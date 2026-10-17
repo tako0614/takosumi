@@ -84,7 +84,7 @@ takosumi accounts tokens create \
 | `--scope` | `read` / `write` / `admin` |
 | `--expires-at` | Expiration time (ISO 8601) |
 | `--accounts-url` | The Accounts URL; the environment variable is `TAKOSUMI_ACCOUNTS_URL` |
-| `--token` | **The Accounts session bearer** (`sess_...`) |
+| `--token` | **The Accounts session bearer** (`sess_...`). If omitted, `TAKOSUMI_ACCOUNTS_TOKEN` is read |
 | `--json` | Print JSON |
 
 The `--token` passed to `accounts` commands is an Accounts session bearer, not the

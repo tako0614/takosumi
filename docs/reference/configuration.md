@@ -113,7 +113,7 @@ CredentialRecipe / ProviderBinding の経路で通常の provider を設定し�
 | `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`      | 任意 | runner コンテナでは `/tmp/takosumi-provider-cache` | provider のバイナリを置いて Run 間で使い回すパス。認証情報、生成した root、plan、state はここに入りません                                                                                                    |
 | `TAKOSUMI_SOURCE_BUILD_CACHE_DIR`         | 任意 | なし                                               | `sourceBuild` を走らせるときの依存パッケージのキャッシュ置き場。絶対パスで書きます。この下の `bun` / `npm` / `xdg` を Bun と npm に渡します                                                                  |
 | `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`       | 任意 | `0`                                                | legacy の activity-expiry grace。完了した non-indeterminate Run は値にかかわらず container を明示破棄し、Run-scoped container を次の Run へ使い回しません。互換入力として残しており、新規設定は `0` にします |
-| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`      | 任意 | `3`                                                | SourceSnapshot を固める zstd の圧縮レベル。`1` から `19` まで。低いほど書庫は大きく、初回の取り込みは速くなります                                                                                            |
+| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`      | 任意 | `3`（Cloudflare の雛形の `wrangler.toml` は `1`）  | SourceSnapshot を固める zstd の圧縮レベル。`1` から `19` まで。低いほど書庫は大きく、初回の取り込みは速くなります                                                                                            |
 | `TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH`    | 任意 | `5`                                                | 定期ポーリング 1 回で拾う自動同期 Source の上限                                                                                                                                                              |
 | `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | 任意 | `45000`                                            | 互換チェックのソース展開をリクエスト経路で待つ上限 (ミリ秒)                                                                                                                                                  |
 | `TAKOSUMI_UNINSTALL_GRACE_DAYS`           | 任意 | `7`                                                | 削除を予約してから実際に破棄するまでの猶予日数。`0` から `365` の整数。`0` は猶予なしで、次の定期処理が system 承認による無人 destroy を実行します。不正な値は警告を出して既定値を使います。変更は新しい予約から効き、予約済みの期日は変わりません |
@@ -191,6 +191,7 @@ ENV
 | `TAKOSUMI_DEPLOY_CONTROL_URL`    | `--url` を省くとき必須             | なし                | CLI が話しかける Takosumi の origin                                                  |
 | `TAKOSUMI_DEPLOY_CONTROL_TOKEN`  | `--token` を省くとき必須・**秘密** | なし                | その origin に渡す bearer。ふだんは[発行した token](./cli.md#トークンを発行する)です。`takosumi connections` など operator 専用 API を呼ぶコマンドには、サーバーの operator 用の秘密を入れます |
 | `TAKOSUMI_ACCOUNTS_URL`          | `--accounts-url` を省くとき必須    | なし                | `takosumi accounts tokens` が話しかける accounts の URL                              |
+| `TAKOSUMI_ACCOUNTS_TOKEN`        | `takosumi accounts tokens` で `--token` を省くとき必須・**秘密** | なし | `takosumi accounts tokens` が渡す Accounts のセッション bearer（`sess_...`） |
 | `TAKOSUMI_ACCOUNTS_DATABASE_URL` | `--database-url` を省くとき必須    | なし                | `takosumi accounts migrate` の接続先                                                 |
 | `TAKOSUMI_LANG`                  | 任意                               | `LANG` などから判定 | `ja` で始まる値にすると CLI のヘルプが日本語になります。`TAKOSUMI_LOCALE` も読みます |
 

@@ -188,6 +188,7 @@ POST  /api/v1/sources/{sourceId}/hook-secret/rotate
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
 GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules
+POST  /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver
 
 GET   /api/v1/workspaces/{workspaceId}/capsules
 GET   /api/v1/capsules/{capsuleId}
@@ -222,6 +223,7 @@ POST /api/v1/runs/{runId}/cancel
 
 GET /api/v1/capsules/{capsuleId}/state-versions
 GET /api/v1/capsules/{capsuleId}/outputs
+GET /api/v1/capsules/{capsuleId}/current-resource-inventory
 GET /api/v1/workspaces/{workspaceId}/activity
 GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
 POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries

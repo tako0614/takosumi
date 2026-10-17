@@ -172,8 +172,10 @@ absent/non-string variables, and requirement kinds outside operator policy.
 `identity.oidc` is a Takosumi Accounts capability that any reviewed
 Git/OpenTofu app may request without naming a product or provider. The selected
 module must contain exactly one `identity.oidc` and exactly one
-`http.endpoint`. OIDC delivery is variables-only and has exactly four slots:
-`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. The endpoint delivers
+`http.endpoint`. OIDC delivery normally uses variables, with exactly four slots:
+`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. From v2.4 it can also use
+`bindings`, with exactly four slots: `issuerUrl`, `clientId`, `ownerSubject`, and
+`redirectUri`. The endpoint delivers
 `url` to a distinct string variable. OIDC scopes must be unique, include
 `openid`, and remain within the explicit
 `InstallConfig.policy.repositoryInstallUx.allowedOidcScopes`; no allowlist

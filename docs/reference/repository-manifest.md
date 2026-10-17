@@ -155,8 +155,9 @@ delivery 名だけを提案します。
 `identity.oidc` は reviewed Git/OpenTofu app が product/provider に依存せず要求できる
 Takosumi Accounts capability です。選択 module はちょうど1件の `identity.oidc` と
 ちょうど1件の `http.endpoint` を持たなければなりません。OIDC の `deliver` は
-`variables` だけで、slot は `accountsUrl`、`issuerUrl`、`clientId`、`redirectUri` の
-exact 4件です。endpoint は `url` を別の string variable に届けます。OIDC scopes は
+ふつう `variables` で、slot は `accountsUrl`、`issuerUrl`、`clientId`、`redirectUri` の
+exact 4件です。v2.4 では `bindings` でも届けられ、その slot は `issuerUrl`、`clientId`、
+`ownerSubject`、`redirectUri` の exact 4件です。endpoint は `url` を別の string variable に届けます。OIDC scopes は
 重複なしで `openid` を含み、DB-owned `InstallConfig.policy.repositoryInstallUx`
 の明示的な `allowedOidcScopes` 内でなければなりません。allowlist がない場合は
 capability を許可しません。
