@@ -126,7 +126,7 @@ own.
 
 ## 7. Inspect the result
 
-On the workload page that **Open service** opened, expand **Update history** on
+On the service page that **Open service** opened, expand **Update history** on
 the **Updates** tab. It lists each apply with its time and marks the version in
 use as **Current**. After a later apply, **Restore a previous version** →
 **Restore this state** on an older entry creates the changes (a plan) that take
