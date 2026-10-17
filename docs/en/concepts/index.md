@@ -1,19 +1,19 @@
 # How Takosumi works
 
-Takosumi is not a replacement for cloud APIs. It runs OpenTofu or Terraform
-with existing providers, then adds review, authorization, and records around
-that execution.
+Takosumi runs OpenTofu or Terraform with your existing providers, without
+changing your module or provider code, and adds review, authorization, and
+records around that execution. It is not a replacement for cloud APIs.
 
 ## Six terms to start with
 
-| Name          | In plain language                                                                  |
-| ------------- | ---------------------------------------------------------------------------------- |
-| **Workspace** | a personal purpose, resource, and security context; sharing is added when needed  |
-| **Project**   | a way to group apps and infrastructure within a Workspace                         |
-| **Source**    | a registered Git repository and module location                                   |
-| **Capsule**   | one deployable module created from a Source                                       |
-| **Run**       | one plan, apply, destroy, or other execution                                      |
-| **Interface** | a declaration of the connection a deployment provides                            |
+| Name          | In plain language                                                                  | In the dashboard                                  |
+| ------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Workspace** | a personal purpose, resource, and security context; sharing is added when needed  | Your workspaces                                   |
+| **Project**   | a way to group apps and infrastructure within a Workspace                         | not shown                                         |
+| **Source**    | a registered Git repository and module location                                   | Source                                            |
+| **Capsule**   | one deployable module created from a Source                                       | a service, listed under **Workloads**             |
+| **Run**       | one plan, apply, destroy, or other execution                                      | an entry in **Deploy history** (Review, Deploy, …) |
+| **Interface** | a declaration of the connection a deployment provides                            | exposed connections (advanced); one with a screen is an app on Home |
 
 A Workspace is not team- or permission-first. It is a purpose-specific work,
 resource, and authorization boundary such as Personal, Work, Experiments, or
@@ -25,8 +25,8 @@ execution environments such as `production` and `preview` belong to Capsules;
 Environment is not another name for Workspace.
 
 State, outputs, logs, and audit records are results of Runs. Provider API keys
-and similar credentials are stored separately as **Connections** and assigned
-only to the Runs that need them.
+and similar credentials are stored separately as **Connections** (**Connected
+accounts** in the dashboard) and assigned only to the Runs that need them.
 
 The [glossary](../reference/glossary.md) contains exact API names. You do not
 need to learn all of them before starting.

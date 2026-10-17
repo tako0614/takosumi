@@ -26,7 +26,7 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 ## 始め方
 
 - **公式ホスティングで使う** — [app.takosumi.com](https://app.takosumi.com/) にサインインします。
-  公式ホスティング（Takosumi hosted service）は Pre-GA です。手順、料金、提供状況、
+  公式ホスティング（Takosumi hosted service）は正式提供前（Pre-GA）です。手順、料金、提供状況、
   サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)にあります。
 - **手元で追加からデプロイまで試す** — [クイックスタート](docs/getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。

@@ -31,8 +31,8 @@ and other systems are still managed by their existing providers.
 ## Getting started
 
 - **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/).
-  The Takosumi hosted service is Pre-GA. Steps, pricing, availability, and
-  support are in the
+  The Takosumi hosted service is Pre-GA (not yet generally available). Steps,
+  pricing, availability, and support are in the
   [hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try adding and deploying locally** — follow the
   [Quickstart](docs/en/getting-started/quickstart.md) to start the dashboard,

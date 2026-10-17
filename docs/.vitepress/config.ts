@@ -57,16 +57,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "移行・旧 Resource / Form Host",
-      items: [
-        { text: "Resource の移行メモ", link: "/concepts/resources" },
-        {
-          text: "Takoform provider integration (migration)",
-          link: "/reference/takoform-host",
-        },
-      ],
-    },
-    {
       text: "リファレンス",
       items: [
         { text: "API", link: "/reference/api" },
@@ -83,6 +73,15 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         },
         { text: "App Handoff", link: "/reference/app-handoff" },
         { text: "用語集", link: "/reference/glossary" },
+      ],
+    },
+    // Notes for migrating old data; not part of the current product path.
+    {
+      text: "移行メモ",
+      collapsed: true,
+      items: [
+        { text: "Resource の移行メモ", link: "/concepts/resources" },
+        { text: "Takoform provider との境界", link: "/reference/takoform-host" },
       ],
     },
   ],
@@ -117,16 +116,6 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "Migration and historical notes",
-      items: [
-        { text: "Resource migration note", link: "/en/concepts/resources" },
-        {
-          text: "Takoform provider integration (migration)",
-          link: "/en/reference/takoform-host",
-        },
-      ],
-    },
-    {
       text: "Reference",
       items: [
         { text: "API", link: "/en/reference/api" },
@@ -143,6 +132,18 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         },
         { text: "App Handoff", link: "/en/reference/app-handoff" },
         { text: "Glossary", link: "/en/reference/glossary" },
+      ],
+    },
+    // Notes for migrating old data; not part of the current product path.
+    {
+      text: "Migration notes",
+      collapsed: true,
+      items: [
+        { text: "Resource migration note", link: "/en/concepts/resources" },
+        {
+          text: "Takoform provider boundary",
+          link: "/en/reference/takoform-host",
+        },
       ],
     },
   ],
