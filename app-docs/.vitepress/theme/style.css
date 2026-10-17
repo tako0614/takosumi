@@ -89,6 +89,15 @@
   margin: 0;
 }
 
+/* On a phone, narrower cell padding lets the four-column pricing tables fit
+ * the column instead of scrolling for the last few pixels. */
+@media (max-width: 419px) {
+  .vp-doc .table-scroll th,
+  .vp-doc .table-scroll td {
+    padding-inline: 10px;
+  }
+}
+
 /* Seven nav items do not fit the inline nav bar VitePress shows from 768px,
  * and from 960px the sidebar takes part of the header. Keep the phone menu
  * button and its panel until 1280px, where the bar has room; the sidebar
