@@ -13,7 +13,7 @@ CLI、dashboard、Takoform client とその他の API client は、その origin
 | --- | --- | --- | --- |
 | **Cloudflare**<br>`deploy/platform/` | できます（Cloudflare Container の runner） | Cloudflare Workers | D1 / R2 / Durable Objects |
 | **Bun と PostgreSQL**<br>`deploy/node-postgres/` | runner を別に組み込むまでできません | VM やコンテナ | PostgreSQL |
-| **手元だけ**<br>`deploy/local-substrate/` | できます（同梱の runner コンテナ） | 手元の Linux と Docker | Docker Compose のボリューム |
+| **手元だけ**<br>`deploy/local-substrate/` | できます（`--profile postgres` で起動する同梱の runner コンテナ） | 手元の Linux と Docker | Docker Compose のボリューム |
 
 **Cloudflare** は、サーバーを自分で持たずに運用したい場合に向きます。Cloudflare
 アカウントと wrangler があれば動き、OpenTofu の実行も Cloudflare Container の runner が
@@ -266,8 +266,8 @@ Docker Compose を使わず手で動かす場合は、同じ環境変数を渡�
 公開して使う accounts は Cloudflare か Bun と PostgreSQL の雛形で動かしてください。
 
 この雛形には OpenTofu runner が入っていません。accounts、control plane、dashboard は
-動きますが、Git の同期、plan、apply は `runner_capability_missing` で失敗します。Stack を
-実行するには、runner を組み込んだ構成を使います。Cloudflare 構成か、
+動きますが、Git の同期、plan、apply は `runner_capability_missing` で失敗します。plan と
+apply を実行するには、runner を組み込んだ構成を使います。Cloudflare 構成か、
 `deploy/local-substrate/` のように runner コンテナを接続した operator composition です。
 
 ## 手元だけで通す

@@ -13,8 +13,8 @@ things.
 | Shape and template | Plan and apply | Where it runs | Where state lives |
 | --- | --- | --- | --- |
 | **Cloudflare**<br>`deploy/platform/` | Yes (a Cloudflare Container runner) | Cloudflare Workers | D1 / R2 / Durable Objects |
-| **Bun and PostgreSQL**<br>`deploy/node-postgres/` | Not until you compose in a runner | A VM or a container | PostgreSQL |
-| **Local only**<br>`deploy/local-substrate/` | Yes (a bundled runner container) | Your own Linux and Docker | Compose volumes |
+| **Bun and PostgreSQL**<br>`deploy/node-postgres/` | Only once you compose in a runner | A VM or a container | PostgreSQL |
+| **Local only**<br>`deploy/local-substrate/` | Yes, with `--profile postgres` (a bundled runner container) | Your own Linux and Docker | Compose volumes |
 
 **Cloudflare** suits you when you would rather not keep servers. A Cloudflare account and
 wrangler are enough, and OpenTofu execution is taken on by a runner in a Cloudflare
@@ -272,7 +272,7 @@ key per process, so run a public accounts plane from the Cloudflare template or 
 PostgreSQL one.
 
 This template has no OpenTofu runner. Accounts, the control plane, and the dashboard work,
-but Git sync, plan, and apply fail with `runner_capability_missing`. To run Stacks, use a
+but Git sync, plan, and apply fail with `runner_capability_missing`. To plan and apply, use a
 composition that includes a runner: the Cloudflare one, or an operator composition that
 attaches a runner container the way `deploy/local-substrate/` does.
 
