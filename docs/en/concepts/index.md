@@ -39,7 +39,7 @@ need to learn all of them before starting.
 3. Select a real module and create a Capsule from it.
 4. Assign Connections and input variables.
 5. Run a plan.
-6. Review the changes and apply.
+6. Review the changes and deploy (apply).
 7. Save state, outputs, logs, and audit records.
 ```
 

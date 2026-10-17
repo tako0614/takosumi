@@ -35,7 +35,7 @@ state、output、ログ、監査記録は Run の結果です。provider の API
 3. 実在する module を選び Capsule を作成
 4. Connection と入力変数を割り当て
 5. plan を実行
-6. 差分を確認して apply
+6. 差分を確認してデプロイ（apply）
 7. state、output、ログ、監査記録を保存
 ```
 

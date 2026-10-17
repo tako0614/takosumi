@@ -158,7 +158,7 @@ export default function Home() {
           </div>
           <figure class="after-product">
             <DashboardShot capture={DASHBOARD_CAPTURES.updates} alt="Takos の「更新」タブ。追跡するバージョン v0.12.7 と「変更を確認」ボタンの下の更新履歴に、現在の版、第2版、第1版が日時つきで並び、第2版には「この状態に戻す」ボタンがある" class="updates-shot" />
-            <figcaption>ワークロードの「更新」タブ。デプロイした版が並び、前の版にはそこへ戻す操作がある（Takosumi ダッシュボードを公開用デモデータで撮影）</figcaption>
+            <figcaption>ワークロードの画面にある、Takos の「更新」タブ。デプロイした版が並び、前の版にはそこへ戻す操作がある（Takosumi ダッシュボードを公開用デモデータで撮影）</figcaption>
           </figure>
         </section>
 

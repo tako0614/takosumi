@@ -40,10 +40,10 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 
 ## 仕組み
 
-dashboard では、ストアで選ぶものを **サービス**、追加してデプロイしたものを **ワークロード**、
-ホームから開く画面を持つものを **アプリ** と呼びます。docs と API では、デプロイの 1 単位を
-**Capsule** と呼び、dashboard のワークロードに当たります。Git URL・ref・module path と、
-変数・接続をまとめたものです。Takosumi は ref を 1 つの commit に固定し、Capsule への変更を、
+dashboard では、ストアで選んで追加するものを **サービス** と呼び、追加したサービスは
+**ワークロード** の一覧に並びます。ホームから開く、サービス自身の画面は **アプリ** です。
+docs と API では、追加したサービスを **Capsule** と呼びます。デプロイの 1 単位で、
+Git URL・ref・module path と、変数・接続をまとめたものです。Takosumi は ref を 1 つの commit に固定し、Capsule への変更を、
 変更の確認（plan）とデプロイ（apply）の別々の Run として記録します。apply の Run は確認した
 plan の Run に固定されるため、読んだ差分と実際にデプロイする差分が一致します。
 

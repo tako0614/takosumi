@@ -49,10 +49,10 @@ and other systems are still managed by their existing providers.
 
 ## How it works
 
-The dashboard calls what you pick in the Store a **service**, what you have
-added and deployed a **workload**, and what opens from Home with its own screen
-an **app**. The docs and the API call one unit of deployment a **Capsule**; it
-is a workload in the dashboard, and it bundles a Git URL, ref, and module path
+In the dashboard, what you pick in the Store and add is a **service**, and the
+services you add are listed under **Workloads**. A service's own screen, opened
+from Home, is an **app**. The docs and the API call an added service a
+**Capsule**: one unit of deployment that bundles a Git URL, ref, and module path
 with its variables and connections. Takosumi pins the ref to one commit and
 records each change to a Capsule as two Runs: a plan (shown as Review) and an
 apply (shown as Deploy). The apply Run is pinned to the reviewed plan Run, so

@@ -11,9 +11,9 @@ docs use a different name, read it back through this table.
 
 | Word on screen         | Internal term                        | What it refers to                                                      |
 | ---------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
-| Service                | Store listing                        | What you pick in the Store and add.                                    |
-| Workload               | Capsule                              | One unit you added and deployed.                                       |
-| App                    | Interface                            | A workload's own screen, opened from Home.                             |
+| Service                | Capsule (a listing in the Store)     | What you pick in the Store and add, and the added thing itself.        |
+| Workloads              | The list of Capsules                 | The page that lists the services you added.                            |
+| App                    | Interface (a screen)                 | A service's own screen, opened from Home.                              |
 | Connected accounts     | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
 | Changes                | plan                                 | The list of changes you review before anything is deployed.            |
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |
