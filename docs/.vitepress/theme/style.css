@@ -81,13 +81,19 @@ html:not(.dark) .vp-doc .dark-only {
   margin: 0;
 }
 
+/* Column labels inside cells exist only for the stacked layout below. */
+.vp-doc .cell-label {
+  display: none;
+}
+
 /* Below 640px a table becomes a list of rows. The first cell reads as the
  * row's name and the other cells follow under it, each labelled with its
  * column name when the table has three or more columns (stacked-tables.ts).
  * A sideways scroll hid the descriptions of most reference tables on a
  * phone. */
 @media (max-width: 639px) {
-  .vp-doc .table-scroll {
+  .vp-doc .table-scroll,
+  .vp-doc .table-scroll > table {
     overflow-x: visible;
   }
 
@@ -127,11 +133,10 @@ html:not(.dark) .vp-doc .dark-only {
     font-weight: 600;
   }
 
-  .vp-doc .table-scroll td[data-label]::before {
-    content: attr(data-label);
+  .vp-doc .table-scroll .cell-label {
     display: block;
     margin-top: 6px;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 400;
     color: var(--vp-c-text-2);
   }

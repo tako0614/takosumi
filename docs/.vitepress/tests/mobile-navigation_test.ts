@@ -64,13 +64,18 @@ test.describe("Takosumi docs page width", () => {
 
     const layout = await page.evaluate(() => {
       const firstRow = document.querySelector(".vp-doc .table-scroll tbody > tr");
+      const label = document.querySelector(".vp-doc td > .cell-label");
+      const overflows = (element: Element) => element.scrollWidth > element.clientWidth;
       return {
         pageWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,
-        scrollingTables: [...document.querySelectorAll(".vp-doc .table-scroll")]
-          .filter((wrapper) => wrapper.scrollWidth > wrapper.clientWidth).length,
+        scrollingTables: [
+          ...document.querySelectorAll(".vp-doc .table-scroll"),
+          ...document.querySelectorAll(".vp-doc .table-scroll > table"),
+        ].filter(overflows).length,
         rowDisplay: firstRow ? getComputedStyle(firstRow).display : "",
-        labelledCells: document.querySelectorAll(".vp-doc td[data-label]").length,
+        labelDisplay: label ? getComputedStyle(label).display : "",
+        labelHidden: label?.getAttribute("aria-hidden"),
         tableRole: document.querySelector(".vp-doc .table-scroll > table")?.getAttribute("role"),
       };
     });
@@ -78,8 +83,11 @@ test.describe("Takosumi docs page width", () => {
     expect(layout.pageWidth).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.scrollingTables).toBe(0);
     expect(layout.rowDisplay).toBe("block");
-    expect(layout.labelledCells).toBeGreaterThan(0);
+    expect(layout.labelDisplay).toBe("block");
+    expect(layout.labelHidden).toBe("true");
     expect(layout.tableRole).toBe("table");
+    // Stacked tables do not scroll, so they are not keyboard stops.
+    await expect(page.locator(".vp-doc .table-scroll[tabindex]")).toHaveCount(0);
   });
 });
 
