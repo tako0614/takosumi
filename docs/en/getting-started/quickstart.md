@@ -128,7 +128,7 @@ own.
 
 On the service page that **Open service** opened, expand **Update history** on
 the **Updates** tab. It lists each deploy with its time and marks the version in
-use as **Current**. After a later apply, **Restore a previous version** →
+use as **Current**. After a later deploy, **Restore a previous version** →
 **Restore this state** on an older entry creates the changes (a plan) that take
 the workload back to that version's source; as in step 6, review them before
 they are applied.
