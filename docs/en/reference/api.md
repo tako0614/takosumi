@@ -12,20 +12,22 @@ External infrastructure keeps its existing providers and standard APIs.
 
 ```text
 External resource has a standard API / OpenTofu provider:
-  use that surface through the plain Stack flow.
+  use that provider directly from a Git module (the Stack flow).
 
 An external Host offers a Form instance:
   use that Host's own API and lifecycle contract.
 
 One-off gap:
-  use generic-env ProviderConnection and an ordinary OpenTofu module.
+  use a generic connection that passes credentials as environment variables
+  (--recipe generic-env --auth-mode env) with an ordinary OpenTofu module.
 ```
 
 Takosumi does not ship a first-party Terraform/OpenTofu provider. Use Takoform
 as an ordinary provider, and use this API, CLI, or dashboard for the supported
 Git/OpenTofu control-plane operations. External providers continue to run
-through plain Stack execution. Takosumi owns that Stack's Run, state, Output,
-and audit records; the provider and its state still own provider-side objects.
+from ordinary Git modules (the Stack flow). Takosumi owns that Stack's Run,
+state, Output, and audit records; the provider and its state still own
+provider-side objects.
 The Cloudflare-specific import/deploy compatibility profile is retired and is
 not part of this API.
 
@@ -137,7 +139,7 @@ audit, sessions, the Control schema, or Workspace / Project / TargetPool state.
 
 ## OpenTofu Stack API
 
-The Stack API runs plain OpenTofu / Terraform modules from Git. Existing
+The Stack API runs ordinary OpenTofu / Terraform modules from Git. Existing
 providers run as-is in this flow. The stock composition uses the provider-neutral
 `opentofu-default` execution path; an operator can explicitly select a different
 capability profile without using provider names as routing authority. Known

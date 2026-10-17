@@ -34,11 +34,12 @@ need to learn all of them before starting.
 ## Deploying a Git module
 
 ```text
-1. Register a Git URL, ref, and optional source subtree as a Source.
-2. Resolve the ref to one commit and scan its tracked OpenTofu tree.
-3. Select a real module and create a Capsule from it.
-4. Assign Connections and input variables.
-5. Run a plan.
+1. Register a Git URL and ref (and, if needed, a directory in the repository) as a Source.
+2. Resolve the ref to one commit, and read the OpenTofu files Git tracks there without
+   changing anything (scan).
+3. Pick a module the scan found, and create a Capsule from it.
+4. Assign connected accounts (Connections) and input variables.
+5. Run a plan to review the changes.
 6. Review the changes and deploy (apply).
 7. Save state, outputs, logs, and audit records.
 ```
