@@ -26,15 +26,17 @@ use logs/events to identify the failing phase.
 | --- | --- |
 | Source fetch fails | Git URL/ref, SourceSnapshot, Git connection |
 | Waiting for approval | Stored Plan contents and approver |
-| Stays queued | Active Runs for the Capsule, runner wiring/capacity, Run-owner dispatch |
-| runner_capability_missing | The stock Bun/PostgreSQL distribution has no runner; inspect actual composition |
+| Stays queued | If another Run is in progress on the same service (Capsule), it waits for that Run to finish; check Deploy history in the dashboard. On Cloudflare, it also waits while every runner container slot is in use (`max_instances` in `wrangler.toml`, 10 in the template). If no slot frees within about 15 minutes, it stops waiting and logs `takosumi.run_owner.controller_poll_deadline_exceeded`, which `bunx wrangler tail` shows. The Run then stays queued until the periodic repair sweep described below picks it up. Also check that your `wrangler.toml` keeps the template's `RUNNER` binding |
+| runner_capability_missing | The standard Bun and PostgreSQL composition has no runner. Plan and apply need a composition with a runner (see [Choosing a shape](../concepts/self-host.md#choosing-a-shape)) |
 | Migration fails | Check `local_compose logs migrations postgres`, database connectivity, and applied migrations. Do not run a down migration. |
 | `/healthz` does not respond | Check `local_compose ps`, Accounts logs, published port, and bind address. The local test uses `localhost:26401`. |
 | Dashboard loads but sign-in fails | Check issuer, origin, redirect URI, and explicit mapping for upstream `clientSecretEnv`. |
 | Provider authentication rejected | Phase-specific ProviderConnection, recipe, permissions, expiry |
 | State/fence/receipt mismatch | Retained evidence and current state; investigate indeterminate mutations before retry |
 
-Cloudflare repair failures appear in `scheduled.run_repair_failures` and
+The Cloudflare repair sweep picks up stalled Runs again and counts them as
+`takosumi_run_repair_total{outcome="rescheduled"}`. Repair failures appear in
+`scheduled.run_repair_failures` and
 `takosumi_run_repair_total{outcome="ordinary_failure"}` / `{outcome="retirement_failure"}`.
 Source-poll, stale-auto-plan, and drift warnings identify the phase without exception text
 or credentials.

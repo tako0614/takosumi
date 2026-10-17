@@ -53,7 +53,15 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Interface", link: "/concepts/interfaces" },
         { text: "利用量と課金", link: "/concepts/usage-and-billing" },
         { text: "自分で動かす", link: "/concepts/self-host" },
-        { text: "運用ガイド", link: "/self-host/" },
+        {
+          text: "運用ガイド",
+          link: "/self-host/",
+          items: [
+            { text: "更新する", link: "/self-host/upgrade" },
+            { text: "バックアップと復旧", link: "/self-host/backup-restore" },
+            { text: "トラブルシューティング", link: "/self-host/troubleshooting" },
+          ],
+        },
         { text: "製品の境界", link: "/concepts/boundaries" },
       ],
     },
@@ -112,7 +120,15 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Interfaces", link: "/en/concepts/interfaces" },
         { text: "Usage and billing", link: "/en/concepts/usage-and-billing" },
         { text: "Running it yourself", link: "/en/concepts/self-host" },
-        { text: "Operations guide", link: "/en/self-host/" },
+        {
+          text: "Operations guide",
+          link: "/en/self-host/",
+          items: [
+            { text: "Updating", link: "/en/self-host/upgrade" },
+            { text: "Backup and recovery", link: "/en/self-host/backup-restore" },
+            { text: "Troubleshooting", link: "/en/self-host/troubleshooting" },
+          ],
+        },
         { text: "Product boundaries", link: "/en/concepts/boundaries" },
       ],
     },
