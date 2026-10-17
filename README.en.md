@@ -28,7 +28,6 @@ are still managed by their existing providers.
   with its outputs, and going back to an earlier version's source is a change
   you review before it is applied.
 
-Everything works from the dashboard and from the API.
 
 ## Getting started
 
@@ -38,10 +37,13 @@ Everything works from the dashboard and from the API.
   [hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try adding and applying locally** — follow the
   [Quickstart](docs/en/getting-started/quickstart.md) to start the dashboard,
-  sign-in, database, and runner on Linux with Docker. The sample creates no
-  external resources, so you need no cloud credentials.
+  sign-in, database, and runner on Linux with Docker. It uses `sudo` to set up a
+  local certificate authority and DNS. The sample creates no external resources,
+  so you need no cloud credentials.
 - **Run it in your own environment** — choose a shape in
-  [Running it yourself](docs/en/concepts/self-host.md).
+  [Running it yourself](docs/en/concepts/self-host.md). The Cloudflare template
+  includes a runner; the Bun + PostgreSQL template needs a separately composed
+  runner for plan and apply.
 - **Run only the API** — for checking the API during development, start an
   in-memory API server with only Bun and Git by following
   [Run only the API](docs/en/getting-started/api-only.md).
@@ -55,8 +57,10 @@ records each change to a Capsule as two Runs, a plan and an apply. The apply Run
 is pinned to the reviewed plan Run, so the changes you read are the changes that
 are applied.
 
-A repository may optionally publish `.well-known/takosumi.json` to propose the
-modules that can be added, pinned to the same commit (see the
+A repository may optionally publish `.well-known/takosumi.json` to add Takosumi
+metadata to modules that the scan of the same commit finds. The manifest cannot
+create or select a module; execution authority stays with the DB-owned
+`InstallConfig`, Plan, and Run (see the
 [Repository manifest reference](docs/en/reference/repository-manifest.md)).
 
 Takoform is an ordinary provider installed from

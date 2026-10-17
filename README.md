@@ -6,7 +6,7 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 アプリのように追加して使うための、オープンソースの管理サーバーです。追加や更新の前に、
 作られるものと変わるものを確かめてから反映できます。
 
-使う module と provider はそのままで、Takosumi 専用の `.tf` 記法や first-party provider は
+使う module と provider はそのままで、Takosumi 専用の設定言語や first-party provider は
 ありません。Cloudflare、AWS、Kubernetes などは、それぞれの既存 provider が操作します。
 
 [ソフトウェアのドキュメント](https://takosumi.com/docs/) ·
@@ -23,7 +23,6 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   反映ごとの state を版として output とともに残し、以前の版の取得元に戻す変更も、
   確認してから適用できます。
 
-dashboard と API のどちらからでも操作できます。
 
 ## 始め方
 
@@ -32,8 +31,11 @@ dashboard と API のどちらからでも操作できます。
   サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)にあります。
 - **手元で追加から反映まで試す** — [クイックスタート](docs/getting-started/quickstart.md)
   に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
-  サンプルは外部リソースを作らないため、クラウドの認証情報は要りません。
+  ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを作らないため、
+  クラウドの認証情報は要りません。
 - **自分の環境で運用する** — [自分で動かす](docs/concepts/self-host.md)で構成を選びます。
+  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
+  実行するには、runner を別に組み込みます。
 - **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](docs/getting-started/api-only.md)
   の手順で、Bun と Git だけでメモリ上の API サーバーを起動します。
 
@@ -45,14 +47,17 @@ ref を 1 つの commit に固定し、Capsule への変更を、計画（plan�
 Run として記録します。apply の Run は確認した plan の Run に固定されるため、読んだ差分と
 実際に反映する差分が一致します。
 
-repository は任意で `.well-known/takosumi.json` を置き、同じ commit に固定された、追加できる
-module の一覧を提案できます（[Repository manifest](docs/reference/repository-manifest.md)）。
+repository は任意で `.well-known/takosumi.json` を置き、同じ commit の scan で見つかった
+module に、Takosumi 向けの情報を添えられます。manifest は module を作ったり選んだりできず、
+実行の権限は DB が持つ `InstallConfig`、Plan、Run にあります
+（[Repository manifest](docs/reference/repository-manifest.md)）。
 
 Takoform は `registry.terraform.io/tako0614/takoform` からインストールする、ほかと同じ
 provider です。Takoform の Form 定義や、Form をホストして実体化するサービスは、この
 リポジトリの所有物ではありません。過去の試作にあった `/v1/resources`、Resource Shape、
 Form Host、TargetPool、SpacePolicy の API と画面は、現在のソフトウェアの機能ではありません。
-互換用に残る API、schema、保存データは移行用の内部実装で、利用手順には載せません。
+互換用に残る API、schema、保存データは移行用の内部実装で、利用手順や画面のナビゲーションには
+載せません。
 
 ## Takosumi と Takosumi hosted service
 
