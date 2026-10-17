@@ -34,7 +34,7 @@ host が `TAKOSUMI_INSTALL_CONFIG_COMPOSITION` を独自の runtime object で�
 
 ### 2. Git module をデプロイする
 
-dashboard の Add service で次を指定します。
+dashboard の **サービスを追加**（`/new`）で次を指定します。
 
 ```text
 Git URL:     https://github.com/tako0614/takosumi.git

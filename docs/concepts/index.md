@@ -39,8 +39,11 @@ state、output、ログ、監査記録は Run の結果です。provider の API
 7. state、output、ログ、監査記録を保存
 ```
 
-Git に新しい commit が追加されても、自動ではデプロイしません。Takosumi は新しい差分が
-あることを示し、次の plan と apply は改めて実行します。
+Git に新しい commit が追加されても、既定では自動でデプロイしません。Takosumi は新しい
+commit があることを示すだけで、次の plan とデプロイは人が始めます。Capsule で自動更新
+（`autoUpdate`）を有効にした場合だけ、削除や置き換えがなく、承認や policy の gate にも
+かからず、変更されるリソースの一覧が分かっている plan を自動でデプロイします
+（[Source と Capsule](./sources.md)）。
 
 詳しくは [Source と Capsule](./sources.md) と
 [実行モデル](./run-model.md)を参照してください。

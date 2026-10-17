@@ -43,8 +43,12 @@ need to learn all of them before starting.
 7. Save state, outputs, logs, and audit records.
 ```
 
-A new commit in Git is not deployed automatically. Takosumi shows that a newer
-revision exists; the next plan and apply remain explicit actions.
+By default, a new commit in Git is not deployed automatically. Takosumi shows
+that a newer revision exists; the next plan and apply remain explicit actions.
+Only when you turn on auto-update (`autoUpdate`) for a Capsule does Takosumi apply a
+plan automatically, and then only a plan with no deletion or replacement, no approval
+or policy gate, and a known list of resource changes (see
+[Sources and Capsules](./sources.md)).
 
 Read [Sources and Capsules](./sources.md) and the
 [Run model](./run-model.md) for details.
