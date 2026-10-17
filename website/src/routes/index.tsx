@@ -166,7 +166,7 @@ export default function Home() {
           <div class="site-width closing-content">
             <div>
               <h2 id="closing-title">一つ追加してみる</h2>
-              <p>公式ホスティングは正式提供前（Pre-GA）です。Linux マシンと Docker などを用意すれば、クラウドの認証情報なしで手元でも試せます。</p>
+              <p>公式ホスティングは正式提供前（Pre-GA）です。sudo が使える Linux マシンに Docker と Bun を入れれば、クラウドの認証情報なしで手元でも試せます。</p>
             </div>
             <div class="closing-actions">
               <a class="button button-primary" href="https://app.takosumi.com/">公式ホスティングで使う <Arrow /></a>
