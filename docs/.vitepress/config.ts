@@ -80,7 +80,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "移行メモ",
       collapsed: true,
       items: [
-        { text: "旧 Resource API の移行", link: "/concepts/resources" },
+        { text: "Resource の移行メモ", link: "/concepts/resources" },
         { text: "Takoform provider との境界", link: "/reference/takoform-host" },
       ],
     },
@@ -139,7 +139,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Migration notes",
       collapsed: true,
       items: [
-        { text: "Old Resource API migration", link: "/en/concepts/resources" },
+        { text: "Resource migration note", link: "/en/concepts/resources" },
         {
           text: "Takoform provider boundary",
           link: "/en/reference/takoform-host",
