@@ -100,7 +100,7 @@ export default function Home() {
           <div class="hero-copy">
             <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>
             <p class="hero-lead">公開されたオープンソースを、アプリのように入れて使う。</p>
-            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />画面のあるアプリは、ワークスペースのホームから開けます。</p>
+            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />追加したアプリは、ワークスペースのホームから開けます。</p>
             <div class="hero-actions">
               <a class="button button-primary" href="#apps">アプリを探す <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
@@ -136,7 +136,7 @@ export default function Home() {
               <ol class="add-steps">
                 <li><h3>接続と設定</h3><p>必要な接続を選び、アプリが求める項目を入れます。</p></li>
                 <li><h3>追加前の確認</h3><p>作成・変更・削除されるリソースの数を見ます。削除や作り直しを含む変更は、承認するまで進みません。</p></li>
-                <li><h3>追加する</h3><p>押したときに初めてデプロイされます。画面のあるアプリは、ホームから開けるようになります。</p></li>
+                <li><h3>追加する</h3><p>押したときに初めてデプロイされます。追加したアプリは、ホームから開けるようになります。</p></li>
               </ol>
             </div>
             <figure class="install-product">
@@ -166,7 +166,7 @@ export default function Home() {
           <div class="site-width closing-content">
             <div>
               <h2 id="closing-title">一つ追加してみる</h2>
-              <p>公式ホスティングは Pre-GA です。Linux マシンと Docker などを用意すれば、クラウドの認証情報なしで手元でも試せます。</p>
+              <p>公式ホスティングは正式提供前（Pre-GA）です。Linux マシンと Docker などを用意すれば、クラウドの認証情報なしで手元でも試せます。</p>
             </div>
             <div class="closing-actions">
               <a class="button button-primary" href="https://app.takosumi.com/">公式ホスティングで使う <Arrow /></a>
@@ -179,7 +179,7 @@ export default function Home() {
 
       <AdringWidget />
       <footer class="site-footer site-width">
-        <div><span>Takosumi</span><small>© contributors</small></div>
+        <div><span>Takosumi</span><small>© Takosumi contributors</small></div>
         <nav aria-label="フッター">
           <a href="/docs/">ドキュメント</a>
           <a href="/docs/en/" hreflang="en" lang="en">English docs</a>
