@@ -316,8 +316,8 @@ PostgreSQL one.
 
 This template has no OpenTofu runner. Accounts, the control plane, and the dashboard work,
 but Git sync, plan, and apply fail with `runner_capability_missing`. To plan and apply, use a
-composition that includes a runner: the Cloudflare one, or an operator composition that
-attaches a runner container the way `deploy/local-substrate/` does.
+composition that includes a runner: the Cloudflare one, or a composition you assemble
+yourself that attaches a runner container the way `deploy/local-substrate/` does.
 
 ## Running it entirely locally
 
