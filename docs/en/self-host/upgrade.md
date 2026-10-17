@@ -28,12 +28,10 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 
 Stop `accounts` before migrating, and do not serve the new image before migrations succeed.
 For a local test project, keep the same dedicated project and Compose files for every
-operation. The example below uses only the base file and its temporary loopback override;
+operation (`local_project` and `local_dir` are the ones set in
+[Local loopback check](../concepts/self-host.md#local-loopback-check)). The example below uses only the base file and its temporary loopback override;
 add only reviewed secret mappings there if needed. It does not load
 `docker-compose.override.yml`.
-
-`local_project` and `local_dir` are the ones you set when starting it in
-[Local loopback check](../concepts/self-host.md#local-loopback-check).
 
 ```bash
 set -euo pipefail

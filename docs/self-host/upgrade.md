@@ -27,11 +27,10 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 ```
 
 `accounts` を止めてから migration を実行し、成功前に新しい service を公開しません。
-ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け、
+ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け
+（`local_project` と `local_dir` は[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）、
 次のように helper に固定します。`docker-compose.override.yml` は読み込まず、必要な secret mapping
 だけを一時 override に追加します。
-
-`local_project` と `local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で起動したときに設定したものです。
 
 ```bash
 set -euo pipefail
@@ -45,7 +44,7 @@ local_compose ps
 curl -fsS http://localhost:26401/healthz
 ```
 
-`--wait` は Docker Compose v2 が必要です。stock 構成に runner が
+`--wait` は Docker Compose v2 が必要です。標準の構成に runner が
 ないため runner の互換性確認対象もありません。runner を組み込んだ custom composition は
 その実 protocol、artifact 保存先、state 保存先も個別に確認します。
 
@@ -62,6 +61,6 @@ plan、backup evidence、適用手順を確認します。control D1 は
 
 ## 失敗した場合
 
-schema に触れる前の失敗と、触れた後の失敗を分けて記録します。後者では排他制御の記録（fence）と
+schema に触れる前の失敗と、触れた後の失敗を分けて記録します。後者では排他制御の印（fence）と
 実行記録を残し、適用済みの schema を確かめてから、前に進める修正（前方修復）で直します。前の Worker Version やイメージがあるだけでは
 データベースとの互換性は証明できません。自動の down migration や、原因を確かめないままの再試行（blind retry）は行いません。

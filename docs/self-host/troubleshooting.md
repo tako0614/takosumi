@@ -1,8 +1,10 @@
 # トラブルシューティング
 
 ローカル smoke-test project で起動しない場合は、初回起動と同じ shell で
-`local_compose` helper を使って状態と診断出力を確認します。`local_project` と `local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で起動したときに設定したものです。production では初回起動時の
-同じ project と Compose file 引数を helper に設定してください。
+`local_compose` helper を使って状態と診断出力を確認します。ローカル確認の `local_project` と
+`local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)
+で設定したものです。production では、初回起動時と同じ project と Compose file 引数を helper に
+設定してください。
 
 ```bash
 set -euo pipefail
@@ -25,14 +27,14 @@ Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` �
 | source の取得失敗 | Git URL/ref、SourceSnapshot、Git 接続 |
 | 承認待ち | 保存済み Plan の内容と承認者 |
 | queued のまま | 同じ Capsule の実行中 Run、runner の配線と capacity、Run owner の dispatch |
-| runner_capability_missing | Bun/PostgreSQL の stock 配布には runner が無い。組み込みの実配線を確認 |
+| runner_capability_missing | Bun/PostgreSQL の標準の配布には runner が無い。組み込みの実配線を確認 |
 | migration が失敗する | `local_compose logs migrations postgres`、DB 接続、適用済み migration を確認。down migration は実行しない |
 | `/healthz` が応答しない | `local_compose ps`、accounts logs、公開 port と bind を確認。local test は `localhost:26401` |
 | dashboard は表示されるが sign-in できない | issuer、origin、redirect URI、upstream `clientSecretEnv` の明示 mapping を確認 |
 | provider の認証拒否 | その phase に渡る ProviderConnection、recipe、権限、失効 |
-| state と実行記録が食い違う（state / fence / receipt） | 保存済みの記録と現在の state を照合する。apply を繰り返さず、結果を判定できない変更は operator が調査する |
+| state・排他制御の印（fence）・実行記録（receipt）が食い違う | 保存済みの記録、fence、現在の state を照合。apply を繰り返さず、結果を判定できない変更は operator が調査 |
 
-Cloudflare の回復処理（定期的な sweep）は `scheduled.run_repair_failures` と
+Cloudflare の修復処理（定期的な sweep）は `scheduled.run_repair_failures` と
 `takosumi_run_repair_total{outcome="ordinary_failure"}` / `{outcome="retirement_failure"}` で失敗件数を示します。
 source poll、stale auto-plan、drift の警告は phase を示し、例外本文や認証情報を出しません。
 

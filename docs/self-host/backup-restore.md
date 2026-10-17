@@ -40,9 +40,9 @@ compose up -d --wait accounts
 ```
 
 ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
-初回起動と同じ shell / project / override 変数を使い、次を実行します。
-
-`local_project` と `local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で起動したときに設定したものです。
+初回起動と同じ shell / project / override 変数（`local_project` と `local_dir` は
+[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
+次を実行します。
 
 ```bash
 set -euo pipefail
@@ -119,9 +119,9 @@ JSON、secret mapping を追加し、`restore_compose up -d --wait accounts` で
 確認後は専用 project の container と volume を確認してから片付けます。元の deployment project や
 volume は対象にしません。`restore_dir` の一時設定も最後に削除します。restore-specific
 認証設定を用意した場合はサインイン、既存 Accounts / Workspace / Run 記録、ProviderConnection の復号も確認します。
-stock 配布に runner は含まれず、Git source、plan artifact、provider 側の実リソースは
+標準の配布に runner は含まれず、Git source、plan artifact、provider 側の実リソースは
 この PostgreSQL backup から復元されません。`takosumi-runtime` volume と custom composition の
-実際の durable store も個別に復旧します。
+実際の永続化された store も個別に復旧します。
 
 Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。
 参照 Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup
