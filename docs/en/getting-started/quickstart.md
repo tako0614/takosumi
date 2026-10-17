@@ -121,8 +121,8 @@ billing check stops shows **Service setup did not finish**, and
 
 When it finishes, **Service added** appears. The sample has no app screen of
 its own, so **Open service** opens the new service's page under **Workloads**.
-Normal updates, detected drift, and new Git commits are not applied on their
-own.
+Normal updates, detected drift, and new Git commits are not applied unless you
+turn on auto-update.
 
 ## 7. Inspect the result
 

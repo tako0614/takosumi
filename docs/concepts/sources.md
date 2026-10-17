@@ -77,7 +77,7 @@ webhook は `401` となり、変更を取りこぼす可能性があります�
 手動でもう一度ローテーションし、新しい応答を Git ホストへ設定します。ローテーション履歴には actor、
 Source、Workspace のみを記録し、secret は記録しません。
 
-## SourceSnapshot — ref と commit は別物
+## SourceSnapshot: ref と commit は別物
 
 `defaultRef` は「どこを追うか」であって「何を実行したか」ではありません。実際に
 実行されるのは、ref を解決した結果の commit です。これを SourceSnapshot として

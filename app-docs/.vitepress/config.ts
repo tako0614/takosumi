@@ -204,7 +204,7 @@ const config: UserConfig = {
       label: "日本語",
       lang: "ja",
       title: "Takosumi",
-      description: "Takosumi hosted service documentation",
+      description: "Takosumi hosted service のドキュメント",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -220,7 +220,7 @@ const config: UserConfig = {
           linkText: "トップへ",
         },
         footer: {
-          message: "Takosumi hosted service docs",
+          message: "Takosumi hosted service のドキュメント",
           copyright: "© Takosumi contributors",
         },
         editLink: {
