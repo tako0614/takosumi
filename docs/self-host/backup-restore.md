@@ -6,8 +6,8 @@
 Bun/PostgreSQL の参照 Compose は PostgreSQL、Caddy と `takosumi-runtime` volume を
 永続化します。control / pre-destroy export は `TAKOSUMI_BACKUP_ARTIFACTS_DIR`
 (既定 `/var/lib/takosumi/backups`) に保存します。directory は実行ユーザー所有の 0700、
-file は 0600 で、bundle は既存の secret-store 鍵で sealed 保存します。public artifact
-manifest だけは平文です。保存名は opaque ref の SHA-256 hex に `.artifact` を付けたものです。
+file は 0600 で、bundle は既存の secret-store の鍵で暗号化して（sealed）保存します。public artifact
+manifest だけは平文です。保存名は、中身を表さない参照名（opaque ref）の SHA-256 hex に `.artifact` を付けたものです。
 runner は同梱されません。独自の runner/state/artifact store の保存先も backup 対象に加えます。
 
 `TAKOSUMI_BACKUP_ARTIFACTS_DIR` は destroy 前の export を保存するために事実上必須です。
@@ -41,6 +41,8 @@ compose up -d --wait accounts
 
 ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
 初回起動と同じ shell / project / override 変数を使い、次を実行します。
+
+`local_project` と `local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で起動したときに設定したものです。
 
 ```bash
 set -euo pipefail

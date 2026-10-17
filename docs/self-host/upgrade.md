@@ -1,7 +1,7 @@
 # 更新する
 
 更新する commit、両データベースの migration、runner の互換性を先に確認します。
-マイグレーションは forward-only です。コードを戻せるかどうかは、その版が更新後の
+マイグレーションは前にしか進めません（forward-only）。コードを戻せるかどうかは、その版が更新後の
 スキーマを受け入れるかで決まり、列の追加だけでも安全とは限りません。
 
 ## Bun と PostgreSQL
@@ -30,6 +30,8 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け、
 次のように helper に固定します。`docker-compose.override.yml` は読み込まず、必要な secret mapping
 だけを一時 override に追加します。
+
+`local_project` と `local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で起動したときに設定したものです。
 
 ```bash
 set -euo pipefail
@@ -60,6 +62,6 @@ plan、backup evidence、適用手順を確認します。control D1 は
 
 ## 失敗した場合
 
-schema に触れる前の失敗と、触れた後の失敗を分けて記録します。後者では fence と実行記録を
-保持し、適用済み schema を検証して前方修復します。前の Worker Version やイメージがあるだけでは
-データベースとの互換性は証明できません。自動の down migration や blind retry は行いません。
+schema に触れる前の失敗と、触れた後の失敗を分けて記録します。後者では排他制御の記録（fence）と
+実行記録を残し、適用済みの schema を確かめてから、前に進める修正（前方修復）で直します。前の Worker Version やイメージがあるだけでは
+データベースとの互換性は証明できません。自動の down migration や、原因を確かめないままの再試行（blind retry）は行いません。

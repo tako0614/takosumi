@@ -1,7 +1,7 @@
 # トラブルシューティング
 
 ローカル smoke-test project で起動しない場合は、初回起動と同じ shell で
-`local_compose` helper を使って状態と診断出力を確認します。production では初回起動時の
+`local_compose` helper を使って状態と診断出力を確認します。`local_project` と `local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で起動したときに設定したものです。production では初回起動時の
 同じ project と Compose file 引数を helper に設定してください。
 
 ```bash
@@ -30,9 +30,9 @@ Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` �
 | `/healthz` が応答しない | `local_compose ps`、accounts logs、公開 port と bind を確認。local test は `localhost:26401` |
 | dashboard は表示されるが sign-in できない | issuer、origin、redirect URI、upstream `clientSecretEnv` の明示 mapping を確認 |
 | provider の認証拒否 | その phase に渡る ProviderConnection、recipe、権限、失効 |
-| state/fence/receipt の不整合 | 保存済みの証拠と現行 state。Apply を連打せず、判定不能な mutation は operator が調査 |
+| state と実行記録が食い違う（state / fence / receipt） | 保存済みの記録と現在の state を照合する。apply を繰り返さず、結果を判定できない変更は operator が調査する |
 
-Cloudflare の回復 sweep は `scheduled.run_repair_failures` と
+Cloudflare の回復処理（定期的な sweep）は `scheduled.run_repair_failures` と
 `takosumi_run_repair_total{outcome="ordinary_failure"}` / `{outcome="retirement_failure"}` で失敗件数を示します。
 source poll、stale auto-plan、drift の警告は phase を示し、例外本文や認証情報を出しません。
 

@@ -32,6 +32,9 @@ operation. The example below uses only the base file and its temporary loopback 
 add only reviewed secret mappings there if needed. It does not load
 `docker-compose.override.yml`.
 
+`local_project` and `local_dir` are the ones you set when starting it in
+[Local loopback check](../concepts/self-host.md#local-loopback-check).
+
 ```bash
 set -euo pipefail
 local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")

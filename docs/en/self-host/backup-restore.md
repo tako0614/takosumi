@@ -42,6 +42,9 @@ compose up -d --wait accounts
 For a local smoke-test project, do not use the default Compose commands above. In the same
 shell as the local startup, keep its project and override variables and run:
 
+`local_project` and `local_dir` are the ones you set when starting it in
+[Local loopback check](../concepts/self-host.md#local-loopback-check).
+
 ```bash
 set -euo pipefail
 umask 077
