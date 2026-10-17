@@ -6,8 +6,8 @@
 Bun/PostgreSQL の参照 Compose は PostgreSQL、Caddy と `takosumi-runtime` volume を
 永続化します。control / pre-destroy export は `TAKOSUMI_BACKUP_ARTIFACTS_DIR`
 (既定 `/var/lib/takosumi/backups`) に保存します。directory は実行ユーザー所有の 0700、
-file は 0600 で、bundle は既存の secret-store 鍵で sealed 保存します。public artifact
-manifest だけは平文です。保存名は opaque ref の SHA-256 hex に `.artifact` を付けたものです。
+file は 0600 で、bundle は既存の secret-store の鍵で暗号化して（sealed）保存します。public artifact
+manifest だけは平文です。保存名は、中身を表さない参照名（opaque ref）の SHA-256 hex に `.artifact` を付けたものです。
 runner は同梱されません。独自の runner/state/artifact store の保存先も backup 対象に加えます。
 
 `TAKOSUMI_BACKUP_ARTIFACTS_DIR` は destroy 前の export を保存するために事実上必須です。
@@ -40,7 +40,9 @@ compose up -d --wait accounts
 ```
 
 ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
-初回起動と同じ shell / project / override 変数を使い、次を実行します。
+初回起動と同じ shell / project / override 変数（`local_project` と `local_dir` は
+[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
+次を実行します。
 
 ```bash
 set -euo pipefail
@@ -117,9 +119,9 @@ JSON、secret mapping を追加し、`restore_compose up -d --wait accounts` で
 確認後は専用 project の container と volume を確認してから片付けます。元の deployment project や
 volume は対象にしません。`restore_dir` の一時設定も最後に削除します。restore-specific
 認証設定を用意した場合はサインイン、既存 Accounts / Workspace / Run 記録、ProviderConnection の復号も確認します。
-stock 配布に runner は含まれず、Git source、plan artifact、provider 側の実リソースは
+標準の配布に runner は含まれず、Git source、plan artifact、provider 側の実リソースは
 この PostgreSQL backup から復元されません。`takosumi-runtime` volume と custom composition の
-実際の durable store も個別に復旧します。
+実際の永続化された store も個別に復旧します。
 
 Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。
 参照 Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup
