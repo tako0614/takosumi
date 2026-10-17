@@ -29,9 +29,9 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   公式ホスティング（Takosumi hosted service）は正式提供前（Pre-GA）です。手順、料金、提供状況、
   サポートは[公式ホスティングのドキュメント](https://app.takosumi.com/docs/)にあります。
 - **手元で追加からデプロイまで試す** — [クイックスタート](docs/getting-started/quickstart.md)
-  に従い、Linux と Docker で dashboard、サインイン、データベース、runner を起動します。
-  ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを作らないため、
-  クラウドの認証情報は要りません。
+  に従い、Linux 上で Docker と Bun を使って dashboard、サインイン、データベース、runner を
+  起動します。ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを
+  作らないため、クラウドの認証情報は要りません。
 - **自分の環境で運用する** — [自分で動かす](docs/concepts/self-host.md)で構成を選びます。
   Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
   実行するには、runner を別に組み込みます。

@@ -33,7 +33,7 @@ Pick the entry point that matches what you want to do.
   the [hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try adding and deploying locally** — follow the
   [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
-  database, and runner on Linux with Docker. It uses `sudo` to set up a local
+  database, and runner on Linux with Docker and Bun. It uses `sudo` to set up a local
   certificate authority and DNS. The sample creates no external resources, so
   you need no cloud credentials.
 - **Run it in your own environment** — choose a shape in

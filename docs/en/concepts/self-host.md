@@ -16,10 +16,10 @@ things.
 | **Bun and PostgreSQL**<br>`deploy/node-postgres/` | Only once you compose in a runner | A VM or a container | PostgreSQL |
 | **Local only**<br>`deploy/local-substrate/` | Yes, with `--profile postgres` (a bundled runner container) | Your own Linux and Docker | Compose volumes |
 
-**Cloudflare** suits you when you would rather not keep servers. A Cloudflare account and
-wrangler are enough, and OpenTofu execution is taken on by a runner in a Cloudflare
-Container. Accounts, the control plane, the dashboard, and the runner all sit in one
-Worker.
+**Cloudflare** suits you when you would rather not keep servers. You need a Cloudflare
+account on the Workers Paid plan and a domain whose DNS Cloudflare manages. OpenTofu
+execution is taken on by a runner in a Cloudflare Container. Accounts, the control
+plane, the dashboard, and the runner all sit in one Worker.
 
 **Bun and PostgreSQL** suits you when it should live on your own infrastructure. You need
 a host running Docker, PostgreSQL, and Caddy to terminate TLS. The bundled
@@ -27,11 +27,25 @@ a host running Docker, PostgreSQL, and Caddy to terminate TLS. The bundled
 together. It does not include an OpenTofu runner, so plan and apply need a runner composed
 in separately.
 
-**Local only** is for exercising the whole thing without exposing anything. It assumes
-Linux and Docker. Pebble for ACME, CoreDNS, and Caddy come up on the same Docker network,
-and `*.takosumi.test` resolves the same way it would in production.
+**Local only** is for exercising the whole thing without exposing anything. You need
+Linux, Docker, Bun, and `sudo` to set up certificates and DNS. Pebble for ACME, CoreDNS,
+and Caddy come up on the same Docker network, and `*.takosumi.test` resolves the same way
+it would in production.
 
 ## Putting it on Cloudflare
+
+What you need:
+
+- A Cloudflare account on the Workers Paid plan. The runner uses Cloudflare Containers,
+  which the Free plan does not offer. Sign in with `bunx wrangler login`.
+- R2 enabled on the account. Even within the free tier, you cannot create buckets until
+  you complete the one-time R2 purchase step in the Cloudflare dashboard.
+- A domain whose DNS Cloudflare manages. The `routes` hostname is registered as a custom
+  domain, and its origin becomes the Accounts issuer.
+- Docker running on the machine where you run `wrangler deploy`. The deploy builds the
+  runner image from `runner/Dockerfile`.
+- Bun and a checkout of this repository, to build the dashboard and to run the `takosumi`
+  CLI that applies the Accounts D1 schema.
 
 Every binding you need is written out in `deploy/platform/wrangler.toml`.
 

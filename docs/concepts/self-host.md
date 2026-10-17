@@ -15,9 +15,10 @@ CLI、dashboard、Takoform client とその他の API client は、その origin
 | **Bun と PostgreSQL**<br>`deploy/node-postgres/` | runner を別に組み込むまでできません | VM やコンテナ | PostgreSQL |
 | **手元だけ**<br>`deploy/local-substrate/` | できます（`--profile postgres` で起動する同梱の runner コンテナ） | 手元の Linux と Docker | Docker Compose のボリューム |
 
-**Cloudflare** は、サーバーを自分で持たずに運用したい場合に向きます。Cloudflare
-アカウントと wrangler があれば動き、OpenTofu の実行も Cloudflare Container の runner が
-引き受けます。1 つの Worker に accounts、control plane、dashboard、runner がまとまります。
+**Cloudflare** は、サーバーを自分で持たずに運用したい場合に向きます。Workers Paid プランの
+Cloudflare アカウントと、Cloudflare で DNS を管理しているドメインが要ります。OpenTofu の
+実行は Cloudflare Container の runner が引き受けます。1 つの Worker に accounts、
+control plane、dashboard、runner がまとまります。
 
 **Bun と PostgreSQL** は、自分のインフラに置きたい場合に向きます。Docker が動くホストが
 あれば、同梱の `docker-compose.yml` が PostgreSQL、2 系統の schema migration、サービス本体、
@@ -27,11 +28,24 @@ Accounts、control plane、dashboard の確認には使えますが、Git sync�
 apply は `runner_capability_missing` になります。plan と apply には runner とその保存先を含む別の
 operator composition が必要です。
 
-**手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux と
-Docker が前提です。ACME 用の Pebble、CoreDNS、Caddy を同じ Docker ネットワークに立て、
-`*.takosumi.test` を本番と同じ形で解決します。
+**手元だけ**の構成は、公開せずに全体を通したい場合に使います。Linux、Docker、Bun と、
+証明書と DNS を設定するための `sudo` が要ります。ACME 用の Pebble、CoreDNS、Caddy を
+同じ Docker ネットワークに立て、`*.takosumi.test` を本番と同じ形で解決します。
 
 ## Cloudflare に置く
+
+次のものを用意します。
+
+- Workers Paid プランの Cloudflare アカウント。runner に Cloudflare Containers を使うため、
+  Free プランでは動きません。`bunx wrangler login` でログインしておきます。
+- R2 を有効にしておくこと。無料枠の範囲で使う場合も、Cloudflare のダッシュボードの R2 で
+  一度購入手続きを済ませるまでバケットを作れません。
+- Cloudflare で DNS を管理しているドメイン。`routes` の hostname を custom domain として
+  登録し、その origin を Accounts の issuer にします。
+- `wrangler deploy` を実行するマシンで動いている Docker。deploy の途中で
+  `runner/Dockerfile` から runner のイメージをビルドします。
+- Bun と、このリポジトリのチェックアウト。dashboard のビルドと、Accounts の D1 スキーマを
+  適用する `takosumi` CLI に使います。
 
 必要な binding は `deploy/platform/wrangler.toml` にすべて書いてあります。
 
