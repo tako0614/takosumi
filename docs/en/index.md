@@ -26,9 +26,9 @@ same module can serve development and production with different connections.
 ### Keep an execution history
 
 Takosumi records which Git commit ran, who ran it, and what changed. Each apply
-saves state and outputs as a version, so you can investigate incidents and go
-back to an earlier version's source through a change you review before it is
-applied.
+saves the state as a version, with its outputs, so you can investigate incidents
+and go back to an earlier version's source through a change you review before it
+is applied.
 
 ## One Git/OpenTofu flow
 
@@ -51,8 +51,8 @@ Git URL and module declaration
 Pick the entry point that matches what you want to do.
 
 - **Use the hosted service** — sign in at [app.takosumi.com](https://app.takosumi.com/)
-  and add an app from the **Store**, or a Git URL with **Add from a Git repository**.
-  The hosted service is Pre-GA.
+  and add an app from the **Store**, or enter a Git URL under
+  **Add from a Git repository**. The hosted service is Pre-GA.
   Steps, pricing, availability, and support are in the
   [Takosumi hosted service documentation](https://app.takosumi.com/docs/en/).
 - **Try plan through apply locally** — follow the
