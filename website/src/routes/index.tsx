@@ -140,7 +140,7 @@ export default function Home() {
               </ol>
             </div>
             <figure class="install-product">
-              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takos を追加する前の確認画面。使うプロバイダーと必要な Cloudflare の接続の下に、作成 13、変更 0、削除 0 と「追加する」ボタンが並ぶ" class="install-shot" />
+              <DashboardShot capture={DASHBOARD_CAPTURES.review} alt="Takos を追加する前の確認画面。構成 deploy/opentofu/cloudflare、使うプロバイダーと必要な Cloudflare の接続の下に、作成 13、変更 0、削除 0 と「追加する」ボタンが並ぶ" class="install-shot" />
               <figcaption>Takos を追加する前の確認画面（Takosumi ダッシュボードを公開用デモデータで撮影。件数は Takos v0.12.7 の Cloudflare 構成から算出）</figcaption>
             </figure>
           </div>
