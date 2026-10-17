@@ -182,12 +182,12 @@ module must contain exactly one `identity.oidc` and exactly one
 grants no capability.
 
 With variable delivery, at Plan the endpoint `url` variable must resolve to a
-canonical exact HTTPS origin with no path, query, fragment, or credentials. Takosumi derives the
-redirect URI from that origin and the reviewed `callbackPath`, then pins the
-exact four variables and authority digest in the private Plan sidecar. With binding
-delivery (v2.4), the four values are never written to the plan, state, or logs; they
-are passed to the runner only at Apply. Plan and
-`apply_check` do not mutate Accounts. Only final Apply may idempotently register
+canonical exact HTTPS origin with no path, query, fragment, or credentials.
+Takosumi derives the redirect URI from that origin and the reviewed
+`callbackPath`, then pins the exact four variables and authority digest in the
+private Plan sidecar. With binding delivery (v2.4), the four values are never
+written to the plan, state, or logs; they are passed to the runner only at
+Apply. Plan and `apply_check` do not mutate Accounts. Only final Apply may idempotently register
 the Capsule-bound public client, and retirement after terminal destroy is also
 idempotent. An unavailable Accounts capability or drift in origin, variable,
 callback, scope, or digest fails before runner execution. There is no fallback
