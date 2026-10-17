@@ -79,11 +79,7 @@ test.describe("Takosumi docs heading links", () => {
     await page.goto("/docs/concepts/self-host#ローカルで安全に起動して確認する");
     await expect(page.locator("#VPContent main")).toBeVisible();
 
-    const target = await page.evaluate(() => {
-      const id = decodeURIComponent(location.hash.slice(1));
-      return document.getElementById(id)?.textContent?.replace(/​/g, "").trim() ?? null;
-    });
-
-    expect(target).toBe("ローカルで安全に起動して確認する");
+    // :target is the browser's own match of the URL fragment to an element id.
+    await expect(page.locator("h3:target")).toContainText("ローカルで安全に起動して確認する");
   });
 });
