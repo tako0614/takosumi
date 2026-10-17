@@ -48,8 +48,8 @@ value, rotate the secret on the same Source; you do not need to delete and recre
 
 If leakage is suspected or the value is lost, prepare to update the Git host's webhook and
 call this endpoint authenticated as an owner/admin of the Source's Workspace. This example also
-uses `TAKOSUMI_DEPLOY_CONTROL_URL` for the Takosumi origin and puts a token that
-owner/admin created, with `write`, in `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
+uses `TAKOSUMI_DEPLOY_CONTROL_URL` for the Takosumi origin and puts an API key that
+owner/admin created, with Read and Write, in `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
 Any Workspace restriction on the PAT must also match the target Workspace. The
 request has no body. On success it returns `200` and `Cache-Control: no-store`; the response's
 `hookSecret` is shown in clear text only for this rotation.

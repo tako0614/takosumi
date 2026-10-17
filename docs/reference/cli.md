@@ -1,27 +1,26 @@
 # CLI
 
-Takosumi CLI は、画面でできる操作を自動化したい場合の補助ツールです。通常は
-dashboard の `/install?git=...` / `/new` からサービスを選び、接続する provider を選んで
-plan / apply します。CLI は任意の Takosumi endpoint に向けて使えます。
+Takosumi CLI は、dashboard でできる操作をスクリプトから行うための補助ツールです。サービスの
+追加はふだん dashboard で行い（ストアか Git URL）、CLI はその後の確認（`takosumi status`、
+`takosumi logs`）や、API キーと接続の管理に使います。
 
 ```bash
 export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://git.example.com/example/photo-blog.git&ref=v1.0.0&sourcePath=infra&path=deploy/opentofu"
-
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-Takosumi hosted service を使う場合の endpoint は `https://app.takosumi.com` です。
+`TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard にサインインしている origin を入れます。公式
+ホスティング（Takosumi hosted service）なら `https://app.takosumi.com` です。
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` に入れる API キーは、下の[トークンを発行する](#トークンを発行する)で
+作ります。
 
-CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で、
-ここで Source / Capsule / Run を作ります。`sourcePath` は Source が取得する Git subtree、
-`path` はその Snapshot 内で scan された module path です。Run の source identity として
-Git commit / ref と両方の path を固定し、実行は runner sandbox で行います。credential は ProviderConnection と
-CredentialRecipe から、Run の実行中だけ env/file として注入されます。
-`takosumi deploy` / `takosumi plan` のローカルアップロード経路は廃止済みです。
+CLI は OpenTofu を直接実行しません。plan と apply は runner が行い、クラウドの認証情報は
+Run の実行中だけ渡ります（[認証情報](../concepts/credentials.md)）。Git URL から追加画面を
+開くリンクの形式は[Source と Capsule](../concepts/sources.md#画面と外部リンク)にあります。
+`takosumi deploy` / `takosumi plan` で手元のファイルを送る方法は廃止しました。
 
 ## CLI を用意する
 
@@ -46,10 +45,12 @@ CLI と、ほかのページの API の例は、`TAKOSUMI_DEPLOY_CONTROL_TOKEN` 
 ふだんは、dashboard で発行した API キーを入れます。
 
 1. dashboard の **設定** から **アカウント** を開きます。
-2. **Takosumi API キー** で名前と有効期間を決め、**権限** に **読み取り** と **書き込み** の
-   両方を選んで **API キーを作成** を押します。ほかのページの例には読み取りと変更の両方が
-   あり、`read` と `write` は互いを含まないため、**書き込み** だけでは読み取りの例が `403` に
-   なります。
+2. **Takosumi API キー** で名前と有効期間（期間が過ぎると使えなくなります）を決め、**権限** に
+   **読み取り** と **書き込み** の両方を選んで **API キーを作成** を押します。ほかのページの例には
+   読み取りと変更の両方があり、`read` と `write` は互いを含まないため、**書き込み** だけでは
+   読み取りの例が `403` になります。**現在のワークスペースだけで使用できるようにする** は最初から
+   オンで、そのキーはそのワークスペースの中でしか使えません。ワークスペースの一覧を読む例や、
+   ほかのワークスペースに触れる例では、オフにして作ります。
 3. 秘密値は作成したときに 1 度だけ表示されます。コピーして `TAKOSUMI_DEPLOY_CONTROL_TOKEN` に
    入れます。
 
@@ -58,8 +59,9 @@ CLI と、ほかのページの API の例は、`TAKOSUMI_DEPLOY_CONTROL_TOKEN` 
 
 ### CLI から発行する
 
-Accounts のセッション bearer（`sess_...`）を持っている場合は、CLI からも同じキーを
-発行できます。
+Accounts のセッション bearer（`sess_...`）を持っている場合は、CLI からも同じ権限のキーを
+発行できます。ワークスペースの制限はかかりません。期限は `--expires-at` を付けたときだけ
+付きます。
 
 ```bash
 takosumi accounts tokens create \

@@ -46,8 +46,8 @@ Source を削除・再作成せず、同じ Source の secret をローテーシ
 
 漏えいが疑われる場合や値を失った場合は、Git ホストの webhook 設定を更新できる状態で
 次の API を呼び出します。対象 Workspace の owner/admin として認証する必要があります。
-この例でも、Takosumi の origin を `TAKOSUMI_DEPLOY_CONTROL_URL` に、その owner/admin が発行した
-`write` を含む token を `TAKOSUMI_DEPLOY_CONTROL_TOKEN` に入れます。PAT の Workspace 制限も対象と一致する必要があります。
+この例でも、Takosumi の origin を `TAKOSUMI_DEPLOY_CONTROL_URL` に、その owner/admin が発行した、
+読み取りと書き込みを持つ API キーを `TAKOSUMI_DEPLOY_CONTROL_TOKEN` に入れます。PAT の Workspace 制限も対象と一致する必要があります。
 要求本文はありません。成功すると `200` と `Cache-Control: no-store` を返し、応答の
 `hookSecret` はこのときだけ平文で見えます。
 
