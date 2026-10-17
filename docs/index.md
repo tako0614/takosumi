@@ -44,8 +44,8 @@ docs と API では、追加したサービスを **Capsule** と呼びます。
 Git URL・ref・module path と、変数・接続をまとめたものです（[用語集](./reference/glossary.md)）。
 
 Capsule への変更は、変更の確認（plan）とデプロイ（apply）を別々の Run として記録します。
-デプロイの Run は確認した変更の Run に結び付けられる（`planRunId`）ため、読んだ差分と
-実際にデプロイする差分が一致します。
+デプロイの Run は確認した変更の Run に固定される（`planRunId`）ため、読んだ差分と実際に
+デプロイする差分が一致します。
 
 追加や更新は、次の順に進みます。
 

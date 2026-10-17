@@ -100,7 +100,7 @@ export default function Home() {
           <div class="hero-copy">
             <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>
             <p class="hero-lead">公開されたオープンソースを、アプリのように入れて使う。</p>
-            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />追加したアプリは、ワークスペースのホームから開けます。</p>
+            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />画面のあるものは、アプリとしてワークスペースのホームから開けます。</p>
             <div class="hero-actions">
               <a class="button button-primary" href="#apps">アプリを探す <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
@@ -136,7 +136,7 @@ export default function Home() {
               <ol class="add-steps">
                 <li><h3>接続と設定</h3><p>必要な接続を選び、アプリが求める項目を入れます。</p></li>
                 <li><h3>追加前の確認</h3><p>作成・変更・削除されるリソースの数を見ます。削除や作り直しを含む変更は、承認するまで進みません。</p></li>
-                <li><h3>追加する</h3><p>押したときに初めてデプロイされます。追加したアプリは、ホームから開けるようになります。</p></li>
+                <li><h3>追加する</h3><p>押したときに初めてデプロイされます。画面のあるものは、アプリとしてホームから開けるようになります。</p></li>
               </ol>
             </div>
             <figure class="install-product">
