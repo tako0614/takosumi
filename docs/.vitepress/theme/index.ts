@@ -77,6 +77,8 @@ function installMobileNavigationA11y(): void {
 // scrolled (scrollable-tables.ts). A wrapper that does not scroll, such as a
 // narrow table or any table stacked on a phone (style.css), would be a stop
 // with nothing to do, so keep the stop only while the wrapper overflows.
+// Without JavaScript every wrapper keeps its stop, which still leaves each
+// wide table reachable by keyboard.
 function installTableScrollStops(): void {
   if (typeof window === "undefined") return;
 
