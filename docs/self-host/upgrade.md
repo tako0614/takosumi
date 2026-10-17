@@ -64,8 +64,8 @@ plan、apply、verify の順で上げます（[Cloudflare に置く](../concepts
 Worker ごとに受け付ける Accounts D1 の版が決まっているため、適用と Worker のデプロイの
 どちらを先にするかは版によって変わります。v3 の Accounts D1 から上げる場合は、bridge Worker を
 デプロイしてから v4 を適用し、その後で v4 以降だけを受け付ける Worker に替える、という決まった
-順序があります。apply は v4 の前に、既存の OIDC client の記録を 100 行ずつ補います。v4 を
-適用した後は、v3 だけを受け付ける Worker には戻せません。この順序と注意は
+順序があります。apply は v4 を適用する直前に、既存の OIDC client の記録を 100 行ずつ補います。
+v4 を適用した後は、v3 だけを受け付ける Worker には戻せません。この順序と注意は
 [online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md)
 に従ってください。
 
