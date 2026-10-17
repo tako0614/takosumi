@@ -116,6 +116,9 @@ module uses Cloudflare, AWS, Takoform, or another provider directly.
 
 ## Reading state and authorization
 
+Put a [token you created](../reference/cli.md#creating-a-token) with `read` in
+`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
+
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"

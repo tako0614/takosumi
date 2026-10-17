@@ -115,6 +115,8 @@ provider を直接使う経路を置き換えません。
 
 ## 状態と認可を読む
 
+例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
+
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"

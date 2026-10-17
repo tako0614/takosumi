@@ -9,6 +9,9 @@ A Source declares that you want to follow this directory of this repository at t
 
 Only three things are required: the Workspace, a name, and a URL.
 
+Put a [token you created](../reference/cli.md#creating-a-token) with `read` and `write` in
+`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` for these examples.
+
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
@@ -44,16 +47,17 @@ value, rotate the secret on the same Source; you do not need to delete and recre
 ### Rotating a webhook secret
 
 If leakage is suspected or the value is lost, prepare to update the Git host's webhook and
-call this endpoint authenticated as an owner/admin of the Source's Workspace. In this example,
-`TAKOSUMI_URL` is the Takosumi origin and `TAKOSUMI_WRITE_PAT` is that owner/admin's `write` PAT.
+call this endpoint authenticated as an owner/admin of the Source's Workspace. This example also
+uses `TAKOSUMI_DEPLOY_CONTROL_URL` for the Takosumi origin and puts a token that
+owner/admin created, with `write`, in `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
 Any Workspace restriction on the PAT must also match the target Workspace. The
 request has no body. On success it returns `200` and `Cache-Control: no-store`; the response's
 `hookSecret` is shown in clear text only for this rotation.
 
 ```bash
 curl --silent --show-error --fail-with-body -X POST \
-  "$TAKOSUMI_URL/api/v1/sources/src_example/hook-secret/rotate" \
-  -H "authorization: Bearer $TAKOSUMI_WRITE_PAT"
+  "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources/src_example/hook-secret/rotate" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 Rotation has **no grace window for the old secret**. Read the response once on a controlled

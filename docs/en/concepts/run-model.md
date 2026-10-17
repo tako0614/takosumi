@@ -18,13 +18,15 @@ include an explicit OpenTofu `import` block in the module and review that plan.
 
 ## Everything starts with a plan
 
-The public `/api/v1` API uses an Accounts session or PAT with the required write
-authority. These examples use `TAKOSUMI_URL` for the public origin and
-`TAKOSUMI_ACCOUNTS_PAT` for the PAT.
+The public `/api/v1` API uses an Accounts session or PAT: reading needs `read`
+and changing needs `write`. Like the other pages, these examples use
+`TAKOSUMI_DEPLOY_CONTROL_URL` for the public origin and put a
+[token you created](../reference/cli.md#creating-a-token) with `read` and
+`write` in `TAKOSUMI_DEPLOY_CONTROL_TOKEN`.
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/capsules/cap_example/plan" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 A `plan` creates a Plan Run. By default, deleting an applied Capsule with
@@ -45,19 +47,19 @@ takosumi logs run_example
 Events and the cost estimate come from their own endpoints.
 
 ```bash
-curl -s "$TAKOSUMI_URL/api/v1/runs/run_example/events" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/events" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_URL/api/v1/runs/run_example/cost" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/cost" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 When you are satisfied, apply the reviewed plan Run. This creates a separate Apply Run.
 If the configuration requires approval, `/approve` comes before the apply.
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/runs/run_example/apply" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 To stop partway, use `/cancel`. The cancellation is recorded too.
@@ -126,11 +128,11 @@ user or policy may continue from a safe plan to apply.**
 Checking for differences alone works per Capsule or across a whole Workspace.
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/capsules/cap_example/drift-check" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/drift-check" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -X POST "$TAKOSUMI_URL/api/v1/workspaces/ws_example/drift-check" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/drift-check" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 ## Running several at once
@@ -138,8 +140,8 @@ curl -X POST "$TAKOSUMI_URL/api/v1/workspaces/ws_example/drift-check" \
 Updating a whole Workspace produces several Runs collected into a RunGroup.
 
 ```bash
-curl -X POST "$TAKOSUMI_URL/api/v1/workspaces/ws_example/plan-update" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-update" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 Approval can be given for the group at once through
@@ -156,11 +158,11 @@ is unclear, inspect provider-side state; do not repeat apply until you know what
 ## History
 
 ```bash
-curl -s "$TAKOSUMI_URL/api/v1/workspaces/ws_example/runs" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/runs" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_URL/api/v1/workspaces/ws_example/activity" \
-  -H "authorization: Bearer $TAKOSUMI_ACCOUNTS_PAT"
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/activity" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
 The activity record belongs to the Workspace.
