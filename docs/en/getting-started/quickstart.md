@@ -199,6 +199,7 @@ done
 
 ## Next
 
+- [Update, restore, or delete a service](./after-adding.md)
 - [How Takosumi works](../concepts/index.md)
 - [Sources and Capsules](../concepts/sources.md)
 - [Credentials](../concepts/credentials.md)
