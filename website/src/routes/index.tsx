@@ -91,7 +91,7 @@ export default function Home() {
         <nav aria-label="サイトナビゲーション">
           <a class="nav-apps" href="#apps">アプリを選ぶ</a>
           <a href="/docs/">ドキュメント</a>
-          <a class="nav-login" href="https://app.takosumi.com/">使ってみる <Arrow /></a>
+          <a class="nav-login" href="https://app.takosumi.com/">サインイン <Arrow /></a>
         </nav>
       </header>
 
@@ -100,11 +100,12 @@ export default function Home() {
           <div class="hero-copy">
             <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>
             <p class="hero-lead">公開されたオープンソースを、アプリのように入れて使う。</p>
-            <p class="hero-description">アプリを選んで接続と設定を入れ、作られるものを確かめてから追加します。<br class="desktop-break" />画面のあるものは、アプリとしてワークスペースのホームから開けます。</p>
+            <p class="hero-description">Git の OpenTofu 定義から、接続した Cloudflare などのアカウントへ追加します。<br class="desktop-break" />追加する前に、<span class="nowrap">作成・変更・削除</span>されるリソースの数を確かめられます。</p>
             <div class="hero-actions">
               <a class="button button-primary" href="#apps">アプリを選ぶ <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
+            <p class="hero-note">公式ホスティングは正式提供前（Pre-GA）です。<br />手元で試す手順は<a href="/docs/getting-started/quickstart.html">クイックスタート</a>にあります<span class="nowrap">（Linux、Docker、Bun、sudo などが必要）</span>。</p>
           </div>
           <figure class="hero-product">
             <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のホーム画面。ワークスペースに Takos、Takos Office、Yurucommu のアプリと追加操作が並ぶ" class="launcher-shot" priority />
@@ -130,7 +131,7 @@ export default function Home() {
           <div class="site-width install-layout">
             <div class="install-copy">
               <div class="install-intro">
-                <h2 id="install-title">追加する前に、作られるものを確かめる</h2>
+                <h2 id="install-title"><span class="nowrap">作成・変更・削除</span>を、追加する前に数で見る</h2>
                 <p>アプリを選ぶと、Takosumi は使う commit を固定してから、次の順に進みます。</p>
               </div>
               <ol class="add-steps">
@@ -149,12 +150,12 @@ export default function Home() {
         <section class="after-section site-width" aria-labelledby="after-title">
           <div class="after-intro">
             <h2 id="after-title">入れたあとの更新と記録</h2>
-            <p>ホームからアプリを開き、設定や更新が必要になったら同じワークスペースへ戻ります。</p>
+            <p>追加したあとの更新と設定の変更は、ワークロードの画面の「更新」と「設定」のタブで行います。</p>
           </div>
           <div class="after-steps">
             <div><h3>危ない更新は止まる</h3><p>新しい版への更新でも自動更新でも、作り直しや削除を含む変更は、確認するまでデプロイされません。</p></div>
             <div><h3>何が起きたかを残す</h3><p>どの commit を誰がデプロイし、何が変わったかを履歴に残します。前の版に戻すときも、戻す変更を確認してからデプロイします。</p></div>
-            <div><h3>鍵は読み出せない形で</h3><p>接続の API token は書き込み専用で保存され、変更の確認やデプロイを実行している間だけ、その処理に渡されます。</p></div>
+            <div><h3>認証情報は読み戻せない</h3><p>接続の認証情報（API token など）は書き込み専用で保存され、変更の確認やデプロイを実行している間だけ、その処理に渡されます。</p></div>
           </div>
           <figure class="after-product">
             <DashboardShot capture={DASHBOARD_CAPTURES.updates} alt="Takos の「更新」タブ。追跡するバージョン v0.12.7 と「変更を確認」ボタンの下の更新履歴に、現在の版、第2版、第1版が日時つきで並び、第2版には「この状態に戻す」ボタンがある" class="updates-shot" />

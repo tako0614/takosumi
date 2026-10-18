@@ -166,6 +166,8 @@ main { display: block; }
 .hero-lead { max-width: none; margin: 20px 0 0; font-size: clamp(1.28rem, 2vw, 1.55rem); font-weight: 570; line-height: 1.35; letter-spacing: -.025em; }
 .hero-description { max-width: 650px; margin: 12px auto 0; font-size: clamp(.91rem, 1.3vw, 1.02rem); line-height: 1.68; }
 .hero-actions { justify-content: center; gap: 10px; margin-top: 23px; }
+.hero-note { max-width: 650px; margin: 20px auto 0; color: var(--tg-color-muted); font-size: .86rem; line-height: 1.7; }
+.hero-note a { color: var(--tg-color-ink); text-decoration: underline; text-underline-offset: 3px; }
 .button { min-height: 51px; padding: 12px 24px; gap: 16px; border-radius: 999px; font-weight: 620; }
 .button-secondary { background: var(--tg-color-surface-2); color: var(--tg-color-ink); }
 .button-secondary:hover { background: var(--tg-color-rule-strong); color: var(--tg-color-ink); }
@@ -177,9 +179,11 @@ main { display: block; }
 .install-copy .add-steps { margin: 0; }
 /* Break Japanese at phrase boundaries so short lines do not end on a lone kana. */
 main :is(h1, h2, h3, p, li, figcaption) { word-break: auto-phrase; text-wrap: pretty; }
-.hero-lead, .hero-description, main h2 { text-wrap: balance; }
+.hero-lead, .hero-description, .hero-note, main h2 { text-wrap: balance; }
 /* Section headings break only after their comma, never inside a phrase. */
 main h2 { word-break: keep-all; overflow-wrap: anywhere; }
+/* Keep the create/change/delete triple on one line. */
+.nowrap { white-space: nowrap; }
 .after-section { padding-block: 130px; }
 .closing-section { margin-inline: 20px; border-radius: 24px; border: 1px solid var(--tg-color-rule); }
 
@@ -196,5 +200,6 @@ main h2 { word-break: keep-all; overflow-wrap: anywhere; }
   .desktop-break { display: none; }
   .hero-actions { gap: 8px; }
   .hero-actions .button { padding-inline: 16px; font-size: .84rem; min-height: 46px; }
+  .hero-note { margin-top: 18px; font-size: .8rem; }
   .install-section, .closing-section { margin-inline: 8px; border-radius: 15px; }
 }
