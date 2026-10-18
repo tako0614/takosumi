@@ -137,19 +137,20 @@ scan の結果全体を `invalid` にします。`../` も、選んだ module �
 どれかです。`secret: true` を付けられるのは `user` だけで、`module_default` には `required: true` を
 付けられません。`env` のような環境変数の map を、秘密や `initial_secret` として公開することはできません。
 入力の名前と role は module の中で重複できず、名前の前後の空白は取り除かずに、正規の形でなければ
-拒否します。互換性の確認結果で、その変数があること、型、既定値の有無を確かめられなければ使われません。
+拒否します。互換性の確認結果で、正確に同じ名前の変数があること、型、既定値の有無を確かめられなければ採用されません。
 表示用の label、helper、placeholder は、よく知られた認証情報らしい形を検査しますが、「Use a token
 value」のようなふつうの文章は通します。
 
 ## `requires`
 
 `requires` は任意で、最大 16 件です。値や認証情報ではなく、Takosumi に用意してほしい機能と、その値を
-渡す先の名前だけを書きます。
+渡す先の名前だけを、提案として書きます。
 
 - `secret.generated`: `kind`、任意の `bytes`（16〜64）、任意の `encoding`（`hex` か `base64url`）、
   `deliver`。module ごとに 8 件まで。
 - `http.endpoint`: `kind`、`deliver`。
-- `identity.oidc`: `kind`、最上位からのパスで書く `callbackPath`、1〜16 件の `scopes`、`deliver`。
+- `identity.oidc`: `kind`、`callbackPath`（`/` で始まり、`//` で始まらず、`?`、`#`、`\`、`.` や `..` の
+  パス要素を含まないパス）、1〜16 件の `scopes`、`deliver`。
 - `interface.consume`（v2.2）: `kind`、module の中で重複しない `key`、正確な `interface.type` と
   `interface.version`、1〜16 件の `permissions`、`{ "type": token }` だけを持つ `delivery`。
 
@@ -159,7 +160,7 @@ requirement と同じ渡し先は使えません。endpoint は module ごとに
 binding、無い変数や文字列でない変数、運用している人が許可していない kind は、変換のときに拒否されます。
 
 `identity.oidc` は、確認を経た Git の OpenTofu のアプリが、製品や provider に依存せずに求められる、
-Takosumi Accounts のサインインの機能です。選んだ module には、`identity.oidc` と `http.endpoint` が
+Takosumi Accounts の機能（capability）です。選んだ module には、`identity.oidc` と `http.endpoint` が
 ちょうど 1 件ずつ必要です。OIDC の `deliver` はふつう `variables` で、slot は `accountsUrl`、`issuerUrl`、
 `clientId`、`redirectUri` のちょうど 4 つです。v2.4 では `bindings` でも渡せ、その slot は `issuerUrl`、
 `clientId`、`ownerSubject`、`redirectUri` のちょうど 4 つです。endpoint は `url` を、別の文字列の変数に
@@ -171,32 +172,35 @@ Takosumi Accounts のサインインの機能です。選んだ module には、
 認証情報を含まない、正規の HTTPS の origin を読めなければ止まります。その origin と確認済みの
 `callbackPath` から redirect URI を作り、4 つの変数と権限の digest を、Plan に付ける記録（sidecar）に
 固定します。`bindings` で渡す場合（v2.4）は、4 つの値を plan、state、ログに書かず、デプロイ（Apply）の
-ときだけ runner に渡します。Plan と `apply_check` は Accounts を変更せず、最後の Apply だけが、その
-Capsule に結びついた公開 client を登録します。何度実行しても結果は同じです。最後の destroy のあとの
-片付け（retirement）も、何度実行しても結果は同じです。Accounts の機能が使えないときや、origin、変数、
-callback、scope、digest が変わったときは、runner を動かす前に失敗します。ProviderBinding、provider の
+ときだけ runner に渡します。
+
+Plan と `apply_check` は Accounts を変更しません。最後の Apply だけが、その Capsule に結びついた公開
+client を登録し、何度実行しても結果は同じです。最後の destroy のあとの撤去（retirement）も、何度実行
+しても結果は同じです。Accounts の機能が使えないときや、origin、変数、callback、scope、digest が Plan の
+時点から想定外に変わった（drift した）ときは、runner を動かす前に失敗します。ProviderBinding、provider の
 output、製品名、ホスト名の決まりから推測して補うことはなく、この要求で provider、resource、デプロイ、
 lifecycle の権限が増えることもありません。
 
 `interface.consume` には、provider、製品名、Interface の ID、endpoint、認証情報を書きません。Takosumi は、
 Plan のあとに保存した InstallConfig から正確な type と version を読み、同じ Workspace に `Resolved` の
-Interface がちょうど 1 件あるときだけ、サインインしている Principal に、必要最小限の permissions の通常の
+Interface がちょうど 1 件あるときだけ、認証済みの Principal に、必要最小限の permissions の通常の
 `InterfaceBinding` を作ります。0 件や複数件のとき、取り消された binding や衝突する binding があるとき、
-運用している人の policy の外の permission や delivery のときは止まります。実行時の認証情報は短い期限で
+運用している人の policy の外の permission や delivery のときは拒否します（fail closed）。実行時の認証情報は短い期限で
 発行され、manifest や OpenTofu の変数には書き込まれません。
 
 ## `features`
 
 `features` は任意で、最大 32 件です。entry に書けるのは `id`、`optional`、日英の `label`、空でない
 `inputs` だけです。`inputs` は同じ module で宣言した利用者の入力を指し、feature どうしで重複できません。
-feature は画面の上での入力のまとまりで、provider、resource、lifecycle を有効にする権限はありません。
+feature は、画面で入力をまとめて表示するための区切りで、provider、resource、lifecycle を有効にする
+権限はありません。
 
 ## `sourceBuild` (v2.3)
 
 v2.3 の module には、checkout した Git の SourceSnapshot に対して OpenTofu の前に行う前処理を、認証情報を
-含まない `sourceBuild` として任意で提案できます。リポジトリの情報がそのまま実行されるのではなく、互換性の
+含まない `sourceBuild` として任意で提案できます。リポジトリの情報は実行の権限を与えるものではなく、互換性の
 確認のあとで利用者が確かめた値として、データベースに保存する `InstallConfig.sourceBuild` に変換されます。
-Takosumi 側や運用している人の `baseConfig.sourceBuild` があれば、そちらが常に優先されます。
+既存の InstallConfig（baseConfig）に `sourceBuild` があれば、リポジトリの提案より常に優先されます。
 
 ```json
 {
@@ -213,7 +217,7 @@ Takosumi 側や運用している人の `baseConfig.sourceBuild` があれば、
 `commands` は 1〜8 件で、各 `argv` は shell の文字列ではなく、空でない 1〜32 個の要素（それぞれ
 4,096 文字まで）です。`workingDirectory` と `outputs` は SourceSnapshot の最上位からの安全な相対パスで、
 `outputs` には、`.` ではない、作られるパスを 1〜16 件書きます。パスは正規の形で書き、前後の空白、`\\`、
-`//`、`.` や `..` の区切りは直さずに拒否します。書ける項目は決まっていて、`env`、認証情報、provider、
+`//`、`.` や `..` のパス要素は直さずに拒否します。書ける項目は決まっていて、`env`、認証情報、provider、
 lifecycle の項目はありません。argv に秘密らしい値を含めることもできません。
 
 Dashboard は、変更の確認（Plan）を始める前に、正確な argv、作業ディレクトリ（省略時は Source の
@@ -222,7 +226,7 @@ InstallConfig だけを使います。
 
 ## `interfaces` (v2〜v2.4)
 
-v2〜v2.4 では、module ごとに最大 32 件の、Capsule が提供する Interface を提案できます。v1 に
+v2〜v2.4 では、Capsule が提供する汎用（generic）の Interface を、module ごとに最大 32 件提案できます。v1 に
 `interfaces` を書くと無効です。v2.1〜v2.4 は、v2 の Interface の形と変換の規則をそのまま引き継ぎます。
 画面をホームに出す完全な例は[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。
 この節は Capsule が提供する Interface、`interface.consume` は Capsule が使う Interface を扱います。
@@ -232,8 +236,8 @@ v2〜v2.4 では、module ごとに最大 32 件の、Capsule が提供する In
 
 - `spec.inputs` は最大 64 件で、公開する JSON の `literal` か、module の Output を `outputName` と
   `outputType` で正確に指す `output` のどちらかです。
-- Output は、互換性の確認結果で、あること、`sensitive: false`、`ephemeral: false` を確かめられなければ
-  使われません。名前から推測することはありません。
+- Output は、互換性の確認結果で、その Output があること、`sensitive: false`、`ephemeral: false` を
+  確かめられなければ採用されません。名前から推測することはありません。
 - `access.visibility` は `workspace` だけです。`resourceUriInput` は同じ spec の input 名でなければ
   なりません。Takosumi 側が持つ `policyRef` は書けません。
 - `bindingRequests` は最大 1 件です。entry に書けるのは、`key`（必須の token）、
@@ -241,8 +245,8 @@ v2〜v2.4 では、module ごとに最大 32 件の、Capsule が提供する In
   だけを持つ `delivery` の 4 つだけです。運用している人が permission と delivery の許可の一覧を明示して
   いないと拒否されます。
 
-標準の InstallConfig が許可するのは、追加した本人に対する `ui.open` と `none`、`mcp.invoke` と
-`oauth2` の組だけです。これは追加の計画（install plan）の確認を通った、1 回限りの Binding の提案で、
+汎用（generic）の標準の InstallConfig が許可するのは、追加した本人に対する、permission の `ui.open` と
+delivery の `none`、permission の `mcp.invoke` と delivery の `oauth2` の組だけです。これは追加の計画（install plan）の確認を通った、1 回限りの Binding の提案で、
 Workspace 全体や運用者の権限を与えるものではありません。ほかの permission や delivery は、運用している
 人の InstallConfig で明示的に許可する必要があります。
 
