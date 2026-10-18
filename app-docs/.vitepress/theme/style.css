@@ -147,3 +147,31 @@
     pointer-events: none;
   }
 }
+
+/* Plain-text blocks wrap instead of running off a narrow screen, clear of the
+ * copy button (40px at 12px); shell and code blocks keep their lines. Same
+ * rules as docs/.vitepress/theme/style.css. */
+.vp-doc div.language-text pre,
+.vp-doc div.language-text code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vp-doc div.language-text pre {
+  padding-right: 56px;
+}
+
+.vp-doc div.language-text code {
+  width: auto;
+}
+
+/* Outline entries wrap instead of ending in an ellipsis. The padding keeps the
+ * first line where VitePress places the active marker (link top + 39px). */
+.VPDocAsideOutline .content .outline-link {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 20px;
+  padding: 6px 0;
+}
