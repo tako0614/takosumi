@@ -148,16 +148,23 @@ function installTableScrollStops(): void {
 
 // VitePress hard-codes some accessible names in English, and gives every
 // sidebar group header a button role, a tab stop, and a heading, even when the
-// group cannot collapse. On Japanese pages the names are translated. Group
+// group cannot collapse. Japanese pages get Japanese names; switching language
+// without a reload keeps the same elements, so each name is written for the
+// current page's language, with VitePress's own English otherwise. Group
 // headers that cannot collapse lose the button role and tab stop, collapsible
 // ones announce whether they are open, and group titles stop being headings so
 // the page h1 is the first heading a screen reader finds.
-const JAPANESE_NAMES: readonly [selector: string, attribute: string | null, text: string][] = [
-  ["#sidebar-aria-label", null, "サイドバー"],
-  ["#main-nav-aria-label", null, "メインナビゲーション"],
-  ["#doc-footer-aria-label", null, "前後のページ"],
-  [".VPNavBarHamburger", "aria-label", "サイトのメニュー"],
-  [".vp-doc button.copy", "title", "コードをコピー"],
+const CHROME_NAMES: readonly [
+  selector: string,
+  attribute: string | null,
+  japanese: string,
+  english: string,
+][] = [
+  ["#sidebar-aria-label", null, "サイドバー", "Sidebar Navigation"],
+  ["#main-nav-aria-label", null, "メインナビゲーション", "Main Navigation"],
+  ["#doc-footer-aria-label", null, "前後のページ", "Pager"],
+  [".VPNavBarHamburger", "aria-label", "サイトのメニュー", "mobile navigation"],
+  [".vp-doc button.copy", "title", "コードをコピー", "Copy Code"],
 ];
 
 function installAccessibleChrome(): void {
@@ -178,14 +185,14 @@ function installAccessibleChrome(): void {
     // mutations this makes settle after one pass.
     const sync = (): void => {
       pending = false;
-      if (root.lang.startsWith("ja")) {
-        for (const [selector, attribute, text] of JAPANESE_NAMES) {
-          for (const element of document.querySelectorAll(selector)) {
-            if (attribute === null) {
-              if (element.textContent !== text) element.textContent = text;
-            } else if (element.getAttribute(attribute) !== text) {
-              element.setAttribute(attribute, text);
-            }
+      const japanese = root.lang.startsWith("ja");
+      for (const [selector, attribute, ja, en] of CHROME_NAMES) {
+        const text = japanese ? ja : en;
+        for (const element of document.querySelectorAll(selector)) {
+          if (attribute === null) {
+            if (element.textContent !== text) element.textContent = text;
+          } else if (element.getAttribute(attribute) !== text) {
+            element.setAttribute(attribute, text);
           }
         }
       }
