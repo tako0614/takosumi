@@ -36,9 +36,10 @@ Takosumi has two modes and no others.
 | `disabled` | Records nothing and bills nothing |
 | `showback` | Records usage but does not bill |
 
-**Running with real invoicing is not a feature of the software.** Halting execution when a
-balance runs out, holding a price list, reconciling against a payment method — none of
-that lives at this layer. For prices and limits on the official hosted service, see its
+**Running with real invoicing is not a feature of the software.** In the default OSS composition,
+nothing halts execution when a balance runs out, holds a price list, or reconciles against a
+payment method. Only when the people running Takosumi add a billing limit can that limit stop
+a plan. For prices and limits on the official hosted service, see its
 own documentation ([Product boundaries](./boundaries.md)).
 
 When you self-host, usage records exist for your own visibility.

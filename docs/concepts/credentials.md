@@ -11,6 +11,7 @@ Takosumi は認証情報を、**書き込み専用で保存し、Run の実行�
 
 ```bash
 takosumi connections create \
+  --workspace ws_example \
   --provider registry.opentofu.org/example/example \
   --recipe generic-env \
   --auth-mode env \
@@ -27,7 +28,11 @@ takosumi connections create \
 | `--values-file`      | 環境変数名と値の JSON                                           |
 | `--files-file`       | ファイルとして渡す認証情報の JSON                               |
 | `--workspace`        | 対象 Workspace                                                  |
+| `--scope`            | `workspace` か `operator`。省くと、`--workspace` があれば `workspace`、無ければ `operator` |
 | `--expires-at`       | 失効日時                                                        |
+
+`--workspace` を省くと operator 範囲の Connection になり、既定の構成では Capsule の provider
+割り当てに使えません。
 
 `--provider` はホスト名から始まる完全修飾のアドレスです。`example/example` のような
 短い形は受け付けません。module の `required_providers` が `example/example` と書いて
@@ -46,8 +51,8 @@ API では `POST /api/v1/connections` です。`/api/v1/provider-connections` �
 
 一部の対応 provider では、Run の実行中に短命の認証情報を更新し続ける Connection を
 使えます（実行中の認証情報の更新）。使う場合は、Capsule の provider 接続を設定するときに、
-その Connection を明示的に選んでください。カタログや Recipe に対応情報があるだけでは
-有効にならず、既存の静的な Connection や割り当ても自動では切り替わりません。
+その Connection を明示的に選んでください。期限が強制される一時的な認証情報を発行できる
+場合にだけ動き、そうでなければ Run は失敗します。カタログや Recipe に対応情報があるだけでは有効にならず、既存の静的な Connection や割り当ても自動では切り替わりません。
 
 必要な provider のバージョンは provider ごとに異なります。たとえば `TAKOFORM_TOKEN_FILE`
 による更新には Terraform provider `tako0614/takoform` の 4.1.0 以上が必要です。これはこの
@@ -78,8 +83,11 @@ Run に残るのは「どの環境変数名を注入したか」だけです。�
 runner 自身が使う名前は上書きできません。`PATH`、`HOME`、`TMPDIR`、`TEMP`、`TMP`、
 `PWD`、`OLDPWD`、`SHELL`、`USER`、`LOGNAME`、`HOSTNAME`、`HTTP_PROXY`、`HTTPS_PROXY`、
 `ALL_PROXY`、`NO_PROXY`、`GIT_ASKPASS`、`SSH_AUTH_SOCK`、`SSL_CERT_FILE`、
-`SSL_CERT_DIR` と、`TAKOSUMI_`、`TF_`、`OPENTOFU_`、`NODE_`、`NPM_`、`BUN_`、`LD_`、
-`DYLD_` で始まる名前を指定すると、作成が `invalid_argument` で失敗します。ファイルを
+`SSL_CERT_DIR`、`REQUESTS_CA_BUNDLE`、git を制御する `GIT_ALLOW_PROTOCOL`、`GIT_EDITOR`、
+`GIT_EXTERNAL_DIFF`、`GIT_PAGER`、`GIT_PROXY_COMMAND`、`GIT_SEQUENCE_EDITOR`、`GIT_SSH`、
+`GIT_SSH_COMMAND`、`GIT_SSL_CAINFO`、`GIT_SSL_NO_VERIFY`、`GIT_TERMINAL_PROMPT` と、
+`TAKOSUMI_`、`TF_`、`OPENTOFU_`、`NODE_`、`NPM_`、`BUN_`、`LD_`、`DYLD_`、`GIT_CONFIG` で
+始まる名前を指定すると、作成が `invalid_argument` で失敗します。ファイルを
 渡す方式で、その置き場所を環境変数でも知らせる場合 (`envName`) にも、同じ規則が
 かかります。
 

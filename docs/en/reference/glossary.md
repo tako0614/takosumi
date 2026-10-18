@@ -31,7 +31,7 @@ docs use a different name, read it back through this table.
 | Takosumi             | A control plane that runs OpenTofu / Terraform modules kept in Git through plan, review, and apply, and keeps the history. |
 | OpenTofu             | An open-source tool that defines infrastructure as code and applies it. Compatible with Terraform.                         |
 | Workspace            | A container that separates one person's purposes, resources, and security, such as Personal, Work, Experiments, or Client. Optional membership and sharing extend it; members, permissions, connections, and history remain separated by it. |
-| Handle               | A stable, globally unique public API identifier for a Workspace, written as `@handle`. API and CLI callers may supply it; first-party dashboard flows generate it and show it only for disambiguation or advanced details. |
+| Handle               | A stable, globally unique public API identifier for a Workspace, written as `@handle`. API and CLI callers may supply it; first-party dashboard flows generate it at creation and show it in places such as Workspace settings. |
 | Project              | A division used to organize the inside of a Workspace.                                                                                                          |
 | Source               | A registration of which repository, which directory, and which ref to follow.                                                                                   |
 | SourceSnapshot       | The commit a Source resolved its ref to. This is always what gets executed.                                                                                     |
@@ -57,9 +57,9 @@ docs use a different name, read it back through this table.
 | destroy      | The operation that removes the resources a Capsule created. A plan is produced first, then applied.                                                              |
 | drift check  | The read-only operation that looks for gaps between saved state and reality.                                                                                     |
 | drift        | The gap that has appeared between saved state and reality.                                                                                                       |
-| RunGroup     | The record grouping several Runs in dependency order. It is created by a Workspace-wide update or drift check, and by adding, updating, or destroying a Capsule. |
+| RunGroup     | The record grouping several Runs in dependency order. It is created by a Workspace-wide update or drift check. |
 | Runner       | The isolated execution environment that actually runs OpenTofu. Credentials are handed over only inside it.                                                      |
-| StateVersion | The state at the moment an apply finished. These accumulate rather than overwrite.                                                                               |
+| StateVersion | The state recorded as the result of an apply, sometimes even when the apply fails. These accumulate rather than overwrite.                                                                               |
 | Output       | A non-secret value a Capsule publishes outward.                                                                                                                  |
 | OutputShare  | The record that passes an Output across Workspaces. The receiving side approves it before it takes effect.                                                       |
 | AuditEvent   | A record, one per entry, of who acted on what, how, and with what result.                                                                                        |
@@ -103,7 +103,7 @@ docs use a different name, read it back through this table.
 | Term                   | Meaning                                                                                                                                                      |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | capability             | A token for what is enabled on an endpoint. Read this rather than an edition name.                                                                           |
-| profile                | A named bundle of settings with a decided scope. Examples are `compat.s3.v1` on the compatibility API, and the `profiles` an EdgeWorker asks of its runtime. |
+| profile                | A named bundle of settings with a decided scope. An example is the RunnerProfile that sets a runner's execution conditions. |
 | surface                | A group of entry points. Takosumi public JSON APIs use `/api/v1`, operator APIs use `/internal/v1`, and the retired `/v1` namespace is not a public surface. |
 | digest                 | A SHA-256 fingerprint computed from content. The same content always gives the same value.                                                                   |
 | fail closed            | Stopping rather than letting something through when the decision is unclear.                                                                                 |
@@ -111,7 +111,6 @@ docs use a different name, read it back through this table.
 | materialization      | Preparing a declared Interface / Binding / credential as a concrete thing only on the host or runner that executes it. Declarations and plans never carry secret values. |
 | CAS (compare-and-swap) | Checking just before an update that the version you read is still current, and not writing if it changed.                                                    |
 | cursor                 | An opaque token for reading the next part of a list. Do not interpret it; pass it straight into the next request.                                            |
-| Compatibility API | An entry point that accepts a standard protocol such as S3 or OCI within a decided scope and version.                                          |
 
 Which capabilities are enabled on an endpoint is answered by the endpoint itself.
 

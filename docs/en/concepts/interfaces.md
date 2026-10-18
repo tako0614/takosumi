@@ -61,17 +61,18 @@ that compatibility path is not a new Interface authoring entry point.
 
 ## Mapping the values you publish
 
-`inputs` says, for each name, where its value comes from. There are three kinds of
+`inputs` says, for each name, where its value comes from. There are two kinds of
 `source`.
 
 | `source`          | Where the value comes from                    | What goes with it                    |
 | ----------------- | --------------------------------------------- | ------------------------------------ |
 | `literal`         | A value written straight into the declaration | `value`                              |
-| `capsule_output`  | A published Output of a Capsule               | `outputName`, optionally `capsuleId` |
-| `resource_output` | A published Output of an old Resource (migration only) | `resourceId`, `outputName`           |
+| `capsule_output`  | A published Output of a Capsule               | `outputName` (and `capsuleId` in the API) |
 
-Omitting `capsuleId` under `capsule_output` reads the Output of the declaring Capsule
-itself.
+In the Interface API (`spec.inputs` of `POST /api/v1/interfaces`), `capsule_output` needs
+`capsuleId`, even to read the Output of the declaring Capsule itself. In a Capsule blueprint
+(`interfaceBlueprints` or the repository's declaration), leave `capsuleId` out: the declaring
+Capsule is filled in, and an explicit value is rejected.
 
 When an Output value has structure, `pointer` pulls out one part of it. The syntax is the
 JSON Pointer of RFC 6901.
