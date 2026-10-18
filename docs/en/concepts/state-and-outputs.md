@@ -138,8 +138,8 @@ it through a chain. Only **Deployed** Capsules change.
 Takosumi does not create the review on its own, even with automatic updates (`autoUpdate`) on.
 On the receiving Capsule, do one of these:
 
-- Press **Update**. It creates a review with the new values and, if the change is safe and needs
-  no approval, deploys it right away
+- Press **Update**. It creates a review with the new values and, if the change needs no approval
+  and does not delete or replace an existing resource, deploys it right away
   ([Update to a new version](../getting-started/after-adding.md#update-to-a-new-version)).
 - To look first, press **Review changes** under **Update service** on the **Updates** tab.
 
