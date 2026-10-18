@@ -233,7 +233,8 @@ public HTTPS origin and hostname instead.
 
 ### Local loopback check
 
-From the repository root, the earlier commands left the shell in `deploy/node-postgres`.
+Run this in the same shell after setting up `.env`; the earlier commands left you in
+`deploy/node-postgres`.
 Keep the temporary override outside the checkout and use a unique Compose project. Accounts
 starts its PostgreSQL and migration dependencies; Caddy is not started, so the local check
 does not request ACME or expose ports 80/443.
@@ -367,7 +368,7 @@ curl -s https://takosumi.example.com/api/v1/capabilities
 With that much working, read real data once. Sign in to the dashboard, create an API key
 with **Read** (untick **Restrict this key to the current Workspace** if it is
 shown), as in [Creating a token](../reference/cli.md#creating-a-token), and list the
-Workspaces. Scopes do not include one another, so a `write`-only token gets `403` here. Use
+Workspaces. Export the key as `TAKOSUMI_READ_TOKEN`. Scopes do not include one another, so a `write`-only token gets `403` here. Use
 the token you created, not the operator-only `TAKOSUMI_DEPLOY_CONTROL_TOKEN`. A `200` means
 authentication and reading the records both work.
 
@@ -383,9 +384,9 @@ credentials and is a good fit for this check.
 
 ## What to decide next
 
-At this point the endpoint runs. What it makes available is then up to you. The Resource
-types on offer, the targets, the runner's concurrency, the frequency of periodic
-observation, and how secrets are handled are all settings. The list of variables and how to
+At this point the endpoint runs. What it makes available is then up to you. The runner
+profiles you enable, the upper limit on Sources picked up per scheduled poll, the deletion
+grace period, and how secrets are stored are all settings. The list of variables and how to
 choose them is in the [configuration reference](/en/reference/configuration).
 
 What you end up taking on from the point of view of the people using that endpoint is set

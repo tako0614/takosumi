@@ -143,6 +143,7 @@ OSS が対応する deploy 経路ではなく、FormActivation や Offering を�
 | 変数                                   | 必須                           | 既定値      | 決めること                                                                                                                                   |
 | -------------------------------------- | ------------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TAKOSUMI_CONTROL_D1_SCHEMA_MODE`      | 任意                           | `bootstrap` | `bootstrap` はリクエスト時にスキーマを用意します。`predeployed` はそれを止め、マイグレーションの記録が揃っていることを読み取り専用で確かめます |
+| `TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE`     | 任意                           | `bootstrap` | Accounts の D1 について同じことを決めます。`bootstrap` は最初の要求で版の記録のない表を作ります。`takosumi accounts migrate-d1` で適用する場合は `predeployed` にすると DDL を出さず、Worker が版を確かめるだけになります |
 | `TAKOSUMI_PRODUCTION_HARDENING_GATE`   | 任意                           | `observe`   | `observe` は不足を報告するだけです。`enforce` は証跡が欠けているあいだ内部の点検 endpoint が `503` を返します                                |
 | `TAKOSUMI_PLATFORM_HARDENING_EVIDENCE` | `enforce` のとき必須           | なし        | 上の点検に答える非 secret の JSON                                                                                                            |
 | `TAKOSUMI_RELEASE_ACTIVATOR_URL`       | 任意                           | なし        | apply の後にアプリ公開を引き受ける webhook の URL                                                                                            |

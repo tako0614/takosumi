@@ -97,7 +97,8 @@ takosumi accounts tokens revoke pat_example --accounts-url "$TAKOSUMI_ACCOUNTS_U
 ## self-host のセットアップ
 
 自分の環境で Accounts を動かす場合のコマンドです。すでに動いている endpoint を
-使うだけなら不要です。
+使うだけなら不要です。公開して使う Accounts は、Cloudflare か Bun と PostgreSQL の雛形で
+動かします（[自分で動かす](../concepts/self-host.md)）。
 
 ### スキーマを適用する
 
@@ -110,10 +111,9 @@ takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 `--dry-run` を付けると、適用せずに何が実行されるかだけを表示します。接続先は
 `TAKOSUMI_ACCOUNTS_DATABASE_URL` からも読みます。
 
-Cloudflare D1 の schema migration は customer-facing CLI workflow ではなく、
-deployment owner が release と同じ change window で扱う運用手順です。この公開 CLI
-reference には account/database identifiers、backup custody、confirmation digests、
-apply/verify sequencing を掲載しません。
+Cloudflare D1 の schema migration は利用者向けのコマンドではなく、運用する側（operator）が
+release と同じ作業の中で行う手順です。自分で動かす場合の手順は
+[自分で動かす](../concepts/self-host.md#cloudflare-に置く)にあります。
 
 ### 初期データを入れる
 
@@ -125,19 +125,24 @@ takosumi accounts seed \
   --redirect-uri https://app.example.com/callback
 ```
 
-### 起動する
+### 手元の確認用に起動する
+
+`takosumi accounts serve` は手元の確認用です。プロセスを起動するたびに使い捨ての署名鍵を
+作るため、公開して使う Accounts には使えません。既定では `127.0.0.1:8787` で待ち受け、
+データはメモリにだけ置きます。
 
 ```bash
-takosumi accounts serve \
-  --issuer https://accounts.example.com \
-  --hostname 0.0.0.0 --port 8080 \
-  --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+takosumi accounts serve --issuer http://localhost:8787
 ```
+
+`--database-url` を付けると、アカウントとセッションをそのデータベースに保存します。
+その場合も署名鍵は起動のたびに変わります。
 
 上流の ID プロバイダや passkey を使う場合は、`--upstream-providers` (JSON 配列)、
 `--passkey-rp-id`、`--passkey-rp-name`、`--passkey-origin` などを併せて指定します。
 手元の確認用に 1 つだけセッションを用意したい場合は `--dev-session-id sess_...` を
-使います。**本番では使わないでください。**
+使います。`--dev-session-id` は `--database-url` を付けない場合だけ使えます。
+**本番では使わないでください。**
 
 ## Platform readiness の contribution を追加する
 

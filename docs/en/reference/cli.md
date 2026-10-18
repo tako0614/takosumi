@@ -104,8 +104,10 @@ You cannot assign yourself the `admin` scope. Only a token issued by an operator
 
 ## Setting up a self-hosted Accounts plane
 
-Use these commands to run Accounts in your own environment. They are unnecessary when you
-only need to use an endpoint that is already running.
+These commands are for running Accounts in your own environment. They are unnecessary when
+you only need to use an endpoint that is already running. Run a public Accounts plane from
+the Cloudflare template or the Bun and PostgreSQL one (see
+[Running it yourself](../concepts/self-host.md)).
 
 ### Apply the schema
 
@@ -118,10 +120,9 @@ takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 Add `--dry-run` to show what would run without applying it. The database URL can also be
 read from `TAKOSUMI_ACCOUNTS_DATABASE_URL`.
 
-Cloudflare D1 schema migrations are not a customer-facing CLI workflow. The deployment
-owner handles them in the same change window as the release. This public CLI reference
-does not document account/database identifiers, backup custody, confirmation digests, or
-the apply/verify sequence.
+Cloudflare D1 schema migration is not a user-facing command: the operator runs it in
+the same change window as the release. For your own installation, the procedure is in
+[Running it yourself](../concepts/self-host.md#putting-it-on-cloudflare).
 
 ### Seed the initial data
 
@@ -133,19 +134,24 @@ takosumi accounts seed \
   --redirect-uri https://app.example.com/callback
 ```
 
-### Start the Accounts server
+### Start Accounts for a local check
+
+`takosumi accounts serve` is for checking things locally. It creates a throwaway signing
+key every time the process starts, so it cannot serve a public Accounts plane. By default
+it listens on `127.0.0.1:8787` and keeps data in memory only.
 
 ```bash
-takosumi accounts serve \
-  --issuer https://accounts.example.com \
-  --hostname 0.0.0.0 --port 8080 \
-  --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+takosumi accounts serve --issuer http://localhost:8787
 ```
+
+With `--database-url`, accounts and sessions are stored in that database; the signing key
+still changes on every start.
 
 When using an upstream identity provider or passkeys, also provide options such as
 `--upstream-providers` (a JSON array), `--passkey-rp-id`, `--passkey-rp-name`, and
 `--passkey-origin`. For a local check that needs only one session, use
-`--dev-session-id sess_...`. **Do not use this in production.**
+`--dev-session-id sess_...`; it works only without `--database-url`. **Do not use this
+in production.**
 
 ## Platform Readiness Contributions
 
