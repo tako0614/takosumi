@@ -36,7 +36,8 @@ cd deploy/node-postgres
 compose() { docker compose "$@"; }
 compose stop accounts
 compose build accounts migrations
-compose run --rm migrations
+migrate_log="$HOME/takosumi-migrate-$(date -u +%Y%m%dT%H%M%SZ).log"
+compose run --rm migrations 2>&1 | tee "$migrate_log"
 # migrations が成功した後、production では Caddy も起動する
 compose up -d --wait accounts caddy
 compose ps
@@ -45,8 +46,10 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 
 `accounts` を止めてから migration を実行し、成功前に新しい service を公開しません。migration が
 失敗すると、ここで止まり、`accounts` は止まったままになります。migration は前にしか進まないため、
-失敗した migration を戻すコマンドはありません。止まった migration をログで確かめ、直前の backup
-を[復旧演習](./backup-restore.md)と同じ手順で別の project に戻して中身を確かめてから、対処を
+失敗した migration を戻すコマンドはありません。migration は 1 本ずつ確定するので、失敗する前に
+終わったものは適用済みのまま残ります。`migrations` の container は終わると消えるため、出力は
+`$migrate_log` のファイルで確かめます。止まった migration を確かめ、直前の backup を
+[復旧演習](./backup-restore.md)と同じ手順で別の project に戻して中身を確かめてから、対処を
 決めます。
 
 ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け

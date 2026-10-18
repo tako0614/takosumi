@@ -37,7 +37,8 @@ cd deploy/node-postgres
 compose() { docker compose "$@"; }
 compose stop accounts
 compose build accounts migrations
-compose run --rm migrations
+migrate_log="$HOME/takosumi-migrate-$(date -u +%Y%m%dT%H%M%SZ).log"
+compose run --rm migrations 2>&1 | tee "$migrate_log"
 # After migrations succeed, start Caddy too in production.
 compose up -d --wait accounts caddy
 compose ps
@@ -46,8 +47,10 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 
 Stop `accounts` before migrating, and do not serve the new image before migrations succeed.
 If a migration fails, the block stops there and `accounts` stays stopped. Migrations only move
-forward, so there is no command that undoes a failed one. Find the migration that stopped in
-the logs, restore the backup you just took into a separate project as in the
+forward, so there is no command that undoes a failed one. Each migration commits on its own,
+so the ones that finished before the failure stay applied. The `migrations` container is
+removed when it exits, so read its output from the `$migrate_log` file. Find the migration
+that stopped, restore the backup you just took into a separate project as in the
 [restore drill](./backup-restore.md) to inspect it, and then decide how to proceed.
 
 For a local test project, keep the same dedicated project and Compose files for every
