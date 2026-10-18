@@ -501,6 +501,7 @@ async function accountsD1GitOutput(
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_GLOBAL: "/dev/null",
           GIT_TERMINAL_PROMPT: "0",
+          GIT_OPTIONAL_LOCKS: "0",
           LC_ALL: "C",
           LANG: "C",
         }).filter(

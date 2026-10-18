@@ -10,6 +10,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -501,13 +502,17 @@ test("Accounts D1 source inspection isolates ambient Git authority and exact roo
     GIT_DIR: Bun.env.GIT_DIR,
     GIT_WORK_TREE: Bun.env.GIT_WORK_TREE,
     GIT_CONFIG_GLOBAL: Bun.env.GIT_CONFIG_GLOBAL,
+    GIT_OPTIONAL_LOCKS: Bun.env.GIT_OPTIONAL_LOCKS,
   };
   await mkdir(bin, { recursive: true });
   await writeFile(
     join(directory, ".gitconfig"),
     "[core]\n\tfsmonitor = /must/not/run\n",
   );
-  const writeFakeGit = async (topLevel: string, fail = false) => {
+  const realGit = Bun.which("git");
+  if (!realGit) throw new Error("source inspection regression requires Git");
+  const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const writeFakeGit = async (topLevel: string, fail = false, statusCheckout?: string) => {
     await writeFile(
       fakeGit,
       [
@@ -520,7 +525,9 @@ test("Accounts D1 source inspection isolates ambient Git authority and exact roo
               'case "$*" in',
               `  *"rev-parse --show-toplevel"*) printf '%s\\n' "${topLevel}";;`,
               `  *"rev-parse HEAD"*) printf '%s\\n' "${SOURCE_COMMIT}";;`,
-              '  *"status --porcelain --untracked-files=all"*) ;;',
+              statusCheckout
+                ? `  *"status --porcelain --untracked-files=all"*) exec ${shellQuote(realGit)} -C ${shellQuote(statusCheckout)} status --porcelain --untracked-files=all;;`
+                : '  *"status --porcelain --untracked-files=all"*) ;;',
               "  *) exit 2;;",
               "esac",
             ]),
@@ -549,6 +556,40 @@ test("Accounts D1 source inspection isolates ambient Git authority and exact roo
     expect(captured).toContain("GIT_WORK_TREE=unset");
     expect(captured).toContain("GIT_CONFIG_NOSYSTEM=1");
     expect(captured).toContain("GIT_CONFIG_GLOBAL=/dev/null");
+
+    // A clean status may refresh an index's cached stat data. Source inspection
+    // must remain a read even when an ambient value asks Git to take that lock.
+    const inspectionCheckout = join(directory, "inspection-checkout");
+    await mkdir(inspectionCheckout);
+    const fixtureGit = (...args: string[]) => {
+      const child = Bun.spawnSync([
+        realGit, "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false",
+        "-c", "user.name=Source Fixture", "-c", "user.email=source@example.invalid",
+        "-C", inspectionCheckout, ...args,
+      ], {
+        env: { PATH: previous.PATH ?? "/usr/bin:/bin", HOME: directory, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      if (child.exitCode !== 0) throw new Error("local source inspection fixture Git failed");
+      return new TextDecoder().decode(child.stdout).trim();
+    };
+    fixtureGit("init", "-b", "main");
+    const tracked = join(inspectionCheckout, "tracked.txt");
+    await writeFile(tracked, "unchanged source fixture\n");
+    fixtureGit("add", "tracked.txt");
+    fixtureGit("commit", "-m", "source inspection fixture");
+    await utimes(tracked, new Date(1_600_000_000_000), new Date(1_600_000_000_000));
+    const fixtureIndex = resolve(inspectionCheckout, fixtureGit("rev-parse", "--git-path", "index"));
+    const indexBytesBefore = await readFile(fixtureIndex);
+    const indexBefore = await lstat(fixtureIndex);
+    await writeFakeGit(sourceRoot, false, inspectionCheckout);
+    Bun.env.GIT_OPTIONAL_LOCKS = "1";
+    await expect(inspectAccountsD1SourceCheckout({ sourceRoot }))
+      .resolves.toEqual({ commit: SOURCE_COMMIT, status: "" });
+    expect(await readFile(fixtureIndex)).toEqual(indexBytesBefore);
+    const indexAfter = await lstat(fixtureIndex);
+    expect({ dev: indexAfter.dev, ino: indexAfter.ino, mode: indexAfter.mode, nlink: indexAfter.nlink })
+      .toEqual({ dev: indexBefore.dev, ino: indexBefore.ino, mode: indexBefore.mode, nlink: indexBefore.nlink });
 
     await writeFakeGit(directory);
     await expect(
