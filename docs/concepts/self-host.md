@@ -360,9 +360,10 @@ curl -s https://takosumi.example.com/api/v1/capabilities
 ここまでが通ったら、実データを 1 回読みます。dashboard でサインインし、
 [API キーの作り方](../reference/cli.md#トークンを発行する)に沿って、**読み取り** を持ち、
 **現在のワークスペースだけで使用できるようにする** が表示されていればオフにした API キーを作って、Workspace の
-一覧を取ります。作ったキーは `TAKOSUMI_READ_TOKEN` に入れます。scope は互いを含まないので、`write` だけの token ではこの読み取りが `403` に
+一覧を取ります。scope は互いを含まないので、`write` だけの token ではこの読み取りが `403` に
 なります。使うのは発行した token で、operator 専用の `TAKOSUMI_DEPLOY_CONTROL_TOKEN` では
-ありません。`200` が返れば、認証と記録の読み取りが通っています。
+ありません。作ったキーを環境変数 `TAKOSUMI_READ_TOKEN` に設定して次を実行し、`200` が返れば、
+認証と記録の読み取りが通っています。
 
 ```bash
 curl -s -H "authorization: Bearer $TAKOSUMI_READ_TOKEN" \
@@ -377,7 +378,7 @@ state backend まで通っています。provider の認証を必要としない
 ## 次に決めること
 
 ここまでで endpoint は動きます。そのうえで、何を使えるようにするかは動かしている側が
-決めます。有効にする runner の profile、定期的に Source を確かめる件数、削除の猶予期間、
+決めます。有効にする runner の profile、定期的な確認 1 回で拾う Source の上限、削除の猶予期間、
 秘密の保存のしかたなどは、すべて設定で決まります。変数の一覧と決め方は
 [設定リファレンス](../reference/configuration.md)にあります。
 

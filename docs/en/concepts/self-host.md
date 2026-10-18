@@ -368,7 +368,7 @@ curl -s https://takosumi.example.com/api/v1/capabilities
 With that much working, read real data once. Sign in to the dashboard, create an API key
 with **Read** (untick **Restrict this key to the current Workspace** if it is
 shown), as in [Creating a token](../reference/cli.md#creating-a-token), and list the
-Workspaces. Put the key in `TAKOSUMI_READ_TOKEN`. Scopes do not include one another, so a `write`-only token gets `403` here. Use
+Workspaces. Export the key as `TAKOSUMI_READ_TOKEN`. Scopes do not include one another, so a `write`-only token gets `403` here. Use
 the token you created, not the operator-only `TAKOSUMI_DEPLOY_CONTROL_TOKEN`. A `200` means
 authentication and reading the records both work.
 
@@ -385,7 +385,7 @@ credentials and is a good fit for this check.
 ## What to decide next
 
 At this point the endpoint runs. What it makes available is then up to you. The runner
-profiles you enable, how many Sources are checked on each scheduled poll, the deletion
+profiles you enable, the upper limit on Sources picked up per scheduled poll, the deletion
 grace period, and how secrets are stored are all settings. The list of variables and how to
 choose them is in the [configuration reference](/en/reference/configuration).
 

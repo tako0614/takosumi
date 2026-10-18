@@ -120,8 +120,8 @@ takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 Add `--dry-run` to show what would run without applying it. The database URL can also be
 read from `TAKOSUMI_ACCOUNTS_DATABASE_URL`.
 
-For Cloudflare D1, use `takosumi accounts migrate-d1`. The values it needs and the
-backup-status, plan, apply, verify order are in
+Cloudflare D1 schema migration is not a user-facing command: the operator runs it in
+the same change window as the release. For your own installation, the procedure is in
 [Running it yourself](../concepts/self-host.md#putting-it-on-cloudflare).
 
 ### Seed the initial data
@@ -137,19 +137,21 @@ takosumi accounts seed \
 ### Start Accounts for a local check
 
 `takosumi accounts serve` is for checking things locally. It creates a throwaway signing
-key every time the process starts, so it cannot serve a public Accounts plane.
+key every time the process starts, so it cannot serve a public Accounts plane. By default
+it listens on `127.0.0.1:8787` and keeps data in memory only.
 
 ```bash
-takosumi accounts serve \
-  --issuer https://accounts.example.com \
-  --hostname 0.0.0.0 --port 8080 \
-  --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+takosumi accounts serve --issuer http://localhost:8787
 ```
+
+With `--database-url`, accounts and sessions are stored in that database; the signing key
+still changes on every start.
 
 When using an upstream identity provider or passkeys, also provide options such as
 `--upstream-providers` (a JSON array), `--passkey-rp-id`, `--passkey-rp-name`, and
 `--passkey-origin`. For a local check that needs only one session, use
-`--dev-session-id sess_...`. **Do not use this in production.**
+`--dev-session-id sess_...`; it works only without `--database-url`. **Do not use this
+in production.**
 
 ## Platform Readiness Contributions
 
