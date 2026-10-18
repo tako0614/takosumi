@@ -79,6 +79,8 @@ AWS, and others are operated by their existing providers.
   addable from Takosumi
 - [Share an install link](./getting-started/install-link.md) — let people open the add screen
   from your README with your repository filled in
+- [Show your app on the home screen](./getting-started/home-launcher.md) — let people open
+  your software's screen from a tile on the dashboard home
 - [Concepts](./concepts/index.md) — the small set of terms and the deployment lifecycle
 - [Sources and Capsules](./concepts/sources.md) — pinning a Git ref to a commit
 - [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy

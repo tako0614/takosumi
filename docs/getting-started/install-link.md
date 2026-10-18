@@ -141,6 +141,7 @@ https://takosumi.example.com/install?source=git::https://github.com/acme/notes.g
 ## 関連
 
 - [追加できるリポジトリを用意する](./prepare-repository.md)
+- [ホームにアプリを出す](./home-launcher.md)
 - [追加したサービスの更新・戻す・削除](./after-adding.md)
 - [Source と Capsule](../concepts/sources.md)
 - [App Handoff](../reference/app-handoff.md) — 追加のあと自分のアプリへ戻す

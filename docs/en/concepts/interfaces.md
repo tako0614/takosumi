@@ -13,6 +13,10 @@ InterfaceBinding, so **a declaration on its own lets nobody call anything**.
 Secret values do not appear in an Interface. What an Interface publishes is the non-secret
 values you explicitly mapped.
 
+To declare a screen from your own repository and show it on the dashboard home, see
+[Show your app on the home screen](../getting-started/home-launcher.md). This page covers
+working with the Interface API directly.
+
 ## Declaring one
 
 The Interface API is the canonical ledger. Declarations generated from a Capsule

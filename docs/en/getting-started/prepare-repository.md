@@ -141,4 +141,5 @@ again, but for this cause every retry gives the same result, so check `required_
 ## Next
 
 When the repository is ready, [share an install link](./install-link.md) so people can open
-the add screen from your README or website.
+the add screen from your README or website. If your software has a screen people open,
+[show it on the home screen](./home-launcher.md) as a dashboard tile.

@@ -51,6 +51,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "リポジトリを用意する", link: "/getting-started/prepare-repository" },
         { text: "追加リンクを配る", link: "/getting-started/install-link" },
+        { text: "ホームにアプリを出す", link: "/getting-started/home-launcher" },
         { text: "API だけ動かす", link: "/getting-started/api-only" },
       ],
     },
@@ -130,6 +131,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Prepare a repository", link: "/en/getting-started/prepare-repository" },
         { text: "Share an install link", link: "/en/getting-started/install-link" },
+        { text: "Show your app on the home screen", link: "/en/getting-started/home-launcher" },
         { text: "Run only the API", link: "/en/getting-started/api-only" },
       ],
     },

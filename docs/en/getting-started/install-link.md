@@ -148,6 +148,7 @@ Link values end up in browser history and logs. Keep secrets out of the link.
 ## Related
 
 - [Prepare a repository](./prepare-repository.md)
+- [Show your app on the home screen](./home-launcher.md)
 - [Update, restore, or delete a service](./after-adding.md)
 - [Sources and Capsules](../concepts/sources.md)
 - [App Handoff](../reference/app-handoff.md) — return to your own app after adding
