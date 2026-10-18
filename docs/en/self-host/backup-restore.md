@@ -23,6 +23,12 @@ commands below target the existing default Compose project started from `deploy/
 without extra `-p` or `-f` arguments. If it was started with a named project or extra Compose
 files, pass those exact arguments on every operation. Keep the backup outside the checkout.
 
+The commands on this page start with `set -euo pipefail` so they stop at the first failure.
+A failure in your interactive shell closes that shell, so open a new one with `bash` before
+pasting. If a command fails while `accounts` is stopped, the block starts `accounts` again before it
+ends. An interruption with Ctrl-C, or closing the terminal, does not, so run `docker compose up -d --wait accounts`
+yourself. A `$backup_file` left by a failure has not been verified. Writing to `/var/backups` needs write permission there.
+
 ```bash
 cd deploy/node-postgres
 set -euo pipefail
@@ -33,10 +39,13 @@ chmod 700 "$backup_dir"
 backup_file="$backup_dir/takosumi-$(date -u +%Y%m%dT%H%M%SZ).dump"
 compose() { docker compose "$@"; }
 compose stop accounts
+trap 'compose up -d --wait accounts' ERR
 compose exec -T postgres pg_dump -U takosumi -d takosumi_accounts -Fc > "$backup_file"
 chmod 600 "$backup_file"
 compose exec -T postgres pg_restore --list < "$backup_file" >/dev/null
+trap - ERR
 compose up -d --wait accounts
+echo "$backup_file"
 ```
 
 For a local smoke-test project, do not use the default Compose commands above. In the same
@@ -53,19 +62,25 @@ backup_file="$backup_dir/takosumi-local-$(date -u +%Y%m%dT%H%M%SZ).dump"
 local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
 local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
 local_compose stop accounts
+trap 'local_compose up -d --wait accounts' ERR
 local_compose exec -T postgres pg_dump -U takosumi -d takosumi_accounts -Fc > "$backup_file"
 chmod 600 "$backup_file"
 local_compose exec -T postgres pg_restore --list < "$backup_file" >/dev/null
+trap - ERR
 local_compose up -d --wait accounts
+echo "$backup_file"
 ```
 
 In a separate operator secret store, preserve `POSTGRES_PASSWORD`,
 `TAKOSUMI_SECRET_STORE_PASSPHRASE`, `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`,
 `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`, `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`,
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN`, and any configured upstream-provider secrets. Losing the
-sealing or signing keys can make stored data unreadable or prevent existing tokens from
-being verified. After changing `TAKOSUMI_SECRET_STORE_PASSPHRASE`, the new value cannot
-decrypt past exports; losing the value used to create them makes decryption impossible.
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN`, and, if you configured an upstream identity provider,
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` and its client secret. `TAKOSUMI_SECRET_STORE_PASSPHRASE`
+seals the connection (ProviderConnection) credentials and OpenTofu state stored in PostgreSQL,
+and the exports. Changing or losing it makes everything sealed before unreadable. Losing the
+signing key prevents existing tokens from being verified, and a changed
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` gives new accounts to upstream sign-ins that are not yet
+linked to an account. Identities already linked keep their stored account.
 Record the configuration, Git commit, image digest, and migration head.
 Caddy certificate state can be reissued, though backing up its volumes avoids another ACME
 issuance.
@@ -80,6 +95,7 @@ archive. In a new shell, set `backup_file` to the actual archive path first.
 
 ```bash
 set -euo pipefail
+[ "$(basename "$PWD")" = node-postgres ] || cd deploy/node-postgres
 # In a new shell, set this to the exact custom-format archive created above.
 # backup_file=/path/to/verified-backup.dump
 restore_project="takosumi-restore-check-$(date +%s)-$$"
@@ -117,13 +133,22 @@ configuration, verify health and that the unauthenticated dashboard loads; do no
 sign-in will succeed. For an additional sign-in check, add the restore-specific provider
 descriptor/client JSON and secret mapping to the temporary override, then apply it with
 `restore_compose up -d --wait accounts`. Inspect authenticated records only after that setup.
-After the check, inspect the dedicated project containers and volume before removing them.
-Do not target the original deployment project or its volume. Remove the temporary
-`restore_dir` configuration when finished. With restore-specific authentication configured,
-also verify sign-in, existing Accounts / Workspace / Run records, and ProviderConnection
-decryption. The stock distribution has no runner, and this PostgreSQL backup does not
-restore Git sources, plan artifacts, or provider-owned infrastructure. Restore the
-`takosumi-runtime` volume and any custom composition's actual durable stores separately.
+With restore-specific authentication configured, also verify sign-in, existing Accounts /
+Workspace / Run records, and ProviderConnection decryption. The stock distribution has no
+runner, and this PostgreSQL backup does not restore Git sources, plan artifacts, or
+provider-owned infrastructure. The `takosumi-runtime` volume holds the exports taken before
+destroy. The database restore does not need it, but keep the volume too if you want those
+exports; nothing imports them back. Back up and restore any custom composition's actual
+durable stores separately.
+
+When every check is done, inspect the dedicated project containers and volume before removing
+them. Do not target the original deployment project or its volume. `restore_compose` and
+`restore_dir` exist only in the shell that ran the restore block, so run this in that shell:
+
+```bash
+restore_compose down -v
+rm -rf "$restore_dir"
+```
 
 Workspace export does not replace whole-database, artifact-store, and key backups.
 The reference Compose wires a file backup store. Owners can use the Capsule backup API

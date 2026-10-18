@@ -371,7 +371,7 @@ DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accou
 takosumi accounts migrate --database-url "$DATABASE_URL"
 ```
 
-`bun run db:migrate:dry-run` を先に実行すると、適用せずに SQL だけ表示します。
+`bun run db:migrate:dry-run` を先に実行すると、適用せずに SQL だけ表示します。表示されるのは catalog 全体で、この database に未適用のものだけではありません。
 `--env=local` は接続せずメモリ上で走るので、実際のデータベースには何もしません。
 実データベースに当てる `--env` は `production` と `staging` の 2 つだけです。
 どちらもforward-onlyで、down/rollback commandはありません。使い捨てfixtureの

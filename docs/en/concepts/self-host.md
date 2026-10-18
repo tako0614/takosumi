@@ -381,7 +381,7 @@ DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accou
 takosumi accounts migrate --database-url "$DATABASE_URL"
 ```
 
-Running `bun run db:migrate:dry-run` first prints the SQL without applying it. `--env=local`
+Running `bun run db:migrate:dry-run` first prints the SQL without applying it. It prints the whole catalog, not only what this database has not applied yet. `--env=local`
 runs in memory without connecting, so it touches no real database. The only `--env` values
 that reach a real database are `production` and `staging`.
 Both are forward-only and expose no down/rollback command. Disposable fixture
