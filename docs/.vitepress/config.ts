@@ -19,8 +19,8 @@ function firstParagraph(srcDir: string, relativePath: string): string | undefine
 }
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "はじめに", link: "/getting-started/quickstart" },
-  { text: "解説", link: "/concepts/" },
+  { text: "はじめに", link: "/getting-started/quickstart", activeMatch: "^/(getting-started/(quickstart|after-adding)|concepts/boundaries)" },
+  { text: "解説", link: "/concepts/", activeMatch: "^/concepts/(?!self-host|boundaries)" },
   { text: "自分で運用", link: "/concepts/self-host", activeMatch: "^/(concepts/self-host|self-host/)" },
   { text: "リファレンス", link: "/reference/api" },
   { text: "公式ホスティング", link: "https://app.takosumi.com/docs/" },
@@ -28,8 +28,8 @@ const jaNav: DefaultTheme.NavItem[] = [
 
 // The site title already links to /en/, as the Japanese title does to /.
 const enNav: DefaultTheme.NavItem[] = [
-  { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Concepts", link: "/en/concepts/" },
+  { text: "Getting started", link: "/en/getting-started/quickstart", activeMatch: "^/en/(getting-started/(quickstart|after-adding)|concepts/boundaries)" },
+  { text: "Concepts", link: "/en/concepts/", activeMatch: "^/en/concepts/(?!self-host|boundaries)" },
   { text: "Self-host", link: "/en/concepts/self-host", activeMatch: "^/en/(concepts/self-host|self-host/)" },
   { text: "Reference", link: "/en/reference/api" },
   { text: "Hosted service", link: "https://app.takosumi.com/docs/en/" },
@@ -67,7 +67,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "自分で運用する",
+      text: "自分で運用",
       items: [
         { text: "自分で動かす", link: "/concepts/self-host" },
         { text: "運用ガイド", link: "/self-host/" },
@@ -143,7 +143,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
-      text: "Run it yourself",
+      text: "Self-host",
       items: [
         { text: "Running it yourself", link: "/en/concepts/self-host" },
         { text: "Operations guide", link: "/en/self-host/" },
