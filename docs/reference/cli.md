@@ -200,6 +200,7 @@ Provider credential の値はファイルから読み込み、画面には表示
 
 ```bash
 takosumi connections create \
+  --workspace ws_example \
   --provider registry.opentofu.org/example/example \
   --recipe generic-env \
   --auth-mode env \
@@ -211,8 +212,9 @@ takosumi connections test conn_...
 takosumi connections revoke conn_...
 ```
 
-Compatibility API は、operator が extension capability として明示的に構成します。CLI から
-作る ProviderConnection でも、対象の provider は `--provider` で明示します。
+CLI から作る ProviderConnection では、対象の provider を `--provider` で明示します。
+`--workspace` を省くと operator 範囲の Connection になり、既定の構成では Capsule の provider
+割り当てに使えません。
 
 ## デプロイ先の secret
 

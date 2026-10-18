@@ -61,16 +61,15 @@ that compatibility path is not a new Interface authoring entry point.
 
 ## Mapping the values you publish
 
-`inputs` says, for each name, where its value comes from. There are three kinds of
+`inputs` says, for each name, where its value comes from. There are two kinds of
 `source`.
 
 | `source`          | Where the value comes from                    | What goes with it                    |
 | ----------------- | --------------------------------------------- | ------------------------------------ |
 | `literal`         | A value written straight into the declaration | `value`                              |
-| `capsule_output`  | A published Output of a Capsule               | `outputName`, optionally `capsuleId` |
-| `resource_output` | A published Output of an old Resource (migration only) | `resourceId`, `outputName`           |
+| `capsule_output`  | A published Output of a Capsule               | `capsuleId`, `outputName`            |
 
-Omitting `capsuleId` under `capsule_output` reads the Output of the declaring Capsule
+`capsule_output` needs `capsuleId`, even to read the Output of the declaring Capsule
 itself.
 
 When an Output value has structure, `pointer` pulls out one part of it. The syntax is the

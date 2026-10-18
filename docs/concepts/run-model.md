@@ -101,19 +101,21 @@ plan に digest があれば、apply は `tofu init` の後の lockfile の SHA-
 
 ## 自動で進む範囲
 
-Git の変更や drift を見つけただけで、Takosumi が apply を始めることはありません。
+既定では、Git の変更や drift を見つけただけで、Takosumi が apply を始めることはありません。
 
 - Git に新しい commit が来ても、Capsule が `stale` になるだけです
 - 差分確認で違いが見つかっても、報告するだけです
-- 定期観測は読み取り専用で、配置先を選び直しません
+- 定期観測は既定では無効です。有効にしても読み取り専用で、配置先を選び直しません
 
-例外は、利用者が dashboard の追加操作または明示的な自動更新を開始した
-場合です。この操作は「plan が安全に完了したら apply まで続ける」という要求を
+例外は、利用者が Capsule の自動更新（`autoUpdate`）を有効にした場合です。新しい snapshot
+ごとに 1 回、更新用の plan を作り、「plan が安全に完了したら apply まで続ける」という要求を
 `autoApplyRequested` として Run に記録します。それでも、削除を含む変更、承認ポリシー、
 料金や policy の gate がある plan は自動で apply されず、確認画面で停止します。
 
-つまり、**検出が apply を起動することはなく、開始済みの操作だけが安全な範囲で
-plan から apply へ続きます。**
+dashboard の **更新する** も、安全に完了した plan を apply まで続けます。これは押した画面が
+行う操作で、Run に `autoApplyRequested` は記録されません。
+
+つまり、**自動更新を有効にしていない限り、検出が apply を起動することはありません。**
 
 差分だけを見る操作は Capsule 単位でも Workspace 単位でも行えます。
 

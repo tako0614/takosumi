@@ -13,6 +13,7 @@ Connection.
 
 ```bash
 takosumi connections create \
+  --workspace ws_example \
   --provider registry.opentofu.org/example/example \
   --recipe generic-env \
   --auth-mode env \
@@ -29,7 +30,11 @@ takosumi connections create \
 | `--values-file` | JSON of environment variable names and values |
 | `--files-file` | JSON of credentials passed as files |
 | `--workspace` | The Workspace this belongs to |
+| `--scope` | `workspace` or `operator`; when omitted, `workspace` if `--workspace` is given and `operator` otherwise |
 | `--expires-at` | When it expires |
+
+Without `--workspace`, the Connection is operator-scoped, and by default it cannot back a
+Capsule's provider assignment.
 
 `--provider` is the fully qualified address, starting with the hostname. Short forms such
 as `example/example` are rejected. If your module's `required_providers` says
@@ -51,8 +56,9 @@ Runs remain.
 
 For some supported providers, a Connection can keep renewing a short-lived credential while
 a Run is executing (credential renewal during a Run). To use it, explicitly choose that
-Connection when setting up the Capsule's provider assignment. A catalog or Recipe entry alone
-does not enable it, and Takosumi does not switch an existing static Connection or assignment
+Connection when setting up the Capsule's provider assignment. It works only when the
+Connection can issue a temporary credential with an enforced expiry. A catalog or Recipe entry
+alone does not enable it, and Takosumi does not switch an existing static Connection or assignment
 automatically.
 
 The required provider version depends on the provider. For example, renewal through
@@ -86,9 +92,11 @@ then uppercase letters, digits, and `_`.
 Names the runner uses itself cannot be overridden. Creation fails with
 `invalid_argument` for `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `PWD`, `OLDPWD`, `SHELL`,
 `USER`, `LOGNAME`, `HOSTNAME`, `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
-`GIT_ASKPASS`, `SSH_AUTH_SOCK`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, and for any name
-beginning with `TAKOSUMI_`, `TF_`, `OPENTOFU_`, `NODE_`, `NPM_`, `BUN_`, `LD_`, or
-`DYLD_`. The same rule applies when you pass credentials as files and also announce their
+`GIT_ASKPASS`, `SSH_AUTH_SOCK`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, the
+git control names `GIT_ALLOW_PROTOCOL`, `GIT_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_PAGER`,
+`GIT_PROXY_COMMAND`, `GIT_SEQUENCE_EDITOR`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_SSL_CAINFO`,
+`GIT_SSL_NO_VERIFY`, and `GIT_TERMINAL_PROMPT`, and for any name beginning with `TAKOSUMI_`,
+`TF_`, `OPENTOFU_`, `NODE_`, `NPM_`, `BUN_`, `LD_`, `DYLD_`, or `GIT_CONFIG`. The same rule applies when you pass credentials as files and also announce their
 location through an environment variable (`envName`).
 
 ## Without an assignment, a Run does not start

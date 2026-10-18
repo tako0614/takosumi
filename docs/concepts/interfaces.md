@@ -59,16 +59,15 @@ owner を読む compatibility code が残る endpoint でも、それは migrati
 
 ## 公開する値を対応付ける
 
-`inputs` は、名前ごとにどこから値を取るかを書きます。`source` は 3 通りです。
+`inputs` は、名前ごとにどこから値を取るかを書きます。`source` は 2 通りです。
 
 | `source`          | 値の出どころ           | 一緒に書くもの                   |
 | ----------------- | ---------------------- | -------------------------------- |
 | `literal`         | 宣言に直接書いた値     | `value`                          |
-| `capsule_output`  | Capsule の公開 Output  | `outputName`、任意で `capsuleId` |
-| `resource_output` | 旧 Resource の公開 Output (migration only) | `resourceId`、`outputName`       |
+| `capsule_output`  | Capsule の公開 Output  | `capsuleId`、`outputName`        |
 
-`capsule_output` で `capsuleId` を省くと、宣言している Capsule 自身の Output を
-読みます。
+`capsule_output` では、宣言している Capsule 自身の Output を読む場合も `capsuleId` を
+書きます。
 
 Output の値が構造を持つときは `pointer` で一部だけを取り出せます。書き方は RFC 6901 の
 JSON Pointer です。

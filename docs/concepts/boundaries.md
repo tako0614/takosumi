@@ -45,7 +45,7 @@ Form の定義、provider、package、hosted instance は Takoform または Tak
 curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-または、認証済みの API から `/api/v1/capabilities` を取得します。
+または、`/api/v1/capabilities` を取得します。どちらも認証は要りません。
 
 ## Takosumi hosted service が追加するもの
 
@@ -56,7 +56,7 @@ Takosumi hosted service は、Takosumi OSS を運用した公式サービスで�
 [Takosumi hosted service のドキュメント](https://app.takosumi.com/docs/)を参照してください。
 
 hosted service 側の実装は OSS の contract を利用しますが、OSS から hosted service の private code や
-Stripe へ依存することはありません。
+Stripe の SDK・API へ依存することはありません。
 
 ## Takoform と外部 Host の位置づけ
 

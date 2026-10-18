@@ -110,20 +110,22 @@ lockfile.
 
 ## What can continue automatically
 
-Detecting a Git change or drift does not make Takosumi start an apply.
+By default, detecting a Git change or drift does not make Takosumi start an apply.
 
 - A new commit in Git only makes the Capsule `stale`
 - A drift check that finds a difference only reports it
-- Periodic observation is read-only and never re-picks a target
+- Periodic observation is off by default; when enabled it is read-only and never re-picks a
+  target
 
-There is one explicit exception. When a user starts an install from the
-dashboard or enables an automatic update, the Run records
-`autoApplyRequested`: continue from plan to apply if the plan finishes cleanly.
-A plan with deletions, an approval policy, a billing check, or another policy
-gate still stops for review.
+The exception is a Capsule whose user turned on automatic updates (`autoUpdate`). For each new
+snapshot, Takosumi creates one update plan and records `autoApplyRequested` on the Run: continue
+from plan to apply if the plan finishes cleanly. A plan with deletions, an approval policy, a
+billing check, or another policy gate still stops for review.
 
-In short, **detection never starts an apply; an action already started by a
-user or policy may continue from a safe plan to apply.**
+The dashboard's **Update** also continues a cleanly finished plan to apply. That is done by the
+screen you pressed it on; the Run does not record `autoApplyRequested`.
+
+In short, **unless automatic updates are on, detection never starts an apply.**
 
 Checking for differences alone works per Capsule or across a whole Workspace.
 

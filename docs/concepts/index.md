@@ -17,8 +17,8 @@ Takosumi は、module や provider のコードを変えずに OpenTofu / Terraf
 Workspace はチームや権限を最初に作るためのものではありません。Personal、Work、
 Experiments、Client など、目的ごとの作業・リソース・認可境界です。必要な場合だけ
 メンバーシップと共有を追加します。表示名が主な識別子で、`handle` は API / CLI で使う
-安定したグローバル一意の技術識別子です。ダッシュボードでは通常自動生成し、名前が
-重複したときや詳細設定でだけ表示します。`production` や `preview` のような具体的な
+安定したグローバル一意の技術識別子です。ダッシュボードでは作成時に自動生成し、
+Workspace の設定画面などで表示します。`production` や `preview` のような具体的な
 実行環境は Capsule に属し、Workspace の別名ではありません。
 
 state、output、ログ、監査記録は Run の結果です。provider の API key などは
