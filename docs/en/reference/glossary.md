@@ -30,7 +30,7 @@ docs use a different name, read it back through this table.
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Takosumi             | A control plane that runs OpenTofu / Terraform modules kept in Git through plan, review, and apply, and keeps the history. |
 | OpenTofu             | An open-source tool that defines infrastructure as code and applies it. Compatible with Terraform.                         |
-| Workspace            | A boundary that separates one person's purposes, resources, and security, such as Personal, Work, Experiments, or Client. Optional membership and sharing extend it; members, permissions, connections, and history remain separated by it. |
+| Workspace            | A container that separates one person's purposes, resources, and security, such as Personal, Work, Experiments, or Client. Optional membership and sharing extend it; members, permissions, connections, and history remain separated by it. |
 | Handle               | A stable, globally unique public API identifier for a Workspace, written as `@handle`. API and CLI callers may supply it; first-party dashboard flows generate it and show it only for disambiguation or advanced details. |
 | Project              | A division used to organize the inside of a Workspace.                                                                                                          |
 | Source               | A registration of which repository, which directory, and which ref to follow.                                                                                   |

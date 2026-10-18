@@ -61,7 +61,7 @@ Every binding you need is written out in `deploy/platform/wrangler.toml`.
 | `ASSETS` | Serves the dashboard build |
 
 Runs are scheduled directly onto `RUN_OWNER` when they are created. This composition
-uses neither Cloudflare Queue nor a dead-letter queue, which would hold failed work.
+uses neither Cloudflare Queue nor a dead-letter queue for failed work.
 `RUN_OWNER` handles retries and final failure, and if its binding is missing, Runs are
 not sent to execution (fail closed).
 
