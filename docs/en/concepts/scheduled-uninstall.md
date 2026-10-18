@@ -77,6 +77,32 @@ The refusal is normally recorded before export, destroy Plan creation, or provid
 The `capsule.uninstall_blocked` audit record also carries the reason and time. Restoring
 authorization later does not resume the request.
 
+## When the deletion stops partway
+
+Even after the authority check passes, a request stops in **Scheduled for deletion** when the
+deletion cannot continue safely, and records one of these reasons in `uninstall.blockedReason`.
+A failed data export alone does not stop it: the result (`failed`) is recorded and the deletion
+goes on. If a Workspace management operation gets in the way before the
+export starts, the request is not stopped and is retried later; if it refuses the export while
+it is running, the export is recorded as `failed` and the deletion goes on.
+
+| `uninstall.blockedReason` | Reason |
+| --- | --- |
+| `pre_destroy_export_incomplete` | A data export started but has recorded no result after 15 minutes |
+| `destroy_plan_cancelled` | Someone cancelled the deletion Plan |
+| `destroy_plan_failed` | The deletion Plan did not complete within 3 attempts in total |
+| `destroy_plan_missing` | The recorded deletion Plan cannot be found (when the attempts run out, or when moving on to the deletion apply). A Plan creation refused for a temporary reason also counts as an attempt |
+| `destroy_plan_refused` | Creating the deletion Plan was refused for a reason that will not clear by waiting |
+| `destroy_plan_unverifiable` | The deletion Plan no longer matches the service it was made for (its state or execution authority changed, it did not pass policy, it has no list of changes, and so on) |
+| `destroy_plan_not_delete_only` | The deletion Plan contains changes other than deletes (including imports) |
+| `destroy_apply_refused` | The deletion apply or its approval was refused for a reason that will not clear by waiting. If the refusal is about authority, one of the three reasons above is recorded instead |
+| `destroy_apply_failed` | The deletion apply ended failed, cancelled, or expired |
+| `finalize_failed` | The deletion process has reached 6 unexpected failures in total |
+
+If the deletion apply fails and the service's status becomes **Error**, the request's processing
+ends there and the request can no longer be cancelled. As the dashboard says, delete the service
+again from Settings.
+
 ## Repairing a blocked request
 
 1. Confirm that one of the cases under "Cancelling" applies.
