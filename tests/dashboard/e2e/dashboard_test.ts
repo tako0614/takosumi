@@ -6,6 +6,8 @@ import {
   type Page,
   type Route,
 } from "@playwright/test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
@@ -87,6 +89,128 @@ async function assertNoPageErrors(errors: readonly string[]): Promise<void> {
 }
 
 const EMPTY_API_STORAGE_STATE = { cookies: [], origins: [] };
+const PUBLIC_LIVE_BOOTSTRAP_REQUEST_PATH = "/api/v1/dashboard/bootstrap";
+
+type PublicLiveBootstrapResponseFailure =
+  | "upstream"
+  | "url"
+  | "method"
+  | "status"
+  | "content_type"
+  | "worker_version"
+  | "body"
+  | "dispose"
+  | "forward"
+  | "abort";
+
+async function publicLiveBootstrapResponseFailure(
+  response: Awaited<ReturnType<Route["fetch"]>>,
+  expectedUrl: string,
+  expectedWorkerVersionId: string,
+): Promise<PublicLiveBootstrapResponseFailure | undefined> {
+  try {
+    assertExpectedResponseUrl({
+      route: "public-live dashboard bootstrap",
+      expectedUrl,
+      observedUrl: response.url(),
+    });
+  } catch {
+    return "url";
+  }
+  if (response.status() !== 401) return "status";
+
+  const headers = response.headers();
+  if (!/^application\/json(?:;|$)/u.test(headers["content-type"] ?? "")) {
+    return "content_type";
+  }
+  if (headers["x-takosumi-version-id"]?.trim() !== expectedWorkerVersionId) {
+    return "worker_version";
+  }
+
+  try {
+    const body = await response.json();
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body) ||
+      !("error" in body) ||
+      body.error !== "invalid_token"
+    ) {
+      return "body";
+    }
+  } catch {
+    return "body";
+  }
+  return undefined;
+}
+
+async function abortPublicLiveBootstrapRoute(
+  route: Route,
+  failures: PublicLiveBootstrapResponseFailure[],
+): Promise<void> {
+  try {
+    await route.abort("blockedbyresponse");
+  } catch {
+    failures.push("abort");
+  }
+}
+
+async function handlePublicLiveBootstrapRoute(
+  route: Route,
+  expectedOrigin: string,
+  expectedWorkerVersionId: string,
+  failures: PublicLiveBootstrapResponseFailure[],
+  verifiedRequestUrls: string[],
+): Promise<boolean> {
+  const request = route.request();
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(request.url());
+  } catch {
+    return false;
+  }
+  if (
+    request.method() !== "GET" ||
+    requestUrl.origin !== expectedOrigin ||
+    requestUrl.pathname !== PUBLIC_LIVE_BOOTSTRAP_REQUEST_PATH
+  ) {
+    return false;
+  }
+
+  let response: Awaited<ReturnType<Route["fetch"]>>;
+  try {
+    response = await route.fetch({ maxRedirects: 0, maxRetries: 0 });
+  } catch {
+    failures.push("upstream");
+    await abortPublicLiveBootstrapRoute(route, failures);
+    return true;
+  }
+
+  const failure = await publicLiveBootstrapResponseFailure(
+    response,
+    request.url(),
+    expectedWorkerVersionId,
+  );
+  if (failure) {
+    failures.push(failure);
+    try {
+      await response.dispose();
+    } catch {
+      failures.push("dispose");
+    }
+    await abortPublicLiveBootstrapRoute(route, failures);
+    return true;
+  }
+
+  try {
+    await route.fulfill({ response });
+    verifiedRequestUrls.push(request.url());
+  } catch {
+    failures.push("forward");
+    await abortPublicLiveBootstrapRoute(route, failures);
+  }
+  return true;
+}
 
 function routePath(value: string): string {
   const url = new URL(value);
@@ -4029,7 +4153,14 @@ test.describe("Takosumi public-live browser profile", () => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
     const mutations: string[] = [];
-    const bootstrapDenials: Promise<void>[] = [];
+    const bootstrapResponses: {
+      readonly status: number;
+      readonly url: string;
+      readonly contentType: string | undefined;
+      readonly workerVersion: string | undefined;
+    }[] = [];
+    const bootstrapRouteFailures: PublicLiveBootstrapResponseFailure[] = [];
+    const bootstrapVerifiedUrls: string[] = [];
     await page.route("**/*", async (route) => {
       const request = route.request();
       if (
@@ -4047,6 +4178,17 @@ test.describe("Takosumi public-live browser profile", () => {
         await route.abort("blockedbyclient");
         return;
       }
+      if (
+        await handlePublicLiveBootstrapRoute(
+          route,
+          new URL(mutationOrigin).origin,
+          expectedWorkerVersionId!,
+          bootstrapRouteFailures,
+          bootstrapVerifiedUrls,
+        )
+      ) {
+        return;
+      }
       await route.continue();
     });
     page.on("response", (response) => {
@@ -4057,17 +4199,16 @@ test.describe("Takosumi public-live browser profile", () => {
       ) {
         return;
       }
-      bootstrapDenials.push(
-        (async () => {
-          expect(response.status(), response.url()).toBe(401);
-          expect(response.headers()["content-type"], response.url()).toMatch(
-            /^application\/json(?:;|$)/u,
-          );
-          expect(await response.json(), response.url()).toMatchObject({
-            error: "invalid_token",
-          });
-        })(),
-      );
+      if (response.request().method() !== "GET") {
+        bootstrapRouteFailures.push("method");
+      }
+      const headers = response.headers();
+      bootstrapResponses.push({
+        status: response.status(),
+        url: response.url(),
+        contentType: headers["content-type"],
+        workerVersion: headers["x-takosumi-version-id"],
+      });
     });
     await gotoPublicDocument(page, "/");
     const origin = new URL(page.url()).origin;
@@ -4116,8 +4257,16 @@ test.describe("Takosumi public-live browser profile", () => {
     // SignInPanel discovery starts after mount. Keep a short, bounded quiet
     // window so late same-origin responses cannot arrive after the assertions.
     await page.waitForTimeout(500);
-    await Promise.all(bootstrapDenials);
-    expect(bootstrapDenials.length).toBeGreaterThan(0);
+    expect(bootstrapResponses.length).toBeGreaterThan(0);
+    for (const response of bootstrapResponses) {
+      expect(response.status).toBe(401);
+      expect(response.contentType).toMatch(/^application\/json(?:;|$)/u);
+      expect(response.workerVersion?.trim()).toBe(expectedWorkerVersionId);
+    }
+    expect(bootstrapRouteFailures).toEqual([]);
+    expect([...bootstrapVerifiedUrls].sort()).toEqual(
+      bootstrapResponses.map((response) => response.url).sort(),
+    );
     expect(
       mutations,
       "public-live browser discovery and navigation must issue zero mutations",
@@ -4127,5 +4276,199 @@ test.describe("Takosumi public-live browser profile", () => {
     expect(expectedWorkerVersionId).toMatch(
       /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u,
     );
+  });
+});
+
+test.describe("public-live bootstrap response local regression", () => {
+  test.skip(
+    mode !== "public-live" ||
+      process.env.TAKOSUMI_E2E_LOCAL_BOOTSTRAP_FIXTURE !== "1",
+    "focused local bootstrap fixture only",
+  );
+
+  test("buffers the actual bootstrap query through sign-in navigation and rejects mismatches", async ({
+    page,
+  }) => {
+    const expectedVersion = "00000000-0000-4000-8000-000000000001";
+    const bootstrapPath =
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50";
+    type FixtureMode = "valid" | "wrong-status" | "wrong-body" | "wrong-version";
+    let fixtureMode: FixtureMode = "valid";
+    let bootstrapRequests = 0;
+    let signInRequests = 0;
+    const responseEvents: string[] = [];
+    const server = createServer((request, response) => {
+      if (request.method === "GET" && request.url === bootstrapPath) {
+        bootstrapRequests += 1;
+        const requestId = bootstrapRequests;
+        responseEvents.push(`bootstrap-${requestId}-headers`);
+        const status = fixtureMode === "wrong-status" ? 200 : 401;
+        const version =
+          fixtureMode === "wrong-version"
+            ? "00000000-0000-4000-8000-000000000002"
+            : expectedVersion;
+        const body =
+          fixtureMode === "wrong-body"
+            ? '{"error":"expired_token"}'
+            : '{"error":"invalid_token"}';
+        response.writeHead(status, {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+          "x-takosumi-version-id": version,
+        });
+        response.flushHeaders();
+        setTimeout(
+          () =>
+            response.end(body, () =>
+              responseEvents.push(`bootstrap-${requestId}-body-complete`),
+            ),
+          200,
+        );
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        (request.url === "/" || request.url === "/sign-in")
+      ) {
+        if (request.url === "/sign-in") {
+          signInRequests += 1;
+          responseEvents.push("sign-in");
+        }
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end("<!doctype html><title>Local sign-in fixture</title>");
+        return;
+      }
+
+      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      response.end("not found");
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    const origin = `http://127.0.0.1:${address.port}`;
+    const bootstrapUrl = `${origin}${bootstrapPath}`;
+    const bootstrapRouteFailures: PublicLiveBootstrapResponseFailure[] = [];
+    const bootstrapVerifiedUrls: string[] = [];
+    const bootstrapResponseUrls: string[] = [];
+    let raceArmed = true;
+    let raceObservation:
+      | {
+          readonly status: number;
+          readonly contentType: string | undefined;
+          readonly cacheControl: string | undefined;
+          readonly workerVersion: string | undefined;
+        }
+      | undefined;
+    let signInNavigation: Promise<Awaited<ReturnType<Page["goto"]>>> | undefined;
+
+    await page.route("**/*", async (route) => {
+      if (
+        await handlePublicLiveBootstrapRoute(
+          route,
+          origin,
+          expectedVersion,
+          bootstrapRouteFailures,
+          bootstrapVerifiedUrls,
+        )
+      ) {
+        return;
+      }
+      await route.continue();
+    });
+    page.on("response", (response) => {
+      if (response.url() !== bootstrapUrl) return;
+      bootstrapResponseUrls.push(response.url());
+      if (!raceArmed) return;
+      raceArmed = false;
+      const headers = response.headers();
+      raceObservation = {
+        status: response.status(),
+        contentType: headers["content-type"],
+        cacheControl: headers["cache-control"],
+        workerVersion: headers["x-takosumi-version-id"],
+      };
+      signInNavigation = page.goto(`${origin}/sign-in`, {
+        waitUntil: "domcontentloaded",
+      });
+    });
+
+    try {
+      await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
+      await page.evaluate((url) => void fetch(url).catch(() => undefined), bootstrapUrl);
+      await expect.poll(() => raceObservation !== undefined).toBe(true);
+      await expect.poll(() => signInNavigation !== undefined).toBe(true);
+      const signInResponse = await signInNavigation!;
+      expect(signInResponse?.status()).toBe(200);
+      expect(raceObservation).toMatchObject({
+        status: 401,
+        contentType: "application/json; charset=utf-8",
+        cacheControl: "no-store",
+        workerVersion: expectedVersion,
+      });
+      expect(signInRequests).toBe(1);
+      expect(bootstrapRequests).toBe(1);
+      const bodyCompleteIndex = responseEvents.indexOf(
+        "bootstrap-1-body-complete",
+      );
+      const signInIndex = responseEvents.indexOf("sign-in");
+      expect(bodyCompleteIndex).toBeGreaterThanOrEqual(0);
+      expect(signInIndex).toBeGreaterThanOrEqual(0);
+      expect(bodyCompleteIndex).toBeLessThan(signInIndex);
+      expect(bootstrapRouteFailures).toEqual([]);
+
+      const forwarded = await page.evaluate(async (url) => {
+        const response = await fetch(url, { cache: "no-store" });
+        return {
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+          cacheControl: response.headers.get("cache-control"),
+          workerVersion: response.headers.get("x-takosumi-version-id"),
+          body: await response.text(),
+        };
+      }, bootstrapUrl);
+      expect(forwarded).toMatchObject({
+        status: 401,
+        contentType: "application/json; charset=utf-8",
+        cacheControl: "no-store",
+        workerVersion: expectedVersion,
+        body: '{"error":"invalid_token"}',
+      });
+      expect(bootstrapRequests).toBe(2);
+      expect(bootstrapRouteFailures).toEqual([]);
+      expect([...bootstrapVerifiedUrls].sort()).toEqual(
+        [...bootstrapResponseUrls].sort(),
+      );
+
+      for (const [mode, expectedFailure] of [
+        ["wrong-status", "status"],
+        ["wrong-body", "body"],
+        ["wrong-version", "worker_version"],
+      ] as const) {
+        fixtureMode = mode;
+        const previousRequestCount = bootstrapRequests;
+        const browserFetch = await page.evaluate(async (url) => {
+          try {
+            await fetch(url, { cache: "no-store" });
+            return "response";
+          } catch {
+            return "rejected";
+          }
+        }, bootstrapUrl);
+        expect(browserFetch).toBe("rejected");
+        expect(bootstrapRequests).toBe(previousRequestCount + 1);
+        expect(bootstrapRouteFailures.at(-1)).toBe(expectedFailure);
+      }
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });
