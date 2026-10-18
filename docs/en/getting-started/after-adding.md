@@ -85,8 +85,11 @@ use this one, the services that would be affected are shown here.
   once. For a grace period (7 days by default in the OSS build; the people who run Takosumi can
   change it) the service and its data stay, and billing continues. **Cancel deletion** undoes it
   until then. When the period ends, Takosumi tries to export the data and then deletes the
-  service. If it cannot confirm that the deletion is safe at that point, it stops, and the page
-  tells you to cancel or delete now ([Scheduled deletion](../concepts/scheduled-uninstall.md)).
+  service. A failed export does not stop the deletion. It does stop when Takosumi cannot continue
+  safely: for example, the authority of the person who scheduled it cannot be confirmed at the
+  deadline, an export attempt was interrupted and its result cannot be confirmed, or the
+  deletion review or apply failed or was refused. The page then tells you to cancel or delete
+  now ([Scheduled deletion](../concepts/scheduled-uninstall.md)).
 - **Delete now** — **Review deletion** creates a review of the deletion. No data is exported. On
   the run screen, press **Approve this change**, confirm "Run this deletion?", then press **Run
   destructive changes anyway**. The service is deleted at once and cannot be restored.

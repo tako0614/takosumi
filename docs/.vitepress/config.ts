@@ -192,7 +192,7 @@ const base = process.env.VITEPRESS_BASE ?? "/docs/";
 export default defineConfig({
   title: "Takosumi",
   description:
-    "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
+    "Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ追加して使うための管理サーバー",
   lang: "ja",
   base,
   head: [
@@ -326,7 +326,7 @@ export default defineConfig({
       lang: "ja",
       title: "Takosumi",
       description:
-        "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
+        "Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ追加して使うための管理サーバー",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -361,7 +361,7 @@ export default defineConfig({
       lang: "en-US",
       title: "Takosumi",
       description:
-        "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
+        "A server that adds Git-hosted OpenTofu and Terraform software to the clouds you connect",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,
