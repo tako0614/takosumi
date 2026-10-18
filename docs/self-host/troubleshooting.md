@@ -26,12 +26,11 @@ production Caddy 構成では `https://<公開hostname>/healthz` を確認しま
 
 | ログに含まれる文字列 | 原因と直し方 |
 | --- | --- |
-| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` が無い。`.env` に入れる。メッセージが挙げる `TAKOSUMI_DEV_MODE=1` は手元の確認用で、本番では使わない |
+| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` が無い。`.env` に入れる。production 以外の環境ではメッセージが `TAKOSUMI_DEV_MODE=1` も挙げるが、手元の確認用なので本番では使わない |
 | `secret-store globalPassphrase is too short` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` が 32 バイト未満。`openssl rand -hex 32` で作った値にする |
 | `refusing to boot an https issuer` | issuer が https なのに安定した署名鍵が無い。`TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` と `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` を入れる |
 | `Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` | 署名鍵だけを入れ、`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` が無い |
 | `Invalid keyData` | `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` を鍵として読めない。`.env.example` の仮の値（`replace-with-private-d`）が残っていないか確かめ、生成した JWK に置き換える |
-| `must include public x/y coordinates` | JWK に `x` と `y` が無い。生成した JWK をそのまま使う |
 | `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` | 上流の ID プロバイダを設定したのに `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` が無い |
 | `clientSecretEnv references missing runtime secret` | 記述子の `clientSecretEnv` に書いた名前の secret がコンテナに届いていない。`docker-compose.override.yml` の `accounts.environment` で渡す |
 | `dashboard SPA build not found` | dashboard の build が無く、画面が出ない（起動は続く）。Compose の image には入っている。手で起動する場合は `bun run build:dashboard` を実行するか、`index.html` のあるディレクトリを `TAKOSUMI_ACCOUNTS_STATIC_DIR` に設定する |

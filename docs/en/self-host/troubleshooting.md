@@ -26,12 +26,11 @@ What stopped the startup appears in the `error.message` of the `"event":"server.
 
 | Text in the log | Cause and fix |
 | --- | --- |
-| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` is not set. Put it in `.env`. The `TAKOSUMI_DEV_MODE=1` the message mentions is for local checks only; do not use it in production |
+| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` is not set. Put it in `.env`. Outside production the message also suggests `TAKOSUMI_DEV_MODE=1`; that is for local checks only, so do not set it in production |
 | `secret-store globalPassphrase is too short` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` is under 32 bytes. Use a value from `openssl rand -hex 32` |
 | `refusing to boot an https issuer` | The issuer is https but there is no stable signing key. Set `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` |
 | `Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` | The signing key is set but `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` is not |
 | `Invalid keyData` | `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` cannot be read as a key. Check that the `.env.example` placeholder (`replace-with-private-d`) is gone, and use a generated JWK |
-| `must include public x/y coordinates` | The JWK lacks `x` and `y`. Use the generated JWK as is |
 | `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` | An upstream identity provider is configured without `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` |
 | `clientSecretEnv references missing runtime secret` | The secret named in the descriptor's `clientSecretEnv` does not reach the container. Pass it under `accounts.environment` in `docker-compose.override.yml` |
 | `dashboard SPA build not found` | There is no dashboard build, so no screens appear (startup continues). The Compose image includes it. When starting by hand, run `bun run build:dashboard` or set `TAKOSUMI_ACCOUNTS_STATIC_DIR` to a directory that contains `index.html` |
