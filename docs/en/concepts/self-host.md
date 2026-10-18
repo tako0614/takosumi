@@ -144,7 +144,7 @@ is something you add to an account after signing in. The
 [configuration reference](../reference/configuration.md) shows how to write
 `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`. The provider's client secret and
 `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` go with the secrets below. The descriptor's `redirectUri` is
-`https://<your origin>/sign-in/callback`. On Cloudflare, a broken descriptor leaves no way to
+`https://<your origin>/sign-in/callback`; register exactly this URI with the identity provider. On Cloudflare, a broken descriptor leaves no way to
 sign in and logs `auth_providers_upstream_oauth_disabled`. If you write the value as a TOML
 array, the Worker does not receive it as a string, and sign-in disappears without any log.
 

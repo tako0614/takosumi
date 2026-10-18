@@ -140,7 +140,7 @@ cp deploy/platform/wrangler.toml "$HOME/.takosumi-private/wrangler.toml"
 済みのアカウントに後から追加する手段です。`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` の書き方は
 [設定リファレンス](../reference/configuration.md)にあります。provider の client secret と
 `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` は、下の secret と一緒に送ります。記述子の `redirectUri` は
-`https://<公開する origin>/sign-in/callback` です。Cloudflare 構成では、記述子の中身が壊れて
+`https://<公開する origin>/sign-in/callback` で、ID プロバイダにもこの URI をそのまま登録します。Cloudflare 構成では、記述子の中身が壊れて
 いるとサインインの手段が出ず、ログに `auth_providers_upstream_oauth_disabled` が残ります。値を
 TOML の配列で書くと Worker に文字列として届かず、ログを出さずにサインインの手段が出ません。
 
