@@ -172,65 +172,144 @@ protocol and authority surfaces.
 
 The authoritative session-route inventory is
 `accounts/service/src/control-route-inventory.ts`; it currently contains 91
-public route descriptors. Representative operations from that inventory are:
+public route descriptors, listed below. The descriptions follow the inventory's summaries,
+lightly edited for readers.
 
-```http
-POST  /api/v1/workspaces
-GET   /api/v1/workspaces/{workspaceId}
-DELETE /api/v1/workspaces/{workspaceId} (empty Workspace, owner only; 409 while Capsules, Sources, in-flight Runs, usage evidence, or retained backups remain; never destroys cloud resources)
+**Account views**
 
-POST  /api/v1/workspaces/{workspaceId}/projects
-GET   /api/v1/projects/{projectId}
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/views/workspaces.v1` | Read the account Workspace inventory projection |
 
-POST  /api/v1/sources
-GET   /api/v1/sources
-GET   /api/v1/sources/{sourceId}
-PATCH /api/v1/sources/{sourceId}
-DELETE /api/v1/sources/{sourceId} (unreferenced Source only; 409 while tracked or in flight)
-POST  /api/v1/sources/{sourceId}/hook-secret/rotate
-POST  /api/v1/sources/{sourceId}/sync
-GET   /api/v1/sources/{sourceId}/snapshots
-GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules
-POST  /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver
+**Workspaces**
 
-GET   /api/v1/workspaces/{workspaceId}/capsules
-GET   /api/v1/capsules/{capsuleId}
-PATCH /api/v1/capsules/{capsuleId}
-GET   /api/v1/capsules/{capsuleId}/provider-bindings
-GET   /api/v1/capsule-configs
-GET   /api/v1/capsule-configs/{capsuleConfigId}
-POST  /api/v1/capsules/{capsuleId}/plan
-POST  /api/v1/capsules/{capsuleId}/configuration-plans
-DELETE /api/v1/capsules/{capsuleId} (or ?immediate=true)
-POST  /api/v1/capsules/{capsuleId}/uninstall
-POST  /api/v1/capsules/{capsuleId}/cancel-uninstall
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/workspaces` | List caller Workspaces |
+| POST | `/api/v1/workspaces` | Create a Workspace |
+| GET | `/api/v1/workspaces/{workspaceId}` | Read a Workspace |
+| PATCH | `/api/v1/workspaces/{workspaceId}` | Update a Workspace |
+| DELETE | `/api/v1/workspaces/{workspaceId}` | Delete an empty Workspace as its owner; never destroys cloud resources. Returns 409 while Capsules, Sources, in-flight Runs, usage evidence, or retained backups remain |
+| GET | `/api/v1/workspaces/{workspaceId}/members` | List Workspace members |
+| POST | `/api/v1/workspaces/{workspaceId}/members` | Add a Workspace member |
+| PATCH | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Change a Workspace member role |
+| DELETE | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Remove a Workspace member |
+| GET | `/api/v1/workspaces/{workspaceId}/graph` | Read the Workspace Capsule dependency graph |
+| GET | `/api/v1/workspaces/{workspaceId}/ui-surfaces` | List authorized Workspace UI surface Interfaces |
+| GET | `/api/v1/workspaces/{workspaceId}/activity` | List Workspace Activity |
+| GET | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | List Interface materialization failures, which contain no secret values |
+| POST | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries` | Retry one exact Interface materialization failure |
+| GET | `/api/v1/workspaces/{workspaceId}/usage` | List Workspace usage |
+| GET | `/api/v1/workspaces/{workspaceId}/billing` | Read the owner's account billing state for this Workspace |
+| GET | `/api/v1/workspaces/{workspaceId}/backups` | List Workspace partial control exports |
+| POST | `/api/v1/workspaces/{workspaceId}/backups` | Create a Workspace partial control export |
+| POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Create a Workspace plan update Run |
+| POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Create a Workspace drift check Run |
 
-POST /api/v1/workspaces/{workspaceId}/install-plans
-GET  /api/v1/install-plans/{installPlanId}
-POST /api/v1/install-plans/{installPlanId}/reconcile
+**Projects and Capsules**
 
-POST /api/v1/capsules/{capsuleId}/revision-plans
-GET  /api/v1/revision-plans/{revisionPlanId}
-POST /api/v1/revision-plans/{revisionPlanId}/reconcile
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/workspaces/{workspaceId}/projects` | List Workspace Projects |
+| POST | `/api/v1/workspaces/{workspaceId}/projects` | Create a Project |
+| GET | `/api/v1/projects/{projectId}` | Read a Project |
+| GET | `/api/v1/workspaces/{workspaceId}/capsules` | List Workspace Capsules |
+| GET | `/api/v1/capsules/{capsuleId}` | Read a Capsule |
+| POST | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | Re-adopt a Capsule to the latest InstallConfig in its repository, conditional on its current binding |
+| PATCH | `/api/v1/capsules/{capsuleId}` | Update a Capsule |
+| DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
+| POST | `/api/v1/capsules/{capsuleId}/uninstall` | Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy |
+| POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall` | Cancel a scheduled uninstall during its grace period |
+| GET | `/api/v1/capsules/{capsuleId}/outputs` | Read the Capsule's current public Output projection |
+| GET | `/api/v1/capsules/{capsuleId}/current-resource-inventory` | Read the Capsule's current recorded OpenTofu resource inventory |
+| GET | `/api/v1/capsules/{capsuleId}/usage-summary` | Read the Capsule's showback usage aggregate |
+| GET | `/api/v1/capsules/{capsuleId}/state-versions` | List Capsule StateVersions |
+| GET | `/api/v1/capsules/{capsuleId}/dependencies` | List Capsule Dependencies |
+| POST | `/api/v1/capsules/{capsuleId}/dependencies` | Create a Capsule Dependency |
+| DELETE | `/api/v1/dependencies/{dependencyId}` | Delete a Dependency |
+| GET | `/api/v1/capsules/{capsuleId}/provider-bindings` | Read Capsule ProviderBinding selections |
+| GET | `/api/v1/workspaces/{workspaceId}/current-state-versions` | List current StateVersions for Workspace Capsules |
+| GET | `/api/v1/capsule-configs` | List Capsule creation configs visible to the caller |
+| GET | `/api/v1/capsule-configs/{capsuleConfigId}` | Read a Capsule creation config |
+| POST | `/api/v1/capsules/{capsuleId}/plan` | Create a Capsule plan Run |
+| POST | `/api/v1/capsules/{capsuleId}/configuration-plans` | Adopt a new desired configuration and provider binding in one step, and return an OpenTofu Plan for review only |
+| POST | `/api/v1/capsules/{capsuleId}/destroy-plan` | Create a Capsule destroy plan Run |
+| POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
+| POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
 
-GET  /api/v1/connections
-POST /api/v1/connections
-POST /api/v1/connections/{connectionId}/test
-POST /api/v1/connections/{connectionId}/revoke
+**Sources**
 
-GET  /api/v1/runs/{runId}
-GET  /api/v1/runs/{runId}/logs
-POST /api/v1/runs/{runId}/approve
-POST /api/v1/runs/{runId}/apply
-POST /api/v1/runs/{runId}/cancel
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/sources` | List Sources visible to the caller |
+| POST | `/api/v1/sources` | Create a Source |
+| GET | `/api/v1/sources/{sourceId}` | Read a Source |
+| PATCH | `/api/v1/sources/{sourceId}` | Update Source metadata |
+| DELETE | `/api/v1/sources/{sourceId}` | Delete an unreferenced Source and invalidate its webhook bearer. Returns 409 while it is tracked or has a Run in flight |
+| POST | `/api/v1/sources/{sourceId}/hook-secret/rotate` | Rotate the webhook bearer and return the new one once; the old bearer stops working immediately |
+| POST | `/api/v1/sources/{sourceId}/sync` | Create a Source sync Run (observe by default; manual_plan for an explicit reviewed update) |
+| GET | `/api/v1/sources/{sourceId}/snapshots` | List SourceSnapshots |
+| GET | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | List install module directories and provider requirements scanned from one SourceSnapshot tree |
+| POST | `/api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | Resolve the highest public stable SemVer Git tag |
+| POST | `/api/v1/sources/{sourceId}/compatibility-check` | Create a Compatibility Report |
+| GET | `/api/v1/compatibility-reports/{reportId}` | Read a Compatibility Report |
 
-GET /api/v1/capsules/{capsuleId}/state-versions
-GET /api/v1/capsules/{capsuleId}/outputs
-GET /api/v1/capsules/{capsuleId}/current-resource-inventory
-GET /api/v1/workspaces/{workspaceId}/activity
-GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
-POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries
-```
+**Git install plans**
+
+| Method | Path | Description |
+| --- | --- | --- |
+| POST | `/api/v1/workspaces/{workspaceId}/install-plans` | Create or replay an idempotent Git install plan |
+| GET | `/api/v1/install-plans/{installPlanId}` | Read an install plan without advancing it |
+| POST | `/api/v1/install-plans/{installPlanId}/reconcile` | Explicitly advance an install plan toward a reviewable Run |
+
+**Git revision plans**
+
+| Method | Path | Description |
+| --- | --- | --- |
+| POST | `/api/v1/capsules/{capsuleId}/revision-plans` | Create or replay an idempotent Git revision plan |
+| GET | `/api/v1/revision-plans/{revisionPlanId}` | Read a Git revision plan without advancing it |
+| POST | `/api/v1/revision-plans/{revisionPlanId}/reconcile` | Advance a Git revision plan toward a reviewable Run |
+
+**Runs and StateVersions**
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/workspaces/{workspaceId}/runs` | List Workspace Runs |
+| GET | `/api/v1/runs/{runId}` | Read a Run |
+| POST | `/api/v1/runs/{runId}/approve` | Approve a Run |
+| POST | `/api/v1/runs/{runId}/apply` | Apply a reviewed Run |
+| POST | `/api/v1/runs/{runId}/cancel` | Cancel a Run |
+| GET | `/api/v1/runs/{runId}/logs` | Read Run logs |
+| GET | `/api/v1/runs/{runId}/events` | Read Run events |
+| GET | `/api/v1/runs/{runId}/cost` | Read Run cost projection |
+| GET | `/api/v1/run-groups/{runGroupId}` | Read a grouped Run |
+| POST | `/api/v1/run-groups/{runGroupId}/approve` | Approve a grouped Run |
+| GET | `/api/v1/state-versions/{stateVersionId}` | Read a StateVersion projection |
+| POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | Create a StateVersion rollback plan |
+
+**Credentials and Output sharing**
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/connections` | List Connections |
+| POST | `/api/v1/connections` | Create a write-only credential Connection |
+| POST | `/api/v1/connections/{connectionId}/test` | Verify a Connection |
+| POST | `/api/v1/connections/{connectionId}/revoke` | Revoke a Connection |
+| POST | `/api/v1/connections/oauth/{helperId}/start` | Start an installed credential OAuth helper |
+| GET | `/api/v1/connections/oauth/{helperId}/callback` | Complete an installed credential OAuth helper |
+| GET | `/api/v1/provider-connections` | List ProviderConnections visible to a Workspace |
+| GET | `/api/v1/credential-recipes` | List optional guided Credential Recipes |
+| GET | `/api/v1/output-shares` | List OutputShares |
+| POST | `/api/v1/output-shares` | Create an OutputShare |
+| POST | `/api/v1/output-shares/{shareId}/approve` | Approve an OutputShare |
+| POST | `/api/v1/output-shares/{shareId}/revoke` | Revoke an OutputShare |
+
+**Dashboard projections**
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/v1/dashboard/bootstrap` | Read the dashboard session bootstrap projection |
+| GET | `/api/v1/dashboard/overview` | Read the dashboard Workspace overview projection |
 
 Webhook secret recovery, old-secret invalidation, and lost-response handling are described in
 [Sources and Capsules](../concepts/sources.md). The equivalent service-internal route is
