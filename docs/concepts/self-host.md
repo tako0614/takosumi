@@ -166,7 +166,7 @@ takosumi accounts migrate-d1 verify ...
 `status` で状態を確かめてから、次の操作を決めます。CLI はデータベースを復元しません。書き出した
 bookmark は復元の手がかりになるため、チェックアウトの外で非公開のまま保管します。適用した後は、
 その版を受け付けない古い Worker には戻せません。すでに動いている環境の Accounts D1 を上げる
-場合は、[更新](../self-host/upgrade.md)を参照してください。
+場合は、[Takosumi 本体を更新する](../self-host/upgrade.md)を参照してください。
 
 control plane 側の D1 にマイグレーションは要りません。`TAKOSUMI_CONTROL_D1_SCHEMA_MODE`
 が既定の `bootstrap` のあいだ、最初のリクエストでスキーマが整います。事前に用意した

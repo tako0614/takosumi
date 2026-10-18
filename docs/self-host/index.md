@@ -6,7 +6,7 @@ Bun と PostgreSQL の標準の構成を手元で試す場合は、そのペー�
 [ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)
 の一時的な上書き設定（`compose.local-test.yml`）を使います。
 
-- [更新する](./upgrade.md)
+- [Takosumi 本体を更新する](./upgrade.md)
 - [バックアップと復旧](./backup-restore.md)
 - [トラブルシューティング](./troubleshooting.md)
 

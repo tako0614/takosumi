@@ -187,6 +187,7 @@ done
 
 ## 次に読むもの
 
+- [追加したサービスの更新・戻す・削除](./after-adding.md)
 - [仕組みの全体像](../concepts/index.md)
 - [Source と Capsule](../concepts/sources.md)
 - [認証情報](../concepts/credentials.md)

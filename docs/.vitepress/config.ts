@@ -40,6 +40,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Takosumi とは", link: "/" },
         { text: "クイックスタート", link: "/getting-started/quickstart" },
+        { text: "更新・戻す・削除", link: "/getting-started/after-adding" },
+        { text: "リポジトリを用意する", link: "/getting-started/prepare-repository" },
         { text: "API だけ動かす", link: "/getting-started/api-only" },
       ],
     },
@@ -59,7 +61,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           text: "運用ガイド",
           link: "/self-host/",
           items: [
-            { text: "更新する", link: "/self-host/upgrade" },
+            { text: "Takosumi 本体を更新する", link: "/self-host/upgrade" },
             { text: "バックアップと復旧", link: "/self-host/backup-restore" },
             { text: "トラブルシューティング", link: "/self-host/troubleshooting" },
           ],
@@ -109,6 +111,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           text: "Quickstart",
           link: "/en/getting-started/quickstart",
         },
+        { text: "Update, restore, delete", link: "/en/getting-started/after-adding" },
+        { text: "Prepare a repository", link: "/en/getting-started/prepare-repository" },
         { text: "Run only the API", link: "/en/getting-started/api-only" },
       ],
     },
@@ -128,7 +132,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           text: "Operations guide",
           link: "/en/self-host/",
           items: [
-            { text: "Updating", link: "/en/self-host/upgrade" },
+            { text: "Updating Takosumi itself", link: "/en/self-host/upgrade" },
             { text: "Backup and recovery", link: "/en/self-host/backup-restore" },
             { text: "Troubleshooting", link: "/en/self-host/troubleshooting" },
           ],

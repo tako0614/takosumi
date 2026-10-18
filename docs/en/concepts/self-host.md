@@ -170,7 +170,7 @@ the state with the read-only `status` before deciding what to do next. The CLI n
 restores a database. Keep the bookmark file private and outside the checkout, because it is
 what a restore would start from. Once applied, you cannot go back to an older Worker that
 does not accept that version. To upgrade the Accounts D1 of a running installation, see
-[Upgrade](../self-host/upgrade.md).
+[Updating Takosumi itself](../self-host/upgrade.md).
 
 The control plane D1 needs no migrations. While `TAKOSUMI_CONTROL_D1_SCHEMA_MODE` is at
 its default of `bootstrap`, the schema settles on the first request. To run against a

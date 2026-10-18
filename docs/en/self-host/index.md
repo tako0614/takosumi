@@ -6,7 +6,7 @@ installation. To try the standard Bun and PostgreSQL composition on your own mac
 temporary override file (`compose.local-test.yml`) from
 [Local loopback check](../concepts/self-host.md#local-loopback-check) on that page.
 
-- [Updating](./upgrade.md)
+- [Updating Takosumi itself](./upgrade.md)
 - [Backup and recovery](./backup-restore.md)
 - [Troubleshooting](./troubleshooting.md)
 

@@ -37,7 +37,8 @@ There is no Takosumi-specific source catalog. `defaultPath` narrows the captured
 tree but does not select an executable module. Source sync scans tracked regular
 files under the source subtree at the exact commit and records the real OpenTofu
 root modules and provider sources in the `SourceSnapshot`. Only this file-derived scan
-creates module or provider candidates.
+creates module or provider candidates. What a module needs in order to be added is in
+[Prepare a repository](../getting-started/prepare-repository.md).
 
 The creation response carries a `hookSecret`. **It is returned in the clear exactly once,
 at creation, and cannot be retrieved afterwards.** The Source record stores only a hash.
