@@ -48,7 +48,7 @@ Check an endpoint instead of guessing from an edition name.
 curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-You can also read `/api/v1/capabilities`. Neither needs authentication.
+You can also read `/api/v1/capabilities`. The Takosumi API and the Cloudflare Worker serve both without authentication.
 
 ## What the Takosumi hosted service adds
 

@@ -52,7 +52,7 @@ API では `POST /api/v1/connections` です。`/api/v1/provider-connections` �
 一部の対応 provider では、Run の実行中に短命の認証情報を更新し続ける Connection を
 使えます（実行中の認証情報の更新）。使う場合は、Capsule の provider 接続を設定するときに、
 その Connection を明示的に選んでください。期限が強制される一時的な認証情報を発行できる
-場合にだけ動きます。カタログや Recipe に対応情報があるだけでは有効にならず、既存の静的な Connection や割り当ても自動では切り替わりません。
+場合にだけ動き、そうでなければ Run は失敗します。カタログや Recipe に対応情報があるだけでは有効にならず、既存の静的な Connection や割り当ても自動では切り替わりません。
 
 必要な provider のバージョンは provider ごとに異なります。たとえば `TAKOFORM_TOKEN_FILE`
 による更新には Terraform provider `tako0614/takoform` の 4.1.0 以上が必要です。これはこの

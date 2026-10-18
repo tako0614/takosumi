@@ -57,7 +57,7 @@ Runs remain.
 For some supported providers, a Connection can keep renewing a short-lived credential while
 a Run is executing (credential renewal during a Run). To use it, explicitly choose that
 Connection when setting up the Capsule's provider assignment. It works only when the
-Connection can issue a temporary credential with an enforced expiry. A catalog or Recipe entry
+Connection can issue a temporary credential with an enforced expiry; otherwise the Run fails. A catalog or Recipe entry
 alone does not enable it, and Takosumi does not switch an existing static Connection or assignment
 automatically.
 

@@ -64,10 +64,12 @@ owner を読む compatibility code が残る endpoint でも、それは migrati
 | `source`          | 値の出どころ           | 一緒に書くもの                   |
 | ----------------- | ---------------------- | -------------------------------- |
 | `literal`         | 宣言に直接書いた値     | `value`                          |
-| `capsule_output`  | Capsule の公開 Output  | `capsuleId`、`outputName`        |
+| `capsule_output`  | Capsule の公開 Output  | `outputName`（API では `capsuleId` も） |
 
-`capsule_output` では、宣言している Capsule 自身の Output を読む場合も `capsuleId` を
-書きます。
+Interface API（`POST /api/v1/interfaces` の `spec.inputs`）では、宣言している Capsule 自身の
+Output を読む場合も `capsuleId` を書きます。Capsule の blueprint（`interfaceBlueprints` や
+repository の宣言）では `capsuleId` を書きません。宣言している Capsule が自動で入り、書くと
+拒否されます。
 
 Output の値が構造を持つときは `pointer` で一部だけを取り出せます。書き方は RFC 6901 の
 JSON Pointer です。
