@@ -29,7 +29,7 @@ A Store client cannot send `modulePath` or `installConfigId` when requesting
 `compileInstallUx: true`. Zero candidates cannot be installed, exactly one is
 auto-selected, and multiple candidates require an exact dashboard choice.
 Multiple host overrides also fail closed; zero overrides use the generic host
-policy, so installing an app does not require registering an app-specific
+policy, so installing a service does not require registering a service-specific
 InstallConfig in the Store.
 A host override is execution policy matched by `sourceSelector.url`; it does
 not need `store` presentation metadata. Operator policy that permits lifecycle
