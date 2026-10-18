@@ -38,12 +38,17 @@ control plane、dashboard の確認には使えますが、Git の同期、plan�
 Takosumi のソフトウェアに利用料はありません（AGPL-3.0）。かかるのは、Takosumi を置く場所の
 料金と、追加したアプリが作るリソースの料金です。
 
-- **Cloudflare** — Workers Paid プランの料金と、Workers、Containers、D1、R2、Durable Objects
-  の使用量が Cloudflare から請求されます。runner のコンテナ（雛形では 2 vCPU・6 GiB、最大
-  10 台）は、変更の確認やデプロイを実行している間だけ動き、Run が終わると破棄されます。金額は
-  [Cloudflare の料金](https://www.cloudflare.com/plans/developer-platform/)で確かめてください。
-- **Bun と PostgreSQL** — Docker を動かすサーバーと PostgreSQL の費用です。
-- **手元だけ** — 手元のマシンの中だけで動きます。
+- **Cloudflare** — Workers Paid プランの料金と、Workers、Containers、D1、R2、Durable Objects、
+  ログ（observability）の使用量が Cloudflare から請求されます。dashboard の表示も Worker への
+  リクエストになります。runner のコンテナ（雛形では 2 vCPU・6 GiB・ディスク 10 GB、最大
+  10 台）は、変更の確認・デプロイ・削除のほか、リポジトリの取得や追加前の確認のたびに起動し、
+  それが終わると止まります。自動で同期するリポジトリがあると、毎時の確認でも起動します。
+  ほかに、ドメインの費用がかかります。金額は Cloudflare の
+  [Workers の料金](https://www.cloudflare.com/plans/developer-platform/)と
+  [Containers の料金](https://developers.cloudflare.com/containers/pricing/)で確かめてください。
+- **Bun と PostgreSQL** — Docker を動かすサーバーと PostgreSQL の費用です。plan と apply には、
+  別に組み込む runner の費用もかかります。
+- **手元だけ** — Takosumi 自体は、手元のマシンの中だけで動きます。
 - **追加したアプリのリソース** — アプリが作る Worker、bucket、データベースなどの料金は、
   接続したアカウントの事業者（Cloudflare など）から、そのアカウントに請求されます。
 

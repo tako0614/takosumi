@@ -38,11 +38,16 @@ The Takosumi software has no fee (AGPL-3.0). What you pay for is where you run T
 resources that the apps you add create.
 
 - **Cloudflare** — Cloudflare bills the Workers Paid plan and your usage of Workers, Containers,
-  D1, R2, and Durable Objects. The runner container (2 vCPU, 6 GiB, at most 10 instances in the
-  template) runs only while a review or a deploy is executing and is discarded when the Run ends.
-  See [Cloudflare's pricing](https://www.cloudflare.com/plans/developer-platform/) for amounts.
-- **Bun and PostgreSQL** — the server that runs Docker, and PostgreSQL.
-- **Entirely local** — it runs only on your own machine.
+  D1, R2, Durable Objects, and logs (observability). Loading the dashboard also counts as Worker
+  requests. The runner container (2 vCPU, 6 GiB, and 10 GB disk in the template, at most 10
+  instances) starts for each review, deploy, and deletion, and also for each repository fetch and
+  pre-add check, and stops when that work ends. Repositories that sync automatically also start it
+  at the hourly check. A domain costs extra. See Cloudflare's
+  [Workers pricing](https://www.cloudflare.com/plans/developer-platform/) and
+  [Containers pricing](https://developers.cloudflare.com/containers/pricing/) for amounts.
+- **Bun and PostgreSQL** — the server that runs Docker, and PostgreSQL. Plan and apply also need a
+  separately composed runner, which costs whatever it runs on.
+- **Entirely local** — Takosumi itself runs only on your own machine.
 - **Resources of the apps you add** — the Workers, buckets, databases, and so on that an app
   creates are billed to the connected account by its provider, such as Cloudflare.
 
