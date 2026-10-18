@@ -93,16 +93,14 @@ SpacePolicy の `/v1` route と CLI domain は廃止済みで、有効化する 
 ありません。常に `404` を返し、capabilities/OpenAPI にも出ず、bearer、
 database、残っている行で復活させることもできません。
 
-現在の Takosumi は、Resource Shape、TargetPool、その他の廃止済み Host record
-向けの型付き Host migration 操作や設定を公開していません。PostgreSQL
-migration v110 と D1 migration v66 は、対象の table がすべて空のときだけ
-物理的に drop します。行が残っていれば forward migration はそこで止まります。
-影響を受ける operator は、直前の release か外部の database ツールでその行を
-棚卸しして export し、どう処置するかを明示的に記録したうえで、その処置に
-従って廃止済み table を空にしてから migration を再試行してください。portable
-Takoform protocol は外部 Host の contract であり、互換 alias や migration
-surface ではありません。新しい利用者は Stack と ProviderConnection /
-CredentialRecipe / ProviderBinding の経路で通常の provider を設定します。
+Form Package の install や host もしません。Form Host を持つ hosted service や operator の構成が、
+その Host 固有の trust policy と artifact binding を Host の runbook に記録することがありますが、それは
+Takosumi OSS が対応する deploy の経路ではなく、FormActivation や Offering を作りません。portable
+Takoform protocol は外部 Host の contract で、互換の alias や移行の入口ではありません。新しい利用者は、
+Stack と ProviderConnection / CredentialRecipe / ProviderBinding の経路で通常の provider を設定します。
+
+廃止したテーブルに行が残っていてアップグレードが止まったときの直し方は、
+[Takosumi 本体を更新する](../self-host/upgrade.md#廃止したテーブルに行が残っているとき)にあります。
 
 ## Run と runner
 
@@ -130,13 +128,6 @@ storage) が無い構成では `skipped` と記録して破棄に進みます。
 export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
 export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 ```
-
-## Form Package の設定 (外部 Host のみ)
-
-Takosumi OSS は Form Package を install も host もしません。Form Host を所有する
-hosted service や operator の構成が、その Host 固有の trust policy と artifact
-binding を Host の runbook に記録することがあります。それらの設定は Takosumi
-OSS が対応する deploy 経路ではなく、FormActivation や Offering を作りません。
 
 ## Cloudflare 構成で使うもの
 

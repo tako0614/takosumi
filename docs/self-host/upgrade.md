@@ -95,6 +95,22 @@ v4 を適用した後は、v3 だけを受け付ける Worker には戻せませ
 [online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md)
 に従ってください。
 
+## 廃止したテーブルに行が残っているとき
+
+以前の Resource Shape、Form Host、TargetPool、SpacePolicy、Offering などの記録を置いていたテーブルは、
+PostgreSQL の migration 110（`retired.host_schema.drop_empty`）と、Cloudflare の D1 の migration 66
+（`d1_retired_host_schema_drop_empty`）が削除します。どちらも、対象のテーブルがすべて空のときだけ削除し、
+行が 1 つでも残っていると、その migration で止まります。
+
+止まったときは、次の順に進めます。
+
+1. 直前の release か外部のデータベースのツールで、残っている行を一覧にして書き出します。
+2. それぞれの行をどう扱うかを、明示的に記録します。
+3. その記録に従って、廃止したテーブルを空にします。
+4. migration をもう一度実行します。
+
+Takosumi の今の版には、これらの記録を移す操作や設定はありません。
+
 ## 失敗した場合
 
 schema に触れる前の失敗と、触れた後の失敗を分けて記録します。後者では排他制御の印（fence）と

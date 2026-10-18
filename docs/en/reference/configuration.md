@@ -97,17 +97,15 @@ flag to re-enable them. They always return `404`, never appear in
 capabilities/OpenAPI, and cannot be revived through a bearer, the database, or
 leftover rows.
 
-The current Takosumi exposes no typed Host migration operations or settings
-for Resource Shape, TargetPool, or other retired Host records. PostgreSQL
-migration v110 and D1 migration v66 physically drop the target tables only
-when all of them are empty. If rows remain, the forward migration stops there.
-An affected operator should inventory and export those rows with the
-immediately previous release or an external database tool, record explicitly
-how they will be handled, empty the retired tables accordingly, and retry the
-migration. The portable Takoform protocol is a contract for external Hosts,
-not a compatibility alias or a migration surface. New users configure ordinary
-providers through Stack and ProviderConnection / CredentialRecipe /
-ProviderBinding.
+It also neither installs nor hosts Form Packages. A hosted service or operator that owns a Form
+Host may record Host-specific trust policy and artifact binding in that Host's runbook, but that is
+not a deploy path Takosumi OSS supports, and it creates no FormActivation or Offering. The portable
+Takoform protocol is a contract for external Hosts, not a compatibility alias or a migration
+surface. New users configure ordinary providers through Stack and ProviderConnection /
+CredentialRecipe / ProviderBinding.
+
+If an upgrade stops because retired tables still have rows, see
+[Updating Takosumi itself](../self-host/upgrade.md#when-retired-tables-still-have-rows).
 
 ## Run and runner
 
@@ -137,13 +135,6 @@ proceeds with the teardown.
 export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
 export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 ```
-
-## Form Package settings (external Hosts only)
-
-Takosumi OSS neither installs nor hosts Form Packages. A hosted service or
-operator that owns a Form Host may record Host-specific trust policy and
-artifact binding in that Host's runbook. Those settings are not a deploy path
-Takosumi OSS supports, and they create no FormActivation or Offering.
 
 ## Cloudflare-only variables
 

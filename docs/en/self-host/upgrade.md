@@ -99,6 +99,23 @@ before it applies v4, `apply` backfills the existing OIDC client records in chun
 [online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md)
 for this order and its caveats.
 
+## When retired tables still have rows
+
+The tables that held the former Resource Shape, Form Host, TargetPool, SpacePolicy, Offering, and
+similar records are dropped by PostgreSQL migration 110 (`retired.host_schema.drop_empty`) and by
+Cloudflare D1 migration 66 (`d1_retired_host_schema_drop_empty`). Both drop the tables only when all
+of them are empty. If even one row remains, the upgrade stops at that migration.
+
+If it stops:
+
+1. List and export the remaining rows with the immediately previous release or an external database
+   tool.
+2. Record explicitly how each row will be handled.
+3. Empty the retired tables as recorded.
+4. Run the migration again.
+
+The current Takosumi has no operation or setting that moves these records.
+
 ## Failure handling
 
 Record whether failure occurred before or after durable state was touched. After mutation,
