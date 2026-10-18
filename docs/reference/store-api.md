@@ -27,7 +27,7 @@ Store client は `compileInstallUx: true` の request に `modulePath` や
 `installConfigId` を指定できません。候補が0件なら install 不可、1件なら自動選択、複数なら
 dashboard の chooser で exact path を明示します。host override が複数件なら fail closed
 です。override が0件でも optional repository manifest と
-汎用 host policy だけで install でき、Store への サービス固有の InstallConfig 登録は不要です。
+汎用 host policy だけで install でき、Store へのサービス固有の InstallConfig 登録は不要です。
 host override は `sourceSelector.url` で一致する実行 policy であり、`store` 表示情報を
 持つ必要はありません。そのため lifecycle や credential policy を許可する operator
 設定が Store の別 listing として表示されることもありません。
