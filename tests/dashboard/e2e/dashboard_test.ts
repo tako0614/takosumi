@@ -251,11 +251,13 @@ async function gotoDashboardDocument(
  * SPA must preserve the requested deep link in its expected sign-in return.
  * This distinguishes an intentional client route from an HTTP redirect.
  */
-async function gotoPublicDocument(page: Page, path: string): Promise<void> {
+async function gotoPublicDocument(
+  page: Page,
+  path: string,
+  expectedReturnPath = path,
+): Promise<void> {
   const requestedUrl = new URL(path, mutationOrigin);
-  const expectedReturn = encodeURIComponent(
-    requestedUrl.pathname + requestedUrl.search,
-  );
+  const expectedReturn = encodeURIComponent(expectedReturnPath);
   const expectedPageUrl = new URL(
     `/sign-in?return=${expectedReturn}`,
     requestedUrl.origin,
@@ -4251,8 +4253,11 @@ test.describe("Takosumi public-live browser profile", () => {
     const installPath =
       "/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fservice.git" +
       "&ref=0123456789abcdef0123456789abcdef01234567&path=deploy%2Fopentofu";
-    await gotoPublicDocument(page, installPath);
-    expect(new URL(page.url()).searchParams.get("return")).toBe(installPath);
+    const installReturnPath = installPath.replace(/^\/install/u, "/new");
+    await gotoPublicDocument(page, installPath, installReturnPath);
+    expect(new URL(page.url()).searchParams.get("return")).toBe(
+      installReturnPath,
+    );
 
     // SignInPanel discovery starts after mount. Keep a short, bounded quiet
     // window so late same-origin responses cannot arrive after the assertions.
