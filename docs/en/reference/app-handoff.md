@@ -12,6 +12,10 @@ It is not a mobile-only protocol and it is not a product registry. Takosumi
 receives a plain OpenTofu/Terraform source, creates a Capsule, runs the normal
 Takosumi flow, then optionally returns a connection payload to the client.
 
+If you only need an install link for a README or website, read
+[Share an install link](../getting-started/install-link.md). This page covers the whole
+protocol, including returning to your own client after adding.
+
 ```text
 client
   -> /install URL
@@ -39,12 +43,12 @@ Supported query parameters:
 
 | Parameter    | Required | Meaning                                                       |
 | ------------ | -------- | ------------------------------------------------------------- |
-| `git`        | no       | HTTPS Git URL for a plain OpenTofu/Terraform module           |
-| `source`     | no       | Packed module address, for example `git::...?...`             |
+| `git`        | `git` or `source` | HTTPS Git URL for a plain OpenTofu/Terraform module           |
+| `source`     | `git` or `source` | Packed module address: `git::<HTTPS URL>//<module folder>?ref=<ref>` (`//<folder>` and `?ref=` are optional) |
 | `ref`        | no       | Git branch, tag, or commit                                    |
 | `sourcePath` | no       | Git subtree captured, archived, and scanned; defaults to `.`  |
-| `path`       | no       | Archive-relative module matched inside the Source subtree     |
-| `name`       | no       | Display name for the service                                  |
+| `path`       | no       | Folder of the module to add, relative to `sourcePath`; ignored if the scan does not find it |
+| `name`       | no       | Service name (lowercase letters, numbers, hyphens); defaults to the repository name |
 | `product`    | no       | Client product key, only with `return_uri`                    |
 | `return_uri` | no       | Connection payload target, only with `product`                |
 
@@ -101,8 +105,10 @@ The source repository stays a plain OpenTofu/Terraform module. Takosumi does not
 require a Takosumi-specific source metadata file or product-specific metadata
 file.
 
-`sourcePath` and `path` accept only `.` or canonical relative directories. The
-whole link is rejected when it contains unknown, duplicate, or invalid query fields.
+`sourcePath` and `path` accept only `.` or canonical relative directories. If the
+link contains any unknown, duplicate, or invalid query field, none of its values are used and
+the add screen opens with an empty source, without an error
+([When a link is not used](../getting-started/install-link.md#when-a-link-is-not-used)).
 Module inputs do not travel in the URL; links carrying `var.<name>` or
 `varjson.<name>` are rejected. Inputs are entered in the Takosumi dashboard screen.
 Secrets, tokens, provider credentials, and private

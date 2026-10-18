@@ -84,8 +84,12 @@ provider, or policy behavior.
 
 The dashboard auto-selects exactly one candidate and asks the user to select
 when multiple candidates exist. A path that exists only in the manifest is not
-a candidate, and an explicit URL `path` fails closed with a typed 4xx unless it
-exists in the immutable scan result. An absent manifest does not block scanned
+a candidate. An install link's `path` that the immutable scan result does not contain
+is ignored, and the dashboard chooses again from the scanned candidates. An install plan
+whose explicit module path is not in the pinned tree fails with
+`repository_install_ux_module_missing`, or with
+`repository_install_ux_module_path_repository_relative` when the path repeats `sourcePath`
+(it was written from the top of the repository). An absent manifest does not block scanned
 modules. A malformed or invalid optional manifest is likewise never guessed or
 partially adopted: its assistance is disabled and the scan-derived generic
 install continues. Only an operator Host policy that explicitly requires an

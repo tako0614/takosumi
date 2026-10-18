@@ -13,8 +13,9 @@ the review alone changes nothing.
 
 When Takosumi finds a new commit on the branch the service tracks, its status becomes
 **Update available** and **Update** appears at the top of its page. A service added with a
-fixed tag or commit tracks something that does not move, so it never shows **Update
-available**; switch it to a new version with **Change version** below.
+commit never shows **Update available**. A service added with a tag does not either, unless
+the tag is moved to another commit. Switch either one to a new version with **Change version**
+below.
 
 - **Update** creates the review. If the change needs no approval, does not delete or replace an
   existing resource, and is not stopped by a policy or billing check, it continues to the

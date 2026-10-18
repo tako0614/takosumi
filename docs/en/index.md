@@ -77,6 +77,8 @@ AWS, and others are operated by their existing providers.
   a new version, go back to an earlier one, or delete it
 - [Prepare a repository](./getting-started/prepare-repository.md) — make your own software
   addable from Takosumi
+- [Share an install link](./getting-started/install-link.md) — let people open the add screen
+  from your README with your repository filled in
 - [Concepts](./concepts/index.md) — the small set of terms and the deployment lifecycle
 - [Sources and Capsules](./concepts/sources.md) — pinning a Git ref to a commit
 - [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy
