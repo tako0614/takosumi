@@ -179,7 +179,7 @@ endpoint を固定したまま報告するので、直すかどうかは人が�
 ## 書き出しとの違い
 
 Takosumi は制御情報 (Capsule の構成、Source の設定、Run と StateVersion の履歴) を
-書き出せます。**アプリのデータそのものと、Connection に保存した秘密は対象外です。**
+書き出せます。**サービスのデータそのものと、Connection に保存した秘密は対象外です。**
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/backups" \

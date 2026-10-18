@@ -95,7 +95,7 @@ JSON Pointer です。
 値は Interface の `status.resolvedInputs`、その出どころは `status.provenance` で
 読めます。
 
-## デプロイ済みアプリから別の Capsule を使う
+## デプロイしたサービスから別の Capsule を使う
 
 Interface は提供側の宣言です。consumer Capsule に接続を渡す場合も、同じ
 Interface / InterfaceBinding の記録で、値の出どころと認可を明示します。

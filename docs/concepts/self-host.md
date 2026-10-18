@@ -36,7 +36,7 @@ control plane、dashboard の確認には使えますが、Git の同期、plan�
 ## 費用
 
 Takosumi のソフトウェアに利用料はありません（AGPL-3.0）。かかるのは、Takosumi を置く場所の
-料金と、追加したアプリが作るリソースの料金です。
+料金と、追加したサービスが作るリソースの料金です。
 
 - **Cloudflare** — Workers Paid プランの料金と、Workers、Containers、D1、R2、Durable Objects、
   ログ（observability）の使用量が Cloudflare から請求されます。dashboard の表示も Worker への
@@ -53,7 +53,7 @@ Takosumi のソフトウェアに利用料はありません（AGPL-3.0）。か
 - **Bun と PostgreSQL** — Docker を動かすサーバーと PostgreSQL の費用です。plan と apply には、
   別に組み込む runner の費用もかかります。
 - **手元だけ** — Takosumi 自体は、手元のマシンの中だけで動きます。
-- **追加したアプリのリソース** — アプリが作る Worker、bucket、データベースなどの料金は、
+- **追加したサービスのリソース** — サービスが作る Worker、bucket、データベースなどの料金は、
   接続したアカウントの事業者（Cloudflare など）から、そのアカウントに請求されます。
 
 ## 手順

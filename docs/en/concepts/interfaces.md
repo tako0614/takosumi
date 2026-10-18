@@ -98,7 +98,7 @@ JSON Pointer of RFC 6901.
 readable from the Interface's `status.resolvedInputs`, and where it came from from
 `status.provenance`.
 
-## Using another Capsule from a deployed app
+## Using another Capsule from a deployed service
 
 An Interface is a provider-side declaration. A consumer Capsule uses the same Interface and
 InterfaceBinding ledger to receive a connection and its authorization.

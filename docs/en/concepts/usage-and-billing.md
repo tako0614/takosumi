@@ -20,7 +20,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/cost" \
 
 Workspace usage comes back as a list of line items, each saying what was measured, how
 much, when, and which Resource it belongs to. The per-Capsule summary answers which
-application used how much. A Run's cost estimate can be read **before you apply it**.
+service used how much. A Run's cost estimate can be read **before you apply it**.
 
 ## Billing modes
 
