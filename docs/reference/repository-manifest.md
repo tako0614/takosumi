@@ -117,95 +117,86 @@ scan の結果全体を `invalid` にします。`../` も、選んだ module �
 
 ## `inputs`
 
-各 module の `inputs` は必須の配列で、最大128件です。各 entry は次の closed field を
-持ちます。
+各 module の `inputs` は必須の配列で、最大 128 件です。各 entry に書ける項目は次のとおりです。
 
-| field         | 必須 | 内容                                          |
-| ------------- | ---- | --------------------------------------------- |
-| `name`        | yes  | exact OpenTofu variable name                  |
-| `source`      | yes  | `{ "kind": ... }` のみ                        |
-| `label`       | yes  | non-empty な `{ "ja", "en" }`                 |
-| `role`        | no   | `service_name` / `initial_secret`             |
-| `type`        | no   | `string` / `number` / `boolean` / `json`      |
-| `format`      | no   | bounded presentation token                    |
-| `required`    | no   | boolean                                       |
-| `helper`      | no   | `{ "ja", "en" }`                              |
-| `placeholder` | no   | non-empty bounded text                        |
-| `advanced`    | no   | boolean                                       |
-| `secret`      | no   | user input を secret materialization に送る印 |
+| 項目          | 必須 | 内容                                                         |
+| ------------- | ---- | ------------------------------------------------------------ |
+| `name`        | yes  | OpenTofu の変数名（正確に一致するもの）                      |
+| `source`      | yes  | `{ "kind": ... }` だけ                                       |
+| `label`       | yes  | 空でない `{ "ja", "en" }`                                    |
+| `role`        | no   | `service_name` か `initial_secret`                           |
+| `type`        | no   | `string`、`number`、`boolean`、`json`                        |
+| `format`      | no   | 表示の形を表す、長さに上限のある token                       |
+| `required`    | no   | boolean                                                      |
+| `helper`      | no   | `{ "ja", "en" }`                                             |
+| `placeholder` | no   | 空でない、長さに上限のある文字列                             |
+| `advanced`    | no   | boolean                                                      |
+| `secret`      | no   | 利用者の入力を、秘密として用意して渡す（secret materialization）印 |
 
-`source.kind` は `user`、`capsule_name`、`workspace_scoped_capsule_name`、
-`module_default` のいずれかです。`secret: true` は `user` だけ、
-`module_default` は `required: true` にできません。`env` のような plain environment
-map を secret や `initial_secret` として公開できません。input name と role は module
-内で一意で、identifier の前後 whitespace は trim せず canonical でなければ拒否します。
-compatibility report が exact variable の存在、型、default の有無を証明できなければ
-採用されません。公開 label/helper/placeholder は既知の credential-like material を検査
-しますが、「Use a token value」のような通常の prose は許可します。
+`source.kind` は `user`、`capsule_name`、`workspace_scoped_capsule_name`、`module_default` の
+どれかです。`secret: true` を付けられるのは `user` だけで、`module_default` には `required: true` を
+付けられません。`env` のような環境変数の map を、秘密や `initial_secret` として公開することはできません。
+入力の名前と role は module の中で重複できず、名前の前後の空白は取り除かずに、正規の形でなければ
+拒否します。互換性の確認結果で、その変数があること、型、既定値の有無を確かめられなければ使われません。
+表示用の label、helper、placeholder は、よく知られた認証情報らしい形を検査しますが、「Use a token
+value」のようなふつうの文章は通します。
 
 ## `requires`
 
-`requires` は任意、最大16件です。値や credential ではなく、host に必要な機能と
-delivery 名だけを提案します。
+`requires` は任意で、最大 16 件です。値や認証情報ではなく、Takosumi に用意してほしい機能と、その値を
+渡す先の名前だけを書きます。
 
-- `secret.generated`: `kind`, optional `bytes` (16〜64), optional
-  `encoding` (`hex` / `base64url`), `deliver`。module ごとに最大8件。
-- `http.endpoint`: `kind`, `deliver`。
-- `identity.oidc`: `kind`, root-relative `callbackPath`, 1〜16件の `scopes`,
-  `deliver`。
-- `interface.consume` (v2.2): `kind`, module 内で一意な `key`, exact
-  `interface.type` / `interface.version`, 1〜16件の `permissions`,
-  `{ "type": token }` だけを持つ `delivery`。
+- `secret.generated`: `kind`、任意の `bytes`（16〜64）、任意の `encoding`（`hex` か `base64url`）、
+  `deliver`。module ごとに 8 件まで。
+- `http.endpoint`: `kind`、`deliver`。
+- `identity.oidc`: `kind`、最上位からのパスで書く `callbackPath`、1〜16 件の `scopes`、`deliver`。
+- `interface.consume`（v2.2）: `kind`、module の中で重複しない `key`、正確な `interface.type` と
+  `interface.version`、1〜16 件の `permissions`、`{ "type": token }` だけを持つ `delivery`。
 
-`deliver` は `variables` または `bindings` のちょうど一方を持ちます。slot は kind
-ごとに closed で、値は exact OpenTofu variable name または runtime binding name
-です。別 requirement と同じ delivery 名を共有できません。endpoint は module ごとに
-1件までです。host-reserved binding、存在しない/non-string variable、operator が
-許可しない requirement kind は compiler が拒否します。
+`deliver` には `variables` か `bindings` のどちらか一方だけを書きます。渡す先の slot は kind ごとに
+決まっていて、値は OpenTofu の変数名か実行時の binding 名（どちらも正確に一致するもの）です。別の
+requirement と同じ渡し先は使えません。endpoint は module ごとに 1 件までです。Takosumi が予約している
+binding、無い変数や文字列でない変数、運用している人が許可していない kind は、変換のときに拒否されます。
 
-`identity.oidc` は reviewed Git/OpenTofu app が product/provider に依存せず要求できる
-Takosumi Accounts capability です。選択 module はちょうど1件の `identity.oidc` と
-ちょうど1件の `http.endpoint` を持たなければなりません。OIDC の `deliver` は
-ふつう `variables` で、slot は `accountsUrl`、`issuerUrl`、`clientId`、`redirectUri` の
-exact 4件です。v2.4 では `bindings` でも届けられ、その slot は `issuerUrl`、`clientId`、
-`ownerSubject`、`redirectUri` の exact 4件です。endpoint は `url` を別の string variable に届けます。OIDC scopes は
-重複なしで `openid` を含み、DB-owned `InstallConfig.policy.repositoryInstallUx`
-の明示的な `allowedOidcScopes` 内でなければなりません。allowlist がない場合は
-capability を許可しません。
+`identity.oidc` は、確認を経た Git の OpenTofu のアプリが、製品や provider に依存せずに求められる、
+Takosumi Accounts のサインインの機能です。選んだ module には、`identity.oidc` と `http.endpoint` が
+ちょうど 1 件ずつ必要です。OIDC の `deliver` はふつう `variables` で、slot は `accountsUrl`、`issuerUrl`、
+`clientId`、`redirectUri` のちょうど 4 つです。v2.4 では `bindings` でも渡せ、その slot は `issuerUrl`、
+`clientId`、`ownerSubject`、`redirectUri` のちょうど 4 つです。endpoint は `url` を、別の文字列の変数に
+渡します。OIDC の scopes は重複がなく `openid` を含み、データベースに保存された
+`InstallConfig.policy.repositoryInstallUx` で明示的に許可された `allowedOidcScopes` の中になければ
+なりません。許可の一覧が無いときは、この機能を使えません。
 
-variables で届ける場合、Plan は endpoint の `url` variable から、path、query、fragment、
-credential のない canonical な exact HTTPS origin を読めなければ fail closed です。その origin と
-review 済み `callbackPath` から redirect URI を導出し、exact 4 variables と authority
-digest を Plan sidecar に固定します。bindings で届ける場合（v2.4）は、4 つの値を plan、state、
-log に書かず、Apply のときだけ runner に渡します。Plan と `apply_check` は Accounts を変更せず、
-final Apply だけが Capsule-bound public client を何度実行しても結果が同じ形で登録できます。terminal
-destroy 後の retirement も、何度実行しても結果は同じです。Accounts capability が利用できない、
-origin/variable/callback/scope/digest が drift した場合は runner 実行前に失敗します。
-ProviderBinding、provider output、製品名、hostname 規則からの fallback/inference はなく、
-この request は provider/resource/deployment/lifecycle authority を追加しません。
+`variables` で渡す場合、変更の確認（Plan）は、endpoint の `url` 変数から、パス、query、fragment、
+認証情報を含まない、正規の HTTPS の origin を読めなければ止まります。その origin と確認済みの
+`callbackPath` から redirect URI を作り、4 つの変数と権限の digest を、Plan に付ける記録（sidecar）に
+固定します。`bindings` で渡す場合（v2.4）は、4 つの値を plan、state、ログに書かず、デプロイ（Apply）の
+ときだけ runner に渡します。Plan と `apply_check` は Accounts を変更せず、最後の Apply だけが、その
+Capsule に結びついた公開 client を登録します。何度実行しても結果は同じです。最後の destroy のあとの
+片付け（retirement）も、何度実行しても結果は同じです。Accounts の機能が使えないときや、origin、変数、
+callback、scope、digest が変わったときは、runner を動かす前に失敗します。ProviderBinding、provider の
+output、製品名、ホスト名の決まりから推測して補うことはなく、この要求で provider、resource、デプロイ、
+lifecycle の権限が増えることもありません。
 
-`interface.consume` は provider、製品名、Interface ID、endpoint、credential を宣言
-しません。host は Plan 後の DB-owned InstallConfig から exact type/version を読み、同じ
-Workspace にある `Resolved` Interface がちょうど1件の場合だけ、認証済み Principal に
-最小 permissions の通常の `InterfaceBinding` を作ります。0件または
-複数件、revoked/conflicting binding、operator policy 外の permission/delivery は
-fail closed です。runtime credential は短期発行され、manifest や OpenTofu variable へ
-書き込みません。
+`interface.consume` には、provider、製品名、Interface の ID、endpoint、認証情報を書きません。Takosumi は、
+Plan のあとに保存した InstallConfig から正確な type と version を読み、同じ Workspace に `Resolved` の
+Interface がちょうど 1 件あるときだけ、サインインしている Principal に、必要最小限の permissions の通常の
+`InterfaceBinding` を作ります。0 件や複数件のとき、取り消された binding や衝突する binding があるとき、
+運用している人の policy の外の permission や delivery のときは止まります。実行時の認証情報は短い期限で
+発行され、manifest や OpenTofu の変数には書き込まれません。
 
 ## `features`
 
-`features` は任意、最大32件です。entry は `id`, `optional`, bilingual `label`,
-non-empty `inputs` だけを持ちます。`inputs` は同じ module に宣言した user input を
-参照し、feature 間でも重複できません。feature は UI grouping であり、provider、
-resource、lifecycle を有効化する authority ではありません。
+`features` は任意で、最大 32 件です。entry に書けるのは `id`、`optional`、日英の `label`、空でない
+`inputs` だけです。`inputs` は同じ module で宣言した利用者の入力を指し、feature どうしで重複できません。
+feature は画面の上での入力のまとまりで、provider、resource、lifecycle を有効にする権限はありません。
 
 ## `sourceBuild` (v2.3)
 
-v2.3 の module は、Git SourceSnapshot の checkout 前処理を行う任意の
-credential-free `sourceBuild` proposal を持てます。これは repository metadata の
-実行権限ではなく、exact compatibility review 後に DB-owned `InstallConfig.sourceBuild`
-へ compile される user-reviewed 値です。既存の service/operator `baseConfig.sourceBuild`
-があれば repository proposal より常に優先されます。
+v2.3 の module には、checkout した Git の SourceSnapshot に対して OpenTofu の前に行う前処理を、認証情報を
+含まない `sourceBuild` として任意で提案できます。リポジトリの情報がそのまま実行されるのではなく、互換性の
+確認のあとで利用者が確かめた値として、データベースに保存する `InstallConfig.sourceBuild` に変換されます。
+Takosumi 側や運用している人の `baseConfig.sourceBuild` があれば、そちらが常に優先されます。
 
 ```json
 {
@@ -219,50 +210,46 @@ credential-free `sourceBuild` proposal を持てます。これは repository me
 }
 ```
 
-`commands` は1〜8件、各 `argv` は shell string ではない1〜32個の non-empty argv
-要素（各4096文字以内）です。`workingDirectory` と `outputs` は SourceSnapshot
-root からの safe relative path で、outputs は1〜16件かつ `.` ではない produced
-path を指定します。path は canonical form が必須で、前後の空白、`\\`、`//`、
-`.` / `..` segment を正規化せず拒否します。object は closed で、`env`、credential、provider、lifecycle
-field はありません。argv に secret-like material を含めることもできません。
+`commands` は 1〜8 件で、各 `argv` は shell の文字列ではなく、空でない 1〜32 個の要素（それぞれ
+4,096 文字まで）です。`workingDirectory` と `outputs` は SourceSnapshot の最上位からの安全な相対パスで、
+`outputs` には、`.` ではない、作られるパスを 1〜16 件書きます。パスは正規の形で書き、前後の空白、`\\`、
+`//`、`.` や `..` の区切りは直さずに拒否します。書ける項目は決まっていて、`env`、認証情報、provider、
+lifecycle の項目はありません。argv に秘密らしい値を含めることもできません。
 
-Dashboard は Plan を開始する前に exact argv、working directory（省略時は Source
-root）、outputs を表示します。Plan/Run は captured repository metadata を再読込せず、
-persist 済み InstallConfig だけを使います。
+Dashboard は、変更の確認（Plan）を始める前に、正確な argv、作業ディレクトリ（省略時は Source の
+最上位）、outputs を表示します。Plan と Run は、取り込んだリポジトリの情報を読み直さず、保存した
+InstallConfig だけを使います。
 
 ## `interfaces` (v2〜v2.4)
 
-v2、v2.1、v2.2、v2.3、v2.4 は module ごとに最大32件の generic Capsule Interface
-proposal を追加できます。v1 に `interfaces` を置くと invalid です。v2.1〜v2.4 は v2 の
-Interface schema と compiler semantics をそのまま保持します。画面をホームに出す完全な例は
-[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。この section は
-Capsule が提供する Interface、`interface.consume` は Capsule が利用する Interface です。
+v2〜v2.4 では、module ごとに最大 32 件の、Capsule が提供する Interface を提案できます。v1 に
+`interfaces` を書くと無効です。v2.1〜v2.4 は、v2 の Interface の形と変換の規則をそのまま引き継ぎます。
+画面をホームに出す完全な例は[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。
+この節は Capsule が提供する Interface、`interface.consume` は Capsule が使う Interface を扱います。
 
-各 declaration は `key`, `name`, `spec`, optional `bindingRequests` だけを持ちます。
-`spec` は `type`, `version`, public JSON `document`, optional `inputs`, `access` の
-closed object です。
+各宣言に書けるのは、`key`、`name`、`spec`、任意の `bindingRequests` だけです。`spec` に書けるのは、
+`type`、`version`、公開する JSON の `document`、任意の `inputs`、`access` だけです。
 
-- `spec.inputs` は最大64件で、public JSON の `literal` または exact module Output の
-  `outputName` と `outputType` を指定する `output` だけです。
-- Output は compatibility report が存在、`sensitive: false`,
-  `ephemeral: false` を証明しなければ採用されません。名前の推測はありません。
-- `access.visibility` は `workspace` 固定です。`resourceUriInput` は同じ spec の
-  input 名でなければなりません。host-owned `policyRef` は指定できません。
-- `bindingRequests` は最大1件です。entry は `key`（必須の token）、
-  `{ "source": "installing_principal" }` だけの `subject`、1〜16件の重複しない
-  `permissions`、`type` だけを持つ `delivery` の 4 つだけを持ちます。operator の明示的な
-  permission/delivery allowlist が無い場合は拒否されます。
+- `spec.inputs` は最大 64 件で、公開する JSON の `literal` か、module の Output を `outputName` と
+  `outputType` で正確に指す `output` のどちらかです。
+- Output は、互換性の確認結果で、あること、`sensitive: false`、`ephemeral: false` を確かめられなければ
+  使われません。名前から推測することはありません。
+- `access.visibility` は `workspace` だけです。`resourceUriInput` は同じ spec の input 名でなければ
+  なりません。Takosumi 側が持つ `policyRef` は書けません。
+- `bindingRequests` は最大 1 件です。entry に書けるのは、`key`（必須の token）、
+  `{ "source": "installing_principal" }` だけの `subject`、1〜16 件の重複しない `permissions`、`type`
+  だけを持つ `delivery` の 4 つだけです。運用している人が permission と delivery の許可の一覧を明示して
+  いないと拒否されます。
 
-generic default InstallConfig が許可するのは、installer本人に対する
-`ui.open` + `none` と `mcp.invoke` + `oauth2` だけです。これはinstall-planの
-reviewを通った一回限りのBinding proposalであり、Workspace全体やoperator権限を
-付与しません。その他のpermission/deliveryはoperator-owned InstallConfigで明示的に
-許可する必要があります。
+標準の InstallConfig が許可するのは、追加した本人に対する `ui.open` と `none`、`mcp.invoke` と
+`oauth2` の組だけです。これは追加の計画（install plan）の確認を通った、1 回限りの Binding の提案で、
+Workspace 全体や運用者の権限を与えるものではありません。ほかの permission や delivery は、運用している
+人の InstallConfig で明示的に許可する必要があります。
 
-採用された proposal は既存の `InstallConfig.interfaceBlueprints` と
-`outputAllowlist` に stable key で merge されます。conflict は上書きせず失敗します。
-exact installing Principal の解決と Interface/Binding materialization は既存 host
-lifecycle が行い、repository は grant を作れません。
+採用された提案は、既存の `InstallConfig.interfaceBlueprints` と `outputAllowlist` に、変わらない key で
+まとめられます。衝突したときは上書きせずに失敗します。追加した Principal を正確に特定し、Interface と
+Binding を実際に用意するのは Takosumi 側の通常の処理で、リポジトリが利用許可（grant）を作ることは
+できません。
 
 ## Authority と secret の境界
 
