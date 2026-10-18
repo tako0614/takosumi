@@ -73,12 +73,13 @@ function installMobileNavigationA11y(): void {
   }
 }
 
-// The build makes every table wrapper a keyboard stop so a wide table can be
-// scrolled (scrollable-tables.ts). A wrapper that does not scroll, such as a
-// narrow table or any table stacked on a phone (style.css), would be a stop
-// with nothing to do, so keep the stop only while the wrapper overflows.
-// Without JavaScript every wrapper keeps its stop, which still leaves each
-// wide table reachable by keyboard.
+// A table that does not fit its column is stacked into rows (style.css), so no
+// column hides off the edge at any width. The build also makes every table
+// wrapper a keyboard stop so a wide table can be scrolled
+// (scrollable-tables.ts); a wrapper that no longer scrolls would be a stop with
+// nothing to do, so the stop stays only while the wrapper still overflows.
+// Without JavaScript every wrapper keeps its stop, and below 640px tables are
+// stacked by CSS alone.
 function installTableScrollStops(): void {
   if (typeof window === "undefined") return;
 
@@ -93,17 +94,25 @@ function installTableScrollStops(): void {
     root.dataset.takosumiTableScrollStops = "installed";
 
     let pending = false;
+    const overflows = (element: Element): boolean =>
+      element.scrollWidth > element.clientWidth + 1;
     const sync = (): void => {
       pending = false;
-      for (const wrapper of document.querySelectorAll<HTMLElement>(
-        ".vp-doc .table-scroll",
-      )) {
-        if (wrapper.scrollWidth > wrapper.clientWidth) {
-          wrapper.setAttribute("tabindex", "0");
-        } else {
-          wrapper.removeAttribute("tabindex");
-        }
-      }
+      const wrappers = [
+        ...document.querySelectorAll<HTMLElement>(".vp-doc .table-scroll"),
+      ];
+      // Measure every table as a table, then stack the ones that do not fit.
+      // Reads and writes are batched so the page lays out once per pass.
+      for (const wrapper of wrappers) wrapper.classList.remove("is-stacked");
+      const tooWide = wrappers.map(overflows);
+      wrappers.forEach((wrapper, index) => {
+        wrapper.classList.toggle("is-stacked", tooWide[index]);
+      });
+      const stillScrolls = wrappers.map(overflows);
+      wrappers.forEach((wrapper, index) => {
+        if (stillScrolls[index]) wrapper.setAttribute("tabindex", "0");
+        else wrapper.removeAttribute("tabindex");
+      });
     };
     const schedule = (): void => {
       if (pending) return;
