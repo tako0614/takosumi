@@ -114,7 +114,9 @@ export async function rejectDisallowedPresentedSession(input: {
   readonly credential: string | null;
   readonly allowlist?: LoginEmailAllowlist;
   readonly secureCookie: boolean;
+  readonly assertActive?: () => void;
 }): Promise<Response | undefined> {
+  input.assertActive?.();
   if (!input.allowlist || !input.credential) return undefined;
   const credential = input.credential;
   return await rejectDisallowedPresentedCredential(
@@ -138,6 +140,7 @@ async function rejectDisallowedPresentedCredential(
     readonly credential: string;
     readonly allowlist: LoginEmailAllowlist;
     readonly secureCookie: boolean;
+    readonly assertActive?: () => void;
   },
   now: number,
 ): Promise<Response | undefined> {
@@ -145,7 +148,9 @@ async function rejectDisallowedPresentedCredential(
     input.store,
     input.credential,
     now,
+    input.assertActive,
   );
+  input.assertActive?.();
   // Nothing live resolved (unknown, expired, or revoked value): leave the
   // answer to the route's own authentication, exactly as before.
   if (presented.length === 0) return undefined;
@@ -153,8 +158,10 @@ async function rejectDisallowedPresentedCredential(
   let disallowedSession = false;
   let disallowed = false;
   for (const candidate of presented) {
+    input.assertActive?.();
     const account =
       candidate.account ?? (await input.store.findAccount(candidate.subject));
+    input.assertActive?.();
     if (account && loginEmailIsAllowed(account, input.allowlist)) {
       continue;
     }
@@ -166,7 +173,9 @@ async function rejectDisallowedPresentedCredential(
   if (disallowedSession) {
     // Browser sessions keep their existing revocation behaviour: the session
     // record is deleted and the cookie cleared on the spot.
+    input.assertActive?.();
     await input.store.deleteAccountSession(input.credential);
+    input.assertActive?.();
     return accountLoginNotAllowedResponse(input.request, input.secureCookie);
   }
   // Token credentials are refused but left intact: re-adding the address to the
@@ -186,11 +195,14 @@ async function resolvePresentedCredentials(
   store: AccountsStore,
   credential: string,
   now: number,
+  assertActive?: () => void,
 ): Promise<readonly PresentedCredential[]> {
+  assertActive?.();
   const resolved: AccountsBearerCredentialCandidates =
     store.resolveAccountsBearerCandidates
       ? await store.resolveAccountsBearerCandidates(credential)
-      : await resolveCredentialCandidatesSeparately(store, credential);
+      : await resolveCredentialCandidatesSeparately(store, credential, assertActive);
+  assertActive?.();
 
   const presented: PresentedCredential[] = [];
   const session = resolved.session;
@@ -229,12 +241,15 @@ async function resolvePresentedCredentials(
 async function resolveCredentialCandidatesSeparately(
   store: AccountsStore,
   credential: string,
+  assertActive?: () => void,
 ): Promise<AccountsBearerCredentialCandidates> {
+  assertActive?.();
   const [session, accessToken, personalAccessToken] = await Promise.all([
     store.findAccountSession(credential),
     store.findAccessToken(credential),
     store.findPersonalAccessToken(credential),
   ]);
+  assertActive?.();
   return {
     ...(session ? { session } : {}),
     ...(accessToken ? { accessToken } : {}),

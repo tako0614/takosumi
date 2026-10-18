@@ -2091,27 +2091,77 @@ interface PausedControlRead {
 
 class CountingAccountsD1 implements D1Database {
   writeCount = 0;
+  pausedReadSql: string | undefined;
+  pausedReadBucket: unknown;
   private readonly statements = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  private nextReadResult: (PausedControlRead & {
+    readsBeforeGate: number;
+    readonly waiting: Promise<void>;
+    readonly signalStarted: () => void;
+    readonly signalCompleted: () => void;
+  }) | undefined;
 
   constructor(private readonly delegate: D1Database) {}
 
-  prepare(query: string): D1PreparedStatement {
-    return this.wrap(this.delegate.prepare(query));
+  pauseNextReadResult(readsBeforeGate = 0): PausedControlRead {
+    if (this.nextReadResult) throw new Error("Accounts read result gate is already armed");
+    if (!Number.isSafeInteger(readsBeforeGate) || readsBeforeGate < 0) throw new Error("invalid Accounts read offset");
+    let signalStarted!: () => void;
+    let signalCompleted!: () => void;
+    let release!: () => void;
+    let reject!: (error: unknown) => void;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const completed = new Promise<void>((resolve) => { signalCompleted = resolve; });
+    const waiting = new Promise<void>((resolve, rejectRead) => {
+      release = resolve;
+      reject = rejectRead;
+    });
+    const gate = { started, completed, waiting, signalStarted, signalCompleted, release, reject, readsBeforeGate };
+    this.nextReadResult = gate;
+    return gate;
   }
 
-  private wrap(bound: D1PreparedStatement): D1PreparedStatement {
+  prepare(query: string): D1PreparedStatement {
+    return this.wrap(this.delegate.prepare(query), query);
+  }
+
+  private wrap(bound: D1PreparedStatement, query: string, values: readonly unknown[] = []): D1PreparedStatement {
     const statement: D1PreparedStatement = {
-      bind: (...values) => this.wrap(bound.bind(...values)),
+      bind: (...values) => this.wrap(bound.bind(...values), query, values),
       run: () => {
         this.writeCount += 1;
         return bound.run();
       },
-      first: <T>(column?: string) => bound.first<T>(column),
-      all: <T>() => bound.all<T>(),
+      first: <T>(column?: string) => this.readResult(query, values, () => bound.first<T>(column)),
+      all: <T>() => this.readResult(query, values, () => bound.all<T>()),
       raw: () => bound.raw?.() ?? Promise.resolve([]),
     };
     this.statements.set(statement, bound);
     return statement;
+  }
+
+  private async readResult<T>(query: string, values: readonly unknown[], read: () => Promise<T>): Promise<T> {
+    let gate = this.nextReadResult;
+    if (gate && gate.readsBeforeGate > 0) {
+      gate.readsBeforeGate -= 1;
+      gate = undefined;
+    } else {
+      this.nextReadResult = undefined;
+    }
+    try {
+      // Execute the real SELECT first; hold only its transport result.
+      // The write counters and underlying SQLite effects remain unchanged.
+      const result = await read();
+      if (gate) {
+        this.pausedReadSql = query;
+        this.pausedReadBucket = values[0];
+        gate.signalStarted();
+        await gate.waiting;
+      }
+      return result;
+    } finally {
+      gate?.signalCompleted();
+    }
   }
 
   async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
@@ -2359,6 +2409,31 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     subject,
     createdAt: now,
     expiresAt: now + 60_000,
+  });
+  const pat = "takpat_issue444_auth_deadline";
+  const expiredSession = "sess_issue444_expired_auth_deadline";
+  const hostedSession = "sess_issue444_hosted_auth_deadline";
+  const disallowedSession = "sess_issue444_disallowed_auth_deadline";
+  const inactiveToken = "oauth_issue444_inactive_auth_deadline";
+  await accountWriter.savePersonalAccessToken(pat, {
+    tokenId: "pat_issue444_auth_deadline", tokenPrefix: "takpat_issue444",
+    subject, name: "local deadline fixture", scopes: ["read"],
+    createdAt: now, expiresAt: now + 60_000,
+  });
+  await accountWriter.saveAccountSession({
+    sessionId: expiredSession, subject, createdAt: now - 60_000, expiresAt: now - 1,
+  });
+  await accountWriter.saveAccountSession({
+    sessionId: hostedSession, subject, policy: "hosted", identityGeneration: 0,
+    issuerSessionId: `sha256:${"a".repeat(43)}`, authTime: Math.floor(now / 1_000),
+    createdAt: now, expiresAt: now + 60_000, absoluteExpiresAt: now + 120_000,
+  });
+  await accountWriter.saveAccountSession({
+    sessionId: disallowedSession, subject, createdAt: now, expiresAt: now + 60_000,
+  });
+  await accountWriter.saveAccessToken(inactiveToken, {
+    clientId: "issue444-fixture-client", subject, takosumiSubject: subject,
+    scope: "read", expiresAt: now - 1,
   });
 
   const rawControlDb = new SqliteFakeD1();
@@ -2631,6 +2706,85 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     expect(baselineAccountWrites).toBe(0);
     expect(baselineControlWrites).toBe(0);
 
+    // Authentication precedes Run dispatch. A held bearer lookup must use the
+    // same request-local read deadline and must not resume authority work late.
+    const authGate = accountDb.pauseNextReadResult();
+    releaseReads.push(authGate.release);
+    pendingReadCompletions.push(authGate.completed);
+    const authProbe = "a444000000000008";
+    const waitForAuthGate = prepareGateWait(authGate.started);
+    jest.useFakeTimers();
+    expect(jest.getTimerCount()).toBe(0);
+    const authResponse = platformWorker.fetch(request(authProbe), routeEnv);
+    pendingRouteResponses.push(authResponse);
+    await waitForAuthGate(authResponse);
+    expect(accountDb.pausedReadSql).toContain("presented_session as");
+    expect(accountDb.pausedReadSql).toContain("select 'pat' as kind");
+    const readsBeforeAuthRelease = {
+      plan: controlDb.planRunReadCount,
+      workspace: controlDb.workspaceReadCount,
+      member: controlDb.memberReadCount,
+    };
+    await expectDeadlineResponse(authResponse);
+    expect(rowsFor(authProbe)).toContainEqual(expect.objectContaining({
+      phase: "control_auth", outcome: "pending", route: "/api/v1/runs/{runId}",
+    }));
+    expect(rowsFor(authProbe)).not.toContainEqual(expect.objectContaining({
+      phase: "control_init", outcome: "started",
+    }));
+    expect(rowsFor(authProbe)).not.toContainEqual(expect.objectContaining({
+      phase: "control_dispatch", outcome: "started",
+    }));
+    authGate.release();
+    await drainLateRouteContinuation(authGate);
+    expect(controlDb.planRunReadCount).toBe(readsBeforeAuthRelease.plan);
+    expect(controlDb.workspaceReadCount).toBe(readsBeforeAuthRelease.workspace);
+    expect(controlDb.memberReadCount).toBe(readsBeforeAuthRelease.member);
+    expect(accountDb.writeCount).toBe(baselineAccountWrites);
+    expect(controlDb.writeCount - controlWritesAtPostInitStart).toBe(baselineControlWrites);
+
+    // Authentication consumes three seconds; entering Run dispatch must use
+    // the remaining two seconds, never start a fresh five-second timer.
+    const sharedAuthGate = accountDb.pauseNextReadResult();
+    const sharedPlanGate = controlDb.pauseNextPlanRunRead();
+    releaseReads.push(sharedAuthGate.release, sharedPlanGate.release);
+    pendingReadCompletions.push(sharedAuthGate.completed, sharedPlanGate.completed);
+    const waitForSharedAuth = prepareGateWait(sharedAuthGate.started);
+    const waitForSharedPlan = prepareGateWait(sharedPlanGate.started);
+    jest.useFakeTimers();
+    expect(jest.getTimerCount()).toBe(0);
+    const sharedStartedAt = Date.now();
+    const sharedResponse = platformWorker.fetch(request("a444000000000012"), routeEnv);
+    pendingRouteResponses.push(sharedResponse);
+    let sharedSettled = false;
+    const sharedObserver = sharedResponse.then(() => { sharedSettled = true; }, () => { sharedSettled = true; });
+    await waitForSharedAuth(sharedResponse);
+    jest.advanceTimersByTime(3_000);
+    sharedAuthGate.release();
+    await waitForSharedPlan(sharedResponse);
+    expect(Date.now()).toBe(sharedStartedAt + 3_000);
+    jest.advanceTimersByTime(1_999);
+    await flushRouteResponse();
+    expect(sharedSettled).toBe(false);
+    jest.advanceTimersByTime(1);
+    await flushRouteResponse();
+    expect(Date.now()).toBe(sharedStartedAt + 5_000);
+    expect(sharedSettled).toBe(true);
+    const sharedResult = await sharedResponse;
+    await sharedObserver;
+    expect(sharedResult.status).toBe(503);
+    expect(sharedResult.headers.get("cache-control")).toBe("no-store");
+    expect(await sharedResult.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "feature_unavailable" }) }));
+    expect(rowsFor("a444000000000012")).toContainEqual(expect.objectContaining({ phase: "control_dispatch", outcome: "fulfilled" }));
+    const memberReadsBeforeSharedRelease = controlDb.memberReadCount;
+    const workspaceReadsBeforeSharedRelease = controlDb.workspaceReadCount;
+    sharedPlanGate.release();
+    await drainLateRouteContinuation(sharedPlanGate);
+    expect(controlDb.memberReadCount).toBe(memberReadsBeforeSharedRelease);
+    expect(controlDb.workspaceReadCount).toBe(workspaceReadsBeforeSharedRelease);
+    expect(accountDb.writeCount).toBe(baselineAccountWrites);
+    expect(controlDb.writeCount - controlWritesAtPostInitStart).toBe(baselineControlWrites);
+
     const downstreamProbe = "a444000000000003";
     const gate = controlDb.pauseNextPlanRunRead();
     releaseReads.push(gate.release);
@@ -2746,6 +2900,93 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     expect(controlDb.memberReadCount).toBe(readsBeforeMemberRelease.member);
     expect(accountDb.writeCount).toBe(baselineAccountWrites);
     expect(controlDb.writeCount - controlWritesAtPostInitStart).toBe(baselineControlWrites);
+    expect(bindingIoCount).toBe(0);
+
+    // Positive native requests must retain their real PAT usage and Hosted
+    // session-touch effects before testing that late auth cannot start them.
+    const credentialRequest = (probeId: string, credential: string): Request => {
+      const value = request(probeId);
+      value.headers.delete("x-takosumi-account-session");
+      value.headers.set("authorization", `Bearer ${credential}`);
+      return value;
+    };
+    const positivePat = await platformWorker.fetch(credentialRequest("a444000000000009", pat), routeEnv);
+    expect(positivePat.status).toBe(200);
+    const usedPat = await accountWriter.findPersonalAccessToken(pat);
+    expect(usedPat?.lastUsedAt).toBeNumber();
+    const positiveHosted = await platformWorker.fetch(credentialRequest("a44400000000000a", hostedSession), routeEnv);
+    expect(positiveHosted.status).toBe(200);
+    const currentHosted = await accountWriter.findAccountSession(hostedSession);
+    expect(currentHosted?.expiresAt).toBeGreaterThan(now + 60_000);
+    expect(accountDb.writeCount).toBeGreaterThan(baselineAccountWrites);
+
+    const totalChanges = async (): Promise<number> => {
+      const row = await rawAccountsDb.prepare("SELECT total_changes() AS changes").first<{ changes: unknown }>();
+      if (typeof row?.changes !== "number" || !Number.isSafeInteger(row.changes) || row.changes < 0) {
+        throw new Error("missing SQLite total_changes oracle");
+      }
+      return row.changes;
+    };
+    const assertLateAuthFenced = async (input: {
+      readonly probe: string;
+      readonly credential: string;
+      readonly readsBeforeGate?: number;
+      readonly sql: string;
+      readonly bucket?: string;
+      readonly environment?: typeof routeEnv;
+    }): Promise<void> => {
+      const writesBefore = accountDb.writeCount;
+      const changesBefore = await totalChanges();
+      const controlBefore = {
+        plan: controlDb.planRunReadCount,
+        workspace: controlDb.workspaceReadCount,
+        member: controlDb.memberReadCount,
+        writes: controlDb.writeCount,
+      };
+      const held = accountDb.pauseNextReadResult(input.readsBeforeGate);
+      releaseReads.push(held.release);
+      pendingReadCompletions.push(held.completed);
+      const waitForHeld = prepareGateWait(held.started);
+      jest.useFakeTimers();
+      expect(jest.getTimerCount()).toBe(0);
+      const pending = platformWorker.fetch(credentialRequest(input.probe, input.credential), input.environment ?? routeEnv);
+      pendingRouteResponses.push(pending);
+      await waitForHeld(pending);
+      expect(accountDb.pausedReadSql).toContain(input.sql);
+      if (input.bucket) expect(accountDb.pausedReadBucket).toBe(input.bucket);
+      await expectDeadlineResponse(pending);
+      expect(jest.getTimerCount()).toBe(0);
+      held.release();
+      await drainLateRouteContinuation(held);
+      expect(accountDb.writeCount).toBe(writesBefore);
+      expect(await totalChanges()).toBe(changesBefore);
+      expect(controlDb.planRunReadCount).toBe(controlBefore.plan);
+      expect(controlDb.workspaceReadCount).toBe(controlBefore.workspace);
+      expect(controlDb.memberReadCount).toBe(controlBefore.member);
+      expect(controlDb.writeCount).toBe(controlBefore.writes);
+      expect(rowsFor(input.probe)).not.toContainEqual(expect.objectContaining({ phase: "control_dispatch", outcome: "started" }));
+    };
+    await assertLateAuthFenced({ probe: "a44400000000000b", credential: pat, sql: "presented_session as" });
+    expect(await accountWriter.findPersonalAccessToken(pat)).toEqual(usedPat);
+    await assertLateAuthFenced({ probe: "a44400000000000c", credential: expiredSession, sql: "presented_session as" });
+    expect(await accountWriter.findAccountSession(expiredSession)).toBeDefined();
+    await assertLateAuthFenced({ probe: "a44400000000000d", credential: inactiveToken, sql: "presented_session as" });
+    expect(await accountWriter.findAccessToken(inactiveToken)).toBeDefined();
+    // Skip the coalesced bearer SELECT, then hold the actual nested Hosted
+    // generation read. Its late result must not start touch or cleanup writes.
+    await assertLateAuthFenced({ probe: "a44400000000000e", credential: hostedSession, readsBeforeGate: 1, sql: "SELECT document FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?", bucket: "authentication_generations" });
+    expect(await accountWriter.findAccountSession(hostedSession)).toEqual(currentHosted);
+
+    const allowlistEnv = { ...routeEnv, TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "only-allowed@example.test" };
+    const anonymousRequest = request("a44400000000000f");
+    anonymousRequest.headers.delete("x-takosumi-account-session");
+    expect((await platformWorker.fetch(anonymousRequest, allowlistEnv)).status).toBe(401);
+    await assertLateAuthFenced({ probe: "a444000000000010", credential: disallowedSession, sql: "presented_session as", environment: allowlistEnv });
+    expect(await accountWriter.findAccountSession(disallowedSession)).toBeDefined();
+    // Without a deadline stall the same policy still revokes the disallowed
+    // session; the late-write fence must never disable ordinary enforcement.
+    expect((await platformWorker.fetch(credentialRequest("a444000000000011", disallowedSession), allowlistEnv)).status).toBe(403);
+    expect(await accountWriter.findAccountSession(disallowedSession)).toBeUndefined();
     expect(bindingIoCount).toBe(0);
   } finally {
     for (const cleanup of readinessCleanups) cleanup();

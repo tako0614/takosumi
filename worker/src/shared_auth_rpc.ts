@@ -178,8 +178,23 @@ export async function handleSharedAuthAccountBoundaryRequest(
           status: 405, headers: { allow: "GET, HEAD", "cache-control": "no-store" },
         });
       }
+      if ([...url.searchParams.keys()].some((key) =>
+        !["return", "return_to"].includes(key) || url.searchParams.getAll(key).length !== 1
+      ) || (url.searchParams.has("return") && url.searchParams.has("return_to"))) {
+        return Response.json({ error: "invalid_request" }, {
+          status: 400, headers: { "cache-control": "no-store" },
+        });
+      }
+      const login = new URL("/auth/oidc/login", selected.origin);
+      const destination = sharedAuthLocalReturnPath(
+        url.searchParams.get("return") ?? url.searchParams.get("return_to"),
+        selected.origin,
+      );
+      // Unsafe legacy return values keep their existing fixed-login fallback.
+      // The private RP validates and retains any accepted local destination.
+      if (destination !== undefined) login.searchParams.set("return", destination);
       return new Response(null, { status: 302, headers: {
-        location: new URL("/auth/oidc/login", selected.origin).href,
+        location: login.href,
         "cache-control": "no-store",
       } });
     }
@@ -189,6 +204,20 @@ export async function handleSharedAuthAccountBoundaryRequest(
     });
   } catch {
     return sharedAuthUnavailableResponse();
+  }
+}
+
+function sharedAuthLocalReturnPath(value: string | null, origin: string): string | undefined {
+  if (!value || value.length > 4096 || new TextEncoder().encode(value).byteLength > 4096 ||
+    !value.startsWith("/") || value.startsWith("//") || /[\\\u0000-\u0020\u007f]/u.test(value)) return undefined;
+  try {
+    const target = new URL(value, origin);
+    // Dot-segment normalization must not produce a protocol-relative Location.
+    if (target.origin !== origin || target.username || target.password || target.pathname.startsWith("//")) return undefined;
+    const destination = `${target.pathname}${target.search}${target.hash}`;
+    return new TextEncoder().encode(destination).byteLength <= 4096 ? destination : undefined;
+  } catch {
+    return undefined;
   }
 }
 
