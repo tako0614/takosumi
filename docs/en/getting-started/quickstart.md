@@ -137,8 +137,8 @@ they are applied.
 [![The Updates tab. Under the tracked version main and the Review changes button, Update history lists the Current version and Version 1 with their times; Restore a previous version on Version 1 is open and shows the Restore this state button (an example after a second apply)](/getting-started/quickstart-updates-en-dark.png){.screenshot width=1704 height=1050}](/getting-started/quickstart-updates-en-dark.png){.dark-only}
 
 The plan and apply Runs are listed newest first, as **Review** (plan) and
-**Deploy** (apply), under **Deploy history** in the user menu behind your initial
-at the top right (`https://app.takosumi.test/runs`).
+**Deploy** (apply), under **Deploy history** in the user menu, which opens from your
+initial at the top right (`https://app.takosumi.test/runs`).
 
 To test the whole environment:
 

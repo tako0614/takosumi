@@ -13,7 +13,7 @@ takosumi status <run-id>
 takosumi logs   <run-id>
 ```
 
-Put the origin you sign in to the dashboard at in `TAKOSUMI_DEPLOY_CONTROL_URL`;
+Set `TAKOSUMI_DEPLOY_CONTROL_URL` to the origin where you sign in to the dashboard;
 for the Takosumi hosted service it is `https://app.takosumi.com`. Create the API
 key for `TAKOSUMI_DEPLOY_CONTROL_TOKEN` as described in
 [Creating a token](#creating-a-token) below.
