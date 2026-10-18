@@ -41,7 +41,7 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 | パラメータ   | 意味                                                           |
 | ------------ | -------------------------------------------------------------- |
 | `git`        | plain OpenTofu/Terraform module の HTTPS Git URL               |
-| `source`     | `git::<HTTPS URL>//<module のフォルダ>?ref=<ref>` 形式の packed module address |
+| `source`     | `git::<HTTPS URL>//<module のフォルダ>?ref=<ref>` 形式の packed module address（`//<フォルダ>` と `?ref=` は省略可） |
 | `ref`        | Git branch / tag / commit                                      |
 | `sourcePath` | sync/archive/scan する Git subtree。省略時は `.`               |
 | `path`       | 追加する module のフォルダ。`sourcePath` からの相対パス。scan の結果に無ければ使わない |

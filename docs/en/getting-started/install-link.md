@@ -13,14 +13,17 @@ Get the repository into the shape described in
 https://<Takosumi origin>/install?git=<Git URL>&ref=<branch, tag, or commit>&path=<module folder>
 ```
 
-`<Takosumi origin>` is the dashboard origin of the Takosumi people will add to. For the official
-hosted service it is `app.takosumi.com`. For a Takosumi you run yourself, it is your origin.
+`<Takosumi origin>` is the dashboard origin (the part from `https://` to the host name) of the
+Takosumi people will add to. For the official hosted service it is `https://app.takosumi.com`.
+For a Takosumi you run yourself, it is your origin.
 
 In a README, make it a Markdown link:
 
 ```markdown
 [Add with Takosumi](https://takosumi.example.com/install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu)
 ```
+
+Replace the origin, repository, version, and folder with your own.
 
 URL-encode a value that contains `&`, `+`, `#`, `%`, or a space. For example, write `+` as
 `%2B`. A bare `+` is read as a space.
@@ -29,7 +32,7 @@ URL-encode a value that contains `&`, `+`, `#`, `%`, or a space. For example, wr
 
 | Parameter | Meaning |
 | --- | --- |
-| `git` | URL of the Git repository that holds the module. It starts with `https://` and has no user name, password, `?`, or `#` |
+| `git` | URL of the Git repository that holds the module (the folder with your OpenTofu configuration). It starts with `https://` and has no user name, password, `?` query, or `#` fragment |
 | `ref` | The version to add: a branch, tag, or commit. Without it, the default branch |
 | `path` | The folder of the module to add. Without it, Takosumi checks the repository and decides |
 | `sourcePath` | The folder inside the repository that Takosumi fetches and checks. Without it, the whole repository (`.`) |
@@ -40,7 +43,8 @@ URL-encode a value that contains `&`, `+`, `#`, `%`, or a space. For example, wr
 Every link needs exactly one of `git` or `source`. The rest are optional. Module variable values
 cannot travel in the link. The person adding enters them on the **Set up the service** screen.
 
-If the repository name has capital letters or `_`, add `name`. With the repository name as is,
+If the repository name has anything other than lowercase letters, numbers, and hyphens (capital
+letters, `_`, `.`, and so on), add `name`. With the repository name as is,
 pressing **Add** shows "Use lowercase letters, numbers, and hyphens for the service name." and
 the person adding has to fix the name.
 
@@ -53,7 +57,8 @@ happens after that depends on the kind of `ref`:
   shows **Update available**.
 - **A tag or commit** (such as `v1.2.0`): the service stays on that version. The person who added
   it moves to a newer one with **Change version**
-  ([Update to a new version](./after-adding.md#update-to-a-new-version)).
+  ([Update to a new version](./after-adding.md#update-to-a-new-version)). If you move the tag to
+  another commit, though, the service shows **Update available**, as it would for a branch.
 
 ### `path` and `sourcePath`
 
@@ -69,8 +74,9 @@ Use `sourcePath` when test or example modules live in the same repository and yo
 narrow what is checked to the main module
 ([What stops a module from being added](./prepare-repository.md#what-stops-a-module-from-being-added)).
 
-Write folders like `deploy/opentofu`. A folder cannot start with `/` or `./`, end with `/`, or
-contain `..` or `\`.
+Write folders like `deploy/opentofu`. A folder cannot start with `/` or `./`, end with `/`,
+contain an empty part (`a//b`), a `.` or `..` part, `\`, or a drive name (`C:`), or be longer than
+1,024 characters.
 
 After the person adding presses **Add**, Takosumi checks the repository and compares `path` with
 what it found:
@@ -79,8 +85,10 @@ what it found:
 - `path` is found and there are other modules: **Choose a module** opens with that module
   selected. The person adding can still choose another one.
 - `path` is not found: `path` is ignored and the check decides. With one module, Takosumi uses
-  it. With several, the person adding chooses. No error is shown, so a wrong path is easy to
-  miss, especially a path written from the top of the repository when `sourcePath` is set.
+  it. With several, the person adding chooses. With none, the screen says "No module that can be
+  added was found in this repository version." Nothing says that `path` was ignored, so a wrong
+  path is easy to miss, especially a path written from the top of the repository when
+  `sourcePath` is set.
 
 ### Packed form
 
@@ -90,38 +98,46 @@ what it found:
 https://takosumi.example.com/install?source=git::https://github.com/acme/notes.git//deploy/opentofu?ref=v1.2.0
 ```
 
-What follows `//` is the module folder, and what follows `?` is the version. Only `ref` can
-follow `?`. `source` cannot be used together with `git`. Give `ref` and `path` either inside
-`source` or outside it, not both.
+What follows `//` is the module folder, and what follows `?` is the version. Both are optional.
+Only `ref` can follow `?`. `source` cannot be used together with `git`. Give `ref` and `path`
+either inside `source` or outside it, not both. `sourcePath` can be used with `source`.
 
 ## When a link is not used
 
-If any of the following is true, none of the link's values are used, and the add screen opens
-with an empty source. **No error is shown.**
+If a link with `git` or `source` matches any of the following, none of its values are used, and
+the add screen opens with an empty source. **No error is shown.**
 
 - A parameter that is not in the table above. This includes tracking parameters such as
   `utm_source` and attempts to pass variable values such as `var.<name>`
 - The same parameter twice
 - Both `git` and `source`
+- A `source` that does not start with `git::`, has something other than `ref` after `?`, or has a
+  folder after `//` that breaks the rules above
+- `ref` or `path` given both inside and outside `source`
 - An empty value (such as `ref=`), or a value with spaces before or after it
-- A `git` URL that does not start with `https://`, contains a user name or password, or
-  contains `?` or `#`
+- A `git` URL that does not start with `https://`, contains a user name or password, or has a
+  `?` query or `#` fragment
 - A `path` or `sourcePath` that breaks the rules above
 - A `name` longer than 96 characters or a `ref` longer than 512 characters
 - Only one of `product` and `return_uri`, or values that break the
   [App Handoff](../reference/app-handoff.md#product-key-and-return-uri-rules) rules
 
+A link with neither `git` nor `source` opens the **Find a service** screen instead of the add
+screen.
+
 ## Check before you share
 
 Open the link yourself. On the first add screen, **Source** should show the repository, version,
-and folder. If **Source** is missing and the fields are empty, one of the cases above applies.
+and folder. The Git URL and the other values are in the collapsed **Source details**. If
+**Source** is missing and the fields in **Source details** are empty, one of the cases above
+applies.
 The first screen is the same one shown in the
 [Quickstart](./quickstart.md#_6-add-the-example).
 
 ## What the person opening it sees
 
-1. Someone who is not signed in sees the sign-in screen with the source of the service they are
-   adding. After signing in, they return to the add screen.
+1. Someone who is not signed in sees the sign-in screen with the name, version, and folder of the
+   service they are adding. After signing in, they return to the add screen.
 2. The first add screen shows the service name, **Source**, and the steps that follow.
 3. After they press **Add**, Takosumi pins `ref` to a commit and checks the repository. On
    **Set up the service** they enter variables and connections, and on **Review before adding**

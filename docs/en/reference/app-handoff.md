@@ -44,7 +44,7 @@ Supported query parameters:
 | Parameter    | Required | Meaning                                                       |
 | ------------ | -------- | ------------------------------------------------------------- |
 | `git`        | `git` or `source` | HTTPS Git URL for a plain OpenTofu/Terraform module           |
-| `source`     | `git` or `source` | Packed module address: `git::<HTTPS URL>//<module folder>?ref=<ref>` |
+| `source`     | `git` or `source` | Packed module address: `git::<HTTPS URL>//<module folder>?ref=<ref>` (`//<folder>` and `?ref=` are optional) |
 | `ref`        | no       | Git branch, tag, or commit                                    |
 | `sourcePath` | no       | Git subtree captured, archived, and scanned; defaults to `.`  |
 | `path`       | no       | Folder of the module to add, relative to `sourcePath`; ignored if the scan does not find it |
