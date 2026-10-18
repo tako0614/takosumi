@@ -199,9 +199,33 @@ test.describe("Takosumi docs for keyboard and screen-reader users", () => {
     }
 
     const toggle = page.locator(".VPSidebarItem.collapsible > .item[role=button]").first();
+    const controls = await toggle.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    await expect(page.locator(`#${controls}`)).toHaveCount(1);
+    await expect(toggle.locator(":scope > .caret[tabindex]")).toHaveCount(0);
+
     const before = await toggle.getAttribute("aria-expanded");
     await toggle.focus();
     await page.keyboard.press("Enter");
     await expect(toggle).not.toHaveAttribute("aria-expanded", before ?? "");
+    await page.keyboard.press(" ");
+    await expect(toggle).toHaveAttribute("aria-expanded", before ?? "");
+  });
+
+  test("restores the English names after switching from Japanese", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/docs/getting-started/quickstart");
+    await expect(page.locator("#sidebar-aria-label")).toHaveText("サイドバー");
+
+    // Follow an in-app link to the English page, as the language menu does.
+    await page.evaluate(() => {
+      const link = [...document.querySelectorAll<HTMLAnchorElement>("a")].find((a) =>
+        /\/docs\/en\/getting-started\/quickstart/u.test(a.getAttribute("href") ?? ""),
+      );
+      link?.click();
+    });
+    await expect(page.locator("html")).toHaveAttribute("lang", /^en/u);
+    await expect(page.locator("#sidebar-aria-label")).toHaveText("Sidebar Navigation");
+    await expect(page.locator(".VPNavBarHamburger")).toHaveAttribute("aria-label", "mobile navigation");
   });
 });

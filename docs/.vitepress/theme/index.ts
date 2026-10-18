@@ -181,8 +181,11 @@ function installAccessibleChrome(): void {
     root.dataset.takosumiAccessibleChrome = "installed";
 
     let pending = false;
+    let groupCount = 0;
     // Every write is skipped when the value is already right, so the
-    // mutations this makes settle after one pass.
+    // mutations this makes settle after one pass. On English pages the names
+    // written are VitePress's own defaults, which restores them after a
+    // Japanese page without changing a page that never left English.
     const sync = (): void => {
       pending = false;
       const japanese = root.lang.startsWith("ja");
@@ -204,15 +207,42 @@ function installAccessibleChrome(): void {
           title.setAttribute("role", "none");
         }
         const group = header.parentElement;
-        if (group?.classList.contains("collapsible")) {
-          if (header.getAttribute("role") !== "button") continue;
+        const list = group?.querySelector<HTMLElement>(":scope > .items");
+        if (
+          group?.classList.contains("collapsible") &&
+          header.getAttribute("role") === "button" &&
+          list
+        ) {
           const expanded = String(!group.classList.contains("collapsed"));
           if (header.getAttribute("aria-expanded") !== expanded) {
             header.setAttribute("aria-expanded", expanded);
           }
+          if (!list.id) list.id = `takosumi-sidebar-group-${++groupCount}`;
+          if (header.getAttribute("aria-controls") !== list.id) {
+            header.setAttribute("aria-controls", list.id);
+          }
+          // The header is the button; its caret would be a second stop that
+          // does the same thing, named in English ("toggle section").
+          const caret = header.querySelector<HTMLElement>(":scope > .caret");
+          if (caret) {
+            if (caret.hasAttribute("role")) caret.removeAttribute("role");
+            if (caret.hasAttribute("tabindex")) caret.removeAttribute("tabindex");
+            if (caret.getAttribute("aria-hidden") !== "true") {
+              caret.setAttribute("aria-hidden", "true");
+            }
+          }
+          // VitePress toggles on Enter only; a button also toggles on Space.
+          if (header.dataset.takosumiSpaceToggle !== "on") {
+            header.dataset.takosumiSpaceToggle = "on";
+            header.addEventListener("keydown", (event) => {
+              if (event.key !== " ") return;
+              event.preventDefault();
+              header.click();
+            });
+          }
         } else {
-          // A header that cannot collapse does nothing on Enter; a page link
-          // inside it stays the one tab stop.
+          // Any other header does nothing on Enter; a page link or the
+          // VitePress caret inside it stays the tab stop.
           if (header.hasAttribute("role")) header.removeAttribute("role");
           if (header.hasAttribute("tabindex")) header.removeAttribute("tabindex");
         }
