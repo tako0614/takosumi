@@ -11,6 +11,9 @@ Takosumi フローを実行します。connection payload をクライアント�
 作成には通常の Takosumi dashboard を使います。クライアントは
 完了後に自分の product app または web callback URL へ戻ります。
 
+README やウェブサイトに置く追加リンクだけが必要なら、[追加リンクを配る](../getting-started/install-link.md)
+を読んでください。このページは、追加のあとに自分のクライアントへ戻す使い方を含めた protocol 全体です。
+
 全体の流れは次のとおりです。
 
 1. クライアントが `/install` URL を開く
@@ -38,11 +41,11 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 | パラメータ   | 意味                                                           |
 | ------------ | -------------------------------------------------------------- |
 | `git`        | plain OpenTofu/Terraform module の HTTPS Git URL               |
-| `source`     | `git::...?...` 形式の packed module address                    |
+| `source`     | `git::<HTTPS URL>//<module のフォルダ>?ref=<ref>` 形式の packed module address |
 | `ref`        | Git branch / tag / commit                                      |
 | `sourcePath` | sync/archive/scan する Git subtree。省略時は `.`               |
-| `path`       | Source subtree 内で scan 後に照合する archive-relative module |
-| `name`       | サービスの表示名                                               |
+| `path`       | 追加する module のフォルダ。`sourcePath` からの相対パス。scan の結果に無ければ使わない |
+| `name`       | サービス名（半角小文字、数字、ハイフン）。省略時はリポジトリ名 |
 | `product`    | `return_uri` とセットで使うクライアント product key            |
 | `return_uri` | `product` とセットで使う connection payload の返却先           |
 
@@ -93,8 +96,9 @@ https://takosumi.example.com/install
 source リポジトリは plain OpenTofu/Terraform module のままで足ります。Takosumi 専用の
 source metadata ファイルや製品固有の metadata ファイルを置く必要はありません。
 
-`sourcePath` と `path` は `.` または正規化済みの relative directory だけを受け付け、
-未知・重複・不正なクエリフィールドがあるリンクは全体を拒否します。module input は URL
+`sourcePath` と `path` は `.` または正規化済みの relative directory だけを受け付けます。
+未知・重複・不正なクエリフィールドが 1 つでもあるリンクは、どの値も使われず、取得元が空の
+追加画面が開きます。エラーは表示されません（[リンクが使われないとき](../getting-started/install-link.md#リンクが使われないとき)）。module input は URL
 では渡しません。`var.<name>` や `varjson.<name>` を付けたリンクも拒否されます。入力は Takosumi dashboard の画面で
 入れます。secret、token、provider credential、private key の渡し先はさらに別で、
 ProviderConnection、Credential Recipe、ProviderBinding、Secret、または製品側の

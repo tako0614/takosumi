@@ -152,15 +152,16 @@ Connection の選択が必要な項目は画面に表示されます。provider 
 https://takosumi.example.com/install?git=https://github.com/example/app.git&ref=v1.2.0&sourcePath=infra&path=deploy/opentofu
 ```
 
-`sourcePath` は sync/archive/scan する Git subtree で、省略時は `.` です。`path` はその
-subtree の Snapshot を scan した後に照合される archive-relative module 選択の初期値です。
-この 2 つを結合・推測せず、それぞれ Source の取得座標と module の選択座標として扱います。
+`sourcePath` は sync/archive/scan する Git subtree で、省略時は `.` です。`path` は追加する
+module のフォルダで、`sourcePath` からの相対パスです。subtree の Snapshot を scan した結果と
+照合し、見つからなければ使いません。この 2 つを結合・推測せず、それぞれ Source の取得座標と
+module の選択座標として扱います。
 `path` を省略した場合は1候補だけを自動選択し、複数候補なら利用者が選びます。`/install` は
 `/new` の入力欄を埋めるだけです。**リンクを開いた時点では何も作られません。**
 利用者は互換性の確認結果、使う認証情報、計画の内容を見てから自分で承認します。
 
-戻り先 URI の規則など、組み立ての詳細は
-[App Handoff](../reference/app-handoff.md) にあります。クエリ文字列はブラウザの
+README などに置くリンクの作り方は[追加リンクを配る](../getting-started/install-link.md)に、
+戻り先 URI の規則は [App Handoff](../reference/app-handoff.md) にあります。クエリ文字列はブラウザの
 履歴やログに残るため、リンクに秘密を入れないでください。
 
 ## 関連

@@ -69,6 +69,8 @@ Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Clo
   前の版に戻す、削除する
 - [リポジトリを用意する](./getting-started/prepare-repository.md) — 自分のソフトウェアを
   Takosumi から追加できる形にする
+- [追加リンクを配る](./getting-started/install-link.md) — README などから、取得元が入った
+  追加画面を開けるようにする
 - [全体像](./concepts/index.md) — 最小限の用語と、デプロイが進む順序
 - [Source と Capsule](./concepts/sources.md) — Git の ref を commit に固定する方法
 - [実行モデル](./concepts/run-model.md) — plan、承認、apply、destroy

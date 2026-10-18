@@ -72,8 +72,9 @@ hint の flow を使い、Store metadata や DB-owned deployment profile は mod
 policy を選びません。
 
 候補が1件なら dashboard が自動選択し、複数なら利用者が選択します。manifest にだけある
-path は候補にならず、URL で明示された `path` も immutable scan result に存在しなければ
-typed 4xx で fail closed します。manifest が absent でも scan された module は利用できます。
+path は候補にならず、追加リンクの `path` も immutable scan result に無ければ使われず、
+dashboard は scan の候補から選び直します。install plan に明示した module path が固定した
+tree に無い場合は、その plan が `repository_install_ux_module_missing` で失敗します。manifest が absent でも scan された module は利用できます。
 任意の manifest が malformed/invalid な場合も、その内容を推測・部分採用せず assistance を
 無効化し、scan 由来の generic install を続行します。operator の Host policy が exact manifest
 API version を明示的に必須化した場合だけ、absent/invalid/version mismatch を fail closed に

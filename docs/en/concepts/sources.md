@@ -157,16 +157,17 @@ https://takosumi.example.com/install?git=https://github.com/example/app.git&ref=
 ```
 
 `sourcePath` is the Git subtree captured, archived, and scanned; it defaults to `.`.
-`path` is an archive-relative module-selection hint checked against the resulting
-Snapshot scan. Takosumi does not join or guess between these coordinates: one scopes
+`path` is the folder of the module to add, relative to `sourcePath`. It is checked against
+the resulting Snapshot scan and ignored if the scan does not find it. Takosumi does not join or guess between these coordinates: one scopes
 Source acquisition and the other selects a module. With no `path`, exactly one candidate
 is auto-selected and multiple candidates require a user choice. `/install` only fills in
 the fields of `/new`. **Opening the link creates nothing.** The
 user sees the compatibility result, the credentials that would be used, and the plan
 before approving anything.
 
-The details of assembling one of these links, including the rules for the return URI, are
-in [App Handoff](../reference/app-handoff.md). Query strings end up in browser history and
+How to build a link for a README or website is in
+[Share an install link](../getting-started/install-link.md), and the rules for the return URI
+are in [App Handoff](../reference/app-handoff.md). Query strings end up in browser history and
 in logs, so keep secrets out of the link.
 
 ## Related
