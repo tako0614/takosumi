@@ -800,6 +800,113 @@ test.describe("Takosumi dashboard browser surface", () => {
     "public-live is an unauthenticated read-only profile",
   );
 
+  for (const stalledAt of ["fetch", "body"] as const) {
+    test(`Install review keeps one Run read in flight through ${stalledAt} stalls`, async ({ page }) => {
+      test.skip(mode !== "portable", "synthetic install Run reads are portable-only");
+      const errors = pageErrors(page);
+      await page.clock.install();
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      await page.addInitScript((mode) => {
+        const probe = { requests: 0, replyStatus: "" };
+        (window as typeof window & { __installRunReadProbe?: typeof probe })
+          .__installRunReadProbe = probe;
+        const realFetch = window.fetch.bind(window);
+        window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const target =
+            typeof input === "string"
+              ? input
+              : input instanceof URL
+                ? input.href
+                : input.url;
+          const path = new URL(target, location.href).pathname;
+          const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+          if (path !== "/api/v1/runs/run_provider_plan_e2e" || method !== "GET") {
+            return realFetch(input, init);
+          }
+          probe.requests += 1;
+          if (probe.replyStatus) {
+            return new Response(JSON.stringify({ run: {
+              id: "run_provider_plan_e2e",
+              workspaceId: "ws_alpha",
+              capsuleId: "cap_provider_destination_e2e",
+              type: "plan",
+              status: probe.replyStatus,
+              summary: { add: 1, change: 0, destroy: 0 },
+              policyStatus: "pass",
+              createdBy: "portable-e2e",
+              createdAt: "2026-08-01T00:00:00.000Z",
+            } }), { status: 200, headers: { "content-type": "application/json" } });
+          }
+          if (mode === "fetch") {
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("fixture aborted", "AbortError")), { once: true });
+            });
+          }
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"run":'));
+              init?.signal?.addEventListener("abort", () =>
+                controller.error(new DOMException("fixture aborted", "AbortError")), { once: true });
+            },
+          }), { status: 200, headers: { "content-type": "application/json" } });
+        }) as typeof fetch;
+      }, stalledAt);
+      await stubProviderDestinationFixture(page, [], []);
+
+      await page.goto(
+        `/new?git=${encodeURIComponent("https://github.com/example/cloudflare-service.git")}` +
+          `&ref=${PORTABLE_SOURCE_COMMIT}&path=.&name=cloudflare-service`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.getByRole("button", { name: "Add", exact: true }).click();
+      const readCount = () => page.evaluate(() =>
+        (window as typeof window & { __installRunReadProbe?: { requests: number } })
+          .__installRunReadProbe?.requests ?? 0);
+      await expect.poll(readCount).toBe(1);
+
+      await page.clock.runFor(9_100);
+      expect(await readCount()).toBe(1);
+      await page.clock.runFor(21_100);
+      await expect(page.locator('.iv-execution [role="alert"]')).toContainText(
+        "Couldn't load this run",
+      );
+      expect(await readCount()).toBe(1);
+
+      await page.evaluate(() => {
+        const probe = (window as typeof window & {
+          __installRunReadProbe?: { replyStatus: string };
+        }).__installRunReadProbe;
+        if (probe) probe.replyStatus = "running";
+      });
+      await page.locator(".iv-execution").getByRole("button", { name: "Retry" }).click();
+      await expect.poll(readCount).toBe(2);
+      await page.clock.runFor(3_100);
+      await expect.poll(readCount).toBe(3);
+      await page.evaluate(() => {
+        const probe = (window as typeof window & {
+          __installRunReadProbe?: { replyStatus: string };
+        }).__installRunReadProbe;
+        if (probe) probe.replyStatus = "";
+      });
+      await page.clock.runFor(3_100);
+      await expect.poll(readCount).toBe(4);
+      await page.clock.runFor(9_100);
+      expect(await readCount()).toBe(4);
+      await page.evaluate(() => {
+        const probe = (window as typeof window & {
+          __installRunReadProbe?: { replyStatus: string };
+        }).__installRunReadProbe;
+        if (probe) probe.replyStatus = "succeeded";
+      });
+      await page.clock.runFor(24_100);
+      await expect.poll(readCount).toBe(5);
+      await page.clock.runFor(9_100);
+      expect(await readCount()).toBe(5);
+      await assertNoPageErrors(errors);
+    });
+  }
+
   test("readiness 401 follows sign-in return without reopening Apply", async ({ page }) => {
     test.skip(mode !== "portable", "synthetic readiness auth is portable-only");
     const errors = pageErrors(page);
