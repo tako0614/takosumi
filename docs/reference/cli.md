@@ -146,6 +146,11 @@ takosumi accounts serve --issuer http://localhost:8787
 
 ## Platform readiness の contribution を追加する
 
+公開前に運用の証跡（launch readiness）をそろえる operator 向けの機能です。hosted service や別の edition が
+求める追加の証跡を、OSS の baseline に組み込みます。サービスを追加して使うだけなら、この節は要りません。
+
+::: details contribution の作り方と検証を開く
+
 `takosumi launch-readiness template` は OSS/Operator に共通する baseline を生成します。
 hosted service や別の edition が追加の運用証跡を要求する場合は、owner 側が versioned な
 `takosumi.platform-readiness-contribution@v2` の
@@ -193,6 +198,8 @@ validate が返す `takosumi.platform-readiness-report@v2` には、組み合わ
 `requiredDomainIds` / `requiredRehearsalStepIds` も含まれます。進捗を集計する側は
 OSS 固定の ID ではなくこの配列を使います。そうすることで、Operator / hosted service の
 contribution を含めた total と complete の件数を正確に数えられます。
+
+:::
 
 ## ProviderConnection を登録する
 
