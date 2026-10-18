@@ -8,18 +8,20 @@ Git の OpenTofu module はそのまま追加できます。書き方の例は
 [ホームにアプリを出す](../getting-started/home-launcher.md)にあります。このページは項目と規則の
 一覧です。
 
-manifest に書けるのは提案だけです。どの module を使うか、provider、接続、作るもの、デプロイと
-削除は、Git にある OpenTofu の設定と利用者の選択で決まり、manifest では変えられません。module と
-provider の候補を決めるのは、Git URL、ref、`sourcePath`、固定した commit で追跡されている
-ファイルを Takosumi が調べた結果です。
+manifest に書けるのは提案だけです。機能の実装は Takosumi が持ち、manifest にできるのは、その機能を
+求めることと、受け取った値を OpenTofu の変数へ渡す対応づけだけです。manifest は実行するコードと同じ
+commit に固定されます。provider、接続、作るもの、デプロイと削除は、アプリ側の Git にある OpenTofu の
+設定で決まり、manifest では変えられません。module と provider の候補を決めるのは、Git URL、ref、
+`sourcePath`、固定した commit で追跡されているファイルを Takosumi が調べた結果です。利用者は、その
+候補から追加する module を選びます。
 
 manifest は次のように扱われます。
 
 - Source を同期するとき、同じ commit の manifest を読み、128 KiB までの UTF-8 JSON として確かめます。
   結果と digest は、後から変わらない `SourceSnapshot.repositoryManifest` に保存します。文書そのものは
   公開 API では返しません。
-- 追加するとき、その SourceSnapshot の宣言を互換性の確認結果と突き合わせ、運用している人の policy の
-  範囲で、データベースに保存する Capsule の設定（`InstallConfig`）に変換します。変更の確認と
+- 追加するとき、固定したその SourceSnapshot の宣言を、同じ snapshot の互換性の確認結果と突き合わせ、
+  運用している人の policy の範囲で、データベースに保存する追加時の設定（`InstallConfig`）に変換します。変更の確認と
   デプロイ（Plan / Run）が読むのはこの保存した設定で、manifest を読み直しません。
 
 ## 版と書ける項目
@@ -43,7 +45,7 @@ manifest は次のように扱われます。
 | `takosumi.com/v2.3` | `modules`、`defaultModule`（任意） | v2.2 + `sourceBuild`（任意）               |
 | `takosumi.com/v2.4` | `modules`              | v2.3 + OIDC の値を実行時の binding で渡す        |
 
-どの object も、書ける項目が決まっています。表や各節にない項目、`$schema`、古い
+どの階層の object も、書ける項目が決まっています。表や各節にない項目、`$schema`、古い
 `schemaVersion: takosumi.install-ux/v1` を書くと拒否されます。
 
 公開 JSON Schema は
@@ -52,15 +54,15 @@ manifest は次のように扱われます。
 [`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json) と
 [`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json)
 です。Schema が確かめるのは形だけで、Takosumi の検査と完全には一致しません。項目どうしの重複、
-JSON の入れ子の深さ（最大 32）、下に書く秘密や権限を表す言葉は、Takosumi がさらに確かめ、合わなければ
-受け付けません。
+JSON の入れ子の深さ（最大 32）、秘密や権限を表す語（下の「Authority と secret の境界」）は、Takosumi が
+さらに確かめ、合わなければ受け付けません。
 
 ## 調べた module と manifest の項目
 
 `install.modules` には 1〜32 件を書きます。key は module のフォルダを、リポジトリの最上位から書いた
 ものです（最上位なら `.`、1,024 文字まで）。`/` や `./` で始まるもの、ドライブ名、末尾の `/`、`\`、
-NUL、空の区切り、`.` や `..` の区切りは使えません。その項目が使われるのは、固定した commit を調べた
-結果、同じフォルダに module があるときだけです。manifest で module を作ったり、選んだり、置き換えたり
+NUL、空の区切り、`.` や `..` の区切りは使えません。その項目が入力欄の説明や機能の要求として使われるのは、固定した
+commit を調べた結果、同じフォルダに module があるときだけです。manifest で module を作ったり、選んだり、置き換えたり
 はできません。
 
 Takosumi が調べた module の一覧は、認証済みの
@@ -68,23 +70,25 @@ Takosumi が調べた module の一覧は、認証済みの
 `status`、`sourceSnapshotId`、`scopePath` と、調べた結果の
 `modules: [{ path, providerPackages, rootProviderRequirements }]` が入ります。`providerPackages` は
 たどれる provider package のすべて（policy、lock、mirror 用）、`rootProviderRequirements` は選んだ
-root module が直接求める provider の local name と alias の組（接続の割り当てと root の生成用）です。
-dashboard はこの一覧から module を選んで互換性を確かめます。Git URL から追加するときもストアから追加
-するときも同じ流れで、ストアの情報や保存した配置の設定が module、provider、policy を選ぶことは
-ありません。この endpoint は、サインインした session、Source の Workspace へのアクセス、
-SourceSnapshot と Source の対応を確かめます。
+root module が直接求める provider の local name と alias の組を、そのままの形で示したもの（接続の割り当てと
+root module の生成用）です。dashboard はこの一覧から module を選んで互換性を確かめます。Git URL から
+追加するときもストアから追加するときも、Git URL と ref に、任意の module のフォルダの目安を添えた同じ
+流れで、ストアの情報や保存されているデプロイの設定が module、provider、policy を選ぶことはありません。
+この API は、サインイン済みの利用者であること、Source の Workspace へのアクセス、その SourceSnapshot が
+その Source のものであることを確かめます。
 
 候補が 1 件なら dashboard が自動で選び、複数なら利用者が選びます。manifest にだけあるフォルダは候補に
-なりません。追加リンクの `path` も、調べた結果に無ければ使われず、dashboard は調べた候補から選び
-直します。install plan に指定した module のフォルダが固定した tree に無いと、その plan は
+なりません。追加リンクの `path` も、固定した commit を調べた結果に無ければ使われず、dashboard は調べた
+候補から選び直します。追加の計画（install plan）に指定した module のフォルダが固定した archive に
+無いと、その plan は
 `repository_install_ux_module_missing` で失敗します。フォルダが `sourcePath` を繰り返している
 （リポジトリの最上位から書いた）ときは `repository_install_ux_module_path_repository_relative` で
 失敗します。
 
 manifest が無くても、調べた module は使えます。manifest が読めないときや規則に合わないときも、内容を
-推し量ったり一部だけ使ったりせず、manifest による補助を使わずに、調べた結果だけで追加を続けます。
-運用している人が manifest の版を必須にしている場合だけ、無い、読めない、版が違う manifest で
-止まります。
+推し量ったり一部だけ使ったりせず、manifest の情報を使わずに、調べた結果だけで追加を続けます。
+運用している人が特定の manifest の版を必須にしている場合だけ、manifest が無い、読めない、版が違う
+ときに追加を止めます。
 
 公開済みの v2.1〜v2.3 の `install.defaultModule`（任意）は今も読み、`install.modules` の key と一致
 するかを確かめますが、表示の目安にしか使いません。複数の module があるときに利用者が選ぶ手順は省けず、
@@ -92,8 +96,8 @@ manifest が無くても、調べた module は使えます。manifest が読め
 
 Takosumi が調べるのは、manifest の有無や版にかかわらず、固定した archive の中の追跡されている通常の
 ファイルと、リポジトリの中の local module（`./`、`../`）だけです。registry や `git::` などのリモートの
-module source は、版を固定していても取得しません。見つかると、その範囲の候補は一部も出さずに `invalid`
-になります。`../` も、選んだ module のディレクトリの外を指すと追加できません。使う module は
+module source は、版を固定していても取得しません。見つかると、候補の一部だけを出すことはせず、その
+scan の結果全体を `invalid` にします。`../` も、選んだ module のディレクトリの外を指すと追加できません。使う module は
 リポジトリに入れてください（[追加できるリポジトリを用意する](../getting-started/prepare-repository.md)）。
 
 ### 有効な v2.1 multi-module 例
