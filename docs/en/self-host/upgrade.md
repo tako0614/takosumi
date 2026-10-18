@@ -101,20 +101,29 @@ for this order and its caveats.
 
 ## When retired tables still have rows
 
-The tables that held the former Resource Shape, Form Host, TargetPool, SpacePolicy, Offering, and
-similar records are dropped by PostgreSQL migration 110 (`retired.host_schema.drop_empty`) and by
-Cloudflare D1 migration 66 (`d1_retired_host_schema_drop_empty`). Both drop the tables only when all
-of them are empty. If even one row remains, the upgrade stops at that migration.
+PostgreSQL migration 110 (`retired.host_schema.drop_empty`) and Cloudflare D1 migration 66
+(`d1_retired_host_schema_drop_empty`) drop the tables that held the former Resource Shape, Form Host,
+TargetPool, SpacePolicy, Offering, resolution lock, identity fence, idempotency, and similar records.
+The upgrade stops at that migration in either of two cases. The error contains one of these names
+(upper case in PostgreSQL, lower case in D1):
+
+- `RETIRED_HOST_ROWS_REQUIRE_OPERATOR_DISPOSITION` — one of the tables to drop still has rows. The
+  tables are dropped only when all of them are empty.
+- `RETAINED_INTERFACE_HOST_EVIDENCE_REQUIRES_OPERATOR_DISPOSITION` — some retained Interface or
+  InterfaceBinding records depend on retired Resource or Form Host state, or their structure cannot
+  prove that they do not. These tables are not dropped.
 
 If it stops:
 
-1. List and export the remaining rows with the immediately previous release or an external database
+1. List and export the affected rows with the immediately previous release or an external database
    tool.
 2. Record explicitly how each row will be handled.
-3. Empty the retired tables as recorded.
+3. As recorded, empty the tables to drop, or correct or remove the affected Interface and
+   InterfaceBinding records.
 4. Run the migration again.
 
-The current Takosumi has no operation or setting that moves these records.
+The current Takosumi has no typed Host migration operation or setting that moves retired Host
+records.
 
 ## Failure handling
 

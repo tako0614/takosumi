@@ -93,7 +93,7 @@ SpacePolicy の `/v1` route と CLI domain は廃止済みで、有効化する 
 ありません。常に `404` を返し、capabilities/OpenAPI にも出ず、bearer、
 database、残っている行で復活させることもできません。
 
-Form Package の install や host もしません。Form Host を持つ hosted service や operator の構成が、
+Takosumi OSS は Form Package の install や host もしません。Form Host を持つ hosted service や operator の構成が、
 その Host 固有の trust policy と artifact binding を Host の runbook に記録することがありますが、それは
 Takosumi OSS が対応する deploy の経路ではなく、FormActivation や Offering を作りません。portable
 Takoform protocol は外部 Host の contract で、互換の alias や移行の入口ではありません。新しい利用者は、

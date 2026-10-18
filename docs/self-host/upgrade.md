@@ -97,19 +97,27 @@ v4 を適用した後は、v3 だけを受け付ける Worker には戻せませ
 
 ## 廃止したテーブルに行が残っているとき
 
-以前の Resource Shape、Form Host、TargetPool、SpacePolicy、Offering などの記録を置いていたテーブルは、
-PostgreSQL の migration 110（`retired.host_schema.drop_empty`）と、Cloudflare の D1 の migration 66
-（`d1_retired_host_schema_drop_empty`）が削除します。どちらも、対象のテーブルがすべて空のときだけ削除し、
-行が 1 つでも残っていると、その migration で止まります。
+以前の Resource Shape、Form Host、TargetPool、SpacePolicy、Offering、resolution lock、identity fence、
+idempotency の記録などを置いていたテーブルは、PostgreSQL の migration 110
+（`retired.host_schema.drop_empty`）と、Cloudflare の D1 の migration 66
+（`d1_retired_host_schema_drop_empty`）が削除します。次の 2 つのどちらかに当たると、アップグレードは
+その migration で止まります。エラーには、次の名前が含まれます（PostgreSQL では大文字、D1 では小文字）。
+
+- `RETIRED_HOST_ROWS_REQUIRE_OPERATOR_DISPOSITION` — 削除するテーブルのどれかに行が残っています。
+  削除は、すべてのテーブルが空のときだけ行います。
+- `RETAINED_INTERFACE_HOST_EVIDENCE_REQUIRES_OPERATOR_DISPOSITION` — 残す Interface と InterfaceBinding の
+  記録のうち、廃止した Resource や Form Host の状態に依っているもの、または記録の形からそうでないと
+  確かめられないものがあります。これらのテーブルは削除しません。
 
 止まったときは、次の順に進めます。
 
-1. 直前の release か外部のデータベースのツールで、残っている行を一覧にして書き出します。
+1. 直前の release か外部のデータベースのツールで、該当する行を一覧にして書き出します。
 2. それぞれの行をどう扱うかを、明示的に記録します。
-3. その記録に従って、廃止したテーブルを空にします。
+3. その記録に従って、削除するテーブルを空にするか、該当する Interface と InterfaceBinding の記録を直すか
+   消します。
 4. migration をもう一度実行します。
 
-Takosumi の今の版には、これらの記録を移す操作や設定はありません。
+Takosumi の今の版には、廃止した Host の記録を移すための操作や設定はありません。
 
 ## 失敗した場合
 

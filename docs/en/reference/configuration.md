@@ -97,7 +97,7 @@ flag to re-enable them. They always return `404`, never appear in
 capabilities/OpenAPI, and cannot be revived through a bearer, the database, or
 leftover rows.
 
-It also neither installs nor hosts Form Packages. A hosted service or operator that owns a Form
+Takosumi OSS also neither installs nor hosts Form Packages. A hosted service or operator that owns a Form
 Host may record Host-specific trust policy and artifact binding in that Host's runbook, but that is
 not a deploy path Takosumi OSS supports, and it creates no FormActivation or Offering. The portable
 Takoform protocol is a contract for external Hosts, not a compatibility alias or a migration
