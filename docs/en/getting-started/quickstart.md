@@ -13,7 +13,8 @@ To check only the API, without the dashboard or runner, follow
 ## Requirements
 
 - Debian or Ubuntu (a system with apt, `update-ca-certificates`, and
-  systemd-resolved). This composition does not support macOS, WSL, or Windows
+  systemd-resolved). This composition does not support macOS, WSL, or Windows. On macOS,
+  check only the API with [Run only the API](./api-only.md)
 - Docker and `docker compose`
 - Bun, Git, `curl`, and `python3`
 - `sudo` for local certificate and DNS setup
