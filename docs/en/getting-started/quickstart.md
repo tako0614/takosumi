@@ -12,11 +12,13 @@ To check only the API, without the dashboard or runner, follow
 
 ## Requirements
 
-- Linux that uses `update-ca-certificates` and systemd-resolved, such as Debian
-  or Ubuntu. This composition does not support macOS, WSL, or Windows
+- Debian or Ubuntu (a system with apt, `update-ca-certificates`, and
+  systemd-resolved). This composition does not support macOS, WSL, or Windows
 - Docker and `docker compose`
 - Bun, Git, `curl`, and `python3`
 - `sudo` for local certificate and DNS setup
+- Ports 53 (UDP and TCP), 80, 443, 14318, and 15000 free on the host's
+  `127.0.0.1`
 
 ## 1. Get the repository
 
@@ -43,9 +45,9 @@ bash scripts/up.sh --profile postgres
 
 This starts Postgres, object storage, the runner, control plane, dashboard,
 local certificate authority, and DNS. On a host where the default AppArmor
-profile blocks the containers, use the following, which starts the containers
-without AppArmor confinement (`apparmor=unconfined`). Do not use it if they
-start with the default profile.
+profile blocks the containers, use the following, which starts every container,
+including the OpenTofu runner, without AppArmor confinement
+(`apparmor=unconfined`). Do not use it if they start with the default profile.
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
@@ -66,7 +68,8 @@ Together they let the browsers and `curl` on this machine open
 
 - `ca-install.sh` adds the root certificate of the local certificate authority
   (Pebble) to the system certificate store (`/usr/local/share/ca-certificates/`)
-  and to the Chromium and Firefox certificate stores. If `certutil` is missing, it
+  and to the certificate stores of Chrome and Chromium (`~/.pki/nssdb`) and
+  Firefox. If `certutil` is missing, it
   installs `libnss3-tools` with apt. Restart any open browser afterwards.
 - `configure-dns.sh` tells systemd-resolved to send only names ending in
   `takosumi.test` to the DNS container on this machine
@@ -74,9 +77,10 @@ Together they let the browsers and `curl` on this machine open
   resolve as before.
 
 `configure-dns.sh` is needed once per host. The local certificate authority
-creates a new root certificate every time it starts, so after you stop with
-`down.sh` and start again with `up.sh`, run `ca-install.sh` again. To undo both,
-see [Stop it](#_8-stop-it).
+(Pebble) creates a new root certificate every time its container starts. After
+you stop with `down.sh` and start again with `up.sh`, or when certificate errors
+appear after the host restarts, run `ca-install.sh` again and restart the
+browser. To undo both, see [Stop it](#_8-stop-it).
 
 ## 4. Check the services
 
@@ -158,7 +162,7 @@ The plan and apply Runs are listed newest first, as **Review** (plan) and
 **Deploy** (apply), under **Deploy history** in the user menu, which opens from your
 initial at the top right (`https://app.takosumi.test/runs`).
 
-To test the whole environment:
+To also test the whole environment:
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
@@ -182,11 +186,16 @@ sudo rm /etc/systemd/resolved.conf.d/takos-local-substrate.conf
 sudo systemctl restart systemd-resolved
 sudo rm /usr/local/share/ca-certificates/takos-local-substrate-pebble.crt
 sudo update-ca-certificates
-certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
 ```
 
-If you use Firefox, run the same `certutil -D` against each of its profile
-directories.
+Remove it from the browser certificate stores as your own user, without `sudo`:
+
+```bash
+certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
+for d in "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
+  [ -d "$d" ] && certutil -d "sql:$d" -D -n takos-local-substrate-pebble
+done
+```
 
 ## Next
 

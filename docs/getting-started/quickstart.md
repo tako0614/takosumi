@@ -11,11 +11,12 @@ dashboard や runner なしで API だけ確認する場合は、[API だけ動�
 
 ## 必要なもの
 
-- Debian や Ubuntu のように、`update-ca-certificates` と systemd-resolved を使う Linux。
+- Debian または Ubuntu（apt、`update-ca-certificates`、systemd-resolved を使う環境）。
   macOS、WSL、Windows はこの構成の対象外です
 - Docker と `docker compose`
 - Bun、Git、`curl`、`python3`
 - 証明書と DNS を設定するための `sudo`
+- ホストの `127.0.0.1` で 53 番（UDP と TCP）、80、443、14318、15000 番が空いていること
 
 ## 1. リポジトリを取得する
 
@@ -41,8 +42,9 @@ bash scripts/up.sh --profile postgres
 
 このコマンドは Postgres、オブジェクトストレージ、runner、control plane、dashboard、
 ローカル認証局と DNS をまとめて起動します。既定の AppArmor 設定でコンテナを起動
-できないホストでは、コンテナを AppArmor の制限なし（`apparmor=unconfined`）で起動する
-次の指定を使います。既定のまま起動できるなら使いません。
+できないホストでは、OpenTofu runner を含むすべてのコンテナを AppArmor の制限なし
+（`apparmor=unconfined`）で起動する次の指定を使います。既定のまま起動できるなら
+使いません。
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
@@ -62,17 +64,18 @@ sudo bash scripts/configure-dns.sh
 なります。
 
 - `ca-install.sh` は、ローカル認証局（Pebble）のルート証明書を、システムの証明書ストア
-  （`/usr/local/share/ca-certificates/`）と、Chromium と Firefox の証明書ストアに
-  追加します。`certutil` がなければ、apt で `libnss3-tools` を入れます。実行したあとは、
+  （`/usr/local/share/ca-certificates/`）と、Chrome・Chromium（`~/.pki/nssdb`）と
+  Firefox の証明書ストアに追加します。`certutil` がなければ、apt で `libnss3-tools` を入れます。実行したあとは、
   開いているブラウザを再起動します。
 - `configure-dns.sh` は、`takosumi.test` で終わる名前だけをこのマシンの DNS
   コンテナに問い合わせるよう、systemd-resolved に設定します
   （`/etc/systemd/resolved.conf.d/takos-local-substrate.conf`）。ほかの名前の解決は
   変わりません。
 
-`configure-dns.sh` はホストごとに 1 回で済みます。ローカル認証局は起動するたびに新しい
-ルート証明書を作るため、`down.sh` で止めたあとに `up.sh` で起動し直したら、
-`ca-install.sh` をもう一度実行してください。元に戻す手順は
+`configure-dns.sh` はホストごとに 1 回で済みます。ローカル認証局（Pebble）は、コンテナが
+起動するたびに新しいルート証明書を作ります。`down.sh` で止めたあとに `up.sh` で起動し
+直したときや、ホストを再起動したあとに証明書のエラーが出たときは、`ca-install.sh` を
+もう一度実行してブラウザを再起動してください。元に戻す手順は
 [停止する](#_8-停止する)にあります。
 
 ## 4. 起動を確認する
@@ -147,7 +150,7 @@ plan と apply の Run は、右上の頭文字のアイコン（ユーザーメ
 （`https://app.takosumi.test/runs`）に、**変更の確認**（plan）と **デプロイ**（apply）として
 新しい順に並びます。
 
-環境全体を検査する場合は、リポジトリ同梱の smoke test を使います。
+さらに環境全体を検査する場合は、リポジトリ同梱の smoke test を使います。
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
@@ -171,10 +174,16 @@ sudo rm /etc/systemd/resolved.conf.d/takos-local-substrate.conf
 sudo systemctl restart systemd-resolved
 sudo rm /usr/local/share/ca-certificates/takos-local-substrate-pebble.crt
 sudo update-ca-certificates
-certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
 ```
 
-Firefox を使っている場合は、その profile のディレクトリにも同じ `certutil -D` を実行します。
+ブラウザの証明書ストアからは、`sudo` を付けずに自分のユーザーで消します。
+
+```bash
+certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
+for d in "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
+  [ -d "$d" ] && certutil -d "sql:$d" -D -n takos-local-substrate-pebble
+done
+```
 
 ## 次に読むもの
 
