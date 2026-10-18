@@ -219,6 +219,8 @@ function invalidRunLogsResponse(): Error {
   return new Error("deploy-control returned an invalid run logs response");
 }
 
+const STATUS_READ_TIMEOUT_MS = 30_000;
+
 export async function runDeployStatus(
   args: string[],
   io: CliIo,
@@ -229,10 +231,28 @@ export async function runDeployStatus(
     return 2;
   }
   const flags = parseFlags(rest);
-  const run = (await requestDeployControl({
-    options: flags,
-    path: `${API_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
-  })) as RunRecord;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`status request timed out after ${STATUS_READ_TIMEOUT_MS}ms`));
+      controller.abort();
+    }, STATUS_READ_TIMEOUT_MS);
+  });
+  let run: RunRecord;
+  try {
+    // The race observes a late fetch/response.text() rejection after timeout.
+    run = (await Promise.race([
+      requestDeployControl({
+        options: flags,
+        path: `${API_V1_PREFIX}/runs/${encodeURIComponent(runId)}`,
+        signal: controller.signal,
+      }),
+      deadline,
+    ])) as RunRecord;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
   io.stdout(`${run.type} ${run.id} ${run.status}`);
   return 0;
 }
@@ -245,6 +265,7 @@ async function requestDeployControl(input: {
   method?: string;
   body?: unknown;
   binary?: Uint8Array;
+  signal?: AbortSignal;
 }): Promise<unknown> {
   const headers: Record<string, string> = { accept: "application/json" };
   const token =
@@ -252,6 +273,7 @@ async function requestDeployControl(input: {
     process.env.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
   if (token) headers.authorization = `Bearer ${token}`;
   const init: RequestInit = { method: input.method ?? "GET", headers };
+  if (input.signal) init.signal = input.signal;
   if (input.binary !== undefined) {
     headers["content-type"] = "application/zstd";
     init.body = input.binary as unknown as BodyInit;

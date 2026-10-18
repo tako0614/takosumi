@@ -3877,8 +3877,35 @@ async function getRunWithOptions(
   return body.run;
 }
 
+const RUN_READ_TIMEOUT_MS = 30_000;
+
 export async function getRun(id: string): Promise<Run> {
-  return await getRunWithOptions(id);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      // Settle the deadline before aborting: a fetch that rejects on abort
+      // must still surface the stable request_timeout error.
+      reject(
+        new ControlApiError(
+          0,
+          "request_timeout",
+          `Run read timed out after ${RUN_READ_TIMEOUT_MS}ms`,
+        ),
+      );
+      controller.abort();
+    }, RUN_READ_TIMEOUT_MS);
+  });
+  try {
+    // Promise.race observes the request's later rejection even if fetch or
+    // response.json() ignores abort and settles after the deadline.
+    return await Promise.race([
+      getRunWithOptions(id, { signal: controller.signal }),
+      deadline,
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
