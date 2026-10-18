@@ -11,6 +11,10 @@ InterfaceBinding が決めるので、**宣言しただけでは誰も呼べま�
 秘密の値は Interface に載りません。Interface が公開するのは、明示的に対応付けた
 非 secret の値だけです。
 
+自分のリポジトリから画面を宣言して dashboard のホームに出す方法は、
+[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。このページは、
+Interface API で直接扱う場合の説明です。
+
 ## 宣言する
 
 Interface の正本 (正とする情報) は Takosumi の Interface API です。Capsule の blueprint から
