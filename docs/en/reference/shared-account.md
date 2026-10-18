@@ -51,36 +51,35 @@ a refusal.
 
 In the issuer browser session, create an operation with
 `POST /api/v1/account/identity-merges` and `{sourceSubject,targetSubject}`.
-The current actor must be one of the two confirmed accounts. Complete both
-legs within five minutes:
+The current actor must be one of the two confirmed accounts. Complete these steps
+within five minutes:
 
-1. POST `/{operationId}/upstream-proof/begin` with
+1. For each leg (`source` and `target`), POST `/{operationId}/upstream-proof/begin` with
    `{role:"source"|"target",providerId,consent:true}`.
 2. Navigate the browser to the 200 response's
-   `{authorization_url,operation_id,role}` URL. Callback returns opaque
+   `{authorization_url,operation_id,role}` URL. The callback returns an opaque
    `proof_receipt` and `operation_id`.
-3. POST `/{operationId}/prove` with `{receiptId}` for each leg.
-4. POST `/{operationId}/consent` with `{consent:true}` and await owner
-   reconciliation. Merged login activates only after every owner confirms custody.
+3. For each leg, POST `/{operationId}/prove` with `{receiptId}`. When both are done, the
+   operation is `proved`.
+4. POST `/{operationId}/context-plan` with `{}`. It returns the plan for the merged
+   Workspaces, current memberships, and retained billing context, with its `planDigest`.
+5. Each leg separately accepts the same plan: POST `/{operationId}/context-accept` with
+   `{planDigest,consent:true}`. Provider consent or acceptance by one leg alone cannot replace
+   this.
+6. POST `/{operationId}/consent` with `{consent:true}`. Merged login activates once every owner
+   confirms custody. If reconciliation is pending, retry with POST `/{operationId}/activate`.
 
-### Versions that include a context plan
+`GET /{operationId}` shows each leg's proof and acceptance state and the expiry.
 
-The basic flow above describes the
-[main source baseline](https://github.com/tako0614/takosumi/blob/dac30855915e49e5a4fb9782c489a023e7ed1f5a/accounts/service/src/identity-merge.ts#L45-L96).
-The [unmerged context-plan candidate](https://github.com/tako0614/takosumi/blob/11d8acf5cae3d624dda6656d84bdcdccdc0585b6/accounts/service/src/identity-merge.ts#L743-L780)
-adds review of the Workspace/current-membership/retained-billing context plan
-after both leg proofs. Each leg separately accepts that same plan before final
-consent. Provider consent or target-only acceptance cannot replace context
-acceptance. Its initial inventory is two existing unshared personal Workspaces,
-one per account; team/extra contexts and retained recovery rows cannot be
-omitted to meet that restriction.
+The current version handles exactly two contexts: one personal Workspace from the target and
+one from the source. A plan that does not fit this shape stops with
+`context_plan_conflict`. Team contexts and rows kept by a recovery cannot be left out to make it
+fit.
 
-Candidate procedures/endpoints are not necessarily present in the current
-deployment. Do not insert unavailable API calls into this baseline flow.
-Same-operation replay and approval renewal for the same immutable recovery
-decision differ from a new group merge or a distinct operation after recovery.
-Repeated-merge extensions are under design and do not expand current eligibility
-or permission.
+Completing a merge requires an identity-merge reconciler built into Accounts. Without one, the
+proofs still work, but `context-plan` stops with `context_plan_unavailable` and `consent` with
+`merge_reconciliation_unavailable`. The dashboard has no merge screen; a first-party page served
+from the issuer origin calls this API.
 
 These suffixes use `/api/v1/account/identity-merges`. Mutations require the exact
 issuer Origin and host-only issuer/merge browser cookies; responses use no-store.
