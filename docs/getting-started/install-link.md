@@ -99,6 +99,30 @@ https://takosumi.example.com/install?source=git::https://github.com/acme/notes.g
 だけを書けます。`git` と一緒には使えません。`ref` と `path` は、`source` の中と外のどちらか
 一方に書きます。`sourcePath` は `source` と一緒に使えます。
 
+## 開いた人の Takosumi で開くリンク
+
+origin を決めずに、リンクを開いた人が使っている Takosumi で開くこともできます。
+`https://<Takosumi の origin>/install` の代わりに `web+takosumi:install` を使います。
+パラメータと規則は同じです。
+
+```text
+web+takosumi:install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu
+```
+
+このリンクが開くのは、開いた人がブラウザに登録した Takosumi です。登録は、その Takosumi の
+dashboard の **アカウント** にある **ストアからの追加先** で **この端末を登録** を押し、
+ブラウザの確認に応じます。
+
+- 登録していないブラウザでは、このリンクは開けません。
+- 登録に対応していないブラウザでは、**アカウント** に「このブラウザはこの機能に未対応です。」と
+  表示されます。
+- GitHub の README のように、`https:` などの決まった形以外のリンクを取り除く表示先では、
+  使えないことがあります。
+
+origin つきのリンクと並べて置くと、どちらの人も開けます。知らないパラメータや重複がある
+など、リンク全体を `web+takosumi:install` の形として読めないときは、下の「リンクが使われない
+とき」と違い、取得元の入っていないストアの一覧が開きます。
+
 ## リンクが使われないとき
 
 `git` か `source` があるリンクが次のどれかに当たると、リンクの値はどれも使われず、取得元が空の
@@ -144,4 +168,4 @@ https://takosumi.example.com/install?source=git::https://github.com/acme/notes.g
 - [ホームにアプリを出す](./home-launcher.md)
 - [追加したサービスの更新・戻す・削除](./after-adding.md)
 - [Source と Capsule](../concepts/sources.md)
-- [App Handoff](../reference/app-handoff.md) — 追加のあと自分のアプリへ戻す
+- [App Handoff](../reference/app-handoff.md) — 追加のあと自分のアプリへ戻す、`web+takosumi:` の詳しい規則

@@ -102,6 +102,30 @@ What follows `//` is the module folder, and what follows `?` is the version. Bot
 Only `ref` can follow `?`. `source` cannot be used together with `git`. Give `ref` and `path`
 either inside `source` or outside it, not both. `sourcePath` can be used with `source`.
 
+## A link that opens the visitor's own Takosumi
+
+You can also leave the origin out, so the link opens in whichever Takosumi the person uses. Use
+`web+takosumi:install` instead of `https://<Takosumi origin>/install`. The parameters and rules
+are the same.
+
+```text
+web+takosumi:install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu
+```
+
+This link opens the Takosumi that the person registered in their browser. They register it in
+that Takosumi's dashboard: under **Account**, in **Where store installs land**, press **Register
+this device** and accept the browser's prompt.
+
+- In a browser that has not registered, this link does not open.
+- In a browser that cannot register, **Account** says "This browser doesn’t support this."
+- Places that remove links other than a few fixed kinds such as `https:`, like a GitHub README,
+  may not keep this link.
+
+Put it next to the link with an origin, so everyone can open one of them. If the whole link
+cannot be read as a `web+takosumi:install` link (for example, it has an unknown or repeated
+parameter), the store list opens with nothing filled in, unlike the cases in "When a link is
+not used" below.
+
 ## When a link is not used
 
 If a link with `git` or `source` matches any of the following, none of its values are used, and
@@ -151,4 +175,5 @@ Link values end up in browser history and logs. Keep secrets out of the link.
 - [Show your app on the home screen](./home-launcher.md)
 - [Update, restore, or delete a service](./after-adding.md)
 - [Sources and Capsules](../concepts/sources.md)
-- [App Handoff](../reference/app-handoff.md) — return to your own app after adding
+- [App Handoff](../reference/app-handoff.md) — return to your own app after adding, and the
+  detailed `web+takosumi:` rules

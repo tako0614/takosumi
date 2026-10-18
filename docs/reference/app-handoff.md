@@ -81,6 +81,18 @@ https://takosumi.example.com/install
   &return_uri=notesapp%3A%2F%2Fconnect
 ```
 
+## ブラウザに登録した Takosumi で開く
+
+origin を決めない `web+takosumi:install?<上と同じクエリ>` も使えます。利用者が dashboard の
+**アカウント** の **ストアからの追加先** でブラウザを登録していると、ブラウザはそのリンクを
+登録した Takosumi の `/install?handoff=<リンク全体>` で開きます。
+
+Takosumi は `handoff` の値を `web+takosumi:install` の形として読み、上の 8 つのパラメータ
+だけを取り出して `/new` を開きます。`handoff` の外にあるクエリは捨てます。読めない値、
+4,096 文字を超える値、知らないパラメータや重複を含む値は使わず、何も入っていない `/new` を
+開きます。`web+takosumi://install` のような authority 形式は使えません。使い方は
+[追加リンクを配る](../getting-started/install-link.md#開いた人の-takosumi-で開くリンク)にあります。
+
 ## OpenTofu をそのまま使う流れ
 
 この URL が行うのは、dashboard フローの事前入力までです。作成そのものは、画面上の
@@ -161,6 +173,11 @@ authority 形式 (`<app-scheme>://...`) の app-owned custom scheme に限りま
 `javascript:` / `data:` / `vbscript:` / `file:` / `blob:` のように browser で
 実行される scheme や、browser-local な scheme は拒否します。connect payload の
 クエリは Takosumi が追加します。
+
+拒否する scheme は `javascript:`、`data:`、`vbscript:`、`blob:`、`file:`、`about:`、
+`filesystem:`、`view-source:` です。authority 形式（`javascript://…`）も同じです。connect の
+リンクは dashboard の中で anchor として表示されるため、これらは移動ではなく dashboard の
+origin でのスクリプト実行になります。
 
 ## 責任境界
 

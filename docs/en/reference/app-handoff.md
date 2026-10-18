@@ -85,6 +85,19 @@ https://takosumi.example.com/install
   &return_uri=notesapp%3A%2F%2Fconnect
 ```
 
+## Opening the Takosumi registered in the browser
+
+You can also use `web+takosumi:install?<the same query>`, which names no origin. If the person
+registered their browser under **Account**, in **Where store installs land**, the browser opens
+the link at `/install?handoff=<the whole link>` on the Takosumi they registered.
+
+Takosumi reads the `handoff` value as a `web+takosumi:install` link, takes only the eight
+parameters above, and opens `/new`. Query parameters outside `handoff` are dropped. A value that
+cannot be read, is longer than 4,096 characters, or has an unknown or repeated parameter is not
+used, and `/new` opens with nothing filled in. The authority form `web+takosumi://install` is not
+supported. How to use it is in
+[Share an install link](../getting-started/install-link.md#a-link-that-opens-the-visitor-s-own-takosumi).
+
 ## OpenTofu-Native Flow
 
 The URL does not install anything by itself. It only pre-fills an explicit
