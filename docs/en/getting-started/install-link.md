@@ -148,12 +148,16 @@ the add screen opens with an empty source. **No error is shown.**
 A link with neither `git` nor `source` opens the store list instead of a filled-in add
 screen.
 
-A `web+takosumi:install` link is first checked for its shape. If it has an unknown or repeated
-parameter, has both or neither of `git` and `source`, breaks the `path` or `sourcePath` rules,
-has only one of `product` and `return_uri`, or is longer than 4,096 characters once decoded, the
-store list opens with nothing filled in. If the shape is fine but another value breaks a rule
-(for example, `git` does not start with `https://`), the add screen opens with an empty source,
-as above.
+For a `web+takosumi:install` link, only the following cases open the add screen with an empty
+source, as `/install` does. Every other case above (an unknown parameter, an empty value, a
+broken `path`, and so on) opens the store list with nothing filled in, and so does a link longer
+than 4,096 characters once decoded.
+
+- The `git` URL breaks its conditions (`https://`, no user name or password, no query or
+  fragment)
+- The contents of `source` break its rules
+- `ref` or `path` is given both inside and outside `source`
+- `name` is longer than 96 characters, or `ref` is longer than 512 characters
 
 ## Check before you share
 

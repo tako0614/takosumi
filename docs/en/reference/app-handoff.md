@@ -92,11 +92,17 @@ registered their browser under **Account**, in **Where store installs land**, th
 the link at `/install?handoff=<the whole link>` on the Takosumi they registered.
 
 Takosumi reads the `handoff` value as a `web+takosumi:install` link, takes only the eight
-parameters above, and opens `/new`. Query parameters outside `handoff` are dropped. A value whose
-shape cannot be read (an unknown or repeated parameter, both or neither of `git` and `source`,
-broken `path` or `sourcePath`, only one of `product` and `return_uri`, or more than 4,096
-characters once decoded) is not used, and `/new` opens with nothing filled in. The values it
-takes are then checked by `/new` with the same rules as `/install`. The authority form `web+takosumi://install` is not
+parameters above, and opens `/new`. Query parameters outside `handoff` are dropped. The value is not
+used, and `/new` opens with nothing filled in, if any of these is true:
+
+- It has an unknown or repeated parameter
+- A value is empty, has spaces around it, or contains a line break or NUL
+- It has both or neither of `git` and `source`
+- `path` or `sourcePath` breaks the rules
+- Only one of `product` and `return_uri` is given, or either one breaks its rules
+- It is longer than 4,096 characters once decoded
+
+The values it takes are then checked by `/new` with the same rules as `/install`. The authority form `web+takosumi://install` is not
 supported. How to use it is in
 [Share an install link](../getting-started/install-link.md#a-link-that-opens-the-visitor-s-own-takosumi).
 
@@ -186,8 +192,8 @@ custom scheme in authority form (`<app-scheme>://...`). Browser-executable and
 browser-local schemes such as `javascript:`, `data:`, `vbscript:`, `file:`, and
 `blob:` are rejected. Takosumi appends the connect payload itself.
 
-So an `http:` web callback and a custom scheme that is not in authority form (such as
-`notesapp:connect`) are rejected too. In addition, the `javascript:`, `data:`, `vbscript:`,
+Also, an `http:` web callback and a custom scheme that is not in authority form (such as
+`notesapp:connect`) are rejected. In addition, the `javascript:`, `data:`, `vbscript:`,
 `blob:`, `file:`, `about:`, `filesystem:`, and `view-source:` schemes are rejected even in
 authority form (`javascript://…`). The connect link is rendered as an anchor in
 the dashboard, so those are not links: they are script execution in the

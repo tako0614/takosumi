@@ -88,10 +88,17 @@ origin を決めない `web+takosumi:install?<上と同じクエリ>` も使え�
 登録した Takosumi の `/install?handoff=<リンク全体>` で開きます。
 
 Takosumi は `handoff` の値を `web+takosumi:install` の形として読み、上の 8 つのパラメータ
-だけを取り出して `/new` を開きます。`handoff` の外にあるクエリは捨てます。形として読めない値
-（知らないパラメータや重複、`git` と `source` の両方かどちらも無い、`path`・`sourcePath` の
-違反、`product` と `return_uri` の片方だけ、デコード後に 4,096 文字を超える）は使わず、
-何も入っていない `/new` を開きます。取り出した値は、`/install` と同じ規則で `/new` が確かめます。
+だけを取り出して `/new` を開きます。`handoff` の外にあるクエリは捨てます。次のどれかに当たる値は
+使わず、何も入っていない `/new` を開きます。
+
+- 知らないパラメータや重複がある
+- 空の値、前後に空白がある値、改行や NUL を含む値がある
+- `git` と `source` の両方があるか、どちらも無い
+- `path` や `sourcePath` の書き方が規則に合わない
+- `product` と `return_uri` の片方だけがあるか、どちらかが規則に合わない
+- デコードした長さが 4,096 文字を超える
+
+取り出した値は、`/install` と同じ規則で `/new` が確かめます。
 `web+takosumi://install` のような authority 形式は使えません。使い方は
 [追加リンクを配る](../getting-started/install-link.md#開いた人の-takosumi-で開くリンク)にあります。
 
@@ -176,9 +183,10 @@ authority 形式 (`<app-scheme>://...`) の app-owned custom scheme に限りま
 実行される scheme や、browser-local な scheme は拒否します。connect payload の
 クエリは Takosumi が追加します。
 
-そのため `http:` の web callback や、`notesapp:connect` のような authority 形式でない custom
-scheme も受け付けません。さらに `javascript:`、`data:`、`vbscript:`、`blob:`、`file:`、
-`about:`、`filesystem:`、`view-source:` は、authority 形式（`javascript://…`）でも拒否します。connect の
+そのため `http:` の web callback や、`notesapp:connect` のような authority 形式でない
+custom scheme も受け付けません。さらに `javascript:`、`data:`、`vbscript:`、`blob:`、
+`file:`、`about:`、`filesystem:`、`view-source:` は、authority 形式（`javascript://…`）
+でも拒否します。connect の
 リンクは dashboard の中で anchor として表示されるため、これらは移動ではなく dashboard の
 origin でのスクリプト実行になります。
 
