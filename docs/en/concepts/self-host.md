@@ -32,6 +32,20 @@ Linux, Docker, Bun, and `sudo` to set up certificates and DNS. Pebble for ACME, 
 and Caddy come up on the same Docker network, and `*.takosumi.test` resolves the same way
 it would in production.
 
+## Costs
+
+The Takosumi software has no fee (AGPL-3.0). What you pay for is where you run Takosumi and the
+resources that the apps you add create.
+
+- **Cloudflare** — Cloudflare bills the Workers Paid plan and your usage of Workers, Containers,
+  D1, R2, and Durable Objects. The runner container (2 vCPU, 6 GiB, at most 10 instances in the
+  template) runs only while a review or a deploy is executing and is discarded when the Run ends.
+  See [Cloudflare's pricing](https://www.cloudflare.com/plans/developer-platform/) for amounts.
+- **Bun and PostgreSQL** — the server that runs Docker, and PostgreSQL.
+- **Entirely local** — it runs only on your own machine.
+- **Resources of the apps you add** — the Workers, buckets, databases, and so on that an app
+  creates are billed to the connected account by its provider, such as Cloudflare.
+
 ## Putting it on Cloudflare
 
 What you need:

@@ -12,7 +12,8 @@ dashboard や runner なしで API だけ確認する場合は、[API だけ動�
 ## 必要なもの
 
 - Debian または Ubuntu（apt、`update-ca-certificates`、systemd-resolved を使う環境）。
-  macOS、WSL、Windows はこの構成の対象外です
+  macOS、WSL、Windows はこの構成の対象外です。macOS では、[API だけ動かす](./api-only.md)で
+  API だけを確かめられます
 - Docker と `docker compose`
 - Bun、Git、`curl`、`python3`
 - 証明書と DNS を設定するための `sudo`

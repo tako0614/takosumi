@@ -29,10 +29,12 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 - **手元で追加からデプロイまで試す** — [クイックスタート](./getting-started/quickstart.md)
   に従い、Linux 上で Docker と Bun を使って dashboard、サインイン、データベース、runner を
   起動します。ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを
-  作らないため、クラウドの認証情報は要りません。
+  作らないため、クラウドの認証情報は要りません。macOS では、[API だけ動かす](./getting-started/api-only.md)
+  で API を確かめられます。
 - **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で構成を選びます。
   Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
-  実行するには、runner を別に組み込みます。
+  実行するには、runner を別に組み込みます。ソフトウェアの利用料はなく、置き場所とアプリが
+  作るリソースの料金がかかります（[費用](./concepts/self-host.md#費用)）。
 - **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](./getting-started/api-only.md)
   の手順でメモリ上の API サーバーを起動します。
 

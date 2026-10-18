@@ -36,11 +36,13 @@ Pick the entry point that matches what you want to do.
   [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
   database, and runner on Linux with Docker and Bun. It uses `sudo` to set up a local
   certificate authority and DNS. The sample creates no external resources, so
-  you need no cloud credentials.
+  you need no cloud credentials. On macOS, check the API with
+  [Run only the API](./getting-started/api-only.md).
 - **Run it in your own environment** — choose a shape in
   [Running it yourself](./concepts/self-host.md). The Cloudflare template includes
   a runner; the Bun + PostgreSQL template needs a separately composed runner for
-  plan and apply.
+  plan and apply. The software has no fee; you pay for where it runs and for the
+  resources the apps create ([Costs](./concepts/self-host.md#costs)).
 - **Run only the API** — for checking the API during development, start an
   in-memory API server with [Run only the API](./getting-started/api-only.md).
 
