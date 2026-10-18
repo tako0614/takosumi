@@ -252,12 +252,14 @@ Before Plan starts, the dashboard discloses the exact argv, working directory
 (Source root when omitted), and outputs. Plan/Run consumes only the persisted
 InstallConfig and never re-reads repository metadata at runtime.
 
-## `interfaces` (v2 and later)
+## `interfaces` (v2 through v2.4)
 
-v2 and later (v2, v2.1, v2.2, v2.3, v2.4) may add at most 32 generic Capsule Interface
-proposals per module. An `interfaces` field is invalid in v1. v2.1 through v2.4 retain the
-exact v2 Interface schema and compiler semantics. A complete example that puts a screen on
-the home screen is in [Show your app on the home screen](../getting-started/home-launcher.md). This section declares Interfaces a
+v2, v2.1, v2.2, v2.3, and v2.4 may add at most 32 generic Capsule Interface proposals per
+module. An `interfaces` field is invalid in v1. v2.1 through v2.4 retain the exact v2
+Interface schema and compiler semantics.
+
+For a complete example that puts a screen on the home screen, see
+[Show your app on the home screen](../getting-started/home-launcher.md). This section declares Interfaces a
 Capsule provides; `interface.consume` declares an Interface it consumes.
 
 Each declaration contains only `key`, `name`, `spec`, and optional

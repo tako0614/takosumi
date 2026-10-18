@@ -224,9 +224,9 @@ Dashboard は Plan を開始する前に exact argv、working directory（省略
 root）、outputs を表示します。Plan/Run は captured repository metadata を再読込せず、
 persist 済み InstallConfig だけを使います。
 
-## `interfaces` (v2 以降)
+## `interfaces` (v2〜v2.4)
 
-v2 以降（v2、v2.1、v2.2、v2.3、v2.4）は module ごとに最大32件の generic Capsule Interface
+v2、v2.1、v2.2、v2.3、v2.4 は module ごとに最大32件の generic Capsule Interface
 proposal を追加できます。v1 に `interfaces` を置くと invalid です。v2.1〜v2.4 は v2 の
 Interface schema と compiler semantics をそのまま保持します。画面をホームに出す完全な例は
 [ホームにアプリを出す](../getting-started/home-launcher.md)にあります。この section は
