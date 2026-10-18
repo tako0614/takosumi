@@ -101,9 +101,11 @@ https://takosumi.example.com/install?source=git::https://github.com/acme/notes.g
 
 ## 開いた人の Takosumi で開くリンク
 
-origin を決めずに、リンクを開いた人が使っている Takosumi で開くこともできます。
-`https://<Takosumi の origin>/install` の代わりに `web+takosumi:install` を使います。
-パラメータと規則は同じです。
+追加してもらう Takosumi の origin が決まっているなら、上の origin つきのリンクを使います。
+どの Takosumi を使う人にも配りたいときは、origin を決めずに、リンクを開いた人が使っている
+Takosumi で開くリンクにできます。`https://<Takosumi の origin>/install` の代わりに
+`web+takosumi:install` を使います。パラメータと規則は同じで、読めないときに開く画面だけが
+違います（下の「リンクが使われないとき」）。
 
 ```text
 web+takosumi:install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu
@@ -117,11 +119,9 @@ dashboard の **アカウント** にある **ストアからの追加先** で 
 - 登録に対応していないブラウザでは、**アカウント** に「このブラウザはこの機能に未対応です。」と
   表示されます。
 - GitHub の README のように、`https:` などの決まった形以外のリンクを取り除く表示先では、
-  使えないことがあります。
+  リンクとして働かないことがあります。
 
-origin つきのリンクと並べて置くと、どちらの人も開けます。知らないパラメータや重複がある
-など、リンク全体を `web+takosumi:install` の形として読めないときは、下の「リンクが使われない
-とき」と違い、取得元の入っていないストアの一覧が開きます。
+README には、origin つきのリンクと並べて置くと、どちらの人も開けます。
 
 ## リンクが使われないとき
 
@@ -144,6 +144,12 @@ origin つきのリンクと並べて置くと、どちらの人も開けます�
   [App Handoff](../reference/app-handoff.md#product-key-と-return-uri-の規則) の規則に合わない
 
 `git` も `source` も無いリンクは、取得元を入れた追加画面ではなく、ストアの一覧を開きます。
+
+`web+takosumi:install` のリンクは、まずリンクの形を確かめます。知らないパラメータや重複が
+ある、`git` と `source` の両方があるかどちらも無い、`path` や `sourcePath` の書き方が規則に
+合わない、`product` と `return_uri` の片方だけがある、デコードした長さが 4,096 文字を超える、
+のどれかに当たると、何も入っていないストアの一覧が開きます。形が正しく、ほかの値が規則に
+合わない（`git` が `https://` で始まらないなど）ときは、上と同じく取得元が空の追加画面です。
 
 ## 配る前に確かめる
 

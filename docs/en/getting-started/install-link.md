@@ -104,9 +104,11 @@ either inside `source` or outside it, not both. `sourcePath` can be used with `s
 
 ## A link that opens the visitor's own Takosumi
 
-You can also leave the origin out, so the link opens in whichever Takosumi the person uses. Use
-`web+takosumi:install` instead of `https://<Takosumi origin>/install`. The parameters and rules
-are the same.
+If you know which Takosumi people will add to, use the link with an origin above. If you want one
+link for people on any Takosumi, leave the origin out so it opens in whichever Takosumi the person
+uses. Use `web+takosumi:install` instead of `https://<Takosumi origin>/install`. The parameters
+and rules are the same; only the screen for a link that cannot be read differs (see "When a link
+is not used" below).
 
 ```text
 web+takosumi:install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu
@@ -119,12 +121,9 @@ this device** and accept the browser's prompt.
 - In a browser that has not registered, this link does not open.
 - In a browser that cannot register, **Account** says "This browser doesn’t support this."
 - Places that remove links other than a few fixed kinds such as `https:`, like a GitHub README,
-  may not keep this link.
+  may not keep it working as a link.
 
-Put it next to the link with an origin, so everyone can open one of them. If the whole link
-cannot be read as a `web+takosumi:install` link (for example, it has an unknown or repeated
-parameter), the store list opens with nothing filled in, unlike the cases in "When a link is
-not used" below.
+In a README, put it next to the link with an origin, so everyone can open one of them.
 
 ## When a link is not used
 
@@ -148,6 +147,13 @@ the add screen opens with an empty source. **No error is shown.**
 
 A link with neither `git` nor `source` opens the store list instead of a filled-in add
 screen.
+
+A `web+takosumi:install` link is first checked for its shape. If it has an unknown or repeated
+parameter, has both or neither of `git` and `source`, breaks the `path` or `sourcePath` rules,
+has only one of `product` and `return_uri`, or is longer than 4,096 characters once decoded, the
+store list opens with nothing filled in. If the shape is fine but another value breaks a rule
+(for example, `git` does not start with `https://`), the add screen opens with an empty source,
+as above.
 
 ## Check before you share
 
