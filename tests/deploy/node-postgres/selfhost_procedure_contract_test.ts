@@ -3,7 +3,7 @@ import { posix } from "node:path";
 import { expect, test } from "bun:test";
 import { parse as parseYaml } from "yaml";
 
-// The published self-host procedure (docs/concepts/self-host.md and
+// The published self-host procedure (docs/self-host/bun-postgres.md and
 // deploy/node-postgres/README.md) is `cp .env.example .env`, edit, then
 // `docker compose up -d`. These checks derive what that procedure needs from
 // the real import graph, workspaces, and docs rather than pinning file text,

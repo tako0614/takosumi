@@ -100,17 +100,8 @@ On the Bun and PostgreSQL shape, `/readyz` returns `503` with `internalApiSecret
 unless `TAKOSUMI_INTERNAL_API_SECRET` is set. The bundled Compose does not pass it, and nothing
 but this check uses it today. A `200` from `/healthz` means the process finished its startup
 checks (sealing key, signing key, upstream provider settings) and PostgreSQL answers; it does
-not check the upstream identity provider or the dashboard. To make `/readyz` pass too, put a
-value from `openssl rand -hex 32` in `.env` **first**, then pass it in
-`docker-compose.override.yml`. Without the value in `.env`, this override makes every
-`docker compose` command fail, including `down` and `logs`:
-
-```yaml
-services:
-  accounts:
-    environment:
-      TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
-```
+not check the upstream identity provider or the dashboard. How to make `/readyz` pass too is in
+[Putting it on Bun and PostgreSQL](../self-host/bun-postgres.md#making-readyz-pass).
 
 OIDC discovery shows whether the foundation for signing in is standing. When `issuer`
 comes back with the same value as `TAKOSUMI_ACCOUNTS_ISSUER`, the configuration is right.

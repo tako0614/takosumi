@@ -147,3 +147,18 @@ Docker Compose を使わず手で動かす場合は、同じ環境変数を渡�
 動きますが、Git の同期、plan、apply は `runner_capability_missing` で失敗します。plan と
 apply を実行するには、runner を組み込んだ構成を使います。Cloudflare 構成か、
 `deploy/local-substrate/` のように runner コンテナをつないだ、自分で組んだ構成です。
+
+## `/readyz` を通す
+
+この構成の `/readyz` は、`TAKOSUMI_INTERNAL_API_SECRET` が無いと `503` を返し、理由に
+`internalApiSecret` を挙げます。同梱の Compose はこの値を渡さず、今はこの確認のほかに使われて
+いません。`/readyz` も通したい場合は、`openssl rand -hex 32` で作った値を
+**先に** `.env` に入れてから、`docker-compose.override.yml` で渡します。値が `.env` に無いと、
+この override のせいで `down` や `logs` を含むすべての `docker compose` が失敗します。
+
+```yaml
+services:
+  accounts:
+    environment:
+      TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
+```

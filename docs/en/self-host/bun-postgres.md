@@ -139,3 +139,19 @@ This template has no OpenTofu runner. Accounts, the control plane, and the dashb
 but Git sync, plan, and apply fail with `runner_capability_missing`. To plan and apply, use a
 composition that includes a runner: the Cloudflare one, or a composition you assemble
 yourself that attaches a runner container the way `deploy/local-substrate/` does.
+
+## Making `/readyz` pass
+
+On this shape, `/readyz` returns `503` with `internalApiSecret` in its reason unless
+`TAKOSUMI_INTERNAL_API_SECRET` is set. The bundled Compose does not pass it, and nothing but this
+check uses it today. To make `/readyz` pass too, put a
+value from `openssl rand -hex 32` in `.env` **first**, then pass it in
+`docker-compose.override.yml`. Without the value in `.env`, this override makes every
+`docker compose` command fail, including `down` and `logs`:
+
+```yaml
+services:
+  accounts:
+    environment:
+      TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
+```
