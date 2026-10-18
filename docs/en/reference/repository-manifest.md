@@ -259,7 +259,9 @@ module. An `interfaces` field is invalid in v1. v2.1 through v2.4 retain the exa
 Interface schema and compiler semantics.
 
 For a complete example that puts a screen on the home screen, see
-[Show your app on the home screen](../getting-started/home-launcher.md). This section declares Interfaces a
+[Show your app on the home screen](../getting-started/home-launcher.md).
+
+This section declares Interfaces a
 Capsule provides; `interface.consume` declares an Interface it consumes.
 
 Each declaration contains only `key`, `name`, `spec`, and optional

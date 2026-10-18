@@ -113,8 +113,7 @@ while the service is **Deployed** or **Update available**.
 
 1. At the end of adding, **Preparing the service** appears while Takosumi waits for the screen's
    URL.
-2. On **Service added**, **Open service** opens the screen in a new tab. (If the screen's URL
-   could not be confirmed, it opens the service's page instead.)
+2. On **Service added**, **Open service** opens the screen in a new tab.
 3. **Your apps** on the home screen shows a tile with the icon and `display.title` (or the
    service name if there is no title). Clicking it opens the screen in a new tab. Without an icon,
    the tile shows the name's initials.
