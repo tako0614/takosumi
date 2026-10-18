@@ -72,8 +72,68 @@ authorized Run. Do not treat state like a published Output or a general export.
 
 ## Passing values to another Capsule
 
-Inside one Workspace, express this as a dependency. Takosumi then understands the ordering
-and lets one Capsule read the Outputs of the one it depends on.
+Inside one Workspace, express this as a dependency. When Takosumi creates the review (plan) for
+the receiving Capsule, it reads the Outputs of the sending Capsule and passes them in as
+OpenTofu variables of the receiving one.
+
+The dashboard's **Dependencies** page shows the connections. Creating and deleting them is done
+through the API. In the examples, `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` holds
+[a token you created](../reference/cli.md#creating-a-token) with `read` and `write`. Only an
+owner or admin of the Workspace can create or delete a dependency.
+
+### Creating one
+
+1. Deploy the sending Capsule and check that it has the Output you want to pass. A `sensitive`
+   Output cannot be passed.
+2. In the receiving module, declare a `variable` for the value. Without the declaration, the
+   value is passed but not used.
+
+   ```hcl
+   variable "base_domain" {
+     type = string
+   }
+   ```
+
+3. Create the dependency on the receiving Capsule. The Capsule in the path is the receiving
+   one, and `producerCapsuleId` is the sending one.
+
+   ```bash
+   curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_app/dependencies" \
+     -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{
+       "producerCapsuleId": "cap_dns",
+       "outputs": {
+         "base_domain": { "from": "base_domain", "to": "base_domain", "required": true }
+       }
+     }'
+   ```
+
+   `from` is the name of the sending Capsule's Output, and `to` is the name of the receiving
+   variable. `required` cannot be left out: write `true` or `false`. If a `true` value has not
+   been published by the sending side yet, the receiving review stops with
+   `dependency_outputs_unavailable`. With `false`, that value is simply not passed. On success
+   the response is `201` with the new `dependency.id`.
+4. On the receiving Capsule, press **Review changes** under **Update service** on the
+   **Updates** tab, check the review, and deploy. Creating the dependency alone does not change
+   the receiving Capsule's status.
+
+Creating a dependency does not check that the sending Output exists. Creating the same
+connection twice is not rejected either, so list the dependencies first. A dependency that
+would form a cycle cannot be created.
+
+### When the sending side changes
+
+When you deploy the sending Capsule and an Output passed to the receiving one changes value,
+the receiving Capsule shows **Update available** (only while it is **Deployed**). Takosumi does
+not create the review on its own. Press **Update** on the receiving Capsule to create a review
+with the new value.
+
+For services added from the dashboard, if you deploy the sending Capsule after the receiving
+review was created, deploying the receiving Capsule stops with `dependency_snapshot_stale`. This
+happens even when the sending Outputs did not change. Create the receiving review again.
+
+### Listing and deleting
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_app/dependencies" \
@@ -83,8 +143,11 @@ curl -X DELETE "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/dependencies/dep_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-The connections across a whole Workspace can be read from
+Deleting does not change the receiving Capsule's status. From its next review on, the value is
+no longer passed. The connections across a whole Workspace can be read from
 `/api/v1/workspaces/{workspaceId}/graph`.
+
+### Across Workspaces
 
 Across Workspaces, use an OutputShare. **The sending side creates it, and it takes effect
 only once the receiving side approves.** Revoking it stops later references, and the

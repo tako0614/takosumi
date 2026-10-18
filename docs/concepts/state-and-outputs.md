@@ -67,8 +67,65 @@ Interface
 
 ## 値を別の Capsule に渡す
 
-同じ Workspace 内なら依存関係で表します。Takosumi が順序を理解し、依存先の Output を
-参照できるようになります。
+同じ Workspace 内なら依存関係で表します。受け取る側の Capsule の変更の確認（plan）を作る
+とき、Takosumi は渡す側の Capsule の Output を読み、受け取る側の OpenTofu 変数として
+渡します。
+
+dashboard の **依存関係** では、つながりを見られます。作成と削除は API で行います。例の
+`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ
+[発行した token](../reference/cli.md#トークンを発行する)を入れます。作成と削除ができるのは、
+Workspace の owner か admin だけです。
+
+### 作り方
+
+1. 渡す側をデプロイし、渡したい Output があることを確かめます。`sensitive` の Output は
+   渡せません。
+2. 受け取る側の module に、受け取る値の `variable` を宣言します。宣言が無いと、値は渡されても
+   使われません。
+
+   ```hcl
+   variable "base_domain" {
+     type = string
+   }
+   ```
+
+3. 受け取る側の Capsule に依存関係を作ります。パスに書くのが受け取る側、
+   `producerCapsuleId` が渡す側です。
+
+   ```bash
+   curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_app/dependencies" \
+     -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+     -H 'content-type: application/json' \
+     -d '{
+       "producerCapsuleId": "cap_dns",
+       "outputs": {
+         "base_domain": { "from": "base_domain", "to": "base_domain", "required": true }
+       }
+     }'
+   ```
+
+   `from` は渡す側の Output の名前、`to` は受け取る側の変数の名前です。`required` は省けず、
+   `true` か `false` を書きます。`true` の値を渡す側がまだ出していないと、受け取る側の変更の
+   確認は `dependency_outputs_unavailable` で止まります。`false` なら、その値は渡されません。
+   成功すると `201` と、`dependency.id` を含む結果が返ります。
+4. 受け取る側の **更新** タブの **サービスを更新** で **変更を確認** を押し、内容を確かめて
+   デプロイします。依存関係を作っただけでは、受け取る側の状態は変わりません。
+
+作成のときには、渡す側の Output があるかは確かめません。同じつながりを 2 回作っても拒否され
+ないため、作る前に一覧で確かめます。つながりが輪になる依存関係は作れません。
+
+### 渡す側が変わったとき
+
+渡す側をデプロイして、受け取る側に渡している Output の値が変わると、受け取る側の状態が
+**更新があります** になります（**デプロイ済み** のときだけです）。Takosumi が自動で変更の
+確認を作ることはありません。受け取る側で **更新する** を押すと、新しい値で変更の確認が
+作られます。
+
+dashboard から追加したサービスでは、受け取る側の変更の確認を作ったあとで渡す側をデプロイすると、
+受け取る側のデプロイは `dependency_snapshot_stale` で止まります。渡す側の Output が変わらない
+デプロイでも同じです。受け取る側の変更の確認を作り直します。
+
+### 見る、削除する
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_app/dependencies" \
@@ -78,7 +135,10 @@ curl -X DELETE "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/dependencies/dep_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-Workspace 全体のつながりは `/api/v1/workspaces/{workspaceId}/graph` で読めます。
+削除しても、受け取る側の状態は変わりません。次の変更の確認から、その値は渡されなく
+なります。Workspace 全体のつながりは `/api/v1/workspaces/{workspaceId}/graph` で読めます。
+
+### Workspace をまたぐとき
 
 Workspace をまたぐ場合は OutputShare を使います。**渡す側が作り、受け取る側が承認
 するまで有効になりません。** 失効させると以降の参照は止まり、すでに実行された Run の
