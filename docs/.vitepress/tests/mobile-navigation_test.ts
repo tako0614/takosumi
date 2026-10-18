@@ -102,27 +102,65 @@ test.describe("Takosumi docs heading links", () => {
 });
 
 test.describe("Takosumi docs at desktop width", () => {
-  test("stacks only the tables that do not fit, and never truncates the outline", async ({ page }) => {
+  test("stacks exactly the tables that do not fit, through a resize", async ({ page }) => {
+    // For every wrapper: would its table fit as a table, and is it stacked?
+    const measure = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>(".vp-doc .table-scroll")].map((wrapper) => {
+          const stacked = wrapper.classList.contains("is-stacked");
+          wrapper.classList.remove("is-stacked");
+          const fits = wrapper.scrollWidth <= wrapper.clientWidth + 1;
+          wrapper.classList.toggle("is-stacked", stacked);
+          return { fits, stacked, overflows: wrapper.scrollWidth > wrapper.clientWidth + 1 };
+        }),
+      );
+
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto("/docs/reference/configuration");
     await expect(page.locator(".vp-doc .table-scroll.is-stacked").first()).toBeVisible();
+    const wide = await measure();
 
-    const layout = await page.evaluate(() => {
-      const overflows = (element: Element | null) =>
-        element !== null && element.scrollWidth > element.clientWidth + 1;
-      const wrappers = [...document.querySelectorAll(".vp-doc .table-scroll")];
-      return {
-        overflowing: wrappers.filter((w) => overflows(w) || overflows(w.querySelector(":scope > table"))).length,
-        stacked: wrappers.filter((w) => w.classList.contains("is-stacked")).length,
-        tables: wrappers.length,
-        truncatedOutline: [...document.querySelectorAll(".VPDocAsideOutline .outline-link")]
-          .filter(overflows).length,
-      };
+    expect(wide.some((table) => table.stacked)).toBe(true);
+    expect(wide.some((table) => !table.stacked)).toBe(true);
+    for (const table of wide) {
+      expect(table.stacked).toBe(!table.fits);
+      expect(table.overflows).toBe(false);
+    }
+
+    await page.setViewportSize({ width: 700, height: 900 });
+    await expect.poll(async () => (await measure()).every((t) => t.stacked === !t.fits)).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect.poll(async () => JSON.stringify(await measure())).toBe(JSON.stringify(wide));
+  });
+
+  test("keeps outline labels and plain-text lines on screen", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/docs/reference/configuration");
+    await expect(page.locator(".VPDocAsideOutline .outline-link").first()).toBeVisible();
+    const truncatedOutline = await page.evaluate(
+      () =>
+        [...document.querySelectorAll(".VPDocAsideOutline .outline-link")].filter(
+          (link) => link.scrollWidth > link.clientWidth + 1,
+        ).length,
+    );
+    expect(truncatedOutline).toBe(0);
+
+    // The overview's numbered steps are a plain-text block: on a phone they
+    // wrap, and no line runs under the copy button.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/docs/concepts/");
+    const block = page.locator(".vp-doc div.language-text").first();
+    await expect(block).toBeVisible();
+    const layout = await block.evaluate((element) => {
+      const pre = element.querySelector("pre")!;
+      const code = element.querySelector("code")!;
+      const button = element.querySelector("button.copy")!.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const right = Math.max(...[...range.getClientRects()].map((rect) => rect.right));
+      return { scrolls: pre.scrollWidth > pre.clientWidth + 1, clearOfCopy: right <= button.left };
     });
-
-    expect(layout.overflowing).toBe(0);
-    expect(layout.stacked).toBeGreaterThan(0);
-    expect(layout.stacked).toBeLessThan(layout.tables);
-    expect(layout.truncatedOutline).toBe(0);
+    expect(layout.scrolls).toBe(false);
+    expect(layout.clearOfCopy).toBe(true);
   });
 });

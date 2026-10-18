@@ -94,25 +94,25 @@ function installTableScrollStops(): void {
     root.dataset.takosumiTableScrollStops = "installed";
 
     let pending = false;
-    const overflows = (element: Element | null): boolean =>
-      element !== null && element.scrollWidth > element.clientWidth + 1;
+    const overflows = (element: Element): boolean =>
+      element.scrollWidth > element.clientWidth + 1;
     const sync = (): void => {
       pending = false;
-      for (const wrapper of document.querySelectorAll<HTMLElement>(
-        ".vp-doc .table-scroll",
-      )) {
-        const table = wrapper.querySelector(":scope > table");
-        // Measure the table as a table, then stack it only if it does not fit.
-        wrapper.classList.remove("is-stacked");
-        if (overflows(wrapper) || overflows(table)) {
-          wrapper.classList.add("is-stacked");
-        }
-        if (overflows(wrapper)) {
-          wrapper.setAttribute("tabindex", "0");
-        } else {
-          wrapper.removeAttribute("tabindex");
-        }
-      }
+      const wrappers = [
+        ...document.querySelectorAll<HTMLElement>(".vp-doc .table-scroll"),
+      ];
+      // Measure every table as a table, then stack the ones that do not fit.
+      // Reads and writes are batched so the page lays out once per pass.
+      for (const wrapper of wrappers) wrapper.classList.remove("is-stacked");
+      const tooWide = wrappers.map(overflows);
+      wrappers.forEach((wrapper, index) => {
+        wrapper.classList.toggle("is-stacked", tooWide[index]);
+      });
+      const stillScrolls = wrappers.map(overflows);
+      wrappers.forEach((wrapper, index) => {
+        if (stillScrolls[index]) wrapper.setAttribute("tabindex", "0");
+        else wrapper.removeAttribute("tabindex");
+      });
     };
     const schedule = (): void => {
       if (pending) return;

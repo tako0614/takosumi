@@ -212,11 +212,16 @@ html:not(.dark) .vp-doc .dark-only {
 }
 
 /* Plain-text blocks (numbered steps, URLs, sample output) wrap instead of
- * running off a narrow screen. Shell and code blocks keep their lines. */
+ * running off a narrow screen. Shell and code blocks keep their lines. The
+ * right padding keeps wrapped text clear of the copy button (40px at 12px). */
 .vp-doc div.language-text pre,
 .vp-doc div.language-text code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.vp-doc div.language-text pre {
+  padding-right: 56px;
 }
 
 .vp-doc div.language-text code {
@@ -228,6 +233,7 @@ html:not(.dark) .vp-doc .dark-only {
 .VPDocAsideOutline .content .outline-link {
   white-space: normal;
   overflow: visible;
+  overflow-wrap: anywhere;
   text-overflow: clip;
   line-height: 20px;
   padding: 6px 0;
