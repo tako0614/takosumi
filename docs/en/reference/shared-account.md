@@ -51,8 +51,10 @@ a refusal.
 
 In the issuer browser session, create an operation with
 `POST /api/v1/account/identity-merges` and `{sourceSubject,targetSubject}`.
-The current actor must be one of the two confirmed accounts. Complete these steps
-within five minutes:
+The current actor must be one of the two confirmed accounts. The response sets the
+`__Host-takosumi-merge-browser` cookie (300 seconds), and every later step needs it. The
+deadline (`expiresAt`) is five minutes after creation; finish the steps through `consent`
+within it.
 
 1. For each leg (`source` and `target`), POST `/{operationId}/upstream-proof/begin` with
    `{role:"source"|"target",providerId,consent:true}`.
@@ -61,25 +63,34 @@ within five minutes:
    `proof_receipt` and `operation_id`.
 3. For each leg, POST `/{operationId}/prove` with `{receiptId}`. When both are done, the
    operation is `proved`.
-4. POST `/{operationId}/context-plan` with `{}`. It returns the plan for the merged
-   Workspaces, current memberships, and retained billing context, with its `planDigest`.
+4. POST `/{operationId}/context-plan` with `{}`. The response's `plan` holds the plan for the
+   merged Workspaces, current memberships, and retained billing context, and
+   `operation.contextPlan.planDigest` holds its digest.
 5. Each leg separately accepts the same plan: POST `/{operationId}/context-accept` with
    `{planDigest,consent:true}`. Provider consent or acceptance by one leg alone cannot replace
    this.
-6. POST `/{operationId}/consent` with `{consent:true}`. Merged login activates once every owner
-   confirms custody. If reconciliation is pending, retry with POST `/{operationId}/activate`.
+6. From the target account's session, POST `/{operationId}/consent` with `{consent:true}`. The
+   source session gets `merge_conflict`. Merged login activates once every owner confirms
+   custody. If the response's `status` is still `proved`, reconciliation is pending: retry with
+   POST `/{operationId}/activate`, or let the automatic retry finish it. `activate` is not bound
+   by the five-minute deadline.
 
 `GET /{operationId}` shows each leg's proof and acceptance state and the expiry.
 
-The current version handles exactly two contexts: one personal Workspace from the target and
-one from the source. A plan that does not fit this shape stops with
+The current version handles exactly two contexts: one Workspace from the target and one from
+the source (`two-disjoint-personal-contexts/v1`). A plan that does not fit this shape stops with
 `context_plan_conflict`. Team contexts and rows kept by a recovery cannot be left out to make it
 fit.
 
-Completing a merge requires an identity-merge reconciler built into Accounts. Without one, the
-proofs still work, but `context-plan` stops with `context_plan_unavailable` and `consent` with
-`merge_reconciliation_unavailable`. The dashboard has no merge screen; a first-party page served
-from the issuer origin calls this API.
+After the deadline, planning stops with `context_plan_unavailable` and `consent` with
+`merge_conflict`.
+
+Completing a merge requires an identity-merge reconciler and a retry capability, both passed
+into Accounts from outside. In this repository only the auth-staging Worker passes them. Without
+them, the proofs still work, but `context-plan` stops with `context_plan_unavailable` and
+`consent` with `merge_reconciliation_unavailable` or `merge_retry_unavailable`. The dashboard
+has no merge screen; a first-party page served from the issuer origin calls this API. This
+repository contains only a staging context-confirmation screen.
 
 These suffixes use `/api/v1/account/identity-merges`. Mutations require the exact
 issuer Origin and host-only issuer/merge browser cookies; responses use no-store.
@@ -95,12 +106,13 @@ acknowledgements stop activation. Credential unlink disables that credential;
 it does not split an account or wallet. Reversal of an incorrect merge requires
 owner-reviewed recovery.
 
-Select credentials from cookie-authenticated read-only
-`GET /api/v1/account/identity-credentials`, bounded to 100 of your own provider
-identities. POST `{removedIdentity,retainedIdentity,consent:true}` to
+Select credentials from your own provider identities returned by the cookie-authenticated,
+read-only `GET /api/v1/account/identity-credentials`. More than 100 returns 503
+`credential_inventory_unavailable`. POST `{removedIdentity,retainedIdentity,consent:true}` to
 `/api/v1/account/identity-credentials/unlink-intents`, then `{consent:true}` to
 the intent's `/upstream-proof/begin`. Complete a new login with the retained
 provider and POST `{receiptId,consent:true}` to the intent's `/complete` using
 the callback's opaque `proof_receipt`. This flow currently supports a retained
-social credential; retained passkey proof is not implemented. The old `/unlink`
-route is unavailable.
+social credential; retained passkey proof is not implemented. Completing an unlink also needs
+a reconciler, and without one it stops with `unlink_reconciliation_unavailable`. The old
+`/unlink` returns 409 `unlink_intent_required`; use `unlink-intents`.

@@ -48,7 +48,9 @@ context を安全に統合できるかは別の条件です。停止を避ける
 
 issuer browser session と同じ browser の操作で
 `POST /api/v1/account/identity-merges` に `{sourceSubject,targetSubject}` を渡します。
-対象は現在の操作者が含まれる、確認済みの2 account です。次の手順を5分以内に進めます。
+対象は現在の操作者が含まれる、確認済みの2 account です。応答とともに
+`__Host-takosumi-merge-browser` cookie（300 秒）が設定され、以降のすべての手順でこの cookie が
+要ります。期限（`expiresAt`）は作成から 5 分で、`consent` までの手順はこの中に終えます。
 
 1. 各 leg（`source` と `target`）で、`POST /{operationId}/upstream-proof/begin` に
    `{role:"source"|"target", providerId, consent:true}` を送ります。
@@ -56,27 +58,34 @@ issuer browser session と同じ browser の操作で
    移動します。callback は opaque `proof_receipt` と `operation_id` を返します。
 3. 各 leg で `POST /{operationId}/prove` に `{receiptId}` を送ります。両方が終わると、
    operation は `proved` になります。
-4. `POST /{operationId}/context-plan` に `{}` を送ります。統合後の Workspace、現在の
-   membership、残す課金 context の計画と、その `planDigest` が返ります。
+4. `POST /{operationId}/context-plan` に `{}` を送ります。応答の `plan` に、統合後の
+   Workspace、現在の membership、残す課金 context の計画が入り、
+   `operation.contextPlan.planDigest` にその digest が入ります。
 5. 各 leg が別々に、`POST /{operationId}/context-accept` に `{planDigest, consent:true}` を
    送って同じ計画を承認します。provider の consent や、片方だけの承認では代わりに
    なりません。
-6. `POST /{operationId}/consent` に `{consent:true}` を送ります。全 owner の整合が確認される
-   と、統合された login が有効になります。整合が保留のときは `POST /{operationId}/activate`
-   でやり直します。
+6. target account の session で、`POST /{operationId}/consent` に `{consent:true}` を送ります。
+   source の session では `merge_conflict` で拒否されます。全 owner の整合が確認されると、
+   統合された login が有効になります。応答の `status` が `proved` のままなら整合は保留中で、
+   `POST /{operationId}/activate` でやり直します。自動の再試行で完了することもあります。
+   `activate` は 5 分の期限に縛られません。
 
 `GET /{operationId}` で、各 leg の証明と承認の状態、期限を読めます。
 
-今の版が扱える計画は、統合先（target）と統合元（source）の personal Workspace を 1 つずつ、
-合わせて 2 つの context だけです。計画がこの形に収まらないときは
+今の版が扱える計画は、統合先（target）と統合元（source）の Workspace を 1 つずつ、合わせて
+2 つの context だけです（`two-disjoint-personal-contexts/v1`）。計画がこの形に収まらないときは
 `context_plan_conflict` で止まります。team の context や復旧で残った行を省いて通すことは
 できません。
 
-統合を完了させるには、Accounts に統合の整合処理（reconciler）が組み込まれている必要が
-あります。組み込まれていない構成では証明までは進みますが、`context-plan` は
-`context_plan_unavailable`、`consent` は `merge_reconciliation_unavailable` で止まります。
-dashboard に統合の画面はありません。この API は、issuer の origin で動く first-party の
-ページから呼びます。
+期限を過ぎると、計画の作成は `context_plan_unavailable`、`consent` は `merge_conflict` で
+止まります。
+
+統合を完了させるには、統合の整合処理（reconciler）と再試行の仕組みを Accounts に外から
+渡す必要があります。この repository で渡しているのは auth-staging の Worker だけです。
+無い構成では証明までは進みますが、`context-plan` は `context_plan_unavailable`、`consent` は
+`merge_reconciliation_unavailable` か `merge_retry_unavailable` で止まります。dashboard に統合の
+画面はありません。この API は issuer の origin で動く first-party のページから呼びます。この
+repository にあるのは、staging 用の context 確認画面だけです。
 
 上記 suffix の base は `/api/v1/account/identity-merges` です。変更は issuer の
 exact Origin と host-only issuer/merge cookie を必要とし、response は no-store です。
@@ -90,11 +99,14 @@ operation key は保持します。wallet や role を自動で和算しませ�
 owner ACK 不足は統合を止めます。credential の unlink は credential を無効にし、
 account や wallet を分割しません。誤った統合の取り消しは owner-reviewed recovery です。
 
-credential の選択は cookie 認証された readonly
-`GET /api/v1/account/identity-credentials` の最大100件の自分の provider identity を使います。
+credential の選択には、cookie で認証する読み取り専用の
+`GET /api/v1/account/identity-credentials` が返す、自分の provider identity を使います。100 件を
+超えると 503 `credential_inventory_unavailable` になります。
 `POST /api/v1/account/identity-credentials/unlink-intents` に
 `{removedIdentity,retainedIdentity,consent:true}` を送り、intent の
 `/upstream-proof/begin` に `{consent:true}` を送って残す provider で新しく認証します。
 callback の `proof_receipt` を intent の `/complete` に
 `{receiptId,consent:true}` として渡します。現在の対応は retained social credential で、
-passkey を残す証明はこの flow にありません。旧 `/unlink` route は利用できません。
+passkey を残す証明はこの flow にありません。unlink の完了にも整合処理が要り、無い構成では
+`unlink_reconciliation_unavailable` で止まります。旧 `/unlink` は 409 `unlink_intent_required` を
+返します。`unlink-intents` を使ってください。
