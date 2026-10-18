@@ -333,8 +333,11 @@ bash scripts/smoke.sh
 ```
 
 `ca-install.sh` installs Pebble's root CA into the host trust store and into the NSS
-databases of Chrome and Firefox. Pebble regenerates its root on every start, so after
-redoing `up.sh`, run `ca-install.sh` again and restart the browser.
+databases of Chrome and Firefox. Pebble regenerates its root every time its container
+starts. After `down.sh` and a new `up.sh`, or when certificate errors appear after the
+host restarts, run `ca-install.sh` again and restart the browser. The
+[Quickstart](../getting-started/quickstart.md) explains what both scripts change and how
+to undo them.
 
 ## Confirming it works
 

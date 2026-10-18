@@ -325,8 +325,10 @@ bash scripts/smoke.sh
 ```
 
 `ca-install.sh` はホストの信頼ストアと、Chrome / Firefox の NSS データベースの両方に
-Pebble の root CA を入れます。Pebble は起動のたびに root を作り直すので、`up.sh` を
-やり直したら `ca-install.sh` も実行し直してブラウザを再起動します。
+Pebble の root CA を入れます。Pebble はコンテナが起動するたびに root を作り直すので、
+`down.sh` のあとに `up.sh` で起動し直したときや、ホストを再起動したあとに証明書の
+エラーが出たときは、`ca-install.sh` も実行し直してブラウザを再起動します。設定の意味と
+元に戻す手順は[クイックスタート](../getting-started/quickstart.md)にあります。
 
 ## 動いていることを確かめる
 

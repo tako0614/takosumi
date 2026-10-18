@@ -4,17 +4,21 @@ Start a local Takosumi installation on a Linux machine, add a sample from the
 dashboard, and take it from reviewing the changes (plan) to deploying them
 (apply). The sample creates no external resources, so you need no cloud
 credentials. The first run builds containers and the dashboard, so it takes a
-while.
+while. You are done when the **Updates** tab of the service you added lists the
+deployed version as **Current**.
 
 To check only the API, without the dashboard or runner, follow
 [Run only the API](./api-only.md).
 
 ## Requirements
 
-- Linux. This composition does not support macOS, WSL, or Windows
+- Debian or Ubuntu (a system with apt, `update-ca-certificates`, and
+  systemd-resolved). This composition does not support macOS, WSL, or Windows
 - Docker and `docker compose`
 - Bun, Git, `curl`, and `python3`
 - `sudo` for local certificate and DNS setup
+- Ports 53 (UDP and TCP), 80, 443, 14318, and 15000 free on the host's
+  `127.0.0.1`
 
 ## 1. Get the repository
 
@@ -41,7 +45,9 @@ bash scripts/up.sh --profile postgres
 
 This starts Postgres, object storage, the runner, control plane, dashboard,
 local certificate authority, and DNS. On a host where the default AppArmor
-profile blocks the containers, use:
+profile blocks the containers, use the following, which starts every container,
+including the OpenTofu runner, without AppArmor confinement
+(`apparmor=unconfined`). Do not use it if they start with the default profile.
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
@@ -57,8 +63,24 @@ sudo bash scripts/ca-install.sh
 sudo bash scripts/configure-dns.sh
 ```
 
-Run these once per host. Run `ca-install.sh` again if you recreate the local
-certificate authority.
+Together they let the browsers and `curl` on this machine open
+`https://*.takosumi.test`.
+
+- `ca-install.sh` adds the root certificate of the local certificate authority
+  (Pebble) to the system certificate store (`/usr/local/share/ca-certificates/`)
+  and to the certificate stores of Chrome and Chromium (`~/.pki/nssdb`) and
+  Firefox. If `certutil` is missing, it
+  installs `libnss3-tools` with apt. Restart any open browser afterwards.
+- `configure-dns.sh` tells systemd-resolved to send only names ending in
+  `takosumi.test` to the DNS container on this machine
+  (`/etc/systemd/resolved.conf.d/takos-local-substrate.conf`). Other names
+  resolve as before.
+
+`configure-dns.sh` is needed once per host. The local certificate authority
+(Pebble) creates a new root certificate every time its container starts. After
+you stop with `down.sh` and start again with `up.sh`, or when certificate errors
+appear after the host restarts, run `ca-install.sh` again and restart the
+browser. To undo both, see [Stop it](#_8-stop-it).
 
 ## 4. Check the services
 
@@ -120,7 +142,7 @@ billing check stops shows **Service setup did not finish**, and
 **Technical details** opens its Run.
 
 When it finishes, **Service added** appears. The sample has no app screen of
-its own, so **Open service** opens the new service's page under **Workloads**.
+its own, so **Open service** opens this service's page under **Workloads**.
 Normal updates and new Git commits are not applied unless you turn on
 auto-update; detected drift is never applied automatically.
 
@@ -140,7 +162,7 @@ The plan and apply Runs are listed newest first, as **Review** (plan) and
 **Deploy** (apply), under **Deploy history** in the user menu, which opens from your
 initial at the top right (`https://app.takosumi.test/runs`).
 
-To test the whole environment:
+To also test the whole environment:
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
@@ -156,6 +178,24 @@ bash scripts/down.sh
 ```
 
 Use `bash scripts/down.sh -v` to also remove Postgres data and certificates.
+
+To undo what step 3 set up on this machine:
+
+```bash
+sudo rm /etc/systemd/resolved.conf.d/takos-local-substrate.conf
+sudo systemctl restart systemd-resolved
+sudo rm /usr/local/share/ca-certificates/takos-local-substrate-pebble.crt
+sudo update-ca-certificates
+```
+
+Remove it from the browser certificate stores as your own user, without `sudo`:
+
+```bash
+certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
+for d in "$HOME"/.mozilla/firefox/*.default* "$HOME"/snap/firefox/common/.mozilla/firefox/*.default*; do
+  [ -d "$d" ] && certutil -d "sql:$d" -D -n takos-local-substrate-pebble
+done
+```
 
 ## Next
 
