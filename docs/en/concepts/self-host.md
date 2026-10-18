@@ -39,12 +39,17 @@ resources that the apps you add create.
 
 - **Cloudflare** — Cloudflare bills the Workers Paid plan and your usage of Workers, Containers,
   D1, R2, Durable Objects, and logs (observability). Loading the dashboard also counts as Worker
-  requests. The runner container (2 vCPU, 6 GiB, and 10 GB disk in the template, at most 10
-  instances) starts for each review, deploy, and deletion, and also for each repository fetch and
-  pre-add check, and stops when that work ends. Repositories that sync automatically also start it
-  at the hourly check. A domain costs extra. See Cloudflare's
+  requests. A domain costs extra. See Cloudflare's
   [Workers pricing](https://www.cloudflare.com/plans/developer-platform/) and
-  [Containers pricing](https://developers.cloudflare.com/containers/pricing/) for amounts.
+  [Containers pricing](https://developers.cloudflare.com/containers/platform/pricing/) for
+  amounts.
+
+  The runner container (2 vCPU, 6 GiB, and 10 GB disk in the template, at most 10 instances)
+  starts for a review, a deploy, a deletion, a repository fetch, a pre-add check, and a restore,
+  backup, or stable-tag lookup that a user requests. Repositories that sync automatically also
+  start it at the hourly check. Drift checks and automatic reviews of services with updates start
+  it only when you enable them. Each time, it stops when that work ends or after about 30 seconds
+  without activity.
 - **Bun and PostgreSQL** — the server that runs Docker, and PostgreSQL. Plan and apply also need a
   separately composed runner, which costs whatever it runs on.
 - **Entirely local** — Takosumi itself runs only on your own machine.

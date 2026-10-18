@@ -40,12 +40,16 @@ Takosumi のソフトウェアに利用料はありません（AGPL-3.0）。か
 
 - **Cloudflare** — Workers Paid プランの料金と、Workers、Containers、D1、R2、Durable Objects、
   ログ（observability）の使用量が Cloudflare から請求されます。dashboard の表示も Worker への
-  リクエストになります。runner のコンテナ（雛形では 2 vCPU・6 GiB・ディスク 10 GB、最大
-  10 台）は、変更の確認・デプロイ・削除のほか、リポジトリの取得や追加前の確認のたびに起動し、
-  それが終わると止まります。自動で同期するリポジトリがあると、毎時の確認でも起動します。
-  ほかに、ドメインの費用がかかります。金額は Cloudflare の
+  リクエストになります。ほかに、ドメインの費用がかかります。金額は Cloudflare の
   [Workers の料金](https://www.cloudflare.com/plans/developer-platform/)と
-  [Containers の料金](https://developers.cloudflare.com/containers/pricing/)で確かめてください。
+  [Containers の料金](https://developers.cloudflare.com/containers/platform/pricing/)で
+  確かめてください。
+
+  runner のコンテナ（雛形では 2 vCPU・6 GiB・ディスク 10 GB、最大 10 台）が起動するのは、
+  変更の確認・デプロイ・削除、リポジトリの取得、追加前の確認、利用者が依頼した復元・
+  バックアップ・安定版タグの確認のときです。自動で同期するリポジトリがあると、毎時の確認でも
+  起動します。drift の確認と、更新があるサービスの自動の変更確認は、有効にした場合だけ起動
+  します。どれも、その処理が終わるか、約 30 秒操作がないと止まります。
 - **Bun と PostgreSQL** — Docker を動かすサーバーと PostgreSQL の費用です。plan と apply には、
   別に組み込む runner の費用もかかります。
 - **手元だけ** — Takosumi 自体は、手元のマシンの中だけで動きます。
