@@ -16,8 +16,9 @@ External infrastructure keeps its existing providers and standard APIs.
    restricted key returns only its Workspace.
 
    The server configuration has a setting with the same name, `TAKOSUMI_DEPLOY_CONTROL_TOKEN`,
-   but that one is the operator's secret and acts on every Workspace. **Never give it to users
-   or put it in an environment that calls the CLI or API.**
+   but that one is the operator's secret and acts on every Workspace. **Never give it to users, and
+   do not use it for ordinary CLI or API calls.** Use it only on the operator's machine, for
+   operator-only work such as `takosumi connections`.
 2. Read the Workspaces you can use. Set `TAKOSUMI_DEPLOY_CONTROL_URL` to the origin where you
    sign in to the dashboard. API paths are `/api/v1/...` on that origin.
 
@@ -362,7 +363,7 @@ Webhook secret recovery, old-secret invalidation, and lost-response handling are
 `POST /internal/v1/sources/{sourceId}/hook-secret/rotate`.
 
 Capsule deletion requires Workspace owner/admin authority and a write scope
-(`write` for an API key, `capsules:write` for OAuth). By default, `DELETE /api/v1/capsules/{capsuleId}` schedules
+(`write` or `admin` for an API key, `capsules:write` for OAuth). By default, `DELETE /api/v1/capsules/{capsuleId}` schedules
 deletion of an applied Capsule and returns `202 {capsule,graceDays}`. The operator
 setting `TAKOSUMI_UNINSTALL_GRACE_DAYS` controls the grace period (7 days by
 default in OSS); while it is pending, cancel it with

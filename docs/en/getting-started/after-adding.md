@@ -11,8 +11,8 @@ the review alone changes nothing.
 
 ## Update to a new version
 
-When Takosumi finds a new commit on the branch the service tracks (through a periodic check or
-the Source webhook; on Cloudflare the periodic check runs hourly), its status becomes
+When Takosumi finds a new commit on the branch the service tracks (on Cloudflare, through the hourly
+check or the Source webhook; the standard Bun and PostgreSQL build has neither), its status becomes
 **Update available** and **Update** appears at the top of its page. A service added with a
 commit never shows **Update available** because of Git changes. A service added with a tag does
 not either, unless the tag is moved to another commit. Switch either one to a new version with

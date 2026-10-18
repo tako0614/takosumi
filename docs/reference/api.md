@@ -16,8 +16,9 @@ provider です。その他の API / instance lifecycle は、それを提供す
    する** はオフにします。オンのままだと、そのワークスペースだけが返ります。
 
    サーバーの設定にも同じ名前の `TAKOSUMI_DEPLOY_CONTROL_TOKEN` がありますが、そちらはすべての
-   Workspace に作用する operator 用の秘密です。**利用者に渡したり、CLI や API を呼ぶ環境に
-   入れたりしないでください。**
+   Workspace に作用する operator 用の秘密です。**利用者には渡さず、ふつうの CLI や API の呼び出しにも
+   使わないでください。** 使うのは、operator のマシンで `takosumi connections` のような operator 専用の
+   操作をするときだけです。
 2. 使える Workspace を読みます。`TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard に
    サインインしている origin を入れます。API の path は、その origin の `/api/v1/...` です。
 
@@ -278,8 +279,8 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
 
-Capsule の削除 API は Workspace owner/admin と書き込みの scope（API キーでは `write`、OAuth では
-`capsules:write`）を要求します。
+Capsule の削除 API は Workspace owner/admin と書き込みの scope（API キーでは `write` か `admin`、
+OAuth では `capsules:write`）を要求します。
 `DELETE /api/v1/capsules/{capsuleId}` は既定でデプロイ済みの Capsule の削除を予約し、`202`
 `{capsule,graceDays}` を返します。猶予期間は operator 設定
 `TAKOSUMI_UNINSTALL_GRACE_DAYS`（OSS 既定 7 日）で、予約中は
