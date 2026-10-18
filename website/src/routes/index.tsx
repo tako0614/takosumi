@@ -105,7 +105,7 @@ export default function Home() {
               <a class="button button-primary" href="#apps">アプリを選ぶ <span aria-hidden="true">↓</span></a>
               <a class="button button-secondary" href="https://app.takosumi.com/new">Git URL から追加 <Arrow /></a>
             </div>
-            <p class="hero-note">公式ホスティングは正式提供前（Pre-GA）です。<br />手元で試す手順は<a href="/docs/getting-started/quickstart.html">クイックスタート</a>にあります<span class="nowrap">（Linux、Docker、Bun、sudo が必要）</span>。</p>
+            <p class="hero-note">公式ホスティングは正式提供前（Pre-GA）です。<br />手元で試す手順は<a href="/docs/getting-started/quickstart.html">クイックスタート</a>にあります<span class="nowrap">（Linux、Docker、Bun、sudo などが必要）</span>。</p>
           </div>
           <figure class="hero-product">
             <DashboardShot capture={DASHBOARD_CAPTURES.home} alt="Takosumi のホーム画面。ワークスペースに Takos、Takos Office、Yurucommu のアプリと追加操作が並ぶ" class="launcher-shot" priority />
