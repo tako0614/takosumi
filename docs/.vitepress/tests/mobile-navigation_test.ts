@@ -164,3 +164,68 @@ test.describe("Takosumi docs at desktop width", () => {
     expect(layout.clearOfCopy).toBe(true);
   });
 });
+
+test.describe("Takosumi docs for keyboard and screen-reader users", () => {
+  test("names the page chrome in Japanese and keeps sidebar headers honest", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/docs/getting-started/quickstart");
+    await expect(page.locator(".VPSkipLink")).toHaveText("本文へ移動");
+    await expect(page.locator("#sidebar-aria-label")).toHaveText("サイドバー");
+
+    const sidebar = await page.evaluate(() => {
+      const headers = [...document.querySelectorAll(".VPSidebarItem > .item")];
+      return {
+        asideHeadings: [...document.querySelectorAll("aside :is(h1, h2, h3, h4, h5, h6)")].filter(
+          (heading) => heading.getAttribute("role") !== "none",
+        ).length,
+        buttons: headers
+          .filter((header) => header.getAttribute("role") === "button")
+          .map((header) => ({
+            collapsible: header.parentElement?.classList.contains("collapsible") ?? false,
+            expanded: header.getAttribute("aria-expanded"),
+          })),
+        stopsWithoutButton: headers.filter(
+          (header) => header.hasAttribute("tabindex") && header.getAttribute("role") !== "button",
+        ).length,
+      };
+    });
+
+    expect(sidebar.asideHeadings).toBe(0);
+    expect(sidebar.stopsWithoutButton).toBe(0);
+    expect(sidebar.buttons.length).toBeGreaterThan(0);
+    for (const button of sidebar.buttons) {
+      expect(button.collapsible).toBe(true);
+      expect(button.expanded).toMatch(/^(true|false)$/u);
+    }
+
+    const toggle = page.locator(".VPSidebarItem.collapsible > .item[role=button]").first();
+    const controls = await toggle.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    await expect(page.locator(`#${controls}`)).toHaveCount(1);
+    await expect(toggle.locator(":scope > .caret[tabindex]")).toHaveCount(0);
+
+    const before = await toggle.getAttribute("aria-expanded");
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(toggle).not.toHaveAttribute("aria-expanded", before ?? "");
+    await page.keyboard.press(" ");
+    await expect(toggle).toHaveAttribute("aria-expanded", before ?? "");
+  });
+
+  test("restores the English names after switching from Japanese", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/docs/getting-started/quickstart");
+    await expect(page.locator("#sidebar-aria-label")).toHaveText("サイドバー");
+
+    // Follow an in-app link to the English page, as the language menu does.
+    await page.evaluate(() => {
+      const link = [...document.querySelectorAll<HTMLAnchorElement>("a")].find((a) =>
+        /\/docs\/en\/getting-started\/quickstart/u.test(a.getAttribute("href") ?? ""),
+      );
+      link?.click();
+    });
+    await expect(page.locator("html")).toHaveAttribute("lang", /^en/u);
+    await expect(page.locator("#sidebar-aria-label")).toHaveText("Sidebar Navigation");
+    await expect(page.locator(".VPNavBarHamburger")).toHaveAttribute("aria-label", "mobile navigation");
+  });
+});

@@ -21,7 +21,7 @@ const html = template
   .replace(hydrationOutlet, renderHydrationBootstrap())
   .replace('data-prerendered="false"', 'data-prerendered="true"');
 
-if (!html.includes('<main id="main">')) {
+if (!/<main id="main"[ >]/.test(html)) {
   throw new Error("Prerendered landing page is missing its main content");
 }
 if (!html.includes("<title>Takosumi</title>") || !html.includes("application/ld+json")) {
