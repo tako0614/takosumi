@@ -11,23 +11,41 @@ External infrastructure keeps its existing providers and standard APIs.
 ## Your first call
 
 1. Create an API key in the dashboard ([Creating a token](./cli.md#creating-a-token)). Choose
-   **Read** to only read, or both **Read** and **Write** to change things too.
+   **Read** to only read, or both **Read** and **Write** to change things too. Untick **Restrict
+   this key to the current Workspace** so the next step lists every Workspace you can use. A
+   restricted key returns only its Workspace.
 2. Read the Workspaces you can use. Set `TAKOSUMI_DEPLOY_CONTROL_URL` to the origin where you
-   sign in to the dashboard.
+   sign in to the dashboard. API paths are `/api/v1/...` on that origin.
 
    ```bash
    export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
    export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<your API key>
 
-   curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces" \
+   curl -sS "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces" \
      -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
    ```
 
-   The `workspaces` field of the response lists them. Use an `id` from it as the `workspaceId`
-   of other calls. A key created with **Restrict this key to the current Workspace** returns only
-   that Workspace.
-3. A failure returns JSON with `error.code`, `error.message`, and `error.requestId`
-   ([Error Shape](#error-shape)). Include the `requestId` when you ask for help.
+   An example response, shortened:
+
+   ```json
+   {
+     "workspaces": [
+       { "id": "ws_example", "handle": "alice", "displayName": "Alice", "type": "personal" }
+     ],
+     "returned": 1,
+     "limit": 100,
+     "truncated": false
+   }
+   ```
+
+   Use an `id` as the `workspaceId` of other calls. One response returns at most 100; when
+   there are more, it includes `nextCursor`.
+3. Failures come in two shapes.
+   - A missing, wrong, or expired API key returns `401` with the body `{"error":"invalid_token"}`
+     and a `WWW-Authenticate` header.
+   - Other failures (such as `403` for a missing permission) return JSON with `error.code`,
+     `error.message`, and `error.requestId` ([Error Shape](#error-shape)). Include the
+     `requestId` when you ask for help.
 
 Some create calls require an `Idempotency-Key` header. The sections below say which ones, and
 what happens when you send the same key again.
@@ -699,6 +717,10 @@ Failures return structured errors.
 
 Secret values, temporary credentials, and internal adapter credentials are never
 included in errors.
+
+The exception is a failed bearer check. A missing, wrong, or expired API key returns `401`
+with the body `{"error":"invalid_token"}` and a `WWW-Authenticate: Bearer error="invalid_token"`
+header. OIDC and OAuth endpoints return the standard `{ error, error_description }`.
 
 ## Versioning
 

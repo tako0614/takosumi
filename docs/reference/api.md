@@ -12,22 +12,40 @@ provider です。その他の API / instance lifecycle は、それを提供す
 
 1. dashboard で API キーを作ります（[トークンを発行する](./cli.md#トークンを発行する)）。
    読むだけなら **読み取り**、変更もするなら **読み取り** と **書き込み** を選びます。
+   次の例で使える Workspace をすべて読むため、**現在のワークスペースだけで使用できるように
+   する** はオフにします。オンのままだと、そのワークスペースだけが返ります。
 2. 使える Workspace を読みます。`TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard に
-   サインインしている origin を入れます。
+   サインインしている origin を入れます。API の path は、その origin の `/api/v1/...` です。
 
    ```bash
    export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
    export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<作った API キー>
 
-   curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces" \
+   curl -sS "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces" \
      -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
    ```
 
-   応答の `workspaces` に Workspace が並びます。その `id` を、ほかの API の
-   `workspaceId` に使います。**現在のワークスペースだけで使用できるようにする** をオンに
-   して作ったキーでは、そのワークスペースだけが返ります。
-3. 失敗すると、`error.code`、`error.message`、`error.requestId` を持つ JSON が返ります
-   （[エラーの形式](#エラーの形式)）。問い合わせるときは `requestId` を添えます。
+   応答の例です（一部を省いています）。
+
+   ```json
+   {
+     "workspaces": [
+       { "id": "ws_example", "handle": "alice", "displayName": "Alice", "type": "personal" }
+     ],
+     "returned": 1,
+     "limit": 100,
+     "truncated": false
+   }
+   ```
+
+   `id` を、ほかの API の `workspaceId` に使います。1 回に返るのは最大 100 件です。続きが
+   あるときは `nextCursor` が入ります。
+3. 失敗したときの応答は 2 通りです。
+   - API キーが無い、違う、期限切れのときは `401` で、本文は `{"error":"invalid_token"}`
+     です。`WWW-Authenticate` header も付きます。
+   - それ以外（権限が足りない `403` など）は、`error.code`、`error.message`、
+     `error.requestId` を持つ JSON です（[エラーの形式](#エラーの形式)）。問い合わせるときは
+     `requestId` を添えます。
 
 作成する API のいくつかは `Idempotency-Key` header が必須です。どの API に必要かと、同じ
 キーで送り直したときの扱いは、下の各節に書いてあります。
@@ -748,6 +766,10 @@ Workspace だけを含む `[workspace_id]` です。Capsule-owned client では�
 ```
 
 secret の値、一時的な credential、内部 adapter の credential は error に含めません。
+
+例外は bearer の認証の失敗です。API キーが無い、違う、期限切れのときは `401` で、本文は
+`{"error":"invalid_token"}`、`WWW-Authenticate: Bearer error="invalid_token"` header が
+付きます。OIDC と OAuth の endpoint は、標準の `{ error, error_description }` を返します。
 
 ## バージョン
 
