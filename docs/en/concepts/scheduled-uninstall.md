@@ -82,8 +82,9 @@ authorization later does not resume the request.
 Even after the authority check passes, a request stops in **Scheduled for deletion** when the
 deletion cannot continue safely, and records one of these reasons in `uninstall.blockedReason`.
 A failed data export alone does not stop it: the result (`failed`) is recorded and the deletion
-goes on. An export refused because it overlapped a Workspace management operation is also
-recorded as `failed`, and the deletion goes on.
+goes on. If a Workspace management operation gets in the way before the
+export starts, the request is not stopped and is retried later; if it refuses the export while
+it is running, the export is recorded as `failed` and the deletion goes on.
 
 | `uninstall.blockedReason` | Reason |
 | --- | --- |
