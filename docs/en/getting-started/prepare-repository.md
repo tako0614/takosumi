@@ -3,9 +3,10 @@
 Takosumi adds an OpenTofu root module kept in Git. No Takosumi-specific configuration file is
 needed. This page lists what to follow so that your software can be added from Takosumi.
 
-While adding, Takosumi checks the repository. If it finds a problem, the add screen shows
-**Needs manual changes** or **Cannot be added right now** and does not go further. In both
-cases, fix the repository and add the new commit again.
+While adding, Takosumi checks the repository. If the module you add has a problem, the add
+screen shows **Needs manual changes** or **Cannot be added right now** and does not go further.
+If a problem affects the whole part that is read (the first table below), the add itself fails.
+In both cases, fix the repository and add the new commit again.
 
 ## The smallest shape
 
@@ -62,9 +63,9 @@ output "example_label" {
 
 ## What stops a module from being added
 
-By default Takosumi reads the whole repository. In the add link, `path` is the directory of the
-module to add, and `sourcePath` (the Source's `defaultPath`) is the part of the repository that is
-read ([Sources and Capsules](../concepts/sources.md)).
+By default Takosumi reads the whole repository. In the add link, `sourcePath` (the Source's
+`defaultPath`) is the part of the repository that is read, and `path` is the directory of the
+module to add within it ([Sources and Capsules](../concepts/sources.md)).
 
 ### Problems that stop every module in the part that is read
 
@@ -77,7 +78,8 @@ directory with `sourcePath`.
 | A remote module source, such as a registry address or `git::` | Copy the module into the repository and refer to it with a path starting with `./`. Remote sources are rejected even when the version is pinned |
 | A `../` module source that leaves the selected module's directory | Put the module inside the selected module's directory |
 | A module source that is not a plain string, or one that points to a missing directory | Write `source` as a string such as `"./modules/app"` and commit that directory |
-| Conflicting exact versions of the same provider | Use the same version in every module |
+| Different exact versions of the same provider within one module and the local modules it calls | Use the same version |
+| HCL, or provider declarations or uses, that cannot be read exactly, or a duplicated file | Fix it so that OpenTofu reads it |
 | An unreadable JSON configuration file, or files over the count or size limits | Fix it, or narrow what is read (see "Size limits" below) |
 
 ### Problems that stop only that module

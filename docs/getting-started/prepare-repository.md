@@ -4,9 +4,10 @@ Takosumi に追加できるのは、Git に置いた OpenTofu の root module �
 設定ファイルは要りません。このページは、自分のソフトウェアを Takosumi から追加できる
 ようにするときに守ることをまとめます。
 
-追加の途中で、Takosumi はリポジトリを調べます。問題があると、追加の画面に
-**手直しが必要です** か **今は追加できません** と表示され、先に進めません。どちらの場合も、
-リポジトリを直して新しい commit を追加し直します。
+追加の途中で、Takosumi はリポジトリを調べます。追加する module に問題があると、追加の画面に
+**手直しが必要です** か **今は追加できません** と表示され、先に進めません。読む範囲の全体に
+関わる問題（下の最初の表）があると、追加そのものが失敗します。どちらの場合も、リポジトリを
+直して新しい commit を追加し直します。
 
 ## 最小の形
 
@@ -61,8 +62,8 @@ output "example_label" {
 
 ## 追加できなくなるもの
 
-Takosumi が読む範囲は、既定ではリポジトリ全体です。追加リンクの `path` は追加する module の
-ディレクトリ、`sourcePath`（Source の `defaultPath`）は読む範囲です
+Takosumi が読む範囲は、既定ではリポジトリ全体です。追加リンクの `sourcePath`（Source の
+`defaultPath`）は読む範囲、`path` はその中で追加する module のディレクトリです
 （[Source と Capsule](../concepts/sources.md)）。
 
 ### 読む範囲の module がすべて止まるもの
@@ -76,7 +77,8 @@ Takosumi が読む範囲は、既定ではリポジトリ全体です。追加�
 | registry や `git::` など、リモートの module source | 使う module をリポジトリに入れ、`./` から始まるパスで参照します。バージョンを固定していてもリモートは使えません |
 | 選んだ module のディレクトリの外を指す `../` の module source | 必要な module を、選ぶ module のディレクトリの中に置きます |
 | 文字列そのままでない module source、存在しないディレクトリを指す module source | `source` は `"./modules/app"` のような文字列で書き、そのディレクトリを commit します |
-| 同じ provider への、食い違う固定バージョン | どの module でも同じバージョンを指定します |
+| 1 つの module と、そこから呼ぶ local module のあいだで、同じ provider に違う固定バージョン | 同じバージョンを指定します |
+| 正確に読めない HCL や provider の宣言・使い方、同じファイルの重複 | OpenTofu で読める形に直します |
 | 読めない JSON の設定ファイル、上限を超える数や大きさ | 直すか、読む範囲を絞ります（下の「大きさの上限」） |
 
 ### その module だけが止まるもの
