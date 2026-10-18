@@ -118,9 +118,13 @@ tail や client HAR を保存する際も auth headers / body / query / private 
 
 ### 停止中の client phase を対応付ける
 
-`--progress` を明示すると、各 sample の開始時に `headers`、応答 headers を受けた
-後に `body` の progress JSON を stderr に出します。最終 sample が未完了でも、
-その `probeId` で Worker log と対応付けられます。各 sample は最大2行で、redirect
+`--progress` を明示すると、各 sample の開始時に `headers`、DNS / TCP / TLS の
+各到達時にも `headers`、応答 headers を受けた後に `body` の progress JSON を stderr
+に出します。各行の `milestones` は、その通知時点で観測済みの到達時刻のコピーです。
+TCP 到達後も応答 headers を待っている状態を、最終 sample の完了前に確認できます。
+各値は request 開始からの累積 ms で、排他的な処理時間や CPU 時間ではありません。
+IP literal では DNS、HTTP loopback では TLS の通知はありません。
+その `probeId` で Worker log と対応付けられます。各 sample は最大5行で、redirect
 を拒否した場合の `body` 行はありません。最終 sample JSON は従来どおり stdout に
 1行出力し、headers/body 共通の期限、接続破棄、secret の扱いは変わりません。
 
@@ -133,7 +137,7 @@ bun run probe:request-latency -- --environment staging \
 ```
 
 stderr も operator-private な場所へ保存します。progress は UTC、route shape、
-probe ID、待機 phase、経過時間と、headers 到達後の status / 検証済み CF Ray / Version UUID のみを
+probe ID、待機 phase、経過時間、観測済み milestone と、headers 到達後の status / 検証済み CF Ray / Version UUID のみを
 含み、body 完了や server phase への到達を示しません。client の `body` 待機は、
 Worker の `control_dispatch` span が Response を返した後にも続くことがあります。
 Version UUID は応答の `x-takosumi-version-id` が厳密な形式に一致した場合だけ記録し、

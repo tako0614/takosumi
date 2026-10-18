@@ -60,7 +60,7 @@ export interface RequestLatencySample {
   }>;
 }
 
-/** At most two records per sample, available before its final result. */
+/** At most five records per sample, available before its final result. */
 export interface RequestLatencyProgress {
   readonly kind: typeof PROGRESS_KIND;
   readonly sample: number;
@@ -75,6 +75,7 @@ export interface RequestLatencyProgress {
   readonly status?: number;
   readonly cfRay?: string;
   readonly versionId?: string;
+  readonly milestones: RequestLatencySample["milestones"];
 }
 
 export function resolveLatencyProbeOptions(
@@ -212,7 +213,7 @@ export async function probeRequestLatency(
       serverTiming: {},
     };
     const emitProgress = (): void => {
-      if (!onProgress) return;
+      if (done || !onProgress) return;
       try {
         const version = response?.headers["x-takosumi-version-id"];
         onProgress({
@@ -226,6 +227,7 @@ export async function probeRequestLatency(
           at: new Date().toISOString(),
           elapsedMs: elapsed(),
           phase,
+          milestones: { ...milestones },
           status: response?.statusCode,
           cfRay: metadata.cfRay,
           ...(typeof version === "string" &&
@@ -286,12 +288,15 @@ export async function probeRequestLatency(
     request.once("socket", (socket) => {
       socket.once("lookup", () => {
         milestones.dnsMs = elapsed();
+        emitProgress();
       });
       socket.once("connect", () => {
         milestones.tcpMs = elapsed();
+        emitProgress();
       });
       socket.once("secureConnect", () => {
         milestones.tlsMs = elapsed();
+        emitProgress();
       });
     });
     request.once("error", () => finish("network_error"));
@@ -353,7 +358,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     console.log(`Usage: bun scripts/probe-request-latency.ts --environment staging --url ${STAGING_ORIGIN} [--path /api/v1/runs/<id>] [--token-file /private/token] [--samples 12] [--timeout-ms 130000] [--interval-ms 250] [--progress]
 Local fixtures: --environment local --url http://127.0.0.1:<port>
 Output: one allowlisted JSON sample per GET; route IDs, credentials, bodies and raw errors are omitted.
-With --progress: at most two allowlisted JSON progress rows per sample on stderr, while headers or body are pending; final stdout is unchanged.
+With --progress: at most five allowlisted JSON progress rows per sample on stderr, including observed DNS/TCP/TLS milestones while headers or body are pending; final stdout is unchanged.
 Limits: 1..70 sequential samples, 1..150000ms total deadline per sample, 0..5000ms interval, 1MiB discarded body.
 Exit: 0 only when every sample completes with 2xx; 1 on timeout/HTTP/transport failure; 2 on invalid input.`);
     return 0;
