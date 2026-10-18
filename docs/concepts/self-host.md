@@ -310,7 +310,9 @@ secret) でサインインして作ります。passkey (`TAKOSUMI_ACCOUNTS_PASSK
 済みのアカウントに後から追加する手段です。どちらも `.env.example` に例があります。
 任意名の `clientSecretEnv` は `docker-compose.override.yml` の `accounts.environment` に
 1つずつ明示して渡します。`deploy/node-postgres/README.md`
-に override の例があります。`.env` に名前と値を書くだけではコンテナへ届きません。
+に override の例があります。`.env` に名前と値を書くだけではコンテナへ届きません。記述子の
+`redirectUri` は `https://<公開する origin>/sign-in/callback` で、ID プロバイダにもこの URI を
+そのまま登録します。
 
 `.env` は秘密を含むので commit しません。このリポジトリは `deploy/node-postgres/.env` を
 `.gitignore` で除外しています。
@@ -357,6 +359,17 @@ provider/client callback も `localhost:26401` に合わせます。passkey は�
 `local_compose down`
 で停止し、`rm -rf "$local_dir"` で一時 override を削除します。専用の PostgreSQL volume は
 残るため、`down` はデータを消しません。
+
+### 公開して運用する
+
+本番では、HTTPS の issuer と公開する hostname を設定してから、既定の構成を起動します。Caddy が
+80 番と 443 番で待ち受けるので、hostname がこのホストを指し、ACME の確認で外から届く必要が
+あります。
+
+```bash
+docker compose up --build -d
+curl -fsS https://app.example.com/healthz # 設定した公開 hostname に置き換えます
+```
 
 初回はイメージのビルドに数分かかります。`migrations` コンテナが control plane と accounts の
 2 つのスキーマを同じデータベースに適用し、成功してからサービス本体と Caddy が起動します。
@@ -421,6 +434,21 @@ curl -s https://takosumi.example.com/healthz
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://takosumi.example.com/readyz
+```
+
+Bun と PostgreSQL の構成の `/readyz` は、`TAKOSUMI_INTERNAL_API_SECRET` が無いと `503` を返し、
+理由に `internalApiSecret` を挙げます。同梱の Compose はこの値を渡さず、今はこの確認のほかに
+使われていません。`/healthz` が `200` なら、起動時の検査（封印鍵、署名鍵、上流の ID プロバイダの
+設定）を通ってプロセスが立ち上がり、PostgreSQL も応答しています。上流の ID プロバイダや
+dashboard までは確かめません。`/readyz` も通したい場合は、`openssl rand -hex 32` で作った値を
+**先に** `.env` に入れてから、`docker-compose.override.yml` で渡します。値が `.env` に無いと、
+この override のせいで `down` や `logs` を含むすべての `docker compose` が失敗します。
+
+```yaml
+services:
+  accounts:
+    environment:
+      TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
 ```
 
 サインインの土台が立っているかは、OIDC の discovery で見ます。`issuer` に

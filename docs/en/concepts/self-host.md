@@ -300,7 +300,8 @@ account after it has signed in. `.env.example` has an example of each.
 Explicitly map each arbitrary `clientSecretEnv` name in
 `docker-compose.override.yml` under `accounts.environment`; setting it in `.env`
 alone does not pass it to the container. See the override example in the
-`deploy/node-postgres/README.md`.
+`deploy/node-postgres/README.md`. The descriptor's `redirectUri` is
+`https://<your origin>/sign-in/callback`; register exactly this URI with the identity provider.
 
 Generate the five random values above with independent `openssl rand -hex 32` invocations.
 Replace the placeholder ES256 key with a real P-256 private JWK using the Bun command in
@@ -433,6 +434,22 @@ the bindings and returns `503` naming anything missing.
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://takosumi.example.com/readyz
+```
+
+On the Bun and PostgreSQL shape, `/readyz` returns `503` with `internalApiSecret` in its reason
+unless `TAKOSUMI_INTERNAL_API_SECRET` is set. The bundled Compose does not pass it, and nothing
+but this check uses it today. A `200` from `/healthz` means the process finished its startup
+checks (sealing key, signing key, upstream provider settings) and PostgreSQL answers; it does
+not check the upstream identity provider or the dashboard. To make `/readyz` pass too, put a
+value from `openssl rand -hex 32` in `.env` **first**, then pass it in
+`docker-compose.override.yml`. Without the value in `.env`, this override makes every
+`docker compose` command fail, including `down` and `logs`:
+
+```yaml
+services:
+  accounts:
+    environment:
+      TAKOSUMI_INTERNAL_API_SECRET: ${TAKOSUMI_INTERNAL_API_SECRET:?set TAKOSUMI_INTERNAL_API_SECRET in .env}
 ```
 
 OIDC discovery shows whether the foundation for signing in is standing. When `issuer`
