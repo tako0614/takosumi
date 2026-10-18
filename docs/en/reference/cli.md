@@ -104,8 +104,10 @@ You cannot assign yourself the `admin` scope. Only a token issued by an operator
 
 ## Setting up a self-hosted Accounts plane
 
-Use these commands to run Accounts in your own environment. They are unnecessary when you
-only need to use an endpoint that is already running.
+These commands are for running Accounts in your own environment. They are unnecessary when
+you only need to use an endpoint that is already running. Run a public Accounts plane from
+the Cloudflare template or the Bun and PostgreSQL one (see
+[Running it yourself](../concepts/self-host.md)).
 
 ### Apply the schema
 
@@ -118,10 +120,9 @@ takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 Add `--dry-run` to show what would run without applying it. The database URL can also be
 read from `TAKOSUMI_ACCOUNTS_DATABASE_URL`.
 
-Cloudflare D1 schema migrations are not a customer-facing CLI workflow. The deployment
-owner handles them in the same change window as the release. This public CLI reference
-does not document account/database identifiers, backup custody, confirmation digests, or
-the apply/verify sequence.
+For Cloudflare D1, use `takosumi accounts migrate-d1`. The values it needs and the
+backup-status, plan, apply, verify order are in
+[Running it yourself](../concepts/self-host.md#putting-it-on-cloudflare).
 
 ### Seed the initial data
 
@@ -133,7 +134,10 @@ takosumi accounts seed \
   --redirect-uri https://app.example.com/callback
 ```
 
-### Start the Accounts server
+### Start Accounts for a local check
+
+`takosumi accounts serve` is for checking things locally. It creates a throwaway signing
+key every time the process starts, so it cannot serve a public Accounts plane.
 
 ```bash
 takosumi accounts serve \
