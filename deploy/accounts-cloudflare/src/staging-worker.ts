@@ -15,6 +15,11 @@ import { authStagingOwnerBundle, authStagingControlOperations, type AuthStagingO
 import { verifyAuthStagingOwnerSchema } from "./staging-owner-bundle.ts";
 export type { AuthStagingOwnerPorts } from "./staging-owner-bundle.ts";
 type AccountsWorker = ReturnType<typeof createCloudflareWorker<AuthEnv>>;
+export type AuthStagingPrivateProofOwner = Readonly<{
+  assertReady(env: AuthEnv): Promise<void>;
+  resolve(env: AuthEnv): Promise<PrivateAccountsFinancialSourceFacade>;
+}>;
+const privateProofOwners = new WeakMap<object, AuthStagingPrivateProofOwner>();
 const REQUIRED_BINDINGS = [
   "TAKOSUMI_ACCOUNTS_DB", "TAKOSUMI_CONTROL_DB", "R2_ARTIFACTS", "R2_SOURCE",
   "R2_STATE", "R2_BACKUPS", "COORDINATION", "RUN_OWNER", "RUNNER",
@@ -50,13 +55,15 @@ export function createAuthStagingWorker(dependencies: {
 } = {}) {
   const sourceInputs = dependencies.financialSourceOrigin?.inputs;
   const sourceObserver = dependencies.financialSourceOrigin?.observe;
+  const verifySchema = dependencies.verifySchema ?? verifyAuthStagingOwnerSchema;
+  const suppliedAccounts = dependencies.accounts;
   // D1 work cannot be forcibly cancelled. Keep at most one pending read-only
   // verification per env; a timed-out caller never starts a parallel attempt.
   const schemaAttempts = new WeakMap<AuthEnv, Promise<void>>();
   const schemaFor = (env: AuthEnv): Promise<void> => {
     const existing = schemaAttempts.get(env);
     if (existing) return existing;
-    const verification = Promise.resolve().then(() => (dependencies.verifySchema ?? verifyAuthStagingOwnerSchema)(env));
+    const verification = Promise.resolve().then(() => verifySchema(env));
     const attempt = withReadinessDeadline(verification);
     schemaAttempts.set(env, attempt);
     // After the shared deadline expires, reuse that rejection until the real
@@ -107,7 +114,7 @@ export function createAuthStagingWorker(dependencies: {
     }
     return service;
   };
-  const accounts = dependencies.accounts ?? createCloudflareWorker<AuthEnv>({
+  const accounts = suppliedAccounts ?? createCloudflareWorker<AuthEnv>({
     controlPlaneOperations: controlOperations,
     // This exact cached operations instance owns the canonical Core Workspace
     // service. ownerBundle(env).store is a different AccountsStore instance and
@@ -123,13 +130,13 @@ export function createAuthStagingWorker(dependencies: {
     workspaceBillingEnrollment:(env)=>ownerPorts(env).workspaceBillingEnrollment,
   });
   const sourceResolver = accounts.resolvePrivateFinancialSource;
-  return {
+  const worker = {
     // Explicit in-process named caller only. A supplied mock Accounts worker
     // cannot qualify the actual HTTP D1 store captured by the default worker.
     async resolvePrivateFinancialSource(env: AuthEnv): Promise<PrivateAccountsFinancialSourceFacade> {
-      if (dependencies.accounts || !sourceResolver)
-        throw new FinancialSourceUnavailable("source_unavailable");
-      return await sourceResolver.call(accounts, env);
+      const owner = privateProofOwners.get(worker);
+      if (!owner) throw new FinancialSourceUnavailable("source_unavailable");
+      return await owner.resolve(env);
     },
     async fetch(request: Request, env: AuthEnv, context?: { waitUntil(promise: Promise<unknown>): void }): Promise<Response> {
       const url = new URL(request.url);
@@ -207,7 +214,27 @@ export function createAuthStagingWorker(dependencies: {
       }
     },
   };
+  if (suppliedAccounts === undefined) {
+    privateProofOwners.set(worker, Object.freeze({
+      async assertReady(env: AuthEnv): Promise<void> {
+        assertAuthStagingVariables(env);
+        await schemaFor(env);
+      },
+      async resolve(env: AuthEnv): Promise<PrivateAccountsFinancialSourceFacade> {
+        if (!sourceResolver) throw new FinancialSourceUnavailable("source_unavailable");
+        return await sourceResolver.call(accounts, env);
+      },
+    }));
+  }
+  return worker;
 }
+
+/** Return the owner only for the original object created by this factory. */
+export function privateAccountsFinancialProofOwner(worker: object): AuthStagingPrivateProofOwner | undefined {
+  return privateProofOwners.get(worker);
+}
+
+export type AuthStagingWorker = ReturnType<typeof createAuthStagingWorker>;
 
 async function withReadinessDeadline(operation: Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
