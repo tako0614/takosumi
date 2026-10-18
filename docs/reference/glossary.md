@@ -37,12 +37,12 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                                                                                            | [Source と Capsule](../concepts/sources.md)    |
 | Capsule                          | デプロイされたひとまとまりです。OpenTofu の root module 1 つ分が動き、`production` や `preview` のような具体的な実行環境も Capsule が持ちます。                                              | [Source と Capsule](../concepts/sources.md)    |
 | Environment                      | Capsule が持つ具体的な実行環境です（`production`、`preview` など）。Workspace の別名ではありません。                                                                                      | [Source と Capsule](../concepts/sources.md)    |
-| stale                            | 追いかけている Source に新しい commit が来た Capsule の状態です。                                                       | [Source と Capsule](../concepts/sources.md)    |
+| stale                            | デプロイ済みの Capsule の、追いかけている Source に新しい commit が来たか、依存先の Output が変わった状態です。画面では **更新があります** と表示されます。 | [Source と Capsule](../concepts/sources.md)    |
 | Stack flow                       | 自分で書いた module を Git から実行する経路です。                                                                       | [全体像](../concepts/index.md)                 |
 | 互換性レポート                   | 登録した module を読み取り専用で解析し、必要な変数と provider を示した結果です。                                        | [Source と Capsule](../concepts/sources.md)    |
 | 依存 (Dependency)                | Capsule どうしをつなぎ、相手の Output を参照できるようにする関係です。Workspace をまたぐ場合は OutputShare を通します。 | [状態と出力](../concepts/state-and-outputs.md) |
 | Capsule 作成設定 (InstallConfig) | 変数の対応づけや公開する Output など、Capsule の実行のしかたを Takosumi 側に持つ設定です。                              | [API](./api.md)                                |
-| Git revision plan                | 既存 Capsule の Source ref 更新を、固定した snapshot と互換性確認を経て reviewable な Plan Run まで進める耐久 coordinator の記録です。 | [API](./api.md)                                |
+| Git revision plan                | 既存の Capsule の取得元の版を変えるとき、commit を固定し、互換性を確かめて、変更の確認（Plan Run）を作るまでの手続きの記録です。dashboard の **更新する**（更新があるときに表示）、**変更を確認**、**バージョンを変更** の **このバージョンを確認** で作られます。 | [API](./api.md)                                |
 | 採用済み Source revision         | Capsule の現在の StateVersion が参照する Plan Run から導出した SourceSnapshot の ref/path/commit です。Source の既定 ref とは別です。 | [API](./api.md)                                |
 | App Handoff                      | 外部のアプリから利用者を作成画面へ送るための URL の決まりです。                                                         | [App Handoff](./app-handoff.md)                |
 | Store                            | 追加できるサービスを探して並べるための一覧です。                                                                        | [App Handoff](./app-handoff.md)                |
@@ -53,7 +53,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | Run                    | 1 回の実行の記録です。plan と apply はそれぞれ別の Run になり、apply の Run は確認した plan の Run に固定されます。   | [実行モデル](../concepts/run-model.md)         |
 | plan                   | 何がどう変わるかを計算して見せる操作です。この時点では実物は変わりません。                                            | [実行モデル](../concepts/run-model.md)         |
-| apply                  | 確認した plan をそのままデプロイする操作です。                                                                            | [実行モデル](../concepts/run-model.md)         |
+| apply                  | 確認した plan をそのままデプロイする操作です。画面では **デプロイ** と表示されます。                                      | [実行モデル](../concepts/run-model.md)         |
 | destroy                | Capsule が作ったリソースを削除する操作です。計画を作ってから実行します。                                              | [実行モデル](../concepts/run-model.md)         |
 | 差分確認 (drift check) | 保存した状態と実物のずれを、読み取り専用で調べる操作です。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | drift                  | 保存した状態と実物のあいだに生まれたずれのことです。                                                                  | [状態と出力](../concepts/state-and-outputs.md) |
@@ -133,6 +133,8 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 **リソース**（サービスが作った resource の記録）とは別のものです。現在は、Git の module と
 通常の OpenTofu provider を使います。
 
+::: details 移行用語の一覧を開く
+
 | 用語              | 意味                                                                                                          | 詳しい説明                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | Resource          | 旧 API が保持する型付きサービスの記録 (migration only)。                                                     | [Resource migration](../concepts/resources.md) |
@@ -153,3 +155,5 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 | observe           | 旧 Resource の読み取り専用差分確認 (migration only)。                                                        | [Resource migration](../concepts/resources.md) |
 | import            | 旧 Resource ledger へ既存実物を取り込む操作 (migration only)。                                                   | [Resource migration](../concepts/resources.md) |
 | portability       | 旧 Resource 解決の移しやすさ (migration only)。                                                             | [Resource migration](../concepts/resources.md) |
+
+:::

@@ -37,12 +37,12 @@ docs use a different name, read it back through this table.
 | SourceSnapshot       | The commit a Source resolved its ref to. This is always what gets executed.                                                                                     |
 | Capsule              | One deployed unit. It runs a single OpenTofu root module and owns concrete execution environments such as `production` and `preview`.                           |
 | Environment          | A concrete execution lane owned by a Capsule, such as `production` or `preview`; it is not another name for Workspace.                                         |
-| stale                | The state of a Capsule whose tracked Source has a newer commit.                                                            |
+| stale                | The state of a deployed Capsule whose tracked Source has a newer commit, or whose dependency's Output changed. Shown as **Update available**. |
 | Stack flow           | The path that runs a module you wrote yourself from Git.                                                                   |
 | Compatibility report | The result of analyzing a registered module read-only, showing the variables and providers it needs.                       |
 | Dependency           | A relation that connects Capsules so one can read another's Output. Across Workspaces it goes through an OutputShare.      |
 | InstallConfig        | The settings Takosumi keeps for how a Capsule runs, such as variable mapping and which Outputs are published.              |
-| Git revision plan    | A durable coordinator record that advances an existing Capsule's Source ref through a pinned snapshot and compatibility check to a reviewable Plan Run. |
+| Git revision plan    | The record of changing an existing Capsule's source version: it pins a commit, checks compatibility, and creates the review (Plan Run). The dashboard's **Update** (shown when an update is available), **Review changes**, and **Review this version** under **Change version** create it. |
 | Adopted Source revision | The SourceSnapshot ref/path/commit derived from the Capsule's current StateVersion and its applied Plan Run; it is distinct from the Source default. |
 | App Handoff          | The URL convention that sends a user from an outside app into the creation screen.                                         |
 | Store                | The listing used to find and browse services you can add.                                                                  |
@@ -134,6 +134,8 @@ They do not appear in Takosumi's current use, and they are not the dashboard's
 **resources** (the record of what a service created). The current
 user path is a Git module with ordinary OpenTofu providers.
 
+::: details Show the migration terms
+
 | Term              | Meaning                                                                                                                                        |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Resource          | An old typed-service record retained for migration only.                                                                                       |
@@ -154,3 +156,5 @@ user path is a Git module with ordinary OpenTofu providers.
 | observe           | The old Resource read-only drift check; migration only.                                                                                         |
 | import            | The old operation taking an existing object into the Resource ledger; migration only.                                                          |
 | portability       | The old Resource-resolution mobility classification; migration only.                                                                            |
+
+:::
