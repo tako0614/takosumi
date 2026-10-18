@@ -76,8 +76,8 @@ AWS, and others are operated by their existing providers.
 - [Interfaces](./concepts/interfaces.md) — describing connections and granting use
 - [Running it yourself](./concepts/self-host.md) — operating a production installation
 - [Repository manifest](./reference/repository-manifest.md),
-  [Store API](./reference/store-api.md), [API](./reference/api.md), and
-  [CLI](./reference/cli.md) references
+  [Store API](./reference/store-api.md), [API](./reference/api.md),
+  [CLI](./reference/cli.md), and [Configuration](./reference/configuration.md) references
 
 The old Resource Shape / Form Host API is documented only in the
 [Resource migration note](./concepts/resources.md); it is not a new authoring

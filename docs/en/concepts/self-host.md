@@ -60,10 +60,10 @@ Every binding you need is written out in `deploy/platform/wrangler.toml`.
 | `COORDINATION` / `RUN_OWNER` / `RUNNER` (Durable Object) | Mutual exclusion, Run ownership, and the runner container |
 | `ASSETS` | Serves the dashboard build |
 
-Runs are scheduled directly onto `RUN_OWNER` when they are created. This GA
-composition has no Cloudflare Queue or dead-letter queue. `RUN_OWNER` owns
-retries and terminal failure handling, and execution fails closed when its
-binding is unavailable.
+Runs are scheduled directly onto `RUN_OWNER` when they are created. This composition
+uses neither Cloudflare Queue nor a dead-letter queue for failed work.
+`RUN_OWNER` handles retries and final failure, and if its binding is missing, Runs are
+not sent to execution (fail closed).
 
 Create the resources first. The names match the template.
 

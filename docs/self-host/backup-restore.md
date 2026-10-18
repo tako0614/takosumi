@@ -127,8 +127,8 @@ Workspace export は DB 全体、artifact store、鍵の backup の代わりに�
 参照 Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup
 API で export でき、期限後の finalizer も destroy 前に export を試みます。適用済み state を含める
 独自 runner 構成では、その sealed state store の `backupStateObjectReader` を host から明示的に
-接続します。読み取り口や state object が無い場合は export 失敗として記録され、#422 の既存方針では
-失敗後も teardown が進みます。volume と鍵は別に保全します。
+接続します。読み取り口や state object が無い場合は export 失敗として記録されますが、
+[削除の予約](../concepts/scheduled-uninstall.md)のとおり、書き出しに失敗しても削除は止まりません。volume と鍵は別に保全します。
 
 Cloudflare 構成は [災害復旧](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) と
 [backup/restore 演習](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md)を参照してください。

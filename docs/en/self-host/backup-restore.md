@@ -130,8 +130,8 @@ The reference Compose wires a file backup store. Owners can use the Capsule back
 during the seven-day uninstall grace period; the finalizer also attempts an export before
 destroy after the deadline. Custom runner compositions must explicitly supply a
 `backupStateObjectReader` for their exact sealed state store. Missing readers or state
-objects are recorded as export failures; #422's existing policy still proceeds with
-teardown after failure. Preserve the volume and keys separately.
+objects are recorded as export failures, and, as [Scheduled deletion](../concepts/scheduled-uninstall.md)
+describes, a failed export does not stop the deletion. Preserve the volume and keys separately.
 
 For Cloudflare, use the [disaster recovery](https://github.com/tako0614/takosumi/blob/main/docs/operations/disaster-recovery.md) and
 [backup/restore drills](https://github.com/tako0614/takosumi/blob/main/docs/operations/backup-restore-drills.md) runbooks. Keep secret values and raw backups

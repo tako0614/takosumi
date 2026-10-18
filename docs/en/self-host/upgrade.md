@@ -67,8 +67,8 @@ installation: backup-status, plan, apply, verify (see
 accepts specific Accounts D1 versions, so whether you apply or deploy the Worker first
 depends on the version. Upgrading from a v3 Accounts D1 has a fixed order: deploy the
 bridge Worker, apply v4, then switch to a Worker that accepts only v4 and later. Just
-before applying v4, apply backfills the existing OIDC client records in chunks of 100. After v4, you
-cannot go back to a Worker that accepts only v3. Follow
+before it applies v4, `apply` backfills the existing OIDC client records in chunks of
+100. After v4, you cannot go back to a Worker that accepts only v3. Follow
 [online DB migrations](https://github.com/tako0614/takosumi/blob/main/docs/operations/online-db-migrations.md)
 for this order and its caveats.
 
