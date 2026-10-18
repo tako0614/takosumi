@@ -1,4 +1,7 @@
-# Updating
+# Updating Takosumi itself (upgrade)
+
+This page updates the Takosumi you run yourself. To update a service you added, see
+[Update, restore, or delete a service](../getting-started/after-adding.md).
 
 Review the target commit, both database migrations, and runner compatibility before updating.
 Migrations are forward-only. A predecessor can serve again only if it accepts the new schema;

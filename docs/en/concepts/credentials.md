@@ -49,10 +49,10 @@ Verify a Connection with `/test`. To take one out of service, use `/revoke` rath
 deleting it. A revoked Connection cannot be used by later Runs, and the records of past
 Runs remain.
 
-For some supported providers, a Connection configured for credential renewal during a Run
-is labeled **Auto-renewing**. To use it, explicitly choose that labeled Connection when
-setting up the Capsule's provider assignment. A catalog or Recipe entry alone does not
-enable it, and Takosumi does not switch an existing static Connection or assignment
+For some supported providers, a Connection can keep renewing a short-lived credential while
+a Run is executing (credential renewal during a Run). To use it, explicitly choose that
+Connection when setting up the Capsule's provider assignment. A catalog or Recipe entry alone
+does not enable it, and Takosumi does not switch an existing static Connection or assignment
 automatically.
 
 The required provider version depends on the provider. For example, renewal through
