@@ -77,6 +77,31 @@ The refusal is normally recorded before export, destroy Plan creation, or provid
 The `capsule.uninstall_blocked` audit record also carries the reason and time. Restoring
 authorization later does not resume the request.
 
+## When the deletion stops partway
+
+Even after the authority check passes, a request stops in **Scheduled for deletion** when the
+deletion cannot continue safely, and records one of these reasons in `uninstall.blockedReason`.
+A failed data export alone does not stop it: the result (`failed`) is recorded and the deletion
+goes on.
+
+| `uninstall.blockedReason` | Reason |
+| --- | --- |
+| `pre_destroy_export_incomplete` | A data export started but has recorded no result after 15 minutes |
+| `destroy_plan_cancelled` | Someone cancelled the deletion Plan |
+| `destroy_plan_failed` | The deletion Plan did not complete in 3 attempts |
+| `destroy_plan_missing` | The recorded deletion Plan cannot be found |
+| `destroy_plan_refused` | Creating the deletion Plan was refused for a reason that will not clear by waiting |
+| `destroy_plan_unverifiable` | The deletion Plan no longer matches the service it was made for (its state or execution authority changed, it did not pass policy, it has no list of changes, and so on) |
+| `destroy_plan_not_delete_only` | The deletion Plan contains changes other than deletes |
+| `destroy_apply_refused` | The deletion apply was refused for a reason that will not clear by waiting |
+| `destroy_apply_failed` | The deletion apply failed |
+| `finalize_failed` | The deletion process has reached 6 unexpected failures in total |
+
+A refusal that clears with time, such as a Workspace management operation in progress or
+another operation running on the same service, does not stop the request; it is retried
+later. The dashboard shows the same message for every reason: the deletion could not be
+confirmed as safe.
+
 ## Repairing a blocked request
 
 1. Confirm that one of the cases under "Cancelling" applies.

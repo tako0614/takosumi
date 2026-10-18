@@ -71,6 +71,29 @@ OAuth について: access token の既定の有効期間は 5 分で、既定�
 監査記録の `capsule.uninstall_blocked` にも理由と時刻が残ります。あとから権限や認証を戻しても、
 予約は再開しません。
 
+## 削除の途中で止まったとき
+
+権限の確認を通ったあとも、削除を安全に続けられないと、予約は **削除予定** のまま止まり、
+`uninstall.blockedReason` に次の理由を記録します。データの書き出しが失敗しただけでは止まらず、
+結果（`failed`）を記録して削除へ進みます。
+
+| `uninstall.blockedReason` | 理由 |
+| --- | --- |
+| `pre_destroy_export_incomplete` | データの書き出しを始めたまま、15 分たっても結果が記録されません |
+| `destroy_plan_cancelled` | 削除の Plan を誰かが取り消しました |
+| `destroy_plan_failed` | 削除の Plan が 3 回続けて完了しませんでした |
+| `destroy_plan_missing` | 記録した削除の Plan が見つかりません |
+| `destroy_plan_refused` | 削除の Plan の作成が、時間をおいても通らない理由で拒否されました |
+| `destroy_plan_unverifiable` | 削除の Plan が、作った時点のサービスと合いません（状態や実行の権限が変わった、policy を通っていない、変更の一覧が無いなど） |
+| `destroy_plan_not_delete_only` | 削除の Plan に、削除以外の変更が含まれています |
+| `destroy_apply_refused` | 削除のデプロイが、時間をおいても通らない理由で拒否されました |
+| `destroy_apply_failed` | 削除のデプロイが失敗しました |
+| `finalize_failed` | 削除の処理での予期しない失敗が、合わせて 6 回に達しました |
+
+Workspace の管理操作の最中や、同じサービスの別の操作の実行中など、時間がたてば解ける理由で
+拒否された場合は止めず、あとでやり直します。dashboard には、どの理由でも「安全に削除できる
+ことを確かめられなかった」と表示されます。
+
 ## 止まった予約を直す
 
 1. 上の「取り消す」の条件を満たしていることを確かめます。
