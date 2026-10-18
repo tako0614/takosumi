@@ -131,7 +131,7 @@ the copy.
 | `directory` under `[assets]` (add) | `"<checkout>/dashboard/dist"` |
 | `image` and `image_build_context` under `[[containers]]` | `"<checkout>/runner/Dockerfile"` and `"<checkout>"` |
 | `TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE` under `[vars]` (add) | `"predeployed"`. The CLI below installs the Accounts D1 schema; the Worker does not create it |
-| `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` under `[vars]` (add) | The upstream identity provider used for sign-in (a JSON array) |
+| `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` under `[vars]` (add) | The upstream identity provider descriptors used for sign-in, as a JSON **string**. Write it as a TOML literal string such as `'[{"providerId": ...}]'` |
 
 This config holds values from your environment, so keep it somewhere private. The template's
 `[vars]` already sets `TAKOSUMI_ENVIRONMENT = "production"`. When the value is `production`
@@ -143,8 +143,10 @@ The first account is created by signing in through the upstream identity provide
 is something you add to an account after signing in. The
 [configuration reference](../reference/configuration.md) shows how to write
 `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`. The provider's client secret and
-`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` go with the secrets below. On Cloudflare, a broken setting
-here leaves no way to sign in and logs `auth_providers_upstream_oauth_disabled`.
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` go with the secrets below. The descriptor's `redirectUri` is
+`https://<your origin>/sign-in/callback`. On Cloudflare, a broken descriptor leaves no way to
+sign in and logs `auth_providers_upstream_oauth_disabled`. If you write the value as a TOML
+array, the Worker does not receive it as a string, and sign-in disappears without any log.
 
 Build the dashboard. `ASSETS` serves this output. The dashboard is not part of the root
 workspace, so `build:dashboard` installs its dependencies from the dashboard's own lockfile
@@ -228,20 +230,29 @@ private JSON file and send them with the first deploy. They are
 sealing key for credentials and state), `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (the bearer for the
 operator-only API), the upstream identity provider's client secret, and
 `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET`. Generate the values as in
-[Putting it on Bun and PostgreSQL](#putting-it-on-bun-and-postgresql).
+[Putting it on Bun and PostgreSQL](#putting-it-on-bun-and-postgresql). Every value must be a
+string; put the ES256 JWK in as its generated JSON, escaped into a string. Name the client
+secret exactly as the descriptor's `clientSecretEnv`.
+
+```json
+{
+  "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"d\":\"...\",\"x\":\"...\",\"y\":\"...\"}",
+  "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT": "...",
+  "COMPANY_SSO_CLIENT_SECRET": "..."
+}
+```
 
 ```bash
 unset CLOUDFLARE_API_TOKEN
-# Write $HOME/.takosumi-private/secrets.json as {"NAME": "value", ...}
+# Write $HOME/.takosumi-private/secrets.json in the shape above
 chmod 600 "$HOME/.takosumi-private/secrets.json"
 bun run wrangler -- deploy \
   --config "$HOME/.takosumi-private/wrangler.toml" \
   --secrets-file "$HOME/.takosumi-private/secrets.json"
 ```
 
-Secrets sent with `--secrets-file` are not removed when a later deploy leaves them out of the
-file. After the deploy, treat secrets.json like any other secret; if you keep it, keep it
-somewhere private.
+Pass the same file with `--secrets-file` on every later deploy too. Treat secrets.json like any
+other secret and keep it somewhere private.
 
 ### About apply and destroy
 
@@ -249,8 +260,8 @@ A Worker set up this way can create reviews (plan), but apply and destroy stop. 
 three digests that identify the running artifacts (`TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST`,
 `TAKOSUMI_RUNNER_ARTIFACT_DIGEST`, and `TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST`). Today only the
 Takosumi release tool produces them, and there is no self-host procedure for them yet. A
-Worker without them stops apply and destroy Runs with `execution_evidence_authority_unavailable`
-and changes nothing.
+Worker without them fails apply and destroy Runs with `execution_evidence_authority_unavailable`
+without touching the provider.
 
 ## Putting it on Bun and PostgreSQL
 

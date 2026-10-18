@@ -129,7 +129,7 @@ cp deploy/platform/wrangler.toml "$HOME/.takosumi-private/wrangler.toml"
 | `[assets]` の `directory`（追加） | `"<checkout>/dashboard/dist"` |
 | `[[containers]]` の `image` と `image_build_context` | `"<checkout>/runner/Dockerfile"` と `"<checkout>"` |
 | `[vars]` の `TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE`（追加） | `"predeployed"`。Accounts D1 のスキーマは下の CLI で入れ、Worker には作らせません |
-| `[vars]` の `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`（追加） | サインインに使う上流の ID プロバイダ（JSON の配列） |
+| `[vars]` の `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`（追加） | サインインに使う上流の ID プロバイダの記述子を JSON にした**文字列**。`'[{"providerId": ...}]'` のように TOML の literal string で書きます |
 
 この設定は自分の環境の値を含むので、公開しない場所で管理します。雛形の `[vars]` には
 `TAKOSUMI_ENVIRONMENT = "production"` がすでに設定されています。この値が `production` か
@@ -139,9 +139,10 @@ cp deploy/platform/wrangler.toml "$HOME/.takosumi-private/wrangler.toml"
 最初のアカウントは、上流の ID プロバイダでサインインして作ります。passkey は、サインイン
 済みのアカウントに後から追加する手段です。`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` の書き方は
 [設定リファレンス](../reference/configuration.md)にあります。provider の client secret と
-`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` は、下の secret と一緒に送ります。Cloudflare 構成では、
-この設定が壊れているとサインインの手段が出ず、ログに `auth_providers_upstream_oauth_disabled`
-が残ります。
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` は、下の secret と一緒に送ります。記述子の `redirectUri` は
+`https://<公開する origin>/sign-in/callback` です。Cloudflare 構成では、記述子の中身が壊れて
+いるとサインインの手段が出ず、ログに `auth_providers_upstream_oauth_disabled` が残ります。値を
+TOML の配列で書くと Worker に文字列として届かず、ログを出さずにサインインの手段が出ません。
 
 dashboard をビルドします。`ASSETS` はこの出力を配ります。dashboard はルートの workspace に
 含まれないため、`build:dashboard` が dashboard 自身の lockfile で依存を入れてからビルドします。
@@ -221,19 +222,29 @@ JSON ファイルにまとめ、最初の deploy と一緒に送ります。入�
 `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`、`TAKOSUMI_SECRET_STORE_PASSPHRASE`
 （認証情報と state の封印鍵）、`TAKOSUMI_DEPLOY_CONTROL_TOKEN`（operator 専用 API の
 bearer）と、上流の ID プロバイダの client secret と `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` です。
-値の作り方は [Bun と PostgreSQL に置く](#bun-と-postgresql-に置く)と同じです。
+値の作り方は [Bun と PostgreSQL に置く](#bun-と-postgresql-に置く)と同じです。値はすべて文字列に
+します。ES256 の JWK も、生成した JSON をエスケープした文字列として入れます。client secret の
+名前は、記述子の `clientSecretEnv` と同じにします。
+
+```json
+{
+  "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"d\":\"...\",\"x\":\"...\",\"y\":\"...\"}",
+  "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT": "...",
+  "COMPANY_SSO_CLIENT_SECRET": "..."
+}
+```
 
 ```bash
 unset CLOUDFLARE_API_TOKEN
-# $HOME/.takosumi-private/secrets.json に {"名前": "値", ...} の形で書く
+# $HOME/.takosumi-private/secrets.json に上の形で書く
 chmod 600 "$HOME/.takosumi-private/secrets.json"
 bun run wrangler -- deploy \
   --config "$HOME/.takosumi-private/wrangler.toml" \
   --secrets-file "$HOME/.takosumi-private/secrets.json"
 ```
 
-`--secrets-file` で送った secret は、次の deploy でファイルから外しても消えません。deploy が
-終わったら、secrets.json はほかの秘密と同じように扱い、残すなら非公開の場所に置きます。
+以後の deploy でも、同じファイルを `--secrets-file` で渡します。secrets.json はほかの秘密と
+同じように扱い、非公開の場所に置きます。
 
 ### apply と destroy について
 
@@ -242,7 +253,8 @@ bun run wrangler -- deploy \
 （`TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST`、`TAKOSUMI_RUNNER_ARTIFACT_DIGEST`、
 `TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST`）が要ります。今はこれらを Takosumi の release tool だけが
 作り、self-host 向けに用意する手順はまだありません。digest の無い Worker は、apply と
-destroy の Run を `execution_evidence_authority_unavailable` で、何も変更せずに止めます。
+destroy の Run を、provider 側には触れずに `execution_evidence_authority_unavailable` で失敗に
+します。
 
 ## Bun と PostgreSQL に置く
 
