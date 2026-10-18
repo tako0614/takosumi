@@ -22,6 +22,10 @@ compatibility report and compiles it within operator policy into a DB-owned
 `InstallConfig`. Plan and Run consume that persisted InstallConfig; they do not
 re-read the manifest.
 
+For worked examples, see [Prepare a repository](../getting-started/prepare-repository.md)
+and [Show your app on the home screen](../getting-started/home-launcher.md). This page lists
+the fields and rules.
+
 ## Versions and closed objects
 
 Every version has exactly three root fields:

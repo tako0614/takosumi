@@ -1,27 +1,30 @@
 # Repository manifest
 
-`.well-known/takosumi.json` は任意の repository manifest です。scan で発見された実在の
-OpenTofu module に input 表示 hint を追加し、Takosumi が提供する generic API/service の
-request と exact delivery target を宣言します。Git repository が executable source と同じ
-commit に固定して所有しますが、module path、provider、Connection、resource、deployment、
-lifecycle の実行権限ではありません。文書がない plain Git/OpenTofu app も通常どおり
-install できます。Source sync は repository root の文書を
-最大 128 KiB の UTF-8 JSON として検証し、結果と digest を immutable
-`SourceSnapshot.repositoryManifest` に保存します。raw document は public API に返しません。
+`.well-known/takosumi.json` は、リポジトリの最上位に置く任意のファイルです。Takosumi が見つけた
+OpenTofu の module ごとに、追加画面の入力欄の説明、Takosumi に用意してほしい機能（秘密の生成、
+公開 URL、サインイン、Interface など）、その値を module のどの変数に渡すかを書きます。置かなくても、
+Git の OpenTofu module はそのまま追加できます。書き方の例は
+[追加できるリポジトリを用意する](../getting-started/prepare-repository.md)と
+[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。このページは項目と規則の
+一覧です。
 
-Git URL、ref、Source subtree と exact commit の tracked regular file scan が
-module/provider 候補の正本 (正とする情報) です。app-owned Git/OpenTofu configuration が
-infrastructure/lifecycle authority であり続けます。
-Takosumi は accepted generic API/capability の実装を所有し、manifest はその request と
-app-owned module への delivered value mapping だけを宣言します。
+manifest に書けるのは提案だけです。どの module を使うか、provider、接続、作るもの、デプロイと
+削除は、Git にある OpenTofu の設定と利用者の選択で決まり、manifest では変えられません。module と
+provider の候補を決めるのは、Git URL、ref、`sourcePath`、固定した commit で追跡されている
+ファイルを Takosumi が調べた結果です。
 
-Takosumi は exact SourceSnapshot の宣言を compatibility report と照合し、operator
-policy の範囲内で DB-owned `InstallConfig` に compile します。Plan/Run が読むのは
-persist 済み InstallConfig であり、manifest を実行時に再読込しません。
+manifest は次のように扱われます。
 
-## Version と closed object
+- Source を同期するとき、同じ commit の manifest を読み、128 KiB までの UTF-8 JSON として確かめます。
+  結果と digest は、後から変わらない `SourceSnapshot.repositoryManifest` に保存します。文書そのものは
+  公開 API では返しません。
+- 追加するとき、その SourceSnapshot の宣言を互換性の確認結果と突き合わせ、運用している人の policy の
+  範囲で、データベースに保存する Capsule の設定（`InstallConfig`）に変換します。変更の確認と
+  デプロイ（Plan / Run）が読むのはこの保存した設定で、manifest を読み直しません。
 
-すべての version で root は次の3 fieldだけを持ちます。
+## 版と書ける項目
+
+どの版でも、最上位に書けるのは次の 3 つだけです。
 
 ```json
 {
@@ -31,68 +34,67 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 }
 ```
 
-| `apiVersion`        | `install` の field | module の field                             |
-| ------------------- | ------------------ | ------------------------------------------- |
-| `takosumi.com/v1`   | `modules`          | `inputs`, `requires`, `features`            |
-| `takosumi.com/v2`   | `modules`          | v1 + `interfaces`                           |
-| `takosumi.com/v2.1` | `modules`, optional `defaultModule` | v2 と同一                                   |
-| `takosumi.com/v2.2` | `modules`, optional `defaultModule` | v2.1 + `requires[].kind: interface.consume` |
-| `takosumi.com/v2.3` | `modules`, optional `defaultModule` | v2.2 + optional `sourceBuild`               |
-| `takosumi.com/v2.4` | `modules`          | v2.3 + runtime OIDC binding delivery        |
+| `apiVersion`        | `install` に書ける項目 | module に書ける項目                         |
+| ------------------- | ---------------------- | ------------------------------------------- |
+| `takosumi.com/v1`   | `modules`              | `inputs`, `requires`, `features`            |
+| `takosumi.com/v2`   | `modules`              | v1 + `interfaces`                           |
+| `takosumi.com/v2.1` | `modules`、`defaultModule`（任意） | v2 と同じ                                   |
+| `takosumi.com/v2.2` | `modules`、`defaultModule`（任意） | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`、`defaultModule`（任意） | v2.2 + `sourceBuild`（任意）               |
+| `takosumi.com/v2.4` | `modules`              | v2.3 + OIDC の値を実行時の binding で渡す        |
 
-各 object は closed です。表や各 section にない field、`$schema`、旧
-`schemaVersion: takosumi.install-ux/v1` は拒否されます。
+どの object も、書ける項目が決まっています。表や各節にない項目、`$schema`、古い
+`schemaVersion: takosumi.install-ux/v1` を書くと拒否されます。
 
 公開 JSON Schema は
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json) と
 [`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json) と
 [`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json) と
 [`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json)
-です。これは structural schema であり、JSON Schema と parser の完全な同値性を
-意味しません。cross-field uniqueness、JSON recursive depth（最大32）、下記の
-secret/authority vocabulary 検査は canonical parser が追加で fail closed に検査します。
+です。Schema が確かめるのは形だけで、Takosumi の検査と完全には一致しません。項目どうしの重複、
+JSON の入れ子の深さ（最大 32）、下に書く秘密や権限を表す言葉は、Takosumi がさらに確かめ、合わなければ
+受け付けません。
 
-## Scanned module と manifest entry
+## 調べた module と manifest の項目
 
-`install.modules` は1〜32件です。key は `.` または最大 1,024 文字の canonical な
-repository-relative path です。absolute path、`./` prefix、drive prefix、末尾 `/`、
-backslash、NUL、空 segment、`.` / `..` segment は使えません。ただし、entry は exact
-`SourceSnapshot` の scan が同じ path に module を発見した場合だけ hint/request として
-採用されます。manifest は module を作成、選択、上書きできません。
+`install.modules` には 1〜32 件を書きます。key は module のフォルダを、リポジトリの最上位から書いた
+ものです（最上位なら `.`、1,024 文字まで）。`/` や `./` で始まるもの、ドライブ名、末尾の `/`、`\`、
+NUL、空の区切り、`.` や `..` の区切りは使えません。その項目が使われるのは、固定した commit を調べた
+結果、同じフォルダに module があるときだけです。manifest で module を作ったり、選んだり、置き換えたり
+はできません。
 
-認証済みの
-`GET /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` projection は
-`status`、exact `sourceSnapshotId`、`scopePath`、scan 由来の
-`modules: [{ path, providerPackages, rootProviderRequirements }]` を返します。
-`providerPackages` は到達可能な provider package 全体（policy / lock / mirror 用）、
-`rootProviderRequirements` は選択 root が直接要求する exact local-name / alias tuple
-（binding / root generation 用）です。dashboard はこの候補から module を選び、
-compatibility を実行します。直接 Git と Store は同じ Git URL/ref と optional module path
-hint の flow を使い、Store metadata や DB-owned deployment profile は module、provider、
-policy を選びません。
+Takosumi が調べた module の一覧は、認証済みの
+`GET /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` で読めます。応答には
+`status`、`sourceSnapshotId`、`scopePath` と、調べた結果の
+`modules: [{ path, providerPackages, rootProviderRequirements }]` が入ります。`providerPackages` は
+たどれる provider package のすべて（policy、lock、mirror 用）、`rootProviderRequirements` は選んだ
+root module が直接求める provider の local name と alias の組（接続の割り当てと root の生成用）です。
+dashboard はこの一覧から module を選んで互換性を確かめます。Git URL から追加するときもストアから追加
+するときも同じ流れで、ストアの情報や保存した配置の設定が module、provider、policy を選ぶことは
+ありません。この endpoint は、サインインした session、Source の Workspace へのアクセス、
+SourceSnapshot と Source の対応を確かめます。
 
-候補が1件なら dashboard が自動選択し、複数なら利用者が選択します。manifest にだけある
-path は候補にならず、追加リンクの `path` も immutable scan result に無ければ使われず、
-dashboard は scan の候補から選び直します。install plan に明示した module path が固定した
-tree に無い場合は、その plan が `repository_install_ux_module_missing` で失敗します。path が
-`sourcePath` を繰り返している（リポジトリの最上位から書いた）場合は
-`repository_install_ux_module_path_repository_relative` で失敗します。manifest が absent でも scan された module は利用できます。
-任意の manifest が malformed/invalid な場合も、その内容を推測・部分採用せず assistance を
-無効化し、scan 由来の generic install を続行します。operator の Host policy が exact manifest
-API version を明示的に必須化した場合だけ、absent/invalid/version mismatch を fail closed に
-します。この endpoint は account-session 認証、Source Workspace access、SourceSnapshot と
-Source の exact relation を検証します。
+候補が 1 件なら dashboard が自動で選び、複数なら利用者が選びます。manifest にだけあるフォルダは候補に
+なりません。追加リンクの `path` も、調べた結果に無ければ使われず、dashboard は調べた候補から選び
+直します。install plan に指定した module のフォルダが固定した tree に無いと、その plan は
+`repository_install_ux_module_missing` で失敗します。フォルダが `sourcePath` を繰り返している
+（リポジトリの最上位から書いた）ときは `repository_install_ux_module_path_repository_relative` で
+失敗します。
 
-公開済み v2.1〜v2.3 の optional `install.defaultModule` は引き続き parse され、
-`install.modules` の exact key であることを検証しますが、互換表示 hint に限定されます。
-scan が複数 module を発見した場合の利用者選択を省略せず、実行 module authority にはなりません。
+manifest が無くても、調べた module は使えます。manifest が読めないときや規則に合わないときも、内容を
+推し量ったり一部だけ使ったりせず、manifest による補助を使わずに、調べた結果だけで追加を続けます。
+運用している人が manifest の版を必須にしている場合だけ、無い、読めない、版が違う manifest で
+止まります。
 
-scan は、manifest の有無や version にかかわらず、immutable archive 内の tracked regular
-files と vendored local module edge（`./` / `../`）だけを辿ります。remote module source は
-pinned/unpinned を問わず network fetch authority を持たず、候補を部分的に公開せず `invalid`
-になります。`../` も、選んだ module のディレクトリの外を指すと追加できません。利用する
-dependency は repository tree に vendor してください
-（[追加できるリポジトリを用意する](../getting-started/prepare-repository.md)）。
+公開済みの v2.1〜v2.3 の `install.defaultModule`（任意）は今も読み、`install.modules` の key と一致
+するかを確かめますが、表示の目安にしか使いません。複数の module があるときに利用者が選ぶ手順は省けず、
+実行する module を決めることもありません。
+
+Takosumi が調べるのは、manifest の有無や版にかかわらず、固定した archive の中の追跡されている通常の
+ファイルと、リポジトリの中の local module（`./`、`../`）だけです。registry や `git::` などのリモートの
+module source は、版を固定していても取得しません。見つかると、その範囲の候補は一部も出さずに `invalid`
+になります。`../` も、選んだ module のディレクトリの外を指すと追加できません。使う module は
+リポジトリに入れてください（[追加できるリポジトリを用意する](../getting-started/prepare-repository.md)）。
 
 ### 有効な v2.1 multi-module 例
 
