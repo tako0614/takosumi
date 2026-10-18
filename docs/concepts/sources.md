@@ -36,6 +36,8 @@ Git URL、ref、source subtree が Source の取得座標です。専用の sour
 commit の source subtree 配下に
 ある tracked regular file を走査し、実在する OpenTofu root module と provider source を
 `SourceSnapshot` に固定します。この file-derived scan だけが module/provider 候補を作れます。
+追加できる module の条件は[追加できるリポジトリを用意する](../getting-started/prepare-repository.md)
+にまとめています。
 
 作成の応答には `hookSecret` が含まれます。**これは作成時に 1 度だけ平文で返り、
 以降は取得できません。** Source レコードにはハッシュだけを保存します。Git ホストの

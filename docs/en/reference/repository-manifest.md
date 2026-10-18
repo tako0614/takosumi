@@ -98,11 +98,13 @@ continues to parse and must name an exact `install.modules` key, but it is only
 a compatibility presentation hint. It never skips explicit user selection when
 the scan finds multiple modules and is not execution-module authority.
 
-The v1 scan follows only tracked regular files and vendored local module edges
-(`./` and `../`) inside the immutable archive. A remote module source is not
-network-fetch authority, whether pinned or unpinned; discovery becomes
-`invalid` rather than publishing a partial candidate. Vendor the dependency in
-the repository tree.
+With or without a manifest, and for every manifest version, the scan follows only
+tracked regular files and vendored local module edges (`./` and `../`) inside the
+immutable archive. A remote module source is not network-fetch authority, whether
+pinned or unpinned; discovery becomes `invalid` rather than publishing a partial
+candidate. A `../` source that leaves the selected module's directory cannot be added
+either. Vendor the dependency in the repository tree
+([Prepare a repository](../getting-started/prepare-repository.md)).
 
 ### Valid multi-module v2.1 example
 
