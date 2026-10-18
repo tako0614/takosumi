@@ -3,14 +3,16 @@
 Linux マシン上にローカルの Takosumi を起動し、サンプルを dashboard から追加して、
 変更の確認（plan）からデプロイ（apply）まで試します。サンプルは外部リソースを作らない
 ため、クラウドの認証情報は要りません。初回はコンテナと dashboard をビルドするため
-時間がかかります。
+時間がかかります。追加したサービスの **更新** タブに、デプロイした版が **現在** として
+並べば完了です。
 
 dashboard や runner なしで API だけ確認する場合は、[API だけ動かす](./api-only.md)の
 手順を使います。
 
 ## 必要なもの
 
-- Linux。macOS、WSL、Windows はこの構成の対象外です
+- Debian や Ubuntu のように、`update-ca-certificates` と systemd-resolved を使う Linux。
+  macOS、WSL、Windows はこの構成の対象外です
 - Docker と `docker compose`
 - Bun、Git、`curl`、`python3`
 - 証明書と DNS を設定するための `sudo`
@@ -39,7 +41,8 @@ bash scripts/up.sh --profile postgres
 
 このコマンドは Postgres、オブジェクトストレージ、runner、control plane、dashboard、
 ローカル認証局と DNS をまとめて起動します。既定の AppArmor 設定でコンテナを起動
-できないホストでは、次を使います。
+できないホストでは、コンテナを AppArmor の制限なし（`apparmor=unconfined`）で起動する
+次の指定を使います。既定のまま起動できるなら使いません。
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
@@ -55,8 +58,22 @@ sudo bash scripts/ca-install.sh
 sudo bash scripts/configure-dns.sh
 ```
 
-この 2 つはホストごとに 1 回だけ実行します。ローカル認証局を作り直した場合は
-`ca-install.sh` をもう一度実行してください。
+この 2 つで、このマシンのブラウザと `curl` が `https://*.takosumi.test` を開けるように
+なります。
+
+- `ca-install.sh` は、ローカル認証局（Pebble）のルート証明書を、システムの証明書ストア
+  （`/usr/local/share/ca-certificates/`）と、Chromium と Firefox の証明書ストアに
+  追加します。`certutil` がなければ、apt で `libnss3-tools` を入れます。実行したあとは、
+  開いているブラウザを再起動します。
+- `configure-dns.sh` は、`takosumi.test` で終わる名前だけをこのマシンの DNS
+  コンテナに問い合わせるよう、systemd-resolved に設定します
+  （`/etc/systemd/resolved.conf.d/takos-local-substrate.conf`）。ほかの名前の解決は
+  変わりません。
+
+`configure-dns.sh` はホストごとに 1 回で済みます。ローカル認証局は起動するたびに新しい
+ルート証明書を作るため、`down.sh` で止めたあとに `up.sh` で起動し直したら、
+`ca-install.sh` をもう一度実行してください。元に戻す手順は
+[停止する](#_8-停止する)にあります。
 
 ## 4. 起動を確認する
 
@@ -111,8 +128,8 @@ module path は折りたたまれた **取得元の詳細** に入っていま�
 最初の追加では表示されません。ポリシーや料金の条件で止められた変更は
 **追加を完了できませんでした** と表示され、**技術的な詳細** から Run の詳細を確認できます。
 
-完了すると **追加できました** と表示されます。このサンプルは画面を持たないため、
-**サービスを開く** で、**ワークロード** にある追加したサービスの画面が開きます。通常の更新と
+完了すると **追加できました** と表示されます。このサンプルにはアプリとしての画面がないため、
+**サービスを開く** を押すと、**ワークロード** にあるこのサービスのページが開きます。通常の更新と
 Git の新しい commit は、自動更新を有効にしない限りデプロイされません。
 drift を検出しても、自動ではデプロイしません。
 
@@ -146,6 +163,18 @@ bash scripts/down.sh
 ```
 
 Postgres のデータと証明書も消す場合は `bash scripts/down.sh -v` を使います。
+
+手順 3 でこのマシンに入れた設定は、次で元に戻せます。
+
+```bash
+sudo rm /etc/systemd/resolved.conf.d/takos-local-substrate.conf
+sudo systemctl restart systemd-resolved
+sudo rm /usr/local/share/ca-certificates/takos-local-substrate-pebble.crt
+sudo update-ca-certificates
+certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
+```
+
+Firefox を使っている場合は、その profile のディレクトリにも同じ `certutil -D` を実行します。
 
 ## 次に読むもの
 

@@ -4,14 +4,16 @@ Start a local Takosumi installation on a Linux machine, add a sample from the
 dashboard, and take it from reviewing the changes (plan) to deploying them
 (apply). The sample creates no external resources, so you need no cloud
 credentials. The first run builds containers and the dashboard, so it takes a
-while.
+while. You are done when the **Updates** tab of the service you added lists the
+deployed version as **Current**.
 
 To check only the API, without the dashboard or runner, follow
 [Run only the API](./api-only.md).
 
 ## Requirements
 
-- Linux. This composition does not support macOS, WSL, or Windows
+- Linux that uses `update-ca-certificates` and systemd-resolved, such as Debian
+  or Ubuntu. This composition does not support macOS, WSL, or Windows
 - Docker and `docker compose`
 - Bun, Git, `curl`, and `python3`
 - `sudo` for local certificate and DNS setup
@@ -41,7 +43,9 @@ bash scripts/up.sh --profile postgres
 
 This starts Postgres, object storage, the runner, control plane, dashboard,
 local certificate authority, and DNS. On a host where the default AppArmor
-profile blocks the containers, use:
+profile blocks the containers, use the following, which starts the containers
+without AppArmor confinement (`apparmor=unconfined`). Do not use it if they
+start with the default profile.
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
@@ -57,8 +61,22 @@ sudo bash scripts/ca-install.sh
 sudo bash scripts/configure-dns.sh
 ```
 
-Run these once per host. Run `ca-install.sh` again if you recreate the local
-certificate authority.
+Together they let the browsers and `curl` on this machine open
+`https://*.takosumi.test`.
+
+- `ca-install.sh` adds the root certificate of the local certificate authority
+  (Pebble) to the system certificate store (`/usr/local/share/ca-certificates/`)
+  and to the Chromium and Firefox certificate stores. If `certutil` is missing, it
+  installs `libnss3-tools` with apt. Restart any open browser afterwards.
+- `configure-dns.sh` tells systemd-resolved to send only names ending in
+  `takosumi.test` to the DNS container on this machine
+  (`/etc/systemd/resolved.conf.d/takos-local-substrate.conf`). Other names
+  resolve as before.
+
+`configure-dns.sh` is needed once per host. The local certificate authority
+creates a new root certificate every time it starts, so after you stop with
+`down.sh` and start again with `up.sh`, run `ca-install.sh` again. To undo both,
+see [Stop it](#_8-stop-it).
 
 ## 4. Check the services
 
@@ -120,7 +138,7 @@ billing check stops shows **Service setup did not finish**, and
 **Technical details** opens its Run.
 
 When it finishes, **Service added** appears. The sample has no app screen of
-its own, so **Open service** opens the new service's page under **Workloads**.
+its own, so **Open service** opens this service's page under **Workloads**.
 Normal updates and new Git commits are not applied unless you turn on
 auto-update; detected drift is never applied automatically.
 
@@ -156,6 +174,19 @@ bash scripts/down.sh
 ```
 
 Use `bash scripts/down.sh -v` to also remove Postgres data and certificates.
+
+To undo what step 3 set up on this machine:
+
+```bash
+sudo rm /etc/systemd/resolved.conf.d/takos-local-substrate.conf
+sudo systemctl restart systemd-resolved
+sudo rm /usr/local/share/ca-certificates/takos-local-substrate-pebble.crt
+sudo update-ca-certificates
+certutil -d sql:$HOME/.pki/nssdb -D -n takos-local-substrate-pebble
+```
+
+If you use Firefox, run the same `certutil -D` against each of its profile
+directories.
 
 ## Next
 
