@@ -83,10 +83,11 @@ owner or admin of the Workspace can create or delete a dependency.
 
 ### Creating one
 
-1. Deploy the sending Capsule and check that it has the Output you want to pass. A `sensitive`
-   Output cannot be passed.
+1. Deploy the sending Capsule and check, in [its Outputs](#outputs-are-only-what-you-published),
+   that it has the Output you want to pass. A `sensitive` Output cannot be passed.
 2. In the receiving module, declare a `variable` for the value. Without the declaration, the
-   value is passed but not used.
+   value is passed but not used. Give a `default` to any variable you receive with
+   `required: false` (below). If no value is passed and there is no default, the review fails.
 
    ```hcl
    variable "base_domain" {
@@ -110,28 +111,43 @@ owner or admin of the Workspace can create or delete a dependency.
    ```
 
    `from` is the name of the sending Capsule's Output, and `to` is the name of the receiving
-   variable. `required` cannot be left out: write `true` or `false`. If a `true` value has not
-   been published by the sending side yet, the receiving review stops with
-   `dependency_outputs_unavailable`. With `false`, that value is simply not passed. On success
-   the response is `201` with the new `dependency.id`.
+   variable. `required` cannot be left out: write `true` or `false`. A `false` value is not
+   passed when the sending side does not have it. On success the response is `201` with the new
+   `dependency.id`.
 4. On the receiving Capsule, press **Review changes** under **Update service** on the
    **Updates** tab, check the review, and deploy. Creating the dependency alone does not change
    the receiving Capsule's status.
 
-Creating a dependency does not check that the sending Output exists. Creating the same
-connection twice is not rejected either, so list the dependencies first. A dependency that
-would form a cycle cannot be created.
+A missing `required`, empty `outputs`, or a dependency on itself is rejected with `400`. A cycle
+or a sending Capsule in another Workspace is rejected with `409`. Creating a dependency does not
+check that the sending Output exists, and creating the same connection twice is not rejected
+either, so list the dependencies first.
+
+If the sending side has not published a `required: true` value (it was never deployed, the
+Output does not exist, or it is `sensitive`), no review is created for the receiving Capsule and
+the screen says "Values from a connected service aren't available right now. Try again in a
+moment." (`dependency_outputs_unavailable`). Waiting does not help: fix and deploy the sending
+Capsule first.
 
 ### When the sending side changes
 
-When you deploy the sending Capsule and an Output passed to the receiving one changes value,
-the receiving Capsule shows **Update available** (only while it is **Deployed**). Takosumi does
-not create the review on its own. Press **Update** on the receiving Capsule to create a review
-with the new value.
+When you deploy the sending Capsule and any of its Outputs changes, every Capsule downstream of
+it shows **Update available**. This includes Outputs you do not pass, and Capsules that depend on
+it through a chain. Only **Deployed** Capsules change.
 
-For services added from the dashboard, if you deploy the sending Capsule after the receiving
-review was created, deploying the receiving Capsule stops with `dependency_snapshot_stale`. This
-happens even when the sending Outputs did not change. Create the receiving review again.
+Takosumi does not create the review on its own, even with automatic updates (`autoUpdate`) on.
+On the receiving Capsule, do one of these:
+
+- Press **Update**. It creates a review with the new values and, if the change is safe and needs
+  no approval, deploys it right away
+  ([Update to a new version](../getting-started/after-adding.md#update-to-a-new-version)).
+- To look first, press **Review changes** under **Update service** on the **Updates** tab.
+
+For a Capsule whose `environment` is `production` (services added from the dashboard are), if you
+deploy the sending Capsule after the receiving review was created, deploying the receiving
+Capsule stops with "A connected service was updated first. Review the changes again."
+(`dependency_snapshot_stale`). This happens even when the sending Outputs did not change, and the
+receiving Capsule's status does not change first. Create the receiving review again.
 
 ### Listing and deleting
 
