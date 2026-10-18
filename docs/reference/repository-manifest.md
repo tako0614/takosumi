@@ -266,32 +266,35 @@ lifecycle が行い、repository は grant を作れません。
 
 ## Authority と secret の境界
 
-manifest に置けるのは公開 proposal だけです。次を置くことはできません。
+manifest に書けるのは、公開してよい提案だけです。次のものは書けません。
 
-- Git URL、ref/tag/commit、SourceSnapshot、Store listing、provider/target/runner 選択。
-- credential/secret/token/password/key の値、credential reference、Principal ID、
-  account/workspace/capsule/resource/connection など host authority の ID。
-- arbitrary environment injection、plain `env` map、provider binding、Interface grant。
-- lifecycle command、migration、output allowlist、billing、policy、Plan/Run bypass。
+- Git URL、ref・tag・commit、SourceSnapshot、ストアの掲載項目、provider・配置先（target）・runner の選択
+- 認証情報・秘密・token・password・key の値、認証情報への参照、Principal の ID、account・workspace・
+  capsule・resource・connection など Takosumi 側が管理する ID
+- 任意の環境変数の注入、`env` の map、provider の割り当て（provider binding）、Interface の利用許可
+  （grant）
+- lifecycle のコマンド、移行（migration）、公開する Output の一覧（output allowlist）、課金、policy、
+  変更の確認やデプロイ（Plan / Run）を飛ばす指定
 
-`secret: true` や `secret.generated` は値ではなく host materialization の要求です。
-公開 presentation field（`label`、`helper`、`placeholder`、feature label）は
-`sk-…`、bearer/assignment、URI credential など既知の
-credential-like pattern を検査します。Interface `document` と literal は key/value を
-再帰検査し、secret-like material と authority ID を拒否します。普通の prose の
-「token」などはこの方針で過剰拒否しません。diagnostic は値を echo しません。これらの
-public JSON value は parser で recursive depth 32 に制限され、JSON Schema はこの
-parser-owned 制約を semantic constraint として記録します。
+`secret: true` や `secret.generated` は、値そのものではなく、Takosumi に秘密を用意して渡すよう求める
+指定です。公開される表示用の項目（`label`、`helper`、`placeholder`、feature の label）は、`sk-…`、
+bearer や代入の形、URI に埋め込んだ認証情報など、よく知られた認証情報らしい形を検査します。Interface の
+`document` と literal は、key と値を入れ子まで検査し、秘密らしい値と、Takosumi 側が管理する ID を拒否
+します。一方、表示用の文章の中で「token」などの語を使っても、それだけでは拒否しません。ただし、
+`Token abc123` のように、大文字で始まる `Token` や `Bearer` などのすぐ後に値を書く形は、文中のどこに
+あっても、認証情報らしい形として拒否することがあります。
+エラーの説明に値をそのまま書き出すことはありません。これらの公開 JSON の値の入れ子の深さは、Takosumi の
+解析処理（parser）が最大 32 に制限します。JSON Schema の形の検査では深さを表せないため、Schema の
+`x-takosumi-semanticConstraints` に、Takosumi が確かめる制約として記しています。
 
-base InstallConfig と operator policy は常に ceiling です。repository proposal は
-allowlist や authority を広げず、service/operator 宣言と衝突する proposal は
-上書きせず拒否されます。
-manifest digest、snapshot、selected module、compatibility report が一致しない場合は
-fail closed です。
+保存されている基本の設定（base InstallConfig）と運用している人の policy が、いつも上限です。リポジトリ
+の提案で許可の一覧や権限を広げることはできず、Takosumi 側や運用している人の宣言と衝突する提案は、
+上書きせずに拒否します。manifest の digest、snapshot、選んだ module、互換性の確認結果が一致しない
+ときは、先に進めずに止めます。
 
 ## 無効な例
 
-closed object に module 選択 field を足しても無効です。
+書ける項目が決まっている object に、module を選ぶ項目を足すと無効です。
 
 ```json
 {
@@ -304,7 +307,7 @@ closed object に module 選択 field を足しても無効です。
 }
 ```
 
-non-canonical module key も無効です。
+正規の形でない module の key も無効です。
 
 ```json
 {
@@ -316,7 +319,7 @@ non-canonical module key も無効です。
 }
 ```
 
-公開 document に secret/authority を埋め込めません。
+公開する document に、秘密や Takosumi 側が管理する ID を入れることはできません。
 
 ```json
 {
@@ -333,27 +336,25 @@ non-canonical module key も無効です。
 
 ## Migration と versioning
 
-version identifier は closed schema の識別子です。既存 version の field set や意味を
-後から広げません。v2.1〜v2.3 の公開済み `defaultModule` wire は互換 hint として保持します。
-v2.2 は provider-neutral な `interface.consume`、v2.3 は bounded credential-free
-`sourceBuild`、v2.4 は runtime OIDC binding delivery を持ちます。既存の module、
-provided Interface、authority semantics は変えません。未知 version/field は fail closed
-です。incompatible vocabulary や authority model の変更には別の schema identifier が
-必要です。
+`apiVersion` の値は、書ける項目が決まった schema を表します。既にある版の項目や意味を、後から広げる
+ことはありません。v2.1〜v2.3 で公開済みの `defaultModule` は、互換のための目安として残します。v2.2 は
+provider に依存しない `interface.consume`、v2.3 は上限があり認証情報を含まない `sourceBuild`、v2.4 は
+OIDC の値を実行時の binding で渡す方法を加えた版です。既存の module、提供する Interface、権限の意味は
+変えていません。知らない版や項目は受け付けません。互換のない語彙や権限の考え方の変更には、別の schema
+の識別子が必要です。
 
-将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は
-fail closed のままにします。
+将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は fail closed の
+ままにします（知らない項目は、今後も受け付けません）。
 
-- manifest の version にかかわらず、scan で1件だけ見つかった module は自動選択されます。
-- scan で複数 module が見つかった repository は利用者が exact path を選択します。
-- v2 の `interfaces` は v2.1 へ変更しても同じ形・意味で保持されます。
-- host Interface を利用する repository だけが v2.2 に上げ、
-  `interface.consume` を追加します。
-- SourceSnapshot の前処理を提案する repository は v2.3 に上げ、module ごとに
-  `sourceBuild` を追加します。
-- v1/v2 の文書に field だけ backport してはいけません。
+- manifest の版にかかわらず、Takosumi が調べた結果、module が 1 つだけ見つかれば、それが自動で
+  選ばれます。
+- module が複数見つかったリポジトリでは、利用者がフォルダを、その正確な path で選びます。
+- v2 の `interfaces` は、v2.1 に上げても同じ形と意味のまま使えます。
+- Takosumi 側の Interface を使うリポジトリだけが v2.2 に上げ、`interface.consume` を足します。
+- SourceSnapshot の前処理を提案するリポジトリは v2.3 に上げ、module ごとに `sourceBuild` を足します。
+- `apiVersion` を上げずに、後の版の項目を v1 や v2 の文書へ足してはいけません。
 
-Store はこの manifest を代理しません。TCS 2.0 との接続と handoff は
-[Store API](./store-api.md)を参照してください。repository install の入力は Git URL、ref、
-optional module path hint であり、module/provider 候補は exact SourceSnapshot の
-OpenTofu scan から得ます。
+ストアはこの manifest の代わりにはなりません。TCS 2.0 とのつなぎ方と handoff は
+[Store API](./store-api.md)にあります。リポジトリから追加するときの入力は Git URL、ref、任意の module
+のフォルダの目安で、module と provider の候補は、固定した SourceSnapshot の OpenTofu を調べた結果から
+得ます。
