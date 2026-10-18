@@ -72,8 +72,9 @@ within it.
 6. From the target account's session, POST `/{operationId}/consent` with `{consent:true}`. The
    source session gets `merge_conflict`. Merged login activates once every owner confirms
    custody. If the response's `status` is still `proved`, reconciliation is pending: retry with
-   POST `/{operationId}/activate`, or let the automatic retry finish it. `activate` is not bound
-   by the five-minute deadline.
+   POST `/{operationId}/activate` before the deadline. After the deadline, a manual `activate` is
+   refused with `context_plan_conflict`, and the automatic retry only marks the operation
+   `reviewed_recovery_required`; the merge does not complete.
 
 `GET /{operationId}` shows each leg's proof and acceptance state and the expiry.
 

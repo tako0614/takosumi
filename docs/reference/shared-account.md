@@ -67,8 +67,9 @@ issuer browser session と同じ browser の操作で
 6. target account の session で、`POST /{operationId}/consent` に `{consent:true}` を送ります。
    source の session では `merge_conflict` で拒否されます。全 owner の整合が確認されると、
    統合された login が有効になります。応答の `status` が `proved` のままなら整合は保留中で、
-   `POST /{operationId}/activate` でやり直します。自動の再試行で完了することもあります。
-   `activate` は 5 分の期限に縛られません。
+   期限内に `POST /{operationId}/activate` でやり直します。期限の後は、手動の `activate` は
+   `context_plan_conflict` で拒否され、自動の再試行は操作を `reviewed_recovery_required` に
+   移すだけで、統合は完了しません。
 
 `GET /{operationId}` で、各 leg の証明と承認の状態、期限を読めます。
 
