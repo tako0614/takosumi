@@ -4,7 +4,8 @@
 
 Takosumi is an open-source server that adds Git-hosted OpenTofu and Terraform
 software to the clouds you connect, much like installing an app. Before anything
-is added or updated, you can see what will be created and what will change.
+is added or updated, you can see how many resources will be created, changed,
+and deleted.
 
 Your modules and providers stay unchanged. There is no Takosumi-specific
 configuration language or first-party provider; Cloudflare, AWS, Kubernetes,

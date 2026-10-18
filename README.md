@@ -4,7 +4,7 @@ English: [README.en.md](README.en.md)
 
 Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ
 アプリのように追加して使うための、オープンソースの管理サーバーです。追加や更新の前に、
-作られるものと変わるものを確かめてからデプロイできます。
+作成・変更・削除されるリソースの数を確かめてからデプロイできます。
 
 使う module と provider はそのままで、Takosumi 専用の設定言語や first-party provider は
 ありません。Cloudflare、AWS、Kubernetes などは、それぞれの既存 provider が操作します。
