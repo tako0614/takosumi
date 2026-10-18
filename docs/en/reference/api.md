@@ -172,7 +172,8 @@ protocol and authority surfaces.
 
 The authoritative session-route inventory is
 `accounts/service/src/control-route-inventory.ts`; it currently contains 91
-public route descriptors, listed below. Each description is the inventory's own summary.
+public route descriptors, listed below. The descriptions follow the inventory's summaries,
+lightly edited for readers.
 
 **Account views**
 
@@ -188,7 +189,7 @@ public route descriptors, listed below. Each description is the inventory's own 
 | POST | `/api/v1/workspaces` | Create a Workspace |
 | GET | `/api/v1/workspaces/{workspaceId}` | Read a Workspace |
 | PATCH | `/api/v1/workspaces/{workspaceId}` | Update a Workspace |
-| DELETE | `/api/v1/workspaces/{workspaceId}` | Delete an empty Workspace as its owner; never destroys cloud resources (empty Workspace, owner only; 409 while Capsules, Sources, in-flight Runs, usage evidence, or retained backups remain; never destroys cloud resources) |
+| DELETE | `/api/v1/workspaces/{workspaceId}` | Delete an empty Workspace as its owner; never destroys cloud resources. Returns 409 while Capsules, Sources, in-flight Runs, usage evidence, or retained backups remain |
 | GET | `/api/v1/workspaces/{workspaceId}/members` | List Workspace members |
 | POST | `/api/v1/workspaces/{workspaceId}/members` | Add a Workspace member |
 | PATCH | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Change a Workspace member role |
@@ -196,10 +197,10 @@ public route descriptors, listed below. Each description is the inventory's own 
 | GET | `/api/v1/workspaces/{workspaceId}/graph` | Read the Workspace Capsule dependency graph |
 | GET | `/api/v1/workspaces/{workspaceId}/ui-surfaces` | List authorized Workspace UI surface Interfaces |
 | GET | `/api/v1/workspaces/{workspaceId}/activity` | List Workspace Activity |
-| GET | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | List value-free Interface materialization failures |
+| GET | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | List Interface materialization failures, which contain no secret values |
 | POST | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries` | Retry one exact Interface materialization failure |
 | GET | `/api/v1/workspaces/{workspaceId}/usage` | List Workspace usage |
-| GET | `/api/v1/workspaces/{workspaceId}/billing` | Read owner account billing state for a Workspace route |
+| GET | `/api/v1/workspaces/{workspaceId}/billing` | Read the owner's account billing state for this Workspace |
 | GET | `/api/v1/workspaces/{workspaceId}/backups` | List Workspace partial control exports |
 | POST | `/api/v1/workspaces/{workspaceId}/backups` | Create a Workspace partial control export |
 | POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Create a Workspace plan update Run |
@@ -214,9 +215,9 @@ public route descriptors, listed below. Each description is the inventory's own 
 | GET | `/api/v1/projects/{projectId}` | Read a Project |
 | GET | `/api/v1/workspaces/{workspaceId}/capsules` | List Workspace Capsules |
 | GET | `/api/v1/capsules/{capsuleId}` | Read a Capsule |
-| POST | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | Re-adopt and CAS-rebind one Capsule to its latest repository InstallConfig |
+| POST | `/api/v1/capsules/{capsuleId}/install-config-re-adoptions` | Re-adopt a Capsule to the latest InstallConfig in its repository, conditional on its current binding |
 | PATCH | `/api/v1/capsules/{capsuleId}` | Update a Capsule |
-| DELETE | `/api/v1/capsules/{capsuleId}` | Schedule Capsule deletion; immediate=true creates an owner-approved destroy plan (`?immediate=true` for an immediate destroy plan) |
+| DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
 | POST | `/api/v1/capsules/{capsuleId}/uninstall` | Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy |
 | POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall` | Cancel a scheduled uninstall during its grace period |
 | GET | `/api/v1/capsules/{capsuleId}/outputs` | Read the Capsule's current public Output projection |
@@ -231,7 +232,7 @@ public route descriptors, listed below. Each description is the inventory's own 
 | GET | `/api/v1/capsule-configs` | List Capsule creation configs visible to the caller |
 | GET | `/api/v1/capsule-configs/{capsuleConfigId}` | Read a Capsule creation config |
 | POST | `/api/v1/capsules/{capsuleId}/plan` | Create a Capsule plan Run |
-| POST | `/api/v1/capsules/{capsuleId}/configuration-plans` | Atomically adopt an immutable desired config/provider-binding successor and return a review-only OpenTofu Plan |
+| POST | `/api/v1/capsules/{capsuleId}/configuration-plans` | Adopt a new desired configuration and provider binding in one step, and return an OpenTofu Plan for review only |
 | POST | `/api/v1/capsules/{capsuleId}/destroy-plan` | Create a Capsule destroy plan Run |
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
@@ -244,8 +245,8 @@ public route descriptors, listed below. Each description is the inventory's own 
 | POST | `/api/v1/sources` | Create a Source |
 | GET | `/api/v1/sources/{sourceId}` | Read a Source |
 | PATCH | `/api/v1/sources/{sourceId}` | Update Source metadata |
-| DELETE | `/api/v1/sources/{sourceId}` | Delete an unreferenced Source and invalidate its webhook bearer (unreferenced Source only; 409 while tracked or in flight) |
-| POST | `/api/v1/sources/{sourceId}/hook-secret/rotate` | Rotate the webhook bearer immediately and return its replacement once; no request body or automatic retry |
+| DELETE | `/api/v1/sources/{sourceId}` | Delete an unreferenced Source and invalidate its webhook bearer. Returns 409 while it is tracked or has a Run in flight |
+| POST | `/api/v1/sources/{sourceId}/hook-secret/rotate` | Rotate the webhook bearer and return the new one once; the old bearer stops working immediately |
 | POST | `/api/v1/sources/{sourceId}/sync` | Create a Source sync Run (observe by default; manual_plan for an explicit reviewed update) |
 | GET | `/api/v1/sources/{sourceId}/snapshots` | List SourceSnapshots |
 | GET | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | List install module directories and provider requirements scanned from one SourceSnapshot tree |

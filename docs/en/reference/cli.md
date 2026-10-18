@@ -219,7 +219,8 @@ takosumi connections revoke conn_...
 
 Compatibility APIs are explicit operator-installed extension capabilities. A
 ProviderConnection created from the CLI also names its target provider explicitly with
-`--provider`; the CLI never infers one.
+`--provider`, as a fully-qualified source such as `registry.opentofu.org/example/example`;
+the CLI never infers one.
 
 ## Deployment secrets
 
