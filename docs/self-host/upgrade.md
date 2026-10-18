@@ -97,8 +97,8 @@ v4 を適用した後は、v3 だけを受け付ける Worker には戻せませ
 
 ## 廃止したテーブルに行が残っているとき
 
-以前の Resource Shape、Form Host、TargetPool、SpacePolicy、Offering、resolution lock、identity fence、
-idempotency の記録などを置いていたテーブルは、PostgreSQL の migration 110
+以前の Resource Shape、Form Host、TargetPool、SpacePolicy、Offering、resolution lock、identity fence の
+記録など（D1 では idempotency の記録も）を置いていたテーブルは、PostgreSQL の migration 110
 （`retired.host_schema.drop_empty`）と、Cloudflare の D1 の migration 66
 （`d1_retired_host_schema_drop_empty`）が削除します。次の 2 つのどちらかに当たると、アップグレードは
 その migration で止まります。エラーには、次の名前が含まれます（PostgreSQL では大文字、D1 では小文字）。

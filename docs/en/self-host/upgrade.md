@@ -103,7 +103,8 @@ for this order and its caveats.
 
 PostgreSQL migration 110 (`retired.host_schema.drop_empty`) and Cloudflare D1 migration 66
 (`d1_retired_host_schema_drop_empty`) drop the tables that held the former Resource Shape, Form Host,
-TargetPool, SpacePolicy, Offering, resolution lock, identity fence, idempotency, and similar records.
+TargetPool, SpacePolicy, Offering, resolution lock, identity fence, and similar records (and, on D1,
+idempotency records).
 The upgrade stops at that migration in either of two cases. The error contains one of these names
 (upper case in PostgreSQL, lower case in D1):
 
