@@ -26,8 +26,11 @@ export async function findActiveAccessToken(input: {
   readonly token: string;
   readonly now?: number;
   readonly interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
+  readonly assertActive?: () => void;
 }): Promise<TokenRecord | undefined> {
+  input.assertActive?.();
   const record = await input.store.findAccessToken(input.token);
+  input.assertActive?.();
   return await validateActiveAccessTokenRecord({ ...input, record });
 }
 
@@ -38,7 +41,9 @@ export async function validateActiveAccessTokenRecord(input: {
   readonly record: TokenRecord | undefined;
   readonly now?: number;
   readonly interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
+  readonly assertActive?: () => void;
 }): Promise<TokenRecord | undefined> {
+  input.assertActive?.();
   const { record } = input;
   const now = input.now ?? Date.now();
   const interfaceRuntime = record?.role === "interface-runtime";
@@ -72,6 +77,7 @@ export async function validateActiveAccessTokenRecord(input: {
     } catch {
       interfaceEvidenceCurrent = false;
     }
+    input.assertActive?.();
   }
   const active =
     record !== undefined &&
@@ -80,7 +86,11 @@ export async function validateActiveAccessTokenRecord(input: {
     interfaceEvidenceCurrent &&
     record.role !== "runtime";
   if (active) return record;
-  if (record) await input.store.deleteToken(input.token);
+  if (record) {
+    input.assertActive?.();
+    await input.store.deleteToken(input.token);
+    input.assertActive?.();
+  }
   return undefined;
 }
 

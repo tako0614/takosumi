@@ -139,8 +139,10 @@ import { matchAccountTokenRevokeRoute } from "./route-matchers.ts";
 import {
   type ControlPlaneOperations,
   handleControlRoute,
+  isRunGetReadRequest,
   isControlRoutePath,
 } from "./control-routes.ts";
+import { runGetWithinDeadline, type RunReadWaiter } from "./control/run-read-deadline.ts";
 import type {
   InterfaceOAuthActivityEvidence,
   InterfaceOAuthActivityValidator,
@@ -586,7 +588,11 @@ export function createAccountsHandler(
   const phaseDiagnostics = createRequestPhaseDiagnostics(
     options.requestPhaseDiagnostics ?? {},
   );
-  const inner = async (request: Request): Promise<Response> => {
+  const inner = async (
+    request: Request,
+    assertActive?: () => void,
+    withinRunReadDeadline?: RunReadWaiter,
+  ): Promise<Response> => {
     const url = new URL(request.url);
     const store = createRequestScopedAccountsStore(baseStore);
     const timings = serverTimingBucketForPath(url.pathname);
@@ -604,6 +610,7 @@ export function createAccountsHandler(
             credential: extractAccountSessionId(request),
             allowlist: loginEmailAllowlist,
             secureCookie: isProductionIssuer,
+            ...(assertActive ? { assertActive } : {}),
           }),
         ),
       );
@@ -971,6 +978,8 @@ export function createAccountsHandler(
             operations: options.controlPlaneOperations,
             resolveOperations: resolveControlPlaneOperations,
             diagnostics,
+            ...(assertActive ? { assertActive } : {}),
+            ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
           }),
       );
       if (controlResponse) return appendServerTiming(controlResponse, timings);
@@ -982,7 +991,9 @@ export function createAccountsHandler(
   const app = createAccountsHttpApp({
     discovery,
     jwks,
-    legacyFallback: (request) => inner(request),
+    legacyFallback: (request) => isRunGetReadRequest(request)
+      ? runGetWithinDeadline((assertActive, wait) => inner(request, assertActive, wait))
+      : inner(request),
   });
 
   // Keep the public fetch-function contract while making the Hono app the

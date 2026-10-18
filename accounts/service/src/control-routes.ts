@@ -31,6 +31,7 @@ import {
   type AccountsBearerRequiredScope,
 } from "./account-session.ts";
 import type { AccountsStore } from "./store.ts";
+import type { RunReadWaiter } from "./control/run-read-deadline.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import {
   type ControlDispatchContext,
@@ -178,6 +179,15 @@ export function isControlRoutePath(pathname: string): boolean {
   return isApiV1Path(pathname);
 }
 
+/** Match the same ordinary Run read accepted by dispatch, including slash normalization. */
+export function isRunGetReadRequest(request: Request): boolean {
+  if (request.method !== "GET") return false;
+  const pathname = new URL(request.url).pathname;
+  if (!isApiV1Path(pathname)) return false;
+  const segments = normalizeControlRouteSegments(pathname.slice(API_V1_PREFIX.length));
+  return segments[0] === "runs" && segments.length === 2;
+}
+
 interface ControlRouteContext {
   readonly diagnostics?: RequestPhaseObserver;
   readonly request: Request;
@@ -189,6 +199,8 @@ interface ControlRouteContext {
   >;
   readonly issuer?: string;
   readonly runStreamTiming?: RunStreamTiming;
+  readonly assertActive?: () => void;
+  readonly withinRunReadDeadline?: RunReadWaiter;
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -451,6 +463,7 @@ async function dispatchAuthenticatedControlRoute(
   timings: ServerTimingBucket,
 ): Promise<Response> {
   const { request, url } = context;
+  context.assertActive?.();
   const tail = url.pathname.slice(API_V1_PREFIX.length);
   const segments = normalizeControlRouteSegments(tail);
 
@@ -477,6 +490,7 @@ async function dispatchAuthenticatedControlRoute(
       timings,
       context.diagnostics,
     );
+    context.assertActive?.();
   }
   if (!operations)
     return appendServerTiming(controlPlaneUnavailable(), timings);
@@ -493,6 +507,8 @@ async function dispatchAuthenticatedControlRoute(
           store: context.store,
           ...(context.issuer ? { issuer: context.issuer } : {}),
           ...(context.runStreamTiming ? { runStreamTiming: context.runStreamTiming } : {}),
+          ...(context.assertActive ? { assertActive: context.assertActive } : {}),
+          ...(context.withinRunReadDeadline ? { withinRunReadDeadline: context.withinRunReadDeadline } : {}),
           session: context.session,
         }),
       ),
@@ -561,11 +577,13 @@ export async function handleControlRoute(
   // Workspace authorization is enforced per route below after the target Workspace is
   // known.
   const requiredAccess = controlRouteRequiredScope(request);
+  context.assertActive?.();
   const bearer = await measureRequestPhase(context.diagnostics, "control_auth", () =>
     measureServerTiming(timings, "tk_control_auth", () =>
-      requireAccountsBearer({ request, store, scope: requiredAccess }),
+      requireAccountsBearer({ request, store, scope: requiredAccess, assertActive: context.assertActive }),
     ),
   );
+  context.assertActive?.();
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 
   const initialAuth = bearer.auth;
@@ -651,9 +669,12 @@ interface DispatchInput {
   readonly issuer?: string;
   readonly session: ControlSession;
   readonly runStreamTiming?: RunStreamTiming;
+  readonly assertActive?: () => void;
+  readonly withinRunReadDeadline?: RunReadWaiter;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
+  input.assertActive?.();
   const rawSegments = normalizeControlRouteSegments(input.tail);
   if (RETIRED_PUBLIC_CONTROL_SEGMENTS.has(rawSegments[0] ?? "")) {
     return errorJson("not_found", "not found", 404);
@@ -670,6 +691,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       store: input.store,
       ...(input.issuer ? { issuer: input.issuer } : {}),
       ...(input.runStreamTiming ? { runStreamTiming: input.runStreamTiming } : {}),
+      ...(input.assertActive ? { assertActive: input.assertActive } : {}),
+      ...(input.withinRunReadDeadline ? { withinRunReadDeadline: input.withinRunReadDeadline } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

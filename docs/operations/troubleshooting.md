@@ -63,6 +63,16 @@ Run の実行時間と、Run を読む HTTP GET の応答時間は分けて調�
 `GET /api/v1/runs/:runId` は Accounts の認証、Control の Run 読み取り、
 Workspace 認可を通ります。runner / coordinator の完了待ちとは別の経路です。
 
+通常の Accounts 経由の exact Run GET は、login allowlist と bearer 認証の開始前から
+Run projection の完了まで、同じ 5 秒の request-local 予算を使います。期限を過ぎると
+`503 feature_unavailable` / `Cache-Control: no-store` を返し、遅れて完了した認証や
+SELECT から新たな認可・dispatch・cleanup / usage 更新を始めません。既に発行した
+D1 操作を取消・rollback する保証ではありません。Accounts の初期化待ちは既存の
+別予算で、shared Accounts RPC の認証はこの予算の対象外です。Run handler の
+直接呼出しは従来の 5 秒 fallback を持ちます。この境界の修正だけでは、issue #444
+の元の約 120 秒の停止原因や
+authenticated staging E2E の成功を示せません。
+
 `probe:request-latency` は、固定の staging origin または HTTP loopback fixture に
 対する、期限付きの読み取り専用 GET probe です。終了済み Plan の Run ID など、
 調査対象を一つ選びます。token は argv や環境変数で渡さず、owner と一致する

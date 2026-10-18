@@ -353,9 +353,12 @@ export async function requireAccountsBearer(input: {
   request: Request;
   store: AccountsStore;
   scope: AccountsBearerRequiredScope;
+  readonly assertActive?: () => void;
 }): Promise<
   { ok: true; auth: AccountsBearerSubject } | { ok: false; response: Response }
 > {
+  const assertActive = input.assertActive;
+  assertActive?.();
   // Non-session credentials arrive in the Authorization header. Sessions may
   // also arrive in that header, the explicit session header, or the HttpOnly
   // cookie. An explicit header always wins over a cookie so a stale browser
@@ -377,6 +380,7 @@ export async function requireAccountsBearer(input: {
   const resolved = input.store.resolveAccountsBearerCandidates
     ? await input.store.resolveAccountsBearerCandidates(token)
     : undefined;
+  assertActive?.();
   const bearerCandidates = resolved
     ? ([
         resolved.session,
@@ -385,29 +389,45 @@ export async function requireAccountsBearer(input: {
           token,
           record: resolved.accessToken,
           now,
+          ...(assertActive ? { assertActive } : {}),
         }),
         resolved.personalAccessToken,
       ] as const)
     : await Promise.all([
         input.store.findAccountSession(token),
-        findActiveAccessToken({ store: input.store, token, now }),
+        findActiveAccessToken({ store: input.store, token, now, ...(assertActive ? { assertActive } : {}) }),
         input.store.findPersonalAccessToken(token),
       ]);
+  assertActive?.();
   const [sessionRecord, accessRecord, personalAccessTokenRecord] =
     bearerCandidates;
 
   let sessionSubject: TakosumiSubject | undefined;
   if (sessionRecord) {
     if (sessionRecord.expiresAt <= now || (sessionRecord.policy === "hosted" && (!sessionRecord.absoluteExpiresAt || sessionRecord.absoluteExpiresAt <= now || !Number.isSafeInteger(sessionRecord.authTime)))) {
+      assertActive?.();
       await input.store.deleteAccountSession(token);
+      assertActive?.();
     } else {
       const account = resolved
         ? resolved.sessionAccount
         : await input.store.findAccount(sessionRecord.subject);
-      if (account && (sessionRecord.policy !== "hosted" || (await hostedSessionIsCurrent(input.store,sessionRecord,now) && input.store.touchHostedAccountSession && await input.store.touchHostedAccountSession(token,now,Math.min(now+HOSTED_SESSION_IDLE_MS,sessionRecord.absoluteExpiresAt!))))) {
+      assertActive?.();
+      let current = Boolean(account) && sessionRecord.policy !== "hosted";
+      if (account && sessionRecord.policy === "hosted" &&
+        await hostedSessionIsCurrent(input.store, sessionRecord, now, assertActive)) {
+        assertActive?.();
+        if (input.store.touchHostedAccountSession) {
+          current = await input.store.touchHostedAccountSession(token, now, Math.min(now + HOSTED_SESSION_IDLE_MS, sessionRecord.absoluteExpiresAt!));
+          assertActive?.();
+        }
+      }
+      if (current) {
         sessionSubject = sessionRecord.subject;
       } else {
+        assertActive?.();
         await input.store.deleteAccountSession(token);
+        assertActive?.();
       }
     }
   }
@@ -464,6 +484,8 @@ export async function requireAccountsBearer(input: {
         ),
       };
     }
+    const tokenHash = await sha256Text(token);
+    assertActive?.();
     return {
       ok: true,
       auth: {
@@ -472,7 +494,7 @@ export async function requireAccountsBearer(input: {
           subject: takosumiSubject,
           grant: {
             kind: "oauth-access-token",
-            tokenHash: await sha256Text(token),
+            tokenHash,
           },
         },
         principalSubject: record.subject,
@@ -506,10 +528,12 @@ export async function requireAccountsBearer(input: {
       ),
     };
   }
+  assertActive?.();
   await input.store.recordPersonalAccessTokenUsed(
     activePersonalAccessTokenRecord.tokenId,
     now,
   );
+  assertActive?.();
   return {
     ok: true,
     auth: {
@@ -603,14 +627,25 @@ export async function handleHostedGlobalLogout(input: {
   } });
 }
 
-async function hostedSessionIsCurrent(store: AccountsStore, session: AccountSessionRecord, now: number): Promise<boolean> {
+async function hostedSessionIsCurrent(store: AccountsStore, session: AccountSessionRecord, now: number, assertActive?: () => void): Promise<boolean> {
+  assertActive?.();
   if (!store.getAccountAuthenticationGeneration || !store.findCanonicalAccount || !store.isAccountAuthenticationFenced ||
     !Number.isSafeInteger(session.authTime) || session.authTime! < 0 || session.authTime! > Math.floor(now/1000)+60 ||
-    !session.absoluteExpiresAt || session.absoluteExpiresAt > session.createdAt+HOSTED_SESSION_ABSOLUTE_MS || session.expiresAt > session.absoluteExpiresAt ||
-    (session.identityGeneration ?? 0) !== await store.getAccountAuthenticationGeneration(session.subject) || await store.isAccountAuthenticationFenced(session.subject)) return false;
+    !session.absoluteExpiresAt || session.absoluteExpiresAt > session.createdAt+HOSTED_SESSION_ABSOLUTE_MS || session.expiresAt > session.absoluteExpiresAt) return false;
+  const generation = await store.getAccountAuthenticationGeneration(session.subject);
+  assertActive?.();
+  if ((session.identityGeneration ?? 0) !== generation) return false;
+  const fenced = await store.isAccountAuthenticationFenced(session.subject);
+  assertActive?.();
+  if (fenced) return false;
   const issuerSessionId = session.issuerSessionId ?? await hostedIssuerSessionId(session.sessionId);
-  if (!/^sha256:[A-Za-z0-9_-]{43}$/u.test(issuerSessionId) || !store.isHostedOidcSessionRevoked || await store.isHostedOidcSessionRevoked(issuerSessionId)) return false;
+  assertActive?.();
+  if (!/^sha256:[A-Za-z0-9_-]{43}$/u.test(issuerSessionId) || !store.isHostedOidcSessionRevoked) return false;
+  const revoked = await store.isHostedOidcSessionRevoked(issuerSessionId);
+  assertActive?.();
+  if (revoked) return false;
   const account = await store.findCanonicalAccount(session.subject);
+  assertActive?.();
   return account?.subject === session.subject;
 }
 

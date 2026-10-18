@@ -40,6 +40,7 @@ import type {
 } from "takosumi-contract/capsules";
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
+import type { RunReadWaiter } from "./run-read-deadline.ts";
 import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
 import {
   bearerWorkspaceAllows,
@@ -158,6 +159,9 @@ export interface ControlDispatchContext {
   readonly session: ControlSession;
   /** Injectable request-local clock for deterministic stream tests. */
   readonly runStreamTiming?: RunStreamTiming;
+  /** Stops new work after the enclosing ordinary Run GET read budget expires. */
+  readonly assertActive?: () => void;
+  readonly withinRunReadDeadline?: RunReadWaiter;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
