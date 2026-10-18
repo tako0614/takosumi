@@ -122,7 +122,7 @@ the add screen opens with an empty source. **No error is shown.**
 - Only one of `product` and `return_uri`, or values that break the
   [App Handoff](../reference/app-handoff.md#product-key-and-return-uri-rules) rules
 
-A link with neither `git` nor `source` opens the **Find a service** screen instead of the add
+A link with neither `git` nor `source` opens the store list instead of a filled-in add
 screen.
 
 ## Check before you share

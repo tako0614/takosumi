@@ -119,7 +119,7 @@ https://takosumi.example.com/install?source=git::https://github.com/acme/notes.g
 - `product` と `return_uri` の片方だけがある、または
   [App Handoff](../reference/app-handoff.md#product-key-と-return-uri-の規則) の規則に合わない
 
-`git` も `source` も無いリンクは、追加画面ではなく **サービスを探す** の画面を開きます。
+`git` も `source` も無いリンクは、取得元を入れた追加画面ではなく、ストアの一覧を開きます。
 
 ## 配る前に確かめる
 
