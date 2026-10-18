@@ -187,7 +187,9 @@ export default function InstallExecution(props: Props) {
     });
     const timer = globalThis.setInterval(() => {
       const latest = runLatest();
-      if (installRunNeedsFallbackRead(latest)) {
+      // A pending fallback read already has its own deadline. Keep one read
+      // in flight so later ticks cannot replace its eventual result/error.
+      if (!run.loading && installRunNeedsFallbackRead(latest)) {
         void refetch();
       }
     }, 3_000);
