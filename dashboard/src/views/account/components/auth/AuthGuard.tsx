@@ -64,7 +64,11 @@ export default function AuthGuard(props: Props) {
     const target = preserveReturn
       ? "/sign-in?return=" + encodeURIComponent(loc.pathname + loc.search)
       : "/sign-in";
-    nav(target, { replace: true });
+    // A pending install must reach the owning server's login route; SPA
+    // navigation would render the legacy sign-in screen instead. Keep the
+    // explicit sign-out path local so it cannot start another issuer login.
+    if (preserveReturn) window.location.assign(target);
+    else nav(target, { replace: true });
   };
 
   const applyState = (

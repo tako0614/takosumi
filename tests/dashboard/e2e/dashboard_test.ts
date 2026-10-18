@@ -21,6 +21,7 @@ import {
 } from "./traffic-policy.ts";
 import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import { assertExpectedResponseUrl } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
+import { registerInstallAuthReturnCase } from "./install_auth_return_case.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -36,6 +37,7 @@ if (rawMode !== "portable" && rawMode !== "live" && rawMode !== "public-live") {
   );
 }
 const mode: DashboardE2EMode = rawMode;
+registerInstallAuthReturnCase(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
