@@ -40,7 +40,8 @@ Pick the entry point that matches what you want to do.
   [Run only the API](./getting-started/api-only.md).
 - **Run it in your own environment** — choose a shape in
   [Running it yourself](./concepts/self-host.md). The Cloudflare template includes
-  a runner; the Bun + PostgreSQL template needs a separately composed runner for
+  a runner, but apply and destroy need digests from the release tool
+  ([About apply and destroy](./concepts/self-host.md#about-apply-and-destroy)); the Bun + PostgreSQL template needs a separately composed runner for
   plan and apply. The software has no fee; you pay for where it runs and for the
   resources the apps create ([Costs](./concepts/self-host.md#costs)).
 - **Run only the API** — for checking the API during development, start an

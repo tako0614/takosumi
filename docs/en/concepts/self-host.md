@@ -12,7 +12,7 @@ things.
 
 | Shape and template | Plan and apply | Where it runs | Where state lives |
 | --- | --- | --- | --- |
-| **Cloudflare**<br>`deploy/platform/` | Yes (a Cloudflare Container runner) | Cloudflare Workers | D1 / R2 / Durable Objects |
+| **Cloudflare**<br>`deploy/platform/` | Plan, yes. Apply and destroy need digests from the release tool ([below](#about-apply-and-destroy)) | Cloudflare Workers | D1 / R2 / Durable Objects |
 | **Bun and PostgreSQL**<br>`deploy/node-postgres/` | Only once you compose in a runner | A VM or a container | PostgreSQL |
 | **Local only**<br>`deploy/local-substrate/` | Yes, with `--profile postgres` (a bundled runner container) | Your own Linux and Docker | Compose volumes |
 
@@ -61,7 +61,7 @@ resources that the apps you add create.
 What you need:
 
 - A Cloudflare account on the Workers Paid plan. The runner uses Cloudflare Containers,
-  which the Free plan does not offer. Sign in with `bunx wrangler login`.
+  which the Free plan does not offer.
 - R2 enabled on the account. Even within the free tier, you cannot create buckets until
   you complete the one-time R2 purchase step in the Cloudflare dashboard.
 - A domain whose DNS Cloudflare manages. The `routes` hostname is registered as a custom
@@ -89,62 +89,78 @@ uses neither Cloudflare Queue nor a dead-letter queue for failed work.
 `RUN_OWNER` handles retries and final failure, and if its binding is missing, Runs are
 not sent to execution (fail closed).
 
-Create the resources first. The names match the template.
+Install the wrangler version this repository pins, and sign in. The `bun run wrangler`
+commands below use that version.
 
 ```bash
-bunx wrangler d1 create takosumi-accounts
-bunx wrangler d1 create takosumi-deploy
-bunx wrangler r2 bucket create takos-artifacts
-bunx wrangler r2 bucket create takosumi-source
-bunx wrangler r2 bucket create takosumi-state
-bunx wrangler r2 bucket create takosumi-backups
+bun install
+bun run wrangler -- login
 ```
 
-Copy `wrangler.toml` for your own use. What you rewrite is `database_id`, the `pattern`
-under `routes`, and `TAKOSUMI_ACCOUNTS_ISSUER` under `[vars]`. The issuer is exactly the
-origin that serves the dashboard. The published template is a reference with placeholder IDs;
-fill in your own values and keep the working copy somewhere you do not publish.
-The template already sets `TAKOSUMI_ENVIRONMENT = "production"` under `[vars]`. When that
-value is `production` or `staging`, the checks on encryption keys and persistent stores
-become fail-closed. What each value means is collected in the
-[configuration reference](/en/reference/configuration).
+Create the resources. The names match the template.
 
-The reference template assumes that the release tool injects `main` and `[assets] directory`,
-so it does not contain them. If you deploy your copy directly with `wrangler deploy`, add `main`
-for your Worker entrypoint and `directory` under `[assets]` for the dashboard build output
-before deploying. If you use your own Worker script, point `main` at that script.
+```bash
+bun run wrangler -- d1 create takosumi-accounts
+bun run wrangler -- d1 create takosumi-deploy
+bun run wrangler -- r2 bucket create takos-artifacts
+bun run wrangler -- r2 bucket create takosumi-source
+bun run wrangler -- r2 bucket create takosumi-state
+bun run wrangler -- r2 bucket create takosumi-backups
+```
+
+### Make your own config
+
+Do not edit the template `deploy/platform/wrangler.toml`; copy it outside the checkout.
+`takosumi accounts migrate-d1`, used below, runs only on a checkout with no changes.
+
+```bash
+install -d -m 700 "$HOME/.takosumi-private"
+cp deploy/platform/wrangler.toml "$HOME/.takosumi-private/wrangler.toml"
+```
+
+In the copy, rewrite the following. `<checkout>` is the absolute path of this repository. The
+template's relative paths resolve from the config file's location, so use absolute paths in
+the copy.
+
+| Item | Value |
+| --- | --- |
+| Both `database_id` entries | The IDs that `d1 create` printed |
+| `pattern` under `[[routes]]` | The hostname you publish |
+| `TAKOSUMI_ACCOUNTS_ISSUER` under `[vars]` | The origin that serves the dashboard (starting with `https://`) |
+| `main` (add at the top) | `"<checkout>/deploy/platform/entry-worker.ts"` |
+| `directory` under `[assets]` (add) | `"<checkout>/dashboard/dist"` |
+| `image` and `image_build_context` under `[[containers]]` | `"<checkout>/runner/Dockerfile"` and `"<checkout>"` |
+| `TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE` under `[vars]` (add) | `"predeployed"`. The CLI below installs the Accounts D1 schema; the Worker does not create it |
+| `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS` under `[vars]` (add) | The upstream identity provider used for sign-in (a JSON array) |
+
+This config holds values from your environment, so keep it somewhere private. The template's
+`[vars]` already sets `TAKOSUMI_ENVIRONMENT = "production"`. When the value is `production`
+or `staging`, the service refuses to start, rather than warning, if the encryption keys and
+durable stores fail their checks (fail closed). The
+[configuration reference](../reference/configuration.md) explains each value.
+
+The first account is created by signing in through the upstream identity provider. A passkey
+is something you add to an account after signing in. The
+[configuration reference](../reference/configuration.md) shows how to write
+`TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`. The provider's client secret and
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` go with the secrets below. On Cloudflare, a broken setting
+here leaves no way to sign in and logs `auth_providers_upstream_oauth_disabled`.
 
 Build the dashboard. `ASSETS` serves this output. The dashboard is not part of the root
 workspace, so `build:dashboard` installs its dependencies from the dashboard's own lockfile
 before building.
 
 ```bash
-bun install
 bun run build:dashboard
 ```
 
-Load the secrets. Keep them out of `wrangler.toml` and push them in with
-`wrangler secret put`.
+### Install the Accounts D1 schema
 
-```bash
-bunx wrangler secret put TAKOSUMI_ACCOUNT_SESSION_HASH_SALT \
-  --config deploy/platform/wrangler.toml
-```
-
-Four more go in the same way. `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and
-`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` cover OIDC signing.
-`TAKOSUMI_SECRET_STORE_PASSPHRASE` is the sealing key for credentials and state, and
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` is the bearer for the operator-only API.
-
-Apply the Accounts D1 schema with the `takosumi` CLI from a checkout;
+Apply the Accounts D1 schema with the `takosumi` CLI from the checkout, before the deploy;
 [CLI](../reference/cli.md) shows how to set it up. Until the Accounts D1 is at a version it
 accepts, the Worker does not handle requests and logs `accounts_d1_schema_incompatible`.
-
-For a new installation, do this before the Worker receives its first request, that is,
-before `wrangler deploy`. In the default `bootstrap` mode, the Worker's first request
-creates tables with no version record. If you apply the schema with the CLI, adding
-`TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE = "predeployed"` under `[vars]` makes the Worker issue no
-DDL to the Accounts D1 and only check the version.
+Because the table above sets `predeployed`, the Worker issues no DDL to the Accounts D1 and
+only checks the version.
 
 Set these environment variables:
 
@@ -164,13 +180,12 @@ each time; the CLI stops if the file already exists.
 ```bash
 # 1. Record the state before applying. Writes the Time Travel bookmark to a private
 #    file and prints backupEvidenceDigest.
-install -d -m 700 "$HOME/.takosumi-private"
 takosumi accounts migrate-d1 backup-status \
   --environment production \
   --account-id "$CLOUDFLARE_ACCOUNT_ID" \
   --database-id "$CLOUDFLARE_DATABASE_ID" \
   --source-commit "$SOURCE_COMMIT" \
-  --out "$HOME/.takosumi-private/accounts-d1-backup.json"
+  --out "$HOME/.takosumi-private/accounts-d1-backup-$(date +%Y%m%d%H%M%S).json"
 # 2. See what will be applied. Makes no remote call.
 takosumi accounts migrate-d1 plan \
   --environment production \
@@ -178,7 +193,8 @@ takosumi accounts migrate-d1 plan \
   --database-id "$CLOUDFLARE_DATABASE_ID" \
   --source-commit "$SOURCE_COMMIT" \
   --backup-evidence-digest "$BACKUP_EVIDENCE_DIGEST"
-# 3. Check the four digests plan printed, then apply (... takes the same options as plan).
+# 3. Check the four digests plan printed, then apply
+#    (... stands for every option you gave plan).
 takosumi accounts migrate-d1 apply ... \
   --confirm-source-digest "$SOURCE_DIGEST" \
   --confirm-catalog-digest "$CATALOG_DIGEST" \
@@ -200,11 +216,41 @@ The control plane D1 needs no migrations. While `TAKOSUMI_CONTROL_D1_SCHEMA_MODE
 its default of `bootstrap`, the schema settles on the first request. To run against a
 schema you prepared in advance, set it to `predeployed`.
 
-Deploy last.
+### Deploy with the secrets
+
+wrangler prefers a `CLOUDFLARE_API_TOKEN` in the environment over `wrangler login`. Unset it
+first so the deploy does not run with a token that only has D1 permission.
+
+`wrangler secret put` cannot set secrets before the Worker exists. Put the secrets in a
+private JSON file and send them with the first deploy. They are
+`TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`, `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`,
+`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`, `TAKOSUMI_SECRET_STORE_PASSPHRASE` (the
+sealing key for credentials and state), `TAKOSUMI_DEPLOY_CONTROL_TOKEN` (the bearer for the
+operator-only API), the upstream identity provider's client secret, and
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET`. Generate the values as in
+[Putting it on Bun and PostgreSQL](#putting-it-on-bun-and-postgresql).
 
 ```bash
-bunx wrangler deploy --config deploy/platform/wrangler.toml
+unset CLOUDFLARE_API_TOKEN
+# Write $HOME/.takosumi-private/secrets.json as {"NAME": "value", ...}
+chmod 600 "$HOME/.takosumi-private/secrets.json"
+bun run wrangler -- deploy \
+  --config "$HOME/.takosumi-private/wrangler.toml" \
+  --secrets-file "$HOME/.takosumi-private/secrets.json"
 ```
+
+Secrets sent with `--secrets-file` are not removed when a later deploy leaves them out of the
+file. After the deploy, treat secrets.json like any other secret; if you keep it, keep it
+somewhere private.
+
+### About apply and destroy
+
+A Worker set up this way can create reviews (plan), but apply and destroy stop. They need
+three digests that identify the running artifacts (`TAKOSUMI_CONTROLLER_ARTIFACT_DIGEST`,
+`TAKOSUMI_RUNNER_ARTIFACT_DIGEST`, and `TAKOSUMI_EXECUTOR_ARTIFACT_DIGEST`). Today only the
+Takosumi release tool produces them, and there is no self-host procedure for them yet. A
+Worker without them stops apply and destroy Runs with `execution_evidence_authority_unavailable`
+and changes nothing.
 
 ## Putting it on Bun and PostgreSQL
 
@@ -406,7 +452,8 @@ curl -s -H "authorization: Bearer $TAKOSUMI_READ_TOKEN" \
 
 Finally, deploy something once on a composition that includes a runner. Put a Git URL into `/new` in the dashboard, create a plan,
 read it, and apply. A successful Run that leaves a StateVersion and Outputs behind means
-the runner and the state backend work too. `examples/opentofu-basic` needs no provider
+the runner and the state backend work too. On Cloudflare without the three digests, check up
+to creating the plan, as described in [About apply and destroy](#about-apply-and-destroy). `examples/opentofu-basic` needs no provider
 credentials and is a good fit for this check.
 
 ## What to decide next

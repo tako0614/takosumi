@@ -42,8 +42,9 @@ and other systems are still managed by their existing providers.
   so you need no cloud credentials.
 - **Run it in your own environment** — choose a shape in
   [Running it yourself](docs/en/concepts/self-host.md). The Cloudflare template
-  includes a runner; the Bun + PostgreSQL template needs a separately composed
-  runner for plan and apply.
+  includes a runner, but apply and destroy need digests from the release tool;
+  the Bun + PostgreSQL template needs a separately composed runner for plan and
+  apply.
 - **Run only the API** — for checking the API during development, start an
   in-memory API server with only Bun and Git by following
   [Run only the API](docs/en/getting-started/api-only.md).

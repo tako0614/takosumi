@@ -32,7 +32,9 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   作らないため、クラウドの認証情報は要りません。macOS では、[API だけ動かす](./getting-started/api-only.md)
   で API を確かめられます。
 - **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で構成を選びます。
-  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
+  Cloudflare の雛形は runner を含みますが、apply と destroy には release tool が作る digest が
+  要ります（[apply と destroy について](./concepts/self-host.md#apply-と-destroy-について)）。
+  Bun と PostgreSQL の雛形で plan と apply を
   実行するには、runner を別に組み込みます。ソフトウェアの利用料はなく、置き場所とアプリが
   作るリソースの料金がかかります（[費用](./concepts/self-host.md#費用)）。
 - **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](./getting-started/api-only.md)
