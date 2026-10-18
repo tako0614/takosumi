@@ -1,3 +1,7 @@
+---
+outline: [2, 3]
+---
+
 # Takosumi API
 
 Takosumi API は、Git を正とする OpenTofu / Terraform control plane、provider 接続、Run、
@@ -14,6 +18,11 @@ provider です。その他の API / instance lifecycle は、それを提供す
    読むだけなら **読み取り**、変更もするなら **読み取り** と **書き込み** を選びます。
    次の例で使える Workspace をすべて読むため、**現在のワークスペースだけで使用できるように
    する** はオフにします。オンのままだと、そのワークスペースだけが返ります。
+
+   サーバーの設定にも同じ名前の `TAKOSUMI_DEPLOY_CONTROL_TOKEN` がありますが、そちらはすべての
+   Workspace に作用する operator 用の秘密です。**利用者には渡さず、ふつうの CLI や API の呼び出しにも
+   使わないでください。** 使うのは、operator のマシンで `takosumi connections` のような operator 専用の
+   操作をするときだけです。
 2. 使える Workspace を読みます。`TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard に
    サインインしている origin を入れます。API の path は、その origin の `/api/v1/...` です。
 
@@ -202,7 +211,7 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
 次の 91 件です。
 
-**Account views**
+### Account views
 
 | メソッド | パス                          | 説明                                                      |
 | -------- | ----------------------------- | --------------------------------------------------------- |
@@ -215,7 +224,7 @@ active membership を `created_asc` で返し、archived Workspace も含めま�
 `cursor` だけを受け付けます。レスポンスの `total` は cursor 適用前の全 active
 membership 行数です。Workspace-scoped credential では利用できません。
 
-**Workspace**
+### Workspace
 
 | メソッド | パス                                                 | 説明                                    |
 | -------- | ---------------------------------------------------- | --------------------------------------- |
@@ -248,7 +257,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 クラウド資源の destroy は行いません。削除は空チェックと一体の原子操作で行い、
 member 行は同時に削除します。削除後の読み取りは 404 です。
 
-**Project と Capsule**
+### Project と Capsule
 
 | メソッド | パス                                                       | 説明                                         |
 | -------- | ---------------------------------------------------------- | -------------------------------------------- |
@@ -274,7 +283,8 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
 
-Capsule の削除 API は Workspace owner/admin と `capsules:write` scope を要求します。
+Capsule の削除 API は Workspace owner/admin と書き込みの scope（API キーでは `write` か `admin`、
+OAuth では `capsules:write`）を要求します。
 `DELETE /api/v1/capsules/{capsuleId}` は既定でデプロイ済みの Capsule の削除を予約し、`202`
 `{capsule,graceDays}` を返します。猶予期間は operator 設定
 `TAKOSUMI_UNINSTALL_GRACE_DAYS`（OSS 既定 7 日）で、予約中は
@@ -321,7 +331,7 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
 
-**Source**
+### Source
 
 | メソッド | パス                                                                     | 説明                                                              |
 | -------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------- |
@@ -348,7 +358,7 @@ source_referenced_by_capsule`、進行中 Run があると `409
 source_has_in_flight_run` で拒否します。削除後は webhook bearer が無効になり、
 読み取りは 404、value-free の `source.deleted` が Activity に 1 件記録されます。
 
-**Git install plan**
+### Git install plan
 
 | メソッド | パス                                              | 説明                                      |
 | -------- | ------------------------------------------------- | ----------------------------------------- |
@@ -439,7 +449,7 @@ tuple と完全一致しなければならず、`connectionId` は既存 Connect
 を exact id で固定します。Dashboard と smoke はこの create-only coordinator を使い、先に
 Capsule を作って public binding PUT で補完することはありません。
 
-**Git revision plan**
+### Git revision plan
 
 | メソッド | パス                                                | 説明                                                 |
 | -------- | --------------------------------------------------- | ---------------------------------------------------- |
@@ -463,7 +473,7 @@ StateVersion が参照する Plan Run の SourceSnapshot が Capsule の追跡�
 `adoptedSourceRevision: { sourceSnapshotId, ref, path, resolvedCommit }` として返します。
 初回 apply 前はこの field はありません。
 
-**Capsule InstallConfig の再採用**
+### Capsule InstallConfig の再採用
 
 `GET /api/v1/capsules/{capsuleId}` は、認証済み caller が読める opaque
 `installConfigReAdoption.authorityGuard` を返します。これは private な
@@ -554,7 +564,7 @@ InstallConfig を読む fresh Plan とその successful Apply だけが Capsule 
 この epoch は Capsule OIDC activation authority にも含まれるため、再採用前の old/orphan
 Apply が新しい InstallConfig を認可することはありません。
 
-**Run と StateVersion**
+### Run と StateVersion
 
 | メソッド | パス                                                    | 説明                            |
 | -------- | ------------------------------------------------------- | ------------------------------- |
@@ -571,7 +581,7 @@ Apply が新しい InstallConfig を認可することはありません。
 | GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
 | POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |
 
-**認証情報と Output の共有**
+### 認証情報と Output の共有
 
 | メソッド | パス                                            | 説明                                               |
 | -------- | ----------------------------------------------- | -------------------------------------------------- |
@@ -591,7 +601,7 @@ Apply が新しい InstallConfig を認可することはありません。
 Connection の作成は `POST /api/v1/connections` です。`/api/v1/provider-connections`
 は読み取り専用で、失効は `POST /api/v1/connections/{connectionId}/revoke` です。
 
-**dashboard 用の投影**
+### dashboard 用の投影
 
 | メソッド | パス                          | 説明                                     |
 | -------- | ----------------------------- | ---------------------------------------- |
@@ -652,8 +662,10 @@ Run には次を保存します。
 を有効にすると、scheduler または source webhook は Source の既定 ref/path に加え、
 その Source を使う各 Capsule が apply 済み StateVersion で採用した ref/path を同期します。
 解決された commit は `SourceSnapshot` として保存されます。同じ ref/path lane を採用している
-active Capsule の現在 snapshot と新しい commit が異なるときだけ、Capsule は `stale`
-になります。別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。
+active Capsule の現在 snapshot と新しい commit が異なると、Capsule は `stale` になります。
+別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。依存先の Capsule の
+Output が変わったときも、active な Capsule は `stale` になります
+（[値を別の Capsule に渡す](../concepts/state-and-outputs.md#値を別の-capsule-に渡す)）。
 通常の update plan も採用済み lane の最新 snapshot を使います。そこからは既存の
 Workspace update / RunGroup が reviewable plan を作り、
 apply は通常の Run approval に従います。app artifact をどこから取るかは、あくまで

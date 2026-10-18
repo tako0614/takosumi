@@ -24,8 +24,10 @@ plane, the dashboard, and the runner all sit in one Worker.
 **Bun and PostgreSQL** suits you when it should live on your own infrastructure. You need
 a host running Docker, PostgreSQL, and Caddy to terminate TLS. The bundled
 `docker-compose.yml` brings up PostgreSQL, the migrations, the service itself, and Caddy
-together. It does not include an OpenTofu runner, so plan and apply need a runner composed
-in separately.
+together. It does not include an OpenTofu runner or its artifact store. Control and
+pre-destroy exports are stored in the `takosumi-runtime` volume. You can use it to check
+Accounts, the control plane, and the dashboard, but Git sync, plan, and apply fail with
+`runner_capability_missing`. For plan and apply, compose a runner and its store yourself.
 
 **Local only** is for exercising the whole thing without exposing anything. You need
 Linux, Docker, Bun, and `sudo` to set up certificates and DNS. Pebble for ACME, CoreDNS,

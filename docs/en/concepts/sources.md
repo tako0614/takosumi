@@ -30,7 +30,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `defaultRef`       | Git `HEAD`   | The branch, tag, or commit to track                      |
 | `defaultPath`      | `.`          | Repository subtree captured, archived, and scanned       |
 | `authConnectionId` | none         | The Connection used to read a private repository         |
-| `autoSync`         | `false`      | The operator's scheduler checks the Git ref periodically |
+| `autoSync`         | `false` (the dashboard's add screen sets it to `true` right after creating the Source) | The operator's scheduler checks the Git ref periodically |
 
 The Git URL, ref, and source subtree are the Source acquisition coordinate.
 There is no Takosumi-specific source catalog. `defaultPath` narrows the captured

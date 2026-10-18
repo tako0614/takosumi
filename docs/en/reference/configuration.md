@@ -17,7 +17,7 @@ in config files; pass them from a secret store.
 | `PORT`                          | Optional                                                    | `8788`  | Listen port when started with `bun core/index.ts`                                                                                                                                                                |
 | `TAKOSUMI_DATABASE_URL`         | Required when running the control plane standalone via `bun core/index.ts` | none    | PostgreSQL connection for the control plane. `DATABASE_URL` is read for the same purpose. The bundled Docker Compose definition runs the control plane and accounts on one connection, so there you set only `TAKOSUMI_ACCOUNTS_DATABASE_URL` |
 | `TAKOSUMI_DB_AUTO_MIGRATE`      | Optional                                                    | `false` | Whether `bun core/index.ts` applies migrations at startup. By default it only verifies them read-only. Setting `true` on `staging` or `production` fails startup                                             |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | Required in real deployments, **secret**                    | none    | Bearer for the operator-only API (`/internal/v1/*`, the root `/capabilities` and `/openapi.json`, and the Interface operator path). It acts on every Workspace and is not accepted on the general public `/api/v1` routes. Does not affect the retired Resource/Form `/v1` surface. The CLI's variable of the same name is described in [What the CLI reads](#what-the-cli-reads) |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | Required in real deployments, **secret**                    | none    | Bearer for the operator-only API (`/internal/v1/*`, the root `/capabilities` and `/openapi.json`, and the Interface operator path). It acts on every Workspace and is not accepted on the general public `/api/v1` routes. **Never give it to users, and do not use it for ordinary CLI calls.** Use it only on the operator's machine for operator-only work. Does not affect the retired Resource/Form `/v1` surface. The CLI's variable of the same name is described in [What the CLI reads](#what-the-cli-reads) |
 | `TAKOSUMI_METRICS_SCRAPE_TOKEN` | Optional, **secret**                                        | none    | Bearer required to read `/metrics`. While unset, `/metrics` returns `404`                                                                                                                                    |
 
 ```bash
@@ -97,17 +97,15 @@ flag to re-enable them. They always return `404`, never appear in
 capabilities/OpenAPI, and cannot be revived through a bearer, the database, or
 leftover rows.
 
-The current Takosumi exposes no typed Host migration operations or settings
-for Resource Shape, TargetPool, or other retired Host records. PostgreSQL
-migration v110 and D1 migration v66 physically drop the target tables only
-when all of them are empty. If rows remain, the forward migration stops there.
-An affected operator should inventory and export those rows with the
-immediately previous release or an external database tool, record explicitly
-how they will be handled, empty the retired tables accordingly, and retry the
-migration. The portable Takoform protocol is a contract for external Hosts,
-not a compatibility alias or a migration surface. New users configure ordinary
-providers through Stack and ProviderConnection / CredentialRecipe /
-ProviderBinding.
+Takosumi OSS also neither installs nor hosts Form Packages. A hosted service or operator that owns a Form
+Host may record Host-specific trust policy and artifact binding in that Host's runbook, but that is
+not a deploy path Takosumi OSS supports, and it creates no FormActivation or Offering. The portable
+Takoform protocol is a contract for external Hosts, not a compatibility alias or a migration
+surface. New users configure ordinary providers through Stack and ProviderConnection /
+CredentialRecipe / ProviderBinding.
+
+If an upgrade stops because retired tables still have rows, see
+[Updating Takosumi itself](../self-host/upgrade.md#when-retired-tables-still-have-rows).
 
 ## Run and runner
 
@@ -137,13 +135,6 @@ proceeds with the teardown.
 export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
 export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 ```
-
-## Form Package settings (external Hosts only)
-
-Takosumi OSS neither installs nor hosts Form Packages. A hosted service or
-operator that owns a Form Host may record Host-specific trust policy and
-artifact binding in that Host's runbook. Those settings are not a deploy path
-Takosumi OSS supports, and they create no FormActivation or Offering.
 
 ## Cloudflare-only variables
 
@@ -178,6 +169,7 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_STATEMENT_TIMEOUT_MS` | Optional                           | `30000`                         | Time to wait for a single statement                                      |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE`             | Optional                           | `disable`                       | `disable` / `require` / `verify-ca` / `verify-full`                  |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT`        | Required for `verify-ca` / `verify-full` | none                            | PEM CA bundle                                                            |
+| `TAKOSUMI_BACKUP_ARTIFACTS_DIR`             | Effectively required               | `/var/lib/takosumi/backups` in the reference Compose, otherwise none | Where pre-destroy exports and other backups are stored. If unset, export is recorded as `skipped` ([Backup and restore](../self-host/backup-restore.md)) |
 | `POSTGRES_PASSWORD`                         | Required when using Docker Compose, **secret** | none                            | Password the bundled Docker Compose definition sets on PostgreSQL        |
 | `TAKOSUMI_TCS_STORE_URL`                    | Optional                           | none                            | Public TCS store URL advertised as a string at `endpoints.extensions["takosumi.tcs-store.v1"]` in `/.well-known/takosumi`; the dashboard's `runtimeStoreUrl()` reads this extension. Use a public HTTP(S) URL without credentials, query, or fragment |
 

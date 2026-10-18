@@ -16,7 +16,7 @@ secret ストアから渡してください。
 | `PORT`                          | 任意                                                        | `8788`  | `bun core/index.ts` で起動したときの待ち受けポート                                                                                                                                                           |
 | `TAKOSUMI_DATABASE_URL`         | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし    | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の Docker Compose 定義は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
 | `TAKOSUMI_DB_AUTO_MIGRATE`      | 任意                                                        | `false` | `bun core/index.ts` の起動時にマイグレーションを適用するか。既定では適用せず、読み取りだけで検証します。`staging` と `production` で `true` にすると起動が失敗します                                         |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密**                                    | なし    | operator 専用 API（`/internal/v1/*`、ルート直下の `/capabilities` と `/openapi.json`、Interface の operator 経路）の bearer。全 Workspace に作用する強い権限で、公開 `/api/v1` の一般の route は受け付けません。旧 Resource/Form `/v1` surface には作用しません。CLI 側の同じ名前の変数は[CLI が読むもの](#cli-が読むもの)にあります |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密**                                    | なし    | operator 専用 API（`/internal/v1/*`、ルート直下の `/capabilities` と `/openapi.json`、Interface の operator 経路）の bearer。全 Workspace に作用する強い権限で、公開 `/api/v1` の一般の route は受け付けません。**利用者には渡さず、ふつうの CLI の呼び出しにも使わないでください。** 使うのは、operator のマシンで operator 専用の操作をするときだけです。旧 Resource/Form `/v1` surface には作用しません。CLI 側の同じ名前の変数は[CLI が読むもの](#cli-が読むもの)にあります |
 | `TAKOSUMI_METRICS_SCRAPE_TOKEN` | 任意・**秘密**                                              | なし    | `/metrics` を読むための bearer。未設定のあいだ `/metrics` は `404` を返します                                                                                                                                |
 
 ```bash
@@ -93,16 +93,14 @@ SpacePolicy の `/v1` route と CLI domain は廃止済みで、有効化する 
 ありません。常に `404` を返し、capabilities/OpenAPI にも出ず、bearer、
 database、残っている行で復活させることもできません。
 
-現在の Takosumi は、Resource Shape、TargetPool、その他の廃止済み Host record
-向けの型付き Host migration 操作や設定を公開していません。PostgreSQL
-migration v110 と D1 migration v66 は、対象の table がすべて空のときだけ
-物理的に drop します。行が残っていれば forward migration はそこで止まります。
-影響を受ける operator は、直前の release か外部の database ツールでその行を
-棚卸しして export し、どう処置するかを明示的に記録したうえで、その処置に
-従って廃止済み table を空にしてから migration を再試行してください。portable
-Takoform protocol は外部 Host の contract であり、互換 alias や migration
-surface ではありません。新しい利用者は Stack と ProviderConnection /
-CredentialRecipe / ProviderBinding の経路で通常の provider を設定します。
+Takosumi OSS は Form Package の install や host もしません。Form Host を持つ hosted service や operator の構成が、
+その Host 固有の trust policy と artifact binding を Host の runbook に記録することがありますが、それは
+Takosumi OSS が対応する deploy の経路ではなく、FormActivation や Offering を作りません。portable
+Takoform protocol は外部 Host の contract で、互換の alias や移行の入口ではありません。新しい利用者は、
+Stack と ProviderConnection / CredentialRecipe / ProviderBinding の経路で通常の provider を設定します。
+
+廃止したテーブルに行が残っていてアップグレードが止まったときの直し方は、
+[Takosumi 本体を更新する](../self-host/upgrade.md#廃止したテーブルに行が残っているとき)にあります。
 
 ## Run と runner
 
@@ -130,13 +128,6 @@ storage) が無い構成では `skipped` と記録して破棄に進みます。
 export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
 export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 ```
-
-## Form Package の設定 (外部 Host のみ)
-
-Takosumi OSS は Form Package を install も host もしません。Form Host を所有する
-hosted service や operator の構成が、その Host 固有の trust policy と artifact
-binding を Host の runbook に記録することがあります。それらの設定は Takosumi
-OSS が対応する deploy 経路ではなく、FormActivation や Offering を作りません。
 
 ## Cloudflare 構成で使うもの
 
@@ -171,6 +162,7 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_STATEMENT_TIMEOUT_MS` | 任意                               | `30000`                         | 1 文を待つ時間                                                       |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE`             | 任意                               | `disable`                       | `disable` / `require` / `verify-ca` / `verify-full`                  |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT`        | `verify-ca` / `verify-full` で必須 | なし                            | PEM の CA バンドル                                                   |
+| `TAKOSUMI_BACKUP_ARTIFACTS_DIR`             | 事実上必須                         | 参照 Compose では `/var/lib/takosumi/backups`、それ以外はなし | destroy 前の export などを保存する場所。未設定だと export は `skipped` と記録されます（[バックアップと復旧](../self-host/backup-restore.md)） |
 | `POSTGRES_PASSWORD`                         | Docker Compose を使う場合は必須・**秘密** | なし                            | 同梱の Docker Compose 定義が PostgreSQL に設定するパスワード                    |
 | `TAKOSUMI_TCS_STORE_URL`                    | 任意                               | なし                            | composed app が公開する TCS store URL。`/.well-known/takosumi` の `endpoints.extensions["takosumi.tcs-store.v1"]` が URL string を持ち、dashboard の `runtimeStoreUrl()` が読み取ります。認証情報、query、fragment を含まない公開 HTTP(S) URL を設定します |
 
