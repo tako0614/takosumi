@@ -14,6 +14,8 @@ picture { display: block; }
 .site-width { width: min(calc(100% - 64px), 1180px); margin-inline: auto; }
 .skip-link { position: absolute; z-index: 30; left: 16px; top: -70px; padding: 10px 16px; background: var(--tg-color-accent-fill); color: white; border-radius: var(--tg-radius-control); }
 .skip-link:focus-visible { top: 12px; color: white; }
+/* The skip link moves focus into <main>; the whole page needs no focus ring. */
+main#main:focus { outline: none; }
 .site-header { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--tg-color-rule); }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-size: 1.14rem; font-weight: 800; letter-spacing: -.025em; white-space: nowrap; }
 .brand:hover { color: var(--tg-color-ink); }

@@ -95,7 +95,7 @@ export default function Home() {
         </nav>
       </header>
 
-      <main id="main">
+      <main id="main" tabIndex={-1}>
         <section class="hero site-width" aria-labelledby="site-title">
           <div class="hero-copy">
             <div class="hero-identity"><img class="hero-mark" src="/tako.png" alt="" width="64" height="64" /><h1 id="site-title">Takosumi</h1></div>

@@ -212,8 +212,12 @@ const config: UserConfig = {
         docFooter: { prev: "前へ", next: "次へ" },
         lastUpdatedText: "最終更新",
         darkModeSwitchLabel: "テーマ",
+        lightModeSwitchTitle: "ライトテーマに切り替える",
+        darkModeSwitchTitle: "ダークテーマに切り替える",
         sidebarMenuLabel: "メニュー",
         returnToTopLabel: "トップへ戻る",
+        skipToContentLabel: "本文へ移動",
+        langMenuLabel: "言語を切り替える",
         notFound: {
           title: "ページがありません",
           quote: "URLが正しいか確認するか、検索から探してください。",
