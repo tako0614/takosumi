@@ -84,10 +84,12 @@ Source の exact relation を検証します。
 `install.modules` の exact key であることを検証しますが、互換表示 hint に限定されます。
 scan が複数 module を発見した場合の利用者選択を省略せず、実行 module authority にはなりません。
 
-v1 の scan は immutable archive 内の tracked regular files と vendored local module edge
-（`./` / `../`）だけを辿ります。remote module source は pinned/unpinned を問わず network
-fetch authority を持たず、候補を部分的に公開せず `invalid` になります。利用する dependency
-は repository tree に vendor してください。
+scan は、manifest の有無や version にかかわらず、immutable archive 内の tracked regular
+files と vendored local module edge（`./` / `../`）だけを辿ります。remote module source は
+pinned/unpinned を問わず network fetch authority を持たず、候補を部分的に公開せず `invalid`
+になります。`../` も、選んだ module のディレクトリの外を指すと追加できません。利用する
+dependency は repository tree に vendor してください
+（[追加できるリポジトリを用意する](../getting-started/prepare-repository.md)）。
 
 ### 有効な v2.1 multi-module 例
 
