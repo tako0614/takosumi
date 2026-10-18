@@ -8,6 +8,30 @@ Interface / InterfaceBinding を公開します。Workspace / Capsule / Run な�
 provider です。その他の API / instance lifecycle は、それを提供する external Host が
 所有します。
 
+## 最初に呼んでみる
+
+1. dashboard で API キーを作ります（[トークンを発行する](./cli.md#トークンを発行する)）。
+   読むだけなら **読み取り**、変更もするなら **読み取り** と **書き込み** を選びます。
+2. 使える Workspace を読みます。`TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard に
+   サインインしている origin を入れます。
+
+   ```bash
+   export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
+   export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<作った API キー>
+
+   curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces" \
+     -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+   ```
+
+   応答の `workspaces` に Workspace が並びます。その `id` を、ほかの API の
+   `workspaceId` に使います。**現在のワークスペースだけで使用できるようにする** をオンに
+   して作ったキーでは、そのワークスペースだけが返ります。
+3. 失敗すると、`error.code`、`error.message`、`error.requestId` を持つ JSON が返ります
+   （[エラーの形式](#エラーの形式)）。問い合わせるときは `requestId` を添えます。
+
+作成する API のいくつかは `Idempotency-Key` header が必須です。どの API に必要かと、同じ
+キーで送り直したときの扱いは、下の各節に書いてあります。
+
 ## 基本方針
 
 | 状況                                                | 扱い方                                                         |

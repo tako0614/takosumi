@@ -8,6 +8,30 @@ instance lifecycle beyond this control plane.
 It is not a combined clone of Cloudflare, AWS, Kubernetes, or other vendor APIs.
 External infrastructure keeps its existing providers and standard APIs.
 
+## Your first call
+
+1. Create an API key in the dashboard ([Creating a token](./cli.md#creating-a-token)). Choose
+   **Read** to only read, or both **Read** and **Write** to change things too.
+2. Read the Workspaces you can use. Set `TAKOSUMI_DEPLOY_CONTROL_URL` to the origin where you
+   sign in to the dashboard.
+
+   ```bash
+   export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
+   export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<your API key>
+
+   curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces" \
+     -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+   ```
+
+   The `workspaces` field of the response lists them. Use an `id` from it as the `workspaceId`
+   of other calls. A key created with **Restrict this key to the current Workspace** returns only
+   that Workspace.
+3. A failure returns JSON with `error.code`, `error.message`, and `error.requestId`
+   ([Error Shape](#error-shape)). Include the `requestId` when you ask for help.
+
+Some create calls require an `Idempotency-Key` header. The sections below say which ones, and
+what happens when you send the same key again.
+
 ## Rule
 
 ```text
