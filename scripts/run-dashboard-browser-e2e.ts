@@ -5,10 +5,12 @@ import {
   validateExpectedWorkerVersionId,
 } from "./dashboard-browser-e2e/live-inputs.ts";
 
-const mode = process.argv[2] ?? "";
+const selectedMode = process.argv[2] ?? "";
+const installReturnProfile = selectedMode === "shared-auth-install-return";
+const mode = installReturnProfile ? "live" : selectedMode;
 if (mode !== "portable" && mode !== "live" && mode !== "public-live") {
   throw new Error(
-    "usage: bun scripts/run-dashboard-browser-e2e.ts <portable|live|public-live> [-- --playwright-args]",
+    "usage: bun scripts/run-dashboard-browser-e2e.ts <portable|live|public-live> [-- --playwright-args] | shared-auth-install-return",
   );
 }
 
@@ -17,6 +19,9 @@ const spec = "tests/dashboard/e2e/dashboard_test.ts";
 const config = "tests/dashboard/e2e/playwright.config.ts";
 const extraArgs = process.argv.slice(3);
 if (extraArgs[0] === "--") extraArgs.shift();
+if (installReturnProfile && extraArgs.length > 0) {
+  throw new Error("shared-auth-install-return uses a fixed single-test selection and accepts no Playwright arguments");
+}
 
 /** Allow the read-only public profile to be run without shell env mutation. */
 if (mode === "public-live") {
@@ -88,6 +93,28 @@ if (mode === "portable") {
     validateExpectedWorkerVersionId(
       process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID!.trim(),
     );
+  if (installReturnProfile) {
+    const required = [
+      "TAKOSUMI_E2E_SHARED_AUTH_ISSUER_ORIGIN",
+      "TAKOSUMI_E2E_EXPECTED_ISSUER_VERSION_ID",
+      "TAKOSUMI_E2E_EXPECTED_ACCOUNT_ID",
+      "TAKOSUMI_E2E_INSTALL_RETURN_QUERY",
+    ];
+    const missing = required.filter((name) => !process.env[name]?.trim());
+    if (missing.length > 0) {
+      throw new Error(
+        `shared-auth-install-return is fail-closed; missing: ${missing.join(", ")}`,
+      );
+    }
+    const baseUrl = process.env.TAKOSUMI_E2E_BASE_URL!.trim();
+    if (!["https://app-staging.takosumi.com", "https://app-staging.takosumi.com/"].includes(baseUrl) ||
+      process.env.TAKOSUMI_E2E_SHARED_AUTH_ISSUER_ORIGIN!.trim() !== "https://auth-staging.takos.jp") {
+      throw new Error("shared-auth-install-return requires the pinned staging app and issuer origins");
+    }
+    validateExpectedWorkerVersionId(
+      process.env.TAKOSUMI_E2E_EXPECTED_ISSUER_VERSION_ID!.trim(),
+    );
+  }
 } else {
   const required = [
     "TAKOSUMI_E2E_BASE_URL",
@@ -128,11 +155,19 @@ const child = Bun.spawn(
     spec,
     `--config=${config}`,
     `--project=${mode}`,
-    ...extraArgs,
+    ...(installReturnProfile
+      ? ["--grep", "a new RP login from existing issuer SSO returns the exact install context"]
+      : extraArgs),
   ],
   {
     cwd: repoRoot,
-    env: { ...process.env, TAKOSUMI_E2E_MODE: mode },
+    env: {
+      ...process.env,
+      TAKOSUMI_E2E_MODE: mode,
+      TAKOSUMI_E2E_INSTALL_RETURN_PROFILE: installReturnProfile
+        ? "shared-auth-install-return"
+        : "",
+    },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",

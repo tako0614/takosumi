@@ -1,4 +1,7 @@
-import { expect, test, type BrowserContext, type Request, type Response } from "@playwright/test";
+import { expect, test, type BrowserContext, type Browser, type Frame, type Request, type Response, type Route, type WebSocketRoute } from "@playwright/test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { CDPSession, Page } from "@playwright/test";
 import type { DashboardE2EMode } from "./traffic-policy.ts";
 import { resolvePortableOrigin } from "./portable-origin.ts";
 import { parseInstallPrefill } from "../../../dashboard/src/lib/install-link.ts";
@@ -44,7 +47,11 @@ export function registerInstallAuthReturnCase(mode: DashboardE2EMode): void {
     expect(writes, "login must not install an app or issue a payment").toEqual([]);
   });
   if (mode === "portable") registerInstallReturnInputCases();
-  if (mode === "live") registerLiveInstallReturnCase();
+  if (selectLiveInstallReturnCase(mode, process.env.TAKOSUMI_E2E_INSTALL_RETURN_PROFILE)) registerLiveInstallReturnCase();
+}
+
+function selectLiveInstallReturnCase(mode: DashboardE2EMode, profile: string | undefined): boolean {
+  return mode === "live" && profile === "shared-auth-install-return";
 }
 
 // This is the published shared-account profile, not a configurable issuer router.
@@ -204,6 +211,361 @@ function classifyTransport(r: TransportRequest, input: LiveInstallInputs, custod
   throw new Error("unknown external browser transport");
 }
 
+function allowedTransport(r: TransportRequest, input: LiveInstallInputs, custody: FlowCustody): string | undefined {
+  try { return classifyTransport(r, input, custody); } catch { return undefined; }
+}
+
+type LiveHttpRoute = Pick<Route, "request" | "abort" | "continue">;
+type LiveSocketRoute = Pick<WebSocketRoute, "close">;
+type RouteFailure = (label: string) => void;
+type PausedResponse = {
+  readonly requestId: string;
+  readonly frameId: string;
+  readonly resourceType: string;
+  readonly request: {
+    readonly url: string;
+    readonly method: string;
+    readonly headers: Readonly<Record<string, unknown>>;
+    readonly postData?: string;
+  };
+  readonly responseStatusCode?: number;
+  readonly responseHeaders?: readonly { readonly name: string; readonly value: string }[];
+};
+type RedirectPolicy = (source: TransportRequest, status: number, target: URL, mainFrame: boolean) => boolean;
+
+async function handleLiveHttpRoute(
+  route: LiveHttpRoute,
+  mainFrame: Frame,
+  input: LiveInstallInputs,
+  custody: FlowCustody,
+  guardReady: () => boolean,
+  onAllowed: (kind: string, request: Request) => void,
+  onFailure: RouteFailure,
+): Promise<void> {
+  let routeOperation: "classification" | "abort" | "continue" = "classification";
+  try {
+    const request = route.request();
+    if (request.frame() !== mainFrame) {
+      onFailure("browser request outside primary page blocked");
+      routeOperation = "abort";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    if (!guardReady()) {
+      onFailure("browser HTTP request blocked while response fence unavailable");
+      routeOperation = "abort";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    const kind = allowedTransport({
+      url: request.url(), method: request.method(), resourceType: request.resourceType(),
+      mainNavigation: request.isNavigationRequest() && request.frame() === mainFrame,
+      origin: request.headers()["origin"], contentType: request.headers()["content-type"], body: request.postData(),
+    }, input, custody);
+    if (!kind) {
+      onFailure("browser HTTP request blocked by pre-dispatch fence");
+      routeOperation = "abort";
+      await route.abort("blockedbyclient");
+      return;
+    }
+    // Custody/count hooks run before Playwright forwards the original Request.
+    onAllowed(kind, request);
+    routeOperation = "continue";
+    await route.continue();
+  } catch {
+    if (routeOperation === "classification") {
+      onFailure("browser HTTP route handling failed");
+      try { await route.abort("blockedbyclient"); } catch { /* Context cleanup owns a failed route. */ }
+    } else if (routeOperation === "abort") {
+      onFailure("browser HTTP abort failed");
+    } else {
+      onFailure("browser HTTP continuation failed");
+    }
+  }
+}
+
+async function handleLiveWebSocketRoute(route: LiveSocketRoute, onFailure: RouteFailure): Promise<void> {
+  onFailure("browser WebSocket blocked by pre-connect fence");
+  try {
+    await route.close({ code: 1008, reason: "unsupported WebSocket transport" });
+  } catch {
+    onFailure("browser WebSocket cleanup failed");
+  }
+}
+
+function requestHeader(headers: Readonly<Record<string, unknown>>, name: string): string | undefined {
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase());
+  return typeof entry?.[1] === "string" ? entry[1] : undefined;
+}
+
+async function handleCdpResponsePause(
+  session: CDPSession,
+  event: PausedResponse,
+  mainFrameId: string,
+  allowRedirect: RedirectPolicy,
+  onFailure: RouteFailure,
+): Promise<void> {
+  let continueAttempted = false;
+  try {
+    const status = event.responseStatusCode;
+    if (status !== undefined && status >= 300 && status < 400) {
+      const locations = (event.responseHeaders ?? []).filter((header) => header.name.toLowerCase() === "location");
+      if (locations.length !== 1 || locations[0]!.value !== locations[0]!.value.trim()) throw new Error("redirect location unavailable");
+      const source = new URL(event.request.url);
+      if (!["http:", "https:"].includes(source.protocol) || source.username || source.password || source.hash) throw new Error("invalid redirect source");
+      const target = new URL(locations[0]!.value, source);
+      if (!["http:", "https:"].includes(target.protocol) || target.username || target.password || target.hash ||
+        status === 307 || status === 308) throw new Error("redirect target rejected");
+      const requestHeaders = event.request.headers;
+      const transport: TransportRequest = {
+        url: source.href,
+        method: event.request.method,
+        resourceType: event.resourceType.toLowerCase(),
+        mainNavigation: event.frameId === mainFrameId && event.resourceType.toLowerCase() === "document",
+        origin: requestHeader(requestHeaders, "origin"),
+        contentType: requestHeader(requestHeaders, "content-type"),
+        body: event.request.postData ?? null,
+      };
+      if (!allowRedirect(transport, status, target, event.frameId === mainFrameId)) throw new Error("redirect transition rejected");
+    }
+    continueAttempted = true;
+    // Omitting responseCode and responseHeaders retains the server's response.
+    await session.send("Fetch.continueResponse", { requestId: event.requestId });
+  } catch {
+    onFailure(continueAttempted ? "CDP response continuation failed" : "browser redirect blocked by response fence");
+    try { await session.send("Fetch.failRequest", { requestId: event.requestId, errorReason: "BlockedByClient" }); }
+    catch { onFailure(continueAttempted ? "CDP response cleanup failed" : "CDP redirect block failed"); }
+  }
+}
+
+function allowSharedAuthRedirect(
+  source: TransportRequest,
+  status: number,
+  target: URL,
+  mainFrame: boolean,
+  input: LiveInstallInputs,
+  custody: FlowCustody,
+  counts: ReadonlyMap<string, number>,
+  consentRedirectHandled: () => boolean,
+  markConsentRedirectHandled: () => void,
+): boolean {
+  if (!mainFrame || status === 307 || status === 308 || target.hash || target.username || target.password) return false;
+  const sourceUrl = parsedUrl(source.url);
+  let sourceKind: string | undefined;
+  try { sourceKind = classifyTransport(source, input, custody); } catch { return false; }
+  if (sourceUrl.origin === input.app && sourceUrl.pathname === "/sign-in") {
+    if (status !== 302 || source.method !== "GET" || sourceKind !== "sign-in-document" ||
+      counts.get("sign-in-document") !== 1 || (counts.get("rp-login") ?? 0) !== 0 ||
+      target.origin !== input.app || target.pathname !== "/auth/oidc/login") return false;
+    return allowedTransport({
+      url: target.href, method: "GET", resourceType: "document", mainNavigation: true,
+    }, input, custody) === "rp-login";
+  }
+  if (sourceUrl.origin === input.app && sourceUrl.pathname === "/auth/oidc/login") {
+    if (status !== 303 || source.method !== "GET" || sourceKind !== "rp-login" || custody.authorization ||
+      (counts.get("issuer-authorization") ?? 0) !== 0 || target.origin !== input.issuer || target.pathname !== "/oauth/authorize") return false;
+    try { assertAuthorization(target, input); return true; } catch { return false; }
+  }
+  if (sourceUrl.origin === input.issuer && sourceUrl.pathname === "/oauth/authorize") {
+    if (status !== 302 || source.method !== "POST" || sourceKind !== "issuer-consent" || consentRedirectHandled() ||
+      counts.get("issuer-consent") !== 1) return false;
+    const callbackKind = allowedTransport({
+      url: target.href, method: "GET", resourceType: "document", mainNavigation: true,
+    }, input, custody);
+    if (callbackKind !== "rp-callback") return false;
+    markConsentRedirectHandled();
+    return true;
+  }
+  if (sourceUrl.origin === input.app && sourceUrl.pathname === "/auth/oidc/callback") {
+    return status === 303 && source.method === "GET" && sourceKind === "rp-callback" &&
+      target.href === input.app + input.returnPath;
+  }
+  return false;
+}
+
+type CdpRedirectGuard = {
+  readonly mainFrameId: string;
+  readonly ready: boolean;
+  beginShutdown(): void;
+  drain(): Promise<void>;
+  close(): Promise<void>;
+};
+
+async function installCdpRedirectGuard(
+  page: Page,
+  allowRedirect: RedirectPolicy,
+  pending: Set<Promise<void>>,
+  onFailure: RouteFailure,
+): Promise<CdpRedirectGuard> {
+  const session = await page.context().newCDPSession(page);
+  let ready = false;
+  let closing = false;
+  let shuttingDown = false;
+  let attached = true;
+  let mainFrameId = "";
+  const invalidate = () => {
+    if (closing || shuttingDown || !attached) return;
+    ready = false;
+    attached = false;
+    onFailure("CDP response guard detached");
+    void page.close().catch(() => { onFailure("CDP response guard page cleanup failed"); });
+  };
+  session.on("Inspector.detached", invalidate);
+  session.on("Inspector.targetCrashed", invalidate);
+  session.on("Fetch.requestPaused", (event) => {
+    void trackRouteWork(pending, () => handleCdpResponsePause(
+      session,
+      event,
+      mainFrameId,
+      (source, status, target, mainFrame) => !shuttingDown && allowRedirect(source, status, target, mainFrame),
+      onFailure,
+    ), onFailure);
+  });
+  try {
+    await session.send("Page.enable");
+    const frameTree = await session.send("Page.getFrameTree");
+    mainFrameId = frameTree.frameTree.frame.id;
+    await session.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Response" }] });
+    ready = true;
+  } catch {
+    ready = false;
+    onFailure("CDP response guard installation failed");
+    try { await session.detach(); } catch { /* No request has been started. */ }
+    throw new Error("CDP response guard installation failed");
+  }
+  const drain = async () => {
+    while (pending.size > 0) await Promise.all([...pending]);
+  };
+  return {
+    get mainFrameId() { return mainFrameId; },
+    get ready() { return ready && attached; },
+    beginShutdown: () => {
+      shuttingDown = true;
+      ready = false;
+    },
+    drain,
+    close: async () => {
+      if (closing) return;
+      closing = true;
+      shuttingDown = true;
+      ready = false;
+      await drain();
+      if (!attached) return;
+      try { await session.send("Fetch.disable"); } catch { onFailure("CDP response guard cleanup failed"); }
+      await drain();
+      attached = false;
+      try { await session.detach(); } catch { onFailure("CDP response guard cleanup failed"); }
+    },
+  };
+}
+
+async function withLoopbackRedirectServer(run: (origin: string, hits: string[], releaseDelayedRedirect: () => void) => Promise<void>): Promise<void> {
+  const hits: string[] = [];
+  let origin = "";
+  let releaseDelayedRedirect!: () => void;
+  const delayedRedirectReady = new Promise<void>((resolve) => { releaseDelayedRedirect = resolve; });
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
+    hits.push(`${request.method ?? "GET"} ${url.pathname}`);
+    if (url.pathname === "/allowed-start") {
+      response.writeHead(302, { location: `${origin.replace("127.0.0.1", "localhost")}/allowed-final`, "x-fixture-redirect": "preserved" });
+      response.end("original-redirect-body");
+      return;
+    }
+    if (url.pathname === "/allowed-final") {
+      response.writeHead(200, { "x-fixture-final": "preserved" });
+      response.end("allowed-final-body");
+      return;
+    }
+    if (url.pathname === "/unknown-start") {
+      response.writeHead(302, { location: `${origin}/unknown-target`, "x-fixture-redirect": "unknown" });
+      response.end("unknown-redirect-body");
+      return;
+    }
+    if (url.pathname === "/delayed-start") {
+      void delayedRedirectReady.then(() => {
+        response.writeHead(302, { location: `${origin}/delayed-target` });
+        response.end("delayed-redirect-body");
+      });
+      return;
+    }
+    if (url.pathname === "/post-302" || url.pathname === "/post-307" || url.pathname === "/post-308") {
+      const status = url.pathname.endsWith("302") ? 302 : url.pathname.endsWith("307") ? 307 : 308;
+      response.writeHead(status, { location: `${origin}/callback`, "x-fixture-redirect": "preserved" });
+      response.end("original-post-redirect-body");
+      return;
+    }
+    if (url.pathname === "/callback") {
+      response.writeHead(200, { "x-fixture-final": "callback" });
+      response.end(`${request.method ?? "GET"}:${url.pathname}`);
+      return;
+    }
+    response.writeHead(404);
+    response.end("not-found");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "0.0.0.0", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  origin = `http://127.0.0.1:${address.port}`;
+  try {
+    await run(origin, hits, releaseDelayedRedirect);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+}
+
+function trackRouteWork(
+  pending: Set<Promise<void>>,
+  work: () => Promise<void>,
+  onFailure: RouteFailure,
+): Promise<void> {
+  const promise = Promise.resolve().then(work).catch(() => {
+    onFailure("browser route callback failed");
+  });
+  pending.add(promise);
+  void promise.then(() => pending.delete(promise));
+  return promise;
+}
+
+function makeFakeRequest(transport: TransportRequest, frame: Frame = {} as Frame): Request {
+  return {
+    url: () => transport.url,
+    method: () => transport.method,
+    resourceType: () => transport.resourceType,
+    isNavigationRequest: () => transport.mainNavigation,
+    frame: () => frame,
+    headers: () => ({
+      ...(transport.origin ? { origin: transport.origin } : {}),
+      ...(transport.contentType ? { "content-type": transport.contentType } : {}),
+    }),
+    postData: () => transport.body ?? null,
+  } as unknown as Request;
+}
+
+function makeFakeHttpRoute(request: Request, operations: string[], forwardedCalls: unknown[][] = []) {
+  let continueCalls = 0;
+  let abortCalls = 0;
+  let failContinue = false;
+  const route = {
+    request: () => request,
+    abort: async (reason?: string) => { abortCalls += 1; operations.push(`abort:${reason}`); },
+    continue: async (...args: unknown[]) => {
+      continueCalls += 1;
+      operations.push("continue");
+      forwardedCalls.push(args);
+      if (failContinue) throw new Error("synthetic-sensitive-detail");
+    },
+  } as unknown as LiveHttpRoute;
+  return {
+    route,
+    get continueCalls() { return continueCalls; },
+    get abortCalls() { return abortCalls; },
+    set failContinue(value: boolean) { failContinue = value; },
+  };
+}
+
 function registerLiveInstallReturnCase(): void {
   test.describe("shared-account live install return", () => {
     // No raw cookies, authorization URLs, callback codes or hidden form values
@@ -218,6 +580,8 @@ function registerLiveInstallReturnCase(): void {
       const counts = new Map<string, number>();
       let authorization: string | undefined;
       let transaction: string | undefined;
+      let consentRedirectWasHandled = false;
+      let guard: CdpRedirectGuard | undefined;
       let callbackSucceeded = false;
       let signedOutObserved = false;
       let authenticatedBootstrap = false;
@@ -226,6 +590,26 @@ function registerLiveInstallReturnCase(): void {
         expect((await isolated.cookies(input.app)).length, "new RP context must have no app cookies").toBe(0);
         const page = await isolated.newPage();
         isolated.on("page", (other) => { if (other !== page) failures.push("unexpected additional page"); });
+        // Intercept every HTTP request before dispatch. Allowed requests keep
+        // their original URL, method, headers, and body; denials never reach
+        // the app, issuer, or an unexpected external origin.
+        await isolated.route("**/*", async (route) => {
+          await trackRouteWork(pending, () => handleLiveHttpRoute(
+            route,
+            page.mainFrame(),
+            input,
+            { authorization, transaction },
+            () => guard?.ready === true,
+            () => {},
+            (label) => failures.push(label),
+          ), (label) => failures.push(label));
+        });
+        // Playwright 1.55.1 leaves a routed socket disconnected unless the
+        // handler calls connectToServer(); this handler intentionally does not.
+        await isolated.routeWebSocket("**/*", (route) => trackRouteWork(pending, () => handleLiveWebSocketRoute(
+          route,
+          (label) => failures.push(label),
+        ), (label) => failures.push(label)));
         isolated.on("request", (request) => {
           try {
             const kind = classifyTransport({
@@ -235,13 +619,24 @@ function registerLiveInstallReturnCase(): void {
             }, input, { authorization, transaction });
             counts.set(kind, (counts.get(kind) ?? 0) + 1);
             if (kind === "issuer-authorization") authorization = request.url();
-            if (!callbackSucceeded) earlyReads.add(request);
-          } catch (error) {
-            failures.push(error instanceof Error ? error.message : "unknown request classification error");
+          } catch {
+            failures.push("browser request outside declared transport scope");
           }
+          if (!callbackSucceeded) earlyReads.add(request);
         });
+        guard = await installCdpRedirectGuard(page, (source, status, target, mainFrame) => allowSharedAuthRedirect(
+          source,
+          status,
+          target,
+          mainFrame,
+          input,
+          { authorization, transaction },
+          counts,
+          () => consentRedirectWasHandled,
+          () => { consentRedirectWasHandled = true; },
+        ), pending, (label) => failures.push(label));
+        expect(guard.ready, "CDP redirect response guard installed before first navigation").toBe(true);
         isolated.on("requestfailed", () => failures.push("browser request failed"));
-        page.on("websocket", () => failures.push("unsupported WebSocket transport"));
         page.on("pageerror", () => failures.push("browser page error"));
         const observe = async (response: Response): Promise<void> => {
           const url = new URL(response.url());
@@ -325,8 +720,13 @@ function registerLiveInstallReturnCase(): void {
         // This observes browser requests, not private RPC/token exchanges or
         // server-side session/grant/personal-Workspace writes.
       } finally {
-        await isolated.close();
-        await Promise.all([...pending]);
+        guard?.beginShutdown();
+        try {
+          await isolated.close();
+        } finally {
+          await guard?.close();
+        }
+        while (pending.size > 0) await Promise.all([...pending]);
       }
       expect(failures, "late browser transport must also remain within scope").toEqual([]);
     });
@@ -383,6 +783,215 @@ function registerInstallReturnInputCases(): void {
       for (const path of ["/api/v1/sources", "/api/v1/workspaces/ws_owned/install-plans", "/api/v1/runs/run_owned/apply", "/api/v1/billing/top-up", "/v1/rpc", "/__takosumi/unknown"]) {
         expect(() => classifyTransport({ url: input.app + path, method: "POST", resourceType: "fetch", mainNavigation: false }, input, {})).toThrow();
       }
+    });
+    test("live HTTP route helper aborts denied traffic before continue and forwards approved consent unchanged", async () => {
+      const input = liveInstallInputs(environment());
+      const mainFrame = {} as Frame;
+      const approved = consent();
+      const originalRequest = makeFakeRequest(approved, mainFrame);
+      const originalRequestFields = { ...approved };
+      const forwardedCalls: unknown[][] = [];
+      const deniedOperations: string[] = [];
+      const deniedFailures: string[] = [];
+      const deniedRequest = makeFakeRequest({ url: "https://production.example.test/api/write", method: "POST", resourceType: "fetch", mainNavigation: false }, mainFrame);
+      const deniedRoute = makeFakeHttpRoute(deniedRequest, deniedOperations);
+      await handleLiveHttpRoute(deniedRoute.route, mainFrame, input, {}, () => true, () => {
+        throw new Error("denied request reached allow hook");
+      }, (label) => deniedFailures.push(label));
+      expect(deniedOperations).toEqual(["abort:blockedbyclient"]);
+      expect(deniedRoute.continueCalls).toBe(0);
+      expect(deniedFailures).toEqual(["browser HTTP request blocked by pre-dispatch fence"]);
+
+      const allowedOperations: string[] = [];
+      const allowedFailures: string[] = [];
+      const allowedRoute = makeFakeHttpRoute(originalRequest, allowedOperations, forwardedCalls);
+      let authorizedBeforeDispatch: string | undefined;
+      await handleLiveHttpRoute(allowedRoute.route, mainFrame, input, { authorization: authorization(), transaction: "hcons_actual_transaction" }, () => true, (kind, request) => {
+        expect(kind).toBe("issuer-consent");
+        expect(request === originalRequest, "approved original request identity").toBe(true);
+        authorizedBeforeDispatch = request.url();
+        allowedOperations.push("custody-hook");
+      }, (label) => allowedFailures.push(label));
+      expect(authorizedBeforeDispatch === approved.url, "authorization custody updated before dispatch").toBe(true);
+      expect(allowedOperations).toEqual(["custody-hook", "continue"]);
+      expect(allowedRoute.continueCalls).toBe(1);
+      expect(allowedRoute.abortCalls).toBe(0);
+      expect(forwardedCalls).toEqual([[]]);
+      expect(JSON.stringify(originalRequestFields) === JSON.stringify(approved), "allowlist classification leaves request fields unchanged").toBe(true);
+      expect(allowedFailures).toEqual([]);
+    });
+    test("live HTTP route helper reports fixed failures without retrying dispatch", async () => {
+      const input = liveInstallInputs(environment());
+      const mainFrame = {} as Frame;
+      const allowedRequest = makeFakeRequest(consent(), mainFrame);
+      const operations: string[] = [];
+      const failures: string[] = [];
+      const route = makeFakeHttpRoute(allowedRequest, operations);
+      route.failContinue = true;
+      await handleLiveHttpRoute(route.route, mainFrame, input, { authorization: authorization(), transaction: "hcons_actual_transaction" }, () => true, () => {}, (label) => failures.push(label));
+      expect(operations).toEqual(["continue"]);
+      expect(route.continueCalls).toBe(1);
+      expect(route.abortCalls).toBe(0);
+      expect(failures).toEqual(["browser HTTP continuation failed"]);
+      expect(failures.join(" ")).not.toContain("synthetic-sensitive-detail");
+    });
+    test("live WebSocket route helper closes before any server connection", async () => {
+      const failures: string[] = [];
+      const closes: unknown[] = [];
+      let connections = 0;
+      const fake = {
+        close: async (options: unknown) => { closes.push(options); },
+        connectToServer: () => { connections += 1; },
+      };
+      await handleLiveWebSocketRoute(fake as unknown as LiveSocketRoute, (label) => failures.push(label));
+      expect(connections).toBe(0);
+      expect(closes).toEqual([{ code: 1008, reason: "unsupported WebSocket transport" }]);
+      expect(failures).toEqual(["browser WebSocket blocked by pre-connect fence"]);
+    });
+    test("live install-return selection requires the dedicated runner profile", () => {
+      expect(selectLiveInstallReturnCase("live", "")).toBe(false);
+      expect(selectLiveInstallReturnCase("live", "unexpected-profile")).toBe(false);
+      expect(selectLiveInstallReturnCase("portable", "shared-auth-install-return")).toBe(false);
+      expect(selectLiveInstallReturnCase("live", "shared-auth-install-return")).toBe(true);
+    });
+    test("shared sign-in redirects only to the RP login with the exact saved return", () => {
+      const input = liveInstallInputs(environment());
+      const signInUrl = new URL(input.app + "/sign-in");
+      signInUrl.searchParams.set("return", input.returnPath);
+      const loginUrl = new URL(input.app + "/auth/oidc/login");
+      loginUrl.searchParams.set("return", input.returnPath);
+      const source: TransportRequest = {
+        url: signInUrl.href, method: "GET", resourceType: "document", mainNavigation: true,
+      };
+      const counts = new Map([["sign-in-document", 1]]);
+      const custody: FlowCustody = {};
+      const consentHandled = () => false;
+      const markConsentHandled = () => { throw new Error("sign-in redirect cannot consume consent"); };
+      expect(allowSharedAuthRedirect(source, 302, loginUrl, true, input, custody, counts, consentHandled, markConsentHandled)).toBe(true);
+
+      const unsafeTarget = new URL(loginUrl);
+      unsafeTarget.searchParams.set("return", "/new?name=other");
+      expect(allowSharedAuthRedirect(source, 302, unsafeTarget, true, input, custody, counts, consentHandled, markConsentHandled)).toBe(false);
+      expect(allowSharedAuthRedirect(source, 307, loginUrl, true, input, custody, counts, consentHandled, markConsentHandled)).toBe(false);
+    });
+    test("RP login redirects to the fixed issuer authorization using its real 303 status", () => {
+      const input = liveInstallInputs(environment());
+      const loginUrl = new URL(input.app + "/auth/oidc/login");
+      loginUrl.searchParams.set("return", input.returnPath);
+      const source: TransportRequest = {
+        url: loginUrl.href, method: "GET", resourceType: "document", mainNavigation: true,
+      };
+      const target = new URL(authorization());
+      const custody: FlowCustody = {};
+      const counts = new Map([["rp-login", 1]]);
+      const consentHandled = () => false;
+      const markConsentHandled = () => { throw new Error("authorization redirect cannot consume consent"); };
+      expect(allowSharedAuthRedirect(source, 303, target, true, input, custody, counts, consentHandled, markConsentHandled)).toBe(true);
+      expect(allowSharedAuthRedirect(source, 302, target, true, input, custody, counts, consentHandled, markConsentHandled)).toBe(false);
+      expect(allowSharedAuthRedirect(source, 307, target, true, input, custody, counts, consentHandled, markConsentHandled)).toBe(false);
+    });
+    test("CDP response guard preserves allowed redirects and blocks unknown or body-replaying targets", async ({ browser }: { browser: Browser }) => {
+      await withLoopbackRedirectServer(async (origin, hits, releaseDelayedRedirect) => {
+        const context = await browser.newContext({ serviceWorkers: "block" });
+        const page = await context.newPage();
+        const pending = new Set<Promise<void>>();
+        const failures: string[] = [];
+        const seenRequests: Array<{ method: string; url: string }> = [];
+        const redirectResponses = new Map<string, { status: number; headers: Record<string, string> }>();
+        const allowRedirect: RedirectPolicy = (source, status, target, mainFrame) => {
+          if (!mainFrame || status !== 302) return false;
+          const sourceUrl = new URL(source.url);
+          if (sourceUrl.pathname === "/allowed-start") {
+            return source.method === "GET" && target.href === `${origin.replace("127.0.0.1", "localhost")}/allowed-final`;
+          }
+          if (sourceUrl.pathname === "/post-302") {
+            return source.method === "POST" && target.href === `${origin}/callback`;
+          }
+          return false;
+        };
+        let guard: CdpRedirectGuard | undefined;
+        let contextClosed = false;
+        try {
+          page.on("request", (request) => seenRequests.push({ method: request.method(), url: request.url() }));
+          page.on("response", (response) => {
+            const url = new URL(response.url());
+            if (!url.pathname.startsWith("/allowed-start") && !url.pathname.startsWith("/post-302")) return;
+            redirectResponses.set(url.pathname, { status: response.status(), headers: response.headers() });
+          });
+          await context.route("**/*", (route) => trackRouteWork(pending, async () => { await route.continue(); }, (label) => failures.push(label)));
+          guard = await installCdpRedirectGuard(page, allowRedirect, pending, (label) => failures.push(label));
+          expect(guard.ready, "CDP response interception installed before first request").toBe(true);
+          await page.goto(`${origin}/allowed-start`, { waitUntil: "commit" });
+          await expect(page).toHaveURL(`${origin.replace("127.0.0.1", "localhost")}/allowed-final`);
+          await expect(page.locator("body")).toHaveText("allowed-final-body");
+          await page.evaluate(async (url) => {
+            try { await fetch(url); }
+            catch { /* Unknown loopback redirect is intentionally stopped. */ }
+          }, `${origin}/unknown-start`);
+          await guard.drain();
+          await page.goto(`${origin}/allowed-final`, { waitUntil: "commit" });
+          const callbackBody = await page.evaluate(async (url) => (await fetch(url, {
+            method: "POST", body: "consent=synthetic", headers: { "content-type": "application/x-www-form-urlencoded" },
+          })).text(), `${origin}/post-302`);
+          expect(callbackBody).toBe("GET:/callback");
+          for (const status of [307, 308]) {
+            const blockedCount = hits.filter((hit) => hit.endsWith(" /callback")).length;
+            await page.evaluate(async (url) => {
+              try { await fetch(url, { method: "POST", body: "consent=synthetic", headers: { "content-type": "application/x-www-form-urlencoded" } }); }
+              catch { /* A browser-side blocked redirect is the expected fixture outcome. */ }
+            }, `${origin}/post-${status}`);
+            await guard.drain();
+            expect(hits.filter((hit) => hit.endsWith(" /callback")).length, `${status} target must not receive POST replay`).toBe(blockedCount);
+          }
+          const delayedNavigation = page.goto(`${origin}/delayed-start`, { waitUntil: "commit" }).catch(() => undefined);
+          await expect.poll(() => hits.includes("GET /delayed-start"), { message: "delayed redirect request reached only the loopback source" }).toBe(true);
+          guard.beginShutdown();
+          const closeContext = context.close();
+          releaseDelayedRedirect();
+          await closeContext;
+          contextClosed = true;
+          await delayedNavigation;
+          await guard.drain();
+          const allowed = redirectResponses.get("/allowed-start");
+          expect(allowed?.status).toBe(302);
+          expect(allowed?.headers["x-fixture-redirect"]).toBe("preserved");
+          const consentRedirect = redirectResponses.get("/post-302");
+          expect(consentRedirect?.status).toBe(302);
+          expect(consentRedirect?.headers["x-fixture-redirect"]).toBe("preserved");
+          const unknownCount = hits.filter((hit) => hit.endsWith(" /unknown-target")).length;
+          expect(unknownCount, "unknown redirect target must not reach the loopback server").toBe(0);
+          expect(hits.filter((hit) => hit.endsWith(" /delayed-target")).length, "redirect during context shutdown must not reach target").toBe(0);
+          expect(seenRequests.some((request) => request.url === `${origin}/allowed-start`), "first redirect hop observed").toBe(true);
+          expect(hits.filter((hit) => hit.endsWith(" /callback"))).toEqual(["GET /callback"]);
+          expect(seenRequests.some((request) => request.url === `${origin.replace("127.0.0.1", "localhost")}/allowed-final`), "cross-origin redirect hop observed").toBe(true);
+          expect(seenRequests.some((request) => request.url === `${origin}/unknown-start`), "unknown redirect source observed").toBe(true);
+          expect(seenRequests.some((request) => request.method === "POST" && request.url === `${origin}/post-302`), "consent POST hop observed").toBe(true);
+          for (const status of [307, 308]) {
+            expect(seenRequests.some((request) => request.method === "POST" && request.url === `${origin}/post-${status}`), `${status} source request observed`).toBe(true);
+            expect(seenRequests.some((request) => request.url === `${origin}/callback` && request.method === "POST"), `${status} replay target not observed`).toBe(false);
+          }
+          expect(seenRequests.filter((request) => request.url.endsWith("/callback")).map((request) => request.method)).toEqual(["GET"]);
+          expect(failures).toEqual([
+            "browser redirect blocked by response fence",
+            "browser redirect blocked by response fence",
+            "browser redirect blocked by response fence",
+            "browser redirect blocked by response fence",
+          ]);
+        } finally {
+          guard?.beginShutdown();
+          if (!contextClosed) {
+            try {
+              await context.close();
+              contextClosed = true;
+            } finally {
+              await guard?.close();
+            }
+          } else {
+            await guard?.close();
+          }
+          await Promise.all([...pending]);
+        }
+      });
     });
     test("browser transport recognizes existing bootstrap and Workspace REST reads", () => {
       const input = liveInstallInputs(environment());

@@ -39,6 +39,23 @@ Resource, and S3 customer-key route 4xx responses as failures. Optional live
 probes such as capability and form-availability discovery may return 4xx while
 the required surfaces remain healthy.
 
+The shared-account install-return journey is selected only by the dedicated
+`shared-auth-install-return` runner profile below. It uses the live browser
+project, but generic `live` always clears the profile selector and does not
+register this staging-only case. Before its first navigation, the case routes
+initial HTTP requests through the fixed staging app/issuer and transaction
+allowlist; allowed requests continue unchanged, and denied requests are
+aborted before dispatch. A page-scoped Chromium CDP response guard checks each
+redirect response before the browser follows its Location, continues only the
+expected original response without rewriting it, and fails closed for unknown
+targets and method-preserving 307/308 responses. Playwright request events
+count and classify every observed hop. It also routes WebSockets before
+connection, closes each routed socket immediately with a fixed policy reason,
+and never connects it to a server. A denied request or any WebSocket attempt
+fails the case. This bounds browser-originated transport;
+it does not observe private server-side token/RPC effects or prove the absence
+of server-side writes.
+
 Public-live treats every same-origin 4xx/5xx and every HTTP request failure as
 fatal; external-origin telemetry is outside its mutation fence.
 
@@ -94,9 +111,46 @@ The same two values may be supplied explicitly for operator tooling with
 `--base-url <http(s)-url>` and `--worker-version-id <lowercase-uuid>` (or
 `--expected-worker-version-id`) on the direct runner command.
 
-The live runner deliberately does not automate sign-in, mint a session, or
-fake an OAuth callback. The authenticated checks start from the supplied
-operator storage state; OIDC discovery/JWKS and the unauthenticated API gate
-are probed separately without that state. If the real callback cannot be
-replayed from the operator-owned session, record that as an explicit live
-evidence gap rather than weakening the browser assertions.
+The shared-account install-return profile is a separately selected staging
+journey. It requires the existing live inputs above plus the shared issuer
+origin, expected issuer Worker Version UUID, expected canonical account ID,
+and the encoded install-return query (`git`, `ref`, `name`, `product`, and
+`return_uri`, with optional `sourcePath` and `path`). Its external storage-state
+file must already contain the real staging issuer SSO cookie; the runner copies
+only that cookie into a fresh RP context with no app cookies or origin storage.
+The selected profile pins the app and issuer to their staging origins, validates
+both Worker Version UUIDs, and runs only the single return-journey test. It
+does not automate account creation, login or signup form entry, payment, or
+installation submission; the user consent journey uses the existing issuer
+session and returns to the exact install context.
+
+```bash
+TAKOSUMI_E2E_BASE_URL="https://app-staging.takosumi.com" \
+TAKOSUMI_E2E_STORAGE_STATE="/outside-repo/staging-issuer-session.json" \
+TAKOSUMI_E2E_WORKSPACE_NAME="<expected-staging-workspace>" \
+TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME="<existing-live-input>" \
+TAKOSUMI_E2E_APP_NAME="<existing-live-input>" \
+TAKOSUMI_E2E_APP_URL="https://app-staging.takosumi.com/" \
+TAKOSUMI_E2E_OBJECT_BUCKET_NAME="<existing-live-input>" \
+TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID="<staging-worker-uuid>" \
+TAKOSUMI_E2E_SHARED_AUTH_ISSUER_ORIGIN="https://auth-staging.takos.jp" \
+TAKOSUMI_E2E_EXPECTED_ISSUER_VERSION_ID="<staging-issuer-worker-uuid>" \
+TAKOSUMI_E2E_EXPECTED_ACCOUNT_ID="<canonical-staging-account-id>" \
+TAKOSUMI_E2E_INSTALL_RETURN_QUERY="<encoded-install-return-query>" \
+bun scripts/run-dashboard-browser-e2e.ts shared-auth-install-return
+```
+
+This direct profile accepts no Playwright arguments so a caller cannot replace
+its single-test selection. Missing inputs, invalid pinned origins or version
+IDs, and an absent or repository-local storage-state file fail before
+Playwright starts. The storage state is sensitive operator data; never commit
+it or place it in a URL.
+
+The generic live runner does not automate sign-in, mint a session, or fake an
+OAuth callback. Its authenticated checks start from the supplied operator
+storage state; OIDC discovery/JWKS and the unauthenticated API gate are probed
+separately without that state. The shared-account profile above is the explicit
+exception: it starts with a real existing issuer SSO cookie and follows the
+real issuer consent and callback. If that callback cannot be replayed from the
+operator-owned session, record it as an explicit live evidence gap rather than
+weakening the browser assertions.
