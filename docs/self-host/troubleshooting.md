@@ -19,6 +19,19 @@ curl -i http://localhost:26401/healthz # loopback-only local test
 保全してから修復します。`accounts` の health check は PostgreSQL 接続も確認します。
 production Caddy 構成では `https://<公開hostname>/healthz` を確認します。
 
+## Bun と PostgreSQL の起動時に出るログ
+
+`local_compose logs accounts`（production では同じ helper の `logs accounts`）に出る主なものです。
+
+| ログ | 原因と直し方 |
+| --- | --- |
+| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` が無い。32 バイト以上の値を `.env` に入れる |
+| `refusing to boot an https issuer` | issuer が https なのに安定した署名鍵が無い。`TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` と `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` を入れる |
+| `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` | 上流の ID プロバイダを設定したのに `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` が無い |
+| `clientSecretEnv references missing runtime secret` | 記述子の `clientSecretEnv` に書いた名前の secret がコンテナに届いていない。`docker-compose.override.yml` の `accounts.environment` で渡す |
+| `dashboard SPA build not found` | dashboard の build が無く、画面が出ない。Compose の image には入っている。手で起動する場合は `bun run build:dashboard` を実行するか、`TAKOSUMI_ACCOUNTS_STATIC_DIR` を設定する |
+| `/readyz` が `503` で `internalApiSecret` | [動いていることを確かめる](../concepts/self-host.md#動いていることを確かめる)を参照 |
+
 Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` で status/errorCode を確認し、
 `GET /api/v1/runs/:runId/logs` と events で止まった phase を特定します。
 

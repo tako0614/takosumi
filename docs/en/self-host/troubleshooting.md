@@ -19,6 +19,20 @@ When `migrations` fails, `accounts` will not start. Preserve the migration error
 state before repairing. The Accounts health check also checks its PostgreSQL connection.
 With the production Caddy composition, check `https://<public-hostname>/healthz`.
 
+## Startup logs on Bun and PostgreSQL
+
+These are the main lines in `local_compose logs accounts` (in production, `logs accounts`
+through the same helper).
+
+| Log | Cause and fix |
+| --- | --- |
+| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` is not set. Put a value of at least 32 bytes in `.env` |
+| `refusing to boot an https issuer` | The issuer is https but there is no stable signing key. Set `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` and `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` |
+| `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` | An upstream identity provider is configured without `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` |
+| `clientSecretEnv references missing runtime secret` | The secret named in the descriptor's `clientSecretEnv` does not reach the container. Pass it under `accounts.environment` in `docker-compose.override.yml` |
+| `dashboard SPA build not found` | There is no dashboard build, so no screens appear. The Compose image includes it. When starting by hand, run `bun run build:dashboard` or set `TAKOSUMI_ACCOUNTS_STATIC_DIR` |
+| `/readyz` returns `503` with `internalApiSecret` | See [Confirming it works](../concepts/self-host.md#confirming-it-works) |
+
 For Run failures, inspect status/errorCode in the dashboard or authorized `GET /api/v1/runs/:runId`, then
 use logs/events to identify the failing phase.
 
