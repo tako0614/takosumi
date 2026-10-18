@@ -26,7 +26,7 @@ files, pass those exact arguments on every operation. Keep the backup outside th
 The commands on this page start with `set -euo pipefail` so they stop at the first failure.
 A failure in your interactive shell closes that shell, so open a new one with `bash` before
 pasting. If a command fails while `accounts` is stopped, the block starts `accounts` again before it
-ends. An interruption with Ctrl-C does not, so run `docker compose up -d --wait accounts`
+ends. An interruption with Ctrl-C, or closing the terminal, does not, so run `docker compose up -d --wait accounts`
 yourself. A `$backup_file` left by a failure has not been verified. Writing to `/var/backups` needs write permission there.
 
 ```bash

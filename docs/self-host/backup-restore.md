@@ -26,7 +26,7 @@ Accounts と control plane の schema は同じ PostgreSQL database
 このページのコマンドは、失敗したらそこで止まるよう `set -euo pipefail` で始まります。対話中の
 shell で失敗すると、その shell が閉じます。先に `bash` で新しい shell を開いてから貼り付けます。
 `accounts` を止めている間にコマンドが失敗した場合は、`accounts` を起動し直してから終わります。
-Ctrl-C で中断した場合は起動し直さないので、自分で `docker compose up -d --wait accounts` を実行
+Ctrl-C で中断したり terminal を閉じたりした場合は起動し直さないので、自分で `docker compose up -d --wait accounts` を実行
 します。失敗したときに残った `$backup_file` は確かめていないファイルです。
 `/var/backups` に書き込むには、その場所への書き込み権限が要ります。
 

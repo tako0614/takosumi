@@ -48,7 +48,8 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 失敗すると、ここで止まり、`accounts` は止まったままになります。migration は前にしか進まないため、
 失敗した migration を戻すコマンドはありません。migration は 1 本ずつ確定するので、失敗する前に
 終わったものは適用済みのまま残ります。`migrations` の container は終わると消えるため、出力は
-`$migrate_log` のファイルで確かめます。止まった migration を確かめ、直前の backup を
+`$migrate_log` のファイルで確かめます。shell が閉じて変数が消えた場合は
+`ls -t "$HOME"/takosumi-migrate-*.log` で見つけます。止まった migration を確かめ、直前の backup を
 [復旧演習](./backup-restore.md)と同じ手順で別の project に戻して中身を確かめてから、対処を
 決めます。
 
