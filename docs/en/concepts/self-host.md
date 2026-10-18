@@ -438,9 +438,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://takosumi.example.com/readyz
 
 On the Bun and PostgreSQL shape, `/readyz` returns `503` with `internalApiSecret` in its reason
 unless `TAKOSUMI_INTERNAL_API_SECRET` is set. The bundled Compose does not pass it, and nothing
-but this check uses it today, so a `200` from `/healthz` means the service works. To make
-`/readyz` pass too, put a value from `openssl rand -hex 32` in `.env` and pass it in
-`docker-compose.override.yml`:
+but this check uses it today. A `200` from `/healthz` means the process finished its startup
+checks (sealing key, signing key, upstream provider settings) and PostgreSQL answers; it does
+not check the upstream identity provider or the dashboard. To make `/readyz` pass too, put a
+value from `openssl rand -hex 32` in `.env` **first**, then pass it in
+`docker-compose.override.yml`. Without the value in `.env`, this override makes every
+`docker compose` command fail, including `down` and `logs`:
 
 ```yaml
 services:
