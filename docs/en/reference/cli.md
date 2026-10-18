@@ -155,6 +155,12 @@ in production.**
 
 ## Platform Readiness Contributions
 
+This is for operators preparing launch-readiness evidence. It adds the extra evidence a hosted
+service or another edition requires on top of the OSS baseline. If you only add and use services,
+you do not need this section.
+
+::: details Show how contributions are built and validated
+
 `takosumi launch-readiness template` generates the baseline shared by OSS and
 Operator. When a hosted service or another edition requires additional
 operational evidence, the owner maintains a versioned
@@ -205,6 +211,8 @@ The `takosumi.platform-readiness-report@v2` validation result also returns the
 composed definition's `requiredDomainIds` and `requiredRehearsalStepIds`.
 Progress consumers use those arrays instead of OSS-only fixed IDs, so totals and
 completed counts remain exact when Operator or hosted-service contributions are present.
+
+:::
 
 ## Connections
 
