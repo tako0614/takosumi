@@ -54,7 +54,7 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 決めます。
 
 ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け
-（`local_project` と `local_dir` は[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）、
+（`local_project` と `local_dir` は[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)で設定したもの）、
 次のように helper に固定します。`docker-compose.override.yml` は読み込まず、必要な secret mapping
 だけを一時 override に追加します。
 
@@ -86,7 +86,7 @@ plan、backup evidence、適用手順を確認します。control D1 は
 リクエストによる schema bootstrap を既存環境の更新手順として扱いません。
 
 Accounts D1 は、新しく構築するときと同じ `takosumi accounts migrate-d1` の backup-status、
-plan、apply、verify の順で上げます（[Cloudflare に置く](../concepts/self-host.md#cloudflare-に置く)）。
+plan、apply、verify の順で上げます（[Cloudflare に置く](./cloudflare.md)）。
 Worker ごとに受け付ける Accounts D1 の版が決まっているため、適用と Worker のデプロイの
 どちらを先にするかは版によって変わります。v3 の Accounts D1 から上げる場合は、bridge Worker を
 デプロイしてから v4 を適用し、その後で v4 以降だけを受け付ける Worker に替える、という決まった

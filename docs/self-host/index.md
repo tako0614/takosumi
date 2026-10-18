@@ -2,10 +2,12 @@
 
 自分の環境に置いた Takosumi の更新、バックアップ、障害切り分けをまとめます。
 構成の境界と初回起動は[自分で動かす](../concepts/self-host.md)を参照してください。
-Bun と PostgreSQL の標準の構成を手元で試す場合は、そのページの
-[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)
+Bun と PostgreSQL の標準の構成を手元で試す場合は、[Bun と PostgreSQL に置く](./bun-postgres.md)の
+[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)
 の一時的な上書き設定（`compose.local-test.yml`）を使います。
 
+- [Cloudflare に置く](./cloudflare.md)
+- [Bun と PostgreSQL に置く](./bun-postgres.md)
 - [Takosumi 本体を更新する](./upgrade.md)
 - [バックアップと復旧](./backup-restore.md)
 - [トラブルシューティング](./troubleshooting.md)

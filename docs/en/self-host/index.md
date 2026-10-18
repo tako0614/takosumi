@@ -4,8 +4,11 @@ These pages cover updating, backing up, and troubleshooting your own Takosumi de
 Start with [Running it yourself](../concepts/self-host.md) for deployment boundaries and
 installation. To try the standard Bun and PostgreSQL composition on your own machine, use the
 temporary override file (`compose.local-test.yml`) from
-[Local loopback check](../concepts/self-host.md#local-loopback-check) on that page.
+[Local loopback check](./bun-postgres.md#local-loopback-check) in
+[Putting it on Bun and PostgreSQL](./bun-postgres.md).
 
+- [Putting it on Cloudflare](./cloudflare.md)
+- [Putting it on Bun and PostgreSQL](./bun-postgres.md)
 - [Updating Takosumi itself](./upgrade.md)
 - [Backup and recovery](./backup-restore.md)
 - [Troubleshooting](./troubleshooting.md)

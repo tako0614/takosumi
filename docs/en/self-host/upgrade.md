@@ -56,7 +56,7 @@ that stopped, restore the backup you just took into a separate project as in the
 
 For a local test project, keep the same dedicated project and Compose files for every
 operation (`local_project` and `local_dir` are the ones set in
-[Local loopback check](../concepts/self-host.md#local-loopback-check)). The example below uses only the base file and its temporary loopback override;
+[Local loopback check](./bun-postgres.md#local-loopback-check)). The example below uses only the base file and its temporary loopback override;
 add only reviewed secret mappings there if needed. It does not load
 `docker-compose.override.yml`.
 
@@ -90,7 +90,7 @@ Request-time schema bootstrap is not an upgrade procedure for an existing deploy
 
 Upgrade the Accounts D1 with the same `takosumi accounts migrate-d1` sequence as a new
 installation: backup-status, plan, apply, verify (see
-[Putting it on Cloudflare](../concepts/self-host.md#putting-it-on-cloudflare)). Each Worker
+[Putting it on Cloudflare](./cloudflare.md)). Each Worker
 accepts specific Accounts D1 versions, so whether you apply or deploy the Worker first
 depends on the version. Upgrading from a v3 Accounts D1 has a fixed order: deploy the
 bridge Worker, apply v4, then switch to a Worker that accepts only v4 and later. Just

@@ -51,7 +51,7 @@ echo "$backup_file"
 
 ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
 初回起動と同じ shell / project / override 変数（`local_project` と `local_dir` は
-[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
+[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
 次を実行します。
 
 ```bash

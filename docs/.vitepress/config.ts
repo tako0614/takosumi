@@ -70,6 +70,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "自分で運用",
       items: [
         { text: "自分で動かす", link: "/concepts/self-host" },
+        { text: "Cloudflare に置く", link: "/self-host/cloudflare" },
+        { text: "Bun と PostgreSQL に置く", link: "/self-host/bun-postgres" },
         { text: "運用ガイド", link: "/self-host/" },
         { text: "Takosumi 本体を更新する", link: "/self-host/upgrade" },
         { text: "バックアップと復旧", link: "/self-host/backup-restore" },
@@ -146,6 +148,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Self-host",
       items: [
         { text: "Running it yourself", link: "/en/concepts/self-host" },
+        { text: "Putting it on Cloudflare", link: "/en/self-host/cloudflare" },
+        { text: "Putting it on Bun and PostgreSQL", link: "/en/self-host/bun-postgres" },
         { text: "Operations guide", link: "/en/self-host/" },
         { text: "Updating Takosumi itself", link: "/en/self-host/upgrade" },
         { text: "Backup and recovery", link: "/en/self-host/backup-restore" },

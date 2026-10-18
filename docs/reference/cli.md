@@ -113,7 +113,7 @@ takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 
 Cloudflare D1 の schema migration は利用者向けのコマンドではなく、運用する側（operator）が
 release と同じ作業の中で行う手順です。自分で動かす場合の手順は
-[自分で動かす](../concepts/self-host.md#cloudflare-に置く)にあります。
+[自分で動かす](../self-host/cloudflare.md)にあります。
 
 ### 初期データを入れる
 
