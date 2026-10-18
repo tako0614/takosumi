@@ -71,7 +71,8 @@ Example:
 }
 ```
 
-Field names are case-sensitive. `endpoints.api` is `<origin>/api/v1`, while
+Field names are case-sensitive. Most are snake_case; `apiBaseUrl` and `oidcClientId`
+are camelCase. `endpoints.api` is `<origin>/api/v1`, while
 `apiBaseUrl` is `<origin>/api/v1`. `features.opentofu_runner` is `true` only
 when the endpoint has an OpenTofu runner configured; a composition without one,
 such as the Bun + PostgreSQL reference, returns `false`.
@@ -190,6 +191,7 @@ POST  /api/v1/sources/{sourceId}/hook-secret/rotate
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
 GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules
+POST  /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver
 
 GET   /api/v1/workspaces/{workspaceId}/capsules
 GET   /api/v1/capsules/{capsuleId}
@@ -224,6 +226,7 @@ POST /api/v1/runs/{runId}/cancel
 
 GET /api/v1/capsules/{capsuleId}/state-versions
 GET /api/v1/capsules/{capsuleId}/outputs
+GET /api/v1/capsules/{capsuleId}/current-resource-inventory
 GET /api/v1/workspaces/{workspaceId}/activity
 GET /api/v1/workspaces/{workspaceId}/interface-materialization-failures
 POST /api/v1/workspaces/{workspaceId}/interface-materialization-failures/{intentId}/retries

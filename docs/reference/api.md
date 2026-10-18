@@ -62,7 +62,8 @@ capability を参照します。
 }
 ```
 
-field 名は snake_case です。`product` は常に `takosumi` で、client は最初にこれを
+field 名は大文字と小文字を区別します。ほとんどは snake_case ですが、`apiBaseUrl` と
+`oidcClientId` は camelCase です。`product` は常に `takosumi` で、client は最初にこれを
 確認します。`endpoints.api` は origin そのものではなく `<origin>/api/v1` です。
 `features.opentofu_runner` は、その endpoint に OpenTofu runner が構成されている
 ときだけ `true` です。runner の無い構成 (Bun + PostgreSQL の reference など) は
@@ -220,6 +221,7 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
+| GET      | `/api/v1/capsules/{capsuleId}/current-resource-inventory`  | 現在の版に記録された OpenTofu の resource の一覧を読む |
 | GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/state-versions`              | StateVersion を一覧する                      |
 | GET      | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を一覧する                               |
@@ -290,6 +292,7 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/sources/{sourceId}/sync`                                        | 同期 Run を作る                                                   |
 | GET      | `/api/v1/sources/{sourceId}/snapshots`                                   | SourceSnapshot を一覧する                                         |
 | GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | 同期時に tree から検出した module と provider 要求を一覧する      |
+| POST     | `/api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver`  | 公開されている Git tag のうち、最も新しい安定版の SemVer を解決する |
 | POST     | `/api/v1/sources/{sourceId}/compatibility-check`                         | 互換性レポートを作る                                              |
 | GET      | `/api/v1/compatibility-reports/{reportId}`                               | 互換性レポートを読む                                              |
 

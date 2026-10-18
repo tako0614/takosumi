@@ -172,18 +172,22 @@ absent/non-string variables, and requirement kinds outside operator policy.
 `identity.oidc` is a Takosumi Accounts capability that any reviewed
 Git/OpenTofu app may request without naming a product or provider. The selected
 module must contain exactly one `identity.oidc` and exactly one
-`http.endpoint`. OIDC delivery is variables-only and has exactly four slots:
-`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. The endpoint delivers
+`http.endpoint`. OIDC delivery normally uses variables, with exactly four slots:
+`accountsUrl`, `issuerUrl`, `clientId`, and `redirectUri`. From v2.4 it can also use
+`bindings`, with exactly four slots: `issuerUrl`, `clientId`, `ownerSubject`, and
+`redirectUri`. The endpoint delivers
 `url` to a distinct string variable. OIDC scopes must be unique, include
 `openid`, and remain within the explicit
 `InstallConfig.policy.repositoryInstallUx.allowedOidcScopes`; no allowlist
 grants no capability.
 
-At Plan, the endpoint `url` variable must resolve to a canonical exact HTTPS
-origin with no path, query, fragment, or credentials. Takosumi derives the
-redirect URI from that origin and the reviewed `callbackPath`, then pins the
-exact four variables and authority digest in the private Plan sidecar. Plan and
-`apply_check` do not mutate Accounts. Only final Apply may idempotently register
+With variable delivery, at Plan the endpoint `url` variable must resolve to a
+canonical exact HTTPS origin with no path, query, fragment, or credentials.
+Takosumi derives the redirect URI from that origin and the reviewed
+`callbackPath`, then pins the exact four variables and authority digest in the
+private Plan sidecar. With binding delivery (v2.4), the four values are never
+written to the plan, state, or logs; they are passed to the runner only at
+Apply. Plan and `apply_check` do not mutate Accounts. Only final Apply may idempotently register
 the Capsule-bound public client, and retirement after terminal destroy is also
 idempotent. An unavailable Accounts capability or drift in origin, variable,
 callback, scope, or digest fails before runner execution. There is no fallback
