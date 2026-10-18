@@ -1,3 +1,7 @@
+---
+outline: [2, 3]
+---
+
 # Takosumi API
 
 The Takosumi API exposes the Git-based OpenTofu control plane, provider
@@ -222,13 +226,13 @@ The authoritative session-route inventory is
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
-**Account views**
+### Account views
 
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/api/v1/views/workspaces.v1` | Read the account Workspace inventory projection |
 
-**Workspaces**
+### Workspaces
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -253,7 +257,7 @@ lightly edited for readers.
 | POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Create a Workspace plan update Run |
 | POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Create a Workspace drift check Run |
 
-**Projects and Capsules**
+### Projects and Capsules
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -284,7 +288,7 @@ lightly edited for readers.
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
 
-**Sources**
+### Sources
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -301,7 +305,7 @@ lightly edited for readers.
 | POST | `/api/v1/sources/{sourceId}/compatibility-check` | Create a Compatibility Report |
 | GET | `/api/v1/compatibility-reports/{reportId}` | Read a Compatibility Report |
 
-**Git install plans**
+### Git install plans
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -309,7 +313,7 @@ lightly edited for readers.
 | GET | `/api/v1/install-plans/{installPlanId}` | Read an install plan without advancing it |
 | POST | `/api/v1/install-plans/{installPlanId}/reconcile` | Explicitly advance an install plan toward a reviewable Run |
 
-**Git revision plans**
+### Git revision plans
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -317,7 +321,7 @@ lightly edited for readers.
 | GET | `/api/v1/revision-plans/{revisionPlanId}` | Read a Git revision plan without advancing it |
 | POST | `/api/v1/revision-plans/{revisionPlanId}/reconcile` | Advance a Git revision plan toward a reviewable Run |
 
-**Runs and StateVersions**
+### Runs and StateVersions
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -334,7 +338,7 @@ lightly edited for readers.
 | GET | `/api/v1/state-versions/{stateVersionId}` | Read a StateVersion projection |
 | POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | Create a StateVersion rollback plan |
 
-**Credentials and Output sharing**
+### Credentials and Output sharing
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -351,7 +355,7 @@ lightly edited for readers.
 | POST | `/api/v1/output-shares/{shareId}/approve` | Approve an OutputShare |
 | POST | `/api/v1/output-shares/{shareId}/revoke` | Revoke an OutputShare |
 
-**Dashboard projections**
+### Dashboard projections
 
 | Method | Path | Description |
 | --- | --- | --- |
