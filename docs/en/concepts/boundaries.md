@@ -48,7 +48,7 @@ Check an endpoint instead of guessing from an edition name.
 curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-An authenticated client can also read `/api/v1/capabilities`.
+You can also read `/api/v1/capabilities`. The Takosumi API and the Cloudflare Worker serve both without authentication.
 
 ## What the Takosumi hosted service adds
 
@@ -61,7 +61,7 @@ Those are not general OSS contracts. Use the
 and limits.
 
 Hosted-service code consumes OSS contracts. The OSS software does not depend on
-private hosted-service code or Stripe.
+private hosted-service code or on Stripe's SDK or API.
 
 ## Where Takoform and external Hosts fit
 

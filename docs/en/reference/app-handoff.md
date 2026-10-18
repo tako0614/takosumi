@@ -12,6 +12,10 @@ It is not a mobile-only protocol and it is not a product registry. Takosumi
 receives a plain OpenTofu/Terraform source, creates a Capsule, runs the normal
 Takosumi flow, then optionally returns a connection payload to the client.
 
+If you only need an install link for a README or website, read
+[Share an install link](../getting-started/install-link.md). This page covers the whole
+protocol, including returning to your own client after adding.
+
 ```text
 client
   -> /install URL
@@ -39,12 +43,12 @@ Supported query parameters:
 
 | Parameter    | Required | Meaning                                                       |
 | ------------ | -------- | ------------------------------------------------------------- |
-| `git`        | no       | HTTPS Git URL for a plain OpenTofu/Terraform module           |
-| `source`     | no       | Packed module address, for example `git::...?...`             |
+| `git`        | `git` or `source` | HTTPS Git URL for a plain OpenTofu/Terraform module           |
+| `source`     | `git` or `source` | Packed module address: `git::<HTTPS URL>//<module folder>?ref=<ref>` (`//<folder>` and `?ref=` are optional) |
 | `ref`        | no       | Git branch, tag, or commit                                    |
 | `sourcePath` | no       | Git subtree captured, archived, and scanned; defaults to `.`  |
-| `path`       | no       | Archive-relative module matched inside the Source subtree     |
-| `name`       | no       | Display name for the service                                  |
+| `path`       | no       | Folder of the module to add, relative to `sourcePath`; ignored if the scan does not find it |
+| `name`       | no       | Service name (lowercase letters, numbers, hyphens); defaults to the repository name |
 | `product`    | no       | Client product key, only with `return_uri`                    |
 | `return_uri` | no       | Connection payload target, only with `product`                |
 
@@ -81,6 +85,27 @@ https://takosumi.example.com/install
   &return_uri=notesapp%3A%2F%2Fconnect
 ```
 
+## Opening the Takosumi registered in the browser
+
+You can also use `web+takosumi:install?<the same query>`, which names no origin. If the person
+registered their browser under **Account**, in **Where store installs land**, the browser opens
+the link at `/install?handoff=<the whole link>` on the Takosumi they registered.
+
+Takosumi reads the `handoff` value as a `web+takosumi:install` link, takes only the eight
+parameters above, and opens `/new`. Query parameters outside `handoff` are dropped. The value is not
+used, and `/new` opens with nothing filled in, if any of these is true:
+
+- It has an unknown or repeated parameter
+- A value is empty, has spaces around it, or contains a line break or NUL
+- It has both or neither of `git` and `source`
+- `path` or `sourcePath` breaks the rules
+- Only one of `product` and `return_uri` is given, or either one breaks its rules
+- It is longer than 4,096 characters once decoded
+
+The values it takes are then checked by `/new` with the same rules as `/install`. The authority form `web+takosumi://install` is not
+supported. How to use it is in
+[Share an install link](../getting-started/install-link.md#a-link-that-opens-the-visitor-s-own-takosumi).
+
 ## OpenTofu-Native Flow
 
 The URL does not install anything by itself. It only pre-fills an explicit
@@ -101,8 +126,10 @@ The source repository stays a plain OpenTofu/Terraform module. Takosumi does not
 require a Takosumi-specific source metadata file or product-specific metadata
 file.
 
-`sourcePath` and `path` accept only `.` or canonical relative directories. The
-whole link is rejected when it contains unknown, duplicate, or invalid query fields.
+`sourcePath` and `path` accept only `.` or canonical relative directories. If the
+link contains any unknown, duplicate, or invalid query field, none of its values are used and
+the add screen opens with an empty source, without an error
+([When a link is not used](../getting-started/install-link.md#when-a-link-is-not-used)).
 Module inputs do not travel in the URL; links carrying `var.<name>` or
 `varjson.<name>` are rejected. Inputs are entered in the Takosumi dashboard screen.
 Secrets, tokens, provider credentials, and private
@@ -165,8 +192,9 @@ custom scheme in authority form (`<app-scheme>://...`). Browser-executable and
 browser-local schemes such as `javascript:`, `data:`, `vbscript:`, `file:`, and
 `blob:` are rejected. Takosumi appends the connect payload itself.
 
-The `javascript:`, `data:`, `vbscript:`, `blob:`, `file:`, `about:`,
-`filesystem:`, and `view-source:` schemes are rejected, including their
+Also, an `http:` web callback and a custom scheme that is not in authority form (such as
+`notesapp:connect`) are rejected. In addition, the `javascript:`, `data:`, `vbscript:`,
+`blob:`, `file:`, `about:`, `filesystem:`, and `view-source:` schemes are rejected even in
 authority form (`javascript://…`). The connect link is rendered as an anchor in
 the dashboard, so those are not links: they are script execution in the
 dashboard origin.

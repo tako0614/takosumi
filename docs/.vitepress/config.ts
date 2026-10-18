@@ -19,16 +19,18 @@ function firstParagraph(srcDir: string, relativePath: string): string | undefine
 }
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "はじめに", link: "/getting-started/quickstart" },
-  { text: "解説", link: "/concepts/" },
+  { text: "はじめに", link: "/getting-started/quickstart", activeMatch: "^/(getting-started/(quickstart|after-adding)|concepts/boundaries)" },
+  { text: "解説", link: "/concepts/", activeMatch: "^/concepts/(?!self-host|boundaries)" },
+  { text: "自分で運用", link: "/concepts/self-host", activeMatch: "^/(concepts/self-host|self-host/)" },
   { text: "リファレンス", link: "/reference/api" },
   { text: "公式ホスティング", link: "https://app.takosumi.com/docs/" },
 ];
 
 // The site title already links to /en/, as the Japanese title does to /.
 const enNav: DefaultTheme.NavItem[] = [
-  { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Concepts", link: "/en/concepts/" },
+  { text: "Getting started", link: "/en/getting-started/quickstart", activeMatch: "^/en/(getting-started/(quickstart|after-adding)|concepts/boundaries)" },
+  { text: "Concepts", link: "/en/concepts/", activeMatch: "^/en/concepts/(?!self-host|boundaries)" },
+  { text: "Self-host", link: "/en/concepts/self-host", activeMatch: "^/en/(concepts/self-host|self-host/)" },
   { text: "Reference", link: "/en/reference/api" },
   { text: "Hosted service", link: "https://app.takosumi.com/docs/en/" },
 ];
@@ -41,7 +43,15 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Takosumi とは", link: "/" },
         { text: "クイックスタート", link: "/getting-started/quickstart" },
         { text: "更新・戻す・削除", link: "/getting-started/after-adding" },
+        { text: "製品の境界", link: "/concepts/boundaries" },
+      ],
+    },
+    {
+      text: "作る",
+      items: [
         { text: "リポジトリを用意する", link: "/getting-started/prepare-repository" },
+        { text: "追加リンクを配る", link: "/getting-started/install-link" },
+        { text: "ホームにアプリを出す", link: "/getting-started/home-launcher" },
         { text: "API だけ動かす", link: "/getting-started/api-only" },
       ],
     },
@@ -56,17 +66,18 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "認証情報", link: "/concepts/credentials" },
         { text: "Interface", link: "/concepts/interfaces" },
         { text: "利用量と課金", link: "/concepts/usage-and-billing" },
+      ],
+    },
+    {
+      text: "自分で運用",
+      items: [
         { text: "自分で動かす", link: "/concepts/self-host" },
-        {
-          text: "運用ガイド",
-          link: "/self-host/",
-          items: [
-            { text: "Takosumi 本体を更新する", link: "/self-host/upgrade" },
-            { text: "バックアップと復旧", link: "/self-host/backup-restore" },
-            { text: "トラブルシューティング", link: "/self-host/troubleshooting" },
-          ],
-        },
-        { text: "製品の境界", link: "/concepts/boundaries" },
+        { text: "Cloudflare に置く", link: "/self-host/cloudflare" },
+        { text: "Bun と PostgreSQL に置く", link: "/self-host/bun-postgres" },
+        { text: "運用ガイド", link: "/self-host/" },
+        { text: "Takosumi 本体を更新する", link: "/self-host/upgrade" },
+        { text: "バックアップと復旧", link: "/self-host/backup-restore" },
+        { text: "トラブルシューティング", link: "/self-host/troubleshooting" },
       ],
     },
     {
@@ -104,7 +115,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
 const enSidebar: DefaultTheme.SidebarMulti = {
   "/en/": [
     {
-      text: "Software",
+      text: "Getting started",
       items: [
         { text: "Takosumi software", link: "/en/" },
         {
@@ -112,7 +123,15 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           link: "/en/getting-started/quickstart",
         },
         { text: "Update, restore, delete", link: "/en/getting-started/after-adding" },
+        { text: "Product boundaries", link: "/en/concepts/boundaries" },
+      ],
+    },
+    {
+      text: "Build",
+      items: [
         { text: "Prepare a repository", link: "/en/getting-started/prepare-repository" },
+        { text: "Share an install link", link: "/en/getting-started/install-link" },
+        { text: "Show your app on the home screen", link: "/en/getting-started/home-launcher" },
         { text: "Run only the API", link: "/en/getting-started/api-only" },
       ],
     },
@@ -127,17 +146,18 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Credentials", link: "/en/concepts/credentials" },
         { text: "Interfaces", link: "/en/concepts/interfaces" },
         { text: "Usage and billing", link: "/en/concepts/usage-and-billing" },
+      ],
+    },
+    {
+      text: "Self-host",
+      items: [
         { text: "Running it yourself", link: "/en/concepts/self-host" },
-        {
-          text: "Operations guide",
-          link: "/en/self-host/",
-          items: [
-            { text: "Updating Takosumi itself", link: "/en/self-host/upgrade" },
-            { text: "Backup and recovery", link: "/en/self-host/backup-restore" },
-            { text: "Troubleshooting", link: "/en/self-host/troubleshooting" },
-          ],
-        },
-        { text: "Product boundaries", link: "/en/concepts/boundaries" },
+        { text: "Putting it on Cloudflare", link: "/en/self-host/cloudflare" },
+        { text: "Putting it on Bun and PostgreSQL", link: "/en/self-host/bun-postgres" },
+        { text: "Operations guide", link: "/en/self-host/" },
+        { text: "Updating Takosumi itself", link: "/en/self-host/upgrade" },
+        { text: "Backup and recovery", link: "/en/self-host/backup-restore" },
+        { text: "Troubleshooting", link: "/en/self-host/troubleshooting" },
       ],
     },
     {
@@ -180,7 +200,7 @@ const base = process.env.VITEPRESS_BASE ?? "/docs/";
 export default defineConfig({
   title: "Takosumi",
   description:
-    "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
+    "Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ追加して使うための管理サーバー",
   lang: "ja",
   base,
   head: [
@@ -314,7 +334,7 @@ export default defineConfig({
       lang: "ja",
       title: "Takosumi",
       description:
-        "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
+        "Git に置いた OpenTofu / Terraform のソフトウェアを、接続したクラウドへ追加して使うための管理サーバー",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -349,7 +369,7 @@ export default defineConfig({
       lang: "en-US",
       title: "Takosumi",
       description:
-        "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
+        "A server that adds Git-hosted OpenTofu and Terraform software to the clouds you connect",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,

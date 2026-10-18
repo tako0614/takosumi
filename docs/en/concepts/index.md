@@ -19,8 +19,8 @@ A Workspace is not team- or permission-first. It is a purpose-specific work,
 resource, and authorization boundary such as Personal, Work, Experiments, or
 Client. Add membership and sharing only when needed. The display name is the
 primary identity people see; `handle` is a stable, globally unique technical
-identifier for API and CLI use. First-party dashboard flows normally generate
-it and show `@handle` only for disambiguation or in advanced details. Concrete
+identifier for API and CLI use. First-party dashboard flows generate it at
+creation and show `@handle` in places such as Workspace settings. Concrete
 execution environments such as `production` and `preview` belong to Capsules;
 Environment is not another name for Workspace.
 

@@ -137,3 +137,9 @@ screen. Commit the actual files instead.
 The standard runner uses OpenTofu 1.12.5. If `required_version` does not include it, the check
 fails and the add screen says "The pre-add check couldn't finish." The screen suggests trying
 again, but for this cause every retry gives the same result, so check `required_version`.
+
+## Next
+
+When the repository is ready, [share an install link](./install-link.md) so people can open
+the add screen from your README or website. If your software has a screen people open,
+[show it on the home screen](./home-launcher.md) as a dashboard tile.

@@ -48,32 +48,46 @@ context を安全に統合できるかは別の条件です。停止を避ける
 
 issuer browser session と同じ browser の操作で
 `POST /api/v1/account/identity-merges` に `{sourceSubject,targetSubject}` を渡します。
-対象は現在の操作者が含まれる、確認済みの2 account です。5分以内に各 leg を進めます。
+対象は現在の操作者が含まれる、確認済みの2 account です。応答とともに
+`__Host-takosumi-merge-browser` cookie（300 秒）が設定され、以降のすべての手順でこの cookie が
+要ります。期限（`expiresAt`）は作成から 5 分で、`consent` までの手順はこの中に終えます。
 
-1. `POST /{operationId}/upstream-proof/begin` に
+1. 各 leg（`source` と `target`）で、`POST /{operationId}/upstream-proof/begin` に
    `{role:"source"|"target", providerId, consent:true}` を送ります。
 2. 200 の `{authorization_url,operation_id,role}` にある provider URL へ browser で
    移動します。callback は opaque `proof_receipt` と `operation_id` を返します。
-3. `POST /{operationId}/prove` に `{receiptId}` を送ります。両 leg に対して実施します。
-4. `POST /{operationId}/consent` に `{consent:true}` を送り、owner reconciliation を
-   待ちます。全 owner の整合が確認されるまで merged login は有効になりません。
+3. 各 leg で `POST /{operationId}/prove` に `{receiptId}` を送ります。両方が終わると、
+   operation は `proved` になります。
+4. `POST /{operationId}/context-plan` に `{}` を送ります。応答の `plan` に、統合後の
+   Workspace、現在の membership、残す課金 context の計画が入り、
+   `operation.contextPlan.planDigest` にその digest が入ります。
+5. 各 leg が別々に、`POST /{operationId}/context-accept` に `{planDigest, consent:true}` を
+   送って同じ計画を承認します。provider の consent や、片方だけの承認では代わりに
+   なりません。
+6. target account の session で、`POST /{operationId}/consent` に `{consent:true}` を送ります。
+   source の session では `merge_conflict` で拒否されます。全 owner の整合が確認されると、
+   統合された login が有効になります。応答の `status` が `proved` のままなら整合は保留中で、
+   期限内に `POST /{operationId}/activate` でやり直します。期限の後は、手動の `activate` は
+   `merge_conflict` で拒否され（自動の再試行で `reviewed_recovery_required` になった後は
+   `recovery_review_required`）、自動の再試行は操作を `reviewed_recovery_required` に移すだけで、
+   統合は完了しません。
 
-### Context plan に対応する版との違い
+`GET /{operationId}` で、各 leg の証明と承認の状態、期限を読めます。
 
-上の基本手順は、この文書の基準となる
-[main source](https://github.com/tako0614/takosumi/blob/dac30855915e49e5a4fb9782c489a023e7ed1f5a/accounts/service/src/identity-merge.ts#L45-L96)
-の2 account flowです。
-[未マージの context-plan 対応候補](https://github.com/tako0614/takosumi/blob/11d8acf5cae3d624dda6656d84bdcdccdc0585b6/accounts/service/src/identity-merge.ts#L743-L780)
-は、両 leg の証明後に Workspace・現在の membership・保持する課金 context の計画を
-確認し、各 leg が同じ計画を別々に明示承認してから最終 consent に進む方式です。
-provider consent や target 側だけの承認は、この context acceptance を代替しません。
-この候補の初期対象は、共有されていない既存 personal Workspace が各1つの2 account
-で、team・追加 context・復旧で残った行を任意に省略して通すことはできません。
+今の版が扱える計画は、統合先（target）と統合元（source）の Workspace を 1 つずつ、合わせて
+2 つの context だけです（`two-disjoint-personal-contexts/v1`）。計画がこの形に収まらないときは
+`context_plan_conflict` で止まります。team の context や復旧で残った行を省いて通すことは
+できません。
 
-候補の手順や endpoint が現在の deployment にあるとは限りません。未対応版に追加の
-API を呼ぶ手順は、この基本 flow へ混ぜません。同一 operation の再送・同一 recovery
-判断の承認更新と、新しい group 統合・復旧後の別 operation は区別します。繰り返し
-統合の拡張は設計中であり、現在の資格や権限を広げるものではありません。
+期限を過ぎると、計画の作成は `context_plan_unavailable`、`consent` は `merge_conflict` で
+止まります。
+
+統合を完了させるには、統合の整合処理（reconciler）と再試行の仕組みを Accounts に外から
+渡す必要があります。この repository で渡しているのは auth-staging の Worker だけです。
+無い構成では証明までは進みますが、`context-plan` は `context_plan_unavailable`、`consent` は
+`merge_reconciliation_unavailable` か `merge_retry_unavailable` で止まります。dashboard に統合の
+画面はありません。この API は issuer の origin で動く first-party のページから呼びます。この
+repository にあるのは、staging 用の context 確認画面だけです。
 
 上記 suffix の base は `/api/v1/account/identity-merges` です。変更は issuer の
 exact Origin と host-only issuer/merge cookie を必要とし、response は no-store です。
@@ -87,11 +101,14 @@ operation key は保持します。wallet や role を自動で和算しませ�
 owner ACK 不足は統合を止めます。credential の unlink は credential を無効にし、
 account や wallet を分割しません。誤った統合の取り消しは owner-reviewed recovery です。
 
-credential の選択は cookie 認証された readonly
-`GET /api/v1/account/identity-credentials` の最大100件の自分の provider identity を使います。
+credential の選択には、cookie で認証する読み取り専用の
+`GET /api/v1/account/identity-credentials` が返す、自分の provider identity を使います。100 件を
+超えると 503 `credential_inventory_unavailable` になります。
 `POST /api/v1/account/identity-credentials/unlink-intents` に
 `{removedIdentity,retainedIdentity,consent:true}` を送り、intent の
 `/upstream-proof/begin` に `{consent:true}` を送って残す provider で新しく認証します。
 callback の `proof_receipt` を intent の `/complete` に
 `{receiptId,consent:true}` として渡します。現在の対応は retained social credential で、
-passkey を残す証明はこの flow にありません。旧 `/unlink` route は利用できません。
+passkey を残す証明はこの flow にありません。unlink の完了にも整合処理が要り、無い構成では
+`unlink_reconciliation_unavailable` で止まります。旧 `/unlink` は 409 `unlink_intent_required` を
+返します。`unlink-intents` を使ってください。

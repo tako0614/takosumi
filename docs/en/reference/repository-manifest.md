@@ -84,8 +84,12 @@ provider, or policy behavior.
 
 The dashboard auto-selects exactly one candidate and asks the user to select
 when multiple candidates exist. A path that exists only in the manifest is not
-a candidate, and an explicit URL `path` fails closed with a typed 4xx unless it
-exists in the immutable scan result. An absent manifest does not block scanned
+a candidate. An install link's `path` that the immutable scan result does not contain
+is ignored, and the dashboard chooses again from the scanned candidates. An install plan
+whose explicit module path is not in the pinned tree fails with
+`repository_install_ux_module_missing`, or with
+`repository_install_ux_module_path_repository_relative` when the path repeats `sourcePath`
+(it was written from the top of the repository). An absent manifest does not block scanned
 modules. A malformed or invalid optional manifest is likewise never guessed or
 partially adopted: its assistance is disabled and the scan-derived generic
 install continues. Only an operator Host policy that explicitly requires an
@@ -248,11 +252,16 @@ Before Plan starts, the dashboard discloses the exact argv, working directory
 (Source root when omitted), and outputs. Plan/Run consumes only the persisted
 InstallConfig and never re-reads repository metadata at runtime.
 
-## `interfaces` (v2 / v2.1 / v2.2 / v2.3)
+## `interfaces` (v2 through v2.4)
 
-v2, v2.1, v2.2, and v2.3 may add at most 32 generic Capsule Interface proposals per
-module. An `interfaces` field is invalid in v1. v2.1 and v2.2 retain the exact
-v2 Interface schema and compiler semantics. This section declares Interfaces a
+v2, v2.1, v2.2, v2.3, and v2.4 may add at most 32 generic Capsule Interface proposals per
+module. An `interfaces` field is invalid in v1. v2.1 through v2.4 retain the exact v2
+Interface schema and compiler semantics.
+
+For a complete example that puts a screen on the home screen, see
+[Show your app on the home screen](../getting-started/home-launcher.md).
+
+This section declares Interfaces a
 Capsule provides; `interface.consume` declares an Interface it consumes.
 
 Each declaration contains only `key`, `name`, `spec`, and optional
@@ -265,9 +274,9 @@ public JSON `document`, optional `inputs`, and `access`.
   `sensitive: false` and `ephemeral: false`. There is no name-based fallback.
 - `access.visibility` is fixed to `workspace`. `resourceUriInput` must name an
   input in the same spec. A repository cannot supply host-owned `policyRef`.
-- `bindingRequests` has at most one entry. Its subject is only
-  `installing_principal`, permissions contain 1–16 tokens, and delivery is only
-  `{ "type": token }`. Missing operator permission/delivery allowlists reject
+- `bindingRequests` has at most one entry. An entry has exactly four fields: `key` (a
+  required token), `subject` containing only `{ "source": "installing_principal" }`,
+  `permissions` with 1–16 unique tokens, and `delivery` containing only `type`. Missing operator permission/delivery allowlists reject
   the request.
 
 The generic default InstallConfig permits only `ui.open` with `none` and

@@ -29,10 +29,14 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
 - **手元で追加からデプロイまで試す** — [クイックスタート](./getting-started/quickstart.md)
   に従い、Linux 上で Docker と Bun を使って dashboard、サインイン、データベース、runner を
   起動します。ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを
-  作らないため、クラウドの認証情報は要りません。
+  作らないため、クラウドの認証情報は要りません。macOS では、[API だけ動かす](./getting-started/api-only.md)
+  で API を確かめられます。
 - **自分の環境で運用する** — [自分で動かす](./concepts/self-host.md)で構成を選びます。
-  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
-  実行するには、runner を別に組み込みます。
+  Cloudflare の雛形は runner を含みますが、apply と destroy には release tool が作る digest が
+  要ります（[apply と destroy について](./self-host/cloudflare.md#apply-と-destroy-について)）。
+  Bun と PostgreSQL の雛形で plan と apply を
+  実行するには、runner を別に組み込みます。ソフトウェアの利用料はなく、置き場所とアプリが
+  作るリソースの料金がかかります（[費用](./concepts/self-host.md#費用)）。
 - **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](./getting-started/api-only.md)
   の手順でメモリ上の API サーバーを起動します。
 
@@ -65,6 +69,10 @@ Takosumi は first-party Terraform/OpenTofu provider を同梱しません。Clo
   前の版に戻す、削除する
 - [リポジトリを用意する](./getting-started/prepare-repository.md) — 自分のソフトウェアを
   Takosumi から追加できる形にする
+- [追加リンクを配る](./getting-started/install-link.md) — README などから、取得元が入った
+  追加画面を開けるようにする
+- [ホームにアプリを出す](./getting-started/home-launcher.md) — 画面を持つソフトウェアを、
+  dashboard のホームのタイルから開けるようにする
 - [全体像](./concepts/index.md) — 最小限の用語と、デプロイが進む順序
 - [Source と Capsule](./concepts/sources.md) — Git の ref を commit に固定する方法
 - [実行モデル](./concepts/run-model.md) — plan、承認、apply、destroy

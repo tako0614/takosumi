@@ -72,8 +72,11 @@ hint の flow を使い、Store metadata や DB-owned deployment profile は mod
 policy を選びません。
 
 候補が1件なら dashboard が自動選択し、複数なら利用者が選択します。manifest にだけある
-path は候補にならず、URL で明示された `path` も immutable scan result に存在しなければ
-typed 4xx で fail closed します。manifest が absent でも scan された module は利用できます。
+path は候補にならず、追加リンクの `path` も immutable scan result に無ければ使われず、
+dashboard は scan の候補から選び直します。install plan に明示した module path が固定した
+tree に無い場合は、その plan が `repository_install_ux_module_missing` で失敗します。path が
+`sourcePath` を繰り返している（リポジトリの最上位から書いた）場合は
+`repository_install_ux_module_path_repository_relative` で失敗します。manifest が absent でも scan された module は利用できます。
 任意の manifest が malformed/invalid な場合も、その内容を推測・部分採用せず assistance を
 無効化し、scan 由来の generic install を続行します。operator の Host policy が exact manifest
 API version を明示的に必須化した場合だけ、absent/invalid/version mismatch を fail closed に
@@ -221,11 +224,12 @@ Dashboard は Plan を開始する前に exact argv、working directory（省略
 root）、outputs を表示します。Plan/Run は captured repository metadata を再読込せず、
 persist 済み InstallConfig だけを使います。
 
-## `interfaces` (v2 / v2.1 / v2.2 / v2.3)
+## `interfaces` (v2〜v2.4)
 
-v2、v2.1、v2.2、v2.3 は module ごとに最大32件の generic Capsule Interface proposal を
-追加できます。v1 に `interfaces` を置くと invalid です。v2.1 と v2.2 は v2 の
-Interface schema と compiler semantics をそのまま保持します。この section は
+v2、v2.1、v2.2、v2.3、v2.4 は module ごとに最大32件の generic Capsule Interface
+proposal を追加できます。v1 に `interfaces` を置くと invalid です。v2.1〜v2.4 は v2 の
+Interface schema と compiler semantics をそのまま保持します。画面をホームに出す完全な例は
+[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。この section は
 Capsule が提供する Interface、`interface.consume` は Capsule が利用する Interface です。
 
 各 declaration は `key`, `name`, `spec`, optional `bindingRequests` だけを持ちます。
@@ -238,8 +242,9 @@ closed object です。
   `ephemeral: false` を証明しなければ採用されません。名前の推測はありません。
 - `access.visibility` は `workspace` 固定です。`resourceUriInput` は同じ spec の
   input 名でなければなりません。host-owned `policyRef` は指定できません。
-- `bindingRequests` は最大1件です。subject は `installing_principal` のみ、permission
-  は1〜16件、delivery は `{ "type": token }` だけです。operator の明示的な
+- `bindingRequests` は最大1件です。entry は `key`（必須の token）、
+  `{ "source": "installing_principal" }` だけの `subject`、1〜16件の重複しない
+  `permissions`、`type` だけを持つ `delivery` の 4 つだけを持ちます。operator の明示的な
   permission/delivery allowlist が無い場合は拒否されます。
 
 generic default InstallConfig が許可するのは、installer本人に対する

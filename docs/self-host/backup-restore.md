@@ -23,6 +23,13 @@ Accounts と control plane の schema は同じ PostgreSQL database
 起動した場合は、その起動時と同じ project/file 引数を全操作に使ってください。backup は checkout
 の外に保存します。
 
+このページのコマンドは、失敗したらそこで止まるよう `set -euo pipefail` で始まります。対話中の
+shell で失敗すると、その shell が閉じます。先に `bash` で新しい shell を開いてから貼り付けます。
+`accounts` を止めている間にコマンドが失敗した場合は、`accounts` を起動し直してから終わります。
+Ctrl-C で中断したり terminal を閉じたりした場合は起動し直さないので、自分で `docker compose up -d --wait accounts` を実行
+します。失敗したときに残った `$backup_file` は確かめていないファイルです。
+`/var/backups` に書き込むには、その場所への書き込み権限が要ります。
+
 ```bash
 cd deploy/node-postgres
 set -euo pipefail
@@ -33,15 +40,18 @@ chmod 700 "$backup_dir"
 backup_file="$backup_dir/takosumi-$(date -u +%Y%m%dT%H%M%SZ).dump"
 compose() { docker compose "$@"; }
 compose stop accounts
+trap 'compose up -d --wait accounts' ERR
 compose exec -T postgres pg_dump -U takosumi -d takosumi_accounts -Fc > "$backup_file"
 chmod 600 "$backup_file"
 compose exec -T postgres pg_restore --list < "$backup_file" >/dev/null
+trap - ERR
 compose up -d --wait accounts
+echo "$backup_file"
 ```
 
 ローカル smoke-test project を backup する場合、default Compose の上記コマンドは使いません。
 初回起動と同じ shell / project / override 変数（`local_project` と `local_dir` は
-[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
+[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)で設定したもの）を使い、
 次を実行します。
 
 ```bash
@@ -54,19 +64,26 @@ backup_file="$backup_dir/takosumi-local-$(date -u +%Y%m%dT%H%M%SZ).dump"
 local_files=(-f docker-compose.yml -f "$local_dir/compose.local-test.yml")
 local_compose() { docker compose -p "$local_project" "${local_files[@]}" "$@"; }
 local_compose stop accounts
+trap 'local_compose up -d --wait accounts' ERR
 local_compose exec -T postgres pg_dump -U takosumi -d takosumi_accounts -Fc > "$backup_file"
 chmod 600 "$backup_file"
 local_compose exec -T postgres pg_restore --list < "$backup_file" >/dev/null
+trap - ERR
 local_compose up -d --wait accounts
+echo "$backup_file"
 ```
 
 バックアップと別の operator secret store に、`POSTGRES_PASSWORD`、
 `TAKOSUMI_SECRET_STORE_PASSPHRASE`、`TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`、
 `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`、`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET`、
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` と、設定していれば upstream provider secrets を保管します。
-封印鍵や署名鍵を失うと、保管したデータを読めないか、既存 token を検証できなくなります。
-`TAKOSUMI_SECRET_STORE_PASSPHRASE` の変更後は新しい値で過去の export を復号できず、
-export 作成時の値を紛失すると復号できなくなります。
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` と、上流の ID プロバイダを設定していれば
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` とその client secret を保管します。
+`TAKOSUMI_SECRET_STORE_PASSPHRASE` は、PostgreSQL に保存する接続（ProviderConnection）の
+認証情報と OpenTofu の state、export を封印する鍵です。値を変えたり失ったりすると、それまでに
+封印したものはすべて読めなくなります。署名鍵を失うと既存の token を検証できなくなり、
+`TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` が変わると、まだアカウントと結び付いていない上流の
+サインインに、元とは別のアカウントが作られます。すでに結び付いたものは、保存済みの
+アカウントのまま使えます。
 設定、Git commit、image digest、migration head も記録します。Caddy volume の証明書状態は
 再発行できますが、バックアップすれば ACME 再取得を避けられます。
 
@@ -79,6 +96,7 @@ volume を作るため、元の database に触れません。`--clean` は使�
 
 ```bash
 set -euo pipefail
+[ "$(basename "$PWD")" = node-postgres ] || cd deploy/node-postgres
 # In a new shell, point this at the exact custom-format archive created above.
 # backup_file=/path/to/verified-backup.dump
 restore_project="takosumi-restore-check-$(date +%s)-$$"
@@ -116,12 +134,21 @@ sign-in 成功を前提にしません。migration と health check の成功後
 確認します。sign-in を追加検証する場合は temporary override に restore 用の provider descriptor/client
 JSON、secret mapping を追加し、`restore_compose up -d --wait accounts` で反映してから試します。
 認証済み記録を読む場合もこの追加設定を用意してから行います。
-確認後は専用 project の container と volume を確認してから片付けます。元の deployment project や
-volume は対象にしません。`restore_dir` の一時設定も最後に削除します。restore-specific
-認証設定を用意した場合はサインイン、既存 Accounts / Workspace / Run 記録、ProviderConnection の復号も確認します。
-標準の配布に runner は含まれず、Git source、plan artifact、provider 側の実リソースは
-この PostgreSQL backup から復元されません。`takosumi-runtime` volume と custom composition の
-実際の永続化された store も個別に復旧します。
+restore-specific 認証設定を用意した場合はサインイン、既存 Accounts / Workspace / Run 記録、
+ProviderConnection の復号も確認します。標準の配布に runner は含まれず、Git source、plan artifact、
+provider 側の実リソースはこの PostgreSQL backup から復元されません。`takosumi-runtime` volume には
+destroy 前の export が入ります。database の復旧には要りませんが、export を残したい場合は volume も
+別に保全します。この export を取り込む仕組みはありません。custom composition の実際の永続化された
+store は個別に保全と復旧をします。
+
+確認がすべて終わったら、専用 project の container と volume を確認してから片付けます。元の
+deployment project や volume は対象にしません。`restore_compose` と `restore_dir` は復旧 block を
+実行した shell にしかないため、同じ shell で次を実行します。
+
+```bash
+restore_compose down -v
+rm -rf "$restore_dir"
+```
 
 Workspace export は DB 全体、artifact store、鍵の backup の代わりにはなりません。
 参照 Compose は file backup store を配線します。uninstall の 7 日 grace 中は Capsule backup

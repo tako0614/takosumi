@@ -36,11 +36,14 @@ Pick the entry point that matches what you want to do.
   [Quickstart](./getting-started/quickstart.md) to start the dashboard, sign-in,
   database, and runner on Linux with Docker and Bun. It uses `sudo` to set up a local
   certificate authority and DNS. The sample creates no external resources, so
-  you need no cloud credentials.
+  you need no cloud credentials. On macOS, check the API with
+  [Run only the API](./getting-started/api-only.md).
 - **Run it in your own environment** — choose a shape in
   [Running it yourself](./concepts/self-host.md). The Cloudflare template includes
-  a runner; the Bun + PostgreSQL template needs a separately composed runner for
-  plan and apply.
+  a runner, but apply and destroy need digests from the release tool
+  ([About apply and destroy](./self-host/cloudflare.md#about-apply-and-destroy)); the Bun + PostgreSQL template needs a separately composed runner for
+  plan and apply. The software has no fee; you pay for where it runs and for the
+  resources the apps create ([Costs](./concepts/self-host.md#costs)).
 - **Run only the API** — for checking the API during development, start an
   in-memory API server with [Run only the API](./getting-started/api-only.md).
 
@@ -74,6 +77,10 @@ AWS, and others are operated by their existing providers.
   a new version, go back to an earlier one, or delete it
 - [Prepare a repository](./getting-started/prepare-repository.md) — make your own software
   addable from Takosumi
+- [Share an install link](./getting-started/install-link.md) — let people open the add screen
+  from your README with your repository filled in
+- [Show your app on the home screen](./getting-started/home-launcher.md) — let people open
+  your software's screen from a tile on the dashboard home
 - [Concepts](./concepts/index.md) — the small set of terms and the deployment lifecycle
 - [Sources and Capsules](./concepts/sources.md) — pinning a Git ref to a commit
 - [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy

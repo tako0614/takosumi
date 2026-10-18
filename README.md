@@ -33,7 +33,8 @@ Takosumi は、Git に置いた OpenTofu / Terraform のソフトウェアを、
   起動します。ローカル証明書と DNS の設定に `sudo` を使います。サンプルは外部リソースを
   作らないため、クラウドの認証情報は要りません。
 - **自分の環境で運用する** — [自分で動かす](docs/concepts/self-host.md)で構成を選びます。
-  Cloudflare の雛形は runner を含みます。Bun と PostgreSQL の雛形で plan と apply を
+  Cloudflare の雛形は runner を含みますが、apply と destroy には release tool が作る digest が
+  要ります。Bun と PostgreSQL の雛形で plan と apply を
   実行するには、runner を別に組み込みます。
 - **API だけ動かす** — 開発中の API 確認用に、[API だけ動かす](docs/getting-started/api-only.md)
   の手順で、Bun と Git だけでメモリ上の API サーバーを起動します。

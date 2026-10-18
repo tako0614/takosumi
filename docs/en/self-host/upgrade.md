@@ -13,7 +13,22 @@ Follow the [distribution README](https://github.com/tako0614/takosumi/blob/main/
 migrations and compatibility, then take a backup immediately before the update. For the
 default Compose project, run from `deploy/node-postgres` and keep its default project and
 automatically loaded override. If the deployment started with custom `-p` or `-f` arguments,
-pass those same arguments on every operation. Switch to the new commit and update in this
+pass those same arguments on every operation.
+
+Applied migrations are recorded in `storage_migrations` for the control plane and in
+`accounts_v1.schema_migrations` for Accounts. `bun run db:migrate:dry-run` prints the whole
+catalog, not only what this database has not applied yet. Check the applied versions with the
+commands below and compare them with the new commit's catalog.
+
+```bash
+cd deploy/node-postgres
+docker compose exec -T postgres psql -U takosumi -d takosumi_accounts \
+  -c 'select id, version, applied_at from storage_migrations order by version desc limit 5'
+docker compose exec -T postgres psql -U takosumi -d takosumi_accounts \
+  -c 'select version, name from accounts_v1.schema_migrations order by version desc limit 5'
+```
+
+Switch to the new commit (for example with `git switch --detach <commit>`) and update in this
 order. The migration service applies the control-plane schema followed by the Accounts schema.
 
 ```bash
@@ -22,7 +37,8 @@ cd deploy/node-postgres
 compose() { docker compose "$@"; }
 compose stop accounts
 compose build accounts migrations
-compose run --rm migrations
+migrate_log="$HOME/takosumi-migrate-$(date -u +%Y%m%dT%H%M%SZ).log"
+compose run --rm migrations 2>&1 | tee "$migrate_log"
 # After migrations succeed, start Caddy too in production.
 compose up -d --wait accounts caddy
 compose ps
@@ -30,9 +46,17 @@ curl -fsS https://app.example.com/healthz # replace with the configured public h
 ```
 
 Stop `accounts` before migrating, and do not serve the new image before migrations succeed.
+If a migration fails, the block stops there and `accounts` stays stopped. Migrations only move
+forward, so there is no command that undoes a failed one. Each migration commits on its own,
+so the ones that finished before the failure stay applied. The `migrations` container is
+removed when it exits, so read its output from the `$migrate_log` file; if the shell closed and
+lost the variable, find it with `ls -t "$HOME"/takosumi-migrate-*.log`. Find the migration
+that stopped, restore the backup you just took into a separate project as in the
+[restore drill](./backup-restore.md) to inspect it, and then decide how to proceed.
+
 For a local test project, keep the same dedicated project and Compose files for every
 operation (`local_project` and `local_dir` are the ones set in
-[Local loopback check](../concepts/self-host.md#local-loopback-check)). The example below uses only the base file and its temporary loopback override;
+[Local loopback check](./bun-postgres.md#local-loopback-check)). The example below uses only the base file and its temporary loopback override;
 add only reviewed secret mappings there if needed. It does not load
 `docker-compose.override.yml`.
 
@@ -66,7 +90,7 @@ Request-time schema bootstrap is not an upgrade procedure for an existing deploy
 
 Upgrade the Accounts D1 with the same `takosumi accounts migrate-d1` sequence as a new
 installation: backup-status, plan, apply, verify (see
-[Putting it on Cloudflare](../concepts/self-host.md#putting-it-on-cloudflare)). Each Worker
+[Putting it on Cloudflare](./cloudflare.md)). Each Worker
 accepts specific Accounts D1 versions, so whether you apply or deploy the Worker first
 depends on the version. Upgrading from a v3 Accounts D1 has a fixed order: deploy the
 bridge Worker, apply v4, then switch to a Worker that accepts only v4 and later. Just

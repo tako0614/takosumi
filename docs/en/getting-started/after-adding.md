@@ -13,8 +13,11 @@ the review alone changes nothing.
 
 When Takosumi finds a new commit on the branch the service tracks, its status becomes
 **Update available** and **Update** appears at the top of its page. A service added with a
-fixed tag or commit tracks something that does not move, so it never shows **Update
-available**; switch it to a new version with **Change version** below.
+commit never shows **Update available** because of Git changes. A service added with a tag does
+not either, unless the tag is moved to another commit. Switch either one to a new version with
+**Change version** below. Any service shows **Update available** when an Output of another
+service it depends on changes
+([Passing values to another Capsule](../concepts/state-and-outputs.md#passing-values-to-another-capsule)).
 
 - **Update** creates the review. If the change needs no approval, does not delete or replace an
   existing resource, and is not stopped by a policy or billing check, it continues to the
@@ -85,8 +88,11 @@ use this one, the services that would be affected are shown here.
   once. For a grace period (7 days by default in the OSS build; the people who run Takosumi can
   change it) the service and its data stay, and billing continues. **Cancel deletion** undoes it
   until then. When the period ends, Takosumi tries to export the data and then deletes the
-  service. If it cannot confirm that the deletion is safe at that point, it stops, and the page
-  tells you to cancel or delete now ([Scheduled deletion](../concepts/scheduled-uninstall.md)).
+  service. A failed export does not stop the deletion. It does stop when Takosumi cannot continue
+  safely: for example, the authority of the person who scheduled it cannot be confirmed at the
+  deadline, an export attempt was interrupted and its result cannot be confirmed, or the
+  deletion review or apply failed or was refused. The page then tells you to cancel or delete
+  now ([Scheduled deletion](../concepts/scheduled-uninstall.md)).
 - **Delete now** — **Review deletion** creates a review of the deletion. No data is exported. On
   the run screen, press **Approve this change**, confirm "Run this deletion?", then press **Run
   destructive changes anyway**. The service is deleted at once and cannot be restored.

@@ -14,8 +14,21 @@
 互換性を確認し、直前に backup を取得します。default Compose project で運用している場合は、
 `deploy/node-postgres` で実行し、起動時と同じ default project と自動読込 override を維持します。
 独自の `-p` / `-f` を使って起動した環境では、同じ引数をすべての operation に渡してください。
-新しい commit に切り替えてから、次の順で更新します。migration は control-plane schema の後に
-Accounts schema を適用します。
+適用済みの migration は、control plane は `storage_migrations`、Accounts は
+`accounts_v1.schema_migrations` に記録されています。`bun run db:migrate:dry-run` が表示するのは
+catalog 全体で、この database にまだ適用していないものではありません。次で適用済みの版を
+確かめ、新しい commit の catalog と見比べます。
+
+```bash
+cd deploy/node-postgres
+docker compose exec -T postgres psql -U takosumi -d takosumi_accounts \
+  -c 'select id, version, applied_at from storage_migrations order by version desc limit 5'
+docker compose exec -T postgres psql -U takosumi -d takosumi_accounts \
+  -c 'select version, name from accounts_v1.schema_migrations order by version desc limit 5'
+```
+
+新しい commit に切り替えてから（`git switch --detach <commit>` など）、次の順で更新します。
+migration は control-plane schema の後に Accounts schema を適用します。
 
 ```bash
 set -euo pipefail
@@ -23,16 +36,25 @@ cd deploy/node-postgres
 compose() { docker compose "$@"; }
 compose stop accounts
 compose build accounts migrations
-compose run --rm migrations
+migrate_log="$HOME/takosumi-migrate-$(date -u +%Y%m%dT%H%M%SZ).log"
+compose run --rm migrations 2>&1 | tee "$migrate_log"
 # migrations が成功した後、production では Caddy も起動する
 compose up -d --wait accounts caddy
 compose ps
 curl -fsS https://app.example.com/healthz # replace with the configured public hostname
 ```
 
-`accounts` を止めてから migration を実行し、成功前に新しい service を公開しません。
+`accounts` を止めてから migration を実行し、成功前に新しい service を公開しません。migration が
+失敗すると、ここで止まり、`accounts` は止まったままになります。migration は前にしか進まないため、
+失敗した migration を戻すコマンドはありません。migration は 1 本ずつ確定するので、失敗する前に
+終わったものは適用済みのまま残ります。`migrations` の container は終わると消えるため、出力は
+`$migrate_log` のファイルで確かめます。shell が閉じて変数が消えた場合は
+`ls -t "$HOME"/takosumi-migrate-*.log` で見つけます。止まった migration を確かめ、直前の backup を
+[復旧演習](./backup-restore.md)と同じ手順で別の project に戻して中身を確かめてから、対処を
+決めます。
+
 ローカル test project で試す場合は起動時と同じ専用 project と composition file を使い続け
-（`local_project` と `local_dir` は[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)で設定したもの）、
+（`local_project` と `local_dir` は[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)で設定したもの）、
 次のように helper に固定します。`docker-compose.override.yml` は読み込まず、必要な secret mapping
 だけを一時 override に追加します。
 
@@ -64,7 +86,7 @@ plan、backup evidence、適用手順を確認します。control D1 は
 リクエストによる schema bootstrap を既存環境の更新手順として扱いません。
 
 Accounts D1 は、新しく構築するときと同じ `takosumi accounts migrate-d1` の backup-status、
-plan、apply、verify の順で上げます（[Cloudflare に置く](../concepts/self-host.md#cloudflare-に置く)）。
+plan、apply、verify の順で上げます（[Cloudflare に置く](./cloudflare.md)）。
 Worker ごとに受け付ける Accounts D1 の版が決まっているため、適用と Worker のデプロイの
 どちらを先にするかは版によって変わります。v3 の Accounts D1 から上げる場合は、bridge Worker を
 デプロイしてから v4 を適用し、その後で v4 以降だけを受け付ける Worker に替える、という決まった

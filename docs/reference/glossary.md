@@ -31,7 +31,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | Takosumi                         | Git に置いた OpenTofu / Terraform の module を、変更の確認・承認・デプロイの順に実行して履歴を残す control plane です。           | [Takosumi とは](../index.md)                   |
 | OpenTofu                         | インフラをコードで定義して適用するオープンソースのツールです。Terraform と互換があります。                              | [Takosumi とは](../index.md)                   |
 | Workspace                        | Personal、Work、Experiments、Client など目的ごとの個人の用途・リソース・セキュリティ境界です。メンバーシップと共有は必要なときに追加し、メンバー、権限、接続、履歴もこの境界で分かれます。 | [全体像](../concepts/index.md)                 |
-| Handle                           | Workspace の安定したグローバル一意の公開 API 識別子です。`@handle` と書きます。API / CLI から指定できますが、必須の利用者選択ではありません。標準ダッシュボードは通常自動生成し、名前の重複時や詳細設定でだけ表示します。 | [全体像](../concepts/index.md)                 |
+| Handle                           | Workspace の安定したグローバル一意の公開 API 識別子です。`@handle` と書きます。API / CLI から指定できますが、必須の利用者選択ではありません。標準ダッシュボードは作成時に自動生成し、Workspace の設定画面などで表示します。 | [全体像](../concepts/index.md)                 |
 | Project                          | Workspace の中を整理するための区分です。                                                                                                                                                | [全体像](../concepts/index.md)                 |
 | Source                           | どのリポジトリの、どのディレクトリを、どの ref で追うかという登録です。                                                                                                                 | [Source と Capsule](../concepts/sources.md)    |
 | SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                                                                                            | [Source と Capsule](../concepts/sources.md)    |
@@ -57,9 +57,9 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | destroy                | Capsule が作ったリソースを削除する操作です。計画を作ってから実行します。                                              | [実行モデル](../concepts/run-model.md)         |
 | 差分確認 (drift check) | 保存した状態と実物のずれを、読み取り専用で調べる操作です。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | drift                  | 保存した状態と実物のあいだに生まれたずれのことです。                                                                  | [状態と出力](../concepts/state-and-outputs.md) |
-| RunGroup               | 依存関係の順に複数の Run をまとめた記録です。Workspace 全体の更新や差分確認、Capsule の追加・更新・削除で作られます。 | [実行モデル](../concepts/run-model.md)         |
+| RunGroup               | 依存関係の順に複数の Run をまとめた記録です。Workspace 全体の更新や差分確認で作られます。 | [実行モデル](../concepts/run-model.md)         |
 | Runner                 | OpenTofu を実際に動かす隔離された実行環境です。認証情報が渡るのはこの中だけです。                                     | [実行モデル](../concepts/run-model.md)         |
-| StateVersion           | デプロイ（apply）を終えた時点の状態です。上書きされず、積み重なります。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
+| StateVersion           | デプロイ（apply）の結果として記録された状態です。失敗した apply でも記録されることがあります。上書きされず、積み重なります。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | Output                 | Capsule が外に公開する、秘密でない値です。                                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | OutputShare            | Workspace をまたいで Output を渡す記録です。受け取る側が承認して有効になります。                                      | [状態と出力](../concepts/state-and-outputs.md) |
 | AuditEvent             | 誰が、何に対して、何をして、結果どうなったかを 1 件ずつ残した記録です。                                               | [実行モデル](../concepts/run-model.md)         |
@@ -103,7 +103,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | 用語                   | 意味                                                                                                                       | 詳しい説明                              |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | capability             | その endpoint で何が有効かを表す token です。edition の名前ではなくこれを見ます。                                          | [製品の境界](../concepts/boundaries.md) |
-| profile                | 範囲を決めて名前を付けた設定の束です。互換 API の `compat.s3.v1` や、EdgeWorker が実行環境に求める `profiles` があります。 | [API](./api.md)                         |
+| profile                | 範囲を決めて名前を付けた設定の束です。runner の実行条件を決める RunnerProfile などがあります。 | [認証情報](../concepts/credentials.md)                         |
 | surface                | 外から使える入口のまとまりです。Takosumi の公開 JSON API は `/api/v1`、operator API は `/internal/v1` です。旧 `/v1` は公開 surface ではありません。 | [API](./api.md)                         |
 | digest                 | 内容から計算した SHA-256 の指紋です。同じ内容なら必ず同じ値になります。                                                    | [API](./api.md)                         |
 | fail closed            | 判断がつかないときに、通さずに止める動き方です。                                                                           | [Interface](../concepts/interfaces.md)  |
@@ -111,7 +111,6 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | materialization      | 宣言した Interface / Binding / credential を、実行する host や runner の上にだけ実体として用意することです。宣言や plan には秘密の値を書きません。 | [Interface](../concepts/interfaces.md)  |
 | CAS (compare-and-swap) | 更新の直前に、読んだときの版のままかを確かめ、変わっていたら書き込まない方式です。                                         | [API](./api.md)                         |
 | cursor                 | 一覧の続きを読むための不透明な token です。中身は解釈せず、次の要求にそのまま渡します。                                    | [API](./api.md)                         |
-| Compatibility API | S3 や OCI のような標準プロトコルを、範囲と版を決めて受け付ける入口です。                                      | [API](./api.md)                             |
 
 その endpoint でどの capability が有効かは、endpoint 自身が答えます。
 

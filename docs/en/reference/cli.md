@@ -122,7 +122,7 @@ read from `TAKOSUMI_ACCOUNTS_DATABASE_URL`.
 
 Cloudflare D1 schema migration is not a user-facing command: the operator runs it in
 the same change window as the release. For your own installation, the procedure is in
-[Running it yourself](../concepts/self-host.md#putting-it-on-cloudflare).
+[Running it yourself](../self-host/cloudflare.md).
 
 ### Seed the initial data
 
@@ -212,6 +212,7 @@ Provider credential values are read from files and are never printed.
 
 ```bash
 takosumi connections create \
+  --workspace ws_example \
   --provider registry.opentofu.org/example/example \
   --recipe generic-env \
   --auth-mode env \
@@ -223,8 +224,9 @@ takosumi connections test conn_...
 takosumi connections revoke conn_...
 ```
 
-Compatibility APIs are explicit operator-installed extension capabilities. A
-ProviderConnection created from the CLI also names its target provider explicitly with
+Without `--workspace`, a ProviderConnection is operator-scoped, and by default it cannot back
+a Capsule's provider assignment. A ProviderConnection created from the CLI names its target
+provider explicitly with
 `--provider`, as a fully-qualified source such as `registry.opentofu.org/example/example`;
 the CLI never infers one.
 

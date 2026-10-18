@@ -2,7 +2,7 @@
 
 ローカル smoke-test project で起動しない場合は、初回起動と同じ shell で
 `local_compose` helper を使って状態と診断出力を確認します。ローカル確認の `local_project` と
-`local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)
+`local_dir` は、[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)
 で設定したものです。production では、初回起動時と同じ project と Compose file 引数を helper に
 設定してください。
 
@@ -18,6 +18,26 @@ curl -i http://localhost:26401/healthz # loopback-only local test
 `migrations` が失敗していれば `accounts` は起動しません。migration error と適用済み状態を
 保全してから修復します。`accounts` の health check は PostgreSQL 接続も確認します。
 production Caddy 構成では `https://<公開hostname>/healthz` を確認します。
+
+## Bun と PostgreSQL の起動時に出るログ
+
+`local_compose logs accounts`（production では同じ helper の `logs accounts`）を見ます。起動を
+止めた原因は、`"event":"server.fatal"` の行の `error.message` に出ます。
+
+| ログに含まれる文字列 | 原因と直し方 |
+| --- | --- |
+| `secret-store encryption key missing` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` が無い。`.env` に入れる。production 以外の環境ではメッセージが `TAKOSUMI_DEV_MODE=1` も挙げるが、手元の確認用なので本番では使わない |
+| `secret-store globalPassphrase is too short` | `TAKOSUMI_SECRET_STORE_PASSPHRASE` が 32 バイト未満。`openssl rand -hex 32` で作った値にする |
+| `refusing to boot an https issuer` | issuer が https なのに安定した署名鍵が無い。`TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` と `TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` を入れる |
+| `Stable OIDC signing requires TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` | 署名鍵だけを入れ、`TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET` が無い |
+| `Invalid keyData` | `TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK` を鍵として読めない。`.env.example` の仮の値（`replace-with-private-d`）が残っていないか確かめ、生成した JWK に置き換える |
+| `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS requires TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` | 上流の ID プロバイダを設定したのに `TAKOSUMI_ACCOUNTS_SUBJECT_SECRET` が無い |
+| `clientSecretEnv references missing runtime secret` | 記述子の `clientSecretEnv` に書いた名前の secret がコンテナに届いていない。`docker-compose.override.yml` の `accounts.environment` で渡す |
+| `dashboard SPA build not found` | dashboard の build が無く、画面が出ない（起動は続く）。Compose の image には入っている。手で起動する場合は `bun run build:dashboard` を実行するか、`index.html` のあるディレクトリを `TAKOSUMI_ACCOUNTS_STATIC_DIR` に設定する |
+
+https で開けない、証明書が出ないときは `logs caddy` を見ます。公開する hostname がこのホストを
+指し、80 番と 443 番に外から届く必要があります。`/readyz` が `503` で `internalApiSecret` を返すのは、
+[動いていることを確かめる](../concepts/self-host.md#動いていることを確かめる)のとおりです。
 
 Run の問題は dashboard または認可された `GET /api/v1/runs/:runId` で status/errorCode を確認し、
 `GET /api/v1/runs/:runId/logs` と events で止まった phase を特定します。
