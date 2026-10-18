@@ -280,9 +280,11 @@ manifest に書けるのは、公開してよい提案だけです。次のも�
 指定です。公開される表示用の項目（`label`、`helper`、`placeholder`、feature の label）は、`sk-…`、
 bearer や代入の形、URI に埋め込んだ認証情報など、よく知られた認証情報らしい形を検査します。Interface の
 `document` と literal は、key と値を入れ子まで検査し、秘密らしい値と、Takosumi 側が管理する ID を拒否
-します。ふつうの文章に「token」などの語が入るだけでは拒否しません。エラーの説明に値をそのまま書き出す
-ことはありません。これらの公開 JSON の値は、parser が入れ子の深さを最大 32 に制限し、JSON Schema は
-この制限を parser の決まりとして記録しています。
+します。一方、表示用の文章の中で「token」などの語を使っても、それだけでは拒否しません。ただし、文頭の
+`Token ...` のように、`Bearer` などに続けて値を書く形は、認証情報らしい形として拒否することがあります。
+エラーの説明に値をそのまま書き出すことはありません。これらの公開 JSON の値の入れ子の深さは、Takosumi の
+解析処理（parser）が最大 32 に制限します。JSON Schema の形の検査では深さを表せないため、Schema の
+`x-takosumi-semanticConstraints` に、Takosumi が確かめる制約として記しています。
 
 保存されている基本の設定（base InstallConfig）と運用している人の policy が、いつも上限です。リポジトリ
 の提案で許可の一覧や権限を広げることはできず、Takosumi 側や運用している人の宣言と衝突する提案は、
@@ -343,12 +345,13 @@ OIDC の値を実行時の binding で渡す方法を加えた版です。既存
 将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は fail closed の
 ままにします（知らない項目は、今後も受け付けません）。
 
-- manifest の版にかかわらず、調べて module が 1 つだけ見つかれば、それが自動で選ばれます。
-- module が複数見つかったリポジトリでは、利用者がフォルダを選びます。
+- manifest の版にかかわらず、Takosumi が調べた結果、module が 1 つだけ見つかれば、それが自動で
+  選ばれます。
+- module が複数見つかったリポジトリでは、利用者がフォルダを、その正確な path で選びます。
 - v2 の `interfaces` は、v2.1 に上げても同じ形と意味のまま使えます。
 - Takosumi 側の Interface を使うリポジトリだけが v2.2 に上げ、`interface.consume` を足します。
 - SourceSnapshot の前処理を提案するリポジトリは v2.3 に上げ、module ごとに `sourceBuild` を足します。
-- v1 や v2 の文書に、後の版の項目だけを足してはいけません。
+- `apiVersion` を上げずに、後の版の項目を v1 や v2 の文書へ足してはいけません。
 
 ストアはこの manifest の代わりにはなりません。TCS 2.0 とのつなぎ方と handoff は
 [Store API](./store-api.md)にあります。リポジトリから追加するときの入力は Git URL、ref、任意の module
