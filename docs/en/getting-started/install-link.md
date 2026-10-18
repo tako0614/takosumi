@@ -149,9 +149,9 @@ A link with neither `git` nor `source` opens the store list instead of a filled-
 screen.
 
 For a `web+takosumi:install` link, only the following cases open the add screen with an empty
-source, as `/install` does. Every other case above (an unknown parameter, an empty value, a
-broken `path`, and so on) opens the store list with nothing filled in, and so does a link longer
-than 4,096 characters once decoded.
+source, as `/install` does. Every other failure of a `web+takosumi:install` link (an unknown
+parameter, an empty value, a broken `path`, and so on) opens the store list with nothing filled
+in, and so does a link longer than 4,096 characters once decoded.
 
 - The `git` URL breaks its conditions (`https://`, no user name or password, no query or
   fragment)

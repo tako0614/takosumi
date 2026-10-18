@@ -189,7 +189,7 @@ whether to act.
 ## How this differs from an export
 
 Takosumi can export its control information: how a Capsule is configured, the settings of
-a Source, and the history of Runs and StateVersions. **The application's own data, and the
+a Source, and the history of Runs and StateVersions. **The service's own data, and the
 secrets stored in a Connection, are not included.**
 
 ```bash

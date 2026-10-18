@@ -35,7 +35,7 @@ it would in production.
 ## Costs
 
 The Takosumi software has no fee (AGPL-3.0). What you pay for is where you run Takosumi and the
-resources that the apps you add create.
+resources that the services you add create.
 
 - **Cloudflare** — Cloudflare bills the Workers Paid plan and your usage of Workers, Containers,
   D1, R2, Durable Objects, and logs (observability). Loading the dashboard also counts as Worker
@@ -53,8 +53,8 @@ resources that the apps you add create.
 - **Bun and PostgreSQL** — the server that runs Docker, and PostgreSQL. Plan and apply also need a
   separately composed runner, which costs whatever it runs on.
 - **Entirely local** — Takosumi itself runs only on your own machine.
-- **Resources of the apps you add** — the Workers, buckets, databases, and so on that an app
-  creates are billed to the connected account by its provider, such as Cloudflare.
+- **Resources of the services you add** — the Workers, buckets, databases, and so on that a
+  service creates are billed to the connected account by its provider, such as Cloudflare.
 
 ## Procedures
 

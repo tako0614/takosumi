@@ -9,7 +9,7 @@ records around that execution. It is not a replacement for cloud APIs.
 | Name          | In plain language                                                                  | In the dashboard                                  |
 | ------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
 | **Workspace** | a container that separates a person's purposes, resources, and security; sharing is added when needed | Your workspaces                                   |
-| **Project**   | a way to group apps and infrastructure within a Workspace                         | not shown                                         |
+| **Project**   | a way to group services and infrastructure within a Workspace                     | not shown                                         |
 | **Source**    | a registered Git repository and module location                                   | Source                                            |
 | **Capsule**   | one deployable module created from a Source                                       | a service, listed under **Workloads**             |
 | **Run**       | one plan, apply, destroy, or other execution                                      | an entry in **Deploy history** (Review, Deploy, …) |

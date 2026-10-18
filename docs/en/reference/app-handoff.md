@@ -4,7 +4,7 @@ Takosumi App Handoff is the small URL protocol for creating a Takosumi-managed
 hosted service from any client: web app, desktop app, mobile app, browser link,
 or CLI output.
 
-the Takosumi dashboard is a web/dashboard flow. This protocol does not require or imply a
+The Takosumi dashboard is a web/dashboard flow. This protocol does not require or imply a
 standalone Takosumi mobile app; clients return to their own product app or web
 callback URL.
 

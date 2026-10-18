@@ -43,7 +43,7 @@ Pick the entry point that matches what you want to do.
   a runner, but apply and destroy need digests from the release tool
   ([About apply and destroy](./self-host/cloudflare.md#about-apply-and-destroy)); the Bun + PostgreSQL template needs a separately composed runner for
   plan and apply. The software has no fee; you pay for where it runs and for the
-  resources the apps create ([Costs](./concepts/self-host.md#costs)).
+  resources the services create ([Costs](./concepts/self-host.md#costs)).
 - **Run only the API** — for checking the API during development, start an
   in-memory API server with [Run only the API](./getting-started/api-only.md).
 

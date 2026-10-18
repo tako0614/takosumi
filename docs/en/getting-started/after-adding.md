@@ -1,6 +1,6 @@
 # Update, restore, or delete a service
 
-Open a service (app) you added from **Workloads** in the dashboard. Its page has three tabs:
+Open a service you added from **Workloads** in the dashboard. Its page has three tabs:
 **Overview**, **Updates**, and **Settings**. This page walks through what you do after adding,
 using the names on those screens.
 

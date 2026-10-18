@@ -86,7 +86,7 @@ curl https://app.takosumi.test/healthz
 curl https://app.takosumi.test/.well-known/openid-configuration
 ```
 
-`/healthz` が `{"ok":true,"database":"ok"}` を返せば、アプリから Postgres まで
+`/healthz` が `{"ok":true,"database":"ok"}` を返せば、Takosumi から Postgres まで
 接続できています。
 
 ## 5. サインインする
