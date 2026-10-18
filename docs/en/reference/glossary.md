@@ -13,7 +13,7 @@ docs use a different name, read it back through this table.
 | ---------------------- | ------------------------------------ | ---------------------------------------------------------------------- |
 | Service                | Store listing; Capsule once added    | What you pick in the Store and add; it keeps the name once added.      |
 | Workloads              | The list of Capsules                 | The page that lists the services you added.                            |
-| App                    | An Interface that has a screen       | A service's own screen, opened from Home.                              |
+| App                    | An Interface that has a screen and is declared for Home (a launcher) | A service's own screen, opened from Home ([Show your app on the home screen](../getting-started/home-launcher.md)). |
 | Connected accounts     | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned.                       |
 | Changes                | plan                                 | The list of changes you review before anything is deployed.            |
 | Change verification ID | planDigest                           | The value that proves the plan you reviewed is the plan being applied. |

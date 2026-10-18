@@ -29,7 +29,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `defaultRef`       | Git の `HEAD` | 追跡する branch / tag / commit                      |
 | `defaultPath`      | `.`           | sync/archive/scan の対象にする repository subtree  |
 | `authConnectionId` | なし          | 非公開リポジトリを読むための Connection             |
-| `autoSync`         | `false`       | operator の scheduler が Git ref を定期的に確認する |
+| `autoSync`         | `false`（dashboard の追加画面が作る Source は `true`） | operator の scheduler が Git ref を定期的に確認する |
 
 Git URL、ref、source subtree が Source の取得座標です。専用の source catalog はありません。
 `defaultPath` は取得範囲を狭めますが、実行 module を選びません。Source sync は exact

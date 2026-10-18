@@ -14,6 +14,10 @@ provider です。その他の API / instance lifecycle は、それを提供す
    読むだけなら **読み取り**、変更もするなら **読み取り** と **書き込み** を選びます。
    次の例で使える Workspace をすべて読むため、**現在のワークスペースだけで使用できるように
    する** はオフにします。オンのままだと、そのワークスペースだけが返ります。
+
+   サーバーの設定にも同じ名前の `TAKOSUMI_DEPLOY_CONTROL_TOKEN` がありますが、そちらはすべての
+   Workspace に作用する operator 用の秘密です。**利用者に渡したり、CLI や API を呼ぶ環境に
+   入れたりしないでください。**
 2. 使える Workspace を読みます。`TAKOSUMI_DEPLOY_CONTROL_URL` には、dashboard に
    サインインしている origin を入れます。API の path は、その origin の `/api/v1/...` です。
 
@@ -274,7 +278,8 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
 | GET      | `/api/v1/capsule-configs/{capsuleConfigId}`                | Capsule 作成設定を読む                       |
 
-Capsule の削除 API は Workspace owner/admin と `capsules:write` scope を要求します。
+Capsule の削除 API は Workspace owner/admin と書き込みの scope（API キーでは `write`、OAuth では
+`capsules:write`）を要求します。
 `DELETE /api/v1/capsules/{capsuleId}` は既定でデプロイ済みの Capsule の削除を予約し、`202`
 `{capsule,graceDays}` を返します。猶予期間は operator 設定
 `TAKOSUMI_UNINSTALL_GRACE_DAYS`（OSS 既定 7 日）で、予約中は
@@ -652,8 +657,10 @@ Run には次を保存します。
 を有効にすると、scheduler または source webhook は Source の既定 ref/path に加え、
 その Source を使う各 Capsule が apply 済み StateVersion で採用した ref/path を同期します。
 解決された commit は `SourceSnapshot` として保存されます。同じ ref/path lane を採用している
-active Capsule の現在 snapshot と新しい commit が異なるときだけ、Capsule は `stale`
-になります。別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。
+active Capsule の現在 snapshot と新しい commit が異なると、Capsule は `stale` になります。
+別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。依存先の Capsule の
+Output が変わったときも、active な Capsule は `stale` になります
+（[値を別の Capsule に渡す](../concepts/state-and-outputs.md#値を別の-capsule-に渡す)）。
 通常の update plan も採用済み lane の最新 snapshot を使います。そこからは既存の
 Workspace update / RunGroup が reviewable plan を作り、
 apply は通常の Run approval に従います。app artifact をどこから取るかは、あくまで
