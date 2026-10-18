@@ -37,12 +37,12 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                                                                                            | [Source と Capsule](../concepts/sources.md)    |
 | Capsule                          | デプロイされたひとまとまりです。OpenTofu の root module 1 つ分が動き、`production` や `preview` のような具体的な実行環境も Capsule が持ちます。                                              | [Source と Capsule](../concepts/sources.md)    |
 | Environment                      | Capsule が持つ具体的な実行環境です（`production`、`preview` など）。Workspace の別名ではありません。                                                                                      | [Source と Capsule](../concepts/sources.md)    |
-| stale                            | 追いかけている Source に新しい commit が来たか、依存先の Output が変わった Capsule の状態です。画面では **更新があります** と表示されます。 | [Source と Capsule](../concepts/sources.md)    |
+| stale                            | デプロイ済みの Capsule の、追いかけている Source に新しい commit が来たか、依存先の Output が変わった状態です。画面では **更新があります** と表示されます。 | [Source と Capsule](../concepts/sources.md)    |
 | Stack flow                       | 自分で書いた module を Git から実行する経路です。                                                                       | [全体像](../concepts/index.md)                 |
 | 互換性レポート                   | 登録した module を読み取り専用で解析し、必要な変数と provider を示した結果です。                                        | [Source と Capsule](../concepts/sources.md)    |
 | 依存 (Dependency)                | Capsule どうしをつなぎ、相手の Output を参照できるようにする関係です。Workspace をまたぐ場合は OutputShare を通します。 | [状態と出力](../concepts/state-and-outputs.md) |
 | Capsule 作成設定 (InstallConfig) | 変数の対応づけや公開する Output など、Capsule の実行のしかたを Takosumi 側に持つ設定です。                              | [API](./api.md)                                |
-| Git revision plan                | 既存の Capsule の取得元の版を変えるとき、commit を固定し、互換性を確かめて、変更の確認（Plan Run）を作るまでの手続きの記録です。dashboard の **更新する** や **変更を確認** で作られます。 | [API](./api.md)                                |
+| Git revision plan                | 既存の Capsule の取得元の版を変えるとき、commit を固定し、互換性を確かめて、変更の確認（Plan Run）を作るまでの手続きの記録です。dashboard の **更新する**（更新があるときに表示）、**変更を確認**、**バージョンを変更** の **このバージョンを確認** で作られます。 | [API](./api.md)                                |
 | 採用済み Source revision         | Capsule の現在の StateVersion が参照する Plan Run から導出した SourceSnapshot の ref/path/commit です。Source の既定 ref とは別です。 | [API](./api.md)                                |
 | App Handoff                      | 外部のアプリから利用者を作成画面へ送るための URL の決まりです。                                                         | [App Handoff](./app-handoff.md)                |
 | Store                            | 追加できるサービスを探して並べるための一覧です。                                                                        | [App Handoff](./app-handoff.md)                |
@@ -74,7 +74,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | ProviderBinding       | この Capsule のこの provider にはこの接続を使う、という対応付けです。                      | [認証情報](../concepts/credentials.md) |
 | CredentialRecipe      | provider ごとに必要な環境変数名やファイル名をまとめた設定補助です。                        | [認証情報](../concepts/credentials.md) |
 | Secret                | 暗号化して保存される秘密の値です。                                                         | [認証情報](../concepts/credentials.md) |
-| secret partition      | 秘密を保存するときの暗号の区画の名前です。Connection を作るときに指定します。             | [CLI](./cli.md)                        |
+| secret partition      | 秘密を保存するときの暗号の区画を指す token です。Connection を作るときに指定します。       | [CLI](./cli.md)                        |
 | personal access token | Accounts が発行する API 用のトークンです。core scope と、owning route が明示した Workspace-bound extension scope を持てます。`admin` は operator 発行専用です。 | [API](./api.md)                        |
 
 ## 実行時の連携

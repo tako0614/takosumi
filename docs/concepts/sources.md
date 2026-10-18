@@ -128,7 +128,8 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \
 ```
 
 Capsule が追跡している Source に新しい commit が来ると、Capsule は `stale` に
-なります。**stale は状態であって動作ではありません。** 通常はそこで止まり、次の
+なります。依存先の Capsule の Output が変わったときも同じです
+（[値を別の Capsule に渡す](./state-and-outputs.md#値を別の-capsule-に渡す)）。**stale は状態であって動作ではありません。** 通常はそこで止まり、次の
 plan とデプロイは人が始めます。
 
 Capsule で `autoUpdate` を明示的に有効にした場合だけ、新しい snapshot ごとに 1 回、
