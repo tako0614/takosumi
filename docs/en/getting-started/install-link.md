@@ -102,6 +102,29 @@ What follows `//` is the module folder, and what follows `?` is the version. Bot
 Only `ref` can follow `?`. `source` cannot be used together with `git`. Give `ref` and `path`
 either inside `source` or outside it, not both. `sourcePath` can be used with `source`.
 
+## A link that opens the visitor's own Takosumi
+
+If you know which Takosumi people will add to, use the link with an origin above. If you want one
+link for people on any Takosumi, leave the origin out so it opens in whichever Takosumi the person
+uses. Use `web+takosumi:install` instead of `https://<Takosumi origin>/install`. The parameters
+and rules are the same; only the screen for a link that cannot be read differs (see "When a link
+is not used" below).
+
+```text
+web+takosumi:install?git=https://github.com/acme/notes.git&ref=v1.2.0&path=deploy/opentofu
+```
+
+This link opens the Takosumi that the person registered in their browser. They register it in
+that Takosumi's dashboard: under **Account**, in **Where store installs land**, press **Register
+this device** and accept the browser's prompt.
+
+- In a browser that has not registered, this link does not open.
+- In a browser that cannot register, **Account** says "This browser doesn’t support this."
+- Places that remove links other than a few fixed kinds such as `https:`, like a GitHub README,
+  may not keep it working as a link.
+
+In a README, put it next to the link with an origin, so everyone can open one of them.
+
 ## When a link is not used
 
 If a link with `git` or `source` matches any of the following, none of its values are used, and
@@ -124,6 +147,17 @@ the add screen opens with an empty source. **No error is shown.**
 
 A link with neither `git` nor `source` opens the store list instead of a filled-in add
 screen.
+
+For a `web+takosumi:install` link, only the following cases open the add screen with an empty
+source, as `/install` does. Every other case above (an unknown parameter, an empty value, a
+broken `path`, and so on) opens the store list with nothing filled in, and so does a link longer
+than 4,096 characters once decoded.
+
+- The `git` URL breaks its conditions (`https://`, no user name or password, no query or
+  fragment)
+- The contents of `source` break its rules
+- `ref` or `path` is given both inside and outside `source`
+- `name` is longer than 96 characters, or `ref` is longer than 512 characters
 
 ## Check before you share
 
@@ -151,4 +185,5 @@ Link values end up in browser history and logs. Keep secrets out of the link.
 - [Show your app on the home screen](./home-launcher.md)
 - [Update, restore, or delete a service](./after-adding.md)
 - [Sources and Capsules](../concepts/sources.md)
-- [App Handoff](../reference/app-handoff.md) — return to your own app after adding
+- [App Handoff](../reference/app-handoff.md) — return to your own app after adding, and the
+  detailed `web+takosumi:` rules
