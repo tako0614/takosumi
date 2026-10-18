@@ -177,6 +177,18 @@ treated as the same readiness profile. `validate` never double-interprets a
 legacy baseline ID; an explicit `launch-readiness migrate-final-model` updates
 it exactly once.
 
+Evidence that can be reused only for a limited time declares its field as
+`utc-timestamp` in the evidence schema's `formats` and lists the same field in
+`notExpired`. The validator never guesses an expiry from a field name; it compares a
+canonical UTC timestamp with the current time only when this schema data is present. An
+expired reference is incomplete, and the report's `ready` is false. When several evidence
+types across domains and rehearsals must share an identity field, declare the field and
+type pairs in `consistentFields` at the top level of the contribution. Each type must
+belong to exactly one requirement group in the whole profile, and validation fails if the
+values differ. `ready` only means the selected profile's evidence was consistent at
+validation time; it grants no GA or open-access decision, deploy or release approval, or
+mutation authority.
+
 There is no ad hoc collector DSL. When a contribution assists collection
 planning, it may only assign its own evidence types to the existing fixed
 classes (`browser-user-e2e`, `external-provider`, `operator-review`,
@@ -205,8 +217,9 @@ takosumi connections test conn_...
 takosumi connections revoke conn_...
 ```
 
-Compatibility APIs are explicit operator-installed extension capabilities. The
-Provider Connection CLI never infers a specific gateway or provider family.
+Compatibility APIs are explicit operator-installed extension capabilities. A
+ProviderConnection created from the CLI also names its target provider explicitly with
+`--provider`; the CLI never infers one.
 
 ## Deployment secrets
 
