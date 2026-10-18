@@ -3,7 +3,7 @@ import { posix } from "node:path";
 import { expect, test } from "bun:test";
 import { parse as parseYaml } from "yaml";
 
-// The published self-host procedure (docs/concepts/self-host.md and
+// The published self-host procedure (docs/self-host/bun-postgres.md and
 // deploy/node-postgres/README.md) is `cp .env.example .env`, edit, then
 // `docker compose up -d`. These checks derive what that procedure needs from
 // the real import graph, workspaces, and docs rather than pinning file text,
@@ -277,10 +277,14 @@ test("self-host docs only run package scripts that exist", async () => {
     "docs/concepts/self-host.md",
     "docs/en/concepts/self-host.md",
     "docs/self-host/index.md",
+    "docs/self-host/cloudflare.md",
+    "docs/self-host/bun-postgres.md",
     "docs/self-host/upgrade.md",
     "docs/self-host/backup-restore.md",
     "docs/self-host/troubleshooting.md",
     "docs/en/self-host/index.md",
+    "docs/en/self-host/cloudflare.md",
+    "docs/en/self-host/bun-postgres.md",
     "docs/en/self-host/upgrade.md",
     "docs/en/self-host/backup-restore.md",
     "docs/en/self-host/troubleshooting.md",

@@ -2,7 +2,7 @@
 
 ローカル smoke-test project で起動しない場合は、初回起動と同じ shell で
 `local_compose` helper を使って状態と診断出力を確認します。ローカル確認の `local_project` と
-`local_dir` は、[ローカルで安全に起動して確認する](../concepts/self-host.md#ローカルで安全に起動して確認する)
+`local_dir` は、[ローカルで安全に起動して確認する](./bun-postgres.md#ローカルで安全に起動して確認する)
 で設定したものです。production では、初回起動時と同じ project と Compose file 引数を helper に
 設定してください。
 

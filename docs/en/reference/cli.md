@@ -122,7 +122,7 @@ read from `TAKOSUMI_ACCOUNTS_DATABASE_URL`.
 
 Cloudflare D1 schema migration is not a user-facing command: the operator runs it in
 the same change window as the release. For your own installation, the procedure is in
-[Running it yourself](../concepts/self-host.md#putting-it-on-cloudflare).
+[Running it yourself](../self-host/cloudflare.md).
 
 ### Seed the initial data
 

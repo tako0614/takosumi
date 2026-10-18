@@ -50,7 +50,7 @@ echo "$backup_file"
 
 For a local smoke-test project, do not use the default Compose commands above. In the same
 shell as the local startup, keep its project and override variables (`local_project` and
-`local_dir` are the ones set in [Local loopback check](../concepts/self-host.md#local-loopback-check)) and run:
+`local_dir` are the ones set in [Local loopback check](./bun-postgres.md#local-loopback-check)) and run:
 
 ```bash
 set -euo pipefail

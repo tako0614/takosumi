@@ -2,7 +2,7 @@
 
 If the local smoke-test project does not start, use the `local_compose` helper in the same
 shell as its startup. For the local check, `local_project` and `local_dir` are the ones
-you set in [Local loopback check](../concepts/self-host.md#local-loopback-check).
+you set in [Local loopback check](./bun-postgres.md#local-loopback-check).
 For production, configure the helper with the same project and Compose file arguments
 used when it was started.
 

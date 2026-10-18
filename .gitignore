@@ -18,5 +18,5 @@ app-docs/.vitepress/dist/
 .claude/worktrees/
 .codex/worktrees/
 /test-results/
-# Self-host secrets created by `cp .env.example .env` (docs/concepts/self-host.md).
+# Self-host secrets created by `cp .env.example .env` (docs/self-host/bun-postgres.md).
 /deploy/node-postgres/.env
