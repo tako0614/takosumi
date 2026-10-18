@@ -100,3 +100,29 @@ test.describe("Takosumi docs heading links", () => {
     await expect(page.locator("h3:target")).toContainText("ローカルで安全に起動して確認する");
   });
 });
+
+test.describe("Takosumi docs at desktop width", () => {
+  test("stacks only the tables that do not fit, and never truncates the outline", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/docs/reference/configuration");
+    await expect(page.locator(".vp-doc .table-scroll.is-stacked").first()).toBeVisible();
+
+    const layout = await page.evaluate(() => {
+      const overflows = (element: Element | null) =>
+        element !== null && element.scrollWidth > element.clientWidth + 1;
+      const wrappers = [...document.querySelectorAll(".vp-doc .table-scroll")];
+      return {
+        overflowing: wrappers.filter((w) => overflows(w) || overflows(w.querySelector(":scope > table"))).length,
+        stacked: wrappers.filter((w) => w.classList.contains("is-stacked")).length,
+        tables: wrappers.length,
+        truncatedOutline: [...document.querySelectorAll(".VPDocAsideOutline .outline-link")]
+          .filter(overflows).length,
+      };
+    });
+
+    expect(layout.overflowing).toBe(0);
+    expect(layout.stacked).toBeGreaterThan(0);
+    expect(layout.stacked).toBeLessThan(layout.tables);
+    expect(layout.truncatedOutline).toBe(0);
+  });
+});

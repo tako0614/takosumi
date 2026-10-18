@@ -86,11 +86,62 @@ html:not(.dark) .vp-doc .dark-only {
   display: none;
 }
 
-/* Below 640px a table becomes a list of rows. The first cell reads as the
- * row's name and the other cells follow under it, each labelled with its
- * column name when the table has three or more columns (stacked-tables.ts).
- * A sideways scroll hid the descriptions of most reference tables on a
- * phone. */
+/* A table that does not fit its column becomes a list of rows instead of
+ * hiding columns off the edge. The first cell reads as the row's name and the
+ * other cells follow under it, each labelled with its column name when the
+ * table has three or more columns (stacked-tables.ts). The theme script adds
+ * `is-stacked` when a table overflows at the current width; below 640px the
+ * same layout applies without the class, so a phone shows it before the
+ * script runs and without JavaScript. Keep the two blocks below identical. */
+.vp-doc .table-scroll.is-stacked,
+.vp-doc .table-scroll.is-stacked > table {
+  overflow-x: visible;
+}
+
+.vp-doc .table-scroll.is-stacked > table,
+.vp-doc .table-scroll.is-stacked > table > tbody,
+.vp-doc .table-scroll.is-stacked > table > tbody > tr,
+.vp-doc .table-scroll.is-stacked > table > tbody > tr > td {
+  display: block;
+}
+
+.vp-doc .table-scroll.is-stacked > table > thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.vp-doc .table-scroll.is-stacked > table > tbody > tr {
+  padding: 12px 0;
+  border-top: 1px solid var(--vp-c-divider);
+  background-color: transparent;
+}
+
+.vp-doc .table-scroll.is-stacked > table > tbody > tr:last-child {
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc .table-scroll.is-stacked > table > tbody > tr > td {
+  padding: 2px 0;
+  border: 0;
+  overflow-wrap: anywhere;
+}
+
+.vp-doc .table-scroll.is-stacked > table > tbody > tr > td:first-child {
+  font-weight: 600;
+}
+
+.vp-doc .table-scroll.is-stacked .cell-label {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--vp-c-text-2);
+}
+
 @media (max-width: 639px) {
   .vp-doc .table-scroll,
   .vp-doc .table-scroll > table {
@@ -158,4 +209,26 @@ html:not(.dark) .vp-doc .dark-only {
     visibility: hidden;
     pointer-events: none;
   }
+}
+
+/* Plain-text blocks (numbered steps, URLs, sample output) wrap instead of
+ * running off a narrow screen. Shell and code blocks keep their lines. */
+.vp-doc div.language-text pre,
+.vp-doc div.language-text code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.vp-doc div.language-text code {
+  width: auto;
+}
+
+/* Outline entries wrap instead of ending in an ellipsis. The padding keeps the
+ * first line where VitePress places the active marker (link top + 39px). */
+.VPDocAsideOutline .content .outline-link {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 20px;
+  padding: 6px 0;
 }
