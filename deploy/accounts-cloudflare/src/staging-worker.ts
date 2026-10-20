@@ -5,6 +5,7 @@ import { handleStagingLoginPortal } from "./staging-login-portal.ts";
 import { createStagingIdentityPortal } from "./staging-identity-portal.ts";
 import {
   AUTH_STAGING_CLIENTS,
+  AUTH_STAGING_CONTROL_SECRETS,
   AUTH_STAGING_ISSUER,
   AUTH_STAGING_RETRY_CRON,
   assertAuthStagingVariables,
@@ -28,6 +29,7 @@ const REQUIRED_BINDINGS = [
 const REQUIRED_SECRETS = [
   "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK", "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET",
   "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", ...AUTH_STAGING_CLIENTS.map((client) => client.clientSecretEnv),
+  ...AUTH_STAGING_CONTROL_SECRETS,
 ] as const;
 
 /** Only the account/identity facade; never mount product or internal Core APIs. */

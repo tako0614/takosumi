@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { sameGitRemote } from "./lib/platform-release-source.ts";
-import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER, assertAuthStagingVariables, assertAuthStagingUpstreams } from "../deploy/accounts-cloudflare/src/staging-target.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_CONTROL_SECRETS, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER, assertAuthStagingVariables, assertAuthStagingUpstreams } from "../deploy/accounts-cloudflare/src/staging-target.ts";
 import { CloudflareD1RestTransport } from "../deploy/cloudflare/d1-rest-transport.ts";
 import { ensureAccountsD1WorkerSchema } from "../deploy/accounts-cloudflare/src/d1-schema-gate.ts";
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../worker/src/d1_opentofu_store.ts";
@@ -17,7 +17,16 @@ const ROOT = resolve(import.meta.dir, "..");
 const SHA = /^sha256:[a-f0-9]{64}$/u;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
 const ID = /^[a-f0-9]{32}$/u;
-const BASE_SECRETS = ["TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK", "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", ...AUTH_STAGING_CLIENTS.map((client) => client.clientSecretEnv)];
+const BASE_SECRETS = ["TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK", "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", ...AUTH_STAGING_CLIENTS.map((client) => client.clientSecretEnv), ...AUTH_STAGING_CONTROL_SECRETS];
+
+/** Secrets whose replacement silently changes every RP subject, session or
+ * signature. A served issuer's authority change must keep all of them. */
+const IDENTITY_CONTINUITY_SECRETS = ["TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK", "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT"] as const;
+const IDENTITY_CONTINUITY_BINDING = "TAKOSUMI_AUTH_IDENTITY_CONTINUITY_DIGEST";
+
+function identityContinuityDigest(secrets: Readonly<Record<string, string>>): string {
+  return digest(JSON.stringify(IDENTITY_CONTINUITY_SECRETS.map((name) => [name, digest(secrets[name] ?? "")])));
+}
 
 export type AuthStagingTarget = Readonly<{
   kind: "takosumi.auth-staging-target@v1";
@@ -203,9 +212,12 @@ export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, 
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest },
     { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
     { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit },
+    { name: IDENTITY_CONTINUITY_BINDING, type: "plain_text" },
     { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
     ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" }))];
   if (actual.length !== expected.length) throw new Error("auth_staging_binding_set_invalid");
+  const continuity = exactNamed(actual, "name", IDENTITY_CONTINUITY_BINDING).text;
+  if (typeof continuity !== "string" || !SHA.test(continuity)) throw new Error("auth_staging_binding_identity_mismatch");
   for (const binding of expected) {
     const current = exactNamed(actual, "name", binding.name);
     if (current.type !== binding.type || Object.entries(binding).some(([name, field]) => current[name] !== field)) throw new Error("auth_staging_binding_identity_mismatch");
@@ -267,8 +279,13 @@ export async function executeAuthStagingRelease(input: {
       await runtime.publicReadback(predecessor, plan);
       return { status: "ready", sourceCommit: target.sourceCommit, version: predecessor, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest };
     }
-    await assertTopology(runtime.provider, target, action === "code");
+    // A reviewed authority change may also replace the authority of an issuer
+    // that is already served; its domain and retry schedule stay attached and
+    // the new Version is read back publicly before the change is reported.
+    const active = action === "code" || (action === "authority" && await topologyActive(runtime.provider));
+    await assertTopology(runtime.provider, target, active);
     validateSecrets(input.secrets, target);
+    if (action === "authority" && active) assertIdentityContinuity(await runtime.provider.request("GET", `${script}/versions/${predecessor}`), input.secrets, target);
     if (action === "code") {
       const before = await runtime.provider.request("GET", `${script}/versions/${predecessor}`);
       // Source/artifact may differ; all authority, stores, registrations and private
@@ -291,9 +308,9 @@ export async function executeAuthStagingRelease(input: {
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== predecessor) throw new Error("auth_staging_concurrent_deployment");
     await runtime.provider.request("POST", `${script}/deployments`, JSON.stringify({ strategy: "percentage", versions: [{ version_id: uploadedVersion, percentage: 100 }] }));
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== uploadedVersion) throw new Error("auth_staging_activation_readback_mismatch");
-    await assertTopology(runtime.provider, target, action === "code");
-    if (action === "code") await runtime.publicReadback(uploadedVersion, plan);
-    return { status: action === "code" ? "ready" : "authority-ready-route-disabled", sourceCommit: target.sourceCommit, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest, releaseTag, predecessor, version: uploadedVersion, reversal: "explicit owner code restore to recorded predecessor while schema compatible; no database rollback" };
+    await assertTopology(runtime.provider, target, active);
+    if (active) await runtime.publicReadback(uploadedVersion, plan);
+    return { status: action === "code" ? "ready" : active ? "authority-ready-served" : "authority-ready-route-disabled", sourceCommit: target.sourceCommit, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest, releaseTag, predecessor, version: uploadedVersion, reversal: "explicit owner code restore to recorded predecessor while schema compatible; no database rollback" };
   } catch (error) {
     if (!touched) throw error;
     const reason = error instanceof Error && /^auth_staging_[a-z0-9_]+$/u.test(error.message) ? error.message : "dependency_failed";
@@ -315,6 +332,7 @@ function uploadMetadata(target: AuthStagingTarget, plan: AuthStagingPlan, secret
       { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest },
       { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
       { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit },
+      { name: IDENTITY_CONTINUITY_BINDING, type: "plain_text", text: identityContinuityDigest(secrets) },
       { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
       ...Object.entries(secrets).map(([name, text]) => ({ name, type: "secret_text", text }))],
     observability: { enabled: true, head_sampling_rate: 1 },
@@ -387,6 +405,28 @@ async function assertTopology(provider: AuthStagingProvider, target: AuthStaging
   return retryPrepared;
 }
 
+/** A served issuer keeps its signing key, subjects and session salt. A
+ * predecessor that predates the continuity digest can only be replaced with an
+ * unchanged signing key id; its other identity secrets are an explicit review
+ * obligation of that one change. */
+function assertIdentityContinuity(predecessor: unknown, secrets: Readonly<Record<string, string>>, target: AuthStagingTarget): void {
+  if (!record(predecessor) || !record(predecessor.resources) || !Array.isArray(predecessor.resources.bindings)) throw new Error("auth_staging_identity_continuity_unverifiable");
+  const bindings = predecessor.resources.bindings;
+  const recorded = bindings.find((binding) => record(binding) && binding.name === IDENTITY_CONTINUITY_BINDING);
+  if (recorded !== undefined) {
+    if (!record(recorded) || recorded.type !== "plain_text" || recorded.text !== identityContinuityDigest(secrets)) throw new Error("auth_staging_identity_continuity_changed");
+    return;
+  }
+  const keyId = bindings.find((binding) => record(binding) && binding.name === "TAKOSUMI_ACCOUNTS_ES256_KEY_ID");
+  if (!record(keyId) || keyId.type !== "plain_text" || keyId.text !== target.vars.TAKOSUMI_ACCOUNTS_ES256_KEY_ID) throw new Error("auth_staging_identity_continuity_changed");
+}
+
+async function topologyActive(provider: AuthStagingProvider): Promise<boolean> {
+  const domains = await provider.request("GET", `/workers/domains?service=${AUTH_STAGING_WORKER}&environment=production`);
+  if (!Array.isArray(domains)) throw new Error("auth_staging_topology_invalid");
+  return domains.length !== 0;
+}
+
 function servingVersion(value: unknown): string {
   if (!record(value) || !Array.isArray(value.deployments) || !record(value.deployments[0]) || !Array.isArray(value.deployments[0].versions)) throw new Error("auth_staging_deployment_invalid");
   const versions = value.deployments[0].versions;
@@ -402,6 +442,9 @@ function validateSecrets(secrets: Readonly<Record<string, string>>, target: Auth
     if (!/^[A-Za-z0-9_-]{43}$/u.test(secret) || Buffer.from(secret, "base64url").length !== 32 || Buffer.from(secret, "base64url").toString("base64url") !== secret) throw new Error("auth_staging_client_secret_invalid");
   }
   if (secrets[AUTH_STAGING_CLIENTS[0].clientSecretEnv] === secrets[AUTH_STAGING_CLIENTS[1].clientSecretEnv]) throw new Error("auth_staging_client_secrets_not_separate");
+  for (const name of AUTH_STAGING_CONTROL_SECRETS) {
+    if (Object.entries(secrets).some(([other, value]) => other !== name && value === secrets[name])) throw new Error("auth_staging_control_secrets_not_separate");
+  }
 }
 
 async function validateSigningSecrets(secrets: Readonly<Record<string, string>>, target: AuthStagingTarget): Promise<void> {
@@ -430,7 +473,7 @@ async function validateSigningSecrets(secrets: Readonly<Record<string, string>>,
       kids.add(key.kid);
     }
     if (publicJwksDigest(keys) !== target.jwksSha256) throw new Error();
-    for (const name of ["TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET"]) {
+    for (const name of ["TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET", ...AUTH_STAGING_CONTROL_SECRETS]) {
       if (new TextEncoder().encode(secrets[name]).byteLength < 32) throw new Error();
     }
   } catch { throw new Error("auth_staging_signing_configuration_invalid"); }

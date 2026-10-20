@@ -16,11 +16,18 @@ export const AUTH_STAGING_CLIENTS = [
   {
     clientId: "takoserver-console-staging-v1",
     redirectUris: [
-      "https://takoserver-api-integration-billing-0092.shoutatomiyama0614.workers.dev/auth/oidc/callback",
+      "https://integration-money-8732b77a789fd563406269261bf09e71.shoutatomiyama0614.workers.dev/auth/oidc/callback",
     ],
     clientSecretEnv: "TAKOSUMI_ACCOUNTS_SERVER_STAGE_CLIENT_SECRET",
   },
 ] as const;
+
+/** The lazy in-process Control operations port (directory, identity
+ * reconciliation) constructs the canonical Control service, which refuses to
+ * start in staging without a secret-store key and an Interface API guard
+ * token. Both are the issuer's own: it never reads or writes the platform's
+ * encrypted secret blobs, and its Interface API is not reachable over HTTP. */
+export const AUTH_STAGING_CONTROL_SECRETS = ["TAKOSUMI_SECRET_STORE_PASSPHRASE", "TAKOSUMI_DEPLOY_CONTROL_TOKEN"] as const;
 
 export function assertAuthStagingVariables(env: Readonly<Record<string, unknown>>): void {
   const ownerTarget = env.TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST;

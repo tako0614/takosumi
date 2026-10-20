@@ -89,7 +89,14 @@ The owning entry is `bun run deploy -- <surface>`. The surfaces are:
 
 - `takosumi-auth-staging-bootstrap`: creates the inert slot only.
 - `takosumi-auth-staging-authority`: config/registration/secret activation with
-  independent review; domain stays disabled.
+  independent review. On a route-less slot the domain stays disabled; on an
+  already served issuer the reviewed change replaces its authority in place,
+  keeps the domain and retry schedule, and is read back publicly. It must keep
+  the signing key, pairwise and subject secrets and session salt: every Version
+  records their digest, and a served change refuses a different one. A
+  predecessor from before that digest can be replaced once with an unchanged
+  signing key id, and keeping its other identity secrets is an explicit review
+  obligation of that change.
 - `takosumi-auth-staging-code`: subsequent code bytes with unchanged authority
   digest, physical stores, registered clients, secret custody and topology.
 - `takosumi-auth-staging-topology`: the exact dedicated domain attachment.
@@ -113,6 +120,14 @@ Resource IDs are derived from that config and compared with the **currently
 serving** canonical staging Worker's immutable Version. Hashing two mutually
 consistent caller files is not a substitute for that provider identity proof.
 
+The issuer's lazy Control operations port (shared-Workspace directory and
+identity reconciliation) constructs the canonical Control service, which refuses
+to start in staging without a secret-store key and an Interface API guard token.
+`TAKOSUMI_SECRET_STORE_PASSPHRASE` and `TAKOSUMI_DEPLOY_CONTROL_TOKEN` are therefore
+required issuer secrets: random 32-byte values owned by the issuer, distinct from
+every other secret. The issuer never reads or writes the platform's encrypted
+secret blobs, and its in-process Interface API is not reachable over HTTP.
+
 The secret bundle is a JSON object containing exactly the reviewed required
 binding names. Its values never appear in arguments, logs or public metadata.
 Code releases reuse the exact pinned bundle rather than inheriting secrets from
@@ -127,7 +142,7 @@ The two registrations are fixed:
 | Client | Exact callback |
 | --- | --- |
 | `takosumi-hosted-staging-v1` | `https://app-staging.takosumi.com/auth/oidc/callback` |
-| `takoserver-console-staging-v1` | `https://takoserver-api-integration-billing-0092.shoutatomiyama0614.workers.dev/auth/oidc/callback` |
+| `takoserver-console-staging-v1` | `https://integration-money-8732b77a789fd563406269261bf09e71.shoutatomiyama0614.workers.dev/auth/oidc/callback` |
 
 Both use enabled `shared-account`, Basic, S256 and only
 `openid email offline_access`. Metadata references independent secret bindings.

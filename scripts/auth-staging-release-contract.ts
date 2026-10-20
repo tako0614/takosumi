@@ -16,7 +16,7 @@ export const AUTH_STAGING_RELEASE_SURFACES = [
   {
     surface: "takosumi-auth-staging-authority", target: "cloudflare-worker:takosumi-auth-staging", lineage: "integration", triggers: ["authority"],
     obligations: { ...common,
-      "independent-review": "requires independent review of the exact stage registration, source/config/artifact and private secret bundle digest; strict Accounts-v5 and canonical Control read-only proofs precede configuration activation; domain routing stays disabled",
+      "independent-review": "requires independent review of the exact stage registration, source/config/artifact and private secret bundle digest; strict Accounts-v5 and canonical Control read-only proofs precede configuration activation; on a route-less slot domain routing stays disabled, while on a served issuer the domain and retry schedule stay attached, the recorded identity-continuity digest of the predecessor (signing key, pairwise and subject secrets, session salt) must equal that of the new bundle, and the new Version is read back publicly before success",
     },
   },
   {

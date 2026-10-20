@@ -53,7 +53,11 @@ const secrets = {
   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: Buffer.alloc(32, 23).toString("base64url"),
   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET: "fixture-google-secret",
   TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_SECRET: "fixture-github-secret",
+  TAKOSUMI_SECRET_STORE_PASSPHRASE: Buffer.alloc(32, 31).toString("base64url"),
+  TAKOSUMI_DEPLOY_CONTROL_TOKEN: Buffer.alloc(32, 32).toString("base64url"),
 };
+const identityContinuity = sha(JSON.stringify(["TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK", "TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT"].map((name) => [name, sha((secrets as Record<string, string>)[name]!)])));
+const continuityBinding = { name: "TAKOSUMI_AUTH_IDENTITY_CONTINUITY_DIGEST", type: "plain_text", text: identityContinuity };
 
 function fixtureTarget() {
   return parseAuthStagingTarget({
@@ -64,7 +68,7 @@ function fixtureTarget() {
   });
 }
 
-function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean } = {}) {
+function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean; predecessor?: (bindings: Record<string, unknown>[]) => Record<string, unknown>[] } = {}) {
   const target = fixtureTarget();
   const plan = createAuthStagingPlan(target, config, bytes);
   let exists = options.exists ?? true;
@@ -107,7 +111,10 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
         return { id: uploadedVersion };
       }
       if (path.endsWith(`/versions/${uploadedVersion}`)) return version;
-      if (path.endsWith(`/versions/${previousVersion}`)) return existingVersion();
+      if (path.endsWith(`/versions/${previousVersion}`)) {
+        const value = existingVersion();
+        return options.predecessor ? { resources: { ...value.resources, bindings: options.predecessor(value.resources.bindings as Record<string, unknown>[]) } } : value;
+      }
       throw new Error(`unexpected fixture path ${path}`);
     },
   };
@@ -115,7 +122,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
     ...plan.bindings.map((binding) => ({ ...binding, ...(binding.type === "durable_object_namespace" ? { namespace_id: `fixture-${binding.name}` } : {}) })),
     ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest }, { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
-    { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit }, { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
+    { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit }, continuityBinding, { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
   ] } });
   const runtime: AuthStagingReleaseRuntime = {
     provider, async verifySchema() { schemaCalls++; if (options.schemaError) throw new Error("fixture_v4_or_drifted_schema"); },
@@ -167,7 +174,7 @@ test("version readback accepts only the exact provider-reported handler surface 
       ...plan.bindings.map((binding) => ({ ...binding, ...(binding.type === "durable_object_namespace" ? { namespace_id: `fixture-${binding.name}` } : {}) })),
       ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
       { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest }, { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
-      { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit }, { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+      { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit }, continuityBinding, { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
       ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
     ],
   } });
@@ -226,7 +233,7 @@ test("bootstrap creates an inert unregistered slot and refuses any existing Work
 });
 
 test("authority needs schema5 and canonical physical resources before uploading", async () => {
-  for (const options of [{ schemaError: true }, { wrongCanonical: true }, { wrongCurrent: true }, { active: true }, { domainOwned: true }]) {
+  for (const options of [{ schemaError: true }, { wrongCanonical: true }, { wrongCurrent: true }, { domainOwned: true }, { active: true, schedules: [] }]) {
     const h = harness(options);
     await expect(h.execute("authority")).rejects.toThrow();
     expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
@@ -244,6 +251,40 @@ test("authority uploads once and leaves route disabled with no product schema wr
   expect(await h.execute("authority")).toMatchObject({ status: "authority-ready-route-disabled", version: uploadedVersion, predecessor: previousVersion });
   expect(h.requests.filter((request) => request.method !== "GET").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`, `/workers/scripts/${AUTH_STAGING_WORKER}/deployments`]);
   expect(h.counts().publicCalls).toBe(0);
+});
+
+test("authority on a served issuer replaces it once, keeps its domain and schedule and reads it back publicly", async () => {
+  const h = harness({ active: true });
+  expect(await h.execute("authority")).toMatchObject({ status: "authority-ready-served", version: uploadedVersion, predecessor: previousVersion });
+  expect(h.requests.filter((request) => request.method !== "GET").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`, `/workers/scripts/${AUTH_STAGING_WORKER}/deployments`]);
+  expect(h.counts().publicCalls).toBe(1);
+  const failing = harness({ active: true, publicError: true });
+  await expect(failing.execute("authority")).rejects.toBeInstanceOf(AuthStagingIncompleteError);
+});
+
+test("a served authority change keeps the identity-continuity secrets", async () => {
+  for (const name of ["TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT"]) {
+    const h = harness({ active: true });
+    await expect(h.execute("authority", { secrets: { ...secrets, [name]: Buffer.alloc(32, 99).toString("base64url") } })).rejects.toThrow("auth_staging_identity_continuity_changed");
+    expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
+  }
+  // A predecessor from before the continuity digest needs an unchanged signing key id.
+  const legacy = (bindings: Record<string, unknown>[]) => bindings.filter((binding) => binding.name !== "TAKOSUMI_AUTH_IDENTITY_CONTINUITY_DIGEST");
+  expect(await harness({ active: true, predecessor: legacy }).execute("authority")).toMatchObject({ status: "authority-ready-served" });
+  const rekeyed = harness({ active: true, predecessor: (bindings) => legacy(bindings).map((binding) => binding.name === "TAKOSUMI_ACCOUNTS_ES256_KEY_ID" ? { ...binding, text: "other-key" } : binding) });
+  await expect(rekeyed.execute("authority")).rejects.toThrow("auth_staging_identity_continuity_changed");
+  expect(rekeyed.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
+});
+
+test("control-operation secrets are required and must be distinct from every other secret", async () => {
+  const h = harness();
+  for (const name of ["TAKOSUMI_SECRET_STORE_PASSPHRASE", "TAKOSUMI_DEPLOY_CONTROL_TOKEN"]) {
+    const { [name]: _removed, ...missing } = secrets as Record<string, string>;
+    await expect(h.execute("authority", { secrets: missing })).rejects.toThrow("auth_staging_secret_bundle_invalid");
+    await expect(h.execute("authority", { secrets: { ...secrets, [name]: secrets.TAKOSUMI_ACCOUNTS_SUBJECT_SECRET } })).rejects.toThrow("auth_staging_control_secrets_not_separate");
+    await expect(h.execute("authority", { secrets: { ...secrets, [name]: "short" } })).rejects.toThrow("auth_staging_signing_configuration_invalid");
+  }
+  expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
 });
 
 test("wrong uploaded DB or DO namespace prevents activation after a single upload", async () => {
@@ -365,7 +406,7 @@ test("private owner qualification reads exact realized graph, schema and topolog
   const text = (name: string, value: string) => ({ name, type: "plain_text", text: value });
   const issuerVersion = { id: uploadedVersion, resources: { bindings: [
     ...plan.bindings, ...Object.entries(target.vars).map(([name, value]) => text(name, value)),
-    text("TAKOSUMI_AUTH_ARTIFACT_DIGEST", plan.artifactDigest), text("TAKOSUMI_AUTH_AUTHORITY_DIGEST", plan.authorityDigest), text("TAKOSUMI_AUTH_SOURCE_COMMIT", target.sourceCommit),
+    text("TAKOSUMI_AUTH_ARTIFACT_DIGEST", plan.artifactDigest), text("TAKOSUMI_AUTH_AUTHORITY_DIGEST", plan.authorityDigest), text("TAKOSUMI_AUTH_SOURCE_COMMIT", target.sourceCommit), continuityBinding,
     { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
   ], script: { handlers: ["scheduled", "fetch"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] },
     script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], exports: { AccountsOwnerAdmission: { type: "worker" } } } } };
