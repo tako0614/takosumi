@@ -95,6 +95,8 @@ test("hosted consent is browser-bound, single-use, exact-Origin and excludes sil
   const page=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));
   // A no-referrer page makes the browser POST `Origin: null`, which the exact-Origin check refuses.
   expect(page.headers.get("referrer-policy")).toBe("same-origin");
+  // form-action also applies to the 302 that answers the POST; it must allow exactly the RP's redirect origin.
+  expect(page.headers.get("content-security-policy")).toContain(`form-action 'self' ${new URL(url.searchParams.get("redirect_uri")!).origin};`);
   const tx=(await page.text()).match(/name="consent_transaction" value="([^"]+)"/)![1]!;
   const post=(origin:string,cookie=f.cookie)=>f.handler(new Request(url,{method:"POST",headers:{origin,cookie,"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({approve:"yes",consent_transaction:tx})}));
   expect((await post("https://attacker.example.test")).status).toBe(403);
