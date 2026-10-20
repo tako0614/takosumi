@@ -7,6 +7,9 @@ test("local mutation preparation ignores only reminted private Run file grants b
   const root = await mkdtemp(join(tmpdir(), "takosumi-private-run-mutation-"));
   const runRoot = join(root, "runs");
   await mkdir(runRoot);
+  // The runner freezes its run root when it first loads, for every later test
+  // in this process; consumers use the runner's RUN_ROOT. Restore the variable.
+  const previousRunRoot = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT;
   Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT = runRoot;
   const {
     reserveLocalMutationPreparation,
@@ -93,6 +96,7 @@ test("local mutation preparation ignores only reminted private Run file grants b
     )).toMatchObject({ status: "indeterminate" });
   } finally {
     await rm(root, { recursive: true, force: true });
-    delete Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT;
+    if (previousRunRoot === undefined) delete Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT;
+    else Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT = previousRunRoot;
   }
 });

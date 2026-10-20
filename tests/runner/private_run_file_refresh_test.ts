@@ -18,6 +18,7 @@ import {
   handleRunnerRequestWithDependencies,
 } from "../../runner/lib/http_server.ts";
 import { runOpenTofuCommand } from "../../runner/lib/exec.ts";
+import { RUN_ROOT } from "../../runner/lib/constants.ts";
 
 const RUN_ID = "plan_private_file_refresh_test";
 const OWNER = { kind: "plan" as const, id: RUN_ID };
@@ -229,7 +230,7 @@ test("local-http private Run file refresh completes only for the live Plan sessi
   const marker = join(fakeBin, "plan-entered");
   const release = join(fakeBin, "release-plan");
   const tofuPath = join(fakeBin, "tofu");
-  const runRoot = join("/tmp/takosumi-runs", runId);
+  const runRoot = join(RUN_ROOT, runId);
   const moduleDir = join(runRoot, "source", "module");
   const previousPath = Bun.env.PATH;
   let planPromise: Promise<Response> | undefined;
