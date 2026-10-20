@@ -22,6 +22,10 @@ export const AUTH_STAGING_CLIENTS = [
   },
 ] as const;
 
+/** Financial's staging TEST realm billing authority for the Takoserver RP.
+ * Workspace billing Organizations are derived under it, never created. */
+export const AUTH_STAGING_WORKSPACE_BILLING_AUTHORITY = "takoserver.hosted.staging-test.v1";
+
 /** The lazy in-process Control operations port (directory, identity
  * reconciliation) constructs the canonical Control service, which refuses to
  * start in staging without a secret-store key and an Interface API guard
@@ -44,6 +48,7 @@ export function assertAuthStagingVariables(env: Readonly<Record<string, unknown>
     env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE !== "predeployed" ||
     env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE !== "predeployed" ||
     env.TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY !== "true" ||
+    env.TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY !== AUTH_STAGING_WORKSPACE_BILLING_AUTHORITY ||
     env.LOCAL_SUBSTRATE_TEST_BED !== undefined ||
     env.TAKOSUMI_EXPOSE_INTERNAL_EDGE !== undefined ||
     env.TAKOSUMI_BILLING_REQUIRED !== undefined ||

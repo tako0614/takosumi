@@ -2,12 +2,14 @@ import { createCloudflareWorker, type PrivateAccountsFinancialSourceFacade, type
 import { FinancialSourceUnavailable } from "../../../accounts/service/src/financial-source.ts";
 import { createIdentityMergeRetryService, type IdentityMergeRetryService, type IdentityMergeRetryRuntimeContext } from "../../../accounts/service/src/identity-merge-retry.ts";
 import { handleStagingLoginPortal } from "./staging-login-portal.ts";
+import { createDerivedWorkspaceBillingEnrollment } from "../../../accounts/service/src/workspace-billing-organization.ts";
 import { createStagingIdentityPortal } from "./staging-identity-portal.ts";
 import {
   AUTH_STAGING_CLIENTS,
   AUTH_STAGING_CONTROL_SECRETS,
   AUTH_STAGING_ISSUER,
   AUTH_STAGING_RETRY_CRON,
+  AUTH_STAGING_WORKSPACE_BILLING_AUTHORITY,
   assertAuthStagingVariables,
   assertAuthStagingUpstreams,
 } from "./staging-target.ts";
@@ -129,7 +131,9 @@ export function createAuthStagingWorker(dependencies: {
     identityMergeReconciler:(env)=>ownerPorts(env).identityMergeReconciler,
     identityMergeRetry:retryService,
     credentialUnlinkReconciler:(env)=>ownerPorts(env).credentialUnlinkReconciler,
-    workspaceBillingEnrollment:(env)=>ownerPorts(env).workspaceBillingEnrollment,
+    // An explicit owner port wins; otherwise the staging realm derives the
+    // Organization reference under the pinned billing authority.
+    workspaceBillingEnrollment:(env)=>ownerPorts(env).workspaceBillingEnrollment ?? createDerivedWorkspaceBillingEnrollment(AUTH_STAGING_WORKSPACE_BILLING_AUTHORITY),
   });
   const sourceResolver = accounts.resolvePrivateFinancialSource;
   const worker = {

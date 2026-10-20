@@ -128,6 +128,16 @@ required issuer secrets: random 32-byte values owned by the issuer, distinct fro
 every other secret. The issuer never reads or writes the platform's encrypted
 secret blobs, and its in-process Interface API is not reachable over HTTP.
 
+The Takoserver RP callback needs `GET /api/v1/account/shared-workspaces/:id/billing-organization`.
+Its Workspace billing Organization follows Financial's
+`takoserver.workspace-billing-organization@v1` contract. The issuer does not
+create the Organization; it derives `organizationRef = "org_wb_" + the first 32
+hex of SHA-256(JSON.stringify(["takoserver.workspace-billing-organization@v1",
+billingAuthority, workspaceRef]))` and records that binding in Control. The RP
+recomputes the same reference and creates the Organization in its own fresh
+issuance. The staging target pins `TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY`
+to Financial's TEST realm value `takoserver.hosted.staging-test.v1`.
+
 The secret bundle is a JSON object containing exactly the reviewed required
 binding names. Its values never appear in arguments, logs or public metadata.
 Code releases reuse the exact pinned bundle rather than inheriting secrets from
