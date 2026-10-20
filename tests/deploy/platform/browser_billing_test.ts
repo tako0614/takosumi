@@ -76,6 +76,64 @@ test("actual platform fetch captures RP cookie before generic stripping and send
   expect(value.bodyUsed).toBe(false);
 });
 
+test("base POST forwards only an exact selected Workspace view request with its original Cookie", async () => {
+  const f = fixture();
+  for (const [body, contentType] of [
+    [JSON.stringify({ workspaceId: "ws_selected" }), "application/json"],
+    ["workspaceId=ws_selected", "application/x-www-form-urlencoded"],
+  ] as const) {
+    const value = post(root + "?workspaceId=ws_selected", body, {
+      "content-type": contentType, "sec-fetch-site": "same-origin",
+    });
+    const result = await fetch(value, f.env);
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toBe("private, no-store");
+    const forwarded = f.seen.dashboard.at(-1)!;
+    expect(forwarded.request.url).toBe(value.url);
+    expect(forwarded.request.method).toBe("POST");
+    expect(forwarded.request.headers.get("cookie")).toBe(cookie);
+    expect(forwarded.request.headers.get("origin")).toBe(origin);
+    expect(await forwarded.request.text()).toBe(body);
+    expect(forwarded.session).toEqual({ authKind: "session", subject: "tsub_canonical" });
+  }
+  expect(f.seen.auth).toHaveLength(2);
+  expect(f.seen.selected).toBe(0);
+  expect(f.seen.generic).toHaveLength(0);
+});
+
+test("base POST rejects absent, mismatched or extra Workspace selectors before authentication", async () => {
+  const f = fixture();
+  const invalid = [
+    post(root, { workspaceId: "ws_selected" }),
+    post(root + "?workspaceId=ws_selected", { workspaceId: "ws_other" }),
+    post(root + "?workspaceId=ws_selected&workspaceId=ws_selected", { workspaceId: "ws_selected" }),
+    post(root + "?workspaceId=ws_selected&format=json", { workspaceId: "ws_selected" }),
+    post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected", operationKey: "forged" }),
+    post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected", principal: "forged" }),
+    post(root + "?workspaceId=ws_selected", '{"workspaceId":"ws_selected","workspaceId":"ws_selected"}'),
+    post(root + "?workspaceId=ws_selected", "workspaceId=ws_selected&workspaceId=ws_selected", {
+      "content-type": "application/x-www-form-urlencoded",
+    }),
+    post(root + "?workspaceId=ws_selected", "workspaceId=ws_selected&consent=forged", {
+      "content-type": "application/x-www-form-urlencoded",
+    }),
+    post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected\n" }),
+    post(root + "?workspaceId=ws_selected%0A", { workspaceId: "ws_selected\n" }),
+  ];
+  for (const value of invalid) {
+    expect((await fetch(value, f.env)).status, value.url).toBe(400);
+  }
+  expect((await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }, {
+    origin: "https://evil.example.test",
+  }), f.env)).status).toBe(403);
+  expect((await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }, {
+    authorization: "Bearer forged",
+  }), f.env)).status).toBe(401);
+  expect(f.seen.auth).toHaveLength(0);
+  expect(f.seen.dashboard).toHaveLength(0);
+  expect(f.seen.generic).toHaveLength(0);
+});
+
 test("only three published GET views and the four dedicated original-command actions dispatch", async () => {
   const f = fixture();
   const contributions = await fetch(request("/__takosumi/platform/contributions"), f.env);
@@ -127,7 +185,7 @@ test("invalid public paths, methods and selectors reject before authentication o
     [request(undefined, { method: "HEAD" }), 405],
     [request(undefined, { method: "OPTIONS" }), 405],
     [request(undefined, { method: "DELETE" }), 405],
-    [post(root), 405],
+    [post(root), 400],
     [request(root), 400],
     [request(root + "?workspaceId=ws_selected&workspaceId=ws_other"), 400],
     [request(root + "?workspaceId=ws_selected&workspace%49d=ws_selected"), 400],
