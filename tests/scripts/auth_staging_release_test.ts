@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   AuthStagingIncompleteError,
+  assertAuthStagingVersion,
   authStagingResourceBindings,
   createAuthStagingPlan,
   executeAuthStagingRelease,
@@ -99,7 +100,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
           if (binding.type === "secret_text") return { name: binding.name, type: binding.type };
           return binding;
         });
-        version = { resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
+        version = { resources: { script: { handlers: ["resolvePrivateFinancialSource", "fetch", "scheduled"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
         if (options.lostUploadAck) throw new Error("fixture_lost_ack");
         return { id: uploadedVersion };
       }
@@ -108,7 +109,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
       throw new Error(`unexpected fixture path ${path}`);
     },
   };
-  const existingVersion = () => ({ resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: [
+  const existingVersion = () => ({ resources: { script: { handlers: ["resolvePrivateFinancialSource", "fetch", "scheduled"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: [
     ...plan.bindings.map((binding) => ({ ...binding, ...(binding.type === "durable_object_namespace" ? { namespace_id: `fixture-${binding.name}` } : {}) })),
     ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest }, { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
@@ -122,6 +123,40 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
   const execute = (action: "bootstrap" | "authority" | "code" | "topology", overrides = {}) => executeAuthStagingRelease({ action, target, plan, artifact: bytes, secrets, confirmation: plan.confirmation, reviewer: "independent-fixture-reviewer", ...overrides }, runtime);
   return { target, plan, runtime, requests, execute, counts: () => ({ schemaCalls, publicCalls, bootstrapCalls }) };
 }
+
+test("version readback accepts only the exact provider-reported handler surface of entry-worker", () => {
+  const { target, plan } = harness();
+  const version = () => ({ resources: {
+    // Order exactly as the Workers versions API reported it for the uploaded issuer.
+    script: { handlers: ["resolvePrivateFinancialSource", "fetch", "scheduled"], named_handlers: [
+      { name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] },
+      { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] },
+    ] },
+    script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], usage_model: "standard" },
+    bindings: [
+      ...plan.bindings.map((binding) => ({ ...binding, ...(binding.type === "durable_object_namespace" ? { namespace_id: `fixture-${binding.name}` } : {}) })),
+      ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
+      { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest }, { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
+      { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit }, { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+      ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
+    ],
+  } });
+  expect(() => assertAuthStagingVersion(version(), plan, target)).not.toThrow();
+  const changes: ((script: { handlers: string[]; named_handlers: { name: string; handlers: string[] }[] }) => void)[] = [
+    (script) => { script.handlers.push("queue"); },
+    (script) => { script.handlers = ["fetch", "scheduled"]; },
+    (script) => { script.named_handlers = script.named_handlers.filter((entry) => entry.name !== "AccountsFinancialProof"); },
+    (script) => { script.named_handlers.push({ name: "AccountsDebug", handlers: ["fetch"] }); },
+    (script) => { script.named_handlers[0]!.handlers.push("control"); },
+    (script) => { script.named_handlers[1]!.handlers = []; },
+    (script) => { script.named_handlers.push({ ...script.named_handlers[1]! }); },
+  ];
+  for (const change of changes) {
+    const value = version();
+    change(value.resources.script as never);
+    expect(() => assertAuthStagingVersion(value, plan, target)).toThrow("auth_staging_entrypoint_invalid");
+  }
+});
 
 test("target rejects production Worker/environment/issuer, unregistered callbacks, inline secrets and client disable", () => {
   const target = fixtureTarget();
@@ -301,7 +336,7 @@ test("private owner qualification reads exact realized graph, schema and topolog
     ...plan.bindings, ...Object.entries(target.vars).map(([name, value]) => text(name, value)),
     text("TAKOSUMI_AUTH_ARTIFACT_DIGEST", plan.artifactDigest), text("TAKOSUMI_AUTH_AUTHORITY_DIGEST", plan.authorityDigest), text("TAKOSUMI_AUTH_SOURCE_COMMIT", target.sourceCommit),
     { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
-  ], script: { handlers: ["fetch", "scheduled"], named_handlers: [{ name: "AccountsOwnerAdmission", handlers: [] }] },
+  ], script: { handlers: ["resolvePrivateFinancialSource", "fetch", "scheduled"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] },
     script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], exports: { AccountsOwnerAdmission: { type: "worker" } } } } };
   const ownerVersion = { id: previousVersion, resources: { bindings: [text("TAKOSUMI_ENVIRONMENT", "staging"), text("OWNER_SOURCE", expected.owner.sourceCommit),
     { name: "PRIVATE_ADMISSION", type: "service", service: AUTH_STAGING_WORKER, entrypoint: "AccountsOwnerAdmission" }, { name: "CUSTODY_DB", type: "d1", id: uuid("6") }], script: {}, script_runtime: {} } };
