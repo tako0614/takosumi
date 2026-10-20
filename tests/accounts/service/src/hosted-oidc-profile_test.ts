@@ -612,3 +612,15 @@ CREATE TABLE accounts_v1.oauth_refresh_tokens(LIKE accounts_v1.oauth_access_toke
     expect(claims((await exchanged.json() as {id_token:string}).id_token).auth_time).toBe((await store.findAccountSession(pending.session.sessionId))!.authTime);
   } finally {await db.close();}
 },20_000);
+
+test("shared-account redirect hosts are DNS names, because the consent CSP names their origin", async () => {
+  const { validateHostedClientConfiguration } = await import("../../../../accounts/service/src/hosted-oidc-profile.ts");
+  const client = (redirect: string) => ({
+    clientId: "csp-host-fixture", profile: "shared-account" as const, enabled: true, tokenEndpointAuthMethod: "client_secret_basic" as const,
+    clientSecret: "fixture-secret", allowedScopes: ["openid", "email", "offline_access"], redirectUris: [redirect],
+  });
+  expect(() => validateHostedClientConfiguration(client("https://rp.example.test/auth/oidc/callback") as never)).not.toThrow();
+  for (const redirect of ["https://a;b.example/cb", "https://*.example/cb", "https://x,y.example/cb", "https://a'b.example/cb"]) {
+    expect(() => validateHostedClientConfiguration(client(redirect) as never)).toThrow("HTTPS exact redirects");
+  }
+});

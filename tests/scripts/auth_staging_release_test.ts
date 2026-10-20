@@ -203,6 +203,14 @@ test("target rejects production Worker/environment/issuer, unregistered callback
   expect(() => parseAuthStagingTarget({ ...target, vars: { ...target.vars, TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([clientMetadata[0], { ...clientMetadata[1], redirectUris: ["https://takoserver-console-integration.shoutatomiyama0614.workers.dev/auth/oidc/callback"] }]) } })).toThrow();
 });
 
+test("the staging target pins Financial's Workspace billing authority", () => {
+  const base = fixtureTarget();
+  const { TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY: _pinned, ...missing } = base.vars;
+  for (const vars of [missing, { ...base.vars, TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY: "takoserver.hosted.production.v1" }]) {
+    expect(() => parseAuthStagingTarget({ ...base, vars })).toThrow("auth_staging_variables_invalid");
+  }
+});
+
 test("upstream and passkey cannot cross to production and all secret refs must be closed", () => {
   const target = fixtureTarget();
   for (const patch of [{ redirectUri: "https://auth.takos.jp/oauth/upstream/callback" }, { clientSecretEnv: "FOREIGN_SECRET" }, { verificationProfile: "unverified" }]) expect(() => parseAuthStagingTarget({ ...target, vars: { ...target.vars, TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify([{ ...upstreamMetadata[0], ...patch }, upstreamMetadata[1]]) } })).toThrow();
