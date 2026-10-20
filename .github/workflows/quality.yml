@@ -57,20 +57,6 @@ jobs:
 
       - name: Diagnose runner image release action
         run: |
-          set -x
-          ls -l /usr/bin/flock || true
-          /usr/bin/flock --version || true
-          id; uname -a; ulimit -a
-          df -h /tmp; mount | grep -E ' /tmp | /dev/shm ' || true
-          ls -ld /tmp /tmp/takosumi-runs 2>&1 || true
-          cat > /tmp/diag-release.ts <<'TS'
-          import { handleRunnerRequest } from "./runner/entrypoint.ts";
-          const orig = console.error;
-          const runId = `release_diag_${crypto.randomUUID().replace(/-/g, "")}`;
-          const body = { runId, workspaceId: "ws_diag", capsuleId: "cap_diag", stateVersionId: "sv_diag", action: "release", release: { commands: [{ id: "c", command: [process.execPath, "-e", "console.log(1)"] }] }, outputs: {}, activation: { sourceSnapshotId: "snap", sourceCommit: "0123456789abcdef0123456789abcdef01234567" } };
-          const r = await handleRunnerRequest(new Request("http://runner/runs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
-          console.log("status", r.status, (await r.text()).slice(0, 2000));
-          TS
-          cp /tmp/diag-release.ts ./diag-release.ts
-          bun ./diag-release.ts || true
-          bun test tests/runner/release_command_test.ts 2>&1 | tail -80 || true
+          bun run test > /tmp/diag-test.log 2>&1 || true
+          grep -E 'DIAG_BODY|\(fail\)|^ *[0-9]+ (pass|fail)$' /tmp/diag-test.log | head -60
+          ls -la /tmp/takosumi-runs 2>&1 | head -20
