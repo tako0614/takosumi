@@ -167,7 +167,7 @@ export function createAuthStagingOwnerGraphReader(provider: AuthStagingOwnerGrap
       if (!issuer.version.bindings.some((binding) => binding.name === name && binding.type === "d1" && binding.id === id)) fail();
     }
     if (!Array.isArray(issuer.version.named) || issuer.version.named.filter((entry) => record(entry) && entry.name === OWNER_OPERATION_ENTRYPOINT &&
-      (entry.handlers === undefined || Array.isArray(entry.handlers) && entry.handlers.length === 0)).length !== 1 ||
+      Array.isArray(entry.handlers) && JSON.stringify(entry.handlers) === JSON.stringify(["readOwnerOperation"])).length !== 1 ||
       !record(issuer.version.exports) || !record(issuer.version.exports[OWNER_OPERATION_ENTRYPOINT]) ||
       issuer.version.exports[OWNER_OPERATION_ENTRYPOINT].type !== "worker") fail();
     const incoming = second.versions.flatMap((version) => version.bindings.filter((binding) => binding.type === "service" &&

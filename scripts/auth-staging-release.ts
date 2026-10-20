@@ -164,16 +164,38 @@ export async function inspectAuthStagingOwnerReleaseTopology(input: {
   return qualification;
 }
 
+/** The exact handler surface the provider reports for `entry-worker.ts`: the
+ * default export's members and each named WorkerEntrypoint's methods. Any
+ * additional or missing entrypoint or method is a different artifact. */
+export const AUTH_STAGING_DEFAULT_HANDLERS = ["fetch", "scheduled"] as const;
+export const AUTH_STAGING_NAMED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
+  AccountsFinancialProof: ["fetch", "loadFinancialIdentityProof", "prove", "verifyCurrentFinancialIdentityProof"],
+  [OWNER_OPERATION_ENTRYPOINT]: ["readOwnerOperation"],
+};
+
+function sameNames(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value) && value.every((name) => typeof name === "string") &&
+    JSON.stringify([...value].sort()) === JSON.stringify([...expected].sort());
+}
+
+function exactHandlerSurface(script: Record<string, unknown>): boolean {
+  const named = script.named_handlers;
+  if (!sameNames(script.handlers, AUTH_STAGING_DEFAULT_HANDLERS) || !Array.isArray(named) ||
+      named.length !== Object.keys(AUTH_STAGING_NAMED_HANDLERS).length) return false;
+  return Object.entries(AUTH_STAGING_NAMED_HANDLERS).every(([name, handlers]) => {
+    const matches = named.filter((entry) => record(entry) && entry.name === name);
+    return matches.length === 1 && sameNames(matches[0]!.handlers, handlers);
+  });
+}
+
 /** Metadata-only readback. Never accept extra authority or a second physical store. */
 export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, target: AuthStagingTarget): void {
   if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings) || !record(value.resources.script) ||
-      JSON.stringify(value.resources.script.handlers) !== JSON.stringify(["fetch", "scheduled"]) ||
       !record(value.resources.script_runtime) || value.resources.script_runtime.compatibility_date !== AUTH_STAGING_COMPATIBILITY_DATE ||
       JSON.stringify(value.resources.script_runtime.compatibility_flags) !== JSON.stringify(["nodejs_compat"])) throw new Error("auth_staging_version_invalid");
+  if (!exactHandlerSurface(value.resources.script)) throw new Error("auth_staging_entrypoint_invalid");
   if (target.vars.TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST !== undefined &&
-      (!Array.isArray(value.resources.script.named_handlers) || value.resources.script.named_handlers.length !== 1 ||
-       !record(value.resources.script.named_handlers[0]) || value.resources.script.named_handlers[0].name !== OWNER_OPERATION_ENTRYPOINT ||
-       JSON.stringify(value.resources.script.named_handlers[0].handlers) !== "[]" || !record(value.resources.script_runtime.exports) ||
+      (!record(value.resources.script_runtime.exports) ||
        !record(value.resources.script_runtime.exports[OWNER_OPERATION_ENTRYPOINT]) ||
        value.resources.script_runtime.exports[OWNER_OPERATION_ENTRYPOINT].type !== "worker")) throw new Error("auth_staging_owner_entrypoint_invalid");
   const actual = value.resources.bindings;

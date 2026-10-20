@@ -22,7 +22,7 @@ function fixture(options: { third?: boolean; preview?: boolean; mutate?: (worker
       { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1", id: id("4") }, { name: "TAKOSUMI_CONTROL_DB", type: "d1", id: id("5") });
     else bindings.push({ name: "PRIVATE_ACCOUNTS", type: "service", service: expected.issuer.worker, entrypoint: "AccountsOwnerAdmission" },
       { name: "CUSTODY_DB", type: "d1", id: id("6") });
-    versions[worker!] = { id: versionId, resources: { bindings, script: { named_handlers: issuer ? [{ name: "AccountsOwnerAdmission", handlers: [] }] : [] },
+    versions[worker!] = { id: versionId, resources: { bindings, script: { named_handlers: issuer ? [{ name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] : [] },
       script_runtime: { exports: issuer ? { AccountsOwnerAdmission: { type: "worker" } } : {} } } };
     options.mutate?.(worker!, versions[worker!]!);
   }
