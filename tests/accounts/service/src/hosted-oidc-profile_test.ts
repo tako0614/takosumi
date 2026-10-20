@@ -93,9 +93,12 @@ test("hosted consent is browser-bound, single-use, exact-Origin and excludes sil
   const silent=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));expect(new URL(silent.headers.get("location")!).searchParams.get("error")).toBe("consent_required");
   url.searchParams.delete("prompt");
   const page=await f.handler(new Request(url,{headers:{cookie:f.cookie}}));
+  // A no-referrer page makes the browser POST `Origin: null`, which the exact-Origin check refuses.
+  expect(page.headers.get("referrer-policy")).toBe("same-origin");
   const tx=(await page.text()).match(/name="consent_transaction" value="([^"]+)"/)![1]!;
   const post=(origin:string,cookie=f.cookie)=>f.handler(new Request(url,{method:"POST",headers:{origin,cookie,"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({approve:"yes",consent_transaction:tx})}));
   expect((await post("https://attacker.example.test")).status).toBe(403);
+  expect((await post("null")).status).toBe(403);
   expect((await post(issuer)).status).toBe(302);
   expect((await post(issuer)).status).toBe(400);
 });

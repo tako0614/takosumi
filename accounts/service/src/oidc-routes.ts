@@ -1806,7 +1806,11 @@ function hostedAuthorizeError(redirectUri: string,state: string|null,error: stri
 }
 function hostedConsentPage(url: URL, transaction: string, clientId: string, scope: string): Response {
   const escape = (value: string) => value.replace(/[&<>"']/gu,(char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!));
-  return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Continue sign-in</title></head><body><main><h1>Continue sign-in</h1><p>Allow ${escape(clientId)} to receive your account identity (${escape(scope)})?</p><form method="post" action="${escape(url.pathname+url.search)}"><input type="hidden" name="consent_transaction" value="${escape(transaction)}"><button name="approve" value="yes">Continue</button></form></main></body></html>`,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'","referrer-policy":"no-referrer"}});
+  return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Continue sign-in</title></head><body><main><h1>Continue sign-in</h1><p>Allow ${escape(clientId)} to receive your account identity (${escape(scope)})?</p><form method="post" action="${escape(url.pathname+url.search)}"><input type="hidden" name="consent_transaction" value="${escape(transaction)}"><button name="approve" value="yes">Continue</button></form></main></body></html>`,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    // Browsers send `Origin: null` for a form POST from a no-referrer page,
+    // which the issuer's exact-Origin CSRF check must refuse. same-origin keeps
+    // the Referer off every other origin while the POST carries the issuer Origin.
+    "referrer-policy":"same-origin"}});
 }
 
 function hostedRecordMetadata(record: {

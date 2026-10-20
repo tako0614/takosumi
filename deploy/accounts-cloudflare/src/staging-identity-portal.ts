@@ -270,7 +270,9 @@ function hex(bytes: Uint8Array): string { return [...bytes].map((value) => value
 function escapeHtml(value: string): string { return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;").replace(/'/gu, "&#39;"); }
 class PortalFailure extends Error { constructor(readonly status: number) { super("Identity context operation unavailable"); } }
 function securityHeaders(): Record<string, string> {
-  return { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" };
+  // The portal's forms POST back to the issuer, whose CSRF check requires the
+  // exact issuer Origin; a no-referrer page would make the browser send `null`.
+  return { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "same-origin", "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" };
 }
 function page(message: string, status: number, content = "", extraHeaders: Record<string, string> = {}): Response {
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Review your account contexts</title></head><body><main><p>Takos staging · auth-staging.takos.jp</p><h1>Review your account contexts</h1><p>${escapeHtml(message)}</p>${content}</main></body></html>`, { status, headers: { "content-type": "text/html; charset=utf-8", ...securityHeaders(), ...extraHeaders } });
