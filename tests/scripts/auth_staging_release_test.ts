@@ -78,7 +78,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
     async request(method, path, body) {
       requests.push({ method, path, body });
       if (path === `/workers/scripts/${AUTH_STAGING_WORKER}/script-settings`) return exists ? {} : null;
-      if (path === `/workers/scripts/takosumi-staging/versions/${canonicalVersion}`) return { resources: { bindings: { bindings: canonicalBindings.map((binding) => options.wrongCanonical && binding.name === "TAKOSUMI_ACCOUNTS_DB" ? { ...binding, id: uuid("f") } : binding) } } };
+      if (path === `/workers/scripts/takosumi-staging/versions/${canonicalVersion}`) return { resources: { bindings: canonicalBindings.map((binding) => options.wrongCanonical && binding.name === "TAKOSUMI_ACCOUNTS_DB" ? { ...binding, id: uuid("f") } : binding) } };
       if (path === "/workers/scripts/takosumi-staging/deployments") return { deployments: [{ versions: [{ version_id: options.wrongCurrent ? uuid("f") : canonicalVersion, percentage: 100 }] }] };
       if (path.endsWith("/subdomain")) return { enabled: false, previews_enabled: false };
       if (path.endsWith("/schedules")) { if (method === "PUT") { schedules = JSON.parse(String(body)); if (options.lostScheduleAck) throw new Error("fixture_lost_schedule_ack"); } return { schedules }; }
@@ -99,7 +99,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
           if (binding.type === "secret_text") return { name: binding.name, type: binding.type };
           return binding;
         });
-        version = { resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: { bindings } } };
+        version = { resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
         if (options.lostUploadAck) throw new Error("fixture_lost_ack");
         return { id: uploadedVersion };
       }
@@ -108,12 +108,12 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
       throw new Error(`unexpected fixture path ${path}`);
     },
   };
-  const existingVersion = () => ({ resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: { bindings: [
+  const existingVersion = () => ({ resources: { script: { handlers: ["fetch", "scheduled"] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings: [
     ...plan.bindings.map((binding) => ({ ...binding, ...(binding.type === "durable_object_namespace" ? { namespace_id: `fixture-${binding.name}` } : {}) })),
     ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest }, { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
     { name: "TAKOSUMI_AUTH_SOURCE_COMMIT", type: "plain_text", text: target.sourceCommit }, { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
-  ] } } });
+  ] } });
   const runtime: AuthStagingReleaseRuntime = {
     provider, async verifySchema() { schemaCalls++; if (options.schemaError) throw new Error("fixture_v4_or_drifted_schema"); },
     async publicReadback() { publicCalls++; if (options.publicError) throw new Error("fixture_readback_failed"); },
@@ -297,14 +297,14 @@ test("private owner qualification reads exact realized graph, schema and topolog
   const target = parseAuthStagingTarget({ ...fixtureTarget(), vars: { ...fixtureTarget().vars, TAKOSUMI_ACCOUNTS_OWNER_CLIENT_ID: expected.ownerClientId, TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST: authStagingOwnerTargetBindingDigest(expected) } });
   const plan = createAuthStagingPlan(target, config, bytes);
   const text = (name: string, value: string) => ({ name, type: "plain_text", text: value });
-  const issuerVersion = { id: uploadedVersion, resources: { bindings: { bindings: [
+  const issuerVersion = { id: uploadedVersion, resources: { bindings: [
     ...plan.bindings, ...Object.entries(target.vars).map(([name, value]) => text(name, value)),
     text("TAKOSUMI_AUTH_ARTIFACT_DIGEST", plan.artifactDigest), text("TAKOSUMI_AUTH_AUTHORITY_DIGEST", plan.authorityDigest), text("TAKOSUMI_AUTH_SOURCE_COMMIT", target.sourceCommit),
     { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" }, ...target.requiredSecrets.map((name) => ({ name, type: "secret_text" })),
-  ] }, script: { handlers: ["fetch", "scheduled"], named_handlers: [{ name: "AccountsOwnerAdmission", handlers: [] }] },
+  ], script: { handlers: ["fetch", "scheduled"], named_handlers: [{ name: "AccountsOwnerAdmission", handlers: [] }] },
     script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], exports: { AccountsOwnerAdmission: { type: "worker" } } } } };
-  const ownerVersion = { id: previousVersion, resources: { bindings: { bindings: [text("TAKOSUMI_ENVIRONMENT", "staging"), text("OWNER_SOURCE", expected.owner.sourceCommit),
-    { name: "PRIVATE_ADMISSION", type: "service", service: AUTH_STAGING_WORKER, entrypoint: "AccountsOwnerAdmission" }, { name: "CUSTODY_DB", type: "d1", id: uuid("6") }] }, script: {}, script_runtime: {} } };
+  const ownerVersion = { id: previousVersion, resources: { bindings: [text("TAKOSUMI_ENVIRONMENT", "staging"), text("OWNER_SOURCE", expected.owner.sourceCommit),
+    { name: "PRIVATE_ADMISSION", type: "service", service: AUTH_STAGING_WORKER, entrypoint: "AccountsOwnerAdmission" }, { name: "CUSTODY_DB", type: "d1", id: uuid("6") }], script: {}, script_runtime: {} } };
   let schema = 0;
   const paths: string[] = [];
   const provider: AuthStagingProvider = { async request(method, path) {

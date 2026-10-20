@@ -121,9 +121,9 @@ export function createAuthStagingOwnerGraphReader(provider: AuthStagingOwnerGrap
       versionInventory.push({ worker, active: [...active].sort(), previewsEnabled: subdomain.previews_enabled, inventory });
       for (const item of inventory.filter((version) => active.has(version.id) || version.preview)) {
         const version = await get(`${prefix}/versions/${item.id}`);
-        if (!record(version) || version.id !== item.id || !record(version.resources) || !record(version.resources.bindings) ||
-          !Array.isArray(version.resources.bindings.bindings) || !record(version.resources.script) || !record(version.resources.script_runtime)) fail();
-        const bindings = version.resources.bindings.bindings;
+        if (!record(version) || version.id !== item.id || !record(version.resources) ||
+          !Array.isArray(version.resources.bindings) || !record(version.resources.script) || !record(version.resources.script_runtime)) fail();
+        const bindings = version.resources.bindings;
         if (!bindings.every((binding) => record(binding) && typeof binding.name === "string" && typeof binding.type === "string") ||
           new Set(bindings.map((binding) => binding.name)).size !== bindings.length) fail();
         // Secret text is never retained in the graph or its public summary.
