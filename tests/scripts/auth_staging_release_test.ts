@@ -53,6 +53,8 @@ const secrets = {
   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: Buffer.alloc(32, 23).toString("base64url"),
   TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET: "fixture-google-secret",
   TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_SECRET: "fixture-github-secret",
+  TAKOSUMI_SECRET_STORE_PASSPHRASE: Buffer.alloc(32, 31).toString("base64url"),
+  TAKOSUMI_DEPLOY_CONTROL_TOKEN: Buffer.alloc(32, 32).toString("base64url"),
 };
 
 function fixtureTarget() {
@@ -226,7 +228,7 @@ test("bootstrap creates an inert unregistered slot and refuses any existing Work
 });
 
 test("authority needs schema5 and canonical physical resources before uploading", async () => {
-  for (const options of [{ schemaError: true }, { wrongCanonical: true }, { wrongCurrent: true }, { active: true }, { domainOwned: true }]) {
+  for (const options of [{ schemaError: true }, { wrongCanonical: true }, { wrongCurrent: true }, { domainOwned: true }, { active: true, schedules: [] }]) {
     const h = harness(options);
     await expect(h.execute("authority")).rejects.toThrow();
     expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
@@ -244,6 +246,26 @@ test("authority uploads once and leaves route disabled with no product schema wr
   expect(await h.execute("authority")).toMatchObject({ status: "authority-ready-route-disabled", version: uploadedVersion, predecessor: previousVersion });
   expect(h.requests.filter((request) => request.method !== "GET").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`, `/workers/scripts/${AUTH_STAGING_WORKER}/deployments`]);
   expect(h.counts().publicCalls).toBe(0);
+});
+
+test("authority on a served issuer replaces it once, keeps its domain and schedule and reads it back publicly", async () => {
+  const h = harness({ active: true });
+  expect(await h.execute("authority")).toMatchObject({ status: "authority-ready-served", version: uploadedVersion, predecessor: previousVersion });
+  expect(h.requests.filter((request) => request.method !== "GET").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`, `/workers/scripts/${AUTH_STAGING_WORKER}/deployments`]);
+  expect(h.counts().publicCalls).toBe(1);
+  const failing = harness({ active: true, publicError: true });
+  await expect(failing.execute("authority")).rejects.toBeInstanceOf(AuthStagingIncompleteError);
+});
+
+test("control-operation secrets are required and must be distinct from every other secret", async () => {
+  const h = harness();
+  for (const name of ["TAKOSUMI_SECRET_STORE_PASSPHRASE", "TAKOSUMI_DEPLOY_CONTROL_TOKEN"]) {
+    const { [name]: _removed, ...missing } = secrets as Record<string, string>;
+    await expect(h.execute("authority", { secrets: missing })).rejects.toThrow("auth_staging_secret_bundle_invalid");
+    await expect(h.execute("authority", { secrets: { ...secrets, [name]: secrets.TAKOSUMI_ACCOUNTS_SUBJECT_SECRET } })).rejects.toThrow();
+    await expect(h.execute("authority", { secrets: { ...secrets, [name]: "short" } })).rejects.toThrow("auth_staging_signing_configuration_invalid");
+  }
+  expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
 });
 
 test("wrong uploaded DB or DO namespace prevents activation after a single upload", async () => {
