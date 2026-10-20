@@ -91,7 +91,12 @@ The owning entry is `bun run deploy -- <surface>`. The surfaces are:
 - `takosumi-auth-staging-authority`: config/registration/secret activation with
   independent review. On a route-less slot the domain stays disabled; on an
   already served issuer the reviewed change replaces its authority in place,
-  keeps the domain and retry schedule, and is read back publicly.
+  keeps the domain and retry schedule, and is read back publicly. It must keep
+  the signing key, pairwise and subject secrets and session salt: every Version
+  records their digest, and a served change refuses a different one. A
+  predecessor from before that digest can be replaced once with an unchanged
+  signing key id, and keeping its other identity secrets is an explicit review
+  obligation of that change.
 - `takosumi-auth-staging-code`: subsequent code bytes with unchanged authority
   digest, physical stores, registered clients, secret custody and topology.
 - `takosumi-auth-staging-topology`: the exact dedicated domain attachment.
