@@ -92,9 +92,12 @@ export type StaticAssetResponder = (
  * requests, falling back to `index.html` (SPA) for extensionless navigations.
  * Returns `undefined` to fall through to the API handlers.
  *
- * HTML pages resolve the way the Cloudflare Static Assets profile's default
- * `auto-trailing-slash` handling does: `/a/b` serves `a/b.html`, `/a/` serves
- * `a/index.html`, and `/a` redirects to `/a/` when only `a/index.html` exists.
+ * HTML pages resolve the clean URLs that the Cloudflare Static Assets
+ * profile's default `auto-trailing-slash` handling also serves: `/a/b` serves
+ * `a/b.html`, `/a/` serves `a/index.html`, and `/a` redirects to `/a/` when
+ * only `a/index.html` exists. Cloudflare's other canonicalizing redirects
+ * (`/a.html` to `/a`, `/a/` to `/a`) are not reproduced; those paths are
+ * served directly or fall back to the SPA.
  * The docs tree under `dist/docs` (VitePress with `cleanUrls`) depends on this;
  * without it `/docs/` and every `/docs/<page>` fell through to the SPA, which
  * rendered its not-found screen.
@@ -137,9 +140,12 @@ export function createStaticAssetResponder(dir: string): StaticAssetResponder {
           return fileResponse(page, req.method, HTML_CACHE_CONTROL);
         }
         if (await bun.file(`${dir}/${rel}/index.html`).exists()) {
+          // Built from the checked `rel`, not the raw pathname: `//docs`
+          // would otherwise redirect to the protocol-relative `//docs/`,
+          // which a browser reads as the host `docs`.
           return new Response(null, {
             status: 307,
-            headers: { location: `${url.pathname}/${url.search}` },
+            headers: { location: `/${rel}/${url.search}` },
           });
         }
       }

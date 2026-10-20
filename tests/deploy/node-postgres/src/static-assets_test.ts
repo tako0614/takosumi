@@ -81,6 +81,23 @@ describe("createStaticAssetResponder", () => {
         expect(res?.status).toBe(307);
         expect(res?.headers.get("location")).toBe(location);
       }
+      // The redirect stays on this origin even when the request path starts
+      // with an extra slash or a backslash (both parse to `//docs`).
+      for (const path of ["//docs", "/\\docs"]) {
+        const res = await serve(get(path));
+        expect(res?.status).toBe(307);
+        expect(res?.headers.get("location")).toBe("/docs/");
+      }
+      const head = await serve(
+        new Request("https://app.takosumi.test/docs/pricing", { method: "HEAD" }),
+      );
+      expect(head?.status).toBe(200);
+      expect(head?.headers.get("cache-control")).toBe("no-cache");
+      expect(await head?.text()).toBe("");
+      // Traversal through a directory-style path never leaves the assets dir.
+      const traversal = await serve(get("/docs/%2e%2e/%2e%2e/"));
+      expect(traversal?.status).toBe(200);
+      expect(await traversal?.text()).toContain("spa");
       // A missing docs page and a trailing-slash SPA route still reach the SPA.
       for (const path of ["/docs/missing", "/docs/missing/", "/workloads/"]) {
         const res = await serve(get(path));
