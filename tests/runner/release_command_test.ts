@@ -72,6 +72,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
       }),
     );
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -123,6 +124,7 @@ test("release action exposes SourceSnapshot identity only as process-local env",
       }),
     );
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -221,6 +223,7 @@ test("release action runs sourceBuild before provider credentials are prepared",
       }),
     );
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(JSON.stringify(body)).not.toContain("snap_1");
@@ -307,6 +310,7 @@ test("release action materializes one exact mode-0600 runtime secret file after 
       }),
     );
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({ status: "succeeded", commandCount: 1 });
@@ -341,6 +345,7 @@ test("release action kills a background descendant before secret cleanup after d
     childPid = Number(await readFile(fixture.childPidPath, "utf8"));
     const runtimePath = await readFile(fixture.runtimePathRecord, "utf8");
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({ status: "succeeded", commandCount: 1 });
@@ -855,6 +860,7 @@ test("release action accepts a 64-character SourceSnapshot commit for lifecycle 
         activation: { sourceSnapshotId: "snap_sha256", sourceCommit },
       }),
     );
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -896,6 +902,7 @@ test("release action treats post-apply work as opaque app commands", async () =>
       }),
     );
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -960,6 +967,7 @@ test("release action admits dispatch-only provider credentials", async () => {
       }),
     );
 
+    if (response.status !== 200) console.error("DIAG_BODY", response.status, await response.clone().text());
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
