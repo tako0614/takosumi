@@ -22,7 +22,7 @@ function fixture(options: { third?: boolean; preview?: boolean; mutate?: (worker
       { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1", id: id("4") }, { name: "TAKOSUMI_CONTROL_DB", type: "d1", id: id("5") });
     else bindings.push({ name: "PRIVATE_ACCOUNTS", type: "service", service: expected.issuer.worker, entrypoint: "AccountsOwnerAdmission" },
       { name: "CUSTODY_DB", type: "d1", id: id("6") });
-    versions[worker!] = { id: versionId, resources: { bindings: { bindings }, script: { named_handlers: issuer ? [{ name: "AccountsOwnerAdmission", handlers: [] }] : [] },
+    versions[worker!] = { id: versionId, resources: { bindings, script: { named_handlers: issuer ? [{ name: "AccountsOwnerAdmission", handlers: [] }] : [] },
       script_runtime: { exports: issuer ? { AccountsOwnerAdmission: { type: "worker" } } : {} } } };
     options.mutate?.(worker!, versions[worker!]!);
   }
@@ -43,7 +43,7 @@ function fixture(options: { third?: boolean; preview?: boolean; mutate?: (worker
     if (tail === `versions/${id("7")}`) return { ...structuredClone(version), id: id("7") };
     if (tail === `versions/${version.id}`) {
       const copy = structuredClone(version);
-      if (options.drift && lists > 1 && worker === expected.owner.worker) copy.resources.bindings.bindings.push(text("DRIFT", "changed"));
+      if (options.drift && lists > 1 && worker === expected.owner.worker) copy.resources.bindings.push(text("DRIFT", "changed"));
       return copy;
     }
     throw new Error("unexpected fixture path " + path);
@@ -74,21 +74,21 @@ test("stable target excludes observed version/source bookkeeping but includes ev
 
 test("any additional serving or preview source edge and changing provider census refuse qualification", async () => {
   for (const options of [{ third: true }, { preview: true }, { drift: true }, { readError: true }]) {
-    const f = fixture(options); await expect(f.reader.qualify(f.expected)).rejects.toThrow();
+    const f = fixture(options); await expect(f.reader.qualify(f.expected)).rejects.toThrow("readError" in options ? "fixture-provider-unavailable" : "auth_staging_owner_graph_unqualified");
   }
 });
 
 test("actual source, version, stateful resource, entrypoint and configuration mismatches refuse without descriptor shortcuts", async () => {
   const changes = [
-    (w: string, v: any) => { if (w === "fixture-issuer") v.resources.bindings.bindings.find((b: any) => b.name === "SOURCE").text = "f".repeat(40); },
-    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.bindings.find((b: any) => b.name === "TAKOSUMI_ENVIRONMENT").text = "production"; },
+    (w: string, v: any) => { if (w === "fixture-issuer") v.resources.bindings.find((b: any) => b.name === "SOURCE").text = "f".repeat(40); },
+    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.find((b: any) => b.name === "TAKOSUMI_ENVIRONMENT").text = "production"; },
     (w: string, v: any) => { if (w === "fixture-issuer") v.resources.script.named_handlers[0].handlers = ["fetch"]; },
-    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.bindings[2].entrypoint = "Default"; },
-    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.bindings[2].props = { owner: "hosted-intents" }; },
-    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.bindings.push({ name: "OTHER_DB", type: "d1", id: id("8") }); },
-    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.bindings.push({ name: "UNKNOWN_STORE", type: "kv_namespace", namespace_id: "unknown" }); },
-    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.bindings.push({ name: "UNKNOWN_OWNER", type: "service", service: "other-custody-worker" }); },
-    (w: string, v: any) => { if (w === "fixture-issuer") { const b = v.resources.bindings.bindings.find((b: any) => b.name === "TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST"); b.text = b.text.slice(0, -1) + (b.text.endsWith("A") ? "B" : "A"); } },
+    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings[2].entrypoint = "Default"; },
+    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings[2].props = { owner: "hosted-intents" }; },
+    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.push({ name: "OTHER_DB", type: "d1", id: id("8") }); },
+    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.push({ name: "UNKNOWN_STORE", type: "kv_namespace", namespace_id: "unknown" }); },
+    (w: string, v: any) => { if (w === "fixture-owner") v.resources.bindings.push({ name: "UNKNOWN_OWNER", type: "service", service: "other-custody-worker" }); },
+    (w: string, v: any) => { if (w === "fixture-issuer") { const b = v.resources.bindings.find((b: any) => b.name === "TAKOSUMI_ACCOUNTS_OWNER_TARGET_BINDING_DIGEST"); b.text = b.text.slice(0, -1) + (b.text.endsWith("A") ? "B" : "A"); } },
   ];
   for (const mutate of changes) { const f = fixture({ mutate }); await expect(f.reader.qualify(f.expected)).rejects.toThrow("unqualified"); }
   const f = fixture();

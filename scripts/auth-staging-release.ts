@@ -166,8 +166,7 @@ export async function inspectAuthStagingOwnerReleaseTopology(input: {
 
 /** Metadata-only readback. Never accept extra authority or a second physical store. */
 export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, target: AuthStagingTarget): void {
-  if (!record(value) || !record(value.resources) || !record(value.resources.bindings) ||
-      !Array.isArray(value.resources.bindings.bindings) || !record(value.resources.script) ||
+  if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings) || !record(value.resources.script) ||
       JSON.stringify(value.resources.script.handlers) !== JSON.stringify(["fetch", "scheduled"]) ||
       !record(value.resources.script_runtime) || value.resources.script_runtime.compatibility_date !== AUTH_STAGING_COMPATIBILITY_DATE ||
       JSON.stringify(value.resources.script_runtime.compatibility_flags) !== JSON.stringify(["nodejs_compat"])) throw new Error("auth_staging_version_invalid");
@@ -177,7 +176,7 @@ export function assertAuthStagingVersion(value: unknown, plan: AuthStagingPlan, 
        JSON.stringify(value.resources.script.named_handlers[0].handlers) !== "[]" || !record(value.resources.script_runtime.exports) ||
        !record(value.resources.script_runtime.exports[OWNER_OPERATION_ENTRYPOINT]) ||
        value.resources.script_runtime.exports[OWNER_OPERATION_ENTRYPOINT].type !== "worker")) throw new Error("auth_staging_owner_entrypoint_invalid");
-  const actual = value.resources.bindings.bindings;
+  const actual = value.resources.bindings;
   const expected = [...plan.bindings, ...Object.entries(target.vars).map(([name, text]) => ({ name, type: "plain_text", text })),
     { name: "TAKOSUMI_AUTH_ARTIFACT_DIGEST", type: "plain_text", text: plan.artifactDigest },
     { name: "TAKOSUMI_AUTH_AUTHORITY_DIGEST", type: "plain_text", text: plan.authorityDigest },
@@ -312,8 +311,8 @@ function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): vo
 }
 
 function assertCodeAuthority(value: unknown, plan: AuthStagingPlan, target: AuthStagingTarget): void {
-  if (!record(value) || !record(value.resources) || !record(value.resources.bindings) || !Array.isArray(value.resources.bindings.bindings)) throw new Error("auth_staging_code_authority_invalid");
-  const bindings = value.resources.bindings.bindings;
+  if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings)) throw new Error("auth_staging_code_authority_invalid");
+  const bindings = value.resources.bindings;
   const authority = exactNamed(bindings, "name", "TAKOSUMI_AUTH_AUTHORITY_DIGEST");
   if (authority.type !== "plain_text" || authority.text !== plan.authorityDigest) throw new Error("auth_staging_code_authority_drift");
   const artifact = exactNamed(bindings, "name", "TAKOSUMI_AUTH_ARTIFACT_DIGEST");
@@ -325,10 +324,11 @@ function assertCodeAuthority(value: unknown, plan: AuthStagingPlan, target: Auth
 async function assertCanonicalBindings(provider: AuthStagingProvider, target: AuthStagingTarget, plan: Pick<AuthStagingPlan, "bindings">): Promise<Readonly<Record<string, string>>> {
   const value = await provider.request("GET", `/workers/scripts/takosumi-staging/versions/${target.canonicalStageVersionId}`);
   if (servingVersion(await provider.request("GET", "/workers/scripts/takosumi-staging/deployments")) !== target.canonicalStageVersionId) throw new Error("auth_staging_canonical_version_not_current");
-  if (!record(value) || !record(value.resources) || !record(value.resources.bindings) || !Array.isArray(value.resources.bindings.bindings)) throw new Error("auth_staging_canonical_version_invalid");
+  // The Workers versions API returns `resources.bindings` as the binding array itself.
+  if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings)) throw new Error("auth_staging_canonical_version_invalid");
   const namespaces: Record<string, string> = {};
   for (const binding of plan.bindings) {
-    const actual = exactNamed(value.resources.bindings.bindings, "name", binding.name);
+    const actual = exactNamed(value.resources.bindings, "name", binding.name);
     if (actual.type !== binding.type || (binding.type === "d1" && actual.id !== binding.id) ||
         (binding.type === "r2_bucket" && actual.bucket_name !== binding.bucket_name) ||
         (binding.type === "durable_object_namespace" && (actual.class_name !== binding.class_name || typeof actual.namespace_id !== "string" || actual.namespace_id.length === 0))) throw new Error("auth_staging_canonical_binding_mismatch");
@@ -338,9 +338,9 @@ async function assertCanonicalBindings(provider: AuthStagingProvider, target: Au
 }
 
 function assertCanonicalNamespaces(value: unknown, namespaces: Readonly<Record<string, string>>): void {
-  if (!record(value) || !record(value.resources) || !record(value.resources.bindings)) throw new Error("auth_staging_namespace_readback_invalid");
+  if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings)) throw new Error("auth_staging_namespace_readback_invalid");
   for (const [name, namespaceId] of Object.entries(namespaces)) {
-    if (exactNamed(value.resources.bindings.bindings, "name", name).namespace_id !== namespaceId) throw new Error("auth_staging_namespace_readback_mismatch");
+    if (exactNamed(value.resources.bindings, "name", name).namespace_id !== namespaceId) throw new Error("auth_staging_namespace_readback_mismatch");
   }
 }
 
