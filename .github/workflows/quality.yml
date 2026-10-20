@@ -57,6 +57,6 @@ jobs:
 
       - name: Diagnose runner image release action
         run: |
-          bun run test > /tmp/diag-test.log 2>&1 || true
+          bun run check > /tmp/diag-test.log 2>&1 || true
           grep -E 'DIAG_BODY|\(fail\)|^ *[0-9]+ (pass|fail)$' /tmp/diag-test.log | head -60
           ls -la /tmp/takosumi-runs 2>&1 | head -20
