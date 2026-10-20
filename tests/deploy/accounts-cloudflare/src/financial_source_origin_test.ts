@@ -181,7 +181,7 @@ test("named HTTP-store facade retains four fresh originals and the same bounded 
   const actualEnv = {
     ...env(db),
     TAKOSUMI_ACCOUNTS_ISSUER: "https://issuer.example.test/",
-    TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true",
+    TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true", TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY: "takoserver.hosted.staging-test.v1",
     TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(privateJwk),
     TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET: "local-test-only-source-origin-pairwise-secret",
     TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([{

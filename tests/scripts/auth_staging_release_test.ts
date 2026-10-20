@@ -64,7 +64,7 @@ function fixtureTarget() {
     kind: "takosumi.auth-staging-target@v1", environment: "staging", worker: AUTH_STAGING_WORKER, issuer: AUTH_STAGING_ISSUER,
     accountId: "a".repeat(32), zoneId: "b".repeat(32), repository: "https://github.com/tako0614/takosumi", sourceCommit: "c".repeat(40),
     canonicalStageConfigSha256: sha(config), canonicalStageVersionId: canonicalVersion, secretsSha256: sha(JSON.stringify(secrets)), jwksSha256: sha(JSON.stringify({ keys: [publicJwk] })), requiredSecrets: Object.keys(secrets),
-    vars: { TAKOSUMI_ENVIRONMENT: "staging", TAKOSUMI_AUTH_WORKER_NAME: AUTH_STAGING_WORKER, TAKOSUMI_ACCOUNTS_ISSUER: AUTH_STAGING_ISSUER, TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed", TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed", TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true", TAKOSUMI_ACCOUNTS_ES256_KEY_ID: keyId, TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify(clientMetadata), TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify(upstreamMetadata) },
+    vars: { TAKOSUMI_ENVIRONMENT: "staging", TAKOSUMI_AUTH_WORKER_NAME: AUTH_STAGING_WORKER, TAKOSUMI_ACCOUNTS_ISSUER: AUTH_STAGING_ISSUER, TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed", TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed", TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true", TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY: "takoserver.hosted.staging-test.v1", TAKOSUMI_ACCOUNTS_ES256_KEY_ID: keyId, TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify(clientMetadata), TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify(upstreamMetadata) },
   });
 }
 
