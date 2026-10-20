@@ -45,7 +45,9 @@ export function isFailureAction(action: string): boolean {
     action === "capsule.auto_update_failed" ||
     action === "capsule.auto_update_apply_failed" ||
     // A scheduled deletion that stopped waits for the owner to decide.
-    action === "capsule.uninstall_blocked"
+    action === "capsule.uninstall_blocked" ||
+    // Interface publication gave up; it stays down until someone retries it.
+    action === "interface_materialization.dead_lettered"
   );
 }
 

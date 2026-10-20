@@ -49,6 +49,51 @@ describe("createStaticAssetResponder", () => {
     }
   });
 
+  // The image copies the hosted docs build into dist/docs (VitePress with
+  // cleanUrls). The dashboard's help link is `/docs/`; before HTML resolution
+  // every docs page except an explicit `*.html` fell through to the SPA, which
+  // rendered its not-found screen.
+  test("resolves docs pages like the Cloudflare assets profile", async () => {
+    const dir = await buildFixture();
+    try {
+      await mkdir(join(dir, "docs", "en"), { recursive: true });
+      await writeFile(join(dir, "docs", "index.html"), "<title>docs home</title>");
+      await writeFile(join(dir, "docs", "pricing.html"), "<title>pricing</title>");
+      await writeFile(join(dir, "docs", "en", "index.html"), "<title>en home</title>");
+      const serve = createStaticAssetResponder(dir);
+      for (const [path, body] of [
+        ["/docs/", "docs home"],
+        ["/docs/pricing", "pricing"],
+        ["/docs/pricing.html", "pricing"],
+        ["/docs/en/", "en home"],
+      ] as const) {
+        const res = await serve(get(path));
+        expect(res?.status).toBe(200);
+        expect(res?.headers.get("content-type")).toContain("text/html");
+        expect(res?.headers.get("cache-control")).toBe("no-cache");
+        expect(await res?.text()).toContain(body);
+      }
+      for (const [path, location] of [
+        ["/docs", "/docs/"],
+        ["/docs/en?x=1", "/docs/en/?x=1"],
+      ] as const) {
+        const res = await serve(get(path));
+        expect(res?.status).toBe(307);
+        expect(res?.headers.get("location")).toBe(location);
+      }
+      // A missing docs page and a trailing-slash SPA route still reach the SPA.
+      for (const path of ["/docs/missing", "/docs/missing/", "/workloads/"]) {
+        const res = await serve(get(path));
+        expect(res?.status).toBe(200);
+        expect(await res?.text()).toContain("spa");
+      }
+      const asset = await serve(get("/assets/app.js"));
+      expect(asset?.headers.get("cache-control")).toBe("public, max-age=3600");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("404s a missing file-like path instead of masking it with the SPA", async () => {
     const dir = await buildFixture();
     try {

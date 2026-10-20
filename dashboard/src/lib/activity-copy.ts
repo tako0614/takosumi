@@ -215,6 +215,21 @@ export function describeActivityEvent(
     case "run_group.created": {
       return { title: t("notif.event.groupCreated") };
     }
+    case "interface_materialization.dead_lettered": {
+      return {
+        title: name
+          ? t("notif.event.interfaceDeadLetteredNamed", { name })
+          : t("notif.event.interfaceDeadLettered"),
+        detail: t("notif.event.interfaceDeadLetteredDetail"),
+      };
+    }
+    case "interface_materialization.retry_requested": {
+      return {
+        title: name
+          ? t("notif.event.interfaceRetryRequestedNamed", { name })
+          : t("notif.event.interfaceRetryRequested"),
+      };
+    }
     default: {
       return { title: t("notif.event.recorded") };
     }

@@ -4,7 +4,12 @@ import { resolve } from "node:path";
 import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 import type { ActivityEvent } from "../../../../../dashboard/src/lib/control-api.ts";
-import { describeActivityEvent } from "../../../../../dashboard/src/lib/activity-copy.ts";
+import {
+  activityServiceName,
+  describeActivityEvent,
+} from "../../../../../dashboard/src/lib/activity-copy.ts";
+import { activityEventHref } from "../../../../../dashboard/src/lib/activity-links.ts";
+import { isFailureAction } from "../../../../../dashboard/src/lib/notifications.ts";
 import { locale, setLocale } from "../../../../../dashboard/src/i18n/index.ts";
 
 const activitySource = readFileSync(
@@ -268,5 +273,64 @@ describe("History and notifications", () => {
     expect(activitySource).toContain(
       't("common.showingRecent", { n: list().length })',
     );
+  });
+  test("a dead-lettered Interface publication reads as a failure that leads to its retry screen", () => {
+    // Recorded by core/domains/interfaces/materialization_intent_drain.ts.
+    // It used to render as the neutral "Recorded activity" line with no link,
+    // so the only screen that can retry it was reachable only through
+    // Settings > Manage.
+    const deadLettered: ActivityEvent = {
+      id: "act_dead_letter",
+      workspaceId: "ws_alpha",
+      action: "interface_materialization.dead_lettered",
+      targetType: "capsule_interface_materialization_intent",
+      targetId: "cimi_1",
+      metadata: { capsuleId: "cap_app", errorCode: "store_unavailable" },
+      createdAt: "2026-10-20T00:00:00.000Z",
+    };
+    const retryRequested: ActivityEvent = {
+      ...deadLettered,
+      id: "act_retry",
+      action: "interface_materialization.retry_requested",
+    };
+    expect(isFailureAction(deadLettered.action)).toBe(true);
+    expect(isFailureAction(retryRequested.action)).toBe(false);
+    expect(activityEventHref(deadLettered)).toBe(
+      "/advanced/workspace/interface-recovery",
+    );
+    expect(activityEventHref(retryRequested)).toBe(
+      "/advanced/workspace/interface-recovery",
+    );
+    expect(
+      activityServiceName(deadLettered, new Map([["cap_app", "App service"]])),
+    ).toBe("App service");
+    const previousLocale = locale();
+    try {
+      setLocale("en");
+      expect(describeActivityEvent(deadLettered, "App service")).toEqual({
+        title: "Interfaces for “App service” could not be published",
+        detail: "Retry them from Interface recovery",
+      });
+      expect(describeActivityEvent(retryRequested).title).toBe(
+        "Queued a retry of Interface publication",
+      );
+      setLocale("ja");
+      expect(describeActivityEvent(deadLettered, "アプリ")).toEqual({
+        title: "「アプリ」の Interface を公開できませんでした",
+        detail: "Interface の復旧から再試行してください",
+      });
+      expect(describeActivityEvent(deadLettered).title).not.toBe(
+        ja["notif.event.recorded"],
+      );
+      // The detail names the screen the link opens.
+      expect(ja["notif.event.interfaceDeadLetteredDetail"]).toContain(
+        ja["interfaceRecovery.title"],
+      );
+      expect(en["notif.event.interfaceDeadLetteredDetail"]).toContain(
+        en["interfaceRecovery.title"],
+      );
+    } finally {
+      setLocale(previousLocale);
+    }
   });
 });

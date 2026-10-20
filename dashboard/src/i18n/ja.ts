@@ -1249,6 +1249,15 @@ export const ja = {
   "notif.event.uninstallBlockedNamed": "「{name}」の予約した削除が止まりました",
   "notif.event.uninstallBlockedDetail":
     "取り消すか、サービスの設定から今すぐ削除してください",
+  "notif.event.interfaceDeadLettered": "Interface を公開できませんでした",
+  "notif.event.interfaceDeadLetteredNamed":
+    "「{name}」の Interface を公開できませんでした",
+  "notif.event.interfaceDeadLetteredDetail":
+    "Interface の復旧から再試行してください",
+  "notif.event.interfaceRetryRequested":
+    "Interface の公開の再試行をキューに追加しました",
+  "notif.event.interfaceRetryRequestedNamed":
+    "「{name}」の Interface の公開の再試行をキューに追加しました",
   "notif.event.recorded": "記録された操作",
   "notif.otherWorkspace": "別のワークスペース「{name}」",
 

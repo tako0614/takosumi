@@ -1243,6 +1243,15 @@ export const en: Record<keyof typeof ja, string> = {
     "The scheduled deletion of “{name}” stopped",
   "notif.event.uninstallBlockedDetail":
     "Cancel it, or delete the service now from its settings",
+  "notif.event.interfaceDeadLettered": "Interfaces could not be published",
+  "notif.event.interfaceDeadLetteredNamed":
+    "Interfaces for “{name}” could not be published",
+  "notif.event.interfaceDeadLetteredDetail":
+    "Retry them from Interface recovery",
+  "notif.event.interfaceRetryRequested":
+    "Queued a retry of Interface publication",
+  "notif.event.interfaceRetryRequestedNamed":
+    "Queued a retry of Interface publication for “{name}”",
   "notif.event.recorded": "Recorded activity",
   "notif.otherWorkspace": "Other workspace: {name}",
 

@@ -78,6 +78,11 @@ export async function resolveStaticAssetsDir(
   return undefined;
 }
 
+// HTML documents name content-hashed assets, so a cached page could keep
+// pointing at assets an upgrade removed; they revalidate on every load.
+const HTML_CACHE_CONTROL = "no-cache";
+const ASSET_CACHE_CONTROL = "public, max-age=3600";
+
 export type StaticAssetResponder = (
   req: Request,
 ) => Promise<Response | undefined>;
@@ -86,6 +91,13 @@ export type StaticAssetResponder = (
  * Build a responder that serves a static file from `dir` for non-API GET/HEAD
  * requests, falling back to `index.html` (SPA) for extensionless navigations.
  * Returns `undefined` to fall through to the API handlers.
+ *
+ * HTML pages resolve the way the Cloudflare Static Assets profile's default
+ * `auto-trailing-slash` handling does: `/a/b` serves `a/b.html`, `/a/` serves
+ * `a/index.html`, and `/a` redirects to `/a/` when only `a/index.html` exists.
+ * The docs tree under `dist/docs` (VitePress with `cleanUrls`) depends on this;
+ * without it `/docs/` and every `/docs/<page>` fell through to the SPA, which
+ * rendered its not-found screen.
  */
 export function createStaticAssetResponder(dir: string): StaticAssetResponder {
   const bun = bunRuntime();
@@ -95,22 +107,47 @@ export function createStaticAssetResponder(dir: string): StaticAssetResponder {
     const url = new URL(req.url);
     if (isApiPath(url.pathname)) return undefined;
 
-    const rel = safeRelativePath(decodeURIComponent(url.pathname));
+    const pathname = decodeURIComponent(url.pathname);
+    const directoryRequest = pathname.length > 1 && pathname.endsWith("/");
+    const rel = safeRelativePath(
+      directoryRequest ? pathname.slice(0, -1) : pathname,
+    );
     if (rel !== undefined) {
-      const hit = bun.file(`${dir}/${rel}`);
-      if (await hit.exists()) {
-        return fileResponse(hit, req.method, "public, max-age=3600");
-      }
-      // A path that looks like a file (has an extension) but is missing must
-      // 404 rather than masking a broken asset request with index.html.
-      if (hasFileExtension(rel)) {
-        return new Response("not found", { status: 404 });
+      if (directoryRequest) {
+        const index = bun.file(`${dir}/${rel}/index.html`);
+        if (await index.exists()) {
+          return fileResponse(index, req.method, HTML_CACHE_CONTROL);
+        }
+      } else {
+        const hit = bun.file(`${dir}/${rel}`);
+        if (await hit.exists()) {
+          return fileResponse(
+            hit,
+            req.method,
+            rel.endsWith(".html") ? HTML_CACHE_CONTROL : ASSET_CACHE_CONTROL,
+          );
+        }
+        // A path that looks like a file (has an extension) but is missing
+        // must 404 rather than masking a broken asset request with index.html.
+        if (hasFileExtension(rel)) {
+          return new Response("not found", { status: 404 });
+        }
+        const page = bun.file(`${dir}/${rel}.html`);
+        if (await page.exists()) {
+          return fileResponse(page, req.method, HTML_CACHE_CONTROL);
+        }
+        if (await bun.file(`${dir}/${rel}/index.html`).exists()) {
+          return new Response(null, {
+            status: 307,
+            headers: { location: `${url.pathname}/${url.search}` },
+          });
+        }
       }
     }
     // SPA fallback for navigations (root + extensionless deep links).
     const index = bun.file(`${dir}/index.html`);
     if (!(await index.exists())) return undefined;
-    return fileResponse(index, req.method, "no-cache");
+    return fileResponse(index, req.method, HTML_CACHE_CONTROL);
   };
 }
 
