@@ -30,7 +30,10 @@ export function validateHostedClientConfiguration(client: OidcClientRegistration
     client.redirectUris.some((uri) => {
       try {
         const url = new URL(uri);
-        return url.protocol !== "https:" || !!url.hash || !!url.username || !!url.password;
+        // The redirect origin is also named in the consent page's CSP
+        // form-action, so its host may only contain DNS name characters.
+        return url.protocol !== "https:" || !!url.hash || !!url.username || !!url.password ||
+          !/^[A-Za-z0-9.-]+$/u.test(url.hostname);
       } catch { return true; }
     })
   ) throw new TypeError("shared-account clients require explicit enabled policy, HTTPS exact redirects, identity scopes and client_secret_basic");

@@ -2,8 +2,11 @@ import type { WorkspaceBillingBinding, WorkspaceBillingBindingIntent } from "tak
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import { SharedAccountWorkspaceError, type SharedWorkspaceBillingResolver } from "./shared-account-workspace.ts";
 
-/** The configured billing owner authenticates this port independently. The
- * intent is an immutable Control DTO, never browser-provided account authority. */
+/** The billing owner's acknowledgement of one enrollment intent. Under
+ * Financial's `takoserver.workspace-billing-organization@v1` contract it is
+ * derived deterministically on the Accounts side rather than issued by an
+ * independent owner call. The intent is an immutable Control DTO, never
+ * browser-provided account authority. */
 export interface WorkspaceBillingEnrollmentAcknowledgement {
   readonly intentId: string;
   readonly workspaceId: string;
