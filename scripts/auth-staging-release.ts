@@ -167,8 +167,8 @@ export async function inspectAuthStagingOwnerReleaseTopology(input: {
 /** The exact handler surface the provider reports for `entry-worker.ts`: the
  * default export's members and each named WorkerEntrypoint's methods. Any
  * additional or missing entrypoint or method is a different artifact. */
-const AUTH_STAGING_DEFAULT_HANDLERS = ["fetch", "resolvePrivateFinancialSource", "scheduled"] as const;
-const AUTH_STAGING_NAMED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
+export const AUTH_STAGING_DEFAULT_HANDLERS = ["fetch", "scheduled"] as const;
+export const AUTH_STAGING_NAMED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
   AccountsFinancialProof: ["fetch", "loadFinancialIdentityProof", "prove", "verifyCurrentFinancialIdentityProof"],
   [OWNER_OPERATION_ENTRYPOINT]: ["readOwnerOperation"],
 };
