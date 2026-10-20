@@ -152,7 +152,7 @@ The two registrations are fixed:
 | Client | Exact callback |
 | --- | --- |
 | `takosumi-hosted-staging-v1` | `https://app-staging.takosumi.com/auth/oidc/callback` |
-| `takoserver-console-staging-v1` | `https://integration-money-8732b77a789fd563406269261bf09e71.shoutatomiyama0614.workers.dev/auth/oidc/callback` |
+| `takoserver-console-staging-v1` | `https://integration-money-8732b77a789fd563406269261bf09e71.shoutatomiyama0614.workers.dev/auth/oidc/callback` and `https://integration-root-ga-573f46e4.shoutatomiyama0614.workers.dev/auth/oidc/callback` |
 
 Both use enabled `shared-account`, Basic, S256 and only
 `openid email offline_access`. Metadata references independent secret bindings.
