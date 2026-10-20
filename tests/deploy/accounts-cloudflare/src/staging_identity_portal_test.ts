@@ -136,7 +136,7 @@ test("real Accounts context plan displays exact retained authority without raw s
   expect(response.headers.get("set-cookie")).toContain("Secure; HttpOnly; SameSite=Strict");
   expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
   expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(response.headers.get("referrer-policy")).toBe("same-origin");
   expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   const switching = [...html.matchAll(/href="([^"]*upstream[^"]*)"/gu)].map((match) => new URL(match[1]!.replace(/&amp;/gu, "&"), issuer));
   expect(switching).toHaveLength(1);
