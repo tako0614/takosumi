@@ -9,6 +9,7 @@ import type { PlatformExtensionRoute } from "./platform_extensions.ts";
 const basePath = "/api/v1/billing";
 const readPaths = new Set([basePath, `${basePath}/subscription`, `${basePath}/top-up`]);
 const actionPaths = new Set([
+  basePath,
   `${basePath}/subscription`, `${basePath}/subscription/cancel`,
   `${basePath}/subscription/plan`, `${basePath}/top-up`,
 ]);
@@ -19,6 +20,10 @@ const bodyReadTimeoutMs = 5_000;
 const safeWorkspace = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const safeOperation = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u;
 const safePlan = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
+
+function exactViewWorkspace(value: unknown): value is string {
+  return typeof value === "string" && safeWorkspace.exec(value)?.[0] === value;
+}
 
 interface BrowserBillingRpc extends SharedAuthRpc {
   fetchWorkspaceDashboard(
@@ -123,7 +128,8 @@ export async function handlePlatformBrowserBillingRequest(
   }
   const selectedWorkspace = query.get("workspaceId");
   if ((selectedWorkspace !== null && !safeWorkspace.test(selectedWorkspace)) ||
-    (method === "GET" && selectedWorkspace === null)) {
+    (method === "GET" && selectedWorkspace === null) ||
+    (method === "POST" && url.pathname === basePath && !exactViewWorkspace(selectedWorkspace))) {
     return response(400, "invalid_billing_request");
   }
   if (signal.aborted) return response(400, "invalid_billing_request");
@@ -277,6 +283,10 @@ function flatJson(text: string): Record<string, unknown> {
 }
 
 function validAction(path: string, fields: Record<string, unknown>, form: boolean): boolean {
+  if (path === basePath) {
+    return Object.keys(fields).length === 1 && Object.hasOwn(fields, "workspaceId") &&
+      exactViewWorkspace(fields.workspaceId);
+  }
   const topUp = path === `${basePath}/top-up`;
   const start = path === `${basePath}/subscription`;
   const cancel = path === `${basePath}/subscription/cancel`;
