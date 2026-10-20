@@ -1367,7 +1367,7 @@ test("local reviewed Plan refuses a foreign lock ref before provider dispatch", 
 test("local HTTP custody recovers a typed partial failure after proxy HTML 500 without a second provider POST", async () => {
   const runId = `apply_custody_${crypto.randomUUID().replace(/-/g, "")}`;
   const planId = `plan_custody_${crypto.randomUUID().replace(/-/g, "")}`;
-  const runRoot = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+  const runRoot = RUN_ROOT;
   const applyRoot = join(runRoot, runId);
   const planRoot = join(runRoot, planId);
   const fakeBin = join(tmpdir(), `takosumi-custody-bin-${crypto.randomUUID()}`);

@@ -7,7 +7,10 @@ import { handleDepStateRestoreRequest } from "../../../runner/entrypoint.ts";
 // The runner workspace deps dir is a SIBLING of the per-run root so the restored
 // producer state survives the plan/apply workspace prep (which wipes root). The
 // handler writes <RUN_ROOT>/<safeRunId>-deps/<name>.tfstate read-only (0444).
-const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+// The runner's own run root, frozen when its constants module first loads.
+// Re-reading the environment here diverges whenever an earlier test file in
+// the same process loaded the runner with a different TAKOSUMI_OPENTOFU_RUN_ROOT.
+import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 const RUN_ID = "dep-restore-test-run";
 const DEPS_DIR = join(RUN_ROOT, `${RUN_ID}-deps`);
 
