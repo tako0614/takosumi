@@ -203,6 +203,26 @@ test("target rejects production Worker/environment/issuer, unregistered callback
   expect(() => parseAuthStagingTarget({ ...target, vars: { ...target.vars, TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([clientMetadata[0], { ...clientMetadata[1], redirectUris: ["https://takoserver-console-integration.shoutatomiyama0614.workers.dev/auth/oidc/callback"] }]) } })).toThrow();
 });
 
+test("staging console keeps the previous callback and accepts only the exact fresh Root callback", () => {
+  const previous = "https://integration-money-8732b77a789fd563406269261bf09e71.shoutatomiyama0614.workers.dev/auth/oidc/callback";
+  const fresh = "https://integration-root-ga-573f46e4.shoutatomiyama0614.workers.dev/auth/oidc/callback";
+  const client = AUTH_STAGING_CLIENTS.find((entry) => entry.clientId === "takoserver-console-staging-v1");
+  expect(client?.redirectUris).toEqual([previous, fresh]);
+  const target = fixtureTarget();
+  expect(() => parseAuthStagingTarget(target)).not.toThrow();
+  for (const redirectUris of [
+    [previous],
+    [fresh],
+    [previous, `${fresh}/`],
+    [previous, `${fresh}?next=/`],
+    [previous, fresh.replace("integration-root-ga-573f46e4", "integration-root-ga-573f46e5")],
+    [previous, fresh, fresh],
+    [previous, "https://takoserver.takos.jp/auth/oidc/callback"],
+  ]) {
+    expect(() => parseAuthStagingTarget({ ...target, vars: { ...target.vars, TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify(clientMetadata.map((entry) => entry.clientId === "takoserver-console-staging-v1" ? { ...entry, redirectUris } : entry)) } })).toThrow("auth_staging_clients_invalid");
+  }
+});
+
 test("the staging target pins Financial's Workspace billing authority", () => {
   const base = fixtureTarget();
   const { TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY: _pinned, ...missing } = base.vars;
