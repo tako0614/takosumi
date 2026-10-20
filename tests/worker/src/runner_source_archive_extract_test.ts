@@ -16,7 +16,10 @@ const haveTools = Bun.which("tar") !== null && Bun.which("zstd") !== null;
 
 // The validator lists the archive with `cwd: RUN_ROOT`; ensure that dir exists
 // (in the real flow the restore handler creates the run workspace first).
-const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+// The runner's own run root, frozen when its constants module first loads.
+// Re-reading the environment here diverges whenever an earlier test file in
+// the same process loaded the runner with a different TAKOSUMI_OPENTOFU_RUN_ROOT.
+import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 beforeAll(async () => {
   await mkdir(RUN_ROOT, { recursive: true });
 });

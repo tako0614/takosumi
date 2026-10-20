@@ -24,7 +24,10 @@ import {
 } from "../../runner/lib/providers.ts";
 import type { RunWorkspace } from "../../runner/lib/types.ts";
 
-const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+// The runner's own run root, frozen when its constants module first loads.
+// Re-reading the environment here diverges whenever an earlier test file in
+// the same process loaded the runner with a different TAKOSUMI_OPENTOFU_RUN_ROOT.
+import { RUN_ROOT } from "../../runner/lib/constants.ts";
 const handleRunnerRequest = (request: Request) =>
   handleRunnerRequestWithDependencies(request, { mutationCustodyMode: "local-http" });
 const RESTORED_GIT_SOURCE = {

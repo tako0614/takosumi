@@ -16,7 +16,10 @@ import { credentialDirPrefixForWorkspace } from "../../runner/lib/credentials.ts
 import { workspaceForRun } from "../../runner/lib/artifacts.ts";
 import type { RuntimeSecretFileSystem } from "../../runner/lib/runtime_secrets.ts";
 
-const RUN_ROOT = Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+// The runner's own run root, frozen when its constants module first loads.
+// Re-reading the environment here diverges whenever an earlier test file in
+// the same process loaded the runner with a different TAKOSUMI_OPENTOFU_RUN_ROOT.
+import { RUN_ROOT } from "../../runner/lib/constants.ts";
 
 test("release action runs opaque argv commands inside the source snapshot", async () => {
   const runId = `release_cmd_${crypto.randomUUID().replace(/-/g, "")}`;

@@ -37,6 +37,7 @@ import { privateRunFileManifestDigest } from "../../../../core/shared/private_ru
 import { handleRunnerRequestWithDependencies } from "../../../../runner/lib/http_server.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../../worker/src/container_runner.ts";
 import { readStoredRunLeaseHeader, storedRunLeaseHeaderValue, STORED_RUN_LEASE_HEADER } from "../../../../worker/src/stored-service-owner-context.ts";
+import { RUN_ROOT } from "../../../../runner/lib/constants.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
@@ -406,7 +407,7 @@ test("Cloud DO forwards live rotation to the real Runner HTTP descriptor used by
   const release = join(root, "release-plan");
   const capture = join(root, "provider-descriptor.json");
   const tofuPath = join(root, "tofu");
-  const runRoot = join("/tmp/takosumi-runs", runId);
+  const runRoot = join(RUN_ROOT, runId);
   const previousPath = Bun.env.PATH;
   const owner = { kind: "plan" as const, id: runId };
   const files = [{ slot: "checkpoint", endpoint: "http://core.internal/internal/private-run-files/v1", grant: "artificial-initial-grant" }];
