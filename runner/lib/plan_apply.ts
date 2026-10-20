@@ -423,7 +423,6 @@ export async function initPlanAndBuildResponse(
       runOpenTofuCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleDir,
         context: commandContext,
-        isolateProcessGroup: true,
       }),
       options.providerScan,
       priorStatePresent,
@@ -484,7 +483,6 @@ export async function initPlanAndBuildResponse(
           {
             cwd: moduleDir,
             context: commandContext,
-            isolateProcessGroup: true,
             onSpawn: variableFile.onSpawn,
           },
         ),
@@ -748,7 +746,6 @@ export async function runReviewedPlanApply(
           {
             cwd: moduleDir,
             context: applyContext,
-            isolateProcessGroup: true,
           },
         ),
         providerScan,
@@ -808,7 +805,6 @@ export async function runReviewedPlanApply(
           {
             cwd: moduleDir,
             context: applyContext,
-            isolateProcessGroup: true,
             onSpawn: runtimeInputVariableFile.onSpawn,
           },
         ),
@@ -1036,13 +1032,17 @@ export async function materializeGeneratedRootFromFiles(
 export async function runCompatibilityCheck(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "source root");
   const modulePath = compatibilityModulePath(request);
   const moduleRoot = resolveModulePath(workspace.sourceRoot, modulePath);
   await assertDirectory(moduleRoot, "compatibility module root");
-  const context: CommandContext = { env: buildPhaseEnv() };
+  const context: CommandContext = {
+    env: buildPhaseEnv(),
+    ...(signal ? { signal } : {}),
+  };
   assertCommandEnvHasNoProviderCredentials(context.env);
   const preInitProviderScan =
     await requiredProviderSourcesFromTerraformTree(moduleRoot);

@@ -155,6 +155,7 @@ export function isStableSemverTagRequest(request: unknown): boolean {
 export async function runStableSemverTagResolution(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const url = requiredStringField(request, "url");
   assertSourceUrlPolicy(url);
@@ -164,6 +165,7 @@ export async function runStableSemverTagResolution(
   await assertResolvedHostNotBlocked(sourceUrlHost(url), "source URL host");
   const context: CommandContext = {
     env: { ...baseCommandEnv(), GIT_TERMINAL_PROMPT: "0" },
+    ...(signal ? { signal } : {}),
   };
   // Tag discovery can be the first operation on a fresh runner filesystem.
   await mkdir(RUN_ROOT, { recursive: true, mode: 0o700 });
@@ -371,6 +373,7 @@ function parseReusableSourceSnapshot(
 export async function runSourceSync(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const source = parseSourceSyncSource(request);
   const credentials = parseSourceCredentials(request);
@@ -402,7 +405,7 @@ export async function runSourceSync(
       ),
     );
     const gitContext = await timer.measure("source_git_credentials", () =>
-      prepareSourceGitContext(source, credentials, credentialDir),
+      prepareSourceGitContext(source, credentials, credentialDir, signal),
     );
     const resolvedCommit = await timer.measure("source_ref_resolve", () =>
       resolveSourceCommit(source, gitContext),
@@ -784,6 +787,7 @@ export async function prepareSourceGitContext(
   source: SourceSyncSource,
   credentials: SourceCredentials,
   credentialDir: string,
+  signal?: AbortSignal,
 ): Promise<SourceGitContext> {
   const env: Record<string, string> = {
     ...baseCommandEnv(),
@@ -855,6 +859,9 @@ export async function prepareSourceGitContext(
     context: {
       env,
       redactionValues: sourceCredentialRedactionValues(credentials),
+      // The run's signal carries cancellation and the host's forwarded run
+      // budget, so every Git and archive command of this sync honours both.
+      ...(signal ? { signal } : {}),
     },
   };
 }

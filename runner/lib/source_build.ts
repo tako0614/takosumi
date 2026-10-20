@@ -69,7 +69,6 @@ export async function runSourceBuild(
     const result = await runCommand(command.argv, {
       cwd,
       context,
-      isolateProcessGroup: true,
     });
     const commandLabel = `source build ${index + 1}/${sourceBuild.commands.length} (${command.argv[0]})`;
     const commandOutput = boundedBuildOutput(

@@ -108,7 +108,7 @@ export async function readOpenTofuPlanJson(
 > {
   const result = await runCommand(
     ["tofu", "show", "-json", workspace.planPath],
-    { cwd: moduleDir, context, isolateProcessGroup: true },
+    { cwd: moduleDir, context },
   );
   if (result.exitCode === 0 && result.stdout.trim().length > 0) {
     return { json: result.stdout };
@@ -134,7 +134,6 @@ export async function readOpenTofuOutputsIn(
   const result = await runCommand(["tofu", "output", "-json"], {
     cwd: moduleDir,
     context,
-    isolateProcessGroup: true,
   });
   if (result.exitCode === 0 && result.stdout.trim().length > 0) {
     const parsed = JSON.parse(result.stdout) as unknown;
@@ -181,13 +180,6 @@ export async function runCommand(
     readonly cwd: string;
     readonly context?: CommandContext;
     /**
-     * Runs the command in its own process group and kills the whole group on
-     * direct exit, timeout, or cancellation. Reviewed app/build commands may
-     * spawn descendants; their lifecycle must end before later credential
-     * phases or cleanup can proceed.
-     */
-    readonly isolateProcessGroup?: boolean;
-    /**
      * Invoked the instant the child process exists.
      *
      * The run-scoped sensitive input lane uses it to open the write end of its
@@ -215,13 +207,19 @@ export async function runCommand(
       stderr: "command timed out: run deadline reached before start",
     };
   }
-  const isolate = options.isolateProcessGroup === true;
+  // Every command runs in its own process group, and the whole group is
+  // killed on direct exit, timeout, or cancellation. A descendant (a shell's
+  // foreground child, Git's remote helper, a backgrounded job) inherits the
+  // output pipes, so killing only the direct child would leave this call
+  // waiting on those pipes for as long as the descendant lives: the timeout,
+  // the run deadline, and cancellation would stop nothing. Its lifecycle must
+  // also end before later credential phases or cleanup can proceed.
   const subprocess = Bun.spawn([...command], {
     cwd: options.cwd,
     env: options.context?.env ?? baseCommandEnv(),
     stdout: "pipe",
     stderr: "pipe",
-    ...(isolate ? { detached: true } : {}),
+    detached: true,
   });
   options.onSpawn?.({
     pid: subprocess.pid,
@@ -281,11 +279,9 @@ export async function runCommand(
       raced.kind === "exit" && interrupted
         ? { kind: "timeout", exitCode: 124 }
         : raced;
-    if (isolate) {
-      // On direct exit this kills any descendant still holding inherited
-      // output pipes. On timeout/abort it also kills the direct child.
-      killProcessGroup(subprocess.pid);
-    }
+    // On direct exit this kills any descendant still holding inherited
+    // output pipes. On timeout/abort it also kills the direct child.
+    killProcessGroup(subprocess.pid);
     if (raced.kind !== "exit") {
       // Keep direct-child timeout/cancel semantics even on a platform where
       // negative-pid process-group signalling is unavailable.
@@ -331,7 +327,6 @@ export async function runOpenTofuCommand(
   options: {
     readonly cwd: string;
     readonly context?: CommandContext;
-    readonly isolateProcessGroup?: boolean;
     readonly onSpawn?: (child: SpawnedCommand) => void;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {

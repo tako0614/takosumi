@@ -462,6 +462,64 @@ echo "init ok"
   }
 });
 
+test("compatibility_check stops its tofu init at the forwarded run budget", async () => {
+  const runId = `compat_deadline_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-compat-bin-"));
+  const previousPath = Bun.env.PATH;
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    const tofuPath = join(fakeBin, "tofu");
+    // The init shell waits on a foreground child that holds the output pipes.
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+sleep 30
+echo "init ok"
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const startedAt = performance.now();
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-takosumi-runner-budget-ms": "500",
+        },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "compatibility_check",
+          runId,
+          request: {},
+        }),
+      }),
+    );
+    const elapsed = performance.now() - startedAt;
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      runId,
+      action: "compatibility_check",
+      status: "failed",
+      exitCode: 124,
+      runDeadlineExceeded: true,
+    });
+    expect(String(body.stderr)).toContain("(run deadline)");
+    expect(elapsed).toBeLessThan(5_000);
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test("compatibility_check fails closed when the capsule exceeds the file cap", async () => {
   const runId = `compat_cap_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, runId);
