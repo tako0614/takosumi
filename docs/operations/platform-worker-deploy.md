@@ -362,9 +362,17 @@ the full-document URL. Native presentation, omitted presentation and
 inline-frame/embed are unsupported, and `billing.commercial.v1` must not be
 advertised by this descriptor. Duplicate descriptors are checked after merge.
 
-The bridge accepts GET on those three documents and POST on
-`/api/v1/billing/subscription`, `/api/v1/billing/subscription/cancel`,
-`/api/v1/billing/subscription/plan`, and `/api/v1/billing/top-up`. Legacy
+The bridge accepts GET on those three documents. It also accepts
+`POST /api/v1/billing?workspaceId=<selected>` for a command-free selected
+Workspace view: the bounded JSON or form body must contain only `workspaceId`,
+equal to the one required query selector. The existing private bridge retains
+the original Cookie for Hosted RP authentication, requires the canonical
+shared-auth session assertion and exact app-Origin CSRF check, rejects explicit
+credentials and authority-shaped headers, and never retries a lost private RPC
+response. This view action grants no financial effect authority. The four
+existing financial POST actions remain `/api/v1/billing/subscription`,
+`/api/v1/billing/subscription/cancel`, `/api/v1/billing/subscription/plan`, and
+`/api/v1/billing/top-up`. Legacy
 `config`, `summary`, `transactions`, `checkout`, `auto-recharge`, and `portal`
 leaves remain 404 in shared composition; there is no retail fallback or DTO
 translation. A malformed billing descriptor follows existing optional-config
