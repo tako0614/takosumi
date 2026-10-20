@@ -60,10 +60,11 @@ import {
 export async function runBackup(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const backup = parseBackup(request);
   if (backup.mode === "provider_snapshot") {
-    return await runProviderSnapshotBackup(runId, backup);
+    return await runProviderSnapshotBackup(runId, backup, signal);
   }
 
   const workspace = workspaceForRun(runId);
@@ -71,6 +72,7 @@ export async function runBackup(
   const context: CommandContext = {
     env: buildPhaseEnv(),
     timeoutMs: 10 * 60 * 1000,
+    ...(signal ? { signal } : {}),
   };
   assertCommandEnvHasNoProviderCredentials(context.env);
   const logs: string[] = [];
@@ -194,7 +196,6 @@ export async function runRelease(
       const result = await runCommand(command.command, {
         cwd,
         context,
-        isolateProcessGroup: true,
       });
       logs.push(
         redactReleaseCommandOutput(
@@ -243,6 +244,7 @@ export async function runRelease(
 export async function runProviderSnapshotBackup(
   runId: string,
   backup: BackupSpec,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const adapterId = backup.adapterId;
   if (!adapterId) {
@@ -277,6 +279,7 @@ export async function runProviderSnapshotBackup(
       TAKOSUMI_RUN_ID: runId,
     },
     timeoutMs: 10 * 60 * 1000,
+    ...(signal ? { signal } : {}),
   };
   const result = await runCommand(["bash", "-lc", adapter.command], {
     cwd: workspace.root,

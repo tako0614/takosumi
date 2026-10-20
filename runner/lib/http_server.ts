@@ -552,8 +552,8 @@ async function handleRunnerRequestBody(
       ? sourceCredentialRedactionValuesFromRequest(body.request)
       : redactionValuesFromRequest(body.request);
     if (isSourceSyncRequest(body.request)) {
-      return await guardedNonMutationPost(runId, async () => { try {
-        const result = await runSourceSync(runId, body.request);
+      return await withRunDeadlineMarker(await guardedNonMutationPost(runId, async () => { try {
+        const result = await runSourceSync(runId, body.request, request.signal);
         return Response.json(result, { status: 200 });
       } catch (error) {
         return Response.json(
@@ -572,13 +572,17 @@ async function handleRunnerRequestBody(
           },
           { status: 500 },
         );
-      } });
+      } }), request.signal);
     }
 
     if (isStableSemverTagRequest(body.request)) {
       const action = "stable_semver_tag";
-      return await guardedNonMutationPost(runId, async () => { try {
-        const result = await runStableSemverTagResolution(runId, body.request);
+      return await withRunDeadlineMarker(await guardedNonMutationPost(runId, async () => { try {
+        const result = await runStableSemverTagResolution(
+          runId,
+          body.request,
+          request.signal,
+        );
         return Response.json(result, { status: 200 });
       } catch (error) {
         return Response.json(
@@ -594,7 +598,7 @@ async function handleRunnerRequestBody(
           },
           { status: 500 },
         );
-      } });
+      } }), request.signal);
     }
 
     const action = parseAction(body.action);
@@ -688,9 +692,9 @@ async function handleRunnerRequestBody(
       }
       const result =
         action === "compatibility_check"
-          ? await runCompatibilityCheck(runId, body.request)
+          ? await runCompatibilityCheck(runId, body.request, request.signal)
           : action === "backup"
-            ? await runBackup(runId, body.request)
+            ? await runBackup(runId, body.request, request.signal)
             : action === "release"
               ? await runRelease(
                   runId,

@@ -4,8 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { handleRunnerRequest, safeRunId } from "../../runner/entrypoint.ts";
+import { createServer, type Socket } from "node:net";
+
 import { RUN_ROOT } from "../../runner/lib/constants.ts";
 import { runCommand } from "../../runner/lib/exec.ts";
+import {
+  prepareSourceGitContext,
+  resolveSourceCommit,
+} from "../../runner/lib/source_sync.ts";
 import {
   parseRunBudgetMs,
   registerRunBudget,
@@ -55,7 +61,6 @@ test("the run deadline bounds a command tighter than its own profile timeout", a
         signal: controller.signal,
         timeoutMs: 60_000,
       },
-      isolateProcessGroup: true,
     },
   );
   const elapsed = performance.now() - startedAt;
@@ -105,7 +110,6 @@ test("a command the run deadline is about to cut off is interrupted before it is
           signal: controller.signal,
           timeoutMs: 60_000,
         },
-        isolateProcessGroup: true,
       },
     );
     const elapsed = performance.now() - startedAt;
@@ -139,7 +143,6 @@ test("a command that ignores the interrupt is still killed at the run deadline",
         signal: controller.signal,
         timeoutMs: 60_000,
       },
-      isolateProcessGroup: true,
     },
   );
   const elapsed = performance.now() - startedAt;
@@ -163,7 +166,6 @@ test("a command bound only by its own timeout keeps its previous behaviour", asy
         signal: controller.signal,
         timeoutMs: 2_000,
       },
-      isolateProcessGroup: true,
     },
   );
   expect(result.exitCode).toBe(0);
@@ -183,7 +185,6 @@ test("a command stopped by its own timeout is not reported as a run-deadline sto
         signal: controller.signal,
         timeoutMs: 300,
       },
-      isolateProcessGroup: true,
     },
   );
   expect(result.exitCode).toBe(124);
@@ -261,5 +262,94 @@ test("the runner applies the forwarded budget header to every command of the run
     expect(body.runDeadlineExceeded).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the forwarded budget stops a backup command whose shell is still waiting on its child", async () => {
+  const runId = `run_deadline_backup_${crypto.randomUUID().replaceAll("-", "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  await mkdir(join(root, "source"), { recursive: true });
+  try {
+    const startedAt = performance.now();
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${encodeURIComponent(runId)}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [RUNNER_RUN_BUDGET_MS_HEADER]: "500",
+        },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          runId,
+          action: "backup",
+          request: {
+            backup: {
+              mode: "custom_command",
+              outputPath: "backup.artifact",
+              command: ["sleep 30; echo late"],
+            },
+          },
+        }),
+      }),
+    );
+    const elapsed = performance.now() - startedAt;
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      action: "backup",
+      status: "failed",
+      exitCode: 124,
+      phase: "backup",
+    });
+    expect(String(body.stderr)).toContain("(run deadline)");
+    expect(body.runDeadlineExceeded).toBe(true);
+    expect(elapsed).toBeLessThan(5_000);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the run deadline stops source Git commands whose remote helper is still waiting", async () => {
+  // A remote that accepts the connection and never answers. Git hands the
+  // transport to a remote-helper descendant that inherits the output pipes.
+  const sockets: Socket[] = [];
+  const server = createServer((socket) => {
+    sockets.push(socket);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("listener has no TCP port");
+  }
+  const credentialDir = await mkdtemp(join(tmpdir(), "takosumi-run-deadline-git-"));
+  try {
+    const controller = new AbortController();
+    registerRunBudget(controller.signal, "500");
+    const source = {
+      url: `http://127.0.0.1:${address.port}/silent.git`,
+      ref: "main",
+      path: ".",
+    };
+    const git = await prepareSourceGitContext(
+      source,
+      { env: {}, files: [] },
+      credentialDir,
+      controller.signal,
+    );
+    const startedAt = performance.now();
+    const failure = await resolveSourceCommit(source, git).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const elapsed = performance.now() - startedAt;
+    expect(failure).toBeInstanceOf(Error);
+    expect(String((failure as Error).message)).toContain("(run deadline)");
+    expect(runDeadlineReached(controller.signal)).toBe(true);
+    expect(elapsed).toBeLessThan(5_000);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(credentialDir, { recursive: true, force: true });
   }
 });
