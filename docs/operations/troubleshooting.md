@@ -180,11 +180,18 @@ Worker は inventory の `{runId}` のような template を使い、client prob
 
 | phase | 待機している処理 |
 | --- | --- |
+| `issuer_schema` | dedicated staging issuer の bootstrap 前schema確認。既存readiness期限は維持 |
 | `accounts_init` | 各 request の shared Accounts handler 初期化待ち。既存の5秒期限は維持 |
 | `allowlist` | handler 内の presented-session allowlist gate。認可の判定内容は維持 |
+| `shared_workspace_auth` | shared bootstrap の元issuer session／登録RP grant認証 |
+| `shared_workspace_dispatch` | shared bootstrap 全体。認証、lazy Control初期化、strict Workspace claim／元owner再照合を含む |
 | `control_auth` | 通常の Accounts bearer認証。D1 candidate lookup / active-token検証を含む |
 | `control_init` | Control operations facade 待ち。既存の5秒期限は維持 |
 | `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
+
+shared bootstrap は固定の `POST /api/v1/account/shared-workspaces/bootstrap` だけを対象にします。
+`shared_workspace_dispatch` が未完了でも、内部のControl初期化とclaimのどちらかは
+このspanだけでは区別できません。診断のためにPOSTを再送しないでください。
 
 outcome `started` は await 前、`fulfilled` / `rejected` はその await の settlement
 です。`fulfilled` は HTTP 2xx や認可成功を意味しません。2秒経っても未解決の場合は

@@ -470,3 +470,27 @@ test("private owner qualification reads exact realized graph, schema and topolog
     expect(() => parseAuthStagingTarget({ ...fixtureTarget(), vars: { ...fixtureTarget().vars, ...vars } })).toThrow();
   }
 });
+
+
+test("the staging descriptor admits only exact boolean request-phase opt-in", () => {
+  const original = fixtureTarget();
+  for (const value of ["true", "false"]) {
+    const target = parseAuthStagingTarget({ ...original, vars: { ...original.vars, TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: value } });
+    expect(target.vars.TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS).toBe(value);
+    expect(createAuthStagingPlan(target, config, bytes).authorityDigest).not.toBe(createAuthStagingPlan(original, config, bytes).authorityDigest);
+  }
+  for (const value of ["TRUE", "1", "", " true", "{}", true, null]) {
+    expect(() => parseAuthStagingTarget({ ...original, vars: { ...original.vars, TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: value } })).toThrow("auth_staging_vars_invalid");
+  }
+  for (const name of ["TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS_EXTRA", "TAKOSUMI_UNREVIEWED_FLAG"]) {
+    expect(() => parseAuthStagingTarget({ ...original, vars: { ...original.vars, [name]: "true" } })).toThrow("auth_staging_vars_invalid");
+  }
+});
+
+test("diagnostic flag activation still requires the authority lane before any write", async () => {
+  const h = harness({ active: true });
+  const target = parseAuthStagingTarget({ ...h.target, vars: { ...h.target.vars, TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: "true" } });
+  const plan = createAuthStagingPlan(target, config, bytes);
+  await expect(h.execute("code", { target, plan, confirmation: plan.confirmation })).rejects.toThrow("auth_staging_code_authority_drift");
+  expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
+});
