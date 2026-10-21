@@ -12,6 +12,10 @@ import {
   UI_SURFACE_INTERFACE_VERSION,
   UI_SURFACE_OPEN_PERMISSION,
 } from "takosumi-contract";
+import {
+  preflightSharedAuthSession,
+  throwIfSharedAuthCallerAborted,
+} from "./shared-auth-session-preflight.ts";
 
 // Contract-owned wire tokens (`takosumi-contract/interface-types`); this
 // module stays the dashboard's type/version consumer but no longer redefines
@@ -292,7 +296,11 @@ async function fetchJson(
   path: string,
   options: UiSurfaceReadOptions,
 ): Promise<unknown> {
-  const response = await (options.fetch ?? fetch)(path, {
+  const transport = options.fetch ?? fetch;
+  const preflight = preflightSharedAuthSession(options.signal);
+  if (preflight) await preflight;
+  throwIfSharedAuthCallerAborted(options.signal);
+  const response = await transport(path, {
     method: "GET",
     headers: { accept: "application/json" },
     credentials: "include",

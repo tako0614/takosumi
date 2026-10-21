@@ -3,6 +3,7 @@ import {
   clearDashboardBootstrapCache,
   fetchDashboardWorkspaceBootstrap,
 } from "./dashboard-bootstrap.ts";
+import { SharedAuthSessionPreflightError } from "./shared-auth-session-preflight.ts";
 
 const CACHE_TTL_MS = 10_000;
 
@@ -91,7 +92,10 @@ export async function listWorkspacesCached(
         .then(
           (workspaces) => workspaces ?? fetchWorkspacePage(scope || undefined),
         )
-        .catch(() => fetchWorkspacePage(scope || undefined));
+        .catch((error) => {
+          if (error instanceof SharedAuthSessionPreflightError) throw error;
+          return fetchWorkspacePage(scope || undefined);
+        });
 
   const request = load
     .then((workspaces) => {

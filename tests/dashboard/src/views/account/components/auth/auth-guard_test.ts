@@ -22,7 +22,7 @@ describe("AuthGuard session failure boundary", () => {
       source.indexOf("const retrySession"),
       source.indexOf("onMount(() =>"),
     );
-    expect(retryBranch).not.toContain("initialSessionOptions");
+    expect(retryBranch).toContain("refreshSessionState(initialSessionOptions)");
   });
 
   test("renders maintenance/error states through the existing auth panel", () => {

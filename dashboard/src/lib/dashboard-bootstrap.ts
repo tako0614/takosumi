@@ -1,4 +1,8 @@
 import type { ActivityEvent, Workspace } from "./control-api.ts";
+import {
+  preflightSharedAuthSession,
+  type InitialSharedAuthHealthTicket,
+} from "./shared-auth-session-preflight.ts";
 
 const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
 export const DASHBOARD_SESSION_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=false`;
@@ -77,12 +81,14 @@ export function fetchDashboardBootstrap(options: {
   readonly includeWorkspaces?: boolean;
   readonly includeNotifications?: boolean;
   readonly selectedWorkspaceId?: string;
+  readonly initialHealthTicket?: InitialSharedAuthHealthTicket;
 }): Promise<DashboardBootstrapResponse | undefined>;
 export function fetchDashboardBootstrap(
   options: {
     readonly includeWorkspaces?: boolean;
     readonly includeNotifications?: boolean;
     readonly selectedWorkspaceId?: string;
+    readonly initialHealthTicket?: InitialSharedAuthHealthTicket;
   } = {},
 ): Promise<DashboardBootstrapResponse | undefined> {
   const path =
@@ -96,11 +102,22 @@ export function fetchDashboardBootstrap(
   if (current) return current;
   if (typeof fetch === "undefined") return Promise.resolve(undefined);
 
-  const request = fetch(path, {
-    method: "GET",
-    headers: { accept: "application/json" },
-    credentials: "include",
-  })
+  let preflight: Promise<void> | undefined;
+  try {
+    preflight = preflightSharedAuthSession(
+      undefined,
+      options.initialHealthTicket,
+    );
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  const send = () =>
+    fetch(path, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      credentials: "include",
+    });
+  const request = (preflight ? preflight.then(send) : send())
     .then(async (res): Promise<DashboardBootstrapResponse | undefined> => {
       if (res.status === 401 || res.status === 404) return undefined;
       if (!res.ok) {
@@ -212,16 +229,19 @@ export function fetchDashboardWorkspaceBootstrap(): Promise<
 export function fetchDashboardWorkspaceBootstrap(options: {
   readonly selectedWorkspaceId?: string;
   readonly includeNotifications?: boolean;
+  readonly initialHealthTicket?: InitialSharedAuthHealthTicket;
 }): Promise<DashboardBootstrapResponse | undefined>;
 export function fetchDashboardWorkspaceBootstrap(
   options: {
     readonly selectedWorkspaceId?: string;
     readonly includeNotifications?: boolean;
+    readonly initialHealthTicket?: InitialSharedAuthHealthTicket;
   } = {},
 ): Promise<DashboardBootstrapResponse | undefined> {
   return fetchDashboardBootstrap({
     includeWorkspaces: true,
     includeNotifications: options.includeNotifications,
     selectedWorkspaceId: options.selectedWorkspaceId,
+    initialHealthTicket: options.initialHealthTicket,
   });
 }

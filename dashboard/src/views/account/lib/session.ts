@@ -32,6 +32,12 @@ import {
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
 import { SESSION_ME } from "./paths.ts";
+import {
+  clearSharedAuthSessionPreflight,
+  isKnownSharedAuthRoutePresent,
+  probeInitialSharedAuthSession,
+  SharedAuthSessionPreflightError,
+} from "../../../lib/shared-auth-session-preflight.ts";
 
 export interface SessionRecord {
   readonly subject: string;
@@ -72,8 +78,6 @@ export type SessionState =
   | { readonly kind: "error"; readonly error: SessionError };
 
 const SESSION_ME_PATH = SESSION_ME;
-const HOSTED_SESSION_PATH = "/auth/oidc/session";
-const HOSTED_SESSION_ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
@@ -158,46 +162,6 @@ interface SessionRefreshOptions {
   readonly initialSharedAuthPreflight?: boolean;
 }
 
-async function completeSharedAuthPreflight(): Promise<"present" | "absent"> {
-  const response = await fetch(HOSTED_SESSION_PATH, {
-    method: "GET",
-    headers: { accept: "application/json" },
-    credentials: "include",
-    cache: "no-store",
-  });
-  const body = await readResponseBody(response);
-  const json = response.headers.get("content-type")
-    ?.split(";", 1)[0]
-    ?.trim()
-    .toLowerCase() === "application/json";
-  const record =
-    typeof body === "object" && body !== null && !Array.isArray(body)
-      ? body as Record<string, unknown>
-      : null;
-  // Only the explicit stock-OSS response denotes an unmounted RP. A 404
-  // from a configured but wrong-origin RP must not become ordinary fallback.
-  if (
-    response.status === 404 && json && record &&
-    Object.keys(record).length === 1 && record.error === "not_found" &&
-    response.headers.get(HOSTED_SESSION_ABSENCE_HEADER) === "1" &&
-    response.headers.get("cache-control")?.split(",")
-      .some((directive) => directive.trim().toLowerCase() === "no-store")
-  ) return "absent";
-  if (
-    json && record && Object.keys(record).length === 1 &&
-    ((response.status === 200 && record.authenticated === true) ||
-      (response.status === 401 && record.authenticated === false))
-  ) return "present";
-  if (!response.ok) throw sessionErrorFromResponse(response, body);
-  throw new SessionError(
-    "error",
-    response.status,
-    new Headers(response.headers),
-    body,
-    "Hosted session probe did not return authenticated status.",
-  );
-}
-
 async function fetchSessionMe(
   options: SessionRefreshOptions = {},
 ): Promise<SessionRecord | null> {
@@ -211,14 +175,20 @@ async function fetchSessionMe(
     );
   }
   try {
-    const sharedAuthRoute = options.initialSharedAuthPreflight
-      ? await completeSharedAuthPreflight()
-      : "absent";
-    // The preflight boolean grants nothing. Canonical bootstrap must still
+    const initialHealth = options.initialSharedAuthPreflight
+      ? await probeInitialSharedAuthSession()
+      : undefined;
+    const sharedAuthRoute = initialHealth?.route ??
+      (isKnownSharedAuthRoutePresent() ? "present" : "absent");
+    // The health result grants nothing. Canonical bootstrap must still
     // authenticate the Cookie and authorize the Workspace list.
     const data = options.includeWorkspaces
-      ? await fetchDashboardWorkspaceBootstrap()
-      : await fetchDashboardBootstrap();
+      ? await fetchDashboardWorkspaceBootstrap({
+        initialHealthTicket: initialHealth?.ticket,
+      })
+      : await fetchDashboardBootstrap({
+        initialHealthTicket: initialHealth?.ticket,
+      });
     if (!data) {
       // A present Hosted RP never falls back to a second account-session
       // projection when canonical Workspace bootstrap denied the request.
@@ -241,6 +211,29 @@ async function fetchSessionMe(
     }
     return session;
   } catch (error) {
+    if (error instanceof SharedAuthSessionPreflightError) {
+      const details = dashboardResponseErrorDetails(
+        error.body,
+        error.status,
+        error.statusText,
+      );
+      throw new SessionError(
+        dashboardFailureKind(
+          error.status,
+          error.headers,
+          error.body,
+          details.code,
+        ),
+        error.status,
+        error.headers,
+        error.body,
+        error.status === 0 || error.status === 200
+          ? error.message
+          : details.message,
+        details.code,
+        error,
+      );
+    }
     if (error instanceof DashboardBootstrapError) {
       // A non-authentication response is authoritative for this probe. Do not
       // turn a maintenance/error response into a second probe that can produce
@@ -472,6 +465,7 @@ export function writeSession(_s: SessionRecord): void {
  * empty auto-created personal one — which reads as "signed in as someone else".
  */
 export function clearSession(): void {
+  clearSharedAuthSessionPreflight();
   cachedSession = null;
   cachedError = null;
   cachedAt = Date.now();

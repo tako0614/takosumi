@@ -17,6 +17,11 @@
  */
 
 import { randomUuid } from "./random-uuid.ts";
+import {
+  preflightSharedAuthSession,
+  SharedAuthSessionPreflightError,
+  throwIfSharedAuthCallerAborted,
+} from "./shared-auth-session-preflight.ts";
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
@@ -207,6 +212,9 @@ export async function controlFetch<T>(
     }
     body = JSON.stringify(opts.body);
   }
+  const preflight = preflightSharedAuthSession(opts.signal);
+  if (preflight) await preflight;
+  throwIfSharedAuthCallerAborted(opts.signal);
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,
@@ -1828,6 +1836,8 @@ function isCapsuleResponse(value: unknown): value is Capsule {
 }
 
 function isMutationOutcomeUnknown(error: unknown): boolean {
+  // The guarded transport has not dispatched the mutation if health failed.
+  if (error instanceof SharedAuthSessionPreflightError) return false;
   if (error instanceof ControlApiIndeterminateError) return true;
   if (error instanceof ControlApiError) {
     return error.status === 0 || error.status >= 500;
@@ -2491,6 +2501,7 @@ function sourceCreateBaselineAttempt(
 }
 
 function isSourceCreateBaselineRetryable(error: unknown): boolean {
+  if (error instanceof SharedAuthSessionPreflightError) return false;
   if (isAbortError(error)) return false;
   if (!(error instanceof ControlApiError)) {
     // `fetch` rejects with a transport error when no HTTP response was
@@ -3984,6 +3995,7 @@ export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
 }
 
 function isApplyRetryableTransportError(error: unknown): boolean {
+  if (error instanceof SharedAuthSessionPreflightError) return false;
   if (error instanceof ControlApiIndeterminateError) return false;
   if (!(error instanceof ControlApiError)) return true;
   return error.status === 0 || error.code === "request_timeout";

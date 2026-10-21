@@ -3,6 +3,10 @@
  * extension. The dashboard owns presentation; an operator extension owns
  * prices, payment-provider integration, tax policy, and billing records.
  */
+import {
+  preflightSharedAuthSession,
+  throwIfSharedAuthCallerAborted,
+} from "./shared-auth-session-preflight.ts";
 
 export type CommercialBillingCustomerType = "individual" | "business";
 export type CommercialBillingAccountStatus =
@@ -640,6 +644,9 @@ async function requestJson(
   url: string,
   init: Omit<RequestInit, "credentials" | "headers"> = {},
 ): Promise<unknown> {
+  const preflight = preflightSharedAuthSession(init.signal ?? undefined);
+  if (preflight) await preflight;
+  throwIfSharedAuthCallerAborted(init.signal ?? undefined);
   const response = await fetch(url, {
     ...init,
     credentials: "include",

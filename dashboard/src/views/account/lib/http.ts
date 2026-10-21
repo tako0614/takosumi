@@ -17,6 +17,10 @@
  * `lib/rpc.ts` Hono client (different base + auth).
  */
 import { clearSession } from "./session.ts";
+import {
+  preflightSharedAuthSession,
+  throwIfSharedAuthCallerAborted,
+} from "../../../lib/shared-auth-session-preflight.ts";
 
 export class ApiError extends Error {
   constructor(
@@ -64,6 +68,11 @@ export async function apiFetch<T>(
       body = JSON.stringify(opts.body);
     }
   }
+  if (auth) {
+    const preflight = preflightSharedAuthSession(opts.signal);
+    if (preflight) await preflight;
+  }
+  throwIfSharedAuthCallerAborted(opts.signal);
   const res = await fetch(path, {
     method: opts.method ?? "GET",
     headers,

@@ -103,7 +103,7 @@ export default function AuthGuard(props: Props) {
 
   const retrySession = (): void => {
     applyState({ kind: "loading" }, false);
-    void refreshSessionState({ includeWorkspaces: true }).then((next) =>
+    void refreshSessionState(initialSessionOptions).then((next) =>
       applyState(next, true),
     );
   };
