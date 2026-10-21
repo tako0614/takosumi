@@ -180,16 +180,19 @@ Worker は inventory の `{runId}` のような template を使い、client prob
 
 | phase | 待機している処理 |
 | --- | --- |
-| `issuer_schema` | dedicated staging issuer の bootstrap 前schema確認。既存readiness期限は維持 |
+| `issuer_schema` | dedicated staging issuer のrequest前schema確認。既存readiness期限は維持 |
 | `accounts_init` | 各 request の shared Accounts handler 初期化待ち。既存の5秒期限は維持 |
 | `allowlist` | handler 内の presented-session allowlist gate。認可の判定内容は維持 |
-| `shared_workspace_auth` | shared bootstrap の元issuer session／登録RP grant認証 |
-| `shared_workspace_dispatch` | shared bootstrap 全体。認証、lazy Control初期化、strict Workspace claim／元owner再照合を含む |
+| `shared_workspace_auth` | shared Workspace request の元issuer session／登録RP grant認証 |
+| `shared_workspace_dispatch` | shared Workspace route全体。認証、lazy Control初期化、Workspace／billing binding処理と元owner再照合を含む |
 | `control_auth` | 通常の Accounts bearer認証。D1 candidate lookup / active-token検証を含む |
 | `control_init` | Control operations facade 待ち。既存の5秒期限は維持 |
 | `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
 
-shared bootstrap は固定の `POST /api/v1/account/shared-workspaces/bootstrap` だけを対象にします。
+shared Workspace診断は固定の `POST /api/v1/account/shared-workspaces/bootstrap` と
+`GET /api/v1/account/shared-workspaces/{workspaceId}/billing-organization` を対象にします。
+GETのWorkspace IDも実値を出さずtemplateに置換します。このGETもbindingのprepare／claimを
+実行し得るため、応答不明や記録なしを未書込みと扱わず、診断のために再送しないでください。
 `shared_workspace_dispatch` が未完了でも、内部のControl初期化とclaimのどちらかは
 このspanだけでは区別できません。診断のためにPOSTを再送しないでください。
 

@@ -104,6 +104,39 @@ test("phase diagnostics expose only a public route template and validated correl
   }
 });
 
+test("billing Organization GET diagnostics preserve the operation and redact the selected Workspace", async () => {
+  const { rows, spy } = collector();
+  const factory = createRequestPhaseDiagnostics({ environment: "staging", enabled: "true" });
+  const request = new Request(
+    "https://private-host-marker.test/api/v1/account/shared-workspaces/private-workspace-marker/billing-organization?private-query-marker=1",
+    { headers: { authorization: "Bearer private-bearer-marker", cookie: "private-cookie-marker" } },
+  );
+  const original = { privateResult: "private-result-marker" };
+  const rejected = new Error("private-rejection-marker");
+  try {
+    const observer = factory.forRequest(request);
+    expect(await observer.measure("shared_workspace_dispatch", () => original)).toBe(original);
+    await expect(observer.measure("shared_workspace_auth", () => { throw rejected; })).rejects.toBe(rejected);
+    expect(rows.map((row) => row.outcome)).toEqual(["started", "fulfilled", "started", "rejected"]);
+    expect(rows.every((row) => row.route === "/api/v1/account/shared-workspaces/{workspaceId}/billing-organization" && row.method === "GET")).toBe(true);
+    for (const marker of ["private-host-marker", "private-workspace-marker", "private-query-marker", "private-bearer-marker", "private-cookie-marker", "private-result-marker", "private-rejection-marker"]) expect(JSON.stringify(rows)).not.toContain(marker);
+    const count = rows.length;
+    for (const [method, path] of [
+      ["POST", "/api/v1/account/shared-workspaces/private-workspace-marker/billing-organization"],
+      ["GET", "/api/v1/account/shared-workspaces//billing-organization"],
+      ["GET", "/api/v1/account/shared-workspaces/private-workspace-marker/billing-organization/extra"],
+    ]) {
+      expect(await factory.forRequest(new Request(`https://app.example.test${path}`, { method })).measure("shared_workspace_dispatch", () => original)).toBe(original);
+    }
+    expect(rows).toHaveLength(count);
+    for (const configuration of [{}, { environment: "staging", enabled: "false" }, { environment: "production", enabled: "true" }]) {
+      expect(await createRequestPhaseDiagnostics(configuration).forRequest(request).measure("shared_workspace_dispatch", () => original)).toBe(original);
+    }
+    expect(rows).toHaveLength(count);
+    expect(factory.activePendingNotifications).toBe(0);
+  } finally { spy.mockRestore(); }
+});
+
 test("pending auth diagnostics observe the real bearer lookup without timing out or dispatching it", async () => {
   let release:
     | ((value: AccountsBearerCredentialCandidates) => void)

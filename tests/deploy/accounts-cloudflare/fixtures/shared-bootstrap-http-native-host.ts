@@ -84,6 +84,7 @@ try {
   let responseStatus: number | null = null;
   let bodySummary: Record<string, unknown> | null = null;
   let callerOutcome = "status_observed";
+  let selectedWorkspaceId: string | undefined;
   try {
     const response = await runtime.dispatchFetch(`${issuer}/api/v1/account/shared-workspaces/bootstrap`, {
       method: "POST",
@@ -94,6 +95,7 @@ try {
     responseStatus = response.status;
     const body = await safeJson(response);
     const workspace = body && typeof body.workspace === "object" && body.workspace !== null ? body.workspace as Record<string, unknown> : null;
+    if (typeof workspace?.id === "string") selectedWorkspaceId = workspace.id;
     bodySummary = workspace ? {
       workspacePresent: true,
       personalType: workspace.type === "personal",
@@ -104,6 +106,32 @@ try {
     callerOutcome = controller.signal.aborted ? "five_second_client_abort_without_status" : "dispatch_rejected_without_status";
   } finally { clearTimeout(deadline); }
   const callerDurationMs = performance.now() - started;
+  let organization: Record<string, unknown> | null = null;
+  if (input.mode === "organization") {
+    assert.ok(selectedWorkspaceId, "original bootstrap Workspace required before billing GET");
+    const menu = await runtime.dispatchFetch(`${issuer}/api/v1/account/shared-workspaces?${new URLSearchParams({selectedWorkspaceId,limit:"1"})}`, { headers: { authorization: `Bearer ${grant.access_token}` }, redirect: "manual" });
+    assert.equal(menu.status, 200, "same original grant selected Workspace");
+    const menuBody = await safeJson(menu);
+    assert.equal((menuBody?.activeWorkspace as {id?:string})?.id, selectedWorkspaceId);
+    const billingAbort = new AbortController();
+    const billingDeadline = setTimeout(() => billingAbort.abort(), 5_000);
+    const billingStarted = performance.now();
+    try {
+      const result = await runtime.dispatchFetch(`${issuer}/api/v1/account/shared-workspaces/${encodeURIComponent(selectedWorkspaceId)}/billing-organization`, { headers: { authorization: `Bearer ${grant.access_token}` }, redirect: "manual", signal: billingAbort.signal });
+      const body = await safeJson(result);
+      organization = { status: result.status, method: "GET", durationMs: performance.now() - billingStarted, exactShape: body !== null && Object.keys(body).sort().join() === "organizationId,workspaceId,workspaceRef" };
+      assert.equal(result.status, 200, "original billing Organization GET");
+      assert.equal(organization.exactShape, true);
+      assert.equal(body!.workspaceId, selectedWorkspaceId);
+      const db = await runtime.getD1Database("TAKOSUMI_CONTROL_DB");
+      const stored = await db.prepare("SELECT workspace_id, workspace_ref, organization_ref FROM workspace_billing_bindings WHERE workspace_id = ?").bind(selectedWorkspaceId).all<{workspace_id:string;workspace_ref:string;organization_ref:string}>();
+      const intents = await db.prepare("SELECT count(*) AS count FROM workspace_billing_intents WHERE workspace_id = ?").bind(selectedWorkspaceId).first<{count:number}>();
+      assert.equal(stored.results.length, 1, "one original durable binding");
+      assert.equal(intents?.count, 1, "one original durable intent");
+      assert.deepEqual(body, { workspaceId: stored.results[0]!.workspace_id, workspaceRef: stored.results[0]!.workspace_ref, organizationId: stored.results[0]!.organization_ref });
+      organization = { ...organization, durableOriginalMatches: true, bindingRows: stored.results.length, intentRows: intents.count };
+    } finally { clearTimeout(billingDeadline); }
+  }
   let readOnlyFollowupStatus: number | null = null;
   let readOnlyFollowupOutcome = "not_requested";
   if (disconnect) {
@@ -130,6 +158,7 @@ try {
   report = {
     ...report,
     authInputClass: "synthetic_real_oidc_code_exchange_bearer",
+    organization,
     exactR9SharedGrantBearerPathReproduced: false,
     callerOutcome,
     disconnect, gatePeerClosedBeforeRelease, readOnlyFollowupStatus, readOnlyFollowupOutcome,

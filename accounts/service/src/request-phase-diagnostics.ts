@@ -44,6 +44,9 @@ const silent: RequestPhaseObserver = {
 function routeShape(request: Request): string | undefined {
   const pathname = new URL(request.url).pathname;
   if (request.method === "POST" && pathname === "/api/v1/account/shared-workspaces/bootstrap") return pathname;
+  if (request.method === "GET" && /^\/api\/v1\/account\/shared-workspaces\/[^/]+\/billing-organization$/u.test(pathname)) {
+    return "/api/v1/account/shared-workspaces/{workspaceId}/billing-organization";
+  }
   for (const endpoint of PUBLIC_SESSION_CONTROL_ENDPOINTS) {
     if (endpoint.method !== request.method) continue;
     const parts = endpoint.path.split("/");

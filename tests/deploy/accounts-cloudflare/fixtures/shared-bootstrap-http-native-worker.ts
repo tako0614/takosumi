@@ -121,7 +121,7 @@ export default {
       return Response.json({ lastRequest: safeCounts(lastRequest), currentRequest: safeCounts(active), inFlight: active !== undefined, gateEntered, gateFinished }, { headers: { "cache-control": "no-store" } });
     }
     const started = performance.now();
-    const tracking = path === "/api/v1/account/shared-workspaces/bootstrap" && request.method === "POST";
+    const tracking = (path === "/api/v1/account/shared-workspaces/bootstrap" && request.method === "POST") || (request.method === "GET" && /^\/api\/v1\/account\/shared-workspaces\/[^/]+\/billing-organization$/u.test(path));
     if (tracking) {
       active = { expectedIssuerOrigin: new URL(request.url).origin === "https://auth-staging.takos.jp", expectedHostHeader: !request.headers.has("host") || request.headers.get("host") === new URL(request.url).host, startedAt: Date.now(), completedAt: null, durationMs: null, status: null, accounts: freshCounts(), control: freshCounts() };
     }

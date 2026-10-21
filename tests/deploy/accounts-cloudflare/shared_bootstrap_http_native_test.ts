@@ -60,7 +60,7 @@ const bindings = {
   ...Object.fromEntries(["TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT", "TAKOSUMI_ACCOUNTS_HOSTED_STAGE_CLIENT_SECRET", "TAKOSUMI_ACCOUNTS_SERVER_STAGE_CLIENT_SECRET", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET", "TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET", "TAKOSUMI_ACCOUNTS_UPSTREAM_GITHUB_CLIENT_SECRET", "TAKOSUMI_SECRET_STORE_PASSPHRASE", "TAKOSUMI_DEPLOY_CONTROL_TOKEN"].map((name) => [name, "fixture-only-not-a-real-secret-32-bytes"])),
 };
 
-for (const mode of ["baseline","disconnect"]) test(`native default Accounts HTTP bootstrap ${mode} preserves its original lifetime`, async () => {
+for (const mode of ["baseline","disconnect","organization"]) test(`native default Accounts HTTP bootstrap ${mode} preserves its original lifetime`, async () => {
   const signingKey = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
   const privateJwk = await crypto.subtle.exportKey("jwk", signingKey.privateKey);
   const fixtureBindings = { ...bindings, TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(privateJwk) };
@@ -97,8 +97,16 @@ for (const mode of ["baseline","disconnect"]) test(`native default Accounts HTTP
       expect(bootstrapRows.some((row) => row.phase === phase && row.outcome === "fulfilled")).toBe(true);
     }
     if (mode === "disconnect") expect(bootstrapRows.some((row) => row.phase === "shared_workspace_dispatch" && row.outcome === "pending")).toBe(true);
+    if (mode === "organization") {
+      const organizationRows = phaseRows.filter((row) => row.route === "/api/v1/account/shared-workspaces/{workspaceId}/billing-organization");
+      for (const phase of ["issuer_schema", "accounts_init", "allowlist", "shared_workspace_auth", "shared_workspace_dispatch"]) {
+        expect(organizationRows.some((row) => row.phase === phase && row.outcome === "started")).toBe(true);
+        expect(organizationRows.some((row) => row.phase === phase && row.outcome === "fulfilled")).toBe(true);
+      }
+    }
     const report = JSON.parse(stdout.trim().split("\n").at(-1)!);
-    expect(report).toMatchObject({ schema: "accounts.bootstrap.native.fixture.v1", localSyntheticD1: true, authorityOrStagingQualification: false, ...(mode === "baseline" ? {responseStatus: 200, terminalOracleQualified: true} : {readOnlyFollowupStatus:200,gateFinished:true}) });
+    expect(report).toMatchObject({ schema: "accounts.bootstrap.native.fixture.v1", localSyntheticD1: true, authorityOrStagingQualification: false, ...(mode === "disconnect" ? {readOnlyFollowupStatus:200,gateFinished:true} : {responseStatus: 200, terminalOracleQualified: true}) });
+    if (mode === "organization") expect(report).toMatchObject({ organization: { status: 200, exactShape: true, durableOriginalMatches: true, bindingRows: 1, intentRows: 1, method: "GET" } });
     console.info(JSON.stringify({ event: "accounts_bootstrap_native_baseline", ...report }));
   } finally { await rm(directory, { recursive: true, force: true }); }
 }, 120_000);
