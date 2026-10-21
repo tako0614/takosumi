@@ -7218,8 +7218,17 @@ export function assertConfigTargetsSource(
           !Array.isArray(entry) &&
           (entry as Record<string, unknown>).handlerKey === "HOSTED",
       );
+      const sharedAuthStagingBillingEnabled =
+        environment === "staging" &&
+        vars?.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
+        vars?.TAKOSUMI_SHARED_AUTH_ORIGIN ===
+          "https://app-staging.takosumi.com";
+      const billingRouteValid =
+        hosted.length === 3 &&
+        sharedAuthStagingBillingEnabled &&
+        hosted.some(matchesHostedWorkspaceBillingRoute);
       hostedRouteValid =
-        hosted.length === 2 &&
+        (hosted.length === 2 || billingRouteValid) &&
         hosted.some(matchesHostedSponsorshipRoute) &&
         hosted.some(matchesHostedAiRoute);
       // `capsulePublicOriginFromPlatformExtensions` throws when more than one
@@ -7341,6 +7350,50 @@ function matchesHostedAiRoute(value: unknown): boolean {
       ]) &&
     JSON.stringify(value.capabilities) ===
       JSON.stringify(["openai.models.v1", "openai.chat-completions.v1"])
+  );
+}
+
+function matchesHostedWorkspaceBillingRoute(value: unknown): boolean {
+  if (!record(value)) return false;
+  const exactKeys = (candidate: Record<string, unknown>, keys: readonly string[]) =>
+    JSON.stringify(Object.keys(candidate).sort()) ===
+    JSON.stringify([...keys].sort());
+  if (
+    !exactKeys(value, [
+      "authDelivery",
+      "authMode",
+      "basePath",
+      "contributions",
+      "handlerKey",
+      "id",
+      "ownsPathSubtree",
+      "workspaceContext",
+    ]) ||
+    value.id !== "hosted-workspace-billing" ||
+    value.basePath !== "/api/v1/billing" ||
+    value.handlerKey !== "HOSTED" ||
+    value.authMode !== "platform" ||
+    value.authDelivery !== "context" ||
+    value.workspaceContext !== "query-required" ||
+    value.ownsPathSubtree !== true ||
+    !Array.isArray(value.contributions) ||
+    value.contributions.length !== 1
+  ) {
+    return false;
+  }
+  const contribution = value.contributions[0];
+  return (
+    record(contribution) &&
+    exactKeys(contribution, ["href", "id", "label", "labels", "presentation", "slot"]) &&
+    contribution.id === "hosted-workspace-billing" &&
+    contribution.slot === "workspace.billing" &&
+    contribution.href === "/api/v1/billing" &&
+    contribution.presentation === "link" &&
+    contribution.label === "使用量と課金" &&
+    record(contribution.labels) &&
+    exactKeys(contribution.labels, ["en", "ja"]) &&
+    contribution.labels.en === "Usage and billing" &&
+    contribution.labels.ja === "使用量と課金"
   );
 }
 

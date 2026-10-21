@@ -1065,6 +1065,89 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     ...(extras.descriptors ?? []),
   ])}'
 `;
+  const billingDescriptor = {
+    id: "hosted-workspace-billing",
+    basePath: "/api/v1/billing",
+    handlerKey: "HOSTED",
+    authMode: "platform",
+    authDelivery: "context",
+    workspaceContext: "query-required",
+    ownsPathSubtree: true,
+    contributions: [
+      {
+        id: "hosted-workspace-billing",
+        slot: "workspace.billing",
+        href: "/api/v1/billing",
+        presentation: "link",
+        label: "使用量と課金",
+        labels: { en: "Usage and billing", ja: "使用量と課金" },
+      },
+    ],
+  };
+  const stagingSource = (
+    descriptors: readonly unknown[],
+    profile = "shared-account",
+    origin = "https://app-staging.takosumi.com",
+  ) =>
+    source("takosumi-hosted-staging", true, "/api/v1/account/subscription", true, true, {}, { descriptors })
+      .replace('name = "takosumi"', 'name = "takosumi-staging"')
+      .replace(
+        'TAKOSUMI_ENVIRONMENT = "production"',
+        `TAKOSUMI_ENVIRONMENT = "staging"\nTAKOSUMI_SHARED_AUTH_PROFILE = "${profile}"\nTAKOSUMI_SHARED_AUTH_ORIGIN = "${origin}"`,
+      );
+
+  // The staging candidate is accepted only after the release validator gains
+  // its exact, shared-auth-gated descriptor exception.
+  expect(() =>
+    assertConfigTargetsSource(stagingSource([billingDescriptor]), "staging"),
+  ).not.toThrow();
+  for (const malformed of [
+    { ...billingDescriptor, id: "unknown-third-route" },
+    { ...billingDescriptor, unexpected: true },
+    { ...billingDescriptor, authMode: "handler" },
+    { ...billingDescriptor, basePath: "/api/v1/account" },
+    {
+      ...billingDescriptor,
+      contributions: [...billingDescriptor.contributions, billingDescriptor.contributions[0]],
+    },
+    {
+      ...billingDescriptor,
+      contributions: [{ ...billingDescriptor.contributions[0], slot: "workspace.admin" }],
+    },
+  ]) {
+    expect(() => assertConfigTargetsSource(stagingSource([malformed]), "staging")).toThrow(
+      "platform_worker_release_config_source_invalid",
+    );
+  }
+  expect(() =>
+    assertConfigTargetsSource(stagingSource([billingDescriptor, billingDescriptor]), "staging"),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted", true, "/api/v1/account/subscription", true, true, {}, {
+        descriptors: [billingDescriptor],
+      }),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(stagingSource([billingDescriptor], "disabled"), "staging"),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      stagingSource([billingDescriptor], "shared-account", "https://app.takosumi.com"),
+      "staging",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      stagingSource([billingDescriptor]).replace(
+        'TAKOSUMI_ENVIRONMENT = "staging"',
+        'TAKOSUMI_ENVIRONMENT = "production"',
+      ),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted"),
