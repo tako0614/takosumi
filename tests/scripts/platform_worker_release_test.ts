@@ -30,6 +30,7 @@ import {
   type PlatformReleaseCommand,
   waitForPlatformContainerReadback,
 } from "../../scripts/platform-worker-release.ts";
+import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
 import {
   REFERENCE_CREDENTIAL_RECIPES,
   REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES,
@@ -1065,6 +1066,154 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     ...(extras.descriptors ?? []),
   ])}'
 `;
+  const billingDescriptor = {
+    id: "hosted-workspace-billing",
+    basePath: "/api/v1/billing",
+    handlerKey: "HOSTED",
+    authMode: "platform",
+    authDelivery: "context",
+    workspaceContext: "query-required",
+    ownsPathSubtree: true,
+    contributions: [
+      {
+        id: "hosted-workspace-billing",
+        slot: "workspace.billing",
+        href: "/api/v1/billing",
+        presentation: "link",
+        label: "使用量と課金",
+        labels: { en: "Usage and billing", ja: "使用量と課金" },
+      },
+    ],
+  };
+  const stagingSource = (
+    descriptors: readonly unknown[],
+    profile = "shared-account",
+    origin = "https://app-staging.takosumi.com",
+    services: readonly { readonly binding: string; readonly service: string }[] = [],
+  ) =>
+    source("takosumi-hosted-staging", true, "/api/v1/account/subscription", true, true, {}, { descriptors, services })
+      .replace('name = "takosumi"', 'name = "takosumi-staging"')
+      .replace(
+        'TAKOSUMI_ENVIRONMENT = "production"',
+        `TAKOSUMI_ENVIRONMENT = "staging"\nTAKOSUMI_SHARED_AUTH_PROFILE = "${profile}"\nTAKOSUMI_SHARED_AUTH_ORIGIN = "${origin}"`,
+      );
+
+  // The staging candidate is accepted only after the release validator gains
+  // its exact, shared-auth-gated descriptor exception.
+  expect(() =>
+    assertConfigTargetsSource(stagingSource([billingDescriptor]), "staging"),
+  ).not.toThrow();
+  const secondaryRoute = {
+    id: "hosted-secondary",
+    basePath: "/extensions/secondary",
+    handlerKey: "SECONDARY",
+    authDelivery: "context",
+    ownsPathSubtree: true,
+  };
+  const secondaryService = { binding: "SECONDARY", service: "takosumi-secondary" };
+  const nonOverlappingSource = stagingSource(
+    [billingDescriptor, secondaryRoute],
+    "shared-account",
+    "https://app-staging.takosumi.com",
+    [secondaryService],
+  );
+  expect(() => assertConfigTargetsSource(nonOverlappingSource, "staging")).not.toThrow();
+  const nonOverlappingVars = (Bun.TOML.parse(nonOverlappingSource) as {
+    vars: Record<string, unknown>;
+  }).vars;
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: nonOverlappingVars.TAKOSUMI_PLATFORM_EXTENSIONS,
+      TAKOSUMI_SHARED_AUTH_PROFILE: nonOverlappingVars.TAKOSUMI_SHARED_AUTH_PROFILE as string,
+      TAKOSUMI_SHARED_AUTH_ORIGIN: nonOverlappingVars.TAKOSUMI_SHARED_AUTH_ORIGIN as string,
+    }),
+  ).not.toThrow();
+
+  const runtimeRoutesFor = (configSource: string) => {
+    const vars = (Bun.TOML.parse(configSource) as {
+      vars: Record<string, unknown>;
+    }).vars;
+    return platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: vars.TAKOSUMI_PLATFORM_EXTENSIONS,
+      TAKOSUMI_SHARED_AUTH_PROFILE: vars.TAKOSUMI_SHARED_AUTH_PROFILE as string,
+      TAKOSUMI_SHARED_AUTH_ORIGIN: vars.TAKOSUMI_SHARED_AUTH_ORIGIN as string,
+    });
+  };
+  const conflictingRoutes = [
+    {
+      route: { ...secondaryRoute, basePath: "/api/v1/billing" },
+      runtimeError: "platform extension basePath /api/v1/billing has multiple owners",
+    },
+    {
+      route: { ...secondaryRoute, basePath: "/api/v1" },
+      runtimeError: "overlaps a Takosumi core route prefix",
+    },
+    {
+      route: { ...secondaryRoute, basePath: "/api/v1/billing/tenant" },
+      runtimeError: "overlaps a Takosumi core route prefix",
+    },
+  ] as const;
+  for (const { route, runtimeError } of conflictingRoutes) {
+    const conflictingSource = stagingSource(
+      [billingDescriptor, route],
+      "shared-account",
+      "https://app-staging.takosumi.com",
+      [secondaryService],
+    );
+    expect(() => runtimeRoutesFor(conflictingSource)).toThrow(runtimeError);
+    // The release validator must reject what the owning runtime parser or
+    // merge refuses, while allowing the disjoint /extensions route above.
+    expect(() => assertConfigTargetsSource(conflictingSource, "staging")).toThrow(
+      "platform_worker_release_config_source_invalid",
+    );
+  }
+  for (const malformed of [
+    { ...billingDescriptor, id: "unknown-third-route" },
+    { ...billingDescriptor, unexpected: true },
+    { ...billingDescriptor, authMode: "handler" },
+    { ...billingDescriptor, basePath: "/api/v1/account" },
+    {
+      ...billingDescriptor,
+      contributions: [...billingDescriptor.contributions, billingDescriptor.contributions[0]],
+    },
+    {
+      ...billingDescriptor,
+      contributions: [{ ...billingDescriptor.contributions[0], slot: "workspace.admin" }],
+    },
+  ]) {
+    expect(() => assertConfigTargetsSource(stagingSource([malformed]), "staging")).toThrow(
+      "platform_worker_release_config_source_invalid",
+    );
+  }
+  expect(() =>
+    assertConfigTargetsSource(stagingSource([billingDescriptor, billingDescriptor]), "staging"),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted", true, "/api/v1/account/subscription", true, true, {}, {
+        descriptors: [billingDescriptor],
+      }),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(stagingSource([billingDescriptor], "disabled"), "staging"),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      stagingSource([billingDescriptor], "shared-account", "https://app.takosumi.com"),
+      "staging",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      stagingSource([billingDescriptor]).replace(
+        'TAKOSUMI_ENVIRONMENT = "staging"',
+        'TAKOSUMI_ENVIRONMENT = "production"',
+      ),
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted"),

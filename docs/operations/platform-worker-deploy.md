@@ -330,11 +330,13 @@ rotation, unknown receipt handling and retained-byte obligations.
 The shared-account browser billing bridge serves full documents and dedicated
 original-command forms. It does not implement the legacy native
 `billing.commercial.v1` API. When either shared-auth profile/origin variable is
-present, the merged billing descriptor must use this recipe:
+present, the merged billing descriptor must retain the route and link constraints
+below. The official staging release admits only this exact optional third
+`HOSTED` descriptor, including its IDs and labels:
 
 ```json
 {
-  "id": "takosumi-hosted-browser-billing",
+  "id": "hosted-workspace-billing",
   "basePath": "/api/v1/billing",
   "handlerKey": "HOSTED",
   "authMode": "platform",
@@ -342,17 +344,26 @@ present, the merged billing descriptor must use this recipe:
   "ownsPathSubtree": true,
   "workspaceContext": "query-required",
   "contributions": [{
-    "id": "workspace-billing",
+    "id": "hosted-workspace-billing",
     "slot": "workspace.billing",
     "href": "/api/v1/billing",
-    "label": "Workspace billing",
+    "label": "使用量と課金",
+    "labels": {
+      "en": "Usage and billing",
+      "ja": "使用量と課金"
+    },
     "presentation": "link"
   }]
 }
 ```
 
-Omitted `matchMode` and `authMode` retain their `subtree` and `platform`
-defaults. `HOSTED` is the same binding used by the private shared-auth bridge;
+The official recipe requires `TAKOSUMI_SHARED_AUTH_PROFILE=shared-account` and
+`TAKOSUMI_SHARED_AUTH_ORIGIN=https://app-staging.takosumi.com` in the staging
+config. Production cannot select this third descriptor. The established two
+Hosted routes remain required and also work without the optional third route.
+
+For the generic runtime parser, omitted `matchMode` and `authMode` retain their
+`subtree` and `platform` defaults. `HOSTED` is the same binding used by the private shared-auth bridge;
 an alias handler is not accepted. Contributions may be omitted to add no
 Dashboard entries; the descriptor's catalog entry and capability declarations
 are unaffected. Each supplied contribution must be an explicit
@@ -381,21 +392,20 @@ contributions GET fails, and the Dashboard loader displays no extra entries.
 The existing contributions HEAD response and unrelated extension/profile-OFF
 contracts are unchanged.
 
-This is a source contract for future composition, not an activation recipe for
-the current official release. The official gate below still requires exactly
-two Hosted descriptors and rejects this third route. Activation also requires
-the genuine per-request Hosted factory, independent current RP verification,
-the four same-primary guarded stores, and the Financial Principal/payer/
-first-Customer receiver and credential authority. A valid descriptor or a
-successful synthetic RPC test supplies none of those authorities. Until they
-are delivered and the official composition is explicitly adopted, keep this
-route inactive; the unmounted private dashboard remains unavailable.
+Descriptor admission alone does not activate the live journey. Deployment still
+requires the selected Hosted release and its schema, actual RP verification and
+same-primary guarded stores, plus the Server's request authorization and
+continuation RPC composition. A valid descriptor or a successful synthetic RPC
+test supplies no Financial permission. Keep the route inactive until those
+owning deployment and binding readbacks are qualified; an unavailable selected
+consumer must refuse rather than fall back to another billing path.
 
 ### Realized Hosted extension descriptors
 
 `TAKOSUMI_PLATFORM_EXTENSIONS` is operator-realized config outside this
-repository, but the release gate pins the official composition's two `HOSTED`
-descriptors exactly, key set included. An unknown key is a refusal, not a
+repository, but the release gate pins the official composition's two required
+`HOSTED` descriptors and optional staging billing descriptor exactly, key set
+included. An unknown key is a refusal, not a
 tolerated addition, because a descriptor the OSS parser rejects makes the whole
 route unloadable rather than degrade quietly.
 
