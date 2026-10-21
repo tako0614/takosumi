@@ -16,6 +16,7 @@ import {
 
 import { authStagingOwnerBundle, authStagingControlOperations, type AuthStagingOwnerPorts, type AuthStagingEnv as AuthEnv } from "./staging-owner-bundle.ts";
 import { verifyAuthStagingOwnerSchema } from "./staging-owner-bundle.ts";
+import { createRequestPhaseDiagnostics } from "../../../accounts/service/src/request-phase-diagnostics.ts";
 export type { AuthStagingOwnerPorts } from "./staging-owner-bundle.ts";
 type AccountsWorker = ReturnType<typeof createCloudflareWorker<AuthEnv>>;
 export type AuthStagingPrivateProofOwner = Readonly<{
@@ -64,6 +65,15 @@ export function createAuthStagingWorker(dependencies: {
   // D1 work cannot be forcibly cancelled. Keep at most one pending read-only
   // verification per env; a timed-out caller never starts a parallel attempt.
   const schemaAttempts = new WeakMap<AuthEnv, Promise<void>>();
+  const phaseDiagnostics = new WeakMap<AuthEnv, ReturnType<typeof createRequestPhaseDiagnostics>>();
+  const schemaForRequest = (env: AuthEnv, request: Request): Promise<void> => {
+    let factory = phaseDiagnostics.get(env);
+    if (!factory) {
+      factory = createRequestPhaseDiagnostics({ environment: env.TAKOSUMI_ENVIRONMENT, enabled: env.TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS });
+      phaseDiagnostics.set(env, factory);
+    }
+    return factory.forRequest(request).measure("issuer_schema", () => schemaFor(env));
+  };
   const schemaFor = (env: AuthEnv): Promise<void> => {
     const existing = schemaAttempts.get(env);
     if (existing) return existing;
@@ -183,7 +193,7 @@ export function createAuthStagingWorker(dependencies: {
         }
       } else if (url.pathname === "/sign-in" || issuerPath(url.pathname)) {
         try {
-          await schemaFor(env);
+          await schemaForRequest(env, request);
           response = url.pathname === "/sign-in"
             ? (await handleStagingLoginPortal({request,issuer:AUTH_STAGING_ISSUER,accountsHandler:(providerRequest)=>accounts.fetch(providerRequest,env,context)}))!
             : await accounts.fetch(request, env, context);

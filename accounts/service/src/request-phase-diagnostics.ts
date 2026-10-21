@@ -6,6 +6,9 @@ export interface RequestPhaseDiagnosticsConfiguration {
 }
 
 export type RequestDiagnosticPhase =
+  | "issuer_schema"
+  | "shared_workspace_auth"
+  | "shared_workspace_dispatch"
   | "accounts_init"
   | "allowlist"
   | "control_auth"
@@ -20,6 +23,9 @@ export interface RequestPhaseObserver {
 }
 
 const PHASES = new Set<RequestDiagnosticPhase>([
+  "issuer_schema",
+  "shared_workspace_auth",
+  "shared_workspace_dispatch",
   "accounts_init",
   "allowlist",
   "control_auth",
@@ -37,6 +43,7 @@ const silent: RequestPhaseObserver = {
 
 function routeShape(request: Request): string | undefined {
   const pathname = new URL(request.url).pathname;
+  if (request.method === "POST" && pathname === "/api/v1/account/shared-workspaces/bootstrap") return pathname;
   for (const endpoint of PUBLIC_SESSION_CONTROL_ENDPOINTS) {
     if (endpoint.method !== request.method) continue;
     const parts = endpoint.path.split("/");

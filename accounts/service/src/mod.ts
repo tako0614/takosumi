@@ -730,7 +730,7 @@ export function createAccountsHandler(
     }
 
     if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
-      return (await handleSharedAccountWorkspaceRoute({request,url,store,directory:options.sharedAccountWorkspaceDirectory,authenticate: async (directoryRequest) => {
+      return (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,directory:options.sharedAccountWorkspaceDirectory,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
         const token = directoryRequest.headers.get("authorization");
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));
@@ -738,7 +738,7 @@ export function createAccountsHandler(
         }
         const session = await requireAccountSession({request:directoryRequest,store});
         return session.ok ? {ok:true,session:{subject:session.subject,sessionId:session.sessionId}} : session;
-      }})) ?? errorJson("not_found","not found",404,request);
+      })}))) ?? errorJson("not_found","not found",404,request);
     }
 
     if (url.pathname === "/api/v1/account/session/global-logout" && options.hostedSessionPolicy) {
