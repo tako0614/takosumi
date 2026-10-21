@@ -6,6 +6,8 @@
  * the native `workspace.hosted-resources` contribution.
  */
 
+import { preflightSharedAuthSession } from "./shared-auth-session-preflight.ts";
+
 export const PLATFORM_EXTENSION_CATALOG_PATH =
   "/__takosumi/platform/extensions" as const;
 export const HOSTED_RESOURCES_SLOT = "workspace.hosted-resources" as const;
@@ -136,6 +138,8 @@ export async function loadHostedResourceContribution(
 ): Promise<HostedResourceContribution> {
   let response: Response;
   try {
+    const preflight = preflightSharedAuthSession();
+    if (preflight) await preflight;
     response = await fetchImpl(PLATFORM_EXTENSION_CATALOG_PATH, {
       method: "GET",
       credentials: "include",
@@ -272,6 +276,8 @@ export async function listHostedResourceInventoryPage(
   );
   if (cursor !== undefined) endpoint.searchParams.set("cursor", cursor);
 
+  const preflight = preflightSharedAuthSession();
+  if (preflight) await preflight;
   const response = await fetchImpl(endpoint.toString(), {
     method: "GET",
     credentials: "include",
