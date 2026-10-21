@@ -40,6 +40,7 @@ const SHARED_AUTH_PATHS = new Set([
   "/auth/oidc/logout",
   "/auth/oidc/session",
 ]);
+const SHARED_AUTH_ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
 
 export function sharedAuthConfigured(env: SharedAuthEnvironment): boolean {
   return env.TAKOSUMI_SHARED_AUTH_PROFILE !== undefined ||
@@ -231,6 +232,19 @@ export async function handleSharedAuthRouteRequest(
   env: SharedAuthEnvironment,
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
+  if (!sharedAuthConfigured(env) && request.method === "GET" &&
+    url.pathname === "/auth/oidc/session" && url.search === "") {
+    // A browser fetch of an unmounted non-API path would otherwise receive
+    // the dashboard SPA's HTML 200 from ASSETS. Reserve this one read as an
+    // explicit absence so the ordinary shell can use its original bootstrap.
+    return Response.json({ error: "not_found" }, {
+      status: 404,
+      headers: {
+        "cache-control": "no-store",
+        [SHARED_AUTH_ABSENCE_HEADER]: "1",
+      },
+    });
+  }
   if (!SHARED_AUTH_PATHS.has(url.pathname) || !sharedAuthConfigured(env)) {
     return undefined;
   }
@@ -256,6 +270,9 @@ export async function handleSharedAuthRouteRequest(
     );
     if (!(response instanceof Response)) return sharedAuthUnavailableResponse();
     const headers = new Headers(response.headers);
+    // Only the gateway's profile-OFF branch may mark route absence. A bound RP
+    // cannot forge that provenance through the forwarded response headers.
+    headers.delete(SHARED_AUTH_ABSENCE_HEADER);
     headers.set("cache-control", "no-store");
     return new Response(response.body, { status: response.status, headers });
   } catch {

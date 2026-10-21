@@ -25,6 +25,10 @@ interface Props {
 }
 
 type AuthState = Exclude<SessionState["kind"], "loading"> | "loading";
+const initialSessionOptions = {
+  includeWorkspaces: true,
+  initialSharedAuthPreflight: true,
+} as const;
 
 /**
  * Wraps an account screen that requires a signed-in account-plane session.
@@ -45,7 +49,7 @@ export default function AuthGuard(props: Props) {
   // The authenticated shell always mounts a Workspace switcher. Prime the
   // session and Workspace list through the same bootstrap request so the
   // first useful screen does not wait on two serial API roundtrips.
-  const cached = readSessionState({ includeWorkspaces: true });
+  const cached = readSessionState(initialSessionOptions);
   const [session, setSession] = createSignal<SessionRecord | null>(
     cached.kind === "authenticated" ? cached.session : null,
   );
@@ -113,7 +117,7 @@ export default function AuthGuard(props: Props) {
       if (cached.kind === "unauthenticated") redirectToSignIn(true);
       return;
     }
-    void refreshSessionState({ includeWorkspaces: true }).then((next) =>
+    void refreshSessionState(initialSessionOptions).then((next) =>
       applyState(next, true),
     );
   });

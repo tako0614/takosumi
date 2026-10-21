@@ -72,6 +72,8 @@ export type SessionState =
   | { readonly kind: "error"; readonly error: SessionError };
 
 const SESSION_ME_PATH = SESSION_ME;
+const HOSTED_SESSION_PATH = "/auth/oidc/session";
+const HOSTED_SESSION_ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
@@ -152,6 +154,48 @@ interface SessionRefreshOptions {
    * session-only bootstrap and then the Workspace bootstrap.
    */
   readonly includeWorkspaces?: boolean;
+  /** Only the first guarded shell read waits for the existing RP health path. */
+  readonly initialSharedAuthPreflight?: boolean;
+}
+
+async function completeSharedAuthPreflight(): Promise<"present" | "absent"> {
+  const response = await fetch(HOSTED_SESSION_PATH, {
+    method: "GET",
+    headers: { accept: "application/json" },
+    credentials: "include",
+    cache: "no-store",
+  });
+  const body = await readResponseBody(response);
+  const json = response.headers.get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase() === "application/json";
+  const record =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : null;
+  // Only the explicit stock-OSS response denotes an unmounted RP. A 404
+  // from a configured but wrong-origin RP must not become ordinary fallback.
+  if (
+    response.status === 404 && json && record &&
+    Object.keys(record).length === 1 && record.error === "not_found" &&
+    response.headers.get(HOSTED_SESSION_ABSENCE_HEADER) === "1" &&
+    response.headers.get("cache-control")?.split(",")
+      .some((directive) => directive.trim().toLowerCase() === "no-store")
+  ) return "absent";
+  if (
+    json && record && Object.keys(record).length === 1 &&
+    ((response.status === 200 && record.authenticated === true) ||
+      (response.status === 401 && record.authenticated === false))
+  ) return "present";
+  if (!response.ok) throw sessionErrorFromResponse(response, body);
+  throw new SessionError(
+    "error",
+    response.status,
+    new Headers(response.headers),
+    body,
+    "Hosted session probe did not return authenticated status.",
+  );
 }
 
 async function fetchSessionMe(
@@ -167,10 +211,21 @@ async function fetchSessionMe(
     );
   }
   try {
+    const sharedAuthRoute = options.initialSharedAuthPreflight
+      ? await completeSharedAuthPreflight()
+      : "absent";
+    // The preflight boolean grants nothing. Canonical bootstrap must still
+    // authenticate the Cookie and authorize the Workspace list.
     const data = options.includeWorkspaces
       ? await fetchDashboardWorkspaceBootstrap()
       : await fetchDashboardBootstrap();
-    if (!data) return await fetchAccountSessionMe();
+    if (!data) {
+      // A present Hosted RP never falls back to a second account-session
+      // projection when canonical Workspace bootstrap denied the request.
+      return sharedAuthRoute === "present"
+        ? null
+        : await fetchAccountSessionMe();
+    }
     if (Array.isArray(data.workspaces)) {
       primeWorkspaceListCache(data.workspaces);
     }

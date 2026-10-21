@@ -20,6 +20,7 @@ import type { ControlPlaneOperations } from "../../../accounts/service/src/contr
 
 const origin = "https://hosted.staging.example.test";
 const cookie = "__Host-takosumi_hosted_session=opaque-rp-session";
+const absenceHeader = "x-takosumi-shared-auth-absent";
 function configured(rpc: SharedAuthRpc): SharedAuthEnvironment {
   return {
     TAKOSUMI_SHARED_AUTH_PROFILE: "shared-account",
@@ -45,6 +46,38 @@ test("stock OSS never invokes an available private authentication service", asyn
   expect(await authenticateSharedAuthRequest(request(), env)).toBeUndefined();
   expect(await handleSharedAuthRouteRequest(request("/auth/oidc/login"), env)).toBeUndefined();
   expect(calls).toBe(0);
+});
+
+test("stock OSS reserves only the exact browser RP session GET as an absent route", async () => {
+  const env = { HOSTED: rpc };
+  const absent = await handleSharedAuthRouteRequest(request("/auth/oidc/session"), env);
+  expect(absent?.status).toBe(404);
+  expect(absent?.headers.get("cache-control")).toBe("no-store");
+  expect(absent?.headers.get(absenceHeader)).toBe("1");
+  expect(await absent?.json()).toEqual({ error: "not_found" });
+  expect(await handleSharedAuthRouteRequest(request("/auth/oidc/session", { method: "HEAD" }), env)).toBeUndefined();
+  expect(await handleSharedAuthRouteRequest(request("/auth/oidc/session?other=1"), env)).toBeUndefined();
+  expect(await handleSharedAuthRouteRequest(request("/auth/oidc/login"), env)).toBeUndefined();
+  const broken = await handleSharedAuthRouteRequest(request("/auth/oidc/session"), {
+    ...configured(rpc),
+    TAKOSUMI_SHARED_AUTH_ORIGIN: undefined,
+  });
+  expect(broken?.status).toBe(503);
+});
+
+test("configured RP response cannot forward the gateway's absence marker", async () => {
+  const forwarded = await handleSharedAuthRouteRequest(request("/auth/oidc/session"),
+    configured({
+      ...rpc,
+      fetchSharedAuth: async () => Response.json({ error: "not_found" }, {
+        status: 404,
+        headers: { [absenceHeader]: "1" },
+      }),
+    }));
+  expect(forwarded?.status).toBe(404);
+  expect(forwarded?.headers.get(absenceHeader)).toBeNull();
+  expect(forwarded?.headers.get("cache-control")).toBe("no-store");
+  expect(await forwarded?.json()).toEqual({ error: "not_found" });
 });
 
 test("local account management is absent on every opted-in product alias; separate issuer and self-host keep their account routes", async () => {
