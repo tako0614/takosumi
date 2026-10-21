@@ -10,6 +10,21 @@ const source = readFileSync(
 );
 
 describe("AuthGuard session failure boundary", () => {
+  test("the synchronous first read and mount share the initial preflight request", () => {
+    expect(source).toContain("initialSharedAuthPreflight: true");
+    expect(source).toContain("const cached = readSessionState(initialSessionOptions)");
+    const mountBranch = source.slice(
+      source.indexOf("onMount(() =>"),
+      source.indexOf("const off = onSessionStateChange"),
+    );
+    expect(mountBranch).toContain("refreshSessionState(initialSessionOptions)");
+    const retryBranch = source.slice(
+      source.indexOf("const retrySession"),
+      source.indexOf("onMount(() =>"),
+    );
+    expect(retryBranch).not.toContain("initialSessionOptions");
+  });
+
   test("renders maintenance/error states through the existing auth panel", () => {
     expect(source).toContain("onSessionStateChange");
     expect(source).toContain('state() === "maintenance" || state() === "error"');
