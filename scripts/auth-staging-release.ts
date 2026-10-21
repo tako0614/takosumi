@@ -74,7 +74,8 @@ export function parseAuthStagingTarget(value: unknown): AuthStagingTarget {
   const vars: Record<string, string> = {};
   for (const [name, text] of Object.entries(value.vars)) {
     if (typeof text !== "string" || text.length > 32_768 ||
-        !/^(?:TAKOSUMI_ACCOUNTS_[A-Z0-9_]+|TAKOSUMI_ENVIRONMENT|TAKOSUMI_AUTH_WORKER_NAME|TAKOSUMI_CONTROL_D1_SCHEMA_MODE)$/u.test(name) ||
+        !/^(?:TAKOSUMI_ACCOUNTS_[A-Z0-9_]+|TAKOSUMI_ENVIRONMENT|TAKOSUMI_AUTH_WORKER_NAME|TAKOSUMI_CONTROL_D1_SCHEMA_MODE|TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS)$/u.test(name) ||
+        (name === "TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS" && text !== "true" && text !== "false") ||
         /(?:SECRET|PRIVATE_JWK|TOKEN)$/u.test(name)) throw new Error("auth_staging_vars_invalid");
     vars[name] = text;
     if (text.startsWith("[") || text.startsWith("{")) {
