@@ -1576,6 +1576,12 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
+    const ordinaryPreflight = mode === "portable"
+      ? page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return url.pathname === "/auth/oidc/session" && url.search === "";
+        })
+      : undefined;
     const bootstrap = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return (
@@ -1584,6 +1590,15 @@ test.describe("Takosumi dashboard browser surface", () => {
       );
     });
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    if (ordinaryPreflight) {
+      const response = await ordinaryPreflight;
+      const headers = response.headers();
+      expect(response.status()).toBe(404);
+      expect(headers["content-type"]).toMatch(/^application\/json(?:;|$)/u);
+      expect(headers["cache-control"]).toBe("no-store");
+      expect(headers["x-takosumi-shared-auth-absent"]).toBe("1");
+      expect(await response.json()).toEqual({ error: "not_found" });
+    }
     await expect((await bootstrap).status()).toBe(200);
 
     const trigger = workspaceTrigger(page);

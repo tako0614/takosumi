@@ -170,6 +170,19 @@ const server = Bun.serve({
   hostname: "127.0.0.1",
   async fetch(request) {
     const url = new URL(request.url);
+    if (
+      request.method === "GET" &&
+      url.pathname === "/auth/oidc/session" &&
+      url.search === ""
+    ) {
+      return Response.json({ error: "not_found" }, {
+        status: 404,
+        headers: {
+          "cache-control": "no-store",
+          "x-takosumi-shared-auth-absent": "1",
+        },
+      });
+    }
     if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/") || url.pathname.startsWith("/apis/") || url.pathname === "/.well-known/takosumi") {
       return apiResponse(request, url);
     }
