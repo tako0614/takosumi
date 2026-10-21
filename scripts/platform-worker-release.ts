@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { isCredentialRecipeRenewableEnv } from "../contract/credential-recipes.ts";
+import { platformExtensionRoutes } from "../deploy/platform/platform_extensions.ts";
 import { REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES } from "../providers/credential-recipes.generated.ts";
 import { lineageVerdict } from "./lib/deploy-lineage.ts";
 import {
@@ -7227,6 +7228,18 @@ export function assertConfigTargetsSource(
         hosted.length === 3 &&
         sharedAuthStagingBillingEnabled &&
         hosted.some(matchesHostedWorkspaceBillingRoute);
+      if (billingRouteValid) {
+        // The runtime owns complete route parsing and merge policy. Apply it
+        // only when admitting this new third route so legacy two-route configs
+        // retain their established release validation behavior.
+        platformExtensionRoutes({
+          TAKOSUMI_PLATFORM_EXTENSIONS: descriptors,
+          TAKOSUMI_SHARED_AUTH_PROFILE:
+            vars?.TAKOSUMI_SHARED_AUTH_PROFILE as string,
+          TAKOSUMI_SHARED_AUTH_ORIGIN:
+            vars?.TAKOSUMI_SHARED_AUTH_ORIGIN as string,
+        });
+      }
       hostedRouteValid =
         (hosted.length === 2 || billingRouteValid) &&
         hosted.some(matchesHostedSponsorshipRoute) &&
