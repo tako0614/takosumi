@@ -31,6 +31,7 @@ export class SharedAuthSessionPreflightError extends Error {
 
 let knownRoute: RouteKnowledge | undefined;
 let initialFailure: SharedAuthSessionPreflightError | undefined;
+let establishedHostedRoute = false;
 let healthInflight: Promise<RoutePresence> | undefined;
 let initialInflight: Promise<RoutePresence> | undefined;
 let generation = 0;
@@ -52,6 +53,7 @@ export function clearSharedAuthSessionPreflight(): void {
   generation += 1;
   knownRoute = undefined;
   initialFailure = undefined;
+  establishedHostedRoute = false;
   healthInflight = undefined;
   initialInflight = undefined;
 }
@@ -173,6 +175,13 @@ export async function probeInitialSharedAuthSession(): Promise<{
         "Hosted session probe was superseded.",
       );
     }
+    if (route === "absent" && establishedHostedRoute) {
+      throw new SharedAuthSessionPreflightError(
+        404, "", new Headers(), undefined,
+        "Established Hosted session route became unavailable.",
+      );
+    }
+    if (route === "present") establishedHostedRoute = true;
     knownRoute = route;
     initialFailure = undefined;
     const ticket = Object.freeze({}) as InitialSharedAuthHealthTicket;
@@ -247,6 +256,18 @@ export function preflightSharedAuthSession(
         throw new SharedAuthSessionPreflightError(
           0, "", new Headers(), undefined,
           "Hosted session probe was superseded.",
+        );
+      }
+      if (route === "absent" && establishedHostedRoute) {
+        throw new SharedAuthSessionPreflightError(
+          404, "", new Headers(), undefined,
+          "Established Hosted session route became unavailable.",
+        );
+      }
+      if (knownRoute === "failed") {
+        throw initialFailure ?? new SharedAuthSessionPreflightError(
+          0, "", new Headers(), undefined,
+          "Hosted session probe is unavailable.",
         );
       }
       if (route !== "present" && route !== "absent") {

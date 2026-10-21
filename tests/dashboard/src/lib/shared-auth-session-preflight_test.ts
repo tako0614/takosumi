@@ -106,6 +106,90 @@ test("a failed initial probe cannot later be mistaken for ordinary route absence
   expect(calls).toEqual([healthPath]);
 });
 
+test("an explicit retry after initial 503 rechecks health before mandatory canonical bootstrap", async () => {
+  const calls: string[] = [];
+  let healthReads = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path === healthPath) {
+      return ++healthReads === 1
+        ? Response.json({ error: "authentication_unavailable" }, { status: 503 })
+        : Response.json({ authenticated: true });
+    }
+    if (path === bootstrapPath) {
+      return Response.json({
+        session: { subject: "tsub_recovered" },
+        workspaces: [{ id: "ws_current", handle: "current" }],
+      });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  }) as typeof fetch;
+  await expect(probeInitialSharedAuthSession()).rejects.toBeInstanceOf(
+    SharedAuthSessionPreflightError,
+  );
+  await expect(controlFetch(workspacePath)).rejects.toBeInstanceOf(
+    SharedAuthSessionPreflightError,
+  );
+  expect(calls).toEqual([healthPath]);
+  const retry = await probeInitialSharedAuthSession();
+  expect(retry.route).toBe("present");
+  expect((await fetchDashboardWorkspaceBootstrap({
+    initialHealthTicket: retry.ticket,
+  }))?.session?.subject).toBe("tsub_recovered");
+  expect(calls).toEqual([healthPath, healthPath, bootstrapPath]);
+});
+
+test("an established Hosted route cannot be downgraded by a later initial 404", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path !== healthPath) throw new Error("business dispatched after downgrade");
+    return calls.length === 1
+      ? Response.json({ authenticated: true })
+      : Response.json({ error: "not_found" }, { status: 404, headers: absence });
+  }) as typeof fetch;
+  expect((await probeInitialSharedAuthSession()).route).toBe("present");
+  await expect(probeInitialSharedAuthSession()).rejects.toBeInstanceOf(
+    SharedAuthSessionPreflightError,
+  );
+  await expect(controlFetch(workspacePath)).rejects.toBeInstanceOf(
+    SharedAuthSessionPreflightError,
+  );
+  expect(calls).toEqual([healthPath, healthPath]);
+});
+
+test("a business read waiting on the downgraded probe also refuses dispatch", async () => {
+  const calls: string[] = [];
+  let release!: (response: Response) => void;
+  const second = new Promise<Response>((resolve) => { release = resolve; });
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input);
+    calls.push(path);
+    if (path !== healthPath) throw new Error("business dispatched after downgrade");
+    return calls.length === 1 ? Response.json({ authenticated: true }) : second;
+  }) as typeof fetch;
+  await probeInitialSharedAuthSession();
+  const reprobe = probeInitialSharedAuthSession();
+  const reprobeOutcome = reprobe.then(
+    () => "accepted" as const,
+    (error: unknown) => error,
+  );
+  const business = controlFetch(workspacePath);
+  const businessOutcome = business.then(
+    () => "dispatched" as const,
+    (error: unknown) => error,
+  );
+  expect(calls).toEqual([healthPath, healthPath]);
+  release(Response.json({ error: "not_found" }, {
+    status: 404, headers: absence,
+  }));
+  expect(await reprobeOutcome).toBeInstanceOf(SharedAuthSessionPreflightError);
+  expect(await businessOutcome).toBeInstanceOf(SharedAuthSessionPreflightError);
+  expect(calls).toEqual([healthPath, healthPath]);
+});
+
 test("a held initial ticket cannot bypass a later failed probe", async () => {
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
