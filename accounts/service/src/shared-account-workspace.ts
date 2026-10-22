@@ -14,6 +14,7 @@ import type { ControlPlaneOperations } from "./control-operations.ts";
 import { ensurePersonalWorkspaceForAccount } from "./control-personal-workspace.ts";
 import { errorJson, json, methodNotAllowed, readJsonObject, RequestBodyReadError, withPrivateNoStoreHeaders } from "./http-helpers.ts";
 import type { AccountsStore, TakosumiAccountRecord } from "./store.ts";
+import { measureRequestPhaseOperation, type RequestPhaseObserver } from "./request-phase-diagnostics.ts";
 
 export const SHARED_ACCOUNT_WORKSPACES_PATH = "/api/v1/account/shared-workspaces";
 
@@ -87,6 +88,8 @@ export type SharedWorkspaceBillingResolver = (input: {
   readonly canonicalAccountId: TakosumiSubject;
   /** Local callback only; never serialized into billing-owner requests. */
   readonly assertCurrentGrant: () => Promise<boolean>;
+  /** Request-local observation only; never serialized to the billing owner. */
+  readonly diagnostics?: RequestPhaseObserver;
 }) => Promise<SharedWorkspaceBillingOrganization | null>;
 
 export interface SharedAccountWorkspaceDirectory {
@@ -102,7 +105,7 @@ export interface SharedAccountWorkspaceDirectory {
     readonly displayName: string;
     readonly type: "organization";
   }): Promise<SharedAccountWorkspaceChoice>;
-  billingOrganization(session: SharedAccountWorkspaceSession, workspaceId: string): Promise<SharedWorkspaceBillingOrganization>;
+  billingOrganization(session: SharedAccountWorkspaceSession, workspaceId: string, diagnostics?: RequestPhaseObserver): Promise<SharedWorkspaceBillingOrganization>;
 }
 
 export interface SharedAccountWorkspaceDependencies {
@@ -242,14 +245,18 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       await canonicalAccount(session);
       return await authorized(account.subject, workspace.id);
     },
-    async billingOrganization(session, workspaceId) {
-      const account = await canonicalAccount(session);
-      await authorized(account.subject, workspaceId);
+    async billingOrganization(session, workspaceId, diagnostics) {
+      const account = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
+        const current = await canonicalAccount(session);
+        await authorized(current.subject, workspaceId);
+        return current;
+      });
       if (!deps.resolveWorkspaceBilling) {
         throw new SharedAccountWorkspaceError("capability_unavailable", "Workspace billing resolver is unavailable.", 503);
       }
       const binding = await deps.resolveWorkspaceBilling({
         workspaceId, canonicalAccountId: account.subject,
+        ...(diagnostics ? { diagnostics } : {}),
         assertCurrentGrant: async () => {
           try { await canonicalAccount(session); return true; }
           catch { return false; }
@@ -262,8 +269,10 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
       }
       // A resolver can await an owner handshake. No authorization result from
       // before that wait survives a concurrent membership revocation or merge.
-      await canonicalAccount(session);
-      await authorized(account.subject, workspaceId);
+      await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
+        await canonicalAccount(session);
+        await authorized(account.subject, workspaceId);
+      });
       return { workspaceId, workspaceRef: binding.workspaceRef, organizationId: binding.organizationId };
     },
   };
@@ -284,6 +293,7 @@ export async function handleSharedAccountWorkspaceRoute(input: {
   readonly store: AccountsStore;
   readonly directory?: SharedAccountWorkspaceDirectory;
   readonly authenticate?: SharedAccountWorkspaceAuthenticator;
+  readonly diagnostics?: RequestPhaseObserver;
 }): Promise<Response | undefined> {
   if (!isSharedAccountWorkspaceRoute(input.url.pathname)) return undefined;
   const respond = (response: Response) => withPrivateNoStoreHeaders(response);
@@ -340,7 +350,7 @@ export async function handleSharedAccountWorkspaceRoute(input: {
       }
       if (method !== "GET") return respond(methodNotAllowed("GET"));
       if ([...input.url.searchParams.keys()].length) throw new SharedAccountWorkspaceError("invalid_request", "Billing resolution accepts only a Workspace id.", 400);
-      return respond(json(await input.directory.billingOrganization(session, workspaceId)));
+      return respond(json(await input.directory.billingOrganization(session, workspaceId, input.diagnostics)));
     }
     return respond(errorJson("not_found", "not found", 404, input.request));
   } catch (error) {

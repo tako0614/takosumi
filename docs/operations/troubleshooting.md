@@ -185,6 +185,13 @@ Worker は inventory の `{runId}` のような template を使い、client prob
 | `allowlist` | handler 内の presented-session allowlist gate。認可の判定内容は維持 |
 | `shared_workspace_auth` | shared Workspace request の元issuer session／登録RP grant認証 |
 | `shared_workspace_dispatch` | shared Workspace route全体。認証、lazy Control初期化、Workspace／billing binding処理と元owner再照合を含む |
+| `shared_workspace_control_resolve` | billing GETがlazy Control directoryを取得する待機 |
+| `shared_workspace_billing_admission` | billing GETの開始時とbinding解決後のcanonical account／現Workspace membership再照合。未binding経路ではprepare前のowner／admin member確認も含む |
+| `shared_workspace_billing_grant` | resolver内の各元current grant assertion。falseは元401拒否としてrejected |
+| `shared_workspace_billing_get` | Controlの既存binding／intent取得 |
+| `shared_workspace_billing_prepare` | 元WorkspaceとmemberでControl intentをprepareする待機 |
+| `shared_workspace_billing_enrollment` | 元intentに対するenrollment acknowledgement取得 |
+| `shared_workspace_billing_claim` | 元intent／member／epochを再照合するControl claim待機 |
 | `control_auth` | 通常の Accounts bearer認証。D1 candidate lookup / active-token検証を含む |
 | `control_init` | Control operations facade 待ち。既存の5秒期限は維持 |
 | `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
@@ -193,8 +200,11 @@ shared Workspace診断は固定の `POST /api/v1/account/shared-workspaces/boots
 `GET /api/v1/account/shared-workspaces/{workspaceId}/billing-organization` を対象にします。
 GETのWorkspace IDも実値を出さずtemplateに置換します。このGETもbindingのprepare／claimを
 実行し得るため、応答不明や記録なしを未書込みと扱わず、診断のために再送しないでください。
-`shared_workspace_dispatch` が未完了でも、内部のControl初期化とclaimのどちらかは
-このspanだけでは区別できません。診断のためにPOSTを再送しないでください。
+内部phaseはbilling GETの同requestのobserverだけを使い、共有directory／initializerへ
+保存しません。admissionは開始時・未bindingのmember確認・解決後、grantは既存の各確認位置で繰り返されます。
+既存bindingがあればprepare／enrollment／claimには進みません。外側の
+`shared_workspace_dispatch`だけの旧sampleでは内部の待機位置を区別できません。
+診断のためにPOSTを再送しないでください。
 
 outcome `started` は await 前、`fulfilled` / `rejected` はその await の settlement
 です。`fulfilled` は HTTP 2xx や認可成功を意味しません。2秒経っても未解決の場合は
