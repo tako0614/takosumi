@@ -203,10 +203,14 @@ The issuer's directory, token and grant paths make many sequential reads of
 the Accounts D1, whose primary runs in Singapore, while callers reach the
 Worker in their nearest colo. Every authority and code upload therefore sends
 [targeted placement](https://developers.cloudflare.com/workers/configuration/placement/)
-`region = "aws:ap-southeast-1"`, and the authority digest binds it. After
-activation, `GET /workers/scripts/takosumi-auth-staging/settings` must report
-that exact region; a missing or different placement leaves the release
-incomplete rather than ready. Placement only moves the `fetch` handler, never
+`region = "aws:ap-southeast-1"`, and the authority digest binds it. Before
+activation, the uploaded Version must report `resources.script.placement` as
+`{mode: "targeted", target: [{id, region: "aws:ap-southeast-1", type: "region"}]}`
+(the shape the provider returned on 2026-10-22; the field is not in the API
+reference). After activation, `GET /workers/scripts/takosumi-auth-staging/settings`
+must report `{mode: "targeted", target: [id]}` with that same target id. Any
+other shape stops before activation, or leaves the release incomplete rather
+than ready. Placement only moves the `fetch` handler, never
 RPC or named entrypoints, and it is a hint for where Cloudflare runs the Worker,
 not a guarantee. The Control D1 primary is in a different location, so judge
 the effect by comparing whole bootstrap and grant timings before and after

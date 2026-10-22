@@ -304,13 +304,13 @@ export async function executeAuthStagingRelease(input: {
     const version = await runtime.provider.request("GET", `${script}/versions/${uploadedVersion}`);
     assertAuthStagingVersion(version, plan, target);
     assertCanonicalNamespaces(version, canonicalNamespaces);
-    assertUploadedPlacement(version);
+    const placementTarget = uploadedPlacementTarget(version);
     // Lost upload/activation acknowledgements are never retried. Current serving
     // predecessor is rechecked before the one explicit activation.
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== predecessor) throw new Error("auth_staging_concurrent_deployment");
     await runtime.provider.request("POST", `${script}/deployments`, JSON.stringify({ strategy: "percentage", versions: [{ version_id: uploadedVersion, percentage: 100 }] }));
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== uploadedVersion) throw new Error("auth_staging_activation_readback_mismatch");
-    assertAuthStagingPlacement(await runtime.provider.request("GET", `${script}/settings`));
+    assertAuthStagingPlacement(await runtime.provider.request("GET", `${script}/settings`), placementTarget);
     await assertTopology(runtime.provider, target, active);
     if (active) await runtime.publicReadback(uploadedVersion, plan);
     return { status: action === "code" ? "ready" : active ? "authority-ready-served" : "authority-ready-route-disabled", sourceCommit: target.sourceCommit, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest, releaseTag, predecessor, version: uploadedVersion, reversal: "explicit owner code restore to recorded predecessor while schema compatible; no database rollback" };
@@ -343,26 +343,35 @@ function uploadMetadata(target: AuthStagingTarget, plan: AuthStagingPlan, secret
   };
 }
 
-/** The serving script settings must carry exactly the selected targeted region. */
-export function assertAuthStagingPlacement(value: unknown): void {
-  if (!record(value) || !exactPlacement(value.placement)) throw new Error("auth_staging_placement_invalid");
-}
-
-function exactPlacement(placement: unknown): boolean {
-  return record(placement) && placement.region === AUTH_STAGING_PLACEMENT.region &&
-    (placement.mode === undefined || placement.mode === AUTH_STAGING_PLACEMENT.mode) &&
-    (placement.status === undefined || typeof placement.status === "string") &&
-    Object.keys(placement).every((key) => key === "mode" || key === "region" || key === "status");
-}
+const exactKeys = (value: Record<string, unknown>, keys: readonly string[]) =>
+  Object.keys(value).sort().join() === [...keys].sort().join();
 
 /**
- * Wrangler reads a Version's placement from `resources.script.placement`. That
- * field is not in the API reference, so its absence is not a refusal; when it
- * is present it must already match before the Version is activated.
+ * Provider readback of the uploaded Version's placement, observed 2026-10-22 as
+ * `resources.script.placement = {mode:"targeted", target:[{id, region, type:"region"}]}`.
+ * That field is not in the API reference, so this exact observed shape is
+ * required before activation; anything else stops with the predecessor serving.
+ * Returns the provider's target id, which the script settings then echo.
  */
-function assertUploadedPlacement(version: unknown): void {
+export function uploadedPlacementTarget(version: unknown): number {
   const script = record(version) && record(version.resources) && record(version.resources.script) ? version.resources.script : undefined;
-  if (script && script.placement !== undefined && !exactPlacement(script.placement)) throw new Error("auth_staging_placement_invalid");
+  const placement = script?.placement;
+  const entry = record(placement) && Array.isArray(placement.target) && placement.target.length === 1 ? placement.target[0] : undefined;
+  if (!record(placement) || !exactKeys(placement, ["mode", "target"]) || placement.mode !== AUTH_STAGING_PLACEMENT.mode ||
+      !record(entry) || !exactKeys(entry, ["id", "region", "type"]) || entry.type !== "region" ||
+      entry.region !== AUTH_STAGING_PLACEMENT.region || typeof entry.id !== "number" || !Number.isSafeInteger(entry.id) || entry.id < 1) {
+    throw new Error("auth_staging_placement_invalid");
+  }
+  return entry.id;
+}
+
+/** After activation the serving script settings must name exactly that target. */
+export function assertAuthStagingPlacement(value: unknown, target: number): void {
+  const placement = record(value) ? value.placement : undefined;
+  if (!record(placement) || !exactKeys(placement, ["mode", "target"]) || placement.mode !== AUTH_STAGING_PLACEMENT.mode ||
+      !Array.isArray(placement.target) || placement.target.length !== 1 || placement.target[0] !== target) {
+    throw new Error("auth_staging_placement_invalid");
+  }
 }
 
 function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): void {
