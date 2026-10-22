@@ -275,6 +275,102 @@ test("the exact-v4 Worker rejects same-named tables and indexes with structural 
   expect(wrongIndexState.issues).toContain("schema_closure_mismatch");
 });
 
+test("Accounts ledger column proof reuses PRAGMA only for the same database, catalog and fresh owned-object snapshot", async () => {
+  const catalog = await loadD1AccountsMigrationCatalog();
+  const first = observedStateDatabase(await databaseAtHead(4));
+  const second = observedStateDatabase(await databaseAtHead(4));
+
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(first.database, catalog)).compatible).toBe(true);
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(first.database, catalog)).compatible).toBe(true);
+  expect(first.pragmaReads()).toBe(1);
+  expect(first.objectReads()).toBe(2);
+  expect(first.ledgerReads()).toBe(2);
+  expect(first.activationReads()).toBe(2);
+
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(second.database, catalog)).compatible).toBe(true);
+  expect(second.pragmaReads()).toBe(1);
+  expect(first.pragmaReads()).toBe(1);
+
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(first.database, { ...catalog })).compatible).toBe(true);
+  expect(first.pragmaReads()).toBe(2);
+});
+
+test("Accounts ledger column proof evicts on owned schema drift and requires a newly verified snapshot", async () => {
+  const catalog = await loadD1AccountsMigrationCatalog();
+  const backing = await databaseAtHead(4);
+  const observed = observedStateDatabase(backing);
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(1);
+
+  const indexSql = catalog.migrations[3]?.body.find((statement) =>
+    statement.sql.startsWith("CREATE INDEX IF NOT EXISTS takosumi_accounts_auth_code_token_links_retention ")
+  )?.sql;
+  if (!indexSql) throw new Error("retention index migration missing");
+  await backing.prepare("DROP INDEX takosumi_accounts_auth_code_token_links_retention").run();
+  const drift = await readD1AccountsMigrationState(observed.database, catalog);
+  expect(drift.issues).toContain("schema_closure_mismatch");
+  expect(observed.pragmaReads()).toBe(2);
+
+  await backing.prepare(indexSql).run();
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(3);
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(3);
+
+  await backing.prepare("ALTER TABLE takosumi_accounts_schema_migrations ADD COLUMN unexpected TEXT").run();
+  expect((await readD1AccountsMigrationState(observed.database, catalog)).issues).toContain("ledger_shape_drift");
+  expect(observed.pragmaReads()).toBe(4);
+  expect((await readD1AccountsMigrationState(observed.database, catalog)).issues).toContain("ledger_shape_drift");
+  expect(observed.pragmaReads()).toBe(5);
+});
+
+test("Accounts ledger column proof never retains ledger, backfill or failed SQL results", async () => {
+  const catalog = await loadD1AccountsMigrationCatalog();
+  const backing = await databaseAtHead(4);
+  const observed = observedStateDatabase(backing);
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(1);
+
+  await backing.prepare("UPDATE takosumi_accounts_schema_migrations SET checksum = 'sha256:drift' WHERE version = 4").run();
+  expect((await readD1AccountsMigrationState(observed.database, catalog)).issues).toContain("ledger_catalog_mismatch");
+  expect(observed.pragmaReads()).toBe(1);
+  await backing.prepare("UPDATE takosumi_accounts_schema_migrations SET checksum = ? WHERE version = 4").bind(catalog.migrations[4]!.checksum).run();
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(2);
+
+  await backing.prepare("INSERT INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES ('oidc_clients', 'late-legacy-cache-proof', '{}', 4000)").run();
+  expect((await readD1AccountsMigrationState(observed.database, catalog)).issues).toContain("activation_digest_backfill_incomplete");
+  expect(observed.pragmaReads()).toBe(2);
+  await backing.prepare("DELETE FROM takosumi_accounts_documents WHERE key = 'late-legacy-cache-proof'").run();
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(3);
+
+  observed.failNextLedgerRead();
+  await expect(readD1AccountsMigrationState(observed.database, catalog)).rejects.toThrow("state_read_failed");
+  expect(observed.pragmaReads()).toBe(3);
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(4);
+});
+
+test("an older overlapping success cannot restore a ledger-column proof after a newer failed read", async () => {
+  const catalog = await loadD1AccountsMigrationCatalog();
+  const observed = observedStateDatabase(await databaseAtHead(4));
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(1);
+
+  const pause = observed.pauseNextLedgerRead();
+  const older = readD1AccountsMigrationState(observed.database, catalog);
+  await pause.entered;
+  observed.failNextLedgerRead();
+  await expect(readD1AccountsMigrationState(observed.database, catalog)).rejects.toThrow("state_read_failed");
+  pause.release();
+  expect(assessD1AccountsWorkerState(await older).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(1);
+
+  expect(assessD1AccountsWorkerState(await readD1AccountsMigrationState(observed.database, catalog)).compatible).toBe(true);
+  expect(observed.pragmaReads()).toBe(2);
+});
+
 test("Accounts D1 v4 atomically upgrades exact v3 and preserves current activation digests", async () => {
   const catalog = await loadD1AccountsMigrationCatalog();
   const database = new SqliteFakeD1();
@@ -886,6 +982,72 @@ function rejectingStatement(
     all: () => Promise.reject(new Error(message)),
   };
   return statement;
+}
+
+function observedStateDatabase(backing: SqliteFakeD1) {
+  let pragmaReads = 0;
+  let objectReads = 0;
+  let ledgerReads = 0;
+  let activationReads = 0;
+  let failLedger = false;
+  let pausedLedger: {
+    readonly entered: () => void;
+    readonly wait: Promise<void>;
+  } | null = null;
+  const database: D1AccountsMigrationDatabase = {
+    prepare(sql) {
+      if (sql.startsWith("SELECT type, name, tbl_name, sql FROM sqlite_master")) objectReads++;
+      if (sql.startsWith("PRAGMA table_info('takosumi_accounts_schema_migrations')")) pragmaReads++;
+      if (sql.startsWith("SELECT version, name FROM takosumi_accounts_schema_migrations") ||
+          sql.startsWith("SELECT version, name, checksum FROM takosumi_accounts_schema_migrations")) {
+        ledgerReads++;
+        if (failLedger) {
+          failLedger = false;
+          return rejectingStatement("synthetic ledger read failure");
+        }
+        if (pausedLedger) {
+          const pause = pausedLedger;
+          pausedLedger = null;
+          const statement = backing.prepare(sql);
+          const held: D1AccountsMigrationPreparedStatement = {
+            bind: () => held,
+            run: () => statement.run(),
+            first: () => statement.first(),
+            all: async () => {
+              pause.entered();
+              await pause.wait;
+              return statement.all();
+            },
+          };
+          return held;
+        }
+      }
+      if (sql.startsWith("SELECT COUNT(*) AS count FROM takosumi_accounts_documents")) activationReads++;
+      return backing.prepare(sql);
+    },
+    batch() {
+      // This probe observes readD1AccountsMigrationState only. Its prepared
+      // statement interface is wider than SqliteFakeD1's batch input; do not
+      // pretend arbitrary probe statements are native batch statements.
+      throw new Error("observed_state_database_batch_forbidden");
+    },
+  };
+  return {
+    database,
+    pragmaReads: () => pragmaReads,
+    objectReads: () => objectReads,
+    ledgerReads: () => ledgerReads,
+    activationReads: () => activationReads,
+    failNextLedgerRead: () => { failLedger = true; },
+    pauseNextLedgerRead: () => {
+      let release!: () => void;
+      let enter!: () => void;
+      const entered = new Promise<void>((resolve) => { enter = resolve; });
+      const wait = new Promise<void>((resolve) => { release = resolve; });
+      pausedLedger = { entered: enter, wait };
+      return { entered, release };
+    },
+  };
 }
 
 async function databaseAtHead(head: number): Promise<SqliteFakeD1> {
