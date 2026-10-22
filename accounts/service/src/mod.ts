@@ -644,6 +644,7 @@ export function createAccountsHandler(
       return await handleToken({
         issuer,
         request,
+        diagnostics,
         store,
         flow: options.oidcFlow,
         clients,
