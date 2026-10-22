@@ -8,6 +8,7 @@ import {
   AUTH_STAGING_DEFAULT_HANDLERS,
   AUTH_STAGING_NAMED_HANDLERS,
   AuthStagingIncompleteError,
+  assertAuthStagingPlacement,
   assertAuthStagingVersion,
   authStagingResourceBindings,
   createAuthStagingPlan,
@@ -17,7 +18,7 @@ import {
   type AuthStagingProvider,
   type AuthStagingReleaseRuntime,
 } from "../../scripts/auth-staging-release.ts";
-import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_WORKER } from "../../deploy/accounts-cloudflare/src/staging-target.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_PLACEMENT, AUTH_STAGING_WORKER } from "../../deploy/accounts-cloudflare/src/staging-target.ts";
 
 const sha = (value: string) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const uuid = (character: string) => `${character.repeat(8)}-${character.repeat(4)}-${character.repeat(4)}-${character.repeat(4)}-${character.repeat(12)}`;
@@ -68,7 +69,7 @@ function fixtureTarget() {
   });
 }
 
-function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean; predecessor?: (bindings: Record<string, unknown>[]) => Record<string, unknown>[] } = {}) {
+function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean; placement?: (uploaded: unknown) => unknown; predecessor?: (bindings: Record<string, unknown>[]) => Record<string, unknown>[] } = {}) {
   const target = fixtureTarget();
   const plan = createAuthStagingPlan(target, config, bytes);
   let exists = options.exists ?? true;
@@ -76,6 +77,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
   let schedules = options.schedules ?? (active ? [{cron:"*/1 * * * *"}] : []);
   let current = previousVersion;
   let version: Record<string, unknown> = {};
+  let settings: Record<string, unknown> = { placement: {} };
   const requests: { method: string; path: string; body?: BodyInit }[] = [];
   let schemaCalls = 0;
   let publicCalls = 0;
@@ -85,6 +87,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
     async request(method, path, body) {
       requests.push({ method, path, body });
       if (path === `/workers/scripts/${AUTH_STAGING_WORKER}/script-settings`) return exists ? {} : null;
+      if (path === `/workers/scripts/${AUTH_STAGING_WORKER}/settings`) return settings;
       if (path === `/workers/scripts/takosumi-staging/versions/${canonicalVersion}`) return { resources: { bindings: canonicalBindings.map((binding) => options.wrongCanonical && binding.name === "TAKOSUMI_ACCOUNTS_DB" ? { ...binding, id: uuid("f") } : binding) } };
       if (path === "/workers/scripts/takosumi-staging/deployments") return { deployments: [{ versions: [{ version_id: options.wrongCurrent ? uuid("f") : canonicalVersion, percentage: 100 }] }] };
       if (path.endsWith("/subdomain")) return { enabled: false, previews_enabled: false };
@@ -100,6 +103,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
       if (method === "POST" && path.endsWith("/versions")) {
         const form = body as FormData;
         const metadata = JSON.parse(String(form.get("metadata")));
+        settings = { placement: options.placement ? options.placement(metadata.placement) : metadata.placement };
         const bindings = metadata.bindings.map((binding: Record<string, unknown>) => {
           if (options.badBinding && binding.name === "TAKOSUMI_ACCOUNTS_DB") return { ...binding, id: uuid("f") };
           if (binding.type === "durable_object_namespace") return { ...binding, namespace_id: options.badNamespace ? "foreign-namespace" : `fixture-${binding.name}` };
@@ -493,4 +497,26 @@ test("diagnostic flag activation still requires the authority lane before any wr
   const plan = createAuthStagingPlan(target, config, bytes);
   await expect(h.execute("code", { target, plan, confirmation: plan.confirmation })).rejects.toThrow("auth_staging_code_authority_drift");
   expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
+});
+
+test("authority and code uploads carry the issuer placement and read it back from the serving settings", async () => {
+  for (const action of ["authority", "code"] as const) {
+    const h = harness({ active: true });
+    expect(await h.execute(action)).toMatchObject({ version: uploadedVersion });
+    const upload = h.requests.find((request) => request.method === "POST" && request.path.endsWith("/versions"));
+    expect(JSON.parse(String((upload!.body as FormData).get("metadata"))).placement).toEqual(AUTH_STAGING_PLACEMENT);
+    expect(h.requests.some((request) => request.method === "GET" && request.path === `/workers/scripts/${AUTH_STAGING_WORKER}/settings`)).toBe(true);
+  }
+  // The provider may echo only the region, or add a status; both are accepted.
+  const echoed = harness({ active: true, placement: () => ({ region: AUTH_STAGING_PLACEMENT.region, status: "SUCCESS" }) });
+  expect(await echoed.execute("authority")).toMatchObject({ status: "authority-ready-served" });
+});
+
+test("a serving version without the selected placement is incomplete, never ready", async () => {
+  for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ region: "aws:us-east-1" }), () => ({ ...AUTH_STAGING_PLACEMENT, hint: "apac" })]) {
+    const h = harness({ active: true, placement });
+    await expect(h.execute("authority")).rejects.toBeInstanceOf(AuthStagingIncompleteError);
+  }
+  expect(() => assertAuthStagingPlacement(null)).toThrow("auth_staging_placement_invalid");
+  expect(() => assertAuthStagingPlacement({ placement: AUTH_STAGING_PLACEMENT })).not.toThrow();
 });

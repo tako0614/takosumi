@@ -198,6 +198,19 @@ may take up to 15 minutes to propagate. After topology/version changes, verify
 an actual matching scheduled completion before attempting merge qualification;
 a five-minute proof must never be reserved based on cron configuration alone.
 Serving deployment readback requires exactly one Version at 100 percent.
+
+The issuer's directory, token and grant paths make many sequential reads of
+the Accounts D1, whose primary runs in Singapore, while callers reach the
+Worker in their nearest colo. Every authority and code upload therefore sends
+[targeted placement](https://developers.cloudflare.com/workers/configuration/placement/)
+`region = "aws:ap-southeast-1"`, and the authority digest binds it. After
+activation, `GET /workers/scripts/takosumi-auth-staging/settings` must report
+that exact region; a missing or different placement leaves the release
+incomplete rather than ready. Placement only moves the `fetch` handler, never
+RPC or named entrypoints, and it is a hint for where Cloudflare runs the Worker,
+not a guarantee. The Control D1 primary is in a different location, so judge
+the effect by comparing whole bootstrap and grant timings before and after
+under the same conditions.
 Topology readback requires the exact stage domain with previews disabled,
 workers.dev/previews disabled, the exact one-minute retry schedule, and no
 unrelated Worker routes. Schedule APIs use the documented `{schedules:[...]}`
