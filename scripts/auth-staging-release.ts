@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { sameGitRemote } from "./lib/platform-release-source.ts";
-import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_CONTROL_SECRETS, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER, assertAuthStagingVariables, assertAuthStagingUpstreams } from "../deploy/accounts-cloudflare/src/staging-target.ts";
+import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_CONTROL_SECRETS, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_PLACEMENT, AUTH_STAGING_RETRY_CRON, AUTH_STAGING_WORKER, assertAuthStagingVariables, assertAuthStagingUpstreams } from "../deploy/accounts-cloudflare/src/staging-target.ts";
 import { CloudflareD1RestTransport } from "../deploy/cloudflare/d1-rest-transport.ts";
 import { ensureAccountsD1WorkerSchema } from "../deploy/accounts-cloudflare/src/d1-schema-gate.ts";
 import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../worker/src/d1_opentofu_store.ts";
@@ -132,7 +132,7 @@ export function authStagingResourceBindings(canonicalConfig: string, target: Aut
 
 export function createAuthStagingPlan(target: AuthStagingTarget, canonicalConfig: string, artifact: Uint8Array): AuthStagingPlan {
   const bindings = authStagingResourceBindings(canonicalConfig, target);
-  const configDigest = digest(JSON.stringify({ bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON }));
+  const configDigest = digest(JSON.stringify({ bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON, placement: AUTH_STAGING_PLACEMENT }));
   const authorityDigest = digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256: target.secretsSha256 }));
   const body = { kind: "takosumi.auth-staging-plan@v1" as const, sourceCommit: target.sourceCommit, targetDigest: digest(JSON.stringify(target)), configDigest, artifactDigest: digest(artifact), authorityDigest, bindings, requiredSecrets: target.requiredSecrets };
   return { ...body, confirmation: digest(JSON.stringify(body)) };
@@ -304,11 +304,13 @@ export async function executeAuthStagingRelease(input: {
     const version = await runtime.provider.request("GET", `${script}/versions/${uploadedVersion}`);
     assertAuthStagingVersion(version, plan, target);
     assertCanonicalNamespaces(version, canonicalNamespaces);
+    assertUploadedPlacement(version);
     // Lost upload/activation acknowledgements are never retried. Current serving
     // predecessor is rechecked before the one explicit activation.
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== predecessor) throw new Error("auth_staging_concurrent_deployment");
     await runtime.provider.request("POST", `${script}/deployments`, JSON.stringify({ strategy: "percentage", versions: [{ version_id: uploadedVersion, percentage: 100 }] }));
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== uploadedVersion) throw new Error("auth_staging_activation_readback_mismatch");
+    assertAuthStagingPlacement(await runtime.provider.request("GET", `${script}/settings`));
     await assertTopology(runtime.provider, target, active);
     if (active) await runtime.publicReadback(uploadedVersion, plan);
     return { status: action === "code" ? "ready" : active ? "authority-ready-served" : "authority-ready-route-disabled", sourceCommit: target.sourceCommit, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest, releaseTag, predecessor, version: uploadedVersion, reversal: "explicit owner code restore to recorded predecessor while schema compatible; no database rollback" };
@@ -337,11 +339,34 @@ function uploadMetadata(target: AuthStagingTarget, plan: AuthStagingPlan, secret
       { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
       ...Object.entries(secrets).map(([name, text]) => ({ name, type: "secret_text", text }))],
     observability: { enabled: true, head_sampling_rate: 1 },
+    placement: AUTH_STAGING_PLACEMENT,
   };
 }
 
+/** The serving script settings must carry exactly the selected targeted region. */
+export function assertAuthStagingPlacement(value: unknown): void {
+  if (!record(value) || !exactPlacement(value.placement)) throw new Error("auth_staging_placement_invalid");
+}
+
+function exactPlacement(placement: unknown): boolean {
+  return record(placement) && placement.region === AUTH_STAGING_PLACEMENT.region &&
+    (placement.mode === undefined || placement.mode === AUTH_STAGING_PLACEMENT.mode) &&
+    (placement.status === undefined || typeof placement.status === "string") &&
+    Object.keys(placement).every((key) => key === "mode" || key === "region" || key === "status");
+}
+
+/**
+ * Wrangler reads a Version's placement from `resources.script.placement`. That
+ * field is not in the API reference, so its absence is not a refusal; when it
+ * is present it must already match before the Version is activated.
+ */
+function assertUploadedPlacement(version: unknown): void {
+  const script = record(version) && record(version.resources) && record(version.resources.script) ? version.resources.script : undefined;
+  if (script && script.placement !== undefined && !exactPlacement(script.placement)) throw new Error("auth_staging_placement_invalid");
+}
+
 function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): void {
-  const configDigest = digest(JSON.stringify({ bindings: plan.bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON }));
+  const configDigest = digest(JSON.stringify({ bindings: plan.bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON, placement: AUTH_STAGING_PLACEMENT }));
   const authorityDigest = digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256: target.secretsSha256 }));
   const body = { kind: "takosumi.auth-staging-plan@v1", sourceCommit: target.sourceCommit, targetDigest: digest(JSON.stringify(target)), configDigest, artifactDigest: plan.artifactDigest, authorityDigest, bindings: plan.bindings, requiredSecrets: target.requiredSecrets };
   if (plan.kind !== body.kind || plan.sourceCommit !== target.sourceCommit ||

@@ -7,6 +7,14 @@ export const AUTH_STAGING_HOST = "auth-staging.takos.jp";
 export const AUTH_STAGING_RETRY_CRON = "*/1 * * * *";
 /** Preserve this existing project's qualified platform runtime policy. */
 export const AUTH_STAGING_COMPATIBILITY_DATE = "2026-04-01";
+/**
+ * The issuer's directory, token and grant paths make many sequential Accounts
+ * D1 reads, and that database's primary runs in Singapore. Running the fetch
+ * handler near it keeps each read near that database instead of crossing
+ * from the caller's colo per query. Placement applies to fetch only, never to RPC or named
+ * entrypoints, and is a hint for where Cloudflare runs the Worker, not a pin.
+ */
+export const AUTH_STAGING_PLACEMENT = { mode: "targeted", region: "aws:ap-southeast-1" } as const;
 export const AUTH_STAGING_CLIENTS = [
   {
     clientId: "takosumi-hosted-staging-v1",
