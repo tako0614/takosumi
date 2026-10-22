@@ -6,6 +6,10 @@ export interface RequestPhaseDiagnosticsConfiguration {
 }
 
 export type RequestDiagnosticPhase =
+  | "oidc_token_preconsume"
+  | "oidc_token_consume"
+  | "oidc_token_live_grant"
+  | "oidc_token_issue"
   | "issuer_schema"
   | "shared_workspace_auth"
   | "shared_workspace_dispatch"
@@ -30,6 +34,10 @@ export interface RequestPhaseObserver {
 }
 
 const PHASES = new Set<RequestDiagnosticPhase>([
+  "oidc_token_preconsume",
+  "oidc_token_consume",
+  "oidc_token_live_grant",
+  "oidc_token_issue",
   "issuer_schema",
   "shared_workspace_auth",
   "shared_workspace_dispatch",
@@ -87,6 +95,7 @@ export async function measureRequestPhaseOperation<T>(
 
 function routeShape(request: Request): string | undefined {
   const pathname = new URL(request.url).pathname;
+  if (request.method === "POST" && pathname === "/oauth/token") return pathname;
   if (request.method === "POST" && pathname === "/api/v1/account/shared-workspaces/bootstrap") return pathname;
   if (request.method === "GET" && /^\/api\/v1\/account\/shared-workspaces\/[^/]+\/billing-organization$/u.test(pathname)) {
     return "/api/v1/account/shared-workspaces/{workspaceId}/billing-organization";
@@ -136,8 +145,9 @@ export function createRequestPhaseDiagnostics(
       if (!enabled) return silent;
       const route = routeShape(request);
       if (route === undefined) return silent;
-      const ray = request.headers.get("cf-ray");
-      const probe = request.headers.get("x-takosumi-request-probe-id");
+      // Token observations carry no request/correlation identifiers.
+      const ray = route === "/oauth/token" ? null : request.headers.get("cf-ray");
+      const probe = route === "/oauth/token" ? null : request.headers.get("x-takosumi-request-probe-id");
       const metadata = {
         route,
         method: request.method,

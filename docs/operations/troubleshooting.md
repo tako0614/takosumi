@@ -178,8 +178,19 @@ cookie/bearer、query、private ID、任意 error text、user/account 情報は�
 Worker は inventory の `{runId}` のような template を使い、client probe の `:runId`
 表記とは違うので、直接照合には `probeId` / CF Ray を使います。
 
+例外として exact `POST /oauth/token` は CF Ray / probe ID も記録せず、
+`event`、固定 `route` / `method`、`phase`、`outcome`、`elapsedMs` だけを出します。
+以下の token 4 phase は form の読取りと grant type 判定後の authorization-code 処理に
+限り、refresh は対象外です。`fulfilled` は待機の正常終了で、HTTP成功や認可成功を
+意味しません。consume が started / pending のままでも、DELETE が未実行・rollback済み
+とは判断できません。観測欠落を不在と扱わず、元codeを再送しません。
+
 | phase | 待機している処理 |
 | --- | --- |
+| `oidc_token_preconsume` | code / client・hosted grant・再利用の検証。元の consume 前まで |
+| `oidc_token_consume` | 1回の `consumeAuthorizationCode` 全体（DELETE RETURNING と index削除） |
+| `oidc_token_live_grant` | consume後のexpiry / client / secret / hosted grant / PKCE / live grant検証すべて |
+| `oidc_token_issue` | 元consumed marker、refresh/access token保存、link、ID token署名とresponse |
 | `issuer_schema` | dedicated staging issuer のrequest前schema確認。既存readiness期限は維持 |
 | `accounts_init` | 各 request の shared Accounts handler 初期化待ち。既存の5秒期限は維持 |
 | `allowlist` | handler 内の presented-session allowlist gate。認可の判定内容は維持 |

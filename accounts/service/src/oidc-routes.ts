@@ -42,6 +42,8 @@ import type {
   ControlWorkspaceRole,
 } from "./control-operations.ts";
 
+import { measureRequestPhaseOperation, type RequestPhaseObserver } from "./request-phase-diagnostics.ts";
+
 type ResolveControlPlaneOperations = () => Promise<
   ControlPlaneOperations | undefined
 >;
@@ -842,6 +844,7 @@ export async function handleToken(input: {
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
   loginEmailAllowlist?: LoginEmailAllowlist;
+  diagnostics?: RequestPhaseObserver;
 }): Promise<Response> {
   return withOAuthNoStoreHeaders(await handleTokenUncached(input));
 }
@@ -855,6 +858,7 @@ async function handleTokenUncached(input: {
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
   loginEmailAllowlist?: LoginEmailAllowlist;
+  diagnostics?: RequestPhaseObserver;
 }): Promise<Response> {
   const params = await readFormUrlEncoded(input.request);
   const grantType = params.get("grant_type");
@@ -875,128 +879,158 @@ async function handleTokenUncached(input: {
     return json({ error: "unsupported_grant_type" }, 400);
   }
 
-  const code = params.get("code");
-  if (!code)
-    return oidcTokenDenial("authorization_code_missing", "invalid_grant");
+  const prepared = await measureRequestPhaseOperation(
+    input.diagnostics,
+    "oidc_token_preconsume",
+    async () => {
+      const code = params.get("code");
+      if (!code)
+        return oidcTokenDenial("authorization_code_missing", "invalid_grant");
 
-  const credentials = oidcTokenClientCredentials(input.request, params);
-  const hostedCode = code.startsWith("hcode_");
-  let hostedAuthorizationSid: string | undefined;
-  if (hostedCode) {
-    const clientAuth = await authenticateOidcClient({clientId:credentials.clientId,secret:credentials.secret,method:credentials.method,clients:input.clients,store:input.store,requireConfidential:true});
-    if (!clientAuth.ok || clientAuth.client.profile !== "shared-account") return json({error:"invalid_client"},401);
-    const grant = await input.store.findHostedOidcGrantForCode?.(await sha256Text(`takosumi-hosted-code:${code}`));
-    if (!grant || grant.clientId !== clientAuth.client.clientId) return json({error:"invalid_grant"},400);
-    hostedAuthorizationSid = grant.sid;
-    if (await input.store.isAuthorizationCodeConsumed(code)) {
-      await input.store.revokeHostedOidcGrant?.(grant.sid,Date.now());
-      await cascadeRevokeAuthorizationCode(code,input.store);
-      return oidcTokenDenial("authorization_code_reused","invalid_grant");
-    }
-  } else if (await input.store.isAuthorizationCodeConsumed(code)) {
-    await cascadeRevokeAuthorizationCode(code, input.store);
-    return oidcTokenDenial("authorization_code_reused", "invalid_grant");
-  }
-  const record = await input.store.consumeAuthorizationCode(code);
-  if (!record || record.expiresAt <= Date.now()) {
-    // Grant-owned code evidence outlives the short generic code tombstone.
-    // Replay still revokes the SID after generic retention has pruned its row.
-    if (hostedAuthorizationSid) {
-      await input.store.revokeHostedOidcGrant?.(hostedAuthorizationSid,Date.now());
-      await cascadeRevokeAuthorizationCode(code,input.store);
-    }
-    return oidcTokenDenial(
-      "authorization_code_unknown_or_expired",
-      "invalid_grant",
-    );
-  }
+      const credentials = oidcTokenClientCredentials(input.request, params);
+      const hostedCode = code.startsWith("hcode_");
+      let hostedAuthorizationSid: string | undefined;
+      if (hostedCode) {
+        const clientAuth = await authenticateOidcClient({clientId:credentials.clientId,secret:credentials.secret,method:credentials.method,clients:input.clients,store:input.store,requireConfidential:true});
+        if (!clientAuth.ok || clientAuth.client.profile !== "shared-account") return json({error:"invalid_client"},401);
+        const grant = await input.store.findHostedOidcGrantForCode?.(await sha256Text(`takosumi-hosted-code:${code}`));
+        if (!grant || grant.clientId !== clientAuth.client.clientId) return json({error:"invalid_grant"},400);
+        hostedAuthorizationSid = grant.sid;
+        if (await input.store.isAuthorizationCodeConsumed(code)) {
+          await input.store.revokeHostedOidcGrant?.(grant.sid,Date.now());
+          await cascadeRevokeAuthorizationCode(code,input.store);
+          return oidcTokenDenial("authorization_code_reused","invalid_grant");
+        }
+      } else if (await input.store.isAuthorizationCodeConsumed(code)) {
+        await cascadeRevokeAuthorizationCode(code, input.store);
+        return oidcTokenDenial("authorization_code_reused", "invalid_grant");
+      }
+      // Internal locals from this invocation, never a reusable authority input.
+      return { code, credentials, hostedCode, hostedAuthorizationSid };
+    },
+  );
+  if (prepared instanceof Response) return prepared;
+  const { code, credentials, hostedCode, hostedAuthorizationSid } = prepared;
+  const consumedRecord = await measureRequestPhaseOperation(
+    input.diagnostics,
+    "oidc_token_consume",
+    () => input.store.consumeAuthorizationCode(code),
+  );
+  const validated = await measureRequestPhaseOperation(
+    input.diagnostics,
+    "oidc_token_live_grant",
+    async () => {
+      const record = consumedRecord;
+      if (!record || record.expiresAt <= Date.now()) {
+        // Grant-owned code evidence outlives the short generic code tombstone.
+        // Replay still revokes the SID after generic retention has pruned its row.
+        if (hostedAuthorizationSid) {
+          await input.store.revokeHostedOidcGrant?.(hostedAuthorizationSid,Date.now());
+          await cascadeRevokeAuthorizationCode(code,input.store);
+        }
+        return oidcTokenDenial(
+          "authorization_code_unknown_or_expired",
+          "invalid_grant",
+        );
+      }
 
-  if (credentials.clientId !== record.clientId) {
-    return oidcTokenDenial("client_id_mismatch", "invalid_grant");
-  }
-  const client = await resolveOidcClient({
-    clientId: record.clientId,
-    clients: input.clients,
-    store: input.store,
-  });
-  if (!client) {
-    return oidcTokenDenial("client_registration_missing", "invalid_grant");
-  }
-  if (!(await validateOidcClientSecret(client, credentials.secret, credentials.method))) {
-    return oidcTokenDenial(
-      "client_authentication_failed",
-      "invalid_client",
-      401,
-    );
-  }
-  if (params.get("redirect_uri") !== record.redirectUri) {
-    return oidcTokenDenial("redirect_uri_mismatch", "invalid_grant");
-  }
-  if (record.oidcProfile === "shared-account" && (!hostedCode || !record.nonce || !/^[A-Za-z0-9._~-]{43,128}$/u.test(params.get("code_verifier") ?? "") || !(await hostedGrantIsActive({store:input.store,client,record,issuer:input.issuer})))) return json({error:"invalid_grant"},400);
-  if (record.oidcProfile !== "shared-account" && client.profile === "shared-account") return json({error:"invalid_grant"},400);
-  if (!(await isPkceVerifierValid(record, params.get("code_verifier")))) {
-    return oidcTokenDenial("pkce_verification_failed", "invalid_grant");
-  }
-  const operations = await operationsForLiveGrant({
-    operations: input.operations,
-    resolveOperations: input.resolveOperations,
-    required:
-      client.capsuleId !== undefined || record.workspaceId !== undefined,
-  });
-  const liveGrant = await validateOidcLiveGrant({
-    store: input.store,
-    operations,
-    client,
-    scope: record.scope,
-    takosumiSubject: record.takosumiSubject,
-    capsuleId: record.capsuleId,
-    workspaceId: record.workspaceId,
-  });
-  if (!liveGrant.ok) {
-    return oidcTokenDenial(`live_grant_${liveGrant.reason}`, "invalid_grant");
-  }
+      if (credentials.clientId !== record.clientId) {
+        return oidcTokenDenial("client_id_mismatch", "invalid_grant");
+      }
+      const client = await resolveOidcClient({
+        clientId: record.clientId,
+        clients: input.clients,
+        store: input.store,
+      });
+      if (!client) {
+        return oidcTokenDenial("client_registration_missing", "invalid_grant");
+      }
+      if (!(await validateOidcClientSecret(client, credentials.secret, credentials.method))) {
+        return oidcTokenDenial(
+          "client_authentication_failed",
+          "invalid_client",
+          401,
+        );
+      }
+      if (params.get("redirect_uri") !== record.redirectUri) {
+        return oidcTokenDenial("redirect_uri_mismatch", "invalid_grant");
+      }
+      if (record.oidcProfile === "shared-account" && (!hostedCode || !record.nonce || !/^[A-Za-z0-9._~-]{43,128}$/u.test(params.get("code_verifier") ?? "") || !(await hostedGrantIsActive({store:input.store,client,record,issuer:input.issuer})))) return json({error:"invalid_grant"},400);
+      if (record.oidcProfile !== "shared-account" && client.profile === "shared-account") return json({error:"invalid_grant"},400);
+      if (!(await isPkceVerifierValid(record, params.get("code_verifier")))) {
+        return oidcTokenDenial("pkce_verification_failed", "invalid_grant");
+      }
+      const operations = await operationsForLiveGrant({
+        operations: input.operations,
+        resolveOperations: input.resolveOperations,
+        required:
+          client.capsuleId !== undefined || record.workspaceId !== undefined,
+      });
+      const liveGrant = await validateOidcLiveGrant({
+        store: input.store,
+        operations,
+        client,
+        scope: record.scope,
+        takosumiSubject: record.takosumiSubject,
+        capsuleId: record.capsuleId,
+        workspaceId: record.workspaceId,
+      });
+      if (!liveGrant.ok) {
+        return oidcTokenDenial(`live_grant_${liveGrant.reason}`, "invalid_grant");
+      }
+      return { record, liveGrant };
+    },
+  );
+  if (validated instanceof Response) return validated;
+  const { record, liveGrant } = validated;
 
-  // Mark this code as consumed and start tracking the tokens issued through
-  // it so a reuse attempt can cascade-revoke the descendants.
-  await input.store.markAuthorizationCodeConsumed(code);
+  return await measureRequestPhaseOperation(
+    input.diagnostics,
+    "oidc_token_issue",
+    async () => {
+      // Mark this code as consumed and start tracking the tokens issued through
+      // it so a reuse attempt can cascade-revoke the descendants.
+      await input.store.markAuthorizationCodeConsumed(code);
 
-  const refreshToken = includesScope(record.scope, "offline_access")
-    ? (record.oidcProfile === "shared-account" ? hostedOpaqueId("hrt_") : generateRefreshToken())
-    : undefined;
-  if (refreshToken) {
-    await input.store.saveRefreshToken(refreshToken, {
-      ...hostedRecordMetadata(record),
-      clientId: record.clientId,
-      scope: record.scope,
-      subject: record.subject,
-      takosumiSubject: record.takosumiSubject,
-      capsuleId: liveGrant.capsuleId,
-      workspaceId: liveGrant.workspaceId,
-      role: liveGrant.role,
-      expiresAt: record.oidcProfile === "shared-account" ? Math.min(Date.now()+HOSTED_REFRESH_IDLE_MS,record.familyExpiresAt!) : Date.now() + REFRESH_TOKEN_TTL_MS,
-    });
-    // The refresh token at chain creation is by definition its own
-    // root; no parent link is recorded yet. `addRefreshChainLink` is
-    // called on subsequent rotations.
-  }
+      const refreshToken = includesScope(record.scope, "offline_access")
+        ? (record.oidcProfile === "shared-account" ? hostedOpaqueId("hrt_") : generateRefreshToken())
+        : undefined;
+      if (refreshToken) {
+        await input.store.saveRefreshToken(refreshToken, {
+          ...hostedRecordMetadata(record),
+          clientId: record.clientId,
+          scope: record.scope,
+          subject: record.subject,
+          takosumiSubject: record.takosumiSubject,
+          capsuleId: liveGrant.capsuleId,
+          workspaceId: liveGrant.workspaceId,
+          role: liveGrant.role,
+          expiresAt: record.oidcProfile === "shared-account" ? Math.min(Date.now()+HOSTED_REFRESH_IDLE_MS,record.familyExpiresAt!) : Date.now() + REFRESH_TOKEN_TTL_MS,
+        });
+        // The refresh token at chain creation is by definition its own
+        // root; no parent link is recorded yet. `addRefreshChainLink` is
+        // called on subsequent rotations.
+      }
 
-  return await issueTokenResponse({
-    ...hostedRecordMetadata(record),
-    issuer: input.issuer,
-    store: input.store,
-    flow: input.flow,
-    clientId: record.clientId,
-    scope: record.scope,
-    subject: record.subject,
-    takosumiSubject: record.takosumiSubject,
-    capsuleId: liveGrant.capsuleId,
-    workspaceId: liveGrant.workspaceId,
-    role: liveGrant.role,
-    nonce: record.nonce,
-    refreshToken,
-    chainRefreshToken: refreshToken,
-    authorizationCode: code,
-  });
+      return await issueTokenResponse({
+        ...hostedRecordMetadata(record),
+        issuer: input.issuer,
+        store: input.store,
+        flow: input.flow,
+        clientId: record.clientId,
+        scope: record.scope,
+        subject: record.subject,
+        takosumiSubject: record.takosumiSubject,
+        capsuleId: liveGrant.capsuleId,
+        workspaceId: liveGrant.workspaceId,
+        role: liveGrant.role,
+        nonce: record.nonce,
+        refreshToken,
+        chainRefreshToken: refreshToken,
+        authorizationCode: code,
+      });
+    },
+  );
 }
 
 async function handleRefreshToken(input: {
