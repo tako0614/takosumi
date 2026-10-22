@@ -9,6 +9,7 @@ import {
   AUTH_STAGING_NAMED_HANDLERS,
   AuthStagingIncompleteError,
   assertAuthStagingPlacement,
+  uploadedPlacementTarget,
   assertAuthStagingVersion,
   authStagingResourceBindings,
   createAuthStagingPlan,
@@ -103,14 +104,15 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
       if (method === "POST" && path.endsWith("/versions")) {
         const form = body as FormData;
         const metadata = JSON.parse(String(form.get("metadata")));
-        settings = { placement: options.placement ? options.placement(metadata.placement) : metadata.placement };
+        // Provider echo observed 2026-10-22: the Version names the region, settings only the target id.
+        settings = { placement: options.placement ? options.placement(metadata.placement) : { mode: metadata.placement.mode, target: [30] } };
         const bindings = metadata.bindings.map((binding: Record<string, unknown>) => {
           if (options.badBinding && binding.name === "TAKOSUMI_ACCOUNTS_DB") return { ...binding, id: uuid("f") };
           if (binding.type === "durable_object_namespace") return { ...binding, namespace_id: options.badNamespace ? "foreign-namespace" : `fixture-${binding.name}` };
           if (binding.type === "secret_text") return { name: binding.name, type: binding.type };
           return binding;
         });
-        version = { resources: { script: { ...(options.versionPlacement === undefined ? {} : { placement: options.versionPlacement }), handlers: ["scheduled", "fetch"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
+        version = { resources: { script: { placement: options.versionPlacement === undefined ? { mode: metadata.placement.mode, target: [{ id: 30, region: metadata.placement.region, type: "region" }] } : options.versionPlacement, placement_mode: "targeted", handlers: ["scheduled", "fetch"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
         if (options.lostUploadAck) throw new Error("fixture_lost_ack");
         return { id: uploadedVersion };
       }
@@ -507,27 +509,31 @@ test("authority and code uploads carry the issuer placement and read it back fro
     expect(JSON.parse(String((upload!.body as FormData).get("metadata"))).placement).toEqual(AUTH_STAGING_PLACEMENT);
     expect(h.requests.some((request) => request.method === "GET" && request.path === `/workers/scripts/${AUTH_STAGING_WORKER}/settings`)).toBe(true);
   }
-  // The provider may echo only the region, or add a status; both are accepted.
-  const echoed = harness({ active: true, placement: () => ({ region: AUTH_STAGING_PLACEMENT.region, status: "SUCCESS" }) });
-  expect(await echoed.execute("authority")).toMatchObject({ status: "authority-ready-served" });
 });
 
-test("a serving version without the selected placement is incomplete, never ready", async () => {
+test("serving settings that do not name the uploaded placement target are incomplete, never ready", async () => {
   for (const action of ["authority", "code"] as const) {
-    for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ region: "aws:us-east-1" }), () => ({ ...AUTH_STAGING_PLACEMENT, hint: "apac" }), () => ({ region: AUTH_STAGING_PLACEMENT.region, status: 1 })]) {
+    for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ mode: "targeted", target: [31] }), () => ({ mode: "targeted", target: [30, 31] }), () => ({ mode: "targeted", target: [30], hint: "apac" }), () => ({ mode: "targeted", region: AUTH_STAGING_PLACEMENT.region })]) {
       const h = harness({ active: true, placement });
       await expect(h.execute(action)).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid" } });
       expect(h.counts().publicCalls).toBe(0);
     }
   }
-  expect(() => assertAuthStagingPlacement(null)).toThrow("auth_staging_placement_invalid");
-  expect(() => assertAuthStagingPlacement({ placement: AUTH_STAGING_PLACEMENT })).not.toThrow();
+  expect(() => assertAuthStagingPlacement(null, 30)).toThrow("auth_staging_placement_invalid");
+  expect(() => assertAuthStagingPlacement({ placement: { mode: "targeted", target: [30] } }, 30)).not.toThrow();
 });
 
-test("a version readback that already shows a different placement stops before activation", async () => {
-  const h = harness({ active: true, versionPlacement: { mode: "smart" } });
-  await expect(h.execute("authority")).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid", uploadedVersion } });
-  expect(h.requests.filter((request) => request.method === "POST").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`]);
-  const matching = harness({ active: true, versionPlacement: AUTH_STAGING_PLACEMENT });
-  expect(await matching.execute("authority")).toMatchObject({ status: "authority-ready-served" });
+test("an uploaded Version without the exact targeted region stops before activation", async () => {
+  const region = AUTH_STAGING_PLACEMENT.region;
+  for (const versionPlacement of [null, {}, { mode: "smart" }, AUTH_STAGING_PLACEMENT, { mode: "targeted", target: [] },
+    { mode: "targeted", target: [{ id: 30, region: "aws:us-east-1", type: "region" }] },
+    { mode: "targeted", target: [{ id: 30, region, type: "host" }] },
+    { mode: "targeted", target: [{ id: 0, region, type: "region" }] },
+    { mode: "targeted", target: [{ id: 30, region, type: "region" }, { id: 31, region, type: "region" }] },
+    { mode: "targeted", target: [{ id: 30, region, type: "region", extra: true }] }]) {
+    const h = harness({ active: true, versionPlacement });
+    await expect(h.execute("authority")).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid", uploadedVersion } });
+    expect(h.requests.filter((request) => request.method === "POST").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`]);
+  }
+  expect(uploadedPlacementTarget({ resources: { script: { placement: { mode: "targeted", target: [{ id: 30, region, type: "region" }] } } } })).toBe(30);
 });
