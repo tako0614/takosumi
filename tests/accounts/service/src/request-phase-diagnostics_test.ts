@@ -1,5 +1,5 @@
 import { expect, jest, spyOn, test } from "bun:test";
-import { createRequestPhaseDiagnostics } from "../../../../accounts/service/src/request-phase-diagnostics.ts";
+import { createRequestPhaseDiagnostics, measureRequestPhaseOperation, type RequestPhaseObserver } from "../../../../accounts/service/src/request-phase-diagnostics.ts";
 import {
   handleAuthenticatedControlRoute,
   handleControlRoute,
@@ -21,6 +21,70 @@ function collector() {
   });
   return { rows, spy };
 }
+
+test("settlement observation cannot replace, repeat or block the actual operation", async () => {
+  const original = { privateValue: "actual-result-marker" };
+  const rejection = new Error("actual-error-marker");
+  const observed: unknown[] = [];
+  const duplicate: RequestPhaseObserver = {
+    async measure(_phase, completion) {
+      observed.push(await completion());
+      return await completion();
+    },
+  };
+  for (const observer of [
+    undefined,
+    { measure: () => { throw new Error("diagnostic sync failure"); } },
+    { measure: async () => { throw new Error("diagnostic async failure"); } },
+    { measure: () => new Promise<never>(() => {}) },
+    { measure: async () => "forged-result" } as unknown as RequestPhaseObserver,
+    duplicate,
+  ]) {
+    let calls = 0;
+    expect(await measureRequestPhaseOperation(observer, "shared_workspace_billing_get", () => {
+      calls += 1;
+      return original;
+    })).toBe(original);
+    await expect(measureRequestPhaseOperation(observer, "shared_workspace_billing_claim", () => {
+      calls += 1;
+      throw rejection;
+    })).rejects.toBe(rejection);
+    expect(calls).toBe(2);
+  }
+  await flush();
+  expect(observed).toEqual([undefined]);
+});
+
+test("settlement-only billing phases observe pending I/O and redact its original rejection", async () => {
+  const { rows, spy } = collector();
+  const factory = createRequestPhaseDiagnostics({ environment: "staging", enabled: "true" });
+  const observer = factory.forRequest(new Request("https://app.example.test/api/v1/account/shared-workspaces/private-workspace-marker/billing-organization"));
+  let reject!: (error: Error) => void;
+  const io = new Promise<never>((_resolve, fail) => { reject = fail; });
+  const error = new Error("private-error-marker");
+  jest.useFakeTimers();
+  try {
+    let calls = 0;
+    const pending = measureRequestPhaseOperation(observer, "shared_workspace_billing_prepare", () => { calls += 1; return io; });
+    const refused = pending.catch((failure: unknown) => failure);
+    await flush();
+    jest.advanceTimersByTime(2000);
+    await flush();
+    expect(rows.map(row => row.outcome)).toEqual(["started", "pending"]);
+    expect(calls).toBe(1);
+    reject(error);
+    expect(await refused).toBe(error);
+    await flush();
+    expect(rows.map(row => row.outcome)).toEqual(["started", "pending", "rejected"]);
+    expect(JSON.stringify(rows)).not.toContain("private-error-marker");
+    expect(JSON.stringify(rows)).not.toContain("private-workspace-marker");
+    expect(factory.activePendingNotifications).toBe(0);
+  } finally {
+    reject(error);
+    jest.useRealTimers();
+    spy.mockRestore();
+  }
+});
 
 test("phase diagnostics default off and remain off in production even with opt-in", async () => {
   const { rows, spy } = collector();

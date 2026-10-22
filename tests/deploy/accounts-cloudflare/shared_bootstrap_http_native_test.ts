@@ -99,10 +99,14 @@ for (const mode of ["baseline","disconnect","organization"]) test(`native defaul
     if (mode === "disconnect") expect(bootstrapRows.some((row) => row.phase === "shared_workspace_dispatch" && row.outcome === "pending")).toBe(true);
     if (mode === "organization") {
       const organizationRows = phaseRows.filter((row) => row.route === "/api/v1/account/shared-workspaces/{workspaceId}/billing-organization");
-      for (const phase of ["issuer_schema", "accounts_init", "allowlist", "shared_workspace_auth", "shared_workspace_dispatch"]) {
+      for (const phase of ["issuer_schema", "accounts_init", "allowlist", "shared_workspace_auth", "shared_workspace_dispatch",
+        "shared_workspace_control_resolve", "shared_workspace_billing_admission", "shared_workspace_billing_grant",
+        "shared_workspace_billing_get", "shared_workspace_billing_prepare", "shared_workspace_billing_enrollment", "shared_workspace_billing_claim"]) {
         expect(organizationRows.some((row) => row.phase === phase && row.outcome === "started")).toBe(true);
         expect(organizationRows.some((row) => row.phase === phase && row.outcome === "fulfilled")).toBe(true);
       }
+      expect(organizationRows.filter(row => row.phase === "shared_workspace_billing_admission" && row.outcome === "fulfilled")).toHaveLength(3);
+      expect(organizationRows.filter(row => row.phase === "shared_workspace_billing_grant" && row.outcome === "fulfilled")).toHaveLength(5);
     }
     const report = JSON.parse(stdout.trim().split("\n").at(-1)!);
     expect(report).toMatchObject({ schema: "accounts.bootstrap.native.fixture.v1", localSyntheticD1: true, authorityOrStagingQualification: false, ...(mode === "disconnect" ? {readOnlyFollowupStatus:200,gateFinished:true} : {responseStatus: 200, terminalOracleQualified: true}) });

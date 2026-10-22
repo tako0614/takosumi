@@ -9,6 +9,13 @@ export type RequestDiagnosticPhase =
   | "issuer_schema"
   | "shared_workspace_auth"
   | "shared_workspace_dispatch"
+  | "shared_workspace_control_resolve"
+  | "shared_workspace_billing_admission"
+  | "shared_workspace_billing_grant"
+  | "shared_workspace_billing_get"
+  | "shared_workspace_billing_prepare"
+  | "shared_workspace_billing_enrollment"
+  | "shared_workspace_billing_claim"
   | "accounts_init"
   | "allowlist"
   | "control_auth"
@@ -26,6 +33,13 @@ const PHASES = new Set<RequestDiagnosticPhase>([
   "issuer_schema",
   "shared_workspace_auth",
   "shared_workspace_dispatch",
+  "shared_workspace_control_resolve",
+  "shared_workspace_billing_admission",
+  "shared_workspace_billing_grant",
+  "shared_workspace_billing_get",
+  "shared_workspace_billing_prepare",
+  "shared_workspace_billing_enrollment",
+  "shared_workspace_billing_claim",
   "accounts_init",
   "allowlist",
   "control_auth",
@@ -40,6 +54,36 @@ const silent: RequestPhaseObserver = {
     return await operation();
   },
 };
+
+/** Observe settlement only. The observer never owns the operation or its value. */
+export async function measureRequestPhaseOperation<T>(
+  observer: RequestPhaseObserver | undefined,
+  phase: RequestDiagnosticPhase,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  if (!observer || observer === silent) return await operation();
+  let resolveCompletion!: () => void;
+  let rejectCompletion!: (error: Error) => void;
+  const completion = new Promise<void>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+  // A diagnostic consumer may throw, ignore the signal, or never settle.
+  void completion.catch(() => {});
+  try {
+    void Promise.resolve(observer.measure(phase, () => completion)).catch(() => {});
+  } catch {
+    // Diagnostics cannot prevent or replace the real operation.
+  }
+  try {
+    const value = await operation();
+    resolveCompletion();
+    return value;
+  } catch (error) {
+    rejectCompletion(new Error("Request phase operation rejected"));
+    throw error;
+  }
+}
 
 function routeShape(request: Request): string | undefined {
   const pathname = new URL(request.url).pathname;

@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, jest, spyOn, test } from "bun:test";
+import { createRequestPhaseDiagnostics } from "../../../../accounts/service/src/request-phase-diagnostics.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
@@ -13,7 +14,8 @@ async function fixture(enroll?: WorkspaceBillingEnrollmentPort["ensureOrganizati
   const store = new InMemoryOpenTofuControlStore();
   const service = new WorkspacesService({store});
   const workspace = await service.createWorkspace({handle:"billing-workspace",displayName:"Billing",type:"organization",ownerUserId:accountId});
-  const operations = {workspaces:{billingBindings:service.billingBindings},members:{getMember:store.getWorkspaceMember.bind(store)}} as Pick<ControlPlaneOperations,"workspaces"|"members">;
+  // This resolver fixture supplies only the two exercised owner ports.
+  const operations = {workspaces:{billingBindings:service.billingBindings},members:{getMember:store.getWorkspaceMember.bind(store)}} as unknown as Pick<ControlPlaneOperations,"workspaces"|"members">;
   const resolver = createWorkspaceBillingBootstrapResolver({operations,billingAuthority,...(enroll?{enrollment:{ensureOrganization:enroll}}:{})});
   const input = {workspaceId:workspace.id,canonicalAccountId:accountId,assertCurrentGrant:async()=>true};
   return {store,service,workspace,operations,resolver,input};
@@ -59,7 +61,7 @@ test("missing real owner never prepares enrollment; existing immutable binding r
 
 test("viewer can read an existing retained binding but cannot initiate missing enrollment",async()=>{
   let calls=0;const f=await fixture(async(intent)=>{calls++;return acknowledgement(intent);});
-  await f.store.putWorkspaceMember({workspaceId:f.workspace.id,accountId:viewerId,status:"active",roles:["viewer"],createdAt:f.workspace.createdAt,updatedAt:f.workspace.updatedAt});
+  await f.store.putWorkspaceMember({id:"membership_billing_viewer",workspaceId:f.workspace.id,accountId:viewerId,status:"active",roles:["viewer"],createdAt:f.workspace.createdAt,updatedAt:f.workspace.updatedAt});
   await expect(f.resolver({...f.input,canonicalAccountId:viewerId})).rejects.toMatchObject({status:503});expect(calls).toBe(0);
   const bound=await f.resolver(f.input);
   expect(await f.resolver({...f.input,canonicalAccountId:viewerId})).toEqual(bound);expect(calls).toBe(1);
@@ -67,9 +69,18 @@ test("viewer can read an existing retained binding but cannot initiate missing e
 
 test("current grant revocation after owner await rejects before Control claim",async()=>{
   let current=true;const f=await fixture(async(intent)=>{current=false;return acknowledgement(intent);});
-  await expect(f.resolver({...f.input,assertCurrentGrant:async()=>current})).rejects.toMatchObject({status:401});
-  expect((await f.service.billingBindings.get(f.workspace.id)).binding).toBeUndefined();
-  expect((await f.service.billingBindings.get(f.workspace.id)).intent).toBeDefined();
+  const rows: {phase:string;outcome:string}[]=[];
+  const spy=spyOn(console,"info").mockImplementation(value=>{rows.push(JSON.parse(String(value)));});
+  const diagnostics=createRequestPhaseDiagnostics({environment:"staging",enabled:"true"}).forRequest(new Request(`https://app.example.test/api/v1/account/shared-workspaces/${f.workspace.id}/billing-organization`));
+  try {
+    await expect(f.resolver({...f.input,diagnostics,assertCurrentGrant:async()=>current})).rejects.toMatchObject({status:401});
+    expect((await f.service.billingBindings.get(f.workspace.id)).binding).toBeUndefined();
+    expect((await f.service.billingBindings.get(f.workspace.id)).intent).toBeDefined();
+    // False is rejected at the full grant assertion, never logged as authority success.
+    expect(rows.filter(row=>row.phase==="shared_workspace_billing_grant").map(row=>row.outcome)).toEqual(["started","fulfilled","started","fulfilled","started","fulfilled","started","rejected"]);
+    expect(rows.filter(row=>row.phase==="shared_workspace_billing_claim")).toHaveLength(0);
+    expect(rows.filter(row=>row.phase==="shared_workspace_billing_enrollment").map(row=>row.outcome)).toEqual(["started","fulfilled"]);
+  } finally {spy.mockRestore();}
 });
 
 test("original membership revocation during external enrollment refuses atomic claim and preserves original intent",async()=>{
@@ -78,6 +89,35 @@ test("original membership revocation during external enrollment refuses atomic c
   await expect(f.resolver(f.input)).rejects.toMatchObject({status:503});
   const state=await f.service.billingBindings.get(f.workspace.id);expect(state.binding).toBeUndefined();expect(state.intent?.actorAccountId).toBe(accountId);
   expect((await f.store.getWorkspaceMember(f.workspace.id,accountId))?.status).toBe("suspended");
+});
+
+test("unbound owner membership await remains observable before prepare without advancing it",async()=>{
+  const f=await fixture(async(intent)=>acknowledgement(intent));
+  const original=f.operations.members.getMember!;
+  let release!:()=>void;
+  const barrier=new Promise<void>(resolve=>{release=resolve;});
+  let memberReads=0;
+  f.operations.members.getMember=async(...args)=>{memberReads++;await barrier;return original(...args);};
+  const rows:{phase:string;outcome:string}[]=[];
+  const spy=spyOn(console,"info").mockImplementation(value=>{rows.push(JSON.parse(String(value)));});
+  const factory=createRequestPhaseDiagnostics({environment:"staging",enabled:"true"});
+  const diagnostics=factory.forRequest(new Request(`https://app.example.test/api/v1/account/shared-workspaces/${f.workspace.id}/billing-organization`));
+  jest.useFakeTimers();
+  try {
+    const pending=f.resolver({...f.input,diagnostics});
+    for(let i=0;i<60;i++) await Promise.resolve();
+    jest.advanceTimersByTime(2000);
+    for(let i=0;i<30;i++) await Promise.resolve();
+    expect(memberReads).toBe(1);
+    expect(rows.filter(row=>row.phase==="shared_workspace_billing_get").map(row=>row.outcome)).toEqual(["started","fulfilled"]);
+    expect(rows.filter(row=>row.phase==="shared_workspace_billing_admission").map(row=>row.outcome)).toEqual(["started","pending"]);
+    expect(rows.some(row=>row.phase==="shared_workspace_billing_prepare")).toBe(false);
+    expect((await f.service.billingBindings.get(f.workspace.id)).intent).toBeUndefined();
+    release();
+    expect(await pending).toMatchObject({organizationId:"org_preserved"});
+    expect(memberReads).toBe(1);
+    expect(factory.activePendingNotifications).toBe(0);
+  } finally {release();jest.useRealTimers();spy.mockRestore();}
 });
 
 test("mismatched owner references and retained financial authority fail closed",async()=>{

@@ -730,7 +730,7 @@ export function createAccountsHandler(
     }
 
     if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
-      return (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,directory:options.sharedAccountWorkspaceDirectory,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
+      return (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
         const token = directoryRequest.headers.get("authorization");
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));

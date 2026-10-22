@@ -1,6 +1,7 @@
 import type { WorkspaceBillingBinding, WorkspaceBillingBindingIntent } from "takosumi-contract";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import { SharedAccountWorkspaceError, type SharedWorkspaceBillingResolver } from "./shared-account-workspace.ts";
+import { measureRequestPhaseOperation } from "./request-phase-diagnostics.ts";
 
 /** The billing owner's acknowledgement of one enrollment intent. Under
  * Financial's `takoserver.workspace-billing-organization@v1` contract it is
@@ -35,14 +36,14 @@ export function createWorkspaceBillingBootstrapResolver(input: {
   const ownerCall = async <T>(call: () => Promise<T>): Promise<T> => {
     try { return await call(); } catch { return unavailable(); }
   };
-  return async ({ workspaceId, canonicalAccountId, assertCurrentGrant }) => {
-    const assertGrant = async () => {
+  return async ({ workspaceId, canonicalAccountId, assertCurrentGrant, diagnostics }) => {
+    const assertGrant = () => measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_grant", async () => {
       if (!await assertCurrentGrant()) throw new SharedAccountWorkspaceError("invalid_session", "A current account grant is required.", 401);
-    };
+    });
     await assertGrant();
     const bindings = input.operations.workspaces.billingBindings;
     if (!bindings) return unavailable();
-    const state = await ownerCall(() => bindings.get(workspaceId));
+    const state = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_get", () => ownerCall(() => bindings.get(workspaceId)));
     if (state.binding) {
       if (state.binding.workspaceId !== workspaceId || state.binding.billingAuthority !== input.billingAuthority ||
         !opaqueReference(state.binding.organizationRef) || !workspaceReference(state.binding.workspaceRef)) return unavailable();
@@ -52,16 +53,18 @@ export function createWorkspaceBillingBootstrapResolver(input: {
     // Without the actual financial owner there is no enrollment side effect,
     // no invented success and no replacement for an existing protected Org.
     if (!input.enrollment) return null;
-    const member = await input.operations.members.getMember?.(workspaceId, canonicalAccountId);
-    if (!member || member.accountId !== canonicalAccountId || member.workspaceId !== workspaceId ||
-      member.status !== "active" || !member.roles.some((role) => role === "owner" || role === "admin")) return unavailable();
+    await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_admission", async () => {
+      const member = await input.operations.members.getMember?.(workspaceId, canonicalAccountId);
+      if (!member || member.accountId !== canonicalAccountId || member.workspaceId !== workspaceId ||
+        member.status !== "active" || !member.roles.some((role) => role === "owner" || role === "admin")) return unavailable();
+    });
     await assertGrant();
-    const intent = await ownerCall(() => bindings.prepare({workspaceId,billingAuthority:input.billingAuthority,actorAccountId:canonicalAccountId}));
+    const intent = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_prepare", () => ownerCall(() => bindings.prepare({workspaceId,billingAuthority:input.billingAuthority,actorAccountId:canonicalAccountId})));
     if (intent.workspaceId !== workspaceId || intent.billingAuthority !== input.billingAuthority ||
       intent.actorAccountId !== canonicalAccountId || !workspaceReference(intent.workspaceRef)) return unavailable();
     await assertGrant();
     let acknowledgement: WorkspaceBillingEnrollmentAcknowledgement | null;
-    try { acknowledgement = await input.enrollment.ensureOrganization(publicIntent(intent)); }
+    try { acknowledgement = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_enrollment", () => input.enrollment!.ensureOrganization(publicIntent(intent))); }
     catch { return null; }
     if (!acknowledgement) return null;
     if (acknowledgement.intentId !== intent.intentId || acknowledgement.workspaceId !== intent.workspaceId ||
@@ -70,8 +73,8 @@ export function createWorkspaceBillingBootstrapResolver(input: {
     await assertGrant();
     // Control atomically rechecks the original captured member, Workspace
     // incarnation and management epoch. They are never refreshed after await.
-    const binding = await ownerCall(() => bindings.claim({workspaceId,intentId:intent.intentId,actorAccountId:canonicalAccountId,
-      organizationRef:acknowledgement!.organizationRef,ownerAcknowledgementRef:acknowledgement!.ownerAcknowledgementRef}));
+    const binding = await measureRequestPhaseOperation(diagnostics, "shared_workspace_billing_claim", () => ownerCall(() => bindings.claim({workspaceId,intentId:intent.intentId,actorAccountId:canonicalAccountId,
+      organizationRef:acknowledgement!.organizationRef,ownerAcknowledgementRef:acknowledgement!.ownerAcknowledgementRef})));
     if (binding.intentId !== intent.intentId || binding.workspaceId !== workspaceId ||
       binding.billingAuthority !== input.billingAuthority || binding.workspaceRef !== intent.workspaceRef ||
       binding.organizationRef !== acknowledgement.organizationRef || binding.ownerAcknowledgementRef !== acknowledgement.ownerAcknowledgementRef) return unavailable();

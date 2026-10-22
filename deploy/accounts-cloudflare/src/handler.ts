@@ -52,7 +52,7 @@ import {
   type SharedAccountWorkspaceDirectory,
   type SharedWorkspaceBillingResolver,
 } from "../../../accounts/service/src/shared-account-workspace.ts";
-import { createRequestPhaseDiagnostics } from "../../../accounts/service/src/request-phase-diagnostics.ts";
+import { createRequestPhaseDiagnostics, measureRequestPhaseOperation } from "../../../accounts/service/src/request-phase-diagnostics.ts";
 import {
   createAccountsFinancialControlSource,
   createAccountsFinancialSource,
@@ -1371,7 +1371,10 @@ function lazySharedAccountWorkspaceDirectory<TEnv extends CloudflareWorkerEnv>(
     menu: async (session, input) => (await resolve()).menu(session, input),
     choose: async (session, workspaceId) => (await resolve()).choose(session, workspaceId),
     create: async (session, input) => (await resolve()).create(session, input),
-    billingOrganization: async (session, workspaceId) => (await resolve()).billingOrganization(session, workspaceId),
+    billingOrganization: async (session, workspaceId, diagnostics) => {
+      const directory = await measureRequestPhaseOperation(diagnostics, "shared_workspace_control_resolve", resolve);
+      return directory.billingOrganization(session, workspaceId, diagnostics);
+    },
   };
 }
 
