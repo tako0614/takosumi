@@ -596,10 +596,37 @@ interface LedgerReadRow {
   readonly checksum?: unknown;
 }
 
+interface VerifiedLedgerColumns {
+  readonly catalog: D1AccountsMigrationCatalog;
+  readonly catalogDigest: string;
+  readonly objectSnapshot: string;
+  readonly columns: readonly SqliteColumnRow[];
+}
+
+// This is only a validated PRAGMA-column observation. It never caches ledger
+// receipts, activation data, the schema assessment, or authorization.
+const verifiedLedgerColumns = new WeakMap<
+  D1AccountsMigrationDatabase,
+  VerifiedLedgerColumns
+>();
+// A late successful read cannot reinstate columns after an overlapping read
+// has failed or observed drift on the same D1 binding.
+const ledgerColumnReadGeneration = new WeakMap<D1AccountsMigrationDatabase, number>();
+
+function invalidateLedgerColumns(database: D1AccountsMigrationDatabase): void {
+  verifiedLedgerColumns.delete(database);
+  ledgerColumnReadGeneration.set(
+    database,
+    (ledgerColumnReadGeneration.get(database) ?? 0) + 1,
+  );
+}
+
 export async function readD1AccountsMigrationState(
   database: D1AccountsMigrationDatabase,
   catalog: D1AccountsMigrationCatalog,
 ): Promise<D1AccountsMigrationState> {
+  const readGeneration = (ledgerColumnReadGeneration.get(database) ?? 0) + 1;
+  ledgerColumnReadGeneration.set(database, readGeneration);
   try {
     const ownedNames = [
       ...new Set(
@@ -617,17 +644,44 @@ export async function readD1AccountsMigrationState(
       .bind(...ownedNames)
       .all<SqliteObjectRow>();
     assertReadResult(objectResult);
-    const objects = (objectResult.results ?? []).map(normalizedSchemaObject);
+    const objectRows = Object.freeze(
+      (objectResult.results ?? []).map((row) =>
+        Object.freeze({
+          type: row.type,
+          name: row.name,
+          tbl_name: row.tbl_name,
+          sql: row.sql,
+        })
+      ),
+    );
+    const objects = Object.freeze(
+      objectRows.map((row) => Object.freeze(normalizedSchemaObject(row))),
+    );
+    // Raw SQL bytes matter for the reuse key even when schema normalization
+    // happens to produce the same closure value.
+    const objectSnapshot = JSON.stringify(objectRows);
     const tables = new Set(
       objects.filter((row) => row.type === "table").map((row) => row.name),
     );
     let columns: readonly SqliteColumnRow[] = [];
     if (tables.has(D1_ACCOUNTS_MIGRATIONS_TABLE)) {
-      const columnResult = await database
-        .prepare(`PRAGMA table_info('${D1_ACCOUNTS_MIGRATIONS_TABLE}')`)
-        .all<SqliteColumnRow>();
-      assertReadResult(columnResult);
-      columns = columnResult.results ?? [];
+      const prior = verifiedLedgerColumns.get(database);
+      if (
+        prior?.catalog === catalog &&
+        prior.catalogDigest === catalog.digest &&
+        prior.objectSnapshot === objectSnapshot
+      ) {
+        columns = prior.columns;
+      } else {
+        verifiedLedgerColumns.delete(database);
+        const columnResult = await database
+          .prepare(`PRAGMA table_info('${D1_ACCOUNTS_MIGRATIONS_TABLE}')`)
+          .all<SqliteColumnRow>();
+        assertReadResult(columnResult);
+        columns = detachedLedgerColumns(columnResult.results ?? []);
+      }
+    } else {
+      verifiedLedgerColumns.delete(database);
     }
     const ledgerShape = classifyLedgerShape(tables, columns);
     let rows: readonly LedgerReadRow[] = [];
@@ -638,7 +692,7 @@ export async function readD1AccountsMigrationState(
         )
         .all<LedgerReadRow>();
       assertReadResult(result);
-      rows = result.results ?? [];
+      rows = detachedLedgerRows(result.results ?? []);
     } else if (ledgerShape === "checksummed") {
       const result = await database
         .prepare(
@@ -646,7 +700,7 @@ export async function readD1AccountsMigrationState(
         )
         .all<LedgerReadRow>();
       assertReadResult(result);
-      rows = result.results ?? [];
+      rows = detachedLedgerRows(result.results ?? []);
     }
 
     const ledgerIssues: string[] = [];
@@ -694,7 +748,7 @@ export async function readD1AccountsMigrationState(
       }
     }
 
-    return {
+    const state: D1AccountsMigrationState = {
       ledgerShape,
       headVersion,
       exactPrefixLength,
@@ -711,10 +765,59 @@ export async function readD1AccountsMigrationState(
       missingActivationDigestCount,
       issues,
     };
+    if (
+      (ledgerShape === "legacy" || ledgerShape === "checksummed") &&
+      headVersion !== null &&
+      missingActivationDigestCount === 0 &&
+      issues.length === 0
+    ) {
+      if (ledgerColumnReadGeneration.get(database) === readGeneration) {
+        verifiedLedgerColumns.set(
+          database,
+          Object.freeze({ catalog, catalogDigest: catalog.digest, objectSnapshot, columns }),
+        );
+      }
+    } else {
+      invalidateLedgerColumns(database);
+    }
+    return state;
   } catch (error) {
+    invalidateLedgerColumns(database);
     if (error instanceof D1AccountsMigrationError) throw error;
     throw new D1AccountsMigrationError("state_read_failed");
   }
+}
+
+function detachedLedgerColumns(rows: readonly SqliteColumnRow[]): readonly SqliteColumnRow[] {
+  return Object.freeze(rows.map((row) => {
+    const { cid, name, type, notnull, dflt_value, pk } = row;
+    if (
+      !Number.isSafeInteger(cid) ||
+      typeof name !== "string" ||
+      typeof type !== "string" ||
+      !Number.isSafeInteger(notnull) ||
+      (dflt_value !== null && typeof dflt_value !== "string") ||
+      !Number.isSafeInteger(pk)
+    ) throw new D1AccountsMigrationError("state_read_failed");
+    return Object.freeze({ cid, name, type, notnull, dflt_value, pk });
+  }));
+}
+
+function detachedLedgerRows(rows: readonly LedgerReadRow[]): readonly LedgerReadRow[] {
+  return Object.freeze(rows.map((row) => {
+    const { version, name, checksum } = row;
+    if (
+      !isSqlScalar(version) ||
+      !isSqlScalar(name) ||
+      !isSqlScalar(checksum)
+    ) throw new D1AccountsMigrationError("state_read_failed");
+    return Object.freeze({ version, name, checksum });
+  }));
+}
+
+function isSqlScalar(value: unknown): value is string | number | boolean | null | undefined {
+  return value === null || value === undefined ||
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 }
 
 export function assessD1AccountsWorkerState(
