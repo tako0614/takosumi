@@ -304,6 +304,7 @@ export async function executeAuthStagingRelease(input: {
     const version = await runtime.provider.request("GET", `${script}/versions/${uploadedVersion}`);
     assertAuthStagingVersion(version, plan, target);
     assertCanonicalNamespaces(version, canonicalNamespaces);
+    assertUploadedPlacement(version);
     // Lost upload/activation acknowledgements are never retried. Current serving
     // predecessor is rechecked before the one explicit activation.
     if (servingVersion(await runtime.provider.request("GET", `${script}/deployments`)) !== predecessor) throw new Error("auth_staging_concurrent_deployment");
@@ -344,12 +345,24 @@ function uploadMetadata(target: AuthStagingTarget, plan: AuthStagingPlan, secret
 
 /** The serving script settings must carry exactly the selected targeted region. */
 export function assertAuthStagingPlacement(value: unknown): void {
-  if (!record(value) || !record(value.placement)) throw new Error("auth_staging_placement_invalid");
-  const placement = value.placement;
-  const keys = Object.keys(placement).sort();
-  if (placement.region !== AUTH_STAGING_PLACEMENT.region ||
-      (placement.mode !== undefined && placement.mode !== AUTH_STAGING_PLACEMENT.mode) ||
-      keys.some((key) => key !== "mode" && key !== "region" && key !== "status")) throw new Error("auth_staging_placement_invalid");
+  if (!record(value) || !exactPlacement(value.placement)) throw new Error("auth_staging_placement_invalid");
+}
+
+function exactPlacement(placement: unknown): boolean {
+  return record(placement) && placement.region === AUTH_STAGING_PLACEMENT.region &&
+    (placement.mode === undefined || placement.mode === AUTH_STAGING_PLACEMENT.mode) &&
+    (placement.status === undefined || typeof placement.status === "string") &&
+    Object.keys(placement).every((key) => key === "mode" || key === "region" || key === "status");
+}
+
+/**
+ * Wrangler reads a Version's placement from `resources.script.placement`. That
+ * field is not in the API reference, so its absence is not a refusal; when it
+ * is present it must already match before the Version is activated.
+ */
+function assertUploadedPlacement(version: unknown): void {
+  const script = record(version) && record(version.resources) && record(version.resources.script) ? version.resources.script : undefined;
+  if (script && script.placement !== undefined && !exactPlacement(script.placement)) throw new Error("auth_staging_placement_invalid");
 }
 
 function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): void {

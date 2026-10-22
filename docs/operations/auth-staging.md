@@ -210,7 +210,11 @@ incomplete rather than ready. Placement only moves the `fetch` handler, never
 RPC or named entrypoints, and it is a hint for where Cloudflare runs the Worker,
 not a guarantee. The Control D1 primary is in a different location, so judge
 the effect by comparing whole bootstrap and grant timings before and after
-under the same conditions.
+under the same conditions. Because the authority digest binds placement, an
+already served issuer first takes it through the reviewed authority lane; the
+code lane refuses that digest change until then. Restoring a predecessor Version
+from before this change also removes the placement.
+
 Topology readback requires the exact stage domain with previews disabled,
 workers.dev/previews disabled, the exact one-minute retry schedule, and no
 unrelated Worker routes. Schedule APIs use the documented `{schedules:[...]}`

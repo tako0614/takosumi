@@ -69,7 +69,7 @@ function fixtureTarget() {
   });
 }
 
-function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean; placement?: (uploaded: unknown) => unknown; predecessor?: (bindings: Record<string, unknown>[]) => Record<string, unknown>[] } = {}) {
+function harness(options: { exists?: boolean; active?: boolean; schemaError?: boolean; lostUploadAck?: boolean; badBinding?: boolean; badNamespace?: boolean; wrongCanonical?: boolean; wrongCurrent?: boolean; extraPreview?: boolean; publicError?: boolean; domainOwned?: boolean; schedules?: readonly {cron:string}[]; lostScheduleAck?: boolean; placement?: (uploaded: unknown) => unknown; versionPlacement?: unknown; predecessor?: (bindings: Record<string, unknown>[]) => Record<string, unknown>[] } = {}) {
   const target = fixtureTarget();
   const plan = createAuthStagingPlan(target, config, bytes);
   let exists = options.exists ?? true;
@@ -110,7 +110,7 @@ function harness(options: { exists?: boolean; active?: boolean; schemaError?: bo
           if (binding.type === "secret_text") return { name: binding.name, type: binding.type };
           return binding;
         });
-        version = { resources: { script: { handlers: ["scheduled", "fetch"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
+        version = { resources: { script: { ...(options.versionPlacement === undefined ? {} : { placement: options.versionPlacement }), handlers: ["scheduled", "fetch"], named_handlers: [{ name: "AccountsFinancialProof", handlers: ["fetch", "prove", "loadFinancialIdentityProof", "verifyCurrentFinancialIdentityProof"] }, { name: "AccountsOwnerAdmission", handlers: ["readOwnerOperation"] }] }, script_runtime: { compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"] }, bindings } };
         if (options.lostUploadAck) throw new Error("fixture_lost_ack");
         return { id: uploadedVersion };
       }
@@ -513,10 +513,21 @@ test("authority and code uploads carry the issuer placement and read it back fro
 });
 
 test("a serving version without the selected placement is incomplete, never ready", async () => {
-  for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ region: "aws:us-east-1" }), () => ({ ...AUTH_STAGING_PLACEMENT, hint: "apac" })]) {
-    const h = harness({ active: true, placement });
-    await expect(h.execute("authority")).rejects.toBeInstanceOf(AuthStagingIncompleteError);
+  for (const action of ["authority", "code"] as const) {
+    for (const placement of [() => ({}), () => ({ mode: "smart" }), () => ({ region: "aws:us-east-1" }), () => ({ ...AUTH_STAGING_PLACEMENT, hint: "apac" }), () => ({ region: AUTH_STAGING_PLACEMENT.region, status: 1 })]) {
+      const h = harness({ active: true, placement });
+      await expect(h.execute(action)).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid" } });
+      expect(h.counts().publicCalls).toBe(0);
+    }
   }
   expect(() => assertAuthStagingPlacement(null)).toThrow("auth_staging_placement_invalid");
   expect(() => assertAuthStagingPlacement({ placement: AUTH_STAGING_PLACEMENT })).not.toThrow();
+});
+
+test("a version readback that already shows a different placement stops before activation", async () => {
+  const h = harness({ active: true, versionPlacement: { mode: "smart" } });
+  await expect(h.execute("authority")).rejects.toMatchObject({ recovery: { reason: "auth_staging_placement_invalid", uploadedVersion } });
+  expect(h.requests.filter((request) => request.method === "POST").map((request) => request.path)).toEqual([`/workers/scripts/${AUTH_STAGING_WORKER}/versions`]);
+  const matching = harness({ active: true, versionPlacement: AUTH_STAGING_PLACEMENT });
+  expect(await matching.execute("authority")).toMatchObject({ status: "authority-ready-served" });
 });
