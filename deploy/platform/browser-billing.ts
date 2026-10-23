@@ -79,9 +79,16 @@ export async function handlePlatformBrowserBillingRequest(
   };
   const selectedStaging = selected.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
     selected.TAKOSUMI_ENVIRONMENT === "staging";
+  // Generate a request-local log join only for the selected diagnostic GET.
+  // Public x-takosumi-* headers are rejected below and are never its source.
+  let billingTrace: string | undefined;
+  if (selectedStaging && method === "GET" && url.pathname === basePath) {
+    try { billingTrace = `brpc_${crypto.randomUUID().replaceAll("-", "")}`; } catch { /* diagnostics cannot block the request */ }
+  }
   const logFailure = (phase: BillingFailurePhase): void => {
     if (!selectedStaging) return;
-    try { console.error("takosumi_browser_billing_failure_phase", phase); } catch { /* logging cannot change the reply */ }
+    try { console.error("takosumi_browser_billing_failure_phase", phase, ...(billingTrace ? [billingTrace] : [])); }
+    catch { /* logging cannot change the reply */ }
   };
   const failed = (phase: BillingFailurePhase, result: Response): Response => {
     logFailure(phase);
@@ -185,7 +192,7 @@ export async function handlePlatformBrowserBillingRequest(
   if (signal.aborted) return response(400, "invalid_billing_request");
   const identity = await authenticateSharedAuthRequest(new Request(url, {
     method, headers: privateHeaders, redirect: "manual",
-  }), capturedEnv);
+  }), capturedEnv, billingTrace);
   if (signal.aborted) return response(400, "invalid_billing_request");
   if (identity?.kind === "unauthenticated") return response(401, "unauthenticated");
   if (identity?.kind !== "authenticated") {

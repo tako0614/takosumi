@@ -76,6 +76,24 @@ test("actual platform fetch captures RP cookie before generic stripping and send
   expect(value.bodyUsed).toBe(false);
 });
 
+test("exact staging billing GET generates a private auth trace, never forwarding a browser trace", async () => {
+  const f = fixture();
+  for (let i = 0; i < 2; i++) {
+    expect((await fetch(request(), f.env)).status).toBe(200);
+  }
+  const traces = f.seen.auth.map((value) => value.headers.get("x-takosumi-internal-billing-trace"));
+  expect(traces).toHaveLength(2);
+  for (const trace of traces) expect(trace).toMatch(/^brpc_[0-9a-f]{32}$/u);
+  expect(traces[0]).not.toBe(traces[1]);
+  expect(f.seen.dashboard[0]!.request.headers.has("x-takosumi-internal-billing-trace")).toBe(false);
+  expect((await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), f.env)).status).toBe(200);
+  expect(f.seen.auth[2]!.headers.has("x-takosumi-internal-billing-trace")).toBe(false);
+
+  const forged = request(undefined, { headers: { "x-takosumi-internal-billing-trace": traces[0]! } });
+  expect((await fetch(forged, f.env)).status).toBe(401);
+  expect(f.seen.auth).toHaveLength(3);
+});
+
 test("base POST forwards only an exact selected Workspace view request with its original Cookie", async () => {
   const f = fixture();
   for (const [body, contentType] of [
@@ -535,7 +553,10 @@ test("billing failure phase is a closed staging-only, error-only console event",
     } else {
       expect(await result.json()).toEqual({ error: "billing_unavailable" });
     }
-    expect(calls, phase).toEqual([[failurePhaseMarker, phase]]);
+    expect(calls, phase).toEqual([[failurePhaseMarker, phase, expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
+    if (f.seen.auth.length === 1) {
+      expect(calls[0]![2]).toBe(f.seen.auth[0]!.headers.get("x-takosumi-internal-billing-trace"));
+    }
     expect(JSON.stringify(calls)).not.toContain("sensitive");
     expect(JSON.stringify(calls)).not.toContain("tsub_canonical");
     expect(JSON.stringify(calls)).not.toContain("ws_selected");
@@ -622,7 +643,8 @@ test("billing failure phase distinguishes dispatch timeout without changing its 
     expect(result.status).toBe(503);
     expect(result.headers.get("x-takosumi-failure-phase")).toBe("dispatch-timeout");
     expect(delays).toContain(40_000);
-    expect(calls).toEqual([[failurePhaseMarker, "dispatch-timeout"]]);
+    expect(calls).toEqual([[failurePhaseMarker, "dispatch-timeout", expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
+    expect(calls[0]![2]).toBe(f.seen.auth[0]!.headers.get("x-takosumi-internal-billing-trace"));
   } finally {
     globalThis.setTimeout = original;
   }
@@ -632,7 +654,7 @@ test("billing phase logger failure cannot alter a preflight 503 or its closed ph
   const f = fixture();
   f.rpc.fetchWorkspaceDashboard = undefined as unknown as typeof f.rpc.fetchWorkspaceDashboard;
   const { result, calls } = await captureFailurePhase(() => fetch(request(), f.env), true);
-  expect(calls).toEqual([[failurePhaseMarker, "preflight"]]);
+  expect(calls).toEqual([[failurePhaseMarker, "preflight", expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
   expect(result.status).toBe(503);
   expect(result.headers.get("cache-control")).toBe("private, no-store");
   expect(result.headers.get("x-takosumi-failure-phase")).toBe("preflight");
