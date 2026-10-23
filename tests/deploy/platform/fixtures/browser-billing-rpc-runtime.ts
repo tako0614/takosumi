@@ -15,6 +15,10 @@ export class BrowserBillingReceiver extends WorkerEntrypoint {
   resolveSharedAuthWorkspace() { throw new Error("billing must not select a Workspace"); }
   authenticateSharedAuth(request: Request) {
     if (request.body !== null) throw new Error("gateway authentication consumed a payment body");
+    const trace = request.headers.get("x-takosumi-internal-billing-trace");
+    if (request.method === "GET" && new URL(request.url).pathname === "/api/v1/billing") {
+      if (!/^brpc_[0-9a-f]{32}$/u.test(trace ?? "")) throw new Error("missing internal GET trace");
+    } else if (trace !== null) throw new Error("trace escaped the selected GET");
     const accountId = syntheticIdentity(request);
     return accountId ? { kind: "authenticated", accountId } : { kind: "unauthenticated" };
   }
