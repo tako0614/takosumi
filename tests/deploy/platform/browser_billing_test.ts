@@ -482,3 +482,114 @@ test("profile OFF preserves ordinary configured extension and unrelated/reserved
   expect(f.seen.auth).toHaveLength(0);
   expect(f.seen.dashboard).toHaveLength(0);
 });
+
+const failurePhaseMarker = "takosumi_browser_billing_failure_phase";
+
+async function captureFailurePhase(run: () => Promise<Response>, throwOnLog = false) {
+  const original = console.error;
+  const calls: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    calls.push(args);
+    if (throwOnLog) throw new Error("synthetic console failure");
+  };
+  try {
+    return { result: await run(), calls };
+  } finally {
+    console.error = original;
+  }
+}
+
+test("billing failure phase is a closed staging-only, error-only console event", async () => {
+  const cases = [
+    { phase: "preflight", setup: (f: ReturnType<typeof fixture>) => {
+      f.rpc.fetchWorkspaceDashboard = undefined as unknown as typeof f.rpc.fetchWorkspaceDashboard;
+    } },
+    { phase: "auth-unavailable", setup: (f: ReturnType<typeof fixture>) => {
+      f.rpc.authenticateSharedAuth = async () => ({ kind: "unavailable" });
+    } },
+    { phase: "auth-unavailable", setup: (f: ReturnType<typeof fixture>) => {
+      f.rpc.authenticateSharedAuth = async () => { throw new Error("sensitive issuer exception"); };
+    } },
+    { phase: "dispatch-nonresponse", setup: (f: ReturnType<typeof fixture>) => {
+      f.rpc.fetchWorkspaceDashboard = async () => undefined as unknown as Response;
+    } },
+    { phase: "dispatch-rejected", setup: (f: ReturnType<typeof fixture>) => {
+      f.rpc.fetchWorkspaceDashboard = async () => { throw new Error("sensitive receiver exception"); };
+    } },
+    { phase: "receiver-returned503", setup: (f: ReturnType<typeof fixture>) => {
+      f.rpc.fetchWorkspaceDashboard = async () => new Response("sensitive receiver body", {
+        status: 503, headers: { "x-test-owner-response": "retained" },
+      });
+    } },
+  ];
+  for (const { phase, setup } of cases) {
+    const f = fixture();
+    setup(f);
+    const { result, calls } = await captureFailurePhase(() => fetch(request(), f.env));
+    expect(result.status, phase).toBe(503);
+    expect(result.headers.get("x-takosumi-failure-phase"), phase).toBeNull();
+    expect(result.headers.get("cache-control"), phase).toBe("private, no-store");
+    if (phase === "receiver-returned503") {
+      expect(result.headers.get("x-test-owner-response")).toBe("retained");
+      expect(await result.text()).toBe("sensitive receiver body");
+    } else {
+      expect(await result.json()).toEqual({ error: "billing_unavailable" });
+    }
+    expect(calls, phase).toEqual([[failurePhaseMarker, phase]]);
+    expect(JSON.stringify(calls)).not.toContain("sensitive");
+    expect(JSON.stringify(calls)).not.toContain("tsub_canonical");
+    expect(JSON.stringify(calls)).not.toContain("ws_selected");
+  }
+
+  const success = fixture();
+  const good = await captureFailurePhase(() => fetch(request(), success.env));
+  expect(good.result.status).toBe(200);
+  expect(good.calls).toEqual([]);
+
+  const forbidden = fixture();
+  const blocked = await captureFailurePhase(() => fetch(post(undefined, start, { origin: "null" }), forbidden.env));
+  expect(blocked.result.status).toBe(403);
+  expect(blocked.calls).toEqual([]);
+
+  const unauthenticated = fixture();
+  unauthenticated.rpc.authenticateSharedAuth = async () => ({ kind: "unauthenticated" });
+  const denied = await captureFailurePhase(() => fetch(request(), unauthenticated.env));
+  expect(denied.result.status).toBe(401);
+  expect(denied.calls).toEqual([]);
+
+  const other = fixture();
+  other.env.TAKOSUMI_ENVIRONMENT = "production";
+  const nonstaging = await captureFailurePhase(() => fetch(request(), other.env));
+  expect(nonstaging.result.status).toBe(503);
+  expect(nonstaging.calls).toEqual([]);
+});
+
+test("billing failure phase distinguishes dispatch timeout without changing its 40-second budget", async () => {
+  const f = fixture();
+  f.rpc.fetchWorkspaceDashboard = async () => await new Promise<Response>(() => {});
+  const original = globalThis.setTimeout;
+  const delays: number[] = [];
+  globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    delays.push(delay ?? 0);
+    return original(handler, delay === 40_000 ? 0 : delay, ...args);
+  }) as typeof setTimeout;
+  try {
+    const { result, calls } = await captureFailurePhase(() => fetch(request(), f.env));
+    expect(result.status).toBe(503);
+    expect(delays).toContain(40_000);
+    expect(calls).toEqual([[failurePhaseMarker, "dispatch-timeout"]]);
+  } finally {
+    globalThis.setTimeout = original;
+  }
+});
+
+test("billing phase logger failure cannot alter a preflight 503 or expose a phase over HTTP", async () => {
+  const f = fixture();
+  f.rpc.fetchWorkspaceDashboard = undefined as unknown as typeof f.rpc.fetchWorkspaceDashboard;
+  const { result, calls } = await captureFailurePhase(() => fetch(request(), f.env), true);
+  expect(calls).toEqual([[failurePhaseMarker, "preflight"]]);
+  expect(result.status).toBe(503);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
+  expect(result.headers.get("x-takosumi-failure-phase")).toBeNull();
+  expect(await result.json()).toEqual({ error: "billing_unavailable" });
+});
