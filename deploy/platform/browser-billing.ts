@@ -20,6 +20,8 @@ const bodyReadTimeoutMs = 5_000;
 const safeWorkspace = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const safeOperation = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u;
 const safePlan = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
+type BillingFailurePhase = "preflight" | "auth-unavailable" | "dispatch-nonresponse" |
+  "dispatch-rejected" | "dispatch-timeout" | "receiver-returned503";
 
 function exactViewWorkspace(value: unknown): value is string {
   return typeof value === "string" && safeWorkspace.exec(value)?.[0] === value;
@@ -74,10 +76,17 @@ export async function handlePlatformBrowserBillingRequest(
     TAKOSUMI_SHARED_AUTH_ORIGIN: env.TAKOSUMI_SHARED_AUTH_ORIGIN,
     TAKOSUMI_ENVIRONMENT: env.TAKOSUMI_ENVIRONMENT,
   };
+  const selectedStaging = selected.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
+    selected.TAKOSUMI_ENVIRONMENT === "staging";
+  const logFailure = (phase: BillingFailurePhase): void => {
+    if (!selectedStaging) return;
+    try { console.error("takosumi_browser_billing_failure_phase", phase); } catch { /* logging cannot change the reply */ }
+  };
   if (!route || route.basePath !== basePath || route.matchMode === "exact" ||
     (route.authMode ?? "platform") !== "platform" || route.authDelivery !== "context" ||
     !binding || typeof binding !== "object" ||
     Reflect.get(env, route.handlerKey) !== binding) {
+    logFailure("preflight");
     return response(503, "billing_unavailable");
   }
   const candidate = binding as Partial<BrowserBillingRpc>;
@@ -87,6 +96,7 @@ export async function handlePlatformBrowserBillingRequest(
   const dashboard = candidate.fetchWorkspaceDashboard;
   if (typeof authenticate !== "function" || typeof authFetch !== "function" ||
     typeof resolve !== "function" || typeof dashboard !== "function") {
+    logFailure("preflight");
     return response(503, "billing_unavailable");
   }
   // RPC method properties are proxies: looking up their `.bind` would invoke
@@ -100,8 +110,7 @@ export async function handlePlatformBrowserBillingRequest(
   const dispatch = (value: Request, session: Parameters<BrowserBillingRpc["fetchWorkspaceDashboard"]>[1]) =>
     Reflect.apply(dashboard, binding, [value, session]);
   const capturedEnv = Object.freeze({ ...selected, HOSTED: rpc });
-  if (selected.TAKOSUMI_SHARED_AUTH_PROFILE !== "shared-account" ||
-    selected.TAKOSUMI_ENVIRONMENT !== "staging") return response(503, "billing_unavailable");
+  if (!selectedStaging) return response(503, "billing_unavailable");
   if (url.origin !== selected.TAKOSUMI_SHARED_AUTH_ORIGIN) return response(404, "not_found");
   // Explicit credentials cannot fall back to cookies. Public authority-shaped
   // headers are rejected, not interpreted as private caller identity.
@@ -173,22 +182,32 @@ export async function handlePlatformBrowserBillingRequest(
   }), capturedEnv);
   if (signal.aborted) return response(400, "invalid_billing_request");
   if (identity?.kind === "unauthenticated") return response(401, "unauthenticated");
-  if (identity?.kind !== "authenticated") return response(503, "billing_unavailable");
+  if (identity?.kind !== "authenticated") {
+    logFailure("auth-unavailable");
+    return response(503, "billing_unavailable");
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const dispatchDeadline = Symbol();
   try {
     const result = await Promise.race([
       dispatch(new Request(url, { method, headers: privateHeaders, body, redirect: "manual" }),
         Object.freeze({ authKind: "session", subject: identity.accountId })),
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("billing unavailable")), 40_000);
+        timer = setTimeout(() => reject(dispatchDeadline), 40_000);
       }),
     ]);
-    if (!(result instanceof Response)) return response(503, "billing_unavailable");
+    if (!(result instanceof Response)) {
+      logFailure("dispatch-nonresponse");
+      return response(503, "billing_unavailable");
+    }
     const responseHeaders = new Headers(result.headers);
     responseHeaders.set("cache-control", "private, no-store");
-    return new Response(result.body, { status: result.status, statusText: result.statusText, headers: responseHeaders });
-  } catch {
+    const returned = new Response(result.body, { status: result.status, statusText: result.statusText, headers: responseHeaders });
+    if (returned.status === 503) logFailure("receiver-returned503");
+    return returned;
+  } catch (error) {
     // A lost response never retries or creates a new operation/reference.
+    logFailure(error === dispatchDeadline ? "dispatch-timeout" : "dispatch-rejected");
     return response(503, "billing_unavailable");
   } finally {
     if (timer !== undefined) clearTimeout(timer);
