@@ -7,6 +7,7 @@ import {
 import type { PlatformExtensionRoute } from "./platform_extensions.ts";
 
 const basePath = "/api/v1/billing";
+const failurePhaseHeader = "x-takosumi-failure-phase";
 const readPaths = new Set([basePath, `${basePath}/subscription`, `${basePath}/top-up`]);
 const actionPaths = new Set([
   basePath,
@@ -82,12 +83,18 @@ export async function handlePlatformBrowserBillingRequest(
     if (!selectedStaging) return;
     try { console.error("takosumi_browser_billing_failure_phase", phase); } catch { /* logging cannot change the reply */ }
   };
+  const failed = (phase: BillingFailurePhase, result: Response): Response => {
+    logFailure(phase);
+    if (selectedStaging && method === "GET" && url.pathname === basePath && result.status === 503) {
+      try { result.headers.set(failurePhaseHeader, phase); } catch { /* diagnostics cannot change the reply */ }
+    }
+    return result;
+  };
   if (!route || route.basePath !== basePath || route.matchMode === "exact" ||
     (route.authMode ?? "platform") !== "platform" || route.authDelivery !== "context" ||
     !binding || typeof binding !== "object" ||
     Reflect.get(env, route.handlerKey) !== binding) {
-    logFailure("preflight");
-    return response(503, "billing_unavailable");
+    return failed("preflight", response(503, "billing_unavailable"));
   }
   const candidate = binding as Partial<BrowserBillingRpc>;
   const authenticate = candidate.authenticateSharedAuth;
@@ -96,8 +103,7 @@ export async function handlePlatformBrowserBillingRequest(
   const dashboard = candidate.fetchWorkspaceDashboard;
   if (typeof authenticate !== "function" || typeof authFetch !== "function" ||
     typeof resolve !== "function" || typeof dashboard !== "function") {
-    logFailure("preflight");
-    return response(503, "billing_unavailable");
+    return failed("preflight", response(503, "billing_unavailable"));
   }
   // RPC method properties are proxies: looking up their `.bind` would invoke
   // a remote method named "bind". Reflect.apply captures the real local call
@@ -183,8 +189,7 @@ export async function handlePlatformBrowserBillingRequest(
   if (signal.aborted) return response(400, "invalid_billing_request");
   if (identity?.kind === "unauthenticated") return response(401, "unauthenticated");
   if (identity?.kind !== "authenticated") {
-    logFailure("auth-unavailable");
-    return response(503, "billing_unavailable");
+    return failed("auth-unavailable", response(503, "billing_unavailable"));
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const dispatchDeadline = Symbol();
@@ -197,18 +202,17 @@ export async function handlePlatformBrowserBillingRequest(
       }),
     ]);
     if (!(result instanceof Response)) {
-      logFailure("dispatch-nonresponse");
-      return response(503, "billing_unavailable");
+      return failed("dispatch-nonresponse", response(503, "billing_unavailable"));
     }
     const responseHeaders = new Headers(result.headers);
+    responseHeaders.delete(failurePhaseHeader);
     responseHeaders.set("cache-control", "private, no-store");
     const returned = new Response(result.body, { status: result.status, statusText: result.statusText, headers: responseHeaders });
-    if (returned.status === 503) logFailure("receiver-returned503");
-    return returned;
+    return returned.status === 503 ? failed("receiver-returned503", returned) : returned;
   } catch (error) {
     // A lost response never retries or creates a new operation/reference.
-    logFailure(error === dispatchDeadline ? "dispatch-timeout" : "dispatch-rejected");
-    return response(503, "billing_unavailable");
+    return failed(error === dispatchDeadline ? "dispatch-timeout" : "dispatch-rejected",
+      response(503, "billing_unavailable"));
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
