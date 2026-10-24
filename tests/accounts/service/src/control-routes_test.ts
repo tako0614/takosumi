@@ -415,6 +415,60 @@ test("a Workspace member can read but cannot mutate Workspace settings or contro
   expect(fixture.mutations).toEqual({ workspaceUpdates: 0, runCancels: 0 });
 });
 
+test("authenticated GET Run returns one generic no-store 503 when its first read stalls", async () => {
+  const auth = roleSessionStore();
+  let getRunCalls = 0;
+  let laterOperationReads = 0;
+  const operations = {
+    getRun: async () => {
+      getRunCalls += 1;
+      return await new Promise<never>(() => undefined);
+    },
+    workspaces: {
+      getWorkspace: async () => {
+        laterOperationReads += 1;
+        throw new Error("a timed-out Run read must not continue to Workspace lookup");
+      },
+    },
+    members: {
+      listMembers: async () => {
+        laterOperationReads += 1;
+        throw new Error("a timed-out Run read must not continue to membership lookup");
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+
+  const originalSetTimeout = globalThis.setTimeout;
+  const scheduledDelays: number[] = [];
+  globalThis.setTimeout = ((
+    callback: TimerHandler,
+    timeout?: number,
+    ...args: unknown[]
+  ) => {
+    scheduledDelays.push(Number(timeout));
+    return originalSetTimeout(callback, 0, ...args);
+  }) as typeof globalThis.setTimeout;
+  let response: Response;
+  try {
+    response = await authenticatedControlRequest({
+      ...auth,
+      operations,
+      path: "/api/v1/runs/run_stalled_first_read",
+    });
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+
+  expect(response.status).toBe(503);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toMatchObject({
+    error: { code: "feature_unavailable" },
+  });
+  expect(getRunCalls).toBe(1);
+  expect(laterOperationReads).toBe(0);
+  expect(scheduledDelays).toContain(5_000);
+});
+
 test("a Workspace admin can control a Run", async () => {
   const auth = roleSessionStore();
   const fixture = roleAuthorizationOperations("admin");
