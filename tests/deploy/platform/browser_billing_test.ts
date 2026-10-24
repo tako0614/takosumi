@@ -650,6 +650,57 @@ test("billing failure phase distinguishes dispatch timeout without changing its 
   }
 });
 
+test("billing auth deadline returns a private unavailable response and ignores a late Hosted success", async () => {
+  const f = fixture();
+  let releaseAuth!: (identity: SharedAuthIdentity) => void;
+  let enteredAuth!: () => void;
+  const authStarted = new Promise<void>((resolve) => { enteredAuth = resolve; });
+  const delayedAuth = new Promise<SharedAuthIdentity>((resolve) => { releaseAuth = resolve; });
+  f.rpc.authenticateSharedAuth = async (value) => {
+    f.seen.auth.push(value);
+    enteredAuth();
+    return await delayedAuth;
+  };
+
+  const original = globalThis.setTimeout;
+  const delays: number[] = [];
+  globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    delays.push(delay ?? 0);
+    return original(handler, delay === 5_000 ? 0 : delay, ...args);
+  }) as typeof setTimeout;
+  let result: Response;
+  let calls: unknown[][];
+  try {
+    const captured = await captureFailurePhase(async () => {
+      const pending = fetch(request(), f.env);
+      await authStarted;
+      return await pending;
+    });
+    result = captured.result;
+    calls = captured.calls;
+  } finally {
+    globalThis.setTimeout = original;
+  }
+
+  expect(delays).toContain(5_000);
+  expect(result.status).toBe(503);
+  expect(result.headers.get("cache-control")).toBe("private, no-store");
+  expect(result.headers.get("x-takosumi-failure-phase")).toBe("auth-unavailable");
+  expect(await result.json()).toEqual({ error: "billing_unavailable" });
+  expect(calls).toEqual([[failurePhaseMarker, "auth-unavailable", expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
+  expect(calls[0]![2]).toBe(f.seen.auth[0]!.headers.get("x-takosumi-internal-billing-trace"));
+  expect(f.seen.auth).toHaveLength(1);
+  expect(f.seen.dashboard).toHaveLength(0);
+  expect(f.seen.selected).toBe(0);
+  expect(f.seen.generic).toHaveLength(0);
+
+  releaseAuth({ kind: "authenticated", accountId: "tsub_late_success" });
+  await new Promise<void>((resolve) => original(resolve, 0));
+  expect(f.seen.dashboard).toHaveLength(0);
+  expect(f.seen.selected).toBe(0);
+  expect(f.seen.generic).toHaveLength(0);
+});
+
 test("billing phase logger failure cannot alter a preflight 503 or its closed phase header", async () => {
   const f = fixture();
   f.rpc.fetchWorkspaceDashboard = undefined as unknown as typeof f.rpc.fetchWorkspaceDashboard;
