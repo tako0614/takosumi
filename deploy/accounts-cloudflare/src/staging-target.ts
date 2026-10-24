@@ -26,6 +26,7 @@ export const AUTH_STAGING_CLIENTS = [
     redirectUris: [
       "https://integration-money-8732b77a789fd563406269261bf09e71.shoutatomiyama0614.workers.dev/auth/oidc/callback",
       "https://integration-root-ga-573f46e4.shoutatomiyama0614.workers.dev/auth/oidc/callback",
+      "https://integration-root-ga-9d9c84f4281649c884e0579d93e5c926.shoutatomiyama0614.workers.dev/auth/oidc/callback",
     ],
     clientSecretEnv: "TAKOSUMI_ACCOUNTS_SERVER_STAGE_CLIENT_SECRET",
   },
