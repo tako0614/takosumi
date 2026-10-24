@@ -419,10 +419,14 @@ test("authenticated GET Run returns one generic no-store 503 when its first read
   const auth = roleSessionStore();
   let getRunCalls = 0;
   let laterOperationReads = 0;
+  let resolveStalledRun: ((run: { readonly workspaceId: string }) => void) | undefined;
+  const stalledRun = new Promise<{ readonly workspaceId: string }>((resolve) => {
+    resolveStalledRun = resolve;
+  });
   const operations = {
     getRun: async () => {
       getRunCalls += 1;
-      return await new Promise<never>(() => undefined);
+      return await stalledRun;
     },
     workspaces: {
       getWorkspace: async () => {
@@ -465,6 +469,8 @@ test("authenticated GET Run returns one generic no-store 503 when its first read
     error: { code: "feature_unavailable" },
   });
   expect(getRunCalls).toBe(1);
+  resolveStalledRun!({ workspaceId: workspace.id });
+  await new Promise<void>((resolve) => originalSetTimeout(resolve, 0));
   expect(laterOperationReads).toBe(0);
   expect(scheduledDelays).toContain(5_000);
 });
