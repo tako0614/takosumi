@@ -24,7 +24,9 @@ export type RequestDiagnosticPhase =
   | "allowlist"
   | "control_auth"
   | "control_init"
-  | "control_dispatch";
+  | "control_dispatch"
+  | "run_get_read"
+  | "run_get_access";
 
 export interface RequestPhaseObserver {
   measure<T>(
@@ -53,6 +55,8 @@ const PHASES = new Set<RequestDiagnosticPhase>([
   "control_auth",
   "control_init",
   "control_dispatch",
+  "run_get_read",
+  "run_get_access",
 ]);
 const PENDING_THRESHOLD_MS = 2000;
 const MAX_PENDING_NOTIFICATIONS = 64;

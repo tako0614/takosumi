@@ -2558,6 +2558,9 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
   const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
   const rowsFor = (probeId: string) => phaseRows
     .filter((row) => row.probeId === probeId);
+  const outcomesFor = (probeId: string, phase: string) => rowsFor(probeId)
+    .filter((row) => row.phase === phase)
+    .map((row) => row.outcome);
   const releaseReads: Array<() => void> = [];
   const pendingReadCompletions: Array<Promise<void>> = [];
   const pendingRouteResponses: Array<Promise<Response>> = [];
@@ -2705,6 +2708,9 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     expect(baselinePlanReads).toBeGreaterThan(0);
     expect(baselineAccountWrites).toBe(0);
     expect(baselineControlWrites).toBe(0);
+    expect(outcomesFor(baselineProbe, "run_get_read")).toContain("fulfilled");
+    expect(outcomesFor(baselineProbe, "run_get_access")).toContain("fulfilled");
+    expect(JSON.stringify(rowsFor(baselineProbe))).not.toContain(runId);
 
     // Authentication precedes Run dispatch. A held bearer lookup must use the
     // same request-local read deadline and must not resume authority work late.
@@ -2828,12 +2834,15 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     expect(rowsFor(downstreamProbe)).toContainEqual(expect.objectContaining({
       phase: "control_dispatch", outcome: "fulfilled", route: "/api/v1/runs/{runId}",
     }));
+    expect(outcomesFor(downstreamProbe, "run_get_read")).toEqual(["started", "pending"]);
+    expect(outcomesFor(downstreamProbe, "run_get_access")).toEqual([]);
     expect(downstreamResponse.status).toBe(503);
 
     // Release the underlying read only after the response has settled. The
     // expired route must not start its Workspace/member checks afterward.
     gate.release();
     await drainLateRouteContinuation(gate);
+    expect(outcomesFor(downstreamProbe, "run_get_read")).toContain("fulfilled");
     expect(controlDb.workspaceReadCount).toBe(workspaceReadsBeforeLateRun);
     expect(controlDb.memberReadCount).toBe(memberReadsBeforeLateRun);
     downstreamResponsePromise = undefined;
@@ -2871,6 +2880,8 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     await waitForWorkspaceGate(workspaceResponse);
     const memberReadsBeforeWorkspaceRelease = controlDb.memberReadCount;
     await expectDeadlineResponse(workspaceResponse);
+    expect(outcomesFor(workspaceProbe, "run_get_read")).toContain("fulfilled");
+    expect(outcomesFor(workspaceProbe, "run_get_access")).toEqual(["started", "pending"]);
     workspaceGate.release();
     await drainLateRouteContinuation(workspaceGate);
     expect(controlDb.memberReadCount).toBe(memberReadsBeforeWorkspaceRelease);
@@ -2893,6 +2904,8 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
       member: controlDb.memberReadCount,
     };
     await expectDeadlineResponse(memberResponse);
+    expect(outcomesFor(memberProbe, "run_get_read")).toContain("fulfilled");
+    expect(outcomesFor(memberProbe, "run_get_access")).toEqual(["started", "pending"]);
     memberGate.release();
     await drainLateRouteContinuation(memberGate);
     expect(controlDb.planRunReadCount).toBe(readsBeforeMemberRelease.plan);

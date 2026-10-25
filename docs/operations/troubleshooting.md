@@ -206,6 +206,8 @@ Worker は inventory の `{runId}` のような template を使い、client prob
 | `control_auth` | 通常の Accounts bearer認証。D1 candidate lookup / active-token検証を含む |
 | `control_init` | Control operations facade 待ち。既存の5秒期限は維持 |
 | `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
+| `run_get_read` | 認証済み `GET /api/v1/runs/{runId}` の元Run読取。外側の同一request deadlineを変更しない |
+| `run_get_access` | 同RunのWorkspace／member認可。`fulfilled` は認可成功やHTTP 2xxを意味しない |
 
 shared Workspace診断は固定の `POST /api/v1/account/shared-workspaces/bootstrap` と
 `GET /api/v1/account/shared-workspaces/{workspaceId}/billing-organization` を対象にします。

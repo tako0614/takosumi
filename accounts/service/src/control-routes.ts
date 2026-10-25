@@ -505,6 +505,7 @@ async function dispatchAuthenticatedControlRoute(
           tail,
           operations,
           store: context.store,
+          ...(context.diagnostics ? { diagnostics: context.diagnostics } : {}),
           ...(context.issuer ? { issuer: context.issuer } : {}),
           ...(context.runStreamTiming ? { runStreamTiming: context.runStreamTiming } : {}),
           ...(context.assertActive ? { assertActive: context.assertActive } : {}),
@@ -661,6 +662,7 @@ function connectionOAuthCallbackHelperId(
 }
 
 interface DispatchInput {
+  readonly diagnostics?: RequestPhaseObserver;
   readonly request: Request;
   readonly url: URL;
   readonly tail: string;
@@ -689,6 +691,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       url: input.url,
       operations: input.operations,
       store: input.store,
+      ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
       ...(input.issuer ? { issuer: input.issuer } : {}),
       ...(input.runStreamTiming ? { runStreamTiming: input.runStreamTiming } : {}),
       ...(input.assertActive ? { assertActive: input.assertActive } : {}),

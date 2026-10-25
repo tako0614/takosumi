@@ -142,6 +142,7 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import { measureRequestPhaseOperation } from "../request-phase-diagnostics.ts";
 
 export async function handleRuns(
   ctx: ControlDispatchContext,
@@ -159,15 +160,23 @@ export async function handleRuns(
           deadlineAssertActive();
         };
         assertActive();
-        const run = await operations.getRun(runId);
+        const run = await measureRequestPhaseOperation(
+          ctx.diagnostics,
+          "run_get_read",
+          () => operations.getRun(runId),
+        );
         assertActive();
-        const auth = await requireWorkspaceAccess({
-          operations,
-          store,
-          workspaceId: run.workspaceId,
-          session: ctx.session,
-          assertActive,
-        });
+        const auth = await measureRequestPhaseOperation(
+          ctx.diagnostics,
+          "run_get_access",
+          () => requireWorkspaceAccess({
+            operations,
+            store,
+            workspaceId: run.workspaceId,
+            session: ctx.session,
+            assertActive,
+          }),
+        );
         assertActive();
         if (!auth.ok) return auth.response;
         const publicValue = await publicRun(operations, run, assertActive);
