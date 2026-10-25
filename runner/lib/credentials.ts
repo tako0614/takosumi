@@ -34,6 +34,7 @@ import type {
   CredentialRefreshSessionMetadata,
 } from "./types.ts";
 import { BASE_COMMAND_ENV_NAMES } from "./constants.ts";
+import { enterSensitiveFilePhase } from "./source_build_phase_gate.ts";
 import {
   isRecord,
   recordField,
@@ -1331,8 +1332,12 @@ export async function prepareProviderCredentialFiles(
   const files = context.credentialFiles ?? [];
   const renewable = context.renewableCredentials ?? [];
   const privateRunFiles = context.privateRunFiles ?? [];
+  const hasProviderEnv = Object.keys(context.env).some(isAdmittedDeclaredProviderEnvName);
+  const hasRuntimeInputs = (context.runtimeInputs?.length ?? 0) > 0;
   if (files.length === 0 && renewable.length === 0 && privateRunFiles.length === 0) {
-    return { context, cleanup: async () => {} };
+    if (!hasProviderEnv && !hasRuntimeInputs) return { context, cleanup: async () => {} };
+    const phaseLease = await enterSensitiveFilePhase(context.signal);
+    return { context, cleanup: async () => phaseLease.release() };
   }
   // A SIBLING of the run workspace with a random suffix, never a child of it:
   // the source-build phase runs user commands inside `workspace.sourceRoot`,
@@ -1341,6 +1346,7 @@ export async function prepareProviderCredentialFiles(
   if (!tmpInfo.isDirectory() || tmpInfo.isSymbolicLink()) {
     throw new Error("run credential parent directory is unsafe");
   }
+  const phaseLease = await enterSensitiveFilePhase(context.signal);
   let credentialDir: string | undefined;
   let session: CredentialRefreshSession | undefined;
   let privateRunFileSession: PrivateRunFileRefreshSession | undefined;
@@ -1457,29 +1463,36 @@ export async function prepareProviderCredentialFiles(
       },
       cleanup: async () => {
         try {
-          if (session) {
-            await session.close();
-            if (activeCredentialRefreshSessions.get(runId!) === session) {
-              activeCredentialRefreshSessions.delete(runId!);
+          try {
+            if (session) {
+              await session.close();
+              if (activeCredentialRefreshSessions.get(runId!) === session) {
+                activeCredentialRefreshSessions.delete(runId!);
+              }
             }
-          }
-          if (privateRunFileSession) {
-            await privateRunFileSession.close();
-            if (activePrivateRunFileRefreshSessions.get(runId!) === privateRunFileSession) {
-              activePrivateRunFileRefreshSessions.delete(runId!);
+            if (privateRunFileSession) {
+              await privateRunFileSession.close();
+              if (activePrivateRunFileRefreshSessions.get(runId!) === privateRunFileSession) {
+                activePrivateRunFileRefreshSessions.delete(runId!);
+              }
             }
+          } finally {
+            await shredCredentialDir(ownedCredentialDir);
           }
-        } finally {
-          await shredCredentialDir(ownedCredentialDir);
+          phaseLease.release();
+        } catch (error) {
+          phaseLease.poison();
+          throw error;
         }
       },
     };
   } catch (error) {
+    let cleanupFailed = false;
     if (session && runId) {
-      await session.close().catch(() => {});
+      await session.close().catch(() => { cleanupFailed = true; });
     }
     if (privateRunFileSession && runId) {
-      await privateRunFileSession.close().catch(() => {});
+      await privateRunFileSession.close().catch(() => { cleanupFailed = true; });
     }
     if ((sessionRegistered || createdSession) && runId && activeCredentialRefreshSessions.get(runId) === session) {
       activeCredentialRefreshSessions.delete(runId);
@@ -1488,7 +1501,11 @@ export async function prepareProviderCredentialFiles(
       activePrivateRunFileRefreshSessions.get(runId) === privateRunFileSession) {
       activePrivateRunFileRefreshSessions.delete(runId);
     }
-    if (credentialDir) await shredCredentialDir(credentialDir).catch(() => {});
+    if (credentialDir) {
+      await shredCredentialDir(credentialDir).catch(() => { cleanupFailed = true; });
+    }
+    if (cleanupFailed) phaseLease.poison();
+    else phaseLease.release();
     if (privateRunFiles.length > 0) {
       throw new Error("private Run file preparation failed");
     }

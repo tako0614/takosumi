@@ -189,6 +189,8 @@ export async function runCommand(
      * inherits `/dev/null` on fd 0 instead of a re-readable var-file body.
      */
     readonly onSpawn?: (child: SpawnedCommand) => void;
+    /** Source-build subreaper hook: drain adopted children before pipe EOF. */
+    readonly onDirectChildExit?: () => Promise<void>;
   },
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const signal = options.context?.signal;
@@ -290,6 +292,7 @@ export async function runCommand(
     // Await the direct child even after a timeout/abort kill. Runtime/provider
     // cleanup must not start while its process or output streams are live.
     await subprocess.exited;
+    await options.onDirectChildExit?.();
     const [stdout, stderr] = await Promise.all([
       stdoutPromise,
       stderrPromise,

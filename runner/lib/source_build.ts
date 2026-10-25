@@ -13,6 +13,7 @@ import {
 import { runCommand } from "./exec.ts";
 import { assertSafeRelativePath } from "./policy.ts";
 import { redactBuildOutput } from "./redaction.ts";
+import { runSupervisedSourceBuild } from "./source_build_supervisor.ts";
 import { assertDirectory, assertRealPathInsideSourceRoot } from "./util.ts";
 
 const SOURCE_BUILD_ENV_NAMES = [
@@ -36,6 +37,19 @@ export async function runSourceBuild(
   } = {},
 ): Promise<string | undefined> {
   if (!sourceBuild) return undefined;
+  return await runSupervisedSourceBuild(sourceBuild, sourceRoot, options);
+}
+
+/** Only the dedicated child-subreaper process may invoke this. */
+export async function runSourceBuildInline(
+  sourceBuild: SourceBuildConfig,
+  sourceRoot: string,
+  options: {
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+    readonly onDirectChildExit: () => Promise<void>;
+  },
+): Promise<string> {
   await assertDirectory(sourceRoot, "source build root");
 
   const env = await sourceBuildEnv();
@@ -69,6 +83,7 @@ export async function runSourceBuild(
     const result = await runCommand(command.argv, {
       cwd,
       context,
+      onDirectChildExit: options.onDirectChildExit,
     });
     const commandLabel = `source build ${index + 1}/${sourceBuild.commands.length} (${command.argv[0]})`;
     const commandOutput = boundedBuildOutput(

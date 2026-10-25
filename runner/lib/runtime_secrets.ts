@@ -13,6 +13,7 @@ import type {
   RuntimeSecretFilesDispatch,
 } from "./types.ts";
 import { isRecord, recordField } from "./util.ts";
+import { enterSensitiveFilePhase } from "./source_build_phase_gate.ts";
 
 const CONTRACT = "takosumi.runner-runtime-secret-files/v1";
 const PROFILE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
@@ -88,6 +89,7 @@ export async function prepareRuntimeSecretFiles(
   fileSystemOverrides: Partial<RuntimeSecretFileSystem> = {},
 ): Promise<PreparedRuntimeSecretFiles> {
   if (!dispatch) return { context, cleanup: async () => {} };
+  const phaseLease = await enterSensitiveFilePhase(context.signal);
   const fileSystem = {
     ...NODE_RUNTIME_SECRET_FILE_SYSTEM,
     ...fileSystemOverrides,
@@ -121,15 +123,30 @@ export async function prepareRuntimeSecretFiles(
         ],
       },
       cleanup: async () => {
-        await removeRuntimeSecretDir(
-          preparedRuntimeDir,
-          preparedTarget,
-          true,
-          fileSystem,
-        );
+        try {
+          await removeRuntimeSecretDir(
+            preparedRuntimeDir,
+            preparedTarget,
+            true,
+            fileSystem,
+          );
+          phaseLease.release();
+        } catch (error) {
+          // A command may remove its own file before cleanup can verify it.
+          // Only a genuinely remaining sandbox must keep later builds out.
+          try {
+            await lstat(preparedRuntimeDir);
+            phaseLease.poison();
+          } catch (checkError) {
+            if (isMissingPath(checkError)) phaseLease.release();
+            else phaseLease.poison();
+          }
+          throw error;
+        }
       },
     };
   } catch {
+    let cleanupFailed = false;
     if (runtimeDir !== undefined) {
       try {
         await removeRuntimeSecretDir(
@@ -140,8 +157,18 @@ export async function prepareRuntimeSecretFiles(
         );
       } catch {
         // Setup diagnostics are fixed and value-free even if cleanup also fails.
+        cleanupFailed = true;
       }
     }
+    if (cleanupFailed && runtimeDir !== undefined) {
+      try {
+        await lstat(runtimeDir);
+        phaseLease.poison();
+      } catch (checkError) {
+        if (isMissingPath(checkError)) phaseLease.release();
+        else phaseLease.poison();
+      }
+    } else phaseLease.release();
     throw new Error("runtime secret sandbox setup failed");
   }
 }

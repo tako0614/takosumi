@@ -18,6 +18,14 @@ The OSS reference image executes module/provider code as the unprivileged
 bounded `/tmp` run/cache directories are writable. Non-root execution reduces
 container breakout impact but is not a substitute for substrate isolation.
 
+For each source build, the reference Runner uses a dedicated Linux child
+subreaper. It drains that build's adopted descendants before later phases may
+materialize provider or runtime files in the same Runner process. An
+unconfirmed drain makes that process refuse later sensitive phases. This
+process-local ordering does not isolate another Runner process under the same
+UID, survive a Runner restart, or replace the selected substrate's tenant
+isolation and teardown evidence.
+
 ## Worker relay memory and artifact limits
 
 The Cloudflare runner relay must stay below the Worker isolate memory ceiling
