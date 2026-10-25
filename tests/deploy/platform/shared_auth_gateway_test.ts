@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, jest, spyOn, test } from "bun:test";
 import {
   authenticateSharedAuthRequest,
   handleSharedAuthRouteRequest,
@@ -240,6 +240,163 @@ test("public shared Control gate never initializes Control for invalid identity,
   expect((await handlePlatformSharedAuthControlRequest(request("/api/v1/workspaces/ws_live", { headers: { cookie, "x-takosumi-account-session": "sess_forged" } }), configured(rpc) as CloudflareWorkerEnv, dependencies))?.status).toBe(401);
   expect((await handlePlatformSharedAuthControlRequest(request("/api/v1/workspaces/ws_live", { headers: { cookie, authorization: "Basic forged" } }), configured(rpc) as CloudflareWorkerEnv, dependencies))?.status).toBe(401);
   expect(calls).toBe(0);
+});
+
+test("shared Run GET reports its read and current Workspace/member phases", async () => {
+  const phaseRows: Array<Record<string, unknown>> = [];
+  const info = spyOn(console, "info").mockImplementation((value: unknown) => {
+    if (typeof value !== "string") return;
+    try {
+      const row = JSON.parse(value) as Record<string, unknown>;
+      if (row.event === "request_phase") phaseRows.push(row);
+    } catch {
+      // Other diagnostic output is not part of this route's oracle.
+    }
+  });
+  const operations = {
+    getRun: async () => ({
+      id: "run_shared", workspaceId: "ws_live", type: "plan", status: "succeeded",
+      createdBy: "tsub_canonical", createdAt: "2026-10-14T00:00:00.000Z",
+    }),
+    workspaces: { getWorkspace: async () => ({ id: "ws_live", ownerUserId: "tsub_canonical" }) },
+    members: { getMember: async () => ({
+      workspaceId: "ws_live", accountId: "tsub_canonical", status: "active", roles: ["owner"],
+    }) },
+  } as unknown as ControlPlaneOperations;
+  try {
+    const response = await handlePlatformSharedAuthControlRequest(
+      request("/api/v1/runs/run_shared", {
+        headers: { cookie, "x-takosumi-request-probe-id": "a444000000000013" },
+      }),
+      { ...configured(rpc), TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS: "true" } as CloudflareWorkerEnv,
+      { store: new InMemoryAccountsStore(), resolveOperations: async () => operations },
+    );
+    expect(response?.status).toBe(200);
+    expect((await response?.json()).run.id).toBe("run_shared");
+    const phases = phaseRows.filter((row) => row.probeId === "a444000000000013");
+    for (const phase of ["run_get_read", "run_get_access", "run_get_workspace", "run_get_member"]) {
+      expect(phases.filter((row) => row.phase === phase).map((row) => row.outcome)).toEqual([
+        "started", "fulfilled",
+      ]);
+    }
+    expect(JSON.stringify(phases)).not.toContain("run_shared");
+    expect(JSON.stringify(phases)).not.toContain(cookie);
+  } finally {
+    info.mockRestore();
+  }
+});
+
+test("shared Run GET retains one five-second budget across RP auth and Run read", async () => {
+  let releaseAuth = () => {};
+  let enteredAuth = () => {};
+  const authHeld = new Promise<void>((resolve) => { releaseAuth = resolve; });
+  const authEntered = new Promise<void>((resolve) => { enteredAuth = resolve; });
+  let releaseRun = () => {};
+  let enteredRun = () => {};
+  const runHeld = new Promise<void>((resolve) => { releaseRun = resolve; });
+  const runEntered = new Promise<void>((resolve) => { enteredRun = resolve; });
+  let workspaceReads = 0;
+  let memberReads = 0;
+  const env = configured({
+    ...rpc,
+    authenticateSharedAuth: async () => {
+      enteredAuth();
+      await authHeld;
+      return { kind: "authenticated", accountId: "tsub_canonical" };
+    },
+  }) as CloudflareWorkerEnv;
+  const operations = {
+    getRun: async () => {
+      enteredRun();
+      await runHeld;
+      return {
+        id: "run_shared", workspaceId: "ws_live", type: "plan", status: "succeeded",
+        createdBy: "tsub_canonical", createdAt: "2026-10-14T00:00:00.000Z",
+      };
+    },
+    workspaces: { getWorkspace: async () => {
+      workspaceReads++;
+      return { id: "ws_live", ownerUserId: "tsub_canonical" };
+    } },
+    members: { getMember: async () => {
+      memberReads++;
+      return { workspaceId: "ws_live", accountId: "tsub_canonical", status: "active", roles: ["owner"] };
+    } },
+  } as unknown as ControlPlaneOperations;
+  let pending: Promise<Response | undefined> | undefined;
+  jest.useFakeTimers();
+  try {
+    pending = handlePlatformSharedAuthControlRequest(
+      request("/api/v1/runs/run_shared"), env,
+      { store: new InMemoryAccountsStore(), resolveOperations: async () => operations },
+    );
+    await authEntered;
+    jest.advanceTimersByTime(3_000);
+    releaseAuth();
+    await runEntered;
+    let settled = false;
+    const observed = pending.then(() => { settled = true; }, () => { settled = true; });
+    jest.advanceTimersByTime(1_999);
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(settled).toBe(false);
+    jest.advanceTimersByTime(1);
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(settled).toBe(true);
+    const response = await pending;
+    await observed;
+    expect(response?.status).toBe(503);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect((await response?.json()).error.code).toBe("feature_unavailable");
+    releaseRun();
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(workspaceReads).toBe(0);
+    expect(memberReads).toBe(0);
+  } finally {
+    releaseAuth();
+    releaseRun();
+    jest.useRealTimers();
+    await pending?.catch(() => undefined);
+  }
+});
+
+test("shared Run GET expires during a pending RP response without Control work", async () => {
+  let releaseAuth = () => {};
+  const authHeld = new Promise<void>((resolve) => { releaseAuth = resolve; });
+  let authCalls = 0;
+  let controlCalls = 0;
+  const env = configured({
+    ...rpc,
+    authenticateSharedAuth: async () => {
+      authCalls++;
+      await authHeld;
+      return { kind: "authenticated", accountId: "tsub_canonical" };
+    },
+  }) as CloudflareWorkerEnv;
+  jest.useFakeTimers();
+  try {
+    const pending = handlePlatformSharedAuthControlRequest(
+      request("/api/v1/runs/run_shared"), env,
+      { resolveOperations: async () => {
+        controlCalls++;
+        throw new Error("Control must not start after RP timeout");
+      } },
+    );
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(authCalls).toBe(1);
+    jest.advanceTimersByTime(5_000);
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    const response = await pending;
+    expect(response?.status).toBe(503);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect((await response?.json()).error.code).toBe("feature_unavailable");
+    releaseAuth();
+    for (let index = 0; index < 12; index++) await Promise.resolve();
+    expect(authCalls).toBe(1);
+    expect(controlCalls).toBe(0);
+  } finally {
+    releaseAuth();
+    jest.useRealTimers();
+  }
 });
 
 test("shared Workspace menu never pins or repairs a suspended recorded owner", async () => {

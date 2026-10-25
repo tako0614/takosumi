@@ -68,8 +68,9 @@ Run projection の完了まで、同じ 5 秒の request-local 予算を使い�
 `503 feature_unavailable` / `Cache-Control: no-store` を返し、遅れて完了した認証や
 SELECT から新たな認可・dispatch・cleanup / usage 更新を始めません。既に発行した
 D1 操作を取消・rollback する保証ではありません。Accounts の初期化待ちは既存の
-別予算で、shared Accounts RPC の認証はこの予算の対象外です。Run handler の
-直接呼出しは従来の 5 秒 fallback を持ちます。この境界の修正だけでは、issue #444
+別予算です。staging の shared-auth 経路で選択された exact Run GET は、元RP認証の
+開始前からControl読取まで一つの5秒予算を使います。Run handler の直接呼出しは
+従来の5秒 fallbackを持ちます。この境界の修正だけでは、issue #444
 の元の約 120 秒の停止原因や
 authenticated staging E2E の成功を示せません。
 
@@ -167,7 +168,7 @@ credential、raw headers/body、query、private Run ID を含めません。
 
 operator が staging config で `TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS = "true"` を
 明示すると、`TAKOSUMI_ENVIRONMENT = "staging"` の場合だけ公開 Accounts/control
-request の `request_phase` log を有効にできます。production、未設定、`"false"`
+request（shared-auth の exact Run GET を含む）の `request_phase` log を有効にできます。production、未設定、`"false"`
 では出力しません。config は operator が管理し、通常の owning-repository staging
 code surface と同じ source/config provenance、target guard、exclusive publish lock
 で反映します。観測後は flag を外せます。これは保存ログの権限を付与する設定ではありません。
@@ -203,7 +204,7 @@ Worker は inventory の `{runId}` のような template を使い、client prob
 | `shared_workspace_billing_prepare` | 元WorkspaceとmemberでControl intentをprepareする待機 |
 | `shared_workspace_billing_enrollment` | 元intentに対するenrollment acknowledgement取得 |
 | `shared_workspace_billing_claim` | 元intent／member／epochを再照合するControl claim待機 |
-| `control_auth` | 通常の Accounts bearer認証。D1 candidate lookup / active-token検証を含む |
+| `control_auth` | 通常経路では Accounts bearer認証とD1 candidate lookup / active-token検証。shared-auth の exact Run GET では元RP認証待ち |
 | `control_init` | Control operations facade 待ち。既存の5秒期限は維持 |
 | `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
 | `run_get_read` | 認証済み `GET /api/v1/runs/{runId}` の元Run読取。外側の同一request deadlineを変更しない |
