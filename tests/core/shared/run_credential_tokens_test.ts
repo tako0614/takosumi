@@ -9,6 +9,8 @@ import {
 
 const NOW = 1_800_000_000_000;
 const SIGNING_SECRET = "0123456789abcdef0123456789abcdef";
+const BASE64URL_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const FULL_CLAIMS = {
   audience: "operator.example.provider.v1",
   subject: "untrusted-token-subject",
@@ -135,6 +137,71 @@ describe("run credential token", () => {
         now: () => NOW,
       }),
     ).toEqual({ ok: false, reason: "invalid_signature" });
+  });
+
+  test("rejects a non-canonical signature encoding of a valid signature", async () => {
+    const issued = await createRunCredentialToken({
+      secret: SIGNING_SECRET,
+      ...FULL_CLAIMS,
+      now: () => NOW,
+      jti: "jti-canonical-signature",
+    });
+    // A 32-byte HMAC encodes to 43 symbols; the last symbol's low two bits
+    // are padding that atob ignores, so flipping one decodes to equal bytes.
+    const final = issued.token.at(-1) ?? "";
+    const finalIndex = BASE64URL_ALPHABET.indexOf(final);
+    expect(finalIndex % 4).toBe(0);
+    const variant = `${issued.token.slice(0, -1)}${BASE64URL_ALPHABET[finalIndex + 1]}`;
+
+    expect(isRunCredentialToken(variant)).toBe(true);
+    expect(
+      await verifyRunCredentialTokenAuthority(variant, {
+        secret: SIGNING_SECRET,
+        now: () => NOW,
+      }),
+    ).toEqual({ ok: false, reason: "malformed_run_credential_token" });
+    expect(
+      (
+        await verifyRunCredentialTokenAuthority(issued.token, {
+          secret: SIGNING_SECRET,
+          now: () => NOW,
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  test("fails closed when the injected clock is not a finite epoch", async () => {
+    const issued = await createRunCredentialToken({
+      secret: SIGNING_SECRET,
+      ...FULL_CLAIMS,
+      ttlSeconds: 60,
+      now: () => NOW,
+      jti: "jti-clock",
+    });
+    expect(
+      await verifyRunCredentialTokenAuthority(issued.token, {
+        secret: SIGNING_SECRET,
+        now: () => NOW + 3_600_000,
+      }),
+    ).toEqual({ ok: false, reason: "expired" });
+
+    for (const now of [
+      () => Number.NaN,
+      () => Number.POSITIVE_INFINITY,
+      () => undefined as unknown as number,
+      () => null as unknown as number,
+      () => new Date(NOW).toISOString() as unknown as number,
+    ]) {
+      await expect(
+        verifyRunCredentialTokenAuthority(issued.token, {
+          secret: SIGNING_SECRET,
+          now,
+        }),
+      ).rejects.toThrow("finite epoch milliseconds");
+      await expect(
+        createRunCredentialToken({ secret: SIGNING_SECRET, ...FULL_CLAIMS, now }),
+      ).rejects.toThrow("finite epoch milliseconds");
+    }
   });
 
   test("accepts only the generic token prefix and dedicated secret", async () => {
