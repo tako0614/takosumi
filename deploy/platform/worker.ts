@@ -33,7 +33,16 @@ import {
 import {
   CONTROL_DISPATCH_RESOURCE_KEYS,
   controlInventoryResourceKey,
+  isRunGetReadRequest,
 } from "../../accounts/service/src/control-routes.ts";
+import {
+  runGetWithinDeadline,
+  type RunReadWaiter,
+} from "../../accounts/service/src/control/run-read-deadline.ts";
+import {
+  createRequestPhaseDiagnostics,
+  measureRequestPhaseOperation,
+} from "../../accounts/service/src/request-phase-diagnostics.ts";
 import type { AccountsStore } from "../../accounts/service/src/store.ts";
 import type { RunStreamTiming } from "../../accounts/service/src/control/shared.ts";
 import {
@@ -1628,50 +1637,87 @@ export async function handlePlatformSharedAuthControlRequest(
   const url = new URL(request.url);
   const resource = controlInventoryResourceKey(url.pathname);
   if (!resource || !CONTROL_DISPATCH_RESOURCE_KEYS.includes(resource)) return undefined;
-  const ingressFailure = sharedAuthRequestFailure(request, env);
-  if (ingressFailure) return ingressFailure;
-  if (request.headers.has("authorization")) {
-    return Response.json({ error: "unauthenticated" }, {
-      status: 401, headers: { "cache-control": "no-store" },
+  const runRead = isRunGetReadRequest(request);
+  const diagnostics = runRead
+    ? sharedRunGetPhaseDiagnostics(env).forRequest(request)
+    : undefined;
+  const handle = async (
+    assertActive?: () => void,
+    withinRunReadDeadline?: RunReadWaiter,
+  ): Promise<Response> => {
+    const ingressFailure = sharedAuthRequestFailure(request, env);
+    if (ingressFailure) return ingressFailure;
+    if (request.headers.has("authorization")) {
+      return Response.json({ error: "unauthenticated" }, {
+        status: 401, headers: { "cache-control": "no-store" },
+      });
+    }
+    const identity = await measureRequestPhaseOperation(
+      diagnostics,
+      "control_auth",
+      () => authenticateSharedAuthRequest(request, env),
+    );
+    assertActive?.();
+    if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
+    if (identity?.kind !== "authenticated") {
+      return Response.json({ error: "unauthenticated" }, {
+        status: 401, headers: { "cache-control": "no-store" },
+      });
+    }
+    const csrfFailure = platformExtensionSessionCsrfFailure(request, env, {
+      authenticated: true, authKind: "session", sharedAccount: true,
     });
-  }
-  const identity = await authenticateSharedAuthRequest(request, env);
-  if (identity?.kind === "unavailable") return sharedAuthUnavailableResponse();
-  if (identity?.kind !== "authenticated") {
-    return Response.json({ error: "unauthenticated" }, {
-      status: 401, headers: { "cache-control": "no-store" },
+    if (csrfFailure) return csrfFailure;
+    const headers = new Headers(request.headers);
+    for (const header of [...headers.keys()]) {
+      if (header === "cookie" || header === "authorization" ||
+        header === "proxy-authorization" || header.startsWith("x-takosumi-") ||
+        header.startsWith("x-auth-")) headers.delete(header);
+    }
+    const authenticatedRequest = clonePlatformExtensionRequest(request, headers);
+    const response = await handleAuthenticatedControlRoute({
+      request: authenticatedRequest,
+      url,
+      store: dependencies.store ?? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+        schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
+      }),
+      resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
+      subject: identity.accountId,
+      requireCurrentMembership: true,
+      ...(diagnostics ? { diagnostics } : {}),
+      ...(assertActive ? { assertActive } : {}),
+      ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
+      ...(dependencies.runStreamTiming ? { runStreamTiming: dependencies.runStreamTiming } : {}),
+      reauthorizeBearer: async () => {
+        const current = await authenticateSharedAuthRequest(request, env);
+        return current?.kind === "authenticated" && current.accountId === identity.accountId;
+      },
     });
+    if (!response) return Response.json({ error: "not found" }, { status: 404 });
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.set("cache-control", "no-store");
+    return new Response(response.body, { status: response.status, headers: responseHeaders });
+  };
+  return runRead
+    ? await runGetWithinDeadline((assertActive, wait) => handle(assertActive, wait))
+    : await handle();
+}
+
+const sharedRunGetDiagnosticFactories = new WeakMap<
+  CloudflareWorkerEnv,
+  ReturnType<typeof createRequestPhaseDiagnostics>
+>();
+
+function sharedRunGetPhaseDiagnostics(env: CloudflareWorkerEnv) {
+  let factory = sharedRunGetDiagnosticFactories.get(env);
+  if (!factory) {
+    factory = createRequestPhaseDiagnostics({
+      environment: typeof env.TAKOSUMI_ENVIRONMENT === "string" ? env.TAKOSUMI_ENVIRONMENT : "",
+      enabled: env.TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS ?? "",
+    });
+    sharedRunGetDiagnosticFactories.set(env, factory);
   }
-  const csrfFailure = platformExtensionSessionCsrfFailure(request, env, {
-    authenticated: true, authKind: "session", sharedAccount: true,
-  });
-  if (csrfFailure) return csrfFailure;
-  const headers = new Headers(request.headers);
-  for (const header of [...headers.keys()]) {
-    if (header === "cookie" || header === "authorization" ||
-      header === "proxy-authorization" || header.startsWith("x-takosumi-") ||
-      header.startsWith("x-auth-")) headers.delete(header);
-  }
-  const authenticatedRequest = clonePlatformExtensionRequest(request, headers);
-  const response = await handleAuthenticatedControlRoute({
-    request: authenticatedRequest,
-    url,
-    store: dependencies.store ?? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-      schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
-    }),
-    resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
-    subject: identity.accountId,
-    requireCurrentMembership: true,
-    ...(dependencies.runStreamTiming ? { runStreamTiming: dependencies.runStreamTiming } : {}),
-    reauthorizeBearer: async () => {
-      const current = await authenticateSharedAuthRequest(request, env);
-      return current?.kind === "authenticated" && current.accountId === identity.accountId;
-    },
-  });
-  if (!response) return Response.json({ error: "not found" }, { status: 404 });
-  const responseHeaders = new Headers(response.headers);
-  responseHeaders.set("cache-control", "no-store");
-  return new Response(response.body, { status: response.status, headers: responseHeaders });
+  return factory;
 }
 
 function platformInterfaceAccessFailure(
