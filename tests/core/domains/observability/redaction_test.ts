@@ -110,6 +110,24 @@ test("unknown redaction has a finite depth and breadth budget", () => {
   assert.equal(wide.at(-1), "[Truncated]");
 });
 
+test("object redaction bounds Proxy descriptor inspection", () => {
+  const target = Object.fromEntries(
+    Array.from({ length: 5_000 }, (_, index) => [`key${index}`, index]),
+  );
+  let descriptorReads = 0;
+  const proxy = new Proxy(target, {
+    getOwnPropertyDescriptor(object, key) {
+      descriptorReads += 1;
+      return Reflect.getOwnPropertyDescriptor(object, key);
+    },
+  });
+
+  const result = redactUnknown(proxy) as Record<string, unknown>;
+  assert.ok(descriptorReads <= 1_024);
+  assert.ok(Object.keys(result).length <= 1_025);
+  assert.equal(result["[Truncated]"], "[Truncated]");
+});
+
 test("unknown redaction does not execute arbitrary toJSON or expose URL credentials", () => {
   let calls = 0;
   const carrier = {

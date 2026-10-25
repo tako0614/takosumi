@@ -63,28 +63,47 @@ function isValidRequestIdShape(value: string): boolean {
 }
 
 export function registerApiErrorHandler(app: HonoApp): void {
+  if (!appsWithUnknownThrowableGuard.has(app)) {
+    appsWithUnknownThrowableGuard.add(app);
+    // Hono's own compose catches only `instanceof Error`. For a revoked Proxy
+    // even that check throws, so an outer middleware must preserve the 500
+    // envelope for unknown throwables.
+    app.use("*", async (c, next) => {
+      try {
+        await next();
+      } catch (error) {
+        return apiExceptionResponse(c, error);
+      }
+    });
+  }
   const maybeApp = app as HonoApp & {
     onError?: HonoApp["onError"];
   };
   maybeApp.onError?.((error, c) => apiExceptionResponse(c, error));
 }
 
+const appsWithUnknownThrowableGuard = new WeakSet<HonoApp>();
+
 export function apiExceptionResponse(c: Context, error: unknown): Response {
   const requestId = requestIdFromContext(c);
-  if (error instanceof MalformedJsonRequestError) {
-    return c.json(apiError("invalid_json", error.message, undefined, requestId), 400);
-  }
-  if (error instanceof RequestBodyTooLargeError) {
-    return c.json(
-      apiError("payload_too_large", error.message, undefined, requestId),
-      413,
-    );
-  }
-  if (error instanceof DomainError) {
-    return c.json(
-      apiError(error.code, error.message, error.details, requestId),
-      httpStatusForDomainErrorCode(error.code),
-    );
+  try {
+    if (error instanceof MalformedJsonRequestError) {
+      return c.json(apiError("invalid_json", error.message, undefined, requestId), 400);
+    }
+    if (error instanceof RequestBodyTooLargeError) {
+      return c.json(
+        apiError("payload_too_large", error.message, undefined, requestId),
+        413,
+      );
+    }
+    if (error instanceof DomainError) {
+      return c.json(
+        apiError(error.code, error.message, error.details, requestId),
+        httpStatusForDomainErrorCode(error.code),
+      );
+    }
+  } catch {
+    // A hostile prototype/Proxy or accessor cannot replace the opaque 500.
   }
   // An unclassified failure is the host's own defect. The response stays
   // opaque; the operator log keeps the cause so a 500 is diagnosable.

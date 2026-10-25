@@ -60,3 +60,25 @@ test("Hono onError contains hostile properties on an actual Error", async () => 
     },
   });
 });
+
+test("registered API handler contains a revoked Proxy thrown by a route", async () => {
+  const app = new Hono();
+  registerApiErrorHandler(app);
+  app.get("/revoked", () => {
+    const revoked = Proxy.revocable(new Error("unreadable failure"), {});
+    revoked.revoke();
+    throw revoked.proxy;
+  });
+
+  const response = await app.request("/revoked", {
+    headers: { "x-request-id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" },
+  });
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    error: {
+      code: "internal_error",
+      message: "Internal server error",
+      requestId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    },
+  });
+});

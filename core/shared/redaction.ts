@@ -127,12 +127,17 @@ function redactOwnData(
   depth: number,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = inertToJson({});
-  const keys = Object.keys(value);
+  // Object.keys asks a Proxy for the descriptor of every key before we can
+  // apply the entry budget. Inspect only the first bounded own-key slots.
+  // Reflect.ownKeys itself remains one indivisible user-defined Proxy trap.
+  const keys = Reflect.ownKeys(value);
   const limit = Math.min(keys.length, MAX_ENTRIES);
   for (let index = 0; index < limit; index += 1) {
     if (budget.nodes >= MAX_NODES) break;
     const key = keys[index]!;
+    if (typeof key !== "string") continue;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor?.enumerable !== true) continue;
     const redacted = isSecretKey(key)
       ? REDACTED_VALUE
       : descriptor === undefined || !("value" in descriptor)
