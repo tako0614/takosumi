@@ -41,6 +41,7 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { RunReadWaiter } from "./run-read-deadline.ts";
+import type { RequestPhaseObserver } from "../request-phase-diagnostics.ts";
 import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
 import {
   bearerWorkspaceAllows,
@@ -151,6 +152,7 @@ export interface RunStreamTiming {
 }
 
 export interface ControlDispatchContext {
+  readonly diagnostics?: RequestPhaseObserver;
   readonly request: Request;
   readonly url: URL;
   readonly operations: ControlPlaneOperations;
