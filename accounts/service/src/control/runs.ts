@@ -175,6 +175,7 @@ export async function handleRuns(
             workspaceId: run.workspaceId,
             session: ctx.session,
             assertActive,
+            ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
           }),
         );
         assertActive();

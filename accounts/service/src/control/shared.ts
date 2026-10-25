@@ -41,7 +41,10 @@ import type {
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { RunReadWaiter } from "./run-read-deadline.ts";
-import type { RequestPhaseObserver } from "../request-phase-diagnostics.ts";
+import {
+  measureRequestPhaseOperation,
+  type RequestPhaseObserver,
+} from "../request-phase-diagnostics.ts";
 import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
 import {
   bearerWorkspaceAllows,
@@ -584,6 +587,7 @@ export async function requireWorkspaceAccess(input: {
   readonly workspaceId: string;
   readonly workspace?: Workspace;
   readonly assertActive?: () => void;
+  readonly diagnostics?: RequestPhaseObserver;
 }): Promise<WorkspaceAccessResult> {
   input.assertActive?.();
   const canAccess = await canAccessWorkspace({
@@ -593,6 +597,7 @@ export async function requireWorkspaceAccess(input: {
     workspaceId: input.workspaceId,
     ...(input.workspace ? { workspace: input.workspace } : {}),
     ...(input.assertActive ? { assertActive: input.assertActive } : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
   input.assertActive?.();
   if (canAccess) {
@@ -615,6 +620,7 @@ export async function canAccessWorkspace(input: {
   readonly workspaceId: string;
   readonly workspace?: Workspace;
   readonly assertActive?: () => void;
+  readonly diagnostics?: RequestPhaseObserver;
 }): Promise<boolean> {
   input.assertActive?.();
   // A Workspace-restricted credential must not reach any other Workspace, even
@@ -626,7 +632,11 @@ export async function canAccessWorkspace(input: {
 
   const workspace =
     input.workspace ??
-    (await input.operations.workspaces.getWorkspace(input.workspaceId));
+    (await measureRequestPhaseOperation(
+      input.diagnostics,
+      "run_get_workspace",
+      () => input.operations.workspaces.getWorkspace(input.workspaceId),
+    ));
   input.assertActive?.();
   if (workspace.id !== input.workspaceId) return false;
   if (!input.session.requireCurrentMembership &&
@@ -642,14 +652,22 @@ export async function canAccessWorkspace(input: {
       member.roles.includes("owner") ||
       member.roles.includes("admin"));
   if (input.operations.members.getMember) {
-    const member = await input.operations.members.getMember(
-      input.workspaceId,
-      input.session.subject,
+    const member = await measureRequestPhaseOperation(
+      input.diagnostics,
+      "run_get_member",
+      () => input.operations.members.getMember!(
+        input.workspaceId,
+        input.session.subject,
+      ),
     );
     input.assertActive?.();
     return mayUseMember(member);
   }
-  const members = await input.operations.members.listMembers(input.workspaceId);
+  const members = await measureRequestPhaseOperation(
+    input.diagnostics,
+    "run_get_member",
+    () => input.operations.members.listMembers(input.workspaceId),
+  );
   input.assertActive?.();
   return mayUseMember(
     members.find((member) => member.accountId === input.session.subject),

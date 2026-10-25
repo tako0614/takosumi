@@ -2836,6 +2836,8 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     }));
     expect(outcomesFor(downstreamProbe, "run_get_read")).toEqual(["started", "pending"]);
     expect(outcomesFor(downstreamProbe, "run_get_access")).toEqual([]);
+    expect(outcomesFor(downstreamProbe, "run_get_workspace")).toEqual([]);
+    expect(outcomesFor(downstreamProbe, "run_get_member")).toEqual([]);
     expect(downstreamResponse.status).toBe(503);
 
     // Release the underlying read only after the response has settled. The
@@ -2882,8 +2884,12 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     await expectDeadlineResponse(workspaceResponse);
     expect(outcomesFor(workspaceProbe, "run_get_read")).toContain("fulfilled");
     expect(outcomesFor(workspaceProbe, "run_get_access")).toEqual(["started", "pending"]);
+    expect(outcomesFor(workspaceProbe, "run_get_workspace")).toEqual(["started", "pending"]);
+    expect(outcomesFor(workspaceProbe, "run_get_member")).toEqual([]);
     workspaceGate.release();
     await drainLateRouteContinuation(workspaceGate);
+    expect(outcomesFor(workspaceProbe, "run_get_workspace")).toContain("fulfilled");
+    expect(outcomesFor(workspaceProbe, "run_get_member")).toEqual([]);
     expect(controlDb.memberReadCount).toBe(memberReadsBeforeWorkspaceRelease);
 
     // If membership loading is already in flight, its late result must not
@@ -2906,8 +2912,11 @@ test("platform GET Run separates an Accounts init gate from a post-init Plan rea
     await expectDeadlineResponse(memberResponse);
     expect(outcomesFor(memberProbe, "run_get_read")).toContain("fulfilled");
     expect(outcomesFor(memberProbe, "run_get_access")).toEqual(["started", "pending"]);
+    expect(outcomesFor(memberProbe, "run_get_workspace")).toEqual(["started", "fulfilled"]);
+    expect(outcomesFor(memberProbe, "run_get_member")).toEqual(["started", "pending"]);
     memberGate.release();
     await drainLateRouteContinuation(memberGate);
+    expect(outcomesFor(memberProbe, "run_get_member")).toContain("fulfilled");
     expect(controlDb.planRunReadCount).toBe(readsBeforeMemberRelease.plan);
     expect(controlDb.workspaceReadCount).toBe(readsBeforeMemberRelease.workspace);
     expect(controlDb.memberReadCount).toBe(readsBeforeMemberRelease.member);
