@@ -141,6 +141,49 @@ test("createTakosumiLogger redacts secret-looking fields and error text", () => 
   );
 });
 
+test("createTakosumiLogger emits one parseable line for cyclic and hostile fields", () => {
+  const lines: string[] = [];
+  const logger = createTakosumiLogger({
+    format: "json",
+    stdout: (line) => lines.push(line),
+  });
+  const cyclic: Record<string, unknown> = { amount: 42n };
+  cyclic.parent = cyclic;
+  logger.info("service.test.cyclic", { cyclic });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  logger.info("service.test.hostile_fields", revoked.proxy);
+
+  assert.equal(lines.length, 2);
+  assert.deepEqual(JSON.parse(lines[0]).cyclic, {
+    amount: "42",
+    parent: "[Circular]",
+  });
+  assert.equal(JSON.parse(lines[1]).value, "[Unreadable]");
+});
+
+test("createTakosumiLogger contains hostile Error properties", () => {
+  const lines: string[] = [];
+  const logger = createTakosumiLogger({
+    format: "json",
+    stderr: (line) => lines.push(line),
+  });
+  const error = new Error("original");
+  let accessorReads = 0;
+  Object.defineProperty(error, "name", {
+    get() {
+      accessorReads += 1;
+      throw new Error("name accessor must not replace original");
+    },
+  });
+
+  logger.error("service.test.hostile_error", { error });
+
+  assert.equal(lines.length, 1);
+  assert.equal(JSON.parse(lines[0]).error, "[Unreadable]");
+  assert.equal(accessorReads, 0);
+});
+
 test("createTakosumiLogger format defaults to pretty for local env", () => {
   const stdout: string[] = [];
   const log = createTakosumiLogger({

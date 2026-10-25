@@ -2,6 +2,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { containsSecretLikeString, redactJsonObject, redactString } from "takosumi-contract/redaction";
+import { redactUnknown } from "../../../../core/shared/redaction.ts";
+import { errorMessage } from "../../../../core/shared/errors.ts";
 
 test("redaction masks nested secret and token fields", () => {
   const redacted = redactJsonObject({
@@ -67,4 +69,95 @@ test("secret-like detection rejects private keys and credential-bearing service 
     containsSecretLikeString("https://service.example/workspace"),
     false,
   );
+});
+
+test("unknown redaction terminates on cycles, BigInt and hostile properties", () => {
+  const cyclic: Record<string, unknown> = { count: 10n };
+  cyclic.self = cyclic;
+  const shared = { value: 1 };
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+
+  assert.deepEqual(redactUnknown(cyclic), {
+    count: "10",
+    self: "[Circular]",
+  });
+  assert.deepEqual(redactUnknown({ left: shared, right: shared }), {
+    left: { value: 1 },
+    right: { value: 1 },
+  });
+  assert.deepEqual(redactUnknown({
+    get hostile() {
+      throw new Error("accessor must not run");
+    },
+    revoked: revoked.proxy,
+    okay: true,
+  }), {
+    hostile: "[Unreadable]",
+    revoked: "[Unreadable]",
+    okay: true,
+  });
+});
+
+test("unknown redaction has a finite depth and breadth budget", () => {
+  let deep: Record<string, unknown> = { leaf: true };
+  for (let index = 0; index < 100; index += 1) deep = { next: deep };
+  assert.match(JSON.stringify(redactUnknown(deep)), /\[Truncated\]/u);
+
+  const wide = redactUnknown(Array.from({ length: 20_000 }, (_, index) => index));
+  assert.ok(Array.isArray(wide));
+  assert.ok(wide.length < 20_000);
+  assert.equal(wide.at(-1), "[Truncated]");
+});
+
+test("unknown redaction does not execute arbitrary toJSON or expose URL credentials", () => {
+  let calls = 0;
+  const carrier = {
+    note: "visible",
+    toJSON() {
+      calls += 1;
+      return { value: "opaque-local-value" };
+    },
+  };
+  assert.deepEqual(redactUnknown({
+    carrier,
+    url: new URL("https://only-user@example.invalid/path?authorization=opaque-local-value"),
+    date: new Date("2026-10-25T00:00:00.000Z"),
+  }), {
+    carrier: { note: "visible", toJSON: "[Function]" },
+    url: "[URL]",
+    date: "2026-10-25T00:00:00.000Z",
+  });
+  assert.equal(calls, 0);
+});
+
+test("redacted objects and arrays cannot inherit a later toJSON override", () => {
+  const redacted = redactUnknown({
+    password: "opaque-local-value",
+    items: [{ note: "visible" }],
+  }) as Record<string, unknown>;
+  Object.setPrototypeOf(redacted, {
+    toJSON() {
+      return { leak: "opaque-local-value" };
+    },
+  });
+  Object.setPrototypeOf(redacted.items as unknown[], {
+    toJSON() {
+      return ["opaque-local-value"];
+    },
+  });
+
+  const serialized = JSON.stringify(redacted);
+  assert.match(serialized, /"password":"\[REDACTED\]"/u);
+  assert.doesNotMatch(serialized, /opaque-local-value/u);
+});
+
+test("errorMessage survives unprintable throwables", () => {
+  assert.equal(errorMessage(Object.create(null)), "[unprintable thrown value]");
+  assert.equal(errorMessage({
+    toString() {
+      throw new Error("toString must not replace the original error");
+    },
+  }), "[unprintable thrown value]");
+  assert.equal(errorMessage(new Error("ordinary")), "ordinary");
 });

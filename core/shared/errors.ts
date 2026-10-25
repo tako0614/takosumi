@@ -62,5 +62,35 @@ export function notImplemented(
  * call sites do not each re-declare the same one-liner.
  */
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  try {
+    if (error instanceof Error) {
+      return readErrorDataString(error, "message") ??
+        "[unprintable thrown value]";
+    }
+    return String(error);
+  } catch {
+    return "[unprintable thrown value]";
+  }
+}
+
+/** Read an Error diagnostic without invoking an accessor on its prototype chain. */
+export function readErrorDataString(
+  error: Error,
+  key: "name" | "message" | "stack",
+): string | undefined {
+  try {
+    let owner: object | null = error;
+    for (let depth = 0; owner !== null && depth < 8; depth += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) {
+        return "value" in descriptor && typeof descriptor.value === "string"
+          ? descriptor.value
+          : undefined;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+  } catch {
+    // A Proxy may reject even descriptor inspection. It has no safe diagnostic.
+  }
+  return undefined;
 }

@@ -50,7 +50,7 @@
  */
 
 import { currentRuntime } from "./runtime/index.ts";
-import { redactRecord, redactString } from "./redaction.ts";
+import { redactRecord } from "./redaction.ts";
 
 export type TakosumiLogLevel = "info" | "warn" | "error";
 
@@ -80,26 +80,11 @@ export interface TakosumiLoggerOptions {
 
 const DEFAULT_SERVICE = "takosumi-service";
 
-function normalizeError(value: unknown): Record<string, unknown> {
-  if (value instanceof Error) {
-    return {
-      name: value.name,
-      message: redactString(value.message),
-      stack: value.stack ? redactString(value.stack) : undefined,
-    };
-  }
-  return { message: redactString(String(value)) };
-}
-
 function normalizeFields(
   fields: TakosumiLogFields | undefined,
 ): Record<string, unknown> {
   if (!fields) return {};
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(fields)) {
-    out[key] = value instanceof Error ? normalizeError(value) : value;
-  }
-  return redactRecord(out);
+  return redactRecord(fields);
 }
 
 function resolveDefaultFormat(
@@ -174,14 +159,14 @@ class TakosumiLoggerImpl implements TakosumiLogger {
       ? this.#warn
       : this.#stderr;
     if (this.#format === "json") {
-      sink(JSON.stringify({
+      sink(JSON.stringify(Object.assign(Object.create(null), {
         level,
         msg: event,
         ts,
         service: this.#service,
         event,
         ...data,
-      }));
+      })));
       return;
     }
     const extra = Object.keys(data).length > 0

@@ -1,5 +1,10 @@
 import type { Context, Hono as HonoApp } from "hono";
-import { DomainError, type DomainErrorCode } from "../shared/errors.ts";
+import {
+  DomainError,
+  errorMessage,
+  readErrorDataString,
+  type DomainErrorCode,
+} from "../shared/errors.ts";
 import { log } from "../shared/log.ts";
 
 export interface ApiErrorEnvelope {
@@ -83,20 +88,38 @@ export function apiExceptionResponse(c: Context, error: unknown): Response {
   }
   // An unclassified failure is the host's own defect. The response stays
   // opaque; the operator log keeps the cause so a 500 is diagnosable.
+  const diagnostics = safeErrorDiagnostics(error);
   log.error("api.unhandled_exception", {
     requestId,
     method: c.req.method,
     route: c.req.routePath,
-    errorName: error instanceof Error ? error.name : "UnknownError",
-    errorMessage: error instanceof Error ? error.message : String(error),
-    ...(error instanceof Error && error.stack
-      ? { errorStack: error.stack.split("\n").slice(0, 6).join("\n") }
-      : {}),
+    errorName: diagnostics.name,
+    errorMessage: errorMessage(error),
+    ...(diagnostics.stack === undefined
+      ? {}
+      : { errorStack: diagnostics.stack }),
   });
   return c.json(
     apiError("internal_error", "Internal server error", undefined, requestId),
     500,
   );
+}
+
+function safeErrorDiagnostics(error: unknown): {
+  readonly name: string;
+  readonly stack?: string;
+} {
+  try {
+    if (!(error instanceof Error)) return { name: "UnknownError" };
+    const name = readErrorDataString(error, "name") ?? "UnknownError";
+    const rawStack = readErrorDataString(error, "stack");
+    const stack = rawStack === undefined
+      ? undefined
+      : rawStack.split("\n").slice(0, 6).join("\n");
+    return stack === undefined ? { name } : { name, stack };
+  } catch {
+    return { name: "UnknownError" };
+  }
 }
 
 function httpStatusForDomainErrorCode(

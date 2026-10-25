@@ -75,6 +75,32 @@ test("readiness route returns service unavailable for failed probes", async () =
   });
 });
 
+test("readiness retains 503 when an Error message accessor throws", async () => {
+  let accessorReads = 0;
+  const app = createApp({
+    ready: () => {
+      const error = new Error("probe failure");
+      Object.defineProperty(error, "message", {
+        get() {
+          accessorReads += 1;
+          throw new Error("hostile message accessor");
+        },
+      });
+      throw error;
+    },
+    live: () => ({ ok: true }),
+  });
+
+  const response = await app.request(TAKOSUMI_SERVICE_READINESS_PATHS.ready);
+  assert.equal(response.status, 503);
+  const body = await response.json() as {
+    error: { code: string; message: string };
+  };
+  assert.equal(body.error.code, "readiness_probe_failed");
+  assert.equal(body.error.message, "probe failed");
+  assert.equal(accessorReads, 0);
+});
+
 test("readiness route returns service unavailable for booting probes", async () => {
   const app = createApp({
     ready: () => ({
