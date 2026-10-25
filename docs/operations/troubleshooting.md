@@ -208,6 +208,8 @@ Worker は inventory の `{runId}` のような template を使い、client prob
 | `control_dispatch` | 実際の resource dispatch。Run / Workspace / member 等の読み取りを含む |
 | `run_get_read` | 認証済み `GET /api/v1/runs/{runId}` の元Run読取。外側の同一request deadlineを変更しない |
 | `run_get_access` | 同RunのWorkspace／member認可。`fulfilled` は認可成功やHTTP 2xxを意味しない |
+| `run_get_workspace` | `run_get_access` 内のWorkspace読取。既にWorkspace原本が渡された場合は出ない |
+| `run_get_member` | `run_get_access` 内の単一member読取またはmember一覧読取。owner即時許可などmemberを読まない場合は出ない |
 
 shared Workspace診断は固定の `POST /api/v1/account/shared-workspaces/bootstrap` と
 `GET /api/v1/account/shared-workspaces/{workspaceId}/billing-organization` を対象にします。
