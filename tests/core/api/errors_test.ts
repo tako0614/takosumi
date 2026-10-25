@@ -81,4 +81,8 @@ test("registered API handler contains a revoked Proxy thrown by a route", async 
       requestId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     },
   });
+
+  const headResponse = await app.request("/revoked", { method: "HEAD" });
+  assert.equal(headResponse.status, 500);
+  assert.equal(await headResponse.text(), "");
 });

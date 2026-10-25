@@ -63,18 +63,19 @@ function isValidRequestIdShape(value: string): boolean {
 }
 
 export function registerApiErrorHandler(app: HonoApp): void {
-  if (!appsWithUnknownThrowableGuard.has(app)) {
-    appsWithUnknownThrowableGuard.add(app);
-    // Hono's own compose catches only `instanceof Error`. For a revoked Proxy
-    // even that check throws, so an outer middleware must preserve the 500
-    // envelope for unknown throwables.
-    app.use("*", async (c, next) => {
+  if (!appsWithUnknownThrowableFetchGuard.has(app)) {
+    appsWithUnknownThrowableFetchGuard.add(app);
+    // Hono's compose and top-level dispatcher only forward `instanceof Error`
+    // to onError. Wrap the request entrypoint instead of registering a `/*`
+    // route, which would expand the declared route surface.
+    const originalFetch = app.fetch;
+    app.fetch = async (request, env, executionCtx) => {
       try {
-        await next();
+        return await originalFetch(request, env, executionCtx);
       } catch (error) {
-        return apiExceptionResponse(c, error);
+        return unclassifiedRequestExceptionResponse(request, error);
       }
-    });
+    };
   }
   const maybeApp = app as HonoApp & {
     onError?: HonoApp["onError"];
@@ -82,7 +83,39 @@ export function registerApiErrorHandler(app: HonoApp): void {
   maybeApp.onError?.((error, c) => apiExceptionResponse(c, error));
 }
 
-const appsWithUnknownThrowableGuard = new WeakSet<HonoApp>();
+const appsWithUnknownThrowableFetchGuard = new WeakSet<HonoApp>();
+
+function unclassifiedRequestExceptionResponse(
+  request: Request,
+  error: unknown,
+): Response {
+  const header = request.headers.get("x-request-id") ??
+    request.headers.get("x-correlation-id");
+  const requestId = header && isValidRequestIdShape(header)
+    ? header
+    : crypto.randomUUID();
+  const diagnostics = safeErrorDiagnostics(error);
+  log.error("api.unhandled_exception", {
+    requestId,
+    method: request.method,
+    route: new URL(request.url).pathname,
+    errorName: diagnostics.name,
+    errorMessage: errorMessage(error),
+    ...(diagnostics.stack === undefined
+      ? {}
+      : { errorStack: diagnostics.stack }),
+  });
+  if (request.method === "HEAD") {
+    return new Response(null, {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return Response.json(
+    apiError("internal_error", "Internal server error", undefined, requestId),
+    { status: 500 },
+  );
+}
 
 export function apiExceptionResponse(c: Context, error: unknown): Response {
   const requestId = requestIdFromContext(c);
