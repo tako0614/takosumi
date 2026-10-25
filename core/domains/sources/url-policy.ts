@@ -107,6 +107,14 @@ export function evaluateSourceUrl(raw: string): SourceUrlPolicyResult {
   if (scp?.groups) {
     const user = scp.groups.user;
     const host = scp.groups.host;
+    // Git removes brackets around an entire scp authority, so the regex's
+    // `127.0.0.1]` host for `[git@127.0.0.1]:path` is not the dialed host.
+    if (
+      user.includes("[") || user.includes("]") ||
+      host.includes("[") || host.includes("]")
+    ) {
+      return { ok: false, reason: "malformed" };
+    }
     // Embedded credentials in scp form: `user:pass@host:path` -> user contains ':'.
     if (user.includes(":")) {
       return { ok: false, reason: "embedded_credentials" };

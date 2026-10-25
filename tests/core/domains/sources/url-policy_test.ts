@@ -45,6 +45,7 @@ const ALLOWED: readonly AllowCase[] = [
     host: "git.example.org",
   },
   { url: "git@github.com:acme/repo.git", scheme: "scp", host: "github.com" },
+  { url: "git@git.selfhost.example:team/repo.git", scheme: "scp", host: "git.selfhost.example" },
   {
     url: "git@bitbucket.org:team/repo.git",
     scheme: "scp",
@@ -90,6 +91,11 @@ const DENIED: readonly DenyCase[] = [
   // may dial the host after the backslash/userinfo boundary.
   { url: "https://github.com\\@10.0.0.1/acme/repo.git", reason: "malformed" },
   { url: "ssh://git@github.com\\@10.0.0.1/acme/repo.git", reason: "malformed" },
+  // Git removes brackets around the entire scp authority before dialing.
+  { url: "[git@127.0.0.1]:acme/repo.git", reason: "malformed" },
+  { url: "[git@169.254.169.254]:acme/repo.git", reason: "malformed" },
+  { url: "[git@localhost]:acme/repo.git", reason: "malformed" },
+  { url: "[git@github.com]:acme/repo.git", reason: "malformed" },
   // other forbidden schemes
   { url: "http://github.com/acme/repo", reason: "forbidden_scheme_other" },
   { url: "ftp://host/x", reason: "forbidden_scheme_other" },
