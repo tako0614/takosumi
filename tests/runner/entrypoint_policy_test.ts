@@ -230,6 +230,20 @@ test("source URL policy rejects git/libcurl backslash parser differentials", () 
   ).toThrow("source url is malformed");
 });
 
+test("source URL policy rejects bracketed scp authorities before Git", () => {
+  for (const url of [
+    "[git@127.0.0.1]:acme/repo.git",
+    "[git@169.254.169.254]:acme/repo.git",
+    "[git@localhost]:acme/repo.git",
+    "[git@github.com]:acme/repo.git",
+  ]) {
+    expect(() => assertSourceUrlPolicy(url)).toThrow("source url is malformed");
+  }
+  expect(() =>
+    assertSourceUrlPolicy("git@git.selfhost.example:team/repo.git")
+  ).not.toThrow();
+});
+
 test("resolved-host policy accepts public addresses through an injected runner resolver", async () => {
   const seen: string[] = [];
   await expect(

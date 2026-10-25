@@ -42,6 +42,14 @@ export function assertSourceUrlPolicy(url: string): void {
     const user = scpLike[1]!;
     const host = scpLike[2]!;
     const remotePath = scpLike[3]!;
+    // Git strips brackets around `[user@host]` before dialing. The regex
+    // otherwise validates a different host such as `127.0.0.1]`.
+    if (
+      user.includes("[") || user.includes("]") ||
+      host.includes("[") || host.includes("]")
+    ) {
+      throw new Error("source url is malformed");
+    }
     if (user.includes(":")) {
       throw new Error("source url must not embed credentials");
     }

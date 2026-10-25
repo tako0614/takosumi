@@ -244,6 +244,27 @@ test("POST /internal/v1/sources rejects a forbidden URL (400)", async () => {
   expect((await response.json()).error.message).toMatch(/not allowed/);
 });
 
+test("POST /internal/v1/sources refuses a bracketed scp authority before creating a Source", async () => {
+  const app = await makeApp();
+  const response = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "bracketed",
+      url: "[git@127.0.0.1]:acme/repo.git",
+    }),
+  });
+  expect(response.status).toBe(400);
+  expect((await response.json()).error.message).toMatch(/not allowed \(malformed\)/);
+
+  const listed = await app.request("/internal/v1/sources?workspaceId=ws_001", {
+    headers: HEADERS,
+  });
+  expect(listed.status).toBe(200);
+  expect((await listed.json()).sources).toEqual([]);
+});
+
 test("source register -> sync -> snapshots flow", async () => {
   const app = await makeApp();
   const created = await app.request("/internal/v1/sources", {
