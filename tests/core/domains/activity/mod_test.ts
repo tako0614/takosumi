@@ -70,6 +70,26 @@ test("record redacts secret-shaped metadata before persisting", async () => {
   });
 });
 
+test("record safely persists cyclic and accessor-bearing metadata", async () => {
+  const { service, store } = makeService();
+  const cyclic: Record<string, unknown> = { count: 42n };
+  cyclic.self = cyclic;
+  const metadata = {
+    cyclic,
+    get hostile() {
+      throw new Error("metadata accessor must not fail the caller");
+    },
+  };
+  const event = await service.record(base({ metadata }));
+
+  expect(event?.metadata).toEqual({
+    cyclic: { count: "42", self: "[Circular]" },
+    hostile: "[Unreadable]",
+  });
+  const [stored] = await store.listActivityEvents("workspace_1");
+  expect(stored?.metadata).toEqual(event?.metadata);
+});
+
 test("list is newest-first, Workspace-scoped, and limit-clamped", async () => {
   const { service } = makeService();
   // Three in workspace_1 (clock advances each record), one in workspace_2.

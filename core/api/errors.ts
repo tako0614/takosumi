@@ -1,5 +1,10 @@
 import type { Context, Hono as HonoApp } from "hono";
-import { DomainError, type DomainErrorCode } from "../shared/errors.ts";
+import {
+  DomainError,
+  errorMessage,
+  readErrorDataString,
+  type DomainErrorCode,
+} from "../shared/errors.ts";
 import { log } from "../shared/log.ts";
 
 export interface ApiErrorEnvelope {
@@ -58,45 +63,115 @@ function isValidRequestIdShape(value: string): boolean {
 }
 
 export function registerApiErrorHandler(app: HonoApp): void {
+  if (!appsWithUnknownThrowableFetchGuard.has(app)) {
+    appsWithUnknownThrowableFetchGuard.add(app);
+    // Hono's compose and top-level dispatcher only forward `instanceof Error`
+    // to onError. Wrap the request entrypoint instead of registering a `/*`
+    // route, which would expand the declared route surface.
+    const originalFetch = app.fetch;
+    app.fetch = async (request, env, executionCtx) => {
+      try {
+        return await originalFetch(request, env, executionCtx);
+      } catch (error) {
+        return unclassifiedRequestExceptionResponse(request, error);
+      }
+    };
+  }
   const maybeApp = app as HonoApp & {
     onError?: HonoApp["onError"];
   };
   maybeApp.onError?.((error, c) => apiExceptionResponse(c, error));
 }
 
+const appsWithUnknownThrowableFetchGuard = new WeakSet<HonoApp>();
+
+function unclassifiedRequestExceptionResponse(
+  request: Request,
+  error: unknown,
+): Response {
+  const header = request.headers.get("x-request-id") ??
+    request.headers.get("x-correlation-id");
+  const requestId = header && isValidRequestIdShape(header)
+    ? header
+    : crypto.randomUUID();
+  const diagnostics = safeErrorDiagnostics(error);
+  log.error("api.unhandled_exception", {
+    requestId,
+    method: request.method,
+    route: new URL(request.url).pathname,
+    errorName: diagnostics.name,
+    errorMessage: errorMessage(error),
+    ...(diagnostics.stack === undefined
+      ? {}
+      : { errorStack: diagnostics.stack }),
+  });
+  if (request.method === "HEAD") {
+    return new Response(null, {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return Response.json(
+    apiError("internal_error", "Internal server error", undefined, requestId),
+    { status: 500 },
+  );
+}
+
 export function apiExceptionResponse(c: Context, error: unknown): Response {
   const requestId = requestIdFromContext(c);
-  if (error instanceof MalformedJsonRequestError) {
-    return c.json(apiError("invalid_json", error.message, undefined, requestId), 400);
-  }
-  if (error instanceof RequestBodyTooLargeError) {
-    return c.json(
-      apiError("payload_too_large", error.message, undefined, requestId),
-      413,
-    );
-  }
-  if (error instanceof DomainError) {
-    return c.json(
-      apiError(error.code, error.message, error.details, requestId),
-      httpStatusForDomainErrorCode(error.code),
-    );
+  try {
+    if (error instanceof MalformedJsonRequestError) {
+      return c.json(apiError("invalid_json", error.message, undefined, requestId), 400);
+    }
+    if (error instanceof RequestBodyTooLargeError) {
+      return c.json(
+        apiError("payload_too_large", error.message, undefined, requestId),
+        413,
+      );
+    }
+    if (error instanceof DomainError) {
+      return c.json(
+        apiError(error.code, error.message, error.details, requestId),
+        httpStatusForDomainErrorCode(error.code),
+      );
+    }
+  } catch {
+    // A hostile prototype/Proxy or accessor cannot replace the opaque 500.
   }
   // An unclassified failure is the host's own defect. The response stays
   // opaque; the operator log keeps the cause so a 500 is diagnosable.
+  const diagnostics = safeErrorDiagnostics(error);
   log.error("api.unhandled_exception", {
     requestId,
     method: c.req.method,
     route: c.req.routePath,
-    errorName: error instanceof Error ? error.name : "UnknownError",
-    errorMessage: error instanceof Error ? error.message : String(error),
-    ...(error instanceof Error && error.stack
-      ? { errorStack: error.stack.split("\n").slice(0, 6).join("\n") }
-      : {}),
+    errorName: diagnostics.name,
+    errorMessage: errorMessage(error),
+    ...(diagnostics.stack === undefined
+      ? {}
+      : { errorStack: diagnostics.stack }),
   });
   return c.json(
     apiError("internal_error", "Internal server error", undefined, requestId),
     500,
   );
+}
+
+function safeErrorDiagnostics(error: unknown): {
+  readonly name: string;
+  readonly stack?: string;
+} {
+  try {
+    if (!(error instanceof Error)) return { name: "UnknownError" };
+    const name = readErrorDataString(error, "name") ?? "UnknownError";
+    const rawStack = readErrorDataString(error, "stack");
+    const stack = rawStack === undefined
+      ? undefined
+      : rawStack.split("\n").slice(0, 6).join("\n");
+    return stack === undefined ? { name } : { name, stack };
+  } catch {
+    return { name: "UnknownError" };
+  }
 }
 
 function httpStatusForDomainErrorCode(

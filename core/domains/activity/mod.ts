@@ -100,6 +100,7 @@ export class ActivityService implements ActivityLedger {
       id: this.#newId("act"),
       createdAt,
     };
+    Object.defineProperty(full, "toJSON", { value: undefined });
     try {
       return await this.#store.putActivityEvent(full);
     } catch (error) {
@@ -132,6 +133,7 @@ export class ActivityService implements ActivityLedger {
       id,
       createdAt,
     };
+    Object.defineProperty(full, "toJSON", { value: undefined });
     try {
       return await this.#store.putActivityEvent(full);
     } catch (error) {

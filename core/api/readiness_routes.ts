@@ -1,4 +1,5 @@
 import type { Context, Hono as HonoApp } from "hono";
+import { readErrorDataString } from "../shared/errors.ts";
 import { apiError, registerApiErrorHandler } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 
@@ -100,5 +101,11 @@ function statusCodeForProbe(result: HealthProbeResult): 200 | 503 {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "probe failed";
+  try {
+    return error instanceof Error
+      ? readErrorDataString(error, "message") ?? "probe failed"
+      : "probe failed";
+  } catch {
+    return "probe failed";
+  }
 }
