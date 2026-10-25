@@ -104,9 +104,11 @@ import {
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { CapsuleModuleVariableMaterializer } from "../../../../core/domains/deploy-control/module_variable_materializer.ts";
 import {
+  createRuntimeSecretFileMaterializer,
   RuntimeSecretFileBundle,
   type RuntimeSecretFileMaterializer,
 } from "../../../../core/domains/deploy-control/runtime_secret_file_materializer.ts";
+import { PlaceholderSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { deriveCommittedPostApplyRecoveryProof } from "../../../../core/domains/deploy-control/committed_post_apply_recovery.ts";
 import {
@@ -7496,6 +7498,77 @@ test("successful destroy retires the exact Capsule runtime secret bundle without
   ]);
 });
 
+test("destroy captures the sealed runtime-secret digest after profile rebind or removal", async () => {
+  for (const runtimeBindingMaterialization of [
+    {
+      ...RUNTIME_SECRET_PROFILE,
+      runtimeSecretFile: {
+        ...RUNTIME_SECRET_PROFILE.runtimeSecretFile,
+        fileName: "changed.json",
+      },
+    },
+    undefined,
+  ]) {
+    const store = new InMemoryOpenTofuControlStore();
+    const runner = recordingRunner();
+    const seeded = await seedRunnableCapsuleModel(store, {
+      environment: "preview",
+      installConfig: runtimeSecretLifecycleInstallConfig(),
+    });
+    const controller = controllerWith(store, runner, {
+      runtimeSecretFileMaterializer: createRuntimeSecretFileMaterializer({
+        store,
+        crypto: new PlaceholderSecretBoundaryCrypto(),
+      }),
+      releaseActivator: {
+        activate: () => Promise.resolve({ status: "succeeded" }),
+      },
+    });
+    const create = await controller.createCapsulePlan(seeded.capsule.id);
+    await controller.createApplyRun({
+      planRunId: create.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(create.planRun),
+    });
+    const ownerRef = `runtime_secret_file_${seeded.capsule.id}`;
+    expect(await store.getSecretBlob(ownerRef)).toBeDefined();
+
+    const target = {
+      ...seeded.installConfig,
+      id: `cfg_rebound_${runtimeBindingMaterialization ? "changed" : "removed"}`,
+      runtimeBindingMaterialization,
+    };
+    await store.putInstallConfig(target);
+    const active = await store.getCapsule(seeded.capsule.id);
+    if (!active) throw new Error("fixture Capsule is missing");
+    await store.putCapsule({ ...active, installConfigId: target.id });
+
+    const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+    await controller.approveRun(destroy.planRun.id);
+    const destroyed = await controller.createApplyRun({
+      planRunId: destroy.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+    });
+    expect(destroyed.applyRun.status).toBe("succeeded");
+    expect(runner.destroyJobs).toHaveLength(1);
+    expect(await store.getSecretBlob(ownerRef)).toBeUndefined();
+    const pending = destroyed.applyRun.auditEvents.find(
+      (event) => event.type === "runtime_secret.retirement.pending",
+    );
+    expect(pending?.data).toMatchObject({
+      capsuleId: seeded.capsule.id,
+      installConfigId: target.id,
+      profileDigest: await stableJsonDigest(
+        RUNTIME_SECRET_PROFILE.runtimeSecretFile,
+      ),
+    });
+    expect(
+      destroyed.applyRun.auditEvents.some(
+        (event) => event.type === "runtime_secret.retirement.completed",
+      ),
+    ).toBe(true);
+  }
+});
+
 test("runtime-secret retirement intent resolution fails before provider destroy dispatch", async () => {
   const store = new FailingNthInstallConfigReadStore();
   const runner = recordingRunner();
@@ -7533,6 +7606,44 @@ test("runtime-secret retirement intent resolution fails before provider destroy 
   expect(store.installConfigReads).toBe(3);
   expect(failed.applyRun.status).toBe("failed");
   expect(runner.destroyJobs).toHaveLength(0);
+});
+
+test("a malformed sealed runtime-secret fence blocks provider destroy before dispatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: createRuntimeSecretFileMaterializer({
+      store,
+      crypto: new PlaceholderSecretBoundaryCrypto(),
+    }),
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const ownerRef = "runtime_secret_file_cap_fixture1";
+  const original = await store.getSecretBlob(ownerRef);
+  if (!original) throw new Error("fixture sealed blob is missing");
+  await store.deleteSecretBlob(ownerRef);
+  await store.createSecretBlobIfAbsent({ ...original, aad: "{}" });
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const failed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(failed.applyRun.status).toBe("failed");
+  expect(runner.destroyJobs).toHaveLength(0);
+  expect(await store.getSecretBlob(ownerRef)).toMatchObject({ aad: "{}" });
 });
 
 test("destroy commits a durable runtime-secret retirement intent and retries without replaying provider destroy", async () => {
@@ -7612,6 +7723,70 @@ test("destroy commits a durable runtime-secret retirement intent and retries wit
   await controller.runQueuedApply(first.applyRun.id);
   expect(retireAttempts).toBe(2);
   expect(runner.destroyJobs).toHaveLength(1);
+});
+
+test("a pending sealed-secret retirement survives a later destroyed-Capsule rebind", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: runtimeSecretLifecycleInstallConfig(),
+  });
+  const real = createRuntimeSecretFileMaterializer({
+    store,
+    crypto: new PlaceholderSecretBoundaryCrypto(),
+  });
+  let retireAttempts = 0;
+  const controller = controllerWith(store, runner, {
+    runtimeSecretFileMaterializer: {
+      materialize: (input) => real.materialize(input),
+      retire: async (input) => {
+        retireAttempts += 1;
+        if (retireAttempts === 1) {
+          throw new Error("injected retirement acknowledgement loss");
+        }
+        await real.retire(input);
+      },
+    },
+    releaseActivator: {
+      activate: () => Promise.resolve({ status: "succeeded" }),
+    },
+  });
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const ownerRef = `runtime_secret_file_${seeded.capsule.id}`;
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  await controller.approveRun(destroy.planRun.id);
+  const first = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(first.applyRun.status).toBe("succeeded");
+  expect(await store.getSecretBlob(ownerRef)).toBeDefined();
+
+  const target = {
+    ...seeded.installConfig,
+    id: "cfg_after_pending_retirement",
+    runtimeBindingMaterialization: undefined,
+  };
+  await store.putInstallConfig(target);
+  const destroyed = await store.getCapsule(seeded.capsule.id);
+  if (!destroyed) throw new Error("fixture destroyed Capsule is missing");
+  await store.putCapsule({ ...destroyed, installConfigId: target.id });
+
+  const repaired = await controller.runQueuedApply(first.applyRun.id);
+  expect(repaired.applyRun.status).toBe("succeeded");
+  expect(retireAttempts).toBe(2);
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(await store.getSecretBlob(ownerRef)).toBeUndefined();
+  expect(
+    repaired.applyRun.auditEvents.some(
+      (event) => event.type === "runtime_secret.retirement.completed",
+    ),
+  ).toBe(true);
 });
 
 test("stale runtime-secret retirement retry cannot overwrite a newer completion", async () => {

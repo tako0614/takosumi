@@ -174,6 +174,12 @@ archived Workspaces and rows beyond the active prefix are included. Deferred
 attempts update their retry timestamp and are selected oldest-attempt-first on
 later bounded sweeps, which provides eventual coverage without exposing values
 or creating another lifecycle ledger.
+Before provider destroy, an existing sealed blob supplies its original profile
+digest to that intent after the Capsule, Workspace, secret partition, and
+associated-data fences are checked. A later InstallConfig rebind or profile
+removal does not strand the sealed material, including after a pending
+retirement. A malformed owner or associated-data fence stops destroy before
+provider dispatch; it is never treated as an absent blob.
 
 Workspace provider credentials, bulk/operator secrets, OIDC signing keys, and
 other generic Connection material remain operator-owned and follow the normal
