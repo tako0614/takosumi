@@ -5,6 +5,7 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import {
   createRuntimeSecretFileMaterializer,
   RUNTIME_SECRET_FILE_BUNDLE_MARKER,
+  runtimeSecretFileRetirementProfileDigest,
 } from "../../../../core/domains/deploy-control/runtime_secret_file_materializer.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -222,6 +223,97 @@ test("runtime secret bundle retires only after the exact Capsule is destroyed", 
   ).rejects.toThrow("destroyed");
   await store.putCapsule({ ...seeded.capsule, status: "destroyed" });
   await materializer.retire({ ...request, profileDigest });
+  expect(
+    await store.getSecretBlob(`runtime_secret_file_${request.capsuleId}`),
+  ).toBeUndefined();
+});
+
+test("retirement keeps the sealed profile fence after a Capsule rebind changes or removes the profile", async () => {
+  for (const runtimeBindingMaterialization of [
+    {
+      ...profile,
+      runtimeSecretFile: {
+        ...profile.runtimeSecretFile,
+        fileName: "changed.json",
+      },
+    },
+    undefined,
+  ]) {
+    const { store, seeded, materializer, request } = await fixture();
+    const sealedDigest = (await materializer.materialize(request))
+      .toRunnerDispatch().profileDigest;
+    const ownerRef = `runtime_secret_file_${request.capsuleId}`;
+    const target = {
+      ...seeded.installConfig,
+      id: `cfg_rebound_${runtimeBindingMaterialization ? "changed" : "removed"}`,
+      runtimeBindingMaterialization,
+    };
+    await store.putInstallConfig(target);
+    await store.putCapsule({ ...seeded.capsule, installConfigId: target.id });
+    const rebound = { ...request, installConfigId: target.id };
+
+    expect(
+      await runtimeSecretFileRetirementProfileDigest({
+        store,
+        workspaceId: request.workspaceId,
+        capsuleId: request.capsuleId,
+        installConfigId: target.id,
+      }),
+    ).toBe(sealedDigest);
+    await store.putCapsule({
+      ...seeded.capsule,
+      installConfigId: target.id,
+      status: "destroyed",
+    });
+    await expect(
+      materializer.retire({
+        ...rebound,
+        profileDigest: `sha256:${"0".repeat(64)}`,
+      }),
+    ).rejects.toThrow("fence");
+    await expect(
+      materializer.retire({
+        ...rebound,
+        installConfigId: "wrong",
+        profileDigest: sealedDigest,
+      }),
+    ).rejects.toThrow("authority");
+    expect(await store.getSecretBlob(ownerRef)).toBeDefined();
+
+    await materializer.retire({ ...rebound, profileDigest: sealedDigest });
+    expect(await store.getSecretBlob(ownerRef)).toBeUndefined();
+  }
+});
+
+test("retirement intent refuses a malformed sealed fence before destroy", async () => {
+  const { store, materializer, request } = await fixture();
+  await materializer.materialize(request);
+  const ownerRef = `runtime_secret_file_${request.capsuleId}`;
+  const original = await store.getSecretBlob(ownerRef);
+  if (!original) throw new Error("fixture sealed blob is missing");
+  await store.deleteSecretBlob(ownerRef);
+  await store.createSecretBlobIfAbsent({ ...original, aad: "{}" });
+
+  await expect(
+    runtimeSecretFileRetirementProfileDigest({ store, ...request }),
+  ).rejects.toThrow("fence");
+  expect(await store.getSecretBlob(ownerRef)).toMatchObject({ aad: "{}" });
+});
+
+test("a deferred retirement keeps its original InstallConfig authority after destroy rebind", async () => {
+  const { store, seeded, materializer, request } = await fixture();
+  const sealedDigest = (await materializer.materialize(request))
+    .toRunnerDispatch().profileDigest;
+  await store.putCapsule({ ...seeded.capsule, status: "destroyed" });
+  const target = { ...seeded.installConfig, id: "cfg_after_destroy" };
+  await store.putInstallConfig(target);
+  await store.putCapsule({
+    ...seeded.capsule,
+    status: "destroyed",
+    installConfigId: target.id,
+  });
+
+  await materializer.retire({ ...request, profileDigest: sealedDigest });
   expect(
     await store.getSecretBlob(`runtime_secret_file_${request.capsuleId}`),
   ).toBeUndefined();

@@ -259,9 +259,10 @@ import {
   restoredCapsuleInterfaceMaterializationIntentId,
   type CapsuleInterfaceMaterializationIntent,
 } from "../interface_materialization_intent.ts";
-import type {
-  RuntimeSecretFileBundle,
-  RuntimeSecretFileMaterializer,
+import {
+  runtimeSecretFileRetirementProfileDigest,
+  type RuntimeSecretFileBundle,
+  type RuntimeSecretFileMaterializer,
 } from "../runtime_secret_file_materializer.ts";
 import {
   runtimeInputProviderInstanceForStorage,
@@ -11682,17 +11683,18 @@ export class RunEngine {
   async #runtimeSecretRetirementIntent(
     capsule: Capsule,
   ): Promise<RuntimeSecretRetirementIntent | undefined> {
-    const installConfig = await this.#store.getInstallConfig(
-      capsule.installConfigId,
-    );
-    const profile =
-      installConfig?.runtimeBindingMaterialization?.runtimeSecretFile;
-    if (!installConfig || profile === undefined) return undefined;
+    const profileDigest = await runtimeSecretFileRetirementProfileDigest({
+      store: this.#store,
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      installConfigId: capsule.installConfigId,
+    });
+    if (profileDigest === undefined) return undefined;
     return {
       workspaceId: capsule.workspaceId,
       capsuleId: capsule.id,
-      installConfigId: installConfig.id,
-      profileDigest: await stableJsonDigest(profile),
+      installConfigId: capsule.installConfigId,
+      profileDigest,
     };
   }
 

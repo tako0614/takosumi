@@ -103,6 +103,40 @@ export interface RuntimeSecretFileMaterializer {
   }): Promise<void>;
 }
 
+/** Capture the sealed, value-free fence before provider destroy is dispatched. */
+export async function runtimeSecretFileRetirementProfileDigest(input: {
+  readonly store: OpenTofuControlStore;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installConfigId: string;
+}): Promise<string | undefined> {
+  const { config } = await currentAuthority(input.store, input);
+  const ownerRef = runtimeSecretFileOwnerRef(input.capsuleId);
+  const blob = await input.store.getSecretBlob(ownerRef);
+  if (blob) {
+    const profileDigest = sealedProfileDigest(blob);
+    assertRuntimeSecretFileBlob({
+      blob,
+      ownerRef,
+      workspaceId: input.workspaceId,
+      partition: runtimeSecretFilePartition(input.capsuleId),
+      aad: runtimeSecretFileAad({
+        ownerRef,
+        workspaceId: input.workspaceId,
+        capsuleId: input.capsuleId,
+        profileDigest,
+      }),
+    });
+    return profileDigest;
+  }
+  if (config.runtimeBindingMaterialization?.runtimeSecretFile === undefined) {
+    return undefined;
+  }
+  return await stableJsonDigest(
+    exactRuntimeSecretFileProfile(config.runtimeBindingMaterialization),
+  );
+}
+
 export function createRuntimeSecretFileMaterializer(input: {
   readonly store: OpenTofuControlStore;
   readonly crypto: SecretBoundaryCrypto;
@@ -178,12 +212,11 @@ export function createRuntimeSecretFileMaterializer(input: {
       });
     },
     async retire(request) {
-      const current = await currentProfile(input.store, request);
-      if (current.capsule.status !== "destroyed") {
+      const capsule = await retirementAuthority(input.store, request);
+      if (capsule.status !== "destroyed") {
         invalid("runtime secret file retires only after Capsule is destroyed");
       }
-      const profileDigest = await stableJsonDigest(current.file);
-      if (request.profileDigest !== profileDigest) {
+      if (!/^sha256:[0-9a-f]{64}$/u.test(request.profileDigest)) {
         invalid("runtime secret file retirement profile is stale");
       }
       const ownerRef = runtimeSecretFileOwnerRef(request.capsuleId);
@@ -192,7 +225,7 @@ export function createRuntimeSecretFileMaterializer(input: {
         ownerRef,
         workspaceId: request.workspaceId,
         capsuleId: request.capsuleId,
-        profileDigest,
+        profileDigest: request.profileDigest,
       });
       const blob = await input.store.getSecretBlob(ownerRef);
       if (!blob) return;
@@ -208,7 +241,32 @@ export function createRuntimeSecretFileMaterializer(input: {
   };
 }
 
-async function currentProfile(
+async function retirementAuthority(
+  store: OpenTofuControlStore,
+  request: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly installConfigId: string;
+  },
+) {
+  const capsule = await store.getCapsule(request.capsuleId);
+  if (!capsule || capsule.workspaceId !== request.workspaceId) {
+    invalid("runtime secret file Capsule authority is not current");
+  }
+  // The durable destroy intent pins the original InstallConfig. A destroyed
+  // Capsule may be rebound before a deferred retirement is retried.
+  const config = await store.getInstallConfig(request.installConfigId);
+  if (
+    !config ||
+    (config.workspaceId !== undefined &&
+      config.workspaceId !== request.workspaceId)
+  ) {
+    invalid("runtime secret file InstallConfig authority is not current");
+  }
+  return capsule;
+}
+
+async function currentAuthority(
   store: OpenTofuControlStore,
   request: {
     readonly workspaceId: string;
@@ -233,10 +291,39 @@ async function currentProfile(
   ) {
     invalid("runtime secret file InstallConfig authority is not current");
   }
+  return { capsule, config };
+}
+
+async function currentProfile(
+  store: OpenTofuControlStore,
+  request: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly installConfigId: string;
+  },
+) {
+  const { capsule, config } = await currentAuthority(store, request);
   return {
     capsule,
     file: exactRuntimeSecretFileProfile(config.runtimeBindingMaterialization),
   };
+}
+
+function sealedProfileDigest(blob: StoredSecretBlob): string {
+  let aad: unknown;
+  try {
+    aad = JSON.parse(blob.aad) as unknown;
+  } catch {
+    invalid("runtime secret file profile or owner fence changed");
+  }
+  const profileDigest = isRecord(aad) ? aad.profileDigest : undefined;
+  if (
+    typeof profileDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(profileDigest)
+  ) {
+    invalid("runtime secret file profile or owner fence changed");
+  }
+  return profileDigest;
 }
 
 function exactRuntimeSecretFileProfile(
