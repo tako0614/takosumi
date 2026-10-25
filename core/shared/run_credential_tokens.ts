@@ -237,6 +237,10 @@ export async function verifyRunCredentialTokenAuthority(
   } catch {
     return { ok: false, reason: "malformed_run_credential_token" };
   }
+  // atob ignores trailing pad bits, so only the canonical encoding is one token.
+  if (base64UrlEncodeBytes(presentedSignature) !== segments[2]) {
+    return { ok: false, reason: "malformed_run_credential_token" };
+  }
   const signed = `${segments[0]}.${segments[1]}`;
   const expectedSignature = await hmacSha256Bytes(
     input.secret,
@@ -257,7 +261,7 @@ export async function verifyRunCredentialTokenAuthority(
   const payload = parsePayload(raw, tokenFormat.type);
   if (!payload) return { ok: false, reason: "invalid_payload" };
 
-  const nowSeconds = Math.floor((input.now?.() ?? Date.now()) / 1000);
+  const nowSeconds = currentEpochSeconds(input.now);
   if (payload.iat > nowSeconds + RUN_CREDENTIAL_TOKEN_CLOCK_SKEW_SECONDS) {
     return { ok: false, reason: "not_yet_valid" };
   }
@@ -276,7 +280,7 @@ function createPayload(
   input: CreateRunCredentialTokenInput,
 ): RunCredentialTokenPayload {
   const ttlSeconds = validTtlSeconds(input.ttlSeconds);
-  const nowSeconds = Math.floor((input.now?.() ?? Date.now()) / 1000);
+  const nowSeconds = currentEpochSeconds(input.now);
   return {
     v: RUN_CREDENTIAL_TOKEN_VERSION,
     typ: RUN_CREDENTIAL_TOKEN_TYPE,
@@ -390,6 +394,17 @@ function validTtlSeconds(value: number | undefined): number {
     );
   }
   return ttl;
+}
+
+/** A non-finite clock would make every iat/exp comparison false (fail-open). */
+function currentEpochSeconds(now: (() => number) | undefined): number {
+  const millis: unknown = now === undefined ? Date.now() : now();
+  if (typeof millis !== "number" || !Number.isFinite(millis)) {
+    throw new TypeError(
+      "Run credential token clock must return finite epoch milliseconds",
+    );
+  }
+  return Math.floor(millis / 1000);
 }
 
 function normalizedScopes(scopes: readonly string[]): readonly string[] {
