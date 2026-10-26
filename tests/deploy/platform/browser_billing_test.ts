@@ -76,7 +76,7 @@ test("actual platform fetch captures RP cookie before generic stripping and send
   expect(value.bodyUsed).toBe(false);
 });
 
-test("exact staging billing GET generates a private auth trace, never forwarding a browser trace", async () => {
+test("exact staging billing base views generate a private auth trace, never forwarding a browser trace", async () => {
   const f = fixture();
   for (let i = 0; i < 2; i++) {
     expect((await fetch(request(), f.env)).status).toBe(200);
@@ -87,7 +87,8 @@ test("exact staging billing GET generates a private auth trace, never forwarding
   expect(traces[0]).not.toBe(traces[1]);
   expect(f.seen.dashboard[0]!.request.headers.has("x-takosumi-internal-billing-trace")).toBe(false);
   expect((await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), f.env)).status).toBe(200);
-  expect(f.seen.auth[2]!.headers.has("x-takosumi-internal-billing-trace")).toBe(false);
+  expect(f.seen.auth[2]!.headers.get("x-takosumi-internal-billing-trace")).toMatch(/^brpc_[0-9a-f]{32}$/u);
+  expect(f.seen.dashboard[2]!.request.headers.has("x-takosumi-internal-billing-trace")).toBe(false);
 
   const forged = request(undefined, { headers: { "x-takosumi-internal-billing-trace": traces[0]! } });
   expect((await fetch(forged, f.env)).status).toBe(401);
@@ -589,13 +590,13 @@ test("billing failure phase is a closed staging-only, error-only console event",
   expect(nonstaging.calls).toEqual([]);
 });
 
-test("only the selected staging base GET 503 owns the failure phase header, never the receiver", async () => {
+test("only the selected staging base view 503 owns the failure phase header, never the receiver", async () => {
   for (const [value, status, expected] of [
     [request(), 200, null],
     [request(), 401, null],
     [request(), 403, null],
     [request(root + "/subscription?workspaceId=ws_selected"), 503, null],
-    [post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), 503, null],
+    [post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), 503, "receiver-returned503"],
     [request(), 503, "receiver-returned503"],
   ] as const) {
     const f = fixture();
@@ -625,28 +626,114 @@ test("only the selected staging base GET 503 owns the failure phase header, neve
   action.rpc.fetchWorkspaceDashboard = undefined as unknown as typeof action.rpc.fetchWorkspaceDashboard;
   const actionResult = await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), action.env);
   expect(actionResult.status).toBe(503);
-  expect(actionResult.headers.get("x-takosumi-failure-phase")).toBeNull();
+  expect(actionResult.headers.get("x-takosumi-failure-phase")).toBe("preflight");
   expect(await actionResult.json()).toEqual({ error: "billing_unavailable" });
 });
 
-test("billing failure phase distinguishes dispatch timeout without changing its 40-second budget", async () => {
-  const f = fixture();
-  f.rpc.fetchWorkspaceDashboard = async () => await new Promise<Response>(() => {});
-  const original = globalThis.setTimeout;
-  const delays: number[] = [];
-  globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
-    delays.push(delay ?? 0);
-    return original(handler, delay === 40_000 ? 0 : delay, ...args);
-  }) as typeof setTimeout;
-  try {
-    const { result, calls } = await captureFailurePhase(() => fetch(request(), f.env));
-    expect(result.status).toBe(503);
-    expect(result.headers.get("x-takosumi-failure-phase")).toBe("dispatch-timeout");
-    expect(delays).toContain(40_000);
-    expect(calls).toEqual([[failurePhaseMarker, "dispatch-timeout", expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
-    expect(calls[0]![2]).toBe(f.seen.auth[0]!.headers.get("x-takosumi-internal-billing-trace"));
-  } finally {
-    globalThis.setTimeout = original;
+test("base view timeout remains finite, traced and single-dispatch at 120 seconds", async () => {
+  for (const value of [request(), post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" })]) {
+    const f = fixture();
+    let dispatched = 0;
+    let release!: (value: Response) => void;
+    f.rpc.fetchWorkspaceDashboard = async () => {
+      dispatched++;
+      return await new Promise<Response>((resolve) => { release = resolve; });
+    };
+    const original = globalThis.setTimeout;
+    const delays: number[] = [];
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      delays.push(delay ?? 0);
+      return original(handler, delay === 120_000 || delay === 40_000 ? 0 : delay, ...args);
+    }) as typeof setTimeout;
+    try {
+      const { result, calls } = await captureFailurePhase(() => fetch(value, f.env));
+      expect(result.status).toBe(503);
+      expect(result.headers.get("x-takosumi-failure-phase")).toBe("dispatch-timeout");
+      expect(delays).toContain(120_000);
+      expect(delays).not.toContain(40_000);
+      expect(calls).toEqual([[failurePhaseMarker, "dispatch-timeout", expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
+      expect(calls[0]![2]).toBe(f.seen.auth[0]!.headers.get("x-takosumi-internal-billing-trace"));
+      release(new Response("late result"));
+      await Promise.resolve();
+      expect(dispatched).toBe(1);
+      expect(result.status).toBe(503);
+    } finally {
+      globalThis.setTimeout = original;
+    }
+  }
+});
+
+test("base view can receive its original redirect after the old 40-second boundary", async () => {
+  for (const value of [request(), post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" })]) {
+    const f = fixture();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: (value: Response) => void;
+    let dispatched = 0;
+    f.rpc.fetchWorkspaceDashboard = async () => {
+      dispatched++;
+      entered();
+      return await new Promise<Response>((resolve) => { release = resolve; });
+    };
+    const original = globalThis.setTimeout;
+    const originalClear = globalThis.clearTimeout;
+    const pending = new Map<ReturnType<typeof setTimeout>, { delay: number; fire: () => void }>();
+    globalThis.setTimeout = ((handler: TimerHandler, delay = 0, ...args: unknown[]) => {
+      const handle = original(() => {}, 60_000);
+      pending.set(handle, { delay, fire: () => { (handler as (...args: unknown[]) => void)(...args); } });
+      return handle;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = ((handle: ReturnType<typeof setTimeout>) => {
+      pending.delete(handle);
+      originalClear(handle);
+    }) as typeof clearTimeout;
+    try {
+      const result = fetch(value, f.env);
+      await started;
+      // Advance the old product deadline, without waiting or widening a test timeout.
+      for (const timer of pending.values()) if (timer.delay <= 40_000) timer.fire();
+      release(new Response(null, { status: 303, headers: { location: "https://console.example.test/original-view" } }));
+      const response = await result;
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("https://console.example.test/original-view");
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(dispatched).toBe(1);
+      expect(pending.size).toBe(0);
+    } finally {
+      for (const handle of pending.keys()) originalClear(handle);
+      globalThis.setTimeout = original;
+      globalThis.clearTimeout = originalClear;
+    }
+  }
+});
+
+test("financial leaves retain their 40-second deadline and never retry", async () => {
+  for (const value of [
+    request(root + "/subscription?workspaceId=ws_selected"),
+    request(root + "/top-up?workspaceId=ws_selected"),
+    post(root + "/subscription", start), post(root + "/subscription/cancel", cancel),
+    post(root + "/subscription/plan", plan), post(root + "/top-up", topUp),
+  ]) {
+    const f = fixture();
+    let dispatched = 0;
+    f.rpc.fetchWorkspaceDashboard = async () => { dispatched++; return await new Promise<Response>(() => {}); };
+    const original = globalThis.setTimeout;
+    const delays: number[] = [];
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      delays.push(delay ?? 0);
+      return original(handler, delay === 40_000 ? 0 : delay, ...args);
+    }) as typeof setTimeout;
+    try {
+      const { result, calls } = await captureFailurePhase(() => fetch(value, f.env));
+      expect(result.status).toBe(503);
+      expect(result.headers.get("x-takosumi-failure-phase")).toBeNull();
+      expect(calls).toEqual([[failurePhaseMarker, "dispatch-timeout"]]);
+      expect(delays).toContain(40_000);
+      expect(delays).not.toContain(120_000);
+      expect(dispatched).toBe(1);
+    } finally {
+      globalThis.setTimeout = original;
+    }
   }
 });
 

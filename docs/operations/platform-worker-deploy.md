@@ -392,6 +392,19 @@ contributions GET fails, and the Dashboard loader displays no extra entries.
 The existing contributions HEAD response and unrelated extension/profile-OFF
 contracts are unchanged.
 
+The staging shared-account bridge waits at most 120 seconds for the original
+base-document GET or command-free base-view POST. Other billing GETs and all
+financial POST actions retain the 40-second dispatch deadline. Authentication
+and request-body deadlines remain five seconds. There is one dispatch, with no
+retry or detached continuation after timeout. A base-view 503 carries a closed
+staging failure-phase header and a request-local log join, including for POST;
+the join carries no account or Workspace identity and is not financial authority.
+An expired wait does not prove that the receiver failed to save the original.
+Retain the original reservation and use its supported GET recovery, rather than
+resending the view POST. Qualify an actual fresh-session navigation and successful
+receiver completion with margin inside this finite budget before calling the
+selected live journey ready; a canceled RPC duration is not a completion sample.
+
 Descriptor admission alone does not activate the live journey. Deployment still
 requires the selected Hosted release and its schema, actual RP verification and
 same-primary guarded stores, plus the Server's request authorization and
