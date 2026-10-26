@@ -8,7 +8,7 @@ import {
 } from "../../../deploy/platform/control_d1_schema.ts";
 import { runControlD1SchemaProductionV66V75Cli } from "../../../deploy/platform/control_d1_schema_cli.ts";
 import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_store.ts";
-import { readControlD1MaintenanceState } from "../../../worker/src/d1_schema_maintenance.ts";
+import { acquireControlD1MaintenanceFence, assertControlD1NoActiveRuns, releaseControlD1MaintenanceFence, readControlD1MaintenanceState } from "../../../worker/src/d1_schema_maintenance.ts";
 import type { D1Database, D1PreparedStatement, D1Result } from "../../../worker/src/bindings.ts";
 
 const source = "a".repeat(40);
@@ -224,28 +224,43 @@ test("production66to75 CLI rejects unrelated candidate/predecessor flags before 
   }
 });
 
-test("native D1 production66to75 fence admission rolls back a concurrent Run before any migration", async () => {
+test("native D1 quiescent fence atomically rejects a racing Run on insert and inactive UPSERT", async () => {
   const runtime = new Miniflare({
     modules: [workerdD1Module("production-schema-quiescence-fixture.mjs")],
     compatibilityDate: "2026-07-01", d1Databases: { CONTROL: "synthetic-production-schema-quiescence" },
   });
   try {
     const db = workerdD1Database(runtime);
-    await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 66 });
-    let injected = false;
-    const raced = wrapped(db, async () => {
-      if (!injected) { injected = true; await run(db, "running", "native-original-lease"); }
-    });
-    await expect(applyControlD1Schema(raced.database, await planPromise, options()))
-      .rejects.toMatchObject({ code: "maintenance_fence_acquire_failed" });
-    expect((await readControlD1MigrationLedger(db)).at(-1)?.version).toBe(66);
-    expect(await readControlD1MaintenanceState(db)).toEqual({ status: "absent" });
-    expect(await db.prepare("select status,lease_token from runs").first())
-      .toEqual({ status: "running", lease_token: "native-original-lease" });
-    // End the synthetic Run explicitly. Production never auto-clears a lease.
-    await db.prepare("update runs set status='succeeded',lease_token=null").run();
-    const result = await applyControlD1Schema(db, await planPromise, options());
-    expect(result.verification).toMatchObject({ status: "ready", latestMigrationVersion: 75 });
-    expect(result.maintenanceStatus).toBe("retained");
+    // This tests actual D1 CHECK/UPSERT/transaction semantics. Full canonical
+    // 66->75 data preservation and fault-forward replay are the SQLite cases
+    // above; this fixture does not claim remote Import API qualification.
+    await db.prepare("create table runs(id text primary key,status text not null,lease_token text)").run();
+    const identity = {
+      sourceCommit: source, manifestDigest: (await planPromise).manifestDigest,
+      environment: "production", databaseRole: "in_place" as const,
+      releasePolicy: "in_place" as const, databaseId,
+    };
+    for (const prior of ["absent", "inactive"]) {
+      await assertControlD1NoActiveRuns(db);
+      let injected = false;
+      const raced = wrapped(db, async () => {
+        if (!injected) {
+          injected = true;
+          await db.prepare("insert into runs values('native_original','running','retained_original')").run();
+        }
+      });
+      await expect(acquireControlD1MaintenanceFence(raced.database, identity, now, { requireQuiescentRuns: true }))
+        .rejects.toMatchObject({ code: "maintenance_fence_acquire_failed" });
+      expect(await readControlD1MaintenanceState(db)).toEqual({ status: prior });
+      expect(await db.prepare("select status,lease_token from runs").first())
+        .toEqual({ status: "running", lease_token: "retained_original" });
+      // End this synthetic operation explicitly; the operator surface never
+      // expires a real Run, clears a lease, or settles an original itself.
+      await db.prepare("delete from runs where id='native_original'").run();
+      const fence = await acquireControlD1MaintenanceFence(db, identity, now, { requireQuiescentRuns: true });
+      expect(await readControlD1MaintenanceState(db)).toMatchObject({ status: "active", fence: { sourceCommit: source } });
+      await releaseControlD1MaintenanceFence(db, fence, now);
+      expect(await readControlD1MaintenanceState(db)).toEqual({ status: "inactive" });
+    }
   } finally { await runtime.dispose(); }
 }, 30_000);
