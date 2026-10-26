@@ -720,11 +720,14 @@ test("base POST keeps strict form CSP and exposes one escaped explicit Console G
     dispatched++;
     return new Response(null, { status: 303, headers: {
       location: destination, "x-takosumi-failure-phase": "forged", "x-test-owner-response": "retained",
+      refresh: "0;url=https://other.example.test", link: '<https://other.example.test>;rel=preload',
     } });
   };
   const result = await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), f.env);
   expect(result.status).toBe(200);
   expect(result.headers.get("location")).toBeNull();
+  expect(result.headers.get("refresh")).toBeNull();
+  expect(result.headers.get("link")).toBeNull();
   expect(result.headers.get("content-type")).toBe("text/html; charset=utf-8");
   expect(result.headers.get("cache-control")).toBe("private, no-store");
   expect(result.headers.get("referrer-policy")).toBe("no-referrer");
@@ -741,7 +744,7 @@ test("base POST keeps strict form CSP and exposes one escaped explicit Console G
 });
 
 test("base POST refuses malformed or non-HTTPS receiver navigation without exposing it", async () => {
-  for (const location of [null, "javascript:alert(1)", "http://console.example.test/view", "//console.example.test/view", "https://user:password@console.example.test/view", "https://console.example.test/view#fragment", "https://console.example.test/a b"]) {
+  for (const location of [null, "javascript:alert(1)", "http://console.example.test/view", "//console.example.test/view", "https://user:password@console.example.test/view", "https://console.example.test/view#fragment", "https://console.example.test/a b", "https://console.example.test/" + "x".repeat(4097)]) {
     const f = fixture();
     let dispatched = 0;
     f.rpc.fetchWorkspaceDashboard = async () => {
@@ -756,6 +759,18 @@ test("base POST refuses malformed or non-HTTPS receiver navigation without expos
     expect(calls).toEqual([[failurePhaseMarker, "dispatch-invalid-redirect", expect.stringMatching(/^brpc_[0-9a-f]{32}$/u)]]);
     expect(dispatched).toBe(1);
   }
+});
+
+test("base POST cancels an unused RPC redirect stream without waiting or forwarding it", async () => {
+  const f = fixture();
+  let cancelled = 0;
+  f.rpc.fetchWorkspaceDashboard = async () => new Response(new ReadableStream({
+    cancel() { cancelled++; return new Promise<void>(() => {}); },
+  }), { status: 303, headers: { location: "https://console.example.test/original-view" } });
+  const result = await fetch(post(root + "?workspaceId=ws_selected", { workspaceId: "ws_selected" }), f.env);
+  expect(result.status).toBe(200);
+  expect(await result.text()).toContain('href="https://console.example.test/original-view"');
+  expect(cancelled).toBe(1);
 });
 
 test("base GET and financial POST retain the receiver's original redirect", async () => {

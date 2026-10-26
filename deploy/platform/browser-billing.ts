@@ -49,19 +49,22 @@ function response(status: number, code: string, allow?: string): Response {
 
 function viewNavigationConfirmation(result: Response): Response | null {
   const location = result.headers.get("location");
-  if (!location || location.length > 4096 || result.body !== null) return null;
+  if (!location || location.length > 4096) return null;
   try {
     const destination = new URL(location);
     if (destination.protocol !== "https:" || destination.username || destination.password ||
       destination.hash || destination.href !== location) return null;
   } catch { return null; }
+  // RPC may represent an empty redirect body as a stream. It is never the
+  // confirmation document; cancel ownership without awaiting a hostile body.
+  void result.body?.cancel().catch(() => undefined);
   // The selected private receiver already owns this destination. A form's
   // cross-origin 303 is blocked by the original document's form-action 'self'.
   // Keep that policy and expose one explicit GET link to the same saved view.
   const escaped = location.replaceAll("&", "&amp;").replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("'", "&#39;");
   const headers = new Headers(result.headers);
-  for (const name of ["location", "content-length", "content-encoding", "content-disposition"]) headers.delete(name);
+  for (const name of ["location", "content-length", "content-encoding", "content-disposition", "refresh", "link"]) headers.delete(name);
   headers.set("content-type", "text/html; charset=utf-8");
   headers.set("cache-control", "private, no-store");
   headers.set("referrer-policy", "no-referrer");
