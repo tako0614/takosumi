@@ -9,6 +9,7 @@ import {
   mkdtemp,
   open,
   readFile,
+  readdir,
   realpath,
   rm,
   stat,
@@ -4098,7 +4099,6 @@ type PublicationLocator = Readonly<{
 }>;
 
 type PublicationRecoveryLocator = Readonly<{
-  kind: "takosumi.runner-image-publication-locator@v4";
   scope: string;
   journalPath: string;
   journalIdentity: PublicationJournalFileIdentity;
@@ -4121,6 +4121,17 @@ type PublicationRecoveryLocator = Readonly<{
   };
   pendingName: string;
   createdAt: string;
+}> & (
+  | Readonly<{ kind: "takosumi.runner-image-publication-locator@v4"; sequence?: never }>
+  | Readonly<{ kind: "takosumi.runner-image-publication-locator@v5"; sequence: number }>
+);
+
+type PublicationRecoverySeal = Readonly<{
+  path: string;
+  descriptor: FileHandle;
+  status: BigIntStats;
+  bytes: Uint8Array;
+  locator: PublicationRecoveryLocator;
 }>;
 
 type PublicationJournal = Readonly<{
@@ -4260,6 +4271,7 @@ async function assertRunnerImageReleasePathGraph(
       (entry) => entry.label === "publication-locator-root",
     )!;
     const pendingPrefixes = [
+      basename(graph.publicationJournal.recoveryLocatorPath).replace(/\.locator-v4\.json$/u, ".locator-v5-"),
       `${basename(graph.publicationJournal.lockPath)}.pending-`,
       `${basename(graph.publicationJournal.recoveryLocatorPath)}.pending-`,
     ];
@@ -4443,6 +4455,125 @@ async function assertPublicationRecoveryRequestedPath(
   }
 }
 
+function publicationRecoveryStepIdentity(
+  identity: PublicationJournalIdentity,
+  sequence: number,
+): PublicationJournalIdentity {
+  return sequence === 0 ? identity : {
+    ...identity,
+    recoveryLocatorPath: identity.recoveryLocatorPath.replace(
+      /\.locator-v4\.json$/u,
+      `.locator-v5-${sequence}.json`,
+    ),
+  };
+}
+
+async function publicationRecoveryPaths(
+  identity: PublicationJournalIdentity,
+): Promise<readonly string[]> {
+  let names: string[];
+  try {
+    names = await readdir(identity.locatorRoot);
+  } catch (error) {
+    if (isFileSystemError(error, "ENOENT")) return [];
+    throw error;
+  }
+  const prefix = basename(identity.recoveryLocatorPath).replace(
+    /\.locator-v4\.json$/u,
+    ".locator-v5-",
+  );
+  const sequences = names.filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+    .map((name) => {
+      const suffix = name.slice(prefix.length, -".json".length);
+      if (!/^[1-9][0-9]*$/u.test(suffix) || !Number.isSafeInteger(Number(suffix))) {
+        throw new Error("runner_image_publication_recovery_locator_invalid");
+      }
+      return Number(suffix);
+    }).sort((left, right) => left - right);
+  const hasV4 = names.includes(basename(identity.recoveryLocatorPath));
+  if (sequences.some((value, index) => value !== index + 1) || (sequences.length > 0 && !hasV4)) {
+    throw new Error("runner_image_publication_recovery_locator_invalid");
+  }
+  return hasV4 ? [identity.recoveryLocatorPath, ...sequences.map(
+    (sequence) => publicationRecoveryStepIdentity(identity, sequence).recoveryLocatorPath,
+  )] : [];
+}
+
+async function closePublicationRecoverySeals(
+  seals: readonly PublicationRecoverySeal[],
+): Promise<void> {
+  await Promise.all(seals.map((seal) => seal.descriptor.close()));
+}
+
+async function assertPublicationRecoverySeals(
+  identity: PublicationJournalIdentity,
+  seals: readonly PublicationRecoverySeal[],
+): Promise<void> {
+  if (JSON.stringify(await publicationRecoveryPaths(identity)) !== JSON.stringify(seals.map((seal) => seal.path))) {
+    throw new Error("runner_image_publication_recovery_locator_invalid");
+  }
+  for (const seal of seals) {
+    const opened = await seal.descriptor.stat({ bigint: true });
+    const linked = await privateSingleLinkStatus(seal.path, "publication recovery locator");
+    if (!samePhysicalFile(seal.status, opened) || !samePhysicalFile(opened, linked)) {
+      throw new Error("runner_image_publication_recovery_locator_invalid");
+    }
+  }
+}
+
+async function openPublicationRecoverySeals(
+  identity: PublicationJournalIdentity,
+  predecessor: PublicationLocator,
+  predecessorBytes: Uint8Array,
+  hostIdentity: PublicationHostIdentity,
+): Promise<readonly PublicationRecoverySeal[]> {
+  const seals: PublicationRecoverySeal[] = [];
+  let previous: PublicationLocator | PublicationRecoveryLocator = predecessor;
+  let previousBytes = predecessorBytes;
+  try {
+    const paths = await publicationRecoveryPaths(identity);
+    for (let sequence = 0; sequence < paths.length; sequence += 1) {
+      const path = paths[sequence]!;
+      const before = await privateSingleLinkStatus(path, "publication recovery locator");
+      const descriptor = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        const opened = await descriptor.stat({ bigint: true });
+        if (!samePhysicalFile(before, opened)) {
+          throw new Error("runner_image_publication_recovery_locator_invalid");
+        }
+        const bytes = await readDescriptorBytes(descriptor, opened, "publication recovery locator");
+        const status = await descriptor.stat({ bigint: true });
+        if (!samePhysicalFile(opened, status) || !samePhysicalFile(status, await privateSingleLinkStatus(path, "publication recovery locator"))) {
+          throw new Error("runner_image_publication_recovery_locator_invalid");
+        }
+        const locator = parsePublicationRecoveryLocator(bytes, publicationRecoveryStepIdentity(identity, sequence), sequence);
+        if (locator.predecessor.locatorSha256 !== sha256(previousBytes) ||
+          !samePublicationJournalFileIdentity(locator.predecessor.expectedJournalIdentity, previous.journalIdentity) ||
+          ("observedPrefix" in previous && locator.observedPrefix.byteLength < previous.observedPrefix.byteLength)) {
+          throw new Error("runner_image_publication_recovery_locator_invalid");
+        }
+        if (!samePublicationMachineIdentity(locator.hostIdentity, hostIdentity)) {
+          throw new Error("runner_image_publication_host_mismatch");
+        }
+        if (resolve(locator.journalPath) !== resolve(predecessor.journalPath)) {
+          throw new Error("runner_image_publication_state_path_mismatch");
+        }
+        seals.push({ path, descriptor, status, bytes, locator });
+        previous = locator;
+        previousBytes = bytes;
+      } catch (error) {
+        await descriptor.close();
+        throw error;
+      }
+    }
+    await assertPublicationRecoverySeals(identity, seals);
+    return seals;
+  } catch (error) {
+    await closePublicationRecoverySeals(seals);
+    throw error;
+  }
+}
+
 async function recoverPublicationJournal(
   options: RunnerImageReleaseOptions,
   context: ReleaseContext,
@@ -4454,180 +4585,183 @@ async function recoverPublicationJournal(
   if (!options.state || !options.review) {
     throw new Error("recover-journal requires --state and --review");
   }
-  await finishPartialPublicationRecovery(identity);
-  let recoveryExists = true;
-  try {
-    await lstat(identity.recoveryLocatorPath);
-  } catch (error) {
-    if (!isFileSystemError(error, "ENOENT")) throw error;
-    recoveryExists = false;
-  }
-  if (recoveryExists) {
-    const journal = await openPublicationJournal(
-      identity,
-      options.state,
-      false,
-      false,
-    );
-    if (!journal) throw new Error("runner_image_publication_journal_not_bound");
-    await journal.close();
-    const bytes = await readStablePrivateFile(
-      identity.recoveryLocatorPath,
-      "publication recovery locator",
-    );
-    const locator = parsePublicationRecoveryLocator(bytes, identity);
-    return appendPublicationRecoveryEvidence(
-      options,
-      observedAt,
-      locator,
-      bytes,
-      "already-recovered",
-      sourceRoots,
-    );
-  }
-
-  const predecessorStatus = await privateSingleLinkStatus(
+  const rootLocatorStatus = await privateSingleLinkStatus(
     identity.locatorPath,
     "publication locator",
   );
-  const predecessorBytes = await readStablePrivateFile(
+  const rootLocatorBytes = await readStablePrivateFile(
     identity.locatorPath,
     "publication locator",
   );
   if (!samePhysicalFile(
-    predecessorStatus,
+    rootLocatorStatus,
     await privateSingleLinkStatus(identity.locatorPath, "publication locator"),
   )) {
     throw new Error("runner_image_publication_recovery_source_changed");
   }
-  const predecessor = parsePublicationLocator(predecessorBytes, identity);
+  const rootLocator = parsePublicationLocator(rootLocatorBytes, identity);
   const hostIdentity = await publicationHostIdentity();
-  if (!samePublicationMachineIdentity(predecessor.hostIdentity, hostIdentity)) {
+  if (!samePublicationMachineIdentity(rootLocator.hostIdentity, hostIdentity)) {
     throw new Error("runner_image_publication_host_mismatch");
   }
   const requested = resolve(options.state);
-  if (resolve(predecessor.journalPath) !== requested) {
+  if (resolve(rootLocator.journalPath) !== requested) {
     throw new Error("runner_image_publication_state_path_mismatch");
   }
-  const journalStatus = await privateSingleLinkStatus(requested, "publication state");
-  const journalIdentity = publicationJournalFileIdentity(journalStatus);
-  if (samePublicationJournalFileIdentity(
-    journalIdentity,
-    predecessor.journalIdentity,
-  )) {
-    throw new Error("runner_image_publication_journal_recovery_not_required");
+  const existingPaths = await publicationRecoveryPaths(identity);
+  for (let sequence = 0; sequence < existingPaths.length; sequence += 1) {
+    await finishPartialPublicationRecovery(publicationRecoveryStepIdentity(identity, sequence), sequence);
   }
-  const journalBytes = await readStablePrivateFile(requested, "publication state");
-  const publicationState = parsePublicationState(
-    journalBytes,
-    runnerPublicationStateContext(options, context),
-  );
-  unresolvedPublicationAttemptsFromRecords(publicationState.entries);
-
-  const pendingName = `${basename(identity.recoveryLocatorPath)}.pending-${process.pid}-${randomBytes(16).toString("hex")}`;
-  const locator: PublicationRecoveryLocator = {
-    kind: "takosumi.runner-image-publication-locator@v4",
-    scope: identity.scope,
-    journalPath: requested,
-    journalIdentity,
-    hostIdentity,
-    predecessor: {
-      locatorSha256: sha256(predecessorBytes),
-      expectedJournalIdentity: predecessor.journalIdentity,
-    },
-    observedPrefix: {
-      byteLength: journalBytes.byteLength,
-      sha256: sha256(journalBytes),
-    },
-    continuity: "unknown",
-    recoveredBy: {
-      branch: context.repository.branch,
-      repository: context.releaseSource.pin.repository,
-      commit: context.repository.commit,
-      authoritySha256: context.releaseSource.authoritySha256,
-      review: options.review,
-    },
-    pendingName,
-    createdAt: observedAt,
-  };
-  const locatorBytes = new TextEncoder().encode(`${JSON.stringify(locator)}\n`);
-  const pendingPath = join(identity.locatorRoot, pendingName);
-  const descriptor = await open(
-    pendingPath,
-    fsConstants.O_WRONLY |
-      fsConstants.O_CREAT |
-      fsConstants.O_EXCL |
-      fsConstants.O_NOFOLLOW,
-    0o600,
-  );
-  let linked = false;
+  const seals = await openPublicationRecoverySeals(identity, rootLocator, rootLocatorBytes, hostIdentity);
   try {
-    await descriptor.chmod(0o600);
-    await descriptor.writeFile(locatorBytes);
-    await (recoveryFsync ?? ((file) => file.sync()))(descriptor);
-    const prepared = await descriptor.stat({ bigint: true });
-    if (
-      prepared.size !== BigInt(locatorBytes.byteLength) ||
-      prepared.nlink !== 1n
-    ) {
-      throw new Error("runner_image_publication_recovery_persistence_invalid");
+    const latest = seals.at(-1);
+    const predecessor = latest?.locator ?? rootLocator;
+    const predecessorBytes = latest?.bytes ?? rootLocatorBytes;
+    const predecessorStatus = latest?.status ?? rootLocatorStatus;
+    const predecessorPath = latest?.path ?? identity.locatorPath;
+    const journalStatus = await privateSingleLinkStatus(requested, "publication state");
+    const journalIdentity = publicationJournalFileIdentity(journalStatus);
+    if (samePublicationJournalFileIdentity(
+      journalIdentity,
+      predecessor.journalIdentity,
+    )) {
+      if (seals.length === 0) {
+        throw new Error("runner_image_publication_journal_recovery_not_required");
+      }
+      const journal = await openPublicationJournal(identity, requested, false, false);
+      if (!journal) throw new Error("runner_image_publication_journal_not_bound");
+      await journal.close();
+      return appendPublicationRecoveryEvidence(options, observedAt, predecessor as PublicationRecoveryLocator, predecessorBytes, "already-recovered", sourceRoots);
     }
-    const currentPredecessorBytes = await readStablePrivateFile(
-      identity.locatorPath,
-      "publication locator",
-    );
-    const currentJournalBytes = await readStablePrivateFile(
-      requested,
-      "publication state",
-    );
-    if (
-      sha256(currentPredecessorBytes) !== locator.predecessor.locatorSha256 ||
-      sha256(currentJournalBytes) !== locator.observedPrefix.sha256 ||
-      currentJournalBytes.byteLength !== locator.observedPrefix.byteLength ||
-      !samePhysicalFile(
-        predecessorStatus,
-        await privateSingleLinkStatus(
-          identity.locatorPath,
-          "publication locator",
-        ),
-      ) ||
-      !samePublicationJournalFileIdentity(
-        publicationJournalFileIdentity(
-          await privateSingleLinkStatus(requested, "publication state"),
-        ),
-        journalIdentity,
-      )
-    ) {
-      throw new Error("runner_image_publication_recovery_source_changed");
-    }
-    await link(pendingPath, identity.recoveryLocatorPath);
-    linked = true;
-    await syncPhysicalDirectory(identity.locatorRoot);
-    await unlink(pendingPath);
-    await syncPhysicalDirectory(identity.locatorRoot);
-  } catch (error) {
-    if (linked) {
-      const pending = await lstat(pendingPath, { bigint: true }).catch(() => null);
-      const canonical = await lstat(identity.recoveryLocatorPath, { bigint: true })
-        .catch(() => null);
-      if (canonical && pending && samePhysicalFile(canonical, pending)) {
-        await unlink(identity.recoveryLocatorPath).catch(() => undefined);
+    const journalBytes = await readStablePrivateFile(requested, "publication state");
+    for (const seal of seals) {
+      const prefix = seal.locator.observedPrefix;
+      if (journalBytes.byteLength < prefix.byteLength || sha256(journalBytes.subarray(0, prefix.byteLength)) !== prefix.sha256) {
+        throw new Error("runner_image_publication_journal_prefix_changed");
       }
     }
-    await unlink(pendingPath).catch(() => undefined);
-    await syncPhysicalDirectory(identity.locatorRoot).catch(() => undefined);
-    throw error;
+    const publicationState = parsePublicationState(
+      journalBytes,
+      runnerPublicationStateContext(options, context),
+    );
+    unresolvedPublicationAttemptsFromRecords(publicationState.entries);
+
+    const sequence = seals.length;
+    const stepIdentity = publicationRecoveryStepIdentity(identity, sequence);
+    const pendingName = `${basename(stepIdentity.recoveryLocatorPath)}.pending-${process.pid}-${randomBytes(16).toString("hex")}`;
+    const locator: PublicationRecoveryLocator = {
+      ...(sequence === 0
+        ? { kind: "takosumi.runner-image-publication-locator@v4" as const }
+        : { kind: "takosumi.runner-image-publication-locator@v5" as const, sequence }),
+      scope: identity.scope,
+      journalPath: requested,
+      journalIdentity,
+      hostIdentity,
+      predecessor: {
+        locatorSha256: sha256(predecessorBytes),
+        expectedJournalIdentity: predecessor.journalIdentity,
+      },
+      observedPrefix: {
+        byteLength: journalBytes.byteLength,
+        sha256: sha256(journalBytes),
+      },
+      continuity: "unknown",
+      recoveredBy: {
+        branch: context.repository.branch,
+        repository: context.releaseSource.pin.repository,
+        commit: context.repository.commit,
+        authoritySha256: context.releaseSource.authoritySha256,
+        review: options.review,
+      },
+      pendingName,
+      createdAt: observedAt,
+    };
+    const locatorBytes = new TextEncoder().encode(`${JSON.stringify(locator)}\n`);
+    const pendingPath = join(identity.locatorRoot, pendingName);
+    const descriptor = await open(
+      pendingPath,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    let linked = false;
+    try {
+      await descriptor.chmod(0o600);
+      await descriptor.writeFile(locatorBytes);
+      await (recoveryFsync ?? ((file) => file.sync()))(descriptor);
+      const prepared = await descriptor.stat({ bigint: true });
+      if (
+        prepared.size !== BigInt(locatorBytes.byteLength) ||
+        prepared.nlink !== 1n
+      ) {
+        throw new Error("runner_image_publication_recovery_persistence_invalid");
+      }
+      const currentPredecessorBytes = await readStablePrivateFile(
+        predecessorPath,
+        "publication locator",
+      );
+      await assertPublicationRecoverySeals(identity, seals);
+      if (!samePhysicalFile(rootLocatorStatus, await privateSingleLinkStatus(identity.locatorPath, "publication locator")) ||
+        sha256(await readStablePrivateFile(identity.locatorPath, "publication locator")) !== sha256(rootLocatorBytes)) {
+        throw new Error("runner_image_publication_recovery_source_changed");
+      }
+      const currentJournalBytes = await readStablePrivateFile(
+        requested,
+        "publication state",
+      );
+      if (
+        sha256(currentPredecessorBytes) !== locator.predecessor.locatorSha256 ||
+        sha256(currentJournalBytes) !== locator.observedPrefix.sha256 ||
+        currentJournalBytes.byteLength !== locator.observedPrefix.byteLength ||
+        !samePhysicalFile(
+          predecessorStatus,
+          await privateSingleLinkStatus(
+            predecessorPath,
+            "publication locator",
+          ),
+        ) ||
+        !samePublicationJournalFileIdentity(
+          publicationJournalFileIdentity(
+            await privateSingleLinkStatus(requested, "publication state"),
+          ),
+          journalIdentity,
+        )
+      ) {
+        throw new Error("runner_image_publication_recovery_source_changed");
+      }
+      await link(pendingPath, stepIdentity.recoveryLocatorPath);
+      linked = true;
+      await syncPhysicalDirectory(identity.locatorRoot);
+      await unlink(pendingPath);
+      await syncPhysicalDirectory(identity.locatorRoot);
+    } catch (error) {
+      if (linked) {
+        const pending = await lstat(pendingPath, { bigint: true }).catch(() => null);
+        const canonical = await lstat(stepIdentity.recoveryLocatorPath, { bigint: true })
+          .catch(() => null);
+        if (canonical && pending && samePhysicalFile(canonical, pending)) {
+          await unlink(stepIdentity.recoveryLocatorPath).catch(() => undefined);
+        }
+      }
+      await unlink(pendingPath).catch(() => undefined);
+      await syncPhysicalDirectory(identity.locatorRoot).catch(() => undefined);
+      throw error;
+    } finally {
+      await descriptor.close();
+    }
+    return appendPublicationRecoveryEvidence(
+      options,
+      observedAt,
+      locator,
+      locatorBytes,
+      "recovered",
+      sourceRoots,
+    );
   } finally {
-    await descriptor.close();
+    await closePublicationRecoverySeals(seals);
   }
-  return appendPublicationRecoveryEvidence(
-    options,
-    observedAt,
-    locator,
-    locatorBytes,
-    "recovered",
-    sourceRoots,
-  );
 }
 
 async function appendPublicationRecoveryEvidence(
@@ -4674,11 +4808,8 @@ async function openPublicationJournal(
     locatorExists = false;
   }
   if (!locatorExists) {
-    try {
-      await lstat(identity.recoveryLocatorPath);
+    if ((await publicationRecoveryPaths(identity)).length > 0) {
       throw new Error("runner_image_publication_locator_invalid");
-    } catch (error) {
-      if (!isFileSystemError(error, "ENOENT")) throw error;
     }
     if (!create) return null;
     let journalStatus: BigIntStats;
@@ -4741,7 +4872,7 @@ async function openPublicationJournal(
     identity.locatorPath,
     fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
   );
-  let recoveryLocatorDescriptor: FileHandle | null = null;
+  let recoverySeals: readonly PublicationRecoverySeal[] = [];
   let journalDescriptor: FileHandle | null = null;
   try {
     const locatorOpened = await locatorDescriptor.stat({ bigint: true });
@@ -4768,57 +4899,8 @@ async function openPublicationJournal(
     if (resolve(locator.journalPath) !== requested) {
       throw new Error("runner_image_publication_state_path_mismatch");
     }
-    let activeLocator: PublicationLocator | PublicationRecoveryLocator = locator;
-    let recoveryLocatorAfter: BigIntStats | null = null;
-    try {
-      const recoveryPathBefore = await privateSingleLinkStatus(
-        identity.recoveryLocatorPath,
-        "publication recovery locator",
-      );
-      recoveryLocatorDescriptor = await open(
-        identity.recoveryLocatorPath,
-        fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-      );
-      const recoveryOpened = await recoveryLocatorDescriptor.stat({ bigint: true });
-      if (!samePhysicalFile(recoveryPathBefore, recoveryOpened)) {
-        throw new Error("runner_image_publication_recovery_locator_invalid");
-      }
-      const recoveryBytes = await readDescriptorBytes(
-        recoveryLocatorDescriptor,
-        recoveryOpened,
-        "publication recovery locator",
-      );
-      recoveryLocatorAfter = await recoveryLocatorDescriptor.stat({ bigint: true });
-      const recoveryLinked = await lstat(
-        identity.recoveryLocatorPath,
-        { bigint: true },
-      );
-      if (
-        !samePhysicalFile(recoveryOpened, recoveryLocatorAfter) ||
-        !samePhysicalFile(recoveryLocatorAfter, recoveryLinked)
-      ) {
-        throw new Error("runner_image_publication_recovery_locator_invalid");
-      }
-      const recovery = parsePublicationRecoveryLocator(recoveryBytes, identity);
-      if (
-        recovery.predecessor.locatorSha256 !== sha256(locatorBytes) ||
-        !samePublicationJournalFileIdentity(
-          recovery.predecessor.expectedJournalIdentity,
-          locator.journalIdentity,
-        )
-      ) {
-        throw new Error("runner_image_publication_recovery_locator_invalid");
-      }
-      if (!samePublicationMachineIdentity(recovery.hostIdentity, hostIdentity)) {
-        throw new Error("runner_image_publication_host_mismatch");
-      }
-      if (resolve(recovery.journalPath) !== requested) {
-        throw new Error("runner_image_publication_state_path_mismatch");
-      }
-      activeLocator = recovery;
-    } catch (error) {
-      if (!isFileSystemError(error, "ENOENT")) throw error;
-    }
+    recoverySeals = await openPublicationRecoverySeals(identity, locator, locatorBytes, hostIdentity);
+    const activeLocator = recoverySeals.at(-1)?.locator ?? locator;
 
     let journalPathBefore: BigIntStats;
     try {
@@ -4856,11 +4938,11 @@ async function openPublicationJournal(
     );
 
     const assertBound = async (): Promise<void> => {
-      const [locatorStatus, recoveryLocatorStatus, journalStatus] = await Promise.all([
+      const [locatorStatus, journalStatus] = await Promise.all([
         locatorDescriptor.stat({ bigint: true }),
-        recoveryLocatorDescriptor?.stat({ bigint: true }) ?? Promise.resolve(null),
         journalDescriptor!.stat({ bigint: true }),
       ]);
+      await assertPublicationRecoverySeals(identity, recoverySeals);
       let locatorLinked: BigIntStats;
       let journalLinked: BigIntStats;
       try {
@@ -4877,13 +4959,6 @@ async function openPublicationJournal(
       if (
         !samePhysicalFile(locatorAfter, locatorStatus) ||
         !samePhysicalFile(locatorStatus, locatorLinked) ||
-        (recoveryLocatorAfter !== null &&
-          (!recoveryLocatorStatus ||
-            !samePhysicalFile(recoveryLocatorAfter, recoveryLocatorStatus) ||
-            !samePhysicalFile(
-              recoveryLocatorStatus,
-              await lstat(identity.recoveryLocatorPath, { bigint: true }),
-            ))) ||
         !samePhysicalFile(journalStatus, journalLinked)
       ) {
         throw new Error("runner_image_publication_journal_identity_changed");
@@ -4893,8 +4968,8 @@ async function openPublicationJournal(
         activeLocator.journalIdentity,
         "runner_image_publication_journal_identity_changed",
       );
-      if (activeLocator.kind === "takosumi.runner-image-publication-locator@v4") {
-        await assertPublicationJournalPrefix(journalDescriptor!, activeLocator);
+      for (const seal of recoverySeals) {
+        await assertPublicationJournalPrefix(journalDescriptor!, seal.locator);
       }
     };
 
@@ -4948,14 +5023,14 @@ async function openPublicationJournal(
       close: async () => {
         await journalDescriptor!.close();
         journalDescriptor = null;
-        await recoveryLocatorDescriptor?.close();
-        recoveryLocatorDescriptor = null;
+        await closePublicationRecoverySeals(recoverySeals);
+        recoverySeals = [];
         await locatorDescriptor.close();
       },
     };
   } catch (error) {
     await journalDescriptor?.close();
-    await recoveryLocatorDescriptor?.close();
+    await closePublicationRecoverySeals(recoverySeals);
     await locatorDescriptor.close();
     throw error;
   }
@@ -5003,6 +5078,7 @@ function parsePublicationLocator(
 function parsePublicationRecoveryLocator(
   bytes: Uint8Array,
   identity: PublicationJournalIdentity,
+  sequence = 0,
 ): PublicationRecoveryLocator {
   let value: unknown;
   try {
@@ -5028,8 +5104,10 @@ function parsePublicationRecoveryLocator(
       "predecessor",
       "recoveredBy",
       "scope",
+      ...(sequence > 0 ? ["sequence"] : []),
     ]) ||
-    value.kind !== "takosumi.runner-image-publication-locator@v4" ||
+    value.kind !== (sequence === 0 ? "takosumi.runner-image-publication-locator@v4" : "takosumi.runner-image-publication-locator@v5") ||
+    (sequence > 0 && value.sequence !== sequence) ||
     value.scope !== identity.scope ||
     typeof value.journalPath !== "string" ||
     !isAbsolute(value.journalPath) ||
@@ -5120,6 +5198,7 @@ function publicationRecoveryPendingName(
 
 async function finishPartialPublicationRecovery(
   identity: PublicationJournalIdentity,
+  sequence = 0,
 ): Promise<void> {
   let status: BigIntStats;
   try {
@@ -5152,7 +5231,10 @@ async function finishPartialPublicationRecovery(
       opened,
       "publication recovery locator",
     );
-    const locator = parsePublicationRecoveryLocator(bytes, identity);
+    const locator = parsePublicationRecoveryLocator(bytes, identity, sequence);
+    if (!samePublicationMachineIdentity(locator.hostIdentity, await publicationHostIdentity())) {
+      throw new Error("runner_image_publication_host_mismatch");
+    }
     const pendingPath = join(identity.locatorRoot, locator.pendingName);
     const pending = await lstat(pendingPath, { bigint: true }).catch(() => null);
     if (!pending || !samePhysicalFile(opened, pending)) {

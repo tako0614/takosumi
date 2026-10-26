@@ -252,6 +252,21 @@ inode can also roll back this local metadata domain. Protect that directory with
 the operator's access and backup controls; the release tool does not claim to
 detect such a full same-owner rollback.
 
+If an already recovered journal changes physical identity again (including a
+changed device number after a remount), ordinary build/reconcile still refuse.
+The same explicit reviewed `recover-journal` operation may publish the next
+`<scope>.locator-v5-<sequence>.json` sidecar. It never rewrites v3, v4, earlier
+v5 records, or the journal. Each sequential no-overwrite record binds the exact
+previous locator digest and expected journal identity, the new physical identity,
+all previously sealed prefixes, the entire currently observed valid history,
+and the new source/reviewer authority. Missing steps, changed predecessors,
+changed/truncated prefixes, foreign machines and alternate state paths refuse.
+The active operation holds and revalidates every locator descriptor plus the
+journal under the same scope lock; a partial two-link publication is completed
+only by explicit recovery. Repeating recovery at the current identity is
+idempotent. Known unresolved attempts remain unresolved and block publication.
+This is still local continuity protection, not same-owner anti-rollback storage.
+
 V4 records `continuity: "unknown"`. It does not say that the observed prefix is
 complete, resolve or prove absence of an unobserved old attempt, or prove that a
 future descriptor is distinct. A future build still uses a fresh nonce-bound
