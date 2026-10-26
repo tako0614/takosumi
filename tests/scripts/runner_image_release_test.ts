@@ -6086,3 +6086,173 @@ test("metered native subprocess receives no provider credentials while standard 
     else process.env.CLOUDFLARE_ACCOUNT_ID = accountBefore;
   }
 });
+
+
+test.each(["device-only", "second-inode"] as const)("reviewed repeat recovery preserves immutable predecessors after %s replacement", async (mutation) => {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const prefix = legacyPublicationPrefix(input, 6);
+  const recovered = await replaceAndRecoverPublicationJournal(input, journalRoot, prefix);
+  if (mutation === "device-only") {
+    // Synthetic stale device number represents a remount; retain ino/birthtime.
+    const record = JSON.parse(readFileSync(recovered.coordination.recoveryLocator, "utf8"));
+    record.journalIdentity.dev = (BigInt(record.journalIdentity.dev) + 1n).toString();
+    writePrivate(recovered.coordination.recoveryLocator, `${JSON.stringify(record)}\n`);
+  } else {
+    renameSync(input.state, join(input.operator, "second-displaced-publication-state.jsonl"));
+    writePrivate(input.state, prefix);
+  }
+  const v3 = readFileSync(recovered.coordination.locator);
+  const v4 = readFileSync(recovered.coordination.recoveryLocator);
+  const journal = readFileSync(input.state);
+  let providerCalls = 0;
+  const runtime = {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    publicationJournalRoot: journalRoot,
+    command: async () => {
+      providerCalls += 1;
+      throw new Error("repeat recovery must not call a provider or registry");
+    },
+  };
+  try {
+    await expect(runRunnerImageRelease(buildOptions(input), runtime))
+      .rejects.toThrow("runner_image_publication_journal_identity_changed");
+    await expect(runRunnerImageRelease(recoverJournalOptions(input), runtime))
+      .resolves.toMatchObject({ status: "recovered", continuity: "unknown" });
+    await expect(runRunnerImageRelease(buildOptions(input), runtime))
+      .resolves.toMatchObject({ status: "planned" });
+  } finally {
+    expect(readFileSync(recovered.coordination.locator)).toEqual(v3);
+    expect(readFileSync(recovered.coordination.recoveryLocator)).toEqual(v4);
+    expect(readFileSync(input.state)).toEqual(journal);
+    expect(providerCalls).toBe(0);
+  }
+});
+
+
+async function twiceRecoveredPublicationJournal(source?: (input: Fixture) => string) {
+  const input = fixture();
+  const journalRoot = join(input.operator, "publication-locator");
+  const prefix = source?.(input) ?? legacyPublicationPrefix(input, 6);
+  const recovered = await replaceAndRecoverPublicationJournal(input, journalRoot, prefix);
+  renameSync(input.state, join(input.operator, "second-displaced-publication-state.jsonl"));
+  writePrivate(input.state, prefix);
+  const runtime = {
+    repositoryRoot: input.repository,
+    git: gitFor("fix/TASK-0032-runner-image"),
+    publicationJournalRoot: journalRoot,
+    command: async () => { throw new Error("local recovery must not call a provider"); },
+  };
+  await runRunnerImageRelease(recoverJournalOptions(input), runtime);
+  const v5 = recovered.coordination.recoveryLocator.replace(".locator-v4.json", ".locator-v5-1.json");
+  return { input, journalRoot, prefix, recovered, runtime, v5 };
+}
+
+test("repeat recovery retains unresolved attempts and blocks publication before a nonce", async () => {
+  const { input, runtime, v5 } = await twiceRecoveredPublicationJournal((fixture) =>
+    `${JSON.stringify(publicationAttempt(fixture, { localDescriptorDigest: `sha256:${"d".repeat(64)}` }))}\n`,
+  );
+  expect(existsSync(v5)).toBeTrue();
+  let nonceCalls = 0;
+  await expect(runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...runtime,
+    accountId: "b".repeat(32),
+    nonce: () => { nonceCalls += 1; return "02".repeat(16); },
+  })).rejects.toThrow("runner_image_publication_reconciliation_required");
+  expect(nonceCalls).toBe(0);
+});
+
+test("repeat recovery remains idempotent and can retain a third immutable transition", async () => {
+  const { input, runtime, v5, prefix, recovered } = await twiceRecoveredPublicationJournal();
+  const original = readFileSync(v5);
+  const inode = statSync(v5).ino;
+  await expect(runRunnerImageRelease(recoverJournalOptions(input), runtime))
+    .resolves.toMatchObject({ status: "already-recovered" });
+  expect(readFileSync(v5)).toEqual(original);
+  expect(statSync(v5).ino).toBe(inode);
+  renameSync(input.state, join(input.operator, "third-displaced-publication-state.jsonl"));
+  writePrivate(input.state, prefix);
+  await expect(runRunnerImageRelease(recoverJournalOptions(input), runtime))
+    .resolves.toMatchObject({ status: "recovered", continuity: "unknown" });
+  expect(readFileSync(v5)).toEqual(original);
+  expect(readFileSync(recovered.coordination.locator)).toEqual(recovered.predecessorBytes);
+  const next = v5.replace("v5-1", "v5-2");
+  expect(JSON.parse(readFileSync(next, "utf8"))).toMatchObject({
+    kind: "takosumi.runner-image-publication-locator@v5", sequence: 2,
+    predecessor: { locatorSha256: sha256(original) },
+  });
+  await expect(runRunnerImageRelease(buildOptions(input), runtime))
+    .resolves.toMatchObject({ status: "planned" });
+});
+
+test.each(["changed-history", "predecessor", "foreign-machine", "gap", "missing-v4", "alternate-path", "fsync"] as const)("repeat recovery fails closed on %s", async (mutation) => {
+  const { input, runtime, v5, prefix, recovered, journalRoot } = await twiceRecoveredPublicationJournal();
+  const originalV3 = readFileSync(recovered.coordination.locator);
+  const originalV4 = readFileSync(recovered.coordination.recoveryLocator);
+  const next = v5.replace("v5-1", "v5-2");
+  if (mutation === "predecessor") {
+    const record = JSON.parse(readFileSync(v5, "utf8"));
+    record.predecessor.locatorSha256 = `sha256:${"0".repeat(64)}`;
+    writePrivate(v5, `${JSON.stringify(record)}\n`);
+  } else if (mutation === "foreign-machine") {
+    const record = JSON.parse(readFileSync(v5, "utf8"));
+    record.hostIdentity.machineIdSha256 = `sha256:${"0".repeat(64)}`;
+    writePrivate(v5, `${JSON.stringify(record)}\n`);
+  } else if (mutation === "gap") {
+    renameSync(v5, next);
+  } else if (mutation === "missing-v4") {
+    renameSync(recovered.coordination.recoveryLocator, join(input.operator, "displaced-v4.json"));
+  } else {
+    renameSync(input.state, join(input.operator, "third-displaced-publication-state.jsonl"));
+    writePrivate(input.state, mutation === "changed-history" ? prefix.replace("legacy-release-1", "legacy-release-9") : prefix);
+  }
+  const options = mutation === "alternate-path"
+    ? { ...recoverJournalOptions(input), state: join(input.operator, "alternate.jsonl") }
+    : recoverJournalOptions(input);
+  if (mutation === "alternate-path") writePrivate(options.state!, prefix);
+  const before = Object.fromEntries(readdirSync(journalRoot).map(name => [name, readFileSync(join(journalRoot, name))]));
+  await expect(runRunnerImageRelease(options, {
+    ...runtime,
+    ...(mutation === "fsync" ? { publicationRecoveryFsync: async () => { throw new Error("simulated fsync failure"); } } : {}),
+  })).rejects.toThrow();
+  expect(readFileSync(recovered.coordination.locator)).toEqual(originalV3);
+  if (mutation !== "missing-v4") expect(readFileSync(recovered.coordination.recoveryLocator)).toEqual(originalV4);
+  expect(Object.fromEntries(readdirSync(journalRoot).map(name => [name, readFileSync(join(journalRoot, name))]))).toEqual(before);
+});
+
+test("repeat recovery completes only the explicit durable v5 two-link crash window", async () => {
+  const { input, runtime, v5, journalRoot } = await twiceRecoveredPublicationJournal();
+  const record = JSON.parse(readFileSync(v5, "utf8"));
+  const pending = join(journalRoot, record.pendingName);
+  const bytes = readFileSync(v5);
+  linkSync(v5, pending);
+  await expect(runRunnerImageRelease(buildOptions(input), runtime)).rejects.toThrow();
+  expect(existsSync(pending)).toBeTrue();
+  await expect(runRunnerImageRelease(recoverJournalOptions(input), runtime))
+    .resolves.toMatchObject({ status: "already-recovered" });
+  expect(existsSync(pending)).toBeFalse();
+  expect(statSync(v5).nlink).toBe(1);
+  expect(readFileSync(v5)).toEqual(bytes);
+});
+
+test("repeat recovery descriptors reject a sidecar replacement after journal binding", async () => {
+  const { input, runtime, v5 } = await twiceRecoveredPublicationJournal();
+  const bytes = readFileSync(v5);
+  let externalCalls = 0;
+  await expect(runRunnerImageRelease(buildOptions(input, "staging", true), {
+    ...runtime,
+    accountId: "b".repeat(32),
+    publicationJournalHook: async (phase) => {
+      if (phase === "opened") {
+        renameSync(v5, join(input.operator, "displaced-v5.json"));
+        writePrivate(v5, bytes.toString());
+      }
+    },
+    command: async () => {
+      externalCalls += 1;
+      throw new Error("changed locator must refuse before commands");
+    },
+  })).rejects.toThrow("runner_image_publication_recovery_locator_invalid");
+  expect(externalCalls).toBe(0);
+});
