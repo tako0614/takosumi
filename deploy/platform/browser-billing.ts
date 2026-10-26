@@ -18,6 +18,11 @@ const bodyLimit = 4096;
 // Match the existing private identity-RPC budget; body ingestion cannot hold
 // the unauthenticated ingress open indefinitely before that RPC starts.
 const bodyReadTimeoutMs = 5_000;
+// Base documents and their command-free view capture can outlive the ordinary
+// financial RPC budget. Keep one finite wait for that original response; never
+// retry it. Financial leaves retain their existing deadline.
+const viewDispatchTimeoutMs = 120_000;
+const financialDispatchTimeoutMs = 40_000;
 const safeWorkspace = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const safeOperation = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u;
 const safePlan = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
@@ -79,10 +84,11 @@ export async function handlePlatformBrowserBillingRequest(
   };
   const selectedStaging = selected.TAKOSUMI_SHARED_AUTH_PROFILE === "shared-account" &&
     selected.TAKOSUMI_ENVIRONMENT === "staging";
-  // Generate a request-local log join only for the selected diagnostic GET.
+  const baseView = url.pathname === basePath;
+  // Generate a request-local log join only for the selected base view.
   // Public x-takosumi-* headers are rejected below and are never its source.
   let billingTrace: string | undefined;
-  if (selectedStaging && method === "GET" && url.pathname === basePath) {
+  if (selectedStaging && baseView) {
     try { billingTrace = `brpc_${crypto.randomUUID().replaceAll("-", "")}`; } catch { /* diagnostics cannot block the request */ }
   }
   const logFailure = (phase: BillingFailurePhase): void => {
@@ -92,7 +98,7 @@ export async function handlePlatformBrowserBillingRequest(
   };
   const failed = (phase: BillingFailurePhase, result: Response): Response => {
     logFailure(phase);
-    if (selectedStaging && method === "GET" && url.pathname === basePath && result.status === 503) {
+    if (selectedStaging && baseView && result.status === 503) {
       try { result.headers.set(failurePhaseHeader, phase); } catch { /* diagnostics cannot change the reply */ }
     }
     return result;
@@ -205,7 +211,8 @@ export async function handlePlatformBrowserBillingRequest(
       dispatch(new Request(url, { method, headers: privateHeaders, body, redirect: "manual" }),
         Object.freeze({ authKind: "session", subject: identity.accountId })),
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(dispatchDeadline), 40_000);
+        timer = setTimeout(() => reject(dispatchDeadline),
+          baseView ? viewDispatchTimeoutMs : financialDispatchTimeoutMs);
       }),
     ]);
     if (!(result instanceof Response)) {
