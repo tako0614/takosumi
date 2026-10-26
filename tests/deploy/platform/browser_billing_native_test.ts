@@ -61,6 +61,21 @@ test("native actual platform fetch crosses the narrow Worker RPC with one bounde
       session: { authKind: "session", subject: "tsub_A" },
       url: origin + root + "?workspaceId=ws_not_in_menu&format=json", method: "GET", cookieSeen: true,
       headerNames: ["accept", "cookie", "sec-fetch-site"], body: "" });
+    // Exercise real RPC Response serialization for both null and stream 303
+    // bodies. Neither body is the browser document or financial authority.
+    for (const workspaceId of ["ws_A", "ws_A_stream"]) {
+      const view = await call(root + "?workspaceId=" + workspaceId, {
+        method: "POST", body: JSON.stringify({ workspaceId }),
+        headers: { origin, "content-type": "application/json" },
+      });
+      expect(view.status).toBe(200);
+      expect(view.headers.get("location")).toBeNull();
+      expect(view.headers.get("content-security-policy")).toContain("form-action 'self'");
+      expect(view.headers.get("referrer-policy")).toBe("no-referrer");
+      const html = await view.text();
+      expect(html).toContain(`href="https://console.example.test/billing/hosted-continuations/${workspaceId}"`);
+      expect(html).not.toContain("<script");
+    }
     const form = "workspaceId=ws_A&operationKey=topup_original&amountUsd=10.01&checkoutConsent=interactive-checkout";
     const purchase = await call(root + "/top-up?workspaceId=ws_A", { method: "POST", body: form,
       headers: { origin, "content-type": "application/x-www-form-urlencoded", "sec-fetch-site": "same-origin" } });

@@ -27,7 +27,7 @@ const safeWorkspace = /^[A-Za-z0-9_.:-]{1,128}$/u;
 const safeOperation = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u;
 const safePlan = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
 type BillingFailurePhase = "preflight" | "auth-unavailable" | "dispatch-nonresponse" |
-  "dispatch-rejected" | "dispatch-timeout" | "receiver-returned503";
+  "dispatch-rejected" | "dispatch-timeout" | "dispatch-invalid-redirect" | "receiver-returned503";
 
 function exactViewWorkspace(value: unknown): value is string {
   return typeof value === "string" && safeWorkspace.exec(value)?.[0] === value;
@@ -44,6 +44,34 @@ function response(status: number, code: string, allow?: string): Response {
   return Response.json({ error: code }, {
     status,
     headers: { "cache-control": "private, no-store", ...(allow ? { allow } : {}) },
+  });
+}
+
+function viewNavigationConfirmation(result: Response): Response | null {
+  const location = result.headers.get("location");
+  if (!location || location.length > 4096) return null;
+  try {
+    const destination = new URL(location);
+    if (destination.protocol !== "https:" || destination.username || destination.password ||
+      destination.hash || destination.href !== location) return null;
+  } catch { return null; }
+  // RPC may represent an empty redirect body as a stream. It is never the
+  // confirmation document; cancel ownership without awaiting a hostile body.
+  void result.body?.cancel().catch(() => undefined);
+  // The selected private receiver already owns this destination. A form's
+  // cross-origin 303 is blocked by the original document's form-action 'self'.
+  // Keep that policy and expose one explicit GET link to the same saved view.
+  const escaped = location.replaceAll("&", "&amp;").replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("'", "&#39;");
+  const headers = new Headers(result.headers);
+  for (const name of ["location", "content-length", "content-encoding", "content-disposition", "refresh", "link"]) headers.delete(name);
+  headers.set("content-type", "text/html; charset=utf-8");
+  headers.set("cache-control", "private, no-store");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("content-security-policy", "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  headers.set("x-content-type-options", "nosniff");
+  return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Continue to billing</title><main><h1>Continue to billing</h1><p>Your billing view is ready.</p><a href="${escaped}" referrerpolicy="no-referrer">Open billing in Takoserver Console</a></main></html>`, {
+    status: 200, headers,
   });
 }
 
@@ -218,10 +246,16 @@ export async function handlePlatformBrowserBillingRequest(
     if (!(result instanceof Response)) {
       return failed("dispatch-nonresponse", response(503, "billing_unavailable"));
     }
-    const responseHeaders = new Headers(result.headers);
+    let selectedResult = result;
+    if (baseView && method === "POST" && result.status === 303) {
+      const confirmation = viewNavigationConfirmation(result);
+      if (!confirmation) return failed("dispatch-invalid-redirect", response(503, "billing_unavailable"));
+      selectedResult = confirmation;
+    }
+    const responseHeaders = new Headers(selectedResult.headers);
     responseHeaders.delete(failurePhaseHeader);
     responseHeaders.set("cache-control", "private, no-store");
-    const returned = new Response(result.body, { status: result.status, statusText: result.statusText, headers: responseHeaders });
+    const returned = new Response(selectedResult.body, { status: selectedResult.status, statusText: selectedResult.statusText, headers: responseHeaders });
     return returned.status === 503 ? failed("receiver-returned503", returned) : returned;
   } catch (error) {
     // A lost response never retries or creates a new operation/reference.
