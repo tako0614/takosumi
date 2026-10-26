@@ -6,6 +6,8 @@ import {
   buildControlD1SchemaPlan,
   CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD,
   CONTROL_D1_PRODUCTION_V66_V69_TARGET,
+  CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD,
+  CONTROL_D1_PRODUCTION_V66_V75_TARGET,
   ControlD1SchemaError,
   fenceControlD1Schema,
   releaseControlD1Candidate,
@@ -97,7 +99,8 @@ interface CliDependencies {
   ) => Promise<ControlD1ReleaseCapability>;
   /** @internal fixed-transition selector, injected only by the owner surface. */
   readonly internalGuard?:
-    typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD;
+    typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD |
+    typeof CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD;
   readonly buildSchemaPlan?: (options?: {
     readonly throughMigrationVersion?: number;
   }) => Promise<ControlD1SchemaPlan>;
@@ -114,9 +117,11 @@ export async function runControlD1SchemaCli(
   write: (value: string) => void = console.log,
   dependencies: CliDependencies = {},
 ): Promise<number> {
-  const productionV66V69Guard =
-    dependencies.internalGuard ===
-    CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD;
+  const productionTransition = dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD
+    ? { target: CONTROL_D1_PRODUCTION_V66_V69_TARGET, failurePrefix: "production_v66_v69" }
+    : dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD
+    ? { target: CONTROL_D1_PRODUCTION_V66_V75_TARGET, failurePrefix: "production_v66_v75" }
+    : undefined;
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
@@ -144,27 +149,32 @@ export async function runControlD1SchemaCli(
   }
 
   if (
-    productionV66V69Guard &&
+    productionTransition &&
     !["plan", "verify", "apply", "release"].includes(args.command)
   ) {
-    write(failureTranscript("production_v66_v69_command_invalid", undefined, args));
+    write(failureTranscript(`${productionTransition.failurePrefix}_command_invalid`, undefined, args));
     return 1;
   }
   if (
-    productionV66V69Guard &&
+    productionTransition &&
     args.environment !== "production"
   ) {
-    write(failureTranscript("production_v66_v69_environment_fixed", undefined, args));
+    write(failureTranscript(`${productionTransition.failurePrefix}_environment_fixed`, undefined, args));
     return 1;
   }
-  if (productionV66V69Guard && args.confirmFenceSourceCommit) {
+  if (productionTransition && args.confirmFenceSourceCommit) {
     write(
       failureTranscript(
-        "production_v66_v69_forward_repair_forbidden",
+        `${productionTransition.failurePrefix}_forward_repair_forbidden`,
         undefined,
         args,
       ),
     );
+    return 1;
+  }
+  if (dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD &&
+    (args.confirmPredecessorSource || args.confirmPredecessorManifest)) {
+    write(failureTranscript("production_v66_v75_predecessor_forbidden", undefined, args));
     return 1;
   }
 
@@ -223,10 +233,10 @@ export async function runControlD1SchemaCli(
   try {
     plan = await (dependencies.buildSchemaPlan ?? buildControlD1SchemaPlan)();
     if (
-      productionV66V69Guard &&
-      plan.migrations.at(-1)?.version !== CONTROL_D1_PRODUCTION_V66_V69_TARGET
+      productionTransition &&
+      plan.migrations.at(-1)?.version !== productionTransition.target
     ) {
-      throw new ControlD1SchemaError("production_v66_v69_plan_target_mismatch");
+      throw new ControlD1SchemaError(`${productionTransition.failurePrefix}_plan_target_mismatch`);
     }
   } catch (error) {
     write(failureTranscript(errorCode(error), undefined, args, provenance));
@@ -457,8 +467,8 @@ export async function runControlD1SchemaCli(
       ) {
         throw new ControlD1SchemaError("maintenance_fence_release_mismatch");
       }
-      if (productionV66V69Guard && fence.predecessor !== null) {
-        throw new ControlD1SchemaError("production_v66_v69_fence_mismatch");
+      if (productionTransition && fence.predecessor !== null) {
+        throw new ControlD1SchemaError(`${productionTransition.failurePrefix}_fence_mismatch`);
       }
       const preReleaseVerification = await verifyControlD1Schema(
         remote.database,
@@ -574,8 +584,8 @@ export async function runControlD1SchemaCli(
       releasePolicy: "in_place",
       databaseId: remote.databaseId,
       ...(activePredecessorFence ? { activePredecessorFence } : {}),
-      ...(productionV66V69Guard
-        ? { internalGuard: CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD }
+      ...(productionTransition
+        ? { internalGuard: dependencies.internalGuard }
         : {}),
     });
     write(
@@ -635,6 +645,19 @@ export async function runControlD1SchemaProductionV66V69Cli(
   return runControlD1SchemaCli(argv, env, write, {
     ...dependencies,
     internalGuard: CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD,
+  });
+}
+
+/** Fixed owner-only production66->75 selector; no public migration-head flag. */
+export async function runControlD1SchemaProductionV66V75Cli(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  write: (value: string) => void = console.log,
+  dependencies: CliDependencies = {},
+): Promise<number> {
+  return runControlD1SchemaCli(argv, env, write, {
+    ...dependencies,
+    internalGuard: CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD,
   });
 }
 

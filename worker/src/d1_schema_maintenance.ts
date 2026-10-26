@@ -317,16 +317,32 @@ async function controlD1MaintenanceStateFromRow(
   throw new ControlD1MaintenanceError("maintenance_fence_invalid");
 }
 
+// Same conservative execution boundary for the fixed production schema lane:
+// do not time out or clear any queued/running Run or retained lease.
+const ACTIVE_RUNS_PREDICATE = "status not in ('succeeded', 'failed', 'cancelled', 'expired', 'waiting_approval') or lease_token is not null";
+
+export async function assertControlD1NoActiveRuns(db: D1Database): Promise<void> {
+  const row = await db.prepare(`select count(*) as count from runs where ${ACTIVE_RUNS_PREDICATE}`)
+    .first<{ readonly count: number | string }>();
+  if (!row || (row.count !== 0 && row.count !== "0")) {
+    throw new ControlD1MaintenanceError("maintenance_runs_active");
+  }
+}
+
 /** Acquire or resume the deterministic fence for one reviewed source/plan. */
 export async function acquireControlD1MaintenanceFence(
   db: D1Database,
   identity: ControlD1MaintenanceFenceIdentity,
   activatedAt: string,
+  options?: { readonly requireQuiescentRuns: true },
 ): Promise<ControlD1MaintenanceFence> {
   const normalizedIdentity = normalizeMaintenanceIdentity(identity);
   const fenceId = await maintenanceFenceId(normalizedIdentity);
   const guardedTables = await listGuardedTables(db);
   const maintenanceUpgrade = await maintenanceTableUpgradeStatements(db);
+  // A malformed-JSON runtime assertion aborts this statement if a Run arrived
+  // after preflight. It does not depend on a CHECK in a historical table. This
+  // statement precedes all guard DDL in the same fence batch.
   const statements = [
     db.prepare(CREATE_MAINTENANCE_TABLE),
     ...maintenanceUpgrade,
@@ -338,7 +354,9 @@ export async function acquireControlD1MaintenanceFence(
            database_role, release_policy,
            database_id, source_export_sha256, predecessor_fence_id,
            predecessor_source_commit, predecessor_manifest_digest
-         ) values (1, 1, 0, ?, ?, ?, ?, ?, null, null, ?, ?, ?, ?, null, null, null)
+         ) values (1, ${options?.requireQuiescentRuns
+           ? `case when exists(select 1 from runs where ${ACTIVE_RUNS_PREDICATE}) then json_extract('maintenance_runs_active', '$') else 1 end`
+           : "1"}, 0, ?, ?, ?, ?, ?, null, null, ?, ?, ?, ?, null, null, null)
          on conflict(singleton) do update set
            active = 1,
            migration_bypass = 0,
