@@ -340,9 +340,9 @@ export async function acquireControlD1MaintenanceFence(
   const fenceId = await maintenanceFenceId(normalizedIdentity);
   const guardedTables = await listGuardedTables(db);
   const maintenanceUpgrade = await maintenanceTableUpgradeStatements(db);
-  // With quiescent admission, active=2 deliberately violates the existing
-  // CHECK if a Run arrived after preflight. The entire D1 batch rolls back,
-  // including fence creation and guards, so no read-then-fence race is opened.
+  // A malformed-JSON runtime assertion aborts this statement if a Run arrived
+  // after preflight. It does not depend on a CHECK in a historical table. This
+  // statement precedes all guard DDL in the same fence batch.
   const statements = [
     db.prepare(CREATE_MAINTENANCE_TABLE),
     ...maintenanceUpgrade,
@@ -355,7 +355,7 @@ export async function acquireControlD1MaintenanceFence(
            database_id, source_export_sha256, predecessor_fence_id,
            predecessor_source_commit, predecessor_manifest_digest
          ) values (1, ${options?.requireQuiescentRuns
-           ? `case when exists(select 1 from runs where ${ACTIVE_RUNS_PREDICATE}) then 2 else 1 end`
+           ? `case when exists(select 1 from runs where ${ACTIVE_RUNS_PREDICATE}) then json_extract('maintenance_runs_active', '$') else 1 end`
            : "1"}, 0, ?, ?, ?, ?, ?, null, null, ?, ?, ?, ?, null, null, null)
          on conflict(singleton) do update set
            active = 1,

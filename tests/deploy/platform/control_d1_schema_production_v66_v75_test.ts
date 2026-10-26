@@ -49,6 +49,41 @@ async function run(db: D1Database, status: string, lease: string | null = null) 
     .bind("run_synthetic", "ws_synthetic", "apply", status, lease, "{}", now).run();
 }
 
+async function removeHistoricalActiveCheck(db: D1Database) {
+  const row = await db.prepare("select sql from sqlite_master where type='table' and name='_takosumi_control_schema_maintenance'").first<{ sql: string }>();
+  expect(row).not.toBeNull();
+  const withoutCheck = row!.sql.replace(/check\s*\(\s*active\s+in\s*\(\s*0\s*,\s*1\s*\)\s*\)/iu, "");
+  expect(withoutCheck).not.toBe(row!.sql);
+  // Synthetic fixture setup only; the production owner never repairs DDL.
+  await db.prepare("alter table _takosumi_control_schema_maintenance rename to _takosumi_old_fixture_maintenance").run();
+  await db.prepare(withoutCheck).run();
+  await db.prepare("insert into _takosumi_control_schema_maintenance select * from _takosumi_old_fixture_maintenance").run();
+  await db.prepare("drop table _takosumi_old_fixture_maintenance").run();
+}
+
+test("production66to75 race rejection does not rely on a historical active CHECK", async () => {
+  const db = await baseline();
+  try {
+    await applyControlD1Schema(db, await buildControlD1SchemaPlan({ throughMigrationVersion: 66 }), {
+      ...options(), internalGuard: undefined, retainMaintenanceFence: false,
+    });
+    await removeHistoricalActiveCheck(db);
+    const original = await db.prepare("select * from _takosumi_control_schema_maintenance").first();
+    let injected = false;
+    const raced = wrapped(db, async () => {
+      if (!injected) { injected = true; await run(db, "running", "unconstrained-original-lease"); }
+    });
+    await expect(applyControlD1Schema(raced.database, await planPromise, options()))
+      .rejects.toMatchObject({ code: "maintenance_fence_acquire_failed" });
+    expect(raced.stats.batches).toBe(1);
+    expect((await readControlD1MigrationLedger(db)).at(-1)?.version).toBe(66);
+    expect(await db.prepare("select * from _takosumi_control_schema_maintenance").first()).toEqual(original);
+    expect(await readControlD1MaintenanceState(db)).toEqual({ status: "inactive" });
+    expect(await db.prepare("select status,lease_token from runs").first())
+      .toEqual({ status: "running", lease_token: "unconstrained-original-lease" });
+  } finally { db.close(); }
+});
+
 for (const [label, sql, failure] of [
   ["tampered checksum", "update schema_migrations set checksum='wrong' where version=10", "ledger_mismatch"],
   ["missing row", "delete from schema_migrations where version=10", "ledger_mismatch"],
@@ -231,7 +266,7 @@ test("native D1 quiescent fence atomically rejects a racing Run on insert and in
   });
   try {
     const db = workerdD1Database(runtime);
-    // This tests actual D1 CHECK/UPSERT/transaction semantics. Full canonical
+    // This tests actual D1 runtime-assertion/UPSERT/transaction semantics. Full canonical
     // 66->75 data preservation and fault-forward replay are the SQLite cases
     // above; this fixture does not claim remote Import API qualification.
     await db.prepare("create table runs(id text primary key,status text not null,lease_token text)").run();
@@ -240,7 +275,8 @@ test("native D1 quiescent fence atomically rejects a racing Run on insert and in
       environment: "production", databaseRole: "in_place" as const,
       releasePolicy: "in_place" as const, databaseId,
     };
-    for (const prior of ["absent", "inactive"]) {
+    for (const prior of ["absent", "inactive", "inactive-without-check"]) {
+      if (prior === "inactive-without-check") await removeHistoricalActiveCheck(db);
       await assertControlD1NoActiveRuns(db);
       let injected = false;
       const raced = wrapped(db, async () => {
@@ -251,7 +287,7 @@ test("native D1 quiescent fence atomically rejects a racing Run on insert and in
       });
       await expect(acquireControlD1MaintenanceFence(raced.database, identity, now, { requireQuiescentRuns: true }))
         .rejects.toMatchObject({ code: "maintenance_fence_acquire_failed" });
-      expect(await readControlD1MaintenanceState(db)).toEqual({ status: prior });
+      expect(await readControlD1MaintenanceState(db)).toEqual({ status: prior === "absent" ? "absent" : "inactive" });
       expect(await db.prepare("select status,lease_token from runs").first())
         .toEqual({ status: "running", lease_token: "retained_original" });
       // End this synthetic operation explicitly; the operator surface never

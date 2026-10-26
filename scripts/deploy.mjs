@@ -206,7 +206,7 @@ const CONTRACT = {
         "post-conditions":
           "apply always retains the exact production in-place fence; after the compatible platform runtime is read back, the separate target-v75 release verifies and releases that exact fence, followed by authenticated Control read/write smoke",
         reversal:
-          "schema is forward-only and the retained fence is the recovery boundary; a failure after v67 or v68 is resumed from the same exact source/manifest/fence and repaired forward, never by down-migration or code rollback",
+          "schema is forward-only and the retained fence is the recovery boundary; a failure at any partial head v67 through v74 is resumed from the same exact source/manifest/fence and repaired forward, never by down-migration or code rollback",
         "failure-handling":
           "read-only source, manifest, target, ledger, environment, and fence mismatches fail closed before fence creation; apply leaves the exact fence active on post-mutation failure, never retries a mutation, and does not invoke a production restore",
       },

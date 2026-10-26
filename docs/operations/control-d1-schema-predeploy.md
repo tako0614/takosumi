@@ -86,9 +86,12 @@ Before any fence batch, admission requires the exact canonical ledger at66
 with absent/inactive maintenance, or the same exact active source/manifest/target
 fence at66 through75. Wrong, missing, tampered or future ledger rows refuse.
 Queued/running Runs, unknown Run statuses and every retained lease refuse;
-terminal and waiting-approval rows without leases are quiescent. The fence
-transaction repeats this Run predicate atomically: a racing Run violates the
-existing active-state CHECK and rolls the entire fence/guard batch back. No
+terminal and waiting-approval rows without leases are quiescent. Revalidate or
+re-plan held waiting-approval work under the new runtime before any approval;
+this migration does not qualify an old compatibility report. The fence
+transaction repeats this Run predicate atomically: a racing Run triggers a
+runtime SQL assertion before guard DDL, independent of historical table CHECKs.
+The live Import API error path must be rehearsed as described below. No
 Run, lease or original record is expired, cleared or retried by this surface.
 
 Before the first production apply, independently review the exact source and
