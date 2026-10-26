@@ -405,6 +405,16 @@ resending the view POST. Qualify an actual fresh-session navigation and successf
 receiver completion with margin inside this finite budget before calling the
 selected live journey ready; a canceled RPC duration is not a completion sample.
 
+After successful base-view POST capture, the bridge presents a private, no-store
+confirmation document with an explicit HTTPS link to the receiver's saved Console
+destination. The original document's `form-action 'self'` also restricts a form's
+cross-origin 303; keep that policy and use this separate link GET. The document
+contains no script or resubmission form, escapes the destination, and uses
+`no-referrer`. A malformed, credential-bearing, noncanonical or non-HTTPS redirect
+refuses without another dispatch. Base GET recovery and financial POST responses
+retain their original transport. This link grants no new financial authority and
+does not create a second original view, consent, or command.
+
 Descriptor admission alone does not activate the live journey. Deployment still
 requires the selected Hosted release and its schema, actual RP verification and
 same-primary guarded stores, plus the Server's request authorization and
