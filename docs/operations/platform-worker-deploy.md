@@ -427,12 +427,13 @@ the optional default `authMode` and empty `selfServicePatScopes`,
 keys is a composition mismatch. Takoserver owns actual Resource/backend
 readback, while Takosumi owns the Run/StateVersion/Output/Audit lifecycle.
 
-The sponsorship descriptor's `providerCredentialBroker` accepts either the
-legacy exact ten-key shape or the opt-in exact twelve-key shape. Six are the
+The sponsorship descriptor's `providerCredentialBroker` accepts the existing
+exact seven-key credential-only shape, the exact ten-key protocol shape, or
+the opt-in exact twelve-key renewable shape. Six are the
 broker identity — `connectionId`, `recipeId`,
 `providerSource`, `displayName`, `exchangePath`, `envNames` — and
 `runCredentialSettings` carries the provider floor for run-issued credentials.
-The remaining three are required, not optional, for an official release:
+The protocol shape adds these three fields together; partial bundles are refused:
 
 - `publicInputExchangePath` is the non-secret public-input route. Takosumi OSS
   neither allocates nor derives a Capsule's public origin; it asks the host
@@ -447,8 +448,11 @@ The remaining three are required, not optional, for an official release:
   the run-scoped sensitive-input lane, so a Capsule asking for
   binding-delivered values has nowhere to deliver them.
 
-The legacy ten-key shape remains valid and keeps the existing fixed Connection
-static. For this official Hosted broker, renewable delivery requires the exact
+Both seven- and ten-key shapes keep the existing fixed Connection static.
+The seven-key shape advertises neither public-origin nor sensitive runtime-input
+support. Ordinary Git/OpenTofu BYOC and its existing managed credential exchange
+remain available; Capsules requiring those optional capabilities fail closed at
+plan. Do not add protocol fields unless the exact Hosted backend supports them. For this official Hosted broker, renewable delivery requires the exact
 paired twelve-key shape: `renewableEnv` with profile
 `{"sourceEnvName":"TAKOFORM_TOKEN","fileEnvName":"TAKOFORM_TOKEN_FILE","minimumProviderVersion":"4.1.0"}`
 and `renewableConnectionId: "conn_takoserverTakoformRenew01"`. The standalone
@@ -468,7 +472,9 @@ at its existing value unless a separate protocol change requires otherwise;
 do not globally upgrade provider requirements to activate this optional
 profile.
 
-Exactly one realized route may declare `publicInputExchangePath`. A Capsule has
+A protocol-enabled composition must have exactly one realized route declaring
+`publicInputExchangePath`. Zero is allowed only with the exact seven-key Hosted
+credential-only broker; it must not advertise a public-origin capability. A Capsule has
 one public origin and no rule for splitting it, so the runtime seam throws when
 two routes claim to answer, and the release refuses that composition rather than
 deciding an authority question by array order. Every realized descriptor's
@@ -476,11 +482,11 @@ deciding an authority question by array order. Every realized descriptor's
 handler is an unroutable route that would only fail on the first real request
 after the irreversible upload.
 
-A realized config predating this shape fails the gate at plan, before any
-upload. Reconciling it is a non-secret config edit: add the three broker fields
-to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
-`query-optional`. The Hosted service must serve the declared
-`publicInputExchangePath` before the platform that advertises it is released.
+An existing credential-only realized config may retain that exact shape and
+its currently provided features. Optional protocol activation requires all
+three fields and an exact Hosted backend that serves both public-input and
+runtime-input contracts before the platform advertises them. The AI descriptor
+uses `query-optional` workspace context independently of this broker choice.
 
 The official sponsorship descriptor may retain its native Hosted resource
 inventory contribution: exactly the `takosumi.account.subscription.v1` and

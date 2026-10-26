@@ -7249,9 +7249,15 @@ export function assertConfigTargetsSource(
       // public origin and array order is not an authority for splitting it. A
       // released Worker that throws there cannot plan any Capsule needing its
       // own origin, so the release refuses the composition instead.
-      publicOriginAnswerValid =
-        descriptors.filter((entry) => declaresPublicInputExchange(entry))
-          .length === 1;
+      const publicOriginAnswers = descriptors.filter((entry) =>
+        declaresPublicInputExchange(entry)
+      ).length;
+      const exactLegacyBroker = hosted.some((entry) =>
+        matchesHostedSponsorshipRoute(entry) && record(entry) &&
+        isHostedLegacyProviderCredentialBrokerShape(entry.providerCredentialBroker)
+      );
+      publicOriginAnswerValid = publicOriginAnswers === 1 ||
+        (publicOriginAnswers === 0 && exactLegacyBroker);
       // Every descriptor dispatches through a bound service. A handlerKey with
       // no `[[services]]` binding of that exact name is an unroutable route
       // that only fails on the first real request after the upload.
@@ -7450,15 +7456,20 @@ function matchesHostedRunCredential(value: unknown): boolean {
  * must use a second fixed Connection: flipping the existing id's installed
  * broker mode would invalidate every previously pinned static Connection.
  *
- * The three public-input/runtime-input fields are REQUIRED, not merely allowed.
- * `deploy/platform/platform_extension_provider_credentials.ts` learns a
- * Capsule's public origin only from a broker that declares
- * `publicInputExchangePath`, and `deploy/platform/platform_extensions.ts`
- * records that a broker without `runtimeInputs` cannot carry the Capsule's
- * runtime binding profile at all. A platform release without them ships a
- * Worker whose Capsules fail closed at plan, so the gate refuses it here rather
- * than after the irreversible upload.
+ * Public-input/runtime-input fields are an exact optional protocol bundle.
+ * The existing seven-key broker keeps run-issued credentials without claiming
+ * either newer capability. Ordinary BYOC does not depend on that bundle;
+ * Capsules requiring those capabilities still fail closed in the runtime.
+ * Never advertise the bundle before the exact Hosted backend supports it.
  */
+function isHostedLegacyProviderCredentialBrokerShape(value: unknown): boolean {
+  return record(value) && JSON.stringify(Object.keys(value).sort()) ===
+    JSON.stringify([
+      "connectionId", "displayName", "envNames", "exchangePath",
+      "providerSource", "recipeId", "runCredentialSettings",
+    ].sort());
+}
+
 function matchesHostedProviderCredentialBroker(value: unknown): boolean {
   if (!record(value)) return false;
   const legacyKeys = [
@@ -7474,13 +7485,14 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
     "runtimeInputs",
   ];
   const keys = Object.keys(value).sort();
-  const exactLegacyShape =
+  const exactLegacyShape = isHostedLegacyProviderCredentialBrokerShape(value);
+  const exactProtocolShape =
     JSON.stringify(keys) === JSON.stringify([...legacyKeys].sort());
   const exactRenewableShape =
     JSON.stringify(keys) ===
     JSON.stringify([...legacyKeys, "renewableConnectionId", "renewableEnv"].sort());
   return (
-    (exactLegacyShape || exactRenewableShape) &&
+    (exactLegacyShape || exactProtocolShape || exactRenewableShape) &&
     (!exactRenewableShape ||
       (value.renewableConnectionId === "conn_takoserverTakoformRenew01" &&
         matchesHostedRenewableEnvDescriptor(
@@ -7488,11 +7500,13 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
           value.envNames,
           value.providerSource,
         ))) &&
-    value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
-    Array.isArray(value.publicInputCapabilities) &&
-    JSON.stringify(value.publicInputCapabilities) ===
-      JSON.stringify(["http_endpoint_url"]) &&
-    matchesHostedRuntimeInputs(value.runtimeInputs) &&
+    (exactLegacyShape || (
+      value.publicInputExchangePath === "/public-inputs/http-endpoint" &&
+      Array.isArray(value.publicInputCapabilities) &&
+      JSON.stringify(value.publicInputCapabilities) ===
+        JSON.stringify(["http_endpoint_url"]) &&
+      matchesHostedRuntimeInputs(value.runtimeInputs)
+    )) &&
     value.connectionId === "conn_takoserverTakoform01" &&
     value.recipeId === "takoserver-takoform-run-v1" &&
     value.providerSource === "registry.terraform.io/tako0614/takoform" &&

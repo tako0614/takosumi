@@ -31,6 +31,7 @@ import {
   waitForPlatformContainerReadback,
 } from "../../scripts/platform-worker-release.ts";
 import { platformExtensionRoutes } from "../../deploy/platform/platform_extensions.ts";
+import { capsulePublicOriginFromPlatformExtensions, platformExtensionProviderCredentialComposition } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import {
   REFERENCE_CREDENTIAL_RECIPES,
   REFERENCE_PROVIDER_RENEWABLE_ENV_CAPABILITIES,
@@ -2740,4 +2741,56 @@ test("native Hosted resource inventory cannot widen release scopes, verbs or con
     expect(() => assertConfigTargetsSource(render(changed), "staging"))
       .toThrow("platform_worker_release_config_source_invalid");
   }
+});
+
+
+test("exact legacy Hosted broker preserves native inventory without advertising unserved protocols", () => {
+  const { routes, render } = nativeHostedResourceInventoryConfig();
+  const broker = routes[0]!.providerCredentialBroker as Record<string, unknown>;
+  delete broker.publicInputExchangePath;
+  delete broker.publicInputCapabilities;
+  delete broker.runtimeInputs;
+  const selected = render(routes);
+  expect(() => assertConfigTargetsSource(selected, "staging")).not.toThrow();
+  const production = selected.replaceAll('"takosumi-staging"', '"takosumi"')
+    .replaceAll('"takosumi-hosted-staging"', '"takosumi-hosted"')
+    .replace('TAKOSUMI_ENVIRONMENT = "staging"', 'TAKOSUMI_ENVIRONMENT = "production"');
+  expect(() => assertConfigTargetsSource(production, "production")).not.toThrow();
+  const env = { TAKOSUMI_PLATFORM_EXTENSIONS: routes, TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com" };
+  const composition = platformExtensionProviderCredentialComposition(env)!;
+  const mode = composition.credentialRecipes[0]!.authModes.broker!;
+  expect(mode.runtimeInputs).toBeUndefined();
+  expect(mode.runIssuance).toMatchObject({ audience: "takosumi-hosted.takoform.v1", scopes: ["takoform.run"] });
+  const unusedLedger = new Proxy({} as Parameters<typeof capsulePublicOriginFromPlatformExtensions>[1], {
+    get() { throw new Error("a legacy broker must never invoke the public-origin ledger"); },
+  });
+  expect(capsulePublicOriginFromPlatformExtensions(env, unusedLedger)).toBeUndefined();
+  expect(platformExtensionRoutes(env)[0]!.contributions?.[0]?.slot).toBe("workspace.hosted-resources");
+});
+
+test("legacy Hosted admission rejects partial protocols and widened credential authority", () => {
+  const { routes, render } = nativeHostedResourceInventoryConfig();
+  const full = structuredClone(routes[0]!.providerCredentialBroker) as Record<string, unknown>;
+  const protocol = ["publicInputExchangePath", "publicInputCapabilities", "runtimeInputs"];
+  for (let mask = 1; mask < 7; mask++) {
+    const changed = structuredClone(routes);
+    const broker = changed[0]!.providerCredentialBroker as Record<string, unknown>;
+    for (const [index, key] of protocol.entries()) if (!(mask & (1 << index))) delete broker[key];
+    expect(() => assertConfigTargetsSource(render(changed), "staging")).toThrow("platform_worker_release_config_source_invalid");
+  }
+  const changed = structuredClone(routes);
+  const broker = changed[0]!.providerCredentialBroker as Record<string, unknown>;
+  for (const key of protocol) delete broker[key];
+  for (const mutation of [
+    { connectionId: "conn_other" }, { exchangePath: "/other" },
+    { runCredentialSettings: { requiredAvailableMinor: 0 } },
+    { renewableConnectionId: "conn_takoserverTakoformRenew01" },
+    { renewableEnv: { sourceEnvName: "TAKOFORM_TOKEN", fileEnvName: "TAKOFORM_TOKEN_FILE", minimumProviderVersion: "4.1.0" } },
+    { authMode: "public" },
+  ]) {
+    const candidate = structuredClone(changed);
+    Object.assign(candidate[0]!.providerCredentialBroker as Record<string, unknown>, mutation);
+    expect(() => assertConfigTargetsSource(render(candidate), "staging")).toThrow("platform_worker_release_config_source_invalid");
+  }
+  expect(Object.keys(full)).toHaveLength(10);
 });
