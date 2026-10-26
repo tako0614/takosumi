@@ -2787,10 +2787,30 @@ test("legacy Hosted admission rejects partial protocols and widened credential a
     { renewableConnectionId: "conn_takoserverTakoformRenew01" },
     { renewableEnv: { sourceEnvName: "TAKOFORM_TOKEN", fileEnvName: "TAKOFORM_TOKEN_FILE", minimumProviderVersion: "4.1.0" } },
     { authMode: "public" },
+    { renewableConnectionId: "conn_takoserverTakoformRenew01", renewableEnv: { sourceEnvName: "TAKOFORM_TOKEN", fileEnvName: "TAKOFORM_TOKEN_FILE", minimumProviderVersion: "4.1.0" } },
   ]) {
     const candidate = structuredClone(changed);
     Object.assign(candidate[0]!.providerCredentialBroker as Record<string, unknown>, mutation);
     expect(() => assertConfigTargetsSource(render(candidate), "staging")).toThrow("platform_worker_release_config_source_invalid");
   }
   expect(Object.keys(full)).toHaveLength(10);
+});
+
+
+test("legacy Hosted profile refuses a bound foreign public-origin authority", () => {
+  const { routes, render } = nativeHostedResourceInventoryConfig();
+  const fullBroker = structuredClone(routes[0]!.providerCredentialBroker) as Record<string, unknown>;
+  const broker = routes[0]!.providerCredentialBroker as Record<string, unknown>;
+  delete broker.publicInputExchangePath;
+  delete broker.publicInputCapabilities;
+  delete broker.runtimeInputs;
+  const values = [...routes, {
+    id: "other-origin", basePath: "/extensions/other-origin", handlerKey: "OTHER",
+    authDelivery: "context", ownsPathSubtree: true, workspaceContext: "query-required",
+    runCredential: { audience: "other-origin.v1", requiredScopes: ["other.run"] },
+    providerCredentialBroker: { ...fullBroker, connectionId: "conn_otherOrigin01", recipeId: "other-origin" },
+  }];
+  expect(() => platformExtensionRoutes({ TAKOSUMI_PLATFORM_EXTENSIONS: values })).not.toThrow();
+  const selected = render(values).replace('[vars]', '[[services]]\nbinding = "OTHER"\nservice = "other-origin"\n[vars]');
+  expect(() => assertConfigTargetsSource(selected, "staging")).toThrow("platform_worker_release_config_source_invalid");
 });

@@ -7256,8 +7256,9 @@ export function assertConfigTargetsSource(
         matchesHostedSponsorshipRoute(entry) && record(entry) &&
         isHostedLegacyProviderCredentialBrokerShape(entry.providerCredentialBroker)
       );
-      publicOriginAnswerValid = publicOriginAnswers === 1 ||
-        (publicOriginAnswers === 0 && exactLegacyBroker);
+      publicOriginAnswerValid = exactLegacyBroker
+        ? publicOriginAnswers === 0
+        : publicOriginAnswers === 1;
       // Every descriptor dispatches through a bound service. A handlerKey with
       // no `[[services]]` binding of that exact name is an unroutable route
       // that only fails on the first real request after the upload.

@@ -410,8 +410,8 @@ tolerated addition, because a descriptor the OSS parser rejects makes the whole
 route unloadable rather than degrade quietly.
 
 - `takosumi-hosted-sponsorship` at `/api/v1/account/subscription`, carrying
-  only the generic Run credential audience and provider credential broker. It
-  has no public capability, scope, contribution, or resource-inventory claim.
+  the generic Run credential audience and provider credential broker. It may
+  also retain the exact read-only native inventory profile described below.
 - `takosumi-ai` at `/api/v1/ai`, the authenticated OpenAI-compatible data
   plane. Its `workspaceContext` is `query-optional`: an OpenAI-compatible client
   is configured with a base URL and sends `POST /chat/completions`, so it cannot
@@ -419,12 +419,13 @@ route unloadable rather than degrade quietly.
   request with `invalid_request`. When the query is present it is still bound to
   verified platform access before dispatch.
 
-The route-less sponsorship descriptor has exactly eight top-level keys:
+The minimal sponsorship descriptor has exactly eight top-level keys:
 `id`, `basePath`, `handlerKey`, `authDelivery`, `ownsPathSubtree`,
 `workspaceContext`, `runCredential`, and `providerCredentialBroker`. It omits
 the optional default `authMode` and empty `selfServicePatScopes`,
-`requestScopeRules`, `capabilities`, and `contributions`; adding any of those
-keys is a composition mismatch. Takoserver owns actual Resource/backend
+`requestScopeRules`, `capabilities`, and `contributions`. The one accepted
+inventory profile adds all four together with their exact pinned values;
+arbitrary extra keys or partial profiles remain a composition mismatch. Takoserver owns actual Resource/backend
 readback, while Takosumi owns the Run/StateVersion/Output/Audit lifecycle.
 
 The sponsorship descriptor's `providerCredentialBroker` accepts the existing
@@ -448,12 +449,15 @@ The protocol shape adds these three fields together; partial bundles are refused
   the run-scoped sensitive-input lane, so a Capsule asking for
   binding-delivered values has nowhere to deliver them.
 
-Both seven- and ten-key shapes keep the existing fixed Connection static.
+Both seven- and ten-key shapes use the existing fixed Connection's static
+credential delivery. Switching the protocol shape changes its installed recipe
+mode, so a Plan reviewed under another shape must be re-planned before Apply.
 The seven-key shape advertises neither public-origin nor sensitive runtime-input
 support. Ordinary Git/OpenTofu BYOC and its existing managed credential exchange
 remain available; Capsules requiring those optional capabilities fail closed at
-plan. Do not add protocol fields unless the exact Hosted backend supports them. For this official Hosted broker, renewable delivery requires the exact
-paired twelve-key shape: `renewableEnv` with profile
+plan. Do not add protocol fields unless the exact Hosted backend supports them.
+For this official Hosted broker, renewable delivery requires the exact paired
+twelve-key shape: `renewableEnv` with profile
 `{"sourceEnvName":"TAKOFORM_TOKEN","fileEnvName":"TAKOFORM_TOKEN_FILE","minimumProviderVersion":"4.1.0"}`
 and `renewableConnectionId: "conn_takoserverTakoformRenew01"`. The standalone
 eleventh-key shape is refused because it would change the installed auth mode
