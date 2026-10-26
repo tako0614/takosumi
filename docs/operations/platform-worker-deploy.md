@@ -482,6 +482,15 @@ to the sponsorship descriptor, and set `takosumi-ai.workspaceContext` to
 `query-optional`. The Hosted service must serve the declared
 `publicInputExchangePath` before the platform that advertises it is released.
 
+The official sponsorship descriptor may retain its native Hosted resource
+inventory contribution: exactly the `takosumi.account.subscription.v1` and
+`hosted-resource.inventory.v1` capabilities, `resources:read` PAT scope, a
+GET-only `/resources` rule, and the `workspace.hosted-resources` native
+contribution at `/api/v1/account/subscription/resources`. The existing minimal
+broker descriptor remains valid. The runtime parser validates display metadata;
+release admission does not drop the inventory feature or widen its verbs,
+scopes, destination or provider credential authority.
+
 ## Official staging release
 
 The official staging target is a reviewed two-step owner surface. Plan is
