@@ -11,6 +11,7 @@ import {
 } from "../../worker/src/d1_opentofu_store.ts";
 import {
   acquireControlD1MaintenanceFence,
+  assertControlD1NoActiveRuns,
   adoptControlD1LegacyCloneAsCandidate,
   digestControlD1MaintenanceFence,
   digestControlD1MaintenanceGuardInventory,
@@ -56,6 +57,14 @@ export const CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD = Symbol(
 export const CONTROL_D1_PRODUCTION_V66_V69_TARGET = 69 as const;
 export const CONTROL_D1_PRODUCTION_V66_V69_BASELINE = 66 as const;
 const CONTROL_D1_PRODUCTION_V66_V69_TAIL = [67, 68, 69] as const;
+
+/** Separate fixed owner transition; never an argv-selected migration head. */
+export const CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD = Symbol(
+  "takosumi-control-d1-schema-production-v66-v75",
+);
+export const CONTROL_D1_PRODUCTION_V66_V75_TARGET = 75 as const;
+const CONTROL_D1_PRODUCTION_V66_V75_TAIL = [67, 68, 69, 70, 71, 72, 73, 74, 75] as const;
+
 
 /**
  * Tables deliberately retired by the current OSS control-ledger migration
@@ -337,7 +346,8 @@ export interface ControlD1SchemaApplyOptions {
     readonly manifestDigest: string;
   };
   /** @internal owner-surface selector; never supplied by public argv. */
-  readonly internalGuard?: typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD;
+  readonly internalGuard?: typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD |
+    typeof CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD;
 }
 
 export interface ControlD1SchemaFenceResult {
@@ -438,6 +448,9 @@ export async function applyControlD1Schema(
       activePredecessorFence: options.activePredecessorFence,
     });
   }
+  if (options.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD) {
+    await assertControlD1ProductionV66V75ApplyPreflight(database, plan, options);
+  }
   const successorIdentity = {
     sourceCommit: options.sourceCommit,
     manifestDigest: plan.manifestDigest,
@@ -464,6 +477,8 @@ export async function applyControlD1Schema(
       database,
       successorIdentity,
       options.activatedAt,
+      options.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD
+        ? { requireQuiescentRuns: true } : undefined,
     );
   }
   await options.waitForRequestDrain(options.maintenanceDrainMilliseconds);
@@ -535,6 +550,50 @@ export async function applyControlD1Schema(
  * the caller can acquire or replace a fence.
  */
 export async function assertControlD1ProductionV66V69ApplyPreflight(
+  database: D1Database, plan: ControlD1SchemaPlan, options: {
+    readonly sourceCommit: string;
+    readonly environment: string;
+    readonly databaseId?: string;
+    readonly databaseRole?: ControlD1MaintenanceDatabaseRole;
+    readonly releasePolicy?: ControlD1MaintenanceReleasePolicy;
+    readonly sourceExportSha256?: string;
+    readonly retainMaintenanceFence?: boolean;
+    readonly activePredecessorFence?: {
+      readonly sourceCommit: string;
+      readonly manifestDigest: string;
+    };
+  },
+): Promise<{ readonly mode: "new" | "resume"; readonly actualHead: number; readonly pendingMigrationVersions: readonly number[] }> {
+  return assertControlD1ProductionTransitionApplyPreflight(database, plan, options, {
+    target: CONTROL_D1_PRODUCTION_V66_V69_TARGET, tail: CONTROL_D1_PRODUCTION_V66_V69_TAIL,
+    failurePrefix: "production_v66_v69",
+  });
+}
+
+export async function assertControlD1ProductionV66V75ApplyPreflight(
+  database: D1Database, plan: ControlD1SchemaPlan, options: {
+    readonly sourceCommit: string;
+    readonly environment: string;
+    readonly databaseId?: string;
+    readonly databaseRole?: ControlD1MaintenanceDatabaseRole;
+    readonly releasePolicy?: ControlD1MaintenanceReleasePolicy;
+    readonly sourceExportSha256?: string;
+    readonly retainMaintenanceFence?: boolean;
+    readonly activePredecessorFence?: {
+      readonly sourceCommit: string;
+      readonly manifestDigest: string;
+    };
+  },
+): Promise<{ readonly mode: "new" | "resume"; readonly actualHead: number; readonly pendingMigrationVersions: readonly number[] }> {
+  const result = await assertControlD1ProductionTransitionApplyPreflight(database, plan, options, {
+    target: CONTROL_D1_PRODUCTION_V66_V75_TARGET, tail: CONTROL_D1_PRODUCTION_V66_V75_TAIL,
+    failurePrefix: "production_v66_v75",
+  });
+  await assertControlD1NoActiveRuns(database);
+  return result;
+}
+
+async function assertControlD1ProductionTransitionApplyPreflight(
   database: D1Database,
   plan: ControlD1SchemaPlan,
   options: {
@@ -550,34 +609,35 @@ export async function assertControlD1ProductionV66V69ApplyPreflight(
       readonly manifestDigest: string;
     };
   },
+  transition: { readonly target: number; readonly tail: readonly number[]; readonly failurePrefix: string },
 ): Promise<{
   readonly mode: "new" | "resume";
   readonly actualHead: number;
   readonly pendingMigrationVersions: readonly number[];
 }> {
   if (
-    plan.migrations.at(-1)?.version !== CONTROL_D1_PRODUCTION_V66_V69_TARGET
+    plan.migrations.at(-1)?.version !== transition.target
   ) {
-    throw new ControlD1SchemaError("production_v66_v69_plan_target_mismatch");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_plan_target_mismatch`);
   }
   if (options.environment !== "production") {
-    throw new ControlD1SchemaError("production_v66_v69_environment_fixed");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_environment_fixed`);
   }
   if (options.retainMaintenanceFence !== true) {
-    throw new ControlD1SchemaError("production_v66_v69_retain_fence_required");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_retain_fence_required`);
   }
   if (
     (options.databaseRole ?? "in_place") !== "in_place" ||
     (options.releasePolicy ?? "in_place") !== "in_place" ||
     options.sourceExportSha256 !== undefined
   ) {
-    throw new ControlD1SchemaError("production_v66_v69_fence_identity_invalid");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_fence_identity_invalid`);
   }
   if (options.activePredecessorFence) {
-    throw new ControlD1SchemaError("production_v66_v69_predecessor_forbidden");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_predecessor_forbidden`);
   }
   if (!options.databaseId?.trim()) {
-    throw new ControlD1SchemaError("production_v66_v69_database_id_required");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_database_id_required`);
   }
 
   const actual = await readControlD1MigrationLedger(database);
@@ -587,31 +647,31 @@ export async function assertControlD1ProductionV66V69ApplyPreflight(
     CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
   );
   if (!baseline) {
-    throw new ControlD1SchemaError("production_v66_v69_plan_baseline_missing");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_plan_baseline_missing`);
   }
-  assertControlD1ProductionV66V69Tail(plan);
+  assertControlD1ProductionTransitionTail(plan, transition);
 
   if (sameControlD1MigrationLedger(actual, baseline)) {
     if (state.status === "active") {
       if (!matchesControlD1ProductionV66V69Fence(state, plan, options)) {
-        throw new ControlD1SchemaError("production_v66_v69_fence_mismatch");
+        throw new ControlD1SchemaError(`${transition.failurePrefix}_fence_mismatch`);
       }
       return {
         mode: "resume",
         actualHead: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
-        pendingMigrationVersions: productionV66V69PendingVersions(
-          CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+        pendingMigrationVersions: productionTransitionPendingVersions(
+          CONTROL_D1_PRODUCTION_V66_V69_BASELINE, transition,
         ),
       };
     }
     if (state.status !== "absent" && state.status !== "inactive") {
-      throw new ControlD1SchemaError("production_v66_v69_fence_state_invalid");
+      throw new ControlD1SchemaError(`${transition.failurePrefix}_fence_state_invalid`);
     }
     return {
       mode: "new",
       actualHead: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
-      pendingMigrationVersions: productionV66V69PendingVersions(
-        CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+      pendingMigrationVersions: productionTransitionPendingVersions(
+        CONTROL_D1_PRODUCTION_V66_V69_BASELINE, transition,
       ),
     };
   }
@@ -620,32 +680,32 @@ export async function assertControlD1ProductionV66V69ApplyPreflight(
   if (
     actual.some(
       (row) =>
-        row.version > CONTROL_D1_PRODUCTION_V66_V69_TARGET ||
+        row.version > transition.target ||
         !plan.migrations.some(
           (migration) => migration.version === row.version,
         ),
-    ) || actualHead > CONTROL_D1_PRODUCTION_V66_V69_TARGET
+    ) || actualHead > transition.target
   ) {
-    throw new ControlD1SchemaError("production_v66_v69_future_ledger_rejected");
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_future_ledger_rejected`);
   }
 
-  for (const resumeHead of [67, 68, 69] as const) {
+  for (const resumeHead of transition.tail) {
     const prefix = canonicalControlD1MigrationPrefix(plan, resumeHead);
     if (!prefix || !sameControlD1MigrationLedger(actual, prefix)) continue;
     if (state.status !== "active") {
-      throw new ControlD1SchemaError("production_v66_v69_active_fence_required");
+      throw new ControlD1SchemaError(`${transition.failurePrefix}_active_fence_required`);
     }
     if (!matchesControlD1ProductionV66V69Fence(state, plan, options)) {
-      throw new ControlD1SchemaError("production_v66_v69_fence_mismatch");
+      throw new ControlD1SchemaError(`${transition.failurePrefix}_fence_mismatch`);
     }
     return {
       mode: "resume",
       actualHead: resumeHead,
-      pendingMigrationVersions: productionV66V69PendingVersions(resumeHead),
+      pendingMigrationVersions: productionTransitionPendingVersions(resumeHead, transition),
     };
   }
 
-  throw new ControlD1SchemaError("production_v66_v69_ledger_mismatch");
+  throw new ControlD1SchemaError(`${transition.failurePrefix}_ledger_mismatch`);
 }
 
 async function matchesExactInPlaceReleaseReceipt(
@@ -691,8 +751,9 @@ function canonicalControlD1MigrationPrefix(
   return index < 0 ? undefined : plan.migrations.slice(0, index + 1);
 }
 
-function assertControlD1ProductionV66V69Tail(
+function assertControlD1ProductionTransitionTail(
   plan: ControlD1SchemaPlan,
+  transition: { readonly tail: readonly number[]; readonly failurePrefix: string },
 ): void {
   const actualTail = plan.migrations
     .filter(
@@ -700,15 +761,16 @@ function assertControlD1ProductionV66V69Tail(
         migration.version > CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
     )
     .map((migration) => migration.version);
-  if (stableJson(actualTail) !== stableJson(CONTROL_D1_PRODUCTION_V66_V69_TAIL)) {
-    throw new ControlD1SchemaError("production_v66_v69_plan_suffix_mismatch");
+  if (stableJson(actualTail) !== stableJson(transition.tail)) {
+    throw new ControlD1SchemaError(`${transition.failurePrefix}_plan_suffix_mismatch`);
   }
 }
 
-function productionV66V69PendingVersions(
-  actualHead: 66 | 67 | 68 | 69,
+function productionTransitionPendingVersions(
+  actualHead: number,
+  transition: { readonly tail: readonly number[] },
 ): readonly number[] {
-  return CONTROL_D1_PRODUCTION_V66_V69_TAIL.filter(
+  return transition.tail.filter(
     (version) => version > actualHead,
   );
 }

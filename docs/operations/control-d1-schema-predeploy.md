@@ -65,6 +65,51 @@ compatible platform runtime first, then explicitly `release` the exact fence
 and verify authenticated Control operations. The entrypoint never retries a
 mutation or automatically restores a Worker.
 
+### Fixed production v66 to v75 transition
+
+The separate temporary `takosumi-control-d1-schema-production-v66-v75` owner
+surface accepts only `plan`, `verify`, `apply`, and `release`. It fixes production
+and canonical head75, injects retained maintenance on apply, and refuses caller
+environment, predecessor, export, and forward-repair overrides. The existing
+v66-to-v69 surface keeps its original boundary; it does not select head75.
+
+```bash
+bun run deploy -- takosumi-control-d1-schema-production-v66-v75 plan
+bun run deploy -- takosumi-control-d1-schema-production-v66-v75 apply \
+  --confirm-manifest sha256:<reviewed-v75-manifest>
+bun run deploy -- takosumi-control-d1-schema-production-v66-v75 release \
+  --confirm-manifest sha256:<reviewed-v75-manifest>
+bun run deploy -- takosumi-control-d1-schema-production-v66-v75 verify
+```
+
+Before any fence batch, admission requires the exact canonical ledger at66
+with absent/inactive maintenance, or the same exact active source/manifest/target
+fence at66 through75. Wrong, missing, tampered or future ledger rows refuse.
+Queued/running Runs, unknown Run statuses and every retained lease refuse;
+terminal and waiting-approval rows without leases are quiescent. The fence
+transaction repeats this Run predicate atomically: a racing Run violates the
+existing active-state CHECK and rolls the entire fence/guard batch back. No
+Run, lease or original record is expired, cleared or retried by this surface.
+
+Before the first production apply, independently review the exact source and
+manifest, representative populated fault-forward rehearsal, and real target.
+Read the serving Worker's predeployed schema mode and exact Control D1 binding;
+a release tag is not evidence of a source commit. Record an actual Time Travel
+bookmark and export in the change window. Measure production backups row/JSON
+volume and rehearse migration74's two indexes at least at that volume with
+margin below D1's request limit. Qualify the existing Import API transport for
+migration75's compound triggers; local SQLite proof alone does not qualify live
+D1 transport or timing.
+
+Apply retains the fence through every partial head. Read back the reviewed
+75-compatible platform Worker and satisfy its separate Accounts prerequisites
+before explicitly releasing that exact schema fence, verifying, and performing
+authenticated Control smoke. No code rollback is valid merely because a
+predecessor Version was recorded. After a schema cutoff, retain the fence and
+repair forward with the same source/manifest; database restoration requires the
+separate recovery procedure. This surface never publishes a Worker, creates a
+credential, restores a database, releases automatically, or retries a mutation.
+
 ### Compatibility-report declarations: v67 to v68
 
 This is a nullable, no-backfill expansion. Historical reports have no retained
