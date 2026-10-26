@@ -3808,6 +3808,34 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  test("manual Git module input survives preparation reset and submits its scanned path", async ({ page }) => {
+    test.skip(mode !== "portable", "the deterministic direct Git install fixture is portable-only");
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const state = await stubProviderDestinationFixture(page, [], [], {
+      modulePath: "deploy/selected",
+    });
+    const query = new URLSearchParams({
+      git: "https://github.com/tako0614/yurucommu.git",
+      ref: PORTABLE_SOURCE_COMMIT,
+      name: "yurucommu",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.locator("summary").filter({ hasText: /取得元の詳細|Source details/u }).click();
+    const modulePath = page.getByRole("textbox", { name: /モジュールのフォルダ|Module folder/u });
+    await modulePath.fill("");
+    await modulePath.pressSequentially("deploy/selected");
+    await expect(modulePath).toHaveValue("deploy/selected");
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await expect.poll(() => state.compatibilityBodies.length).toBe(1);
+    expect(state.compatibilityBodies[0]).toMatchObject({
+      modulePath: "deploy/selected",
+      sourceSnapshotId: "snap_provider_destination_e2e",
+    });
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
   test("direct Git installs submit the exact scanned module path", async ({
     page,
   }) => {
