@@ -7297,21 +7297,17 @@ function declaresPublicInputExchange(value: unknown): boolean {
 
 function matchesHostedSponsorshipRoute(value: unknown): boolean {
   if (!record(value)) return false;
+  const legacyKeys = [
+    "authDelivery", "basePath", "handlerKey", "id", "ownsPathSubtree",
+    "providerCredentialBroker", "runCredential", "workspaceContext",
+  ];
   const keys = Object.keys(value).sort();
+  const legacy = JSON.stringify(keys) === JSON.stringify([...legacyKeys].sort());
+  const inventory = JSON.stringify(keys) === JSON.stringify([
+    ...legacyKeys, "capabilities", "contributions", "requestScopeRules", "selfServicePatScopes",
+  ].sort()) && matchesHostedNativeResourceInventory(value);
   return (
-    JSON.stringify(keys) ===
-      JSON.stringify(
-        [
-          "authDelivery",
-          "basePath",
-          "handlerKey",
-          "id",
-          "ownsPathSubtree",
-          "providerCredentialBroker",
-          "runCredential",
-          "workspaceContext",
-        ].sort(),
-      ) &&
+    (legacy || inventory) &&
     value.id === "takosumi-hosted-sponsorship" &&
     value.basePath === "/api/v1/account/subscription" &&
     value.handlerKey === "HOSTED" &&
@@ -7321,6 +7317,33 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
     matchesHostedRunCredential(value.runCredential) &&
     matchesHostedProviderCredentialBroker(value.providerCredentialBroker)
   );
+}
+
+function matchesHostedNativeResourceInventory(value: Record<string, unknown>): boolean {
+  if (
+    JSON.stringify(value.capabilities) !== JSON.stringify([
+      "takosumi.account.subscription.v1", "hosted-resource.inventory.v1",
+    ]) ||
+    JSON.stringify(value.selfServicePatScopes) !== JSON.stringify(["resources:read"]) ||
+    JSON.stringify(value.requestScopeRules) !== JSON.stringify([
+      { path: "/resources", methods: ["GET"], requiredScopes: ["resources:read"] },
+    ]) ||
+    !Array.isArray(value.contributions) || value.contributions.length !== 1
+  ) return false;
+  const contribution = value.contributions[0];
+  if (!record(contribution) ||
+    contribution.id !== "takoserver-hosted-resources" ||
+    contribution.slot !== "workspace.hosted-resources" ||
+    contribution.href !== "/api/v1/account/subscription/resources" ||
+    contribution.presentation !== "native") return false;
+  try {
+    // Use the runtime's existing parser for display metadata and route grammar.
+    // Scope, verb, contribution identity and destination stay closed above.
+    platformExtensionRoutes({ TAKOSUMI_PLATFORM_EXTENSIONS: [value] });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function matchesHostedAiRoute(value: unknown): boolean {

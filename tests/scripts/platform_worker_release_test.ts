@@ -2683,3 +2683,61 @@ test("ready evidence requires exact bindings and the fetch handler", () => {
     ),
   ).toThrow("platform_worker_release_version_invalid");
 });
+
+function nativeHostedResourceInventoryConfig() {
+  const source = statusConfigSource();
+  const parsed = Bun.TOML.parse(source) as { vars: { TAKOSUMI_PLATFORM_EXTENSIONS: string } };
+  const inventory = {
+    capabilities: ["takosumi.account.subscription.v1", "hosted-resource.inventory.v1"],
+    selfServicePatScopes: ["resources:read"],
+    requestScopeRules: [{ path: "/resources", methods: ["GET"], requiredScopes: ["resources:read"] }],
+    contributions: [{
+      id: "takoserver-hosted-resources", slot: "workspace.hosted-resources",
+      href: "/api/v1/account/subscription/resources", presentation: "native",
+      label: "Hosted resources", labels: { ja: "ホスト済みリソース" },
+      description: "Resources managed by Takoserver for this Workspace.",
+      descriptions: { ja: "このワークスペースでTakoserverが管理するリソースです。" },
+    }],
+  };
+  const routes = JSON.parse(parsed.vars.TAKOSUMI_PLATFORM_EXTENSIONS) as Array<typeof inventory & Record<string, unknown>>;
+  Object.assign(routes[0], inventory);
+  return { source, routes, render: (values: unknown) => source.replace(
+    /TAKOSUMI_PLATFORM_EXTENSIONS = '[^']+'/u,
+    `TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify(values)}'`,
+  ) };
+}
+
+test("native Hosted resource inventory survives official platform release validation", () => {
+  const { source, routes, render } = nativeHostedResourceInventoryConfig();
+  expect(() => assertConfigTargetsSource(source, "staging")).not.toThrow();
+  const selected = render(routes);
+  expect(() => assertConfigTargetsSource(selected, "staging")).not.toThrow();
+  const production = selected.replaceAll('"takosumi-staging"', '"takosumi"')
+    .replaceAll('"takosumi-hosted-staging"', '"takosumi-hosted"')
+    .replace('TAKOSUMI_ENVIRONMENT = "staging"', 'TAKOSUMI_ENVIRONMENT = "production"');
+  expect(() => assertConfigTargetsSource(production, "production")).not.toThrow();
+  const runtime = platformExtensionRoutes({ TAKOSUMI_PLATFORM_EXTENSIONS: routes });
+  expect(runtime[0]?.contributions?.[0]?.slot).toBe("workspace.hosted-resources");
+});
+
+test("native Hosted resource inventory cannot widen release scopes, verbs or contribution authority", () => {
+  const { routes, render } = nativeHostedResourceInventoryConfig();
+  type InventoryRoute = typeof routes[number];
+  const mutations = [
+    (route: InventoryRoute) => route.capabilities.push("resources.write"),
+    (route: InventoryRoute) => route.selfServicePatScopes.push("resources:write"),
+    (route: InventoryRoute) => route.requestScopeRules[0].methods.push("POST"),
+    (route: InventoryRoute) => route.requestScopeRules[0].path = "/admin",
+    (route: InventoryRoute) => route.contributions[0].href = "/api/v1/account/subscription/other",
+    (route: InventoryRoute) => route.contributions[0].slot = "workspace.billing",
+    (route: InventoryRoute) => route.contributions[0].presentation = "link",
+    (route: InventoryRoute) => route.contributions[0].label = "",
+    (route: InventoryRoute) => route.contributions = [],
+    (route: InventoryRoute) => route.authMode = "public",
+  ];
+  for (const mutate of mutations) {
+    const changed = structuredClone(routes); mutate(changed[0]);
+    expect(() => assertConfigTargetsSource(render(changed), "staging"))
+      .toThrow("platform_worker_release_config_source_invalid");
+  }
+});
