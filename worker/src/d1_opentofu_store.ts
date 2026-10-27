@@ -8907,6 +8907,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       expectedConnection,
       expectedSecretBlob,
       replacement,
+      replacementSecretBlob,
       expectedWorkspaceManagementAuthority,
       actorAuthority,
     } = prepareConnectionTestResult(input);
@@ -8966,6 +8967,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         expectedConnection,
         expectedSecretBlob,
       ),
+      ...(replacementSecretBlob ? [this.#orm.update(schema.secretBlobs).set({
+        ciphertext: replacementSecretBlob.ciphertext, encryptedDek: replacementSecretBlob.encryptedDek,
+        nonce: replacementSecretBlob.nonce, aad: replacementSecretBlob.aad,
+        keyVersion: replacementSecretBlob.keyVersion, rotatedAt: replacementSecretBlob.rotatedAt ?? null,
+        blobJson: replacementSecretBlob,
+      }).where(eq(schema.secretBlobs.connectionId, expectedConnection.id))] : []),
       this.#orm
         .update(schema.connections)
         .set({

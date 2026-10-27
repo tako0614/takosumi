@@ -328,7 +328,8 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
       "CLOUDFLARE_EMAIL",
       "CLOUDFLARE_ACCOUNT_ID",
       "CLOUDFLARE_ZONE_ID",
-      "CF_API_TOKEN"
+      "CF_API_TOKEN",
+      "CLOUDFLARE_OAUTH_SESSION"
     ],
     "requiredEnvGroups": [
       [
@@ -346,9 +347,12 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
       "oauth": {
         "env": {
           "CLOUDFLARE_API_TOKEN": {
-            "from": "secret",
+            "from": "generated",
             "name": "access_token"
           }
+        },
+        "preRun": {
+          "type": "cloudflare_oauth"
         }
       },
       "api_token": {

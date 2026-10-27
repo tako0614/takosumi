@@ -64,6 +64,7 @@ import {
 import {
   connectionOAuthDescriptorsFromEnv,
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  referenceCredentialDriversFromEnv,
 } from "@takosumi/providers";
 import {
   type CredentialRecipeRunCredentialIssuer,
@@ -316,7 +317,7 @@ export async function createWorkerServiceApp(
         REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes,
       credentialRecipeDrivers:
         options.credentialRecipeDrivers ??
-        REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+        referenceCredentialDriversFromEnv(runtimeEnv),
       ...(options.credentialRecipes === undefined &&
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRequiredProviderSources
         ? {

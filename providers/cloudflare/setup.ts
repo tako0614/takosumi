@@ -3,6 +3,7 @@ import type {
   GuidedConnectionRequestBuilder,
 } from "../types.ts";
 import { GuidedConnectionSetupError } from "../types.ts";
+import { cloudflareOAuthValues } from "./oauth.ts";
 
 const PROVIDER_SOURCE = "registry.opentofu.org/cloudflare/cloudflare";
 
@@ -31,9 +32,9 @@ export function cloudflareOAuthDescriptorFromEnv(
 ): ConnectionOAuthDescriptor | undefined {
   const clientId = env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID;
   const redirectUri = env.TAKOSUMI_CLOUDFLARE_OAUTH_REDIRECT_URI;
-  const authorizationUrl = env.TAKOSUMI_CLOUDFLARE_OAUTH_AUTHORIZATION_URL;
-  const tokenUrl = env.TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL;
-  if (!clientId || !redirectUri || !authorizationUrl || !tokenUrl) {
+  const authorizationUrl = env.TAKOSUMI_CLOUDFLARE_OAUTH_AUTHORIZATION_URL ?? "https://dash.cloudflare.com/oauth2/auth";
+  const tokenUrl = env.TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL ?? "https://dash.cloudflare.com/oauth2/token";
+  if (!clientId || !redirectUri) {
     return undefined;
   }
   return {
@@ -51,15 +52,20 @@ export function cloudflareOAuthDescriptorFromEnv(
     authorizationUrl,
     tokenUrl,
     redirectUri,
+    pkce: true,
+    browserBindingRequired: true,
+    setupFields: [{ key: "accountId", envName: "CLOUDFLARE_ACCOUNT_ID" }],
     scopes: splitScopes(env.TAKOSUMI_CLOUDFLARE_OAUTH_SCOPES),
-    mapTokenResponse: ({ tokenResponse, helperId }) => {
+    mapTokenResponse: ({ tokenResponse, helperId, scopeHints }) => {
       const token = tokenResponse.access_token;
       if (typeof token !== "string" || token.length === 0) {
         throw new GuidedConnectionSetupError(
           `OAuth token response for helper ${helperId} did not include access_token`,
         );
       }
-      return { CLOUDFLARE_API_TOKEN: token };
+      const account = scopeHints?.providerSettings?.accountId;
+      return { ...cloudflareOAuthValues({ tokenResponse, clientId, now: Date.now() }),
+        ...(typeof account === "string" && account ? { CLOUDFLARE_ACCOUNT_ID: account } : {}) };
     },
   };
 }

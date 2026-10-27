@@ -109,7 +109,7 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
         url: String(input),
         body: String(init?.body ?? ""),
       };
-      return Response.json({ access_token: "cf-access-token" });
+      return Response.json({ access_token: "cf-access-token", expires_in: 3600, refresh_token: "cf-refresh-fixture" });
     }) as typeof fetch,
   );
 
@@ -148,6 +148,11 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
   });
   expect(tokenRequest?.url).toBe("https://api.cloudflare.test/oauth2/token");
   expect(tokenRequest?.body).toContain("code=cf-code");
+  const verifier = new URLSearchParams(tokenRequest!.body).get("code_verifier")!;
+  expect(verifier).toHaveLength(43);
+  const challenge = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))).toString("base64url");
+  expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(authUrl.searchParams.get("code_challenge")).toBe(challenge);
   expect(completion.request).toEqual({
     workspaceId: "ws_1",
     provider: "registry.opentofu.org/cloudflare/cloudflare",
@@ -159,7 +164,7 @@ test("Cloudflare OAuth helper signs state and returns an internal provider resol
     materialization: "oauth",
     displayName: "Cloudflare OAuth",
     scopeHints: { accountId: "acct_cf" },
-    values: { CLOUDFLARE_API_TOKEN: "cf-access-token" },
+    values: { CLOUDFLARE_API_TOKEN: "cf-access-token", CLOUDFLARE_OAUTH_SESSION: expect.any(String) },
   });
   // The HMAC-signed subject rides the state so the cross-site callback can
   // authorize without a session cookie.
@@ -184,7 +189,7 @@ test("Cloudflare OAuth state binds the subject under the HMAC: tampering fails v
         "https://api.cloudflare.test/oauth2/token",
     },
     (async () =>
-      Response.json({ access_token: "cf-access-token" })) as typeof fetch,
+      Response.json({ access_token: "cf-access-token", expires_in: 3600, refresh_token: "cf-refresh-fixture" })) as typeof fetch,
   );
   const started = await helpers!.cloudflare!.start({
     helperId: "cloudflare",

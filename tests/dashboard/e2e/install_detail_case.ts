@@ -9,7 +9,7 @@ const applyId = "run_provider_apply_e2e";
 const now = "2026-10-27T01:00:00.000Z";
 const sourceUrl = "/new?git=https%3A%2F%2Fgithub.com%2Fexample%2Fcloudflare-service.git&ref=0123456789abcdef0123456789abcdef01234567&path=.&name=cloudflare-service";
 
-async function detailFixture(page: Page, base: (page: Page, provider: boolean) => Promise<BaseFixture>, provider = false) {
+async function detailFixture(page: Page, base: (page: Page, provider: boolean) => Promise<BaseFixture>, provider = false, oauth = false) {
   await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
   const initial = await base(page, provider);
   const mutations: string[] = [];
@@ -19,14 +19,22 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
   let connected = false;
   let retryCount = 0;
   let retryFailed = false;
-  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], id: "conn_inline_fixture", displayName: "My Cloudflare" };
+  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), id: "conn_inline_fixture", displayName: "My Cloudflare" };
   const plan = () => ({ id: retryCount ? `run_retry_fixture_${retryCount}` : planId, workspaceId: "ws_alpha", capsuleId: capId, type: "plan", status: retryCount && retryFailed ? "failed" : "succeeded", summary: { add: 1, change: 0, destroy: 0 }, policyStatus: "pass", createdBy: "portable-e2e", createdAt: retryCount ? new Date(Date.parse(now) + 120000 + retryCount * 1000).toISOString() : now });
   const apply = () => ({ ...plan(), id: applyId, planRunId: planId, type: "apply", status: applyStatus, errorCode: applyStatus === "failed" ? "runner_apply_failed" : undefined, createdAt: "2026-10-27T01:01:00.000Z" });
   const capsule = () => ({ id: capId, workspaceId: "ws_alpha", sourceId: "src_provider_destination_e2e", name: "cloudflare-service", slug: "cloudflare-service", installConfigId: "cfg-default-opentofu-capsule", environment: "production", status: capsuleStatus, currentStateGeneration: capsuleStatus === "pending" ? 0 : 1, currentStateVersionId: capsuleStatus === "pending" ? undefined : "sv_inline", uninstall: capsuleStatus === "uninstalled" ? { phase: "scheduled", requestedAt: now, scheduledDestroyAt: "2026-11-03T01:00:00Z" } : undefined, createdAt: now, updatedAt: now });
+  if (oauth) await page.context().route("**/api/v1/connections/oauth/cloudflare/callback**", async (route) => {
+    const url = new URL(route.request().url());
+    connected = !url.searchParams.has("error");
+    const flow = "sha256:" + Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify("opaque-fixture-state")))).toString("hex");
+    const result = { kind: "connection-oauth", error: !connected, connectionId: connection.id, connectionStatus: "verified" };
+    return route.fulfill({ contentType: "text/html", body: `<h1>Connection callback</h1><script>new BroadcastChannel(${JSON.stringify("takosumi.oauth." + flow)}).postMessage(${JSON.stringify(result)})</script>` });
+  });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(); const path = new URL(request.url()).pathname;
     if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
-    if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES } });
+    if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES, oauthHelpers: oauth ? [{ id: "cloudflare", providerSource: "registry.opentofu.org/cloudflare/cloudflare", credentialRecipe: { id: "cloudflare", authMode: "oauth" }, setupFields: [{ key: "accountId", envName: "CLOUDFLARE_ACCOUNT_ID" }] }] : [] } });
+    if (path === "/api/v1/connections/oauth/cloudflare/start") return route.fulfill({ json: { authorizationUrl: "https://dash.cloudflare.test/oauth2/auth?state=opaque-fixture-state", state: "opaque-fixture-state", expiresAt: new Date(Date.now() + 600000).toISOString() } });
     if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: connected ? [connection] : [] } });
     if (path === "/api/v1/connections") {
       if (request.method() === "POST") return route.fulfill({ status: 201, json: { connection: { ...connection, status: "pending" } } });
@@ -35,7 +43,7 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     if (path === "/api/v1/connections/conn_inline_fixture/test") { connected = true; return route.fulfill({ json: { status: "verified" } }); }
     if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") return route.fulfill({ json: { installConfig: {
       id: "cfg-default-opentofu-capsule", name: "Example", policy: {}, variableMapping: {},
-      variablePresentation: [{ name: "domain", type: "string", required: true, label: { ja: "ドメイン", en: "Domain" }, defaultValue: { source: "literal", value: "default.example.com" } }],
+      variablePresentation: [{ name: "domain", type: "string", required: true, label: { ja: "ドメイン", en: "Domain" }, defaultValue: { source: "literal", value: "default.example.com" } }, { name: "custom_domain", type: "string", required: false, label: { en: "Custom domain", ja: "カスタムドメイン" } }, { name: "service_name", type: "string", required: true, label: { en: "Service name", ja: "サービス名" }, defaultValue: { source: "capsule_name" } }],
       outputAllowlist: {}, createdAt: now, updatedAt: now,
     } } });
     if (path === `/api/v1/capsules/${capId}`) {
@@ -60,7 +68,7 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     return route.fallback();
   });
   await page.context().route("https://apps.example.test/inline-app", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Installed application</h1>" }));
-  return { initial, mutations, finish: () => { applyStatus = "succeeded"; capsuleStatus = "active"; }, fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; }, destroy: () => { capsuleStatus = "destroyed"; }, problem: (status: string) => { capsuleStatus = status; }, failRetry: (failed: boolean) => { retryFailed = failed; } };
+  return { initial, mutations, authorize: () => { connected = true; }, finish: () => { applyStatus = "succeeded"; capsuleStatus = "active"; }, fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; }, destroy: () => { capsuleStatus = "destroyed"; }, problem: (status: string) => { capsuleStatus = status; }, failRetry: (failed: boolean) => { retryFailed = failed; } };
 }
 
 export function registerInstallDetailCases(mode: string, base: (page: Page, provider: boolean) => Promise<BaseFixture>) {
@@ -75,8 +83,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByTestId("install-configuration")).toHaveCount(0);
       expect(f.initial.sourceCreateBodies ?? []).toEqual([]);
       await page.getByRole("button", { name: "Install", exact: true }).click();
-      await expect(page.getByLabel("Domain")).toHaveValue("default.example.com");
-      await page.getByLabel("Domain").fill("chosen.example.com");
+      await expect(page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ })).toHaveValue("default.example.com");
+      await page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ }).fill("chosen.example.com");
       expect(f.initial.installPlanBody).toBeUndefined();
       await page.locator(".iv-cloud-summary").getByRole("button", { name: "Connect", exact: true }).click();
       await expect(page.getByTestId("install-connections-panel")).toBeVisible();
@@ -91,7 +99,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.screenshot({ path: test.info().outputPath("install-connect-mobile.png") });
       await page.getByRole("button", { name: "Back to settings" }).click();
       await expect(page.locator(".iv-cloud-summary button")).toBeFocused();
-      await expect(page.getByLabel("Domain")).toHaveValue("chosen.example.com");
+      await expect(page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ })).toHaveValue("chosen.example.com");
       await page.locator(".iv-cloud-summary").getByRole("button", { name: "Connect", exact: true }).click();
       await page.locator('#connection-field-CLOUDFLARE_API_TOKEN').fill("fixture-only-token");
       await page.locator('#connection-field-CLOUDFLARE_ACCOUNT_ID').fill("fixture-account");
@@ -99,13 +107,58 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.locator(".iv-cloud-summary")).toContainText("Connected. Ready to install.");
       await page.getByRole("button", { name: "Back to settings" }).click();
       await expect(page.locator(".iv-cloud-summary button")).toBeFocused();
-      await expect(page.getByLabel("Domain")).toHaveValue("chosen.example.com");
+      await expect(page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ })).toHaveValue("chosen.example.com");
       await page.getByTestId("install-configuration").getByRole("button", { name: "Install", exact: true }).click();
       await expect.poll(() => f.initial.installPlanBody?.variables).toEqual({ domain: "chosen.example.com" });
       expect(f.initial.installPlanBody?.options?.providerBindings?.[0]?.connectionId).toBe("conn_inline_fixture");
       const stored = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
       expect(stored).not.toContain("fixture-only-token"); expect(stored).not.toContain("chosen.example.com");
       expect(errors).toEqual([]);
+    });
+    test("OAuth keeps declared domain settings mounted and uses the verified returned connection", async ({ page, context }) => {
+      const f = await detailFixture(page, base, true, true);
+      await context.route("https://dash.cloudflare.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Authorize Cloudflare</h1>" }));
+      await page.goto(sourceUrl);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      await page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ }).fill("oauth-chosen.example.net");
+      await page.getByText("Advanced settings", { exact: true }).click();
+      await expect(page.getByRole("textbox", { name: /^Service name(?:\s*\*)?$/ })).toHaveValue("cloudflare-service");
+      await page.getByLabel("Custom domain", { exact: true }).fill("custom.example.org");
+      await page.locator(".iv-cloud-summary").getByRole("button", { name: "Connect", exact: true }).click();
+      await expect(page.locator('#connection-field-CLOUDFLARE_API_TOKEN')).toBeHidden();
+      const popupEvent = context.waitForEvent("page");
+      await page.getByRole("button", { name: "Connect Cloudflare", exact: true }).click();
+      const popup = await popupEvent;
+      await expect(popup.getByRole("heading")).toHaveText("Authorize Cloudflare");
+      await popup.goto(new URL("/api/v1/connections/oauth/cloudflare/callback?state=opaque-fixture-state&code=fixture", page.url()).toString());
+      await expect(page.locator(".iv-cloud-summary")).toContainText("Connected. Ready to install.");
+      await page.getByRole("button", { name: "Back to settings" }).click();
+      await expect(page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ })).toHaveValue("oauth-chosen.example.net");
+      await page.getByTestId("install-configuration").getByRole("button", { name: "Install", exact: true }).click();
+      await expect.poll(() => f.initial.installPlanBody?.variables).toEqual({ domain: "oauth-chosen.example.net", custom_domain: "custom.example.org" });
+      expect(f.initial.installPlanBody?.options?.providerBindings?.[0]?.connectionId).toBe("conn_inline_fixture");
+      expect(f.mutations.some((entry) => entry === "POST /api/v1/connections")).toBe(false);
+      const stored = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
+      expect(stored).not.toContain("oauth-chosen.example.net");
+      expect(stored).not.toContain("opaque-fixture-state");
+    });
+    test("OAuth failure and cancel leave settings editable and allow retry", async ({ page, context }) => {
+      await detailFixture(page, base, true, true);
+      await context.route("https://dash.cloudflare.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Authorize Cloudflare</h1>" }));
+      await page.goto(sourceUrl); await page.getByRole("button", { name: "Install", exact: true }).click();
+      await page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ }).fill("retry.example.net");
+      await page.locator(".iv-cloud-summary").getByRole("button", { name: "Connect", exact: true }).click();
+      const popupEvent = context.waitForEvent("page");
+      await page.getByRole("button", { name: "Connect Cloudflare", exact: true }).click();
+      const popup = await popupEvent;
+      await expect(popup.getByRole("heading")).toHaveText("Authorize Cloudflare");
+      await popup.goto(new URL("/api/v1/connections/oauth/cloudflare/callback?state=opaque-fixture-state&error=access_denied", page.url()).toString());
+      await expect(page.getByText("Connection was not completed.", { exact: false })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect Cloudflare", exact: true })).toBeEnabled();
+      await page.getByRole("button", { name: "Connect Cloudflare", exact: true }).click();
+      await page.getByTestId("install-connections-panel").getByRole("button", { name: "Cancel", exact: true }).click();
+      await page.getByRole("button", { name: "Back to settings" }).click();
+      await expect(page.getByRole("textbox", { name: /^Domain(?:\s*\*)?$/ })).toHaveValue("retry.example.net");
     });
     test("installs inline, restores the real running Apply after reload, and opens the deployed app", async ({ page, context }) => {
       const f = await detailFixture(page, base);

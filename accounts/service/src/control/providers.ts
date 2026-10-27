@@ -152,7 +152,18 @@ export async function handleCredentialRecipes(
   const { request, url, operations, store } = ctx;
   if (segments.length === 1 && segments[0] === "credential-recipes") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return json(await operations.listCredentialRecipes());
+    const catalog = await operations.listCredentialRecipes();
+    return json({
+      ...catalog,
+      oauthHelpers: Object.entries(operations.connectionOAuth ?? {}).flatMap(([id, helper]) => {
+        const recipe = catalog.recipes.find((item) => item.id === helper.credentialRecipe?.id);
+        return helper.providerSource && helper.credentialRecipe &&
+          recipe?.authModes[helper.credentialRecipe.authMode] ? [{
+            id, providerSource: helper.providerSource, credentialRecipe: helper.credentialRecipe,
+            ...(helper.setupFields ? { setupFields: helper.setupFields } : {}),
+          }] : [];
+      }),
+    });
   }
   return undefined;
 }

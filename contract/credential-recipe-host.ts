@@ -17,6 +17,11 @@ export type CredentialDriverFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+/** A provider may release a renewal claim only after a definite no-token response. */
+export class CredentialRecipeRefreshFailure extends Error {
+  constructor(readonly retrySafe: boolean) { super("Provider credential renewal failed"); }
+}
+
 /** Canonical non-secret Run authority delivered to a trusted recipe driver. */
 export interface CredentialRecipeDriverRunContext {
   readonly workspaceId: string;
@@ -44,6 +49,7 @@ export type CredentialRecipeIssueRunCredential = (
 ) => Promise<CredentialRecipeIssuedRunCredential>;
 
 interface CredentialRecipeDriverBaseContext {
+  readonly minimumLifetimeSeconds?: number;
   readonly connection: ProviderConnection;
   /** Per-connection mint attempt, distinct from the canonical Run identity. */
   readonly issuanceAttemptRef?: `sha256:${string}`;
@@ -104,6 +110,10 @@ export interface CredentialRecipeDriverVerifyResult {
 }
 
 export interface CredentialRecipeRuntimeDriver {
+  /** Optional sealed-material renewal. Core atomically fences and seals the result. */
+  refresh?(input: CredentialRecipeDriverContext): Promise<Readonly<Record<string, string>> | undefined>;
+  /** Pure local decision; no network or secret mutation before Core claims renewal. */
+  refreshRequired?(values: Readonly<Record<string, string>>, now: Date, minimumLifetimeSeconds?: number): boolean;
   /** Host-pinned bounded label persisted in provider credential evidence. */
   readonly evidenceIssuer: string;
   /** Optional host-composed verifier identity for successful verification. */

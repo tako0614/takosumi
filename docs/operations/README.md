@@ -49,6 +49,7 @@ Cloud 側のリポジトリで管理します。
 - [optional shared-account browser authentication](./shared-account-authentication.md)
 - [runner sandbox](./runner-sandbox-security.md)
 - [secret rotation](./secret-rotation.md)
+- [Cloudflare OAuth provider connections](./cloudflare-oauth.md)
 - [shared-account OIDC の導入](./shared-account-oidc.md)
 - [patch management](./patch-management.md)
 - [vulnerability response](./vulnerability-response.md)

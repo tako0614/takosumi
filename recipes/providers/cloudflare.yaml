@@ -11,15 +11,18 @@ env_names:
   - CLOUDFLARE_ACCOUNT_ID
   - CLOUDFLARE_ZONE_ID
   - CF_API_TOKEN
+  - CLOUDFLARE_OAUTH_SESSION
 required_env_groups:
   - [CLOUDFLARE_API_TOKEN]
   - [CF_API_TOKEN]
   - [CLOUDFLARE_API_KEY, CLOUDFLARE_EMAIL]
 auth_modes:
   oauth:
+    pre_run:
+      type: cloudflare_oauth
     env:
       CLOUDFLARE_API_TOKEN:
-        from: secret
+        from: generated
         name: access_token
   api_token:
     presentation:

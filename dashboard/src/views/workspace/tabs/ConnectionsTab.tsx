@@ -50,11 +50,12 @@ import {
 import {
   type ProviderConnection,
   createConnection,
-  listCredentialRecipes,
+  connectionSetupCatalog,
   listProviderConnections,
   revokeConnection,
   testConnection,
 } from "../../../lib/control-api.ts";
+import { connectProviderWithPopup } from "../../../lib/connection-oauth-popup.ts";
 import { readableProviderSourceLabel } from "../../../lib/provider-labels.ts";
 import { providerConnectionDisplayName } from "../../../lib/provider-connections.ts";
 import { formatDateTime, locale, t } from "../../../i18n/index.ts";
@@ -129,9 +130,9 @@ export default function ConnectionsTab(props: {
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(workspaceId, listProviderConnections);
-  const [credentialRecipes] = createResource(listCredentialRecipes);
+  const [credentialRecipes] = createResource(connectionSetupCatalog);
   const installedCredentialRecipes = () =>
-    credentialRecipes.error ? [] : (credentialRecipes.latest ?? []);
+    credentialRecipes.error ? [] : (credentialRecipes.latest?.recipes ?? []);
   const providerOptions = createMemo(() =>
     providerSetupOptionsFromCredentialRecipes(
       installedCredentialRecipes(),
@@ -219,6 +220,55 @@ export default function ConnectionsTab(props: {
   });
   const fields = createMemo(() => setupOption()?.fields ?? []);
   const setupGuide = createMemo(() => setupOption()?.setupGuide);
+  const oauthHelper = createMemo(() => credentialRecipes.error ? undefined :
+    credentialRecipes.latest?.oauthHelpers.find((helper) =>
+      helper.providerSource === setupOption()?.providerSource ||
+      setupOption()?.providerAliases.includes(helper.providerSource)));
+  const oauthSetupFields = () => (oauthHelper()?.setupFields ?? []).filter((field) =>
+    fields().some((candidate) => candidate.envName === field.envName && !candidate.secret));
+  const [oauthBusy, setOauthBusy] = createSignal(false);
+  const [oauthFailure, setOauthFailure] = createSignal(false);
+  const [manualCredentials, setManualCredentials] = createSignal(false);
+  let oauthController: AbortController | undefined;
+  let oauthPopup: Window | null = null;
+  const cancelOAuth = () => {
+    oauthController?.abort(); oauthController = undefined;
+    oauthPopup?.close(); oauthPopup = null;
+    setOauthBusy(false);
+  };
+  onCleanup(cancelOAuth);
+  let oauthWorkspace = workspaceId();
+  let oauthProvider = provider();
+  createEffect(() => {
+    const current = workspaceId();
+    const selected = provider();
+    if (current !== oauthWorkspace || selected !== oauthProvider) {
+      cancelOAuth(); setOauthFailure(false); setManualCredentials(false);
+      oauthWorkspace = current; oauthProvider = selected;
+    }
+  });
+  const connectOAuth = async () => {
+    const helper = oauthHelper();
+    if (!helper || oauthBusy()) return;
+    const popup = window.open("about:blank", "_blank", "popup,width=600,height=760");
+    if (!popup) { setOauthFailure(true); return; }
+    cancelOAuth(); oauthPopup = popup;
+    const controller = new AbortController(); oauthController = controller;
+    const targetWorkspace = workspaceId();
+    setOauthBusy(true); setOauthFailure(false);
+    try {
+      const connection = await connectProviderWithPopup({ helper, workspaceId: targetWorkspace,
+        displayName: displayName().trim() || undefined, signal: controller.signal, popup,
+        scopeHints: { providerSettings: Object.fromEntries(oauthSetupFields().flatMap((field) =>
+          values()[field.envName]?.trim() ? [[field.key, values()[field.envName]!.trim()]] : [])) } });
+      if (disposed || controller.signal.aborted || workspaceId() !== targetWorkspace) return;
+      await afterConnectionCreated(connection);
+    } catch {
+      if (!disposed && !controller.signal.aborted && workspaceId() === targetWorkspace) setOauthFailure(true);
+    } finally {
+      if (oauthController === controller) cancelOAuth();
+    }
+  };
 
   const setFieldValue = (envName: string, value: string) => {
     setValues((prev) => ({ ...prev, [envName]: value }));
@@ -261,6 +311,13 @@ export default function ConnectionsTab(props: {
   };
   if (!props.embedded && typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
+    const flow = params.get("connection_flow");
+    if (flow && /^sha256:[a-f0-9]{64}$/u.test(flow)) {
+      const channel = new BroadcastChannel(`takosumi.oauth.${flow}`);
+      channel.postMessage({ kind: "connection-oauth", error: params.has("connection_error"),
+        connectionId: params.get("connection_id"), connectionStatus: params.get("connection_status") });
+      setTimeout(() => channel.close(), 200);
+    }
     if (params.get("connected")) {
       setOauthNotice({ kind: "ok" });
       const connectionId = params.get("connection_id");
@@ -284,6 +341,7 @@ export default function ConnectionsTab(props: {
       params.delete("connection_error");
       params.delete("connection_id");
       params.delete("connection_status");
+      params.delete("connection_flow");
       const next = params.toString();
       window.history.replaceState(
         {},
@@ -822,10 +880,28 @@ export default function ConnectionsTab(props: {
               </FormField>
             </details>
 
+            <Show when={!isGenericEnvProvider() && oauthHelper()}>
+              <details class="connection-advanced"><summary>{t("conn.oauth.accountSettings")}</summary>
+                <For each={oauthSetupFields()}>{(field) => <FormField
+                  label={fields().find((candidate) => candidate.envName === field.envName)?.label ?? field.key}>
+                  <Input value={values()[field.envName] ?? ""} onInput={(event) => setFieldValue(field.envName, event.currentTarget.value)} autocomplete="off" />
+                </FormField>}</For>
+              </details>
+              <div class="wc-form-actions">
+                <Button type="button" variant="primary" busy={oauthBusy()} onClick={() => void connectOAuth()}>
+                  {t("conn.oauth.connect", { provider: installedCredentialRecipes().find((recipe) => recipe.id === oauthHelper()?.credentialRecipe.id)?.displayName ?? "" })}
+                </Button>
+                <Show when={oauthBusy()}><Button type="button" variant="ghost" onClick={cancelOAuth}>{t("common.cancel")}</Button></Show>
+              </div>
+              <Show when={oauthBusy()}><p role="status">{t("conn.oauth.waiting")}</p></Show>
+              <Show when={oauthFailure()}><Toast tone="error">{t("conn.oauth.retryHint")}</Toast></Show>
+              <Button type="button" variant="ghost" onClick={() => setManualCredentials((value) => !value)} aria-expanded={manualCredentials()}>{t("conn.oauth.manual")}</Button>
+            </Show>
+
             <Show
               when={isGenericEnvProvider()}
               fallback={
-                <>
+                <div hidden={Boolean(oauthHelper()) && !manualCredentials()}>
                   <Show when={setupOption()?.description}>
                     {(description) => <p class="muted">{description()}</p>}
                   </Show>
@@ -901,7 +977,7 @@ export default function ConnectionsTab(props: {
                     </div>
                     <ActionError error={createFromRecipe.error} />
                   </form>
-                </>
+                </div>
               }
             >
               {/* Advanced bring-your-own-key editor: any OpenTofu provider,

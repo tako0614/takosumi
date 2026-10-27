@@ -104,4 +104,29 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       await pg?.close();
     }
   });
+  test(`${name}: sealed token renewal is atomic and cannot change ownership`, async () => {
+    const pg = name === "Postgres" ? await PGliteSqlClient.create() : undefined;
+    const d1 = name === "D1" ? new SqliteFakeD1() : undefined;
+    const store: OpenTofuControlStore = pg ? new SqlOpenTofuControlStore({ client: pg })
+      : d1 ? new CloudflareD1OpenTofuControlStore(d1) : new InMemoryOpenTofuControlStore();
+    try {
+      await store.putWorkspace({ id: authority.workspaceId, handle: "renewal", displayName: "Renewal", type: "personal", ownerUserId: "owner", createdAt: now, updatedAt: now });
+      const row = connection(); const material = blob(row);
+      await store.createConnectionRegistration({ connection: row, secretBlob: material, expectedWorkspaceManagementAuthority: authority, actorAuthority: null });
+      const renewed = { ...material, ciphertext: "cmVuZXdlZA==", rotatedAt: later };
+      const replacement = { ...row, updatedAt: later };
+      const input: CommitConnectionTestResultInput = { expectedConnection: row, expectedSecretBlob: material,
+        replacement, replacementSecretBlob: renewed, expectedWorkspaceManagementAuthority: authority, actorAuthority: null };
+      await expect(store.commitConnectionTestResult({ ...input, replacementSecretBlob: { ...renewed, connectionId: "another" } })).rejects.toThrow();
+      expect(await store.commitConnectionTestResult(input)).toBe(true);
+      expect(await store.getConnection(row.id)).toEqual(replacement);
+      expect(await store.getSecretBlob(row.id)).toEqual(renewed);
+      expect(await store.commitConnectionTestResult(input)).toBe(false);
+      expect(await store.getSecretBlob(row.id)).toEqual(renewed);
+      await store.beginWorkspaceDraining(authority.workspaceId, authority);
+      await expect(store.commitConnectionTestResult({ ...input, expectedConnection: replacement, expectedSecretBlob: renewed })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      expect(await store.getSecretBlob(row.id)).toEqual(renewed);
+    } finally { await pg?.close(); }
+  });
+
 }
