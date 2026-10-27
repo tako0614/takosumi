@@ -41,6 +41,7 @@ import {
   type StateVersionReadiness,
 } from "../../lib/capsules-ui.ts";
 import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 
 /**
  * Why this Plan is being reviewed. Every purpose shares the same review and
@@ -250,6 +251,39 @@ export async function readInstallReadiness(
   }, retry);
 }
 
+/**
+ * The recorded change counts of a reviewed Plan, when they are a fact. A
+ * removal that reports no deletions did not record its counts — removing
+ * deletes by definition — so its counts are unknown rather than 0/0/0.
+ */
+export function reviewSummary(
+  run: Pick<Run, "type" | "summary"> | undefined,
+): Run["summary"] | undefined {
+  const recorded = run?.summary;
+  if (!recorded) return undefined;
+  if (run.type === "destroy_plan" && (recorded.destroy ?? 0) === 0) return undefined;
+  return recorded;
+}
+
+/**
+ * Whether applying needs the explicit "I reviewed these changes" check: any
+ * removal (a destroy Plan or a review opened to uninstall), unknown counts,
+ * deletions, or a Plan the host marked as needing approval.
+ */
+export function reviewNeedsConfirmation(
+  run: Pick<Run, "type" | "summary" | "requiresApproval"> | undefined,
+  purpose: ReviewPurpose | undefined,
+): boolean {
+  const counts = reviewSummary(run);
+  return (
+    run?.type === "destroy_plan" ||
+    purpose === "uninstall" ||
+    !counts ||
+    (counts.destroy ?? 0) > 0 ||
+    run?.requiresApproval === true
+  );
+}
+
 /** A reviewable Plan: an ordinary change or an uninstall's removal Plan. */
 function isReviewRun(type: Run["type"] | undefined): boolean {
   return type === "plan" || type === "destroy_plan";
@@ -411,16 +445,12 @@ export default function InstallExecution(props: Props) {
     }
   });
 
-  const summary = () => runLatest()?.summary;
-  const countsKnown = () => Boolean(summary());
-  const destructive = () => {
-    const latest = runLatest();
-    return (
-      !countsKnown() ||
-      (summary()?.destroy ?? 0) > 0 ||
-      latest?.requiresApproval === true
-    );
-  };
+  /** A removal Plan, or any review opened to uninstall. */
+  const isRemoval = () =>
+    runLatest()?.type === "destroy_plan" || props.purpose === "uninstall";
+  const summary = () => reviewSummary(runLatest());
+  // A removal always needs the explicit confirmation, whatever its counts say.
+  const destructive = () => reviewNeedsConfirmation(runLatest(), props.purpose);
   const planReady = () => {
     const latest = runLatest();
     return (
@@ -430,7 +460,19 @@ export default function InstallExecution(props: Props) {
     );
   };
 
+  const { confirm } = useConfirmDialog();
   const approve = async () => {
+    // Approving a removal starts removing live resources: never one click.
+    if (isRemoval()) {
+      const ok = await confirm({
+        title: t("run.approveConfirm.destroyTitle"),
+        message: t("run.approveConfirm.destroyMessageGeneric"),
+        confirmText: t("run.approve"),
+        cancelText: t("common.cancel"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
     setApproving(true);
     setError(null);
     try {
@@ -556,10 +598,14 @@ export default function InstallExecution(props: Props) {
     props.onState?.(failed() || error() ? "failed" : planReady() ? "ready" : "installing");
   });
 
-  // A failed removal is not retried by re-planning the app: that would plan
-  // the app back, not away. The review closes and the app page offers the
-  // next step.
-  const canRetryApply = () => props.purpose !== "uninstall";
+  // Only the first install retries by re-planning the app as it stands. An
+  // update, version choice, rollback, settings change or removal was planned
+  // for a specific revision or operation, so its retry goes back through the
+  // request that created it (onRestart, with a fresh key) — or, without one,
+  // the review only closes.
+  const isInstall = () => (props.purpose ?? "install") === "install";
+  const canRetryApply = () => isInstall();
+  const canRestart = () => Boolean(props.onRestart) && (!isInstall() || !hasSeenApply());
   const closeButton = () => (
     <Show when={props.onClose}>
       {(close) => (
@@ -599,6 +645,7 @@ export default function InstallExecution(props: Props) {
           >
             {t("common.retry")}
           </Button>
+          {closeButton()}
         </div>
       </Show>
 
@@ -825,18 +872,29 @@ export default function InstallExecution(props: Props) {
                 <strong>{t(copy().failed)}</strong>
                 <p>{runFailureHint(current().errorCode)}</p>
                 <div class="iv-action-row">
-                  <Show when={isApplyRun(current().type) && canRetryApply()}>
-                    <Button type="button" variant="primary" busy={restarting()} onClick={() => void retryFailedApply()}>{props.purpose && props.purpose !== "install" ? t("app.review.retry") : t("installStore.retryInstall")}</Button>
+                  <Show when={isInstall() && isApplyRun(current().type) && canRetryApply()}>
+                    <Button type="button" variant="primary" busy={restarting()} onClick={() => void retryFailedApply()}>{t("installStore.retryInstall")}</Button>
                   </Show>
-                  <Show when={isReviewRun(current().type) && (canRetryApply() || props.onRestart)}>
+                  <Show when={isInstall() && isReviewRun(current().type)}>
                     <Button
                       type="button"
                       variant="primary"
                       busy={restarting()}
                       disabled={restarting()}
-                      onClick={() => void (props.onRestart && !hasSeenApply() ? restartWithLatestSource() : retryFailedApply())}
+                      onClick={() => void (canRestart() ? restartWithLatestSource() : retryFailedApply())}
                     >
-                      {props.onRestart && !hasSeenApply() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : props.purpose && props.purpose !== "install" ? t("app.review.retry") : t("installStore.retryInstall")}
+                      {canRestart() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : t("installStore.retryInstall")}
+                    </Button>
+                  </Show>
+                  <Show when={!isInstall() && canRestart()}>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      busy={restarting()}
+                      disabled={restarting()}
+                      onClick={() => void restartWithLatestSource()}
+                    >
+                      {props.restartLabel ?? t("app.review.retry")}
                     </Button>
                   </Show>
                   <Button
@@ -870,6 +928,10 @@ export default function InstallExecution(props: Props) {
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />
             <p>{message()}</p>
+            {/* An Apply whose outcome is unknown is held — never retried from
+                here — but the review can close; the run detail and the app's
+                history show what happened. */}
+            <Show when={applyUnconfirmed()}>{closeButton()}</Show>
           </div>
         )}
       </Show>

@@ -28,6 +28,11 @@ import { readableProviderSourceLabel } from "./provider-labels.ts";
  * registering with the route's Suspense boundary. A failed read is simply
  * `undefined`; every section renders its own loading and failure state.
  */
+/** True once a supporting read has loaded (also while it refreshes). */
+export function isSettled(resource: Resource<unknown>): boolean {
+  return resource.state === "ready" || resource.state === "refreshing";
+}
+
 export function settledValue<T>(resource: Resource<T>): T | undefined {
   const state = resource.state;
   return state === "ready" || state === "refreshing"

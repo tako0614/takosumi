@@ -50,10 +50,7 @@ import {
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
   listRuns,
-  destroyPlanCapsule,
   openRunStream,
-  planCapsule,
-  planCapsuleUpdate,
   type ProviderConnection,
   type ProviderResolution,
   type Run,
@@ -86,6 +83,7 @@ import {
 } from "../../lib/run-approval.ts";
 import { canCancelRun } from "../../lib/run-cancel.ts";
 import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
+import { retryPlanForRun } from "../../lib/run-retry.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -1120,38 +1118,10 @@ function Inner() {
         t("controlError.sourceRevisionMismatch"),
       );
     }
-    const initialReport = initialPlanRetryReport(currentRun, capsule);
-    // The Plan's immutable base generation owns its retry mode. Another Apply
-    // must not turn an initial-source retry into an update from latest source.
-    const isUpdatedPlan =
-      (currentRun.baseStateGeneration ?? 0) > 0 &&
-      capsule.currentStateGeneration > 0;
-    if (
-      currentRun.type === "plan" &&
-      !isUpdatedPlan &&
-      !initialReport
-    ) {
-      throw new ControlApiError(
-        409,
-        "retry_plan_review_mismatch",
-        t("controlError.compatibilityStale"),
-      );
-    }
-    // Preserve the requested operation. A failed destroy must be retried as a
-    // destroy. A first-install retry must preserve the exact reviewed
-    // SourceSnapshot/CompatibilityReport pair; refreshing only the report
-    // would mismatch the InstallConfig-pinned snapshot. Deployed updates still
-    // sync and pin the latest source.
-    const envelope =
-      currentRun.type === "destroy_plan"
-        ? await destroyPlanCapsule(instId)
-        : capsule.currentStateGeneration === 0 &&
-            currentRun.compatibilityReportId
-          ? await planCapsule(instId, {
-              compatibilityReportId:
-                initialReport ?? currentRun.compatibilityReportId,
-            })
-          : await planCapsuleUpdate(instId);
+    // The same selector as the app page's problem card: a failed removal is
+    // retried as a removal, a first install keeps its reviewed pair, and an
+    // installed app's change re-reads the latest source.
+    const envelope = await retryPlanForRun(currentRun, capsule);
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(

@@ -101,9 +101,9 @@ export default function InstallLifecycle(props: {
       </div>
     </Show>
     <Show when={latest()}>{(value) => <>
-      <Show when={managed()}>
+      <Show when={managed() ? props.capsuleId : undefined} keyed>{(capsuleId) =>
         <AppManagePage
-          capsuleId={props.capsuleId}
+          capsuleId={capsuleId}
           principalId={props.principalId}
           justInstalled={props.justInstalled}
           // The app page reads the app after its own actions (uninstall,
@@ -114,7 +114,7 @@ export default function InstallLifecycle(props: {
             }
           }}
         />
-      </Show>
+      }</Show>
       <Show when={state() === "not-installed"}><h2>{t("installStore.uninstalled")}</h2><Button type="button" variant="secondary" onClick={props.onChooseAnother}>{t("installStore.chooseAnother")}</Button></Show>
       <Show when={!managed() && state() !== "not-installed"}>
         <Show when={value().run} fallback={<p>{t("installStore.recoveryUnverifiedHint")}</p>}>{(run) =>

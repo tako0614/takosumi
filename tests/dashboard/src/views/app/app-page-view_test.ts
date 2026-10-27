@@ -139,4 +139,47 @@ describe("installed app page", () => {
     expect(history).toContain("<RelativeTime iso={event.at} />");
     expect(history).toContain("href={`/runs/${encodeURIComponent(runId())}`}");
   });
+
+  test("a returned Plan releases its idempotency key; a failed or unknown outcome keeps it", () => {
+    expect(page).toContain("if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);");
+    expect(page.indexOf("releaseRevisionPlanAttempt(revisionAttempts")).toBeGreaterThan(
+      page.indexOf("await createReviewableGitRevisionPlan(forCapsule"),
+    );
+    // Settings: the key is released and the form is clean once the Plan exists.
+    const create = settings.slice(settings.indexOf("props.onReview(async () => {"), settings.indexOf("return result.configurationPlan.planRunId;"));
+    expect(create).toContain("configurationAttempt = undefined");
+    expect(create).toContain("setBindingsDirty(false)");
+    expect(create).toContain("dirty: false, deleted: false, resetToDefault: false");
+    // An unapplied settings review re-reads the form from what the app runs.
+    expect(page).toContain('if (active.section === "settings") setSettingsSeed((value) => value + 1);');
+    expect(settings).toContain("[() => props.installConfig, () => props.seed]");
+  });
+
+  test("try again plans the failed run the way the run page does", () => {
+    expect(page).toContain("const fresh = await getCapsule(run.capsuleId ?? capsuleId());");
+    expect(page).toContain("return extractRunId(await retryPlanForRun(run, fresh));");
+    expect(page).not.toContain("planCapsule(capsuleId())");
+    expect(page).toContain('removal ? "uninstall" : "apply"');
+  });
+
+  test("another app never shows this app's review, notices or reads", () => {
+    // The route and the install page mount a fresh page per app.
+    expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
+    expect(read("views/new/InstallLifecycle.tsx")).toContain("<Show when={managed() ? props.capsuleId : undefined} keyed>");
+    // Defense in depth inside the page.
+    expect(page).toContain("const forCapsule = capsuleId();");
+    expect(page).toContain("if (capsuleId() !== forCapsule) return;");
+    const reset = page.slice(page.indexOf("on(\n      capsuleId,"), page.indexOf("{ defer: true }"));
+    for (const signal of ["setReview(undefined)", "setStarting(undefined)", "setSectionError(undefined)", "setNotice(undefined)"]) {
+      expect(reset).toContain(signal);
+    }
+  });
+
+  test("settings read from the configuration the app runs, and an app without bindings can still change settings", () => {
+    expect(page).toContain("bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}");
+    expect(page).toContain("capsuleInstallConfigId={inst().installConfigId}");
+    expect(settings).toContain("props.installConfig.id === props.capsuleInstallConfigId");
+    expect(settings).toContain("!props.installConfigLoading &&");
+    expect(settings).toMatch(/disabled=\{\s*props\.reviewBusy \|\|\s*!configCurrent\(\)/u);
+  });
 });

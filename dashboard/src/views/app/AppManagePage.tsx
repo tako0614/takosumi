@@ -24,6 +24,7 @@ import {
   createSignal,
   For,
   Match,
+  on,
   onCleanup,
   Show,
   Switch,
@@ -56,7 +57,7 @@ import {
   listSourceSnapshots,
   listSources,
   listStateVersions,
-  planCapsule,
+  getCapsule,
   retryInterfaceMaterializationFailure,
   type Run,
   setCapsuleAutoUpdate,
@@ -76,6 +77,7 @@ import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
 import {
   getOrCreateRevisionPlanAttempt,
+  releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
 import {
@@ -92,6 +94,7 @@ import { resolveAppIcon } from "../../lib/app-face.ts";
 import {
   appHistory,
   appState,
+  isSettled,
   capsuleRuns,
   latestFailedRun,
   linkedApps,
@@ -101,6 +104,7 @@ import {
 } from "../../lib/app-page.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
+import { retryPlanForRun } from "../../lib/run-retry.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppSection, OpenAppButton } from "./app-ui.tsx";
@@ -424,6 +428,30 @@ export default function AppManagePage(props: {
     { readonly section: ReviewSection; readonly message: string }
   >();
   const reviewBusy = () => review() !== undefined || starting() !== undefined;
+  // Bumped when a settings review closes unapplied, so the form shows what
+  // the app actually runs rather than edits that were never applied.
+  const [settingsSeed, setSettingsSeed] = createSignal(0);
+  const closeReview = (active: ActiveReview) => {
+    setReview(undefined);
+    if (active.section === "settings") setSettingsSeed((value) => value + 1);
+  };
+  // A review, its errors and notices belong to one app. If this page is
+  // handed another app, none of them carry over.
+  createEffect(
+    on(
+      capsuleId,
+      () => {
+        setReview(undefined);
+        setStarting(undefined);
+        setSectionError(undefined);
+        setNotice(undefined);
+        setUninstallError(undefined);
+        setAutoUpdateError(undefined);
+        setScreenRetryMessage(undefined);
+      },
+      { defer: true },
+    ),
+  );
   const errorFor = (section: ReviewSection) =>
     sectionError()?.section === section ? sectionError()!.message : undefined;
   const noticeFor = (section: ReviewSection) =>
@@ -436,11 +464,14 @@ export default function AppManagePage(props: {
     options: { readonly restartable?: boolean } = {},
   ) => {
     if (reviewBusy()) return;
+    // A result that arrives after the page moved to another app is dropped.
+    const forCapsule = capsuleId();
     setStarting(section);
     setSectionError(undefined);
     setNotice(undefined);
     try {
       const planRunId = await create();
+      if (capsuleId() !== forCapsule) return;
       if (!planRunId) throw new Error(t("app.review.notStarted"));
       setReview({
         section,
@@ -452,9 +483,11 @@ export default function AppManagePage(props: {
         document.getElementById("app-review")?.scrollIntoView({ block: "nearest", behavior: "instant" }),
       );
     } catch (cause) {
-      setSectionError({ section, message: friendlyError(cause, t).message });
+      if (capsuleId() === forCapsule) {
+        setSectionError({ section, message: friendlyError(cause, t).message });
+      }
     } finally {
-      setStarting(undefined);
+      if (capsuleId() === forCapsule) setStarting(undefined);
     }
   };
 
@@ -473,13 +506,21 @@ export default function AppManagePage(props: {
             planRunId={active().planRunId}
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
-            onDiscard={async () => setReview(undefined)}
-            onClose={() => setReview(undefined)}
+            onDiscard={async () => closeReview(active())}
+            // Closing after an unknown or failed outcome re-reads the app so
+            // its state, problems and history show what actually happened.
+            onClose={() => {
+              closeReview(active());
+              void refreshAll();
+            }}
             {...(active().restart
               ? {
                   onRestart: async () => {
+                    const forCapsule = capsuleId();
                     const restarted = await active().restart!();
-                    if (restarted) setReview({ ...active(), planRunId: restarted });
+                    if (restarted && capsuleId() === forCapsule) {
+                      setReview({ ...active(), planRunId: restarted });
+                    }
                   },
                   restartLabel: t("app.review.retry"),
                 }
@@ -491,9 +532,11 @@ export default function AppManagePage(props: {
   );
 
   // --- version actions -----------------------------------------------------------
-  // One request/key pair per ref tried in this app. The POST may have
-  // committed before a later reconcile error reaches the browser, so even
-  // definite HTTP errors must not discard a replay key.
+  // One request/key pair per ref while its outcome is unknown or failed: the
+  // POST may have committed before a later reconcile error reaches the
+  // browser. Once a Plan id comes back the key is released, so the next
+  // Update / Review again / later update to the same ref is a new request
+  // instead of a replay of the plan already returned.
   const revisionAttempts = new Map<string, RevisionPlanAttempt>();
   const currentRef = () =>
     capsule()?.adoptedSourceRevision?.ref ?? source()?.defaultRef;
@@ -511,15 +554,15 @@ export default function AppManagePage(props: {
       );
     }
     const request = { ref } as const;
-    const attempt = getOrCreateRevisionPlanAttempt(
-      revisionAttempts,
-      capsuleId(),
-      JSON.stringify(request),
-    );
-    const response = await createReviewableGitRevisionPlan(capsuleId(), request, {
+    const requestJson = JSON.stringify(request);
+    const forCapsule = capsuleId();
+    const attempt = getOrCreateRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);
+    const response = await createReviewableGitRevisionPlan(forCapsule, request, {
       idempotencyKey: attempt.idempotencyKey,
     });
-    return response.revisionPlan.planRunId!;
+    const planRunId = response.revisionPlan.planRunId;
+    if (planRunId) releaseRevisionPlanAttempt(revisionAttempts, forCapsule, requestJson);
+    return planRunId!;
   };
   const startUpdate = (ref?: string) =>
     void startReview("version", "update", () => createRevisionRun(ref));
@@ -543,10 +586,16 @@ export default function AppManagePage(props: {
   };
 
   // --- problems ------------------------------------------------------------------
-  const retryFailedRun = () =>
-    void startReview("problems", "apply", async () =>
-      extractRunId(await planCapsule(capsuleId())),
-    );
+  // "Review again" plans the failed run the way the run page does: a removal
+  // as a removal, a first install with its reviewed report, an installed
+  // app's change from the latest source. The app is re-read first.
+  const retryFailedRun = (run: Run) => {
+    const removal = run.type === "destroy_plan" || run.type === "destroy_apply";
+    void startReview("problems", removal ? "uninstall" : "apply", async () => {
+      const fresh = await getCapsule(run.capsuleId ?? capsuleId());
+      return extractRunId(await retryPlanForRun(run, fresh));
+    });
+  };
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
   const [screenRetryMessage, setScreenRetryMessage] = createSignal<string>();
   const retryScreen = async () => {
@@ -824,7 +873,10 @@ export default function AppManagePage(props: {
                 installConfig={installConfigValue()}
                 installConfigLoading={installConfig.loading}
                 authorityGuard={authorityGuard()}
-                bindings={settledValue(bindingSet)?.bindings}
+                // A loaded app without a binding set uses no connections.
+                bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
+                capsuleInstallConfigId={inst().installConfigId}
+                seed={settingsSeed()}
                 bindingsFailed={Boolean(bindingSet.error)}
                 connections={settledValue(connections) ?? []}
                 onConnectionsChanged={() => void refetchConnections()}
@@ -839,7 +891,7 @@ export default function AppManagePage(props: {
                 inventory={settledValue(inventory)}
                 inventoryLoading={inventory.loading}
                 inventoryFailed={Boolean(inventory.error)}
-                bindings={settledValue(bindingSet)?.bindings ?? []}
+                bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : []}
                 connections={settledValue(connections) ?? []}
                 usage={settledValue(usage)}
                 usageLoading={usage.loading}
@@ -1070,19 +1122,17 @@ export default function AppManagePage(props: {
           )}
         </Show>
         <div class="ap-row-actions">
-          <Show when={!removal}>
-            <Button
-              variant="primary"
-              type="button"
-              busy={starting() === "problems"}
-              disabled={reviewBusy()}
-              onClick={retryFailedRun}
-            >
-              {t("app.problem.retry")}
-            </Button>
-          </Show>
           <Button
-            variant={removal ? "primary" : "secondary"}
+            variant="primary"
+            type="button"
+            busy={starting() === "problems"}
+            disabled={reviewBusy()}
+            onClick={() => retryFailedRun(run)}
+          >
+            {t("app.problem.retry")}
+          </Button>
+          <Button
+            variant="secondary"
             href={`/runs/${encodeURIComponent(run.id)}`}
             icon={<ExternalLink size={16} />}
           >

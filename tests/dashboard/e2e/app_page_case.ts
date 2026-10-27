@@ -358,7 +358,9 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await capture(page, "app-settings-review");
       await settingsReview.getByRole("button", { name: "Cancel", exact: true }).click();
       await expect(settings.getByTestId("app-review")).toHaveCount(0);
-      await expect(settings.getByRole("textbox", { name: /^Region/u })).toHaveValue("edited");
+      // Cancelled, so the form shows what the app runs, not the unapplied edit.
+      await expect(settings.getByRole("textbox", { name: /^Region/u })).toHaveValue("initial");
+      await expect(settings.getByRole("button", { name: "Review", exact: true })).toBeDisabled();
 
       // A problem appears on the app it belongs to, with the next step first.
       failedLatest = true;
@@ -381,6 +383,314 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         `POST /api/v1/capsules/${CAPSULE_ID}/revision-plans`,
         `POST /api/v1/runs/${UPDATE_PLAN}/apply`,
         `POST /api/v1/capsules/${CAPSULE_ID}/configuration-plans`,
+      ]);
+      expect(errors).toEqual([]);
+      traffic.assertNoFailures();
+    });
+
+    test("reviews never replay a returned plan, retry through their own request, and never leak to another app", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      const traffic = monitorDashboardTraffic(page, mode);
+      const origin = resolvePortableOrigin();
+      const seenMutations: string[] = [];
+      const revisionKeys: string[] = [];
+      const configurationKeys: string[] = [];
+      const configurationBodies: unknown[] = [];
+      const now = "2026-10-01T00:00:00.000Z";
+      const apps = {
+        cap_keep_a: { name: "Keep Alpha", freshness: "stale", source: "src_keep_a" },
+        cap_keep_b: { name: "Keep Beta", freshness: "fresh", source: "src_keep_b" },
+      } as const;
+      type AppId = keyof typeof apps;
+      const capsule = (id: AppId) => ({
+        id, workspaceId: "ws_alpha", name: apps[id].name, slug: id, sourceId: apps[id].source,
+        installConfigId: `cfg_${id}`, environment: "production", currentStateVersionId: `sv_${id}`,
+        currentStateGeneration: 1, status: "active", freshness: apps[id].freshness,
+        adoptedSourceRevision: { sourceSnapshotId: `snap_${id}`, ref: "main", path: ".", resolvedCommit: PORTABLE_SOURCE_COMMIT },
+        createdAt: now, updatedAt: now,
+      });
+      const plan = (n: number) => ({
+        ...lifecycleRun(`run_rev_plan_${n}`, "plan", n === 2 ? "failed" : "succeeded", now, n === 2 ? { errorCode: "plan_failed" } : {}),
+        capsuleId: "cap_keep_a", summary: { add: 1, change: 0, destroy: 0 }, policyStatus: "pass",
+        planResources: [{ address: `cloudflare_r2_bucket.revision_${n}`, type: "cloudflare_r2_bucket", actions: ["create"] }],
+      });
+      const configPlan = (n: number) => ({
+        ...lifecycleRun(`run_config_plan_${n}`, "plan", "succeeded", now), capsuleId: "cap_keep_a",
+        summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass",
+        planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }],
+      });
+      const runs = new Map<string, unknown>();
+
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const path = new URL(request.url()).pathname;
+        if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
+          seenMutations.push(`${request.method()} ${path}`);
+        }
+        const app = (Object.keys(apps) as AppId[]).find((id) => path.startsWith(`/api/v1/capsules/${id}`));
+        if (app) {
+          const rest = path.slice(`/api/v1/capsules/${app}`.length);
+          if (rest === "") return route.fulfill({ json: { capsule: capsule(app), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
+          if (rest === "/state-versions") return route.fulfill({ json: { stateVersions: [{ id: `sv_${app}`, workspaceId: "ws_alpha", capsuleId: app, environment: "production", generation: 1, createdByRunId: `run_install_${app}`, createdAt: now }] } });
+          // Keep Alpha has no provider binding set at all.
+          if (rest === "/provider-bindings") return route.fulfill({ json: { providerBindingSet: null } });
+          if (rest === "/current-resource-inventory") return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: app, workspaceId: "ws_alpha", environment: "production", stateVersionId: `sv_${app}`, generation: 1, applyRunId: `run_install_${app}`, planRunId: `run_install_plan_${app}`, recordedAt: now, availability: "legacy_unavailable" } } });
+          if (rest === "/usage-summary") return route.fulfill({ json: { summary: { capsuleId: app, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
+          if (rest === "/revision-plans" && request.method() === "POST") {
+            revisionKeys.push(request.headers()["idempotency-key"] ?? "");
+            const n = revisionKeys.length;
+            runs.set(`run_rev_plan_${n}`, plan(n));
+            return route.fulfill({ status: 201, json: { revisionPlan: { id: `grp_${n}`, phase: "review_ready", generation: 1, planRunId: `run_rev_plan_${n}` }, nextAction: "review_run", links: { self: `/api/v1/revision-plans/grp_${n}` } } });
+          }
+          if (rest === "/configuration-plans" && request.method() === "POST") {
+            configurationKeys.push(request.headers()["idempotency-key"] ?? "");
+            configurationBodies.push(request.postDataJSON());
+            const n = configurationKeys.length;
+            runs.set(`run_config_plan_${n}`, configPlan(n));
+            return route.fulfill({ status: 201, json: { capsule: capsule(app), configurationPlan: { replayed: false, previousInstallConfigId: `cfg_${app}`, targetInstallConfigId: `cfg_next_${n}`, sourceSnapshotId: `snap_${app}`, planRunId: `run_config_plan_${n}` }, links: { run: `/api/v1/runs/run_config_plan_${n}` } } });
+          }
+        }
+        const config = (Object.keys(apps) as AppId[]).find((id) => path === `/api/v1/capsule-configs/cfg_${id}`);
+        if (config) {
+          return route.fulfill({ json: { installConfig: {
+            id: `cfg_${config}`, workspaceId: "ws_alpha", name: apps[config].name, policy: {},
+            variableMapping: { region: config === "cap_keep_a" ? "alpha-region" : "beta-region" },
+            variablePresentation: [{ name: "region", type: "string", required: true, label: { ja: "リージョン", en: "Region" } }],
+            outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now,
+          } } });
+        }
+        if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: [] } });
+        if (path === "/api/v1/workspaces/ws_alpha/graph") {
+          return route.fulfill({ json: {
+            nodes: [{ capsuleId: "cap_keep_a", name: "Keep Alpha", environment: "production", status: "active" }, { capsuleId: "cap_keep_b", name: "Keep Beta", environment: "production", status: "active" }],
+            edges: [{ id: "dep_keep", producerCapsuleId: "cap_keep_a", consumerCapsuleId: "cap_keep_b", outputs: {} }],
+          } });
+        }
+        if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
+        if (path === "/api/v1/sources" && request.method() === "GET") {
+          return route.fulfill({ json: { sources: (Object.keys(apps) as AppId[]).map((id) => ({
+            id: apps[id].source, workspaceId: "ws_alpha", name: apps[id].name, url: `https://github.com/example/${id}.git`,
+            defaultRef: "main", defaultPath: ".", status: "active", autoSync: true, createdAt: now, updatedAt: now,
+          })) } });
+        }
+        if (path.startsWith("/api/v1/sources/") && path.endsWith("/snapshots")) return route.fulfill({ json: { snapshots: [] } });
+        const runMatch = path.match(/^\/api\/v1\/runs\/([^/]+)(\/[a-z]+)?$/u);
+        if (runMatch && runs.has(runMatch[1]!)) {
+          const [, id, suffix] = runMatch;
+          // The apply's outcome is lost: the review must hold it, not retry.
+          if (suffix === "/apply") return route.fulfill({ status: 503, json: { error: "fixture_outcome_unknown" } });
+          if (suffix === "/cost") return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+          if (suffix === "/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (suffix === "/stream") return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+          return route.fulfill({ json: { run: runs.get(id!) } });
+        }
+        return route.fallback();
+      });
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/workloads/cap_keep_a", { waitUntil: "domcontentloaded" });
+      const app = page.getByTestId("app-page");
+      const version = app.getByTestId("app-version");
+      await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Alpha");
+
+      // Update → Cancel → Update: the second Update is a new request, not a
+      // replay of the plan that was already returned.
+      await version.getByRole("button", { name: "Update", exact: true }).click();
+      await expect(version.getByTestId("app-review")).toContainText("revision_1");
+      await version.getByTestId("app-review").getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(version.getByTestId("app-review")).toHaveCount(0);
+      await version.getByRole("button", { name: "Update", exact: true }).click();
+      // The second plan failed: Review again goes back through the revision
+      // request with a fresh key, never through a plain re-plan of the app.
+      const review = version.getByTestId("app-review");
+      await expect(review).toContainText("The update couldn't finish");
+      await review.getByRole("button", { name: "Review again", exact: true }).click();
+      await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeVisible();
+      await expect(review).toContainText("revision_3");
+      expect(revisionKeys).toHaveLength(3);
+      expect(new Set(revisionKeys).size).toBe(3);
+      expect(seenMutations.some((entry) => entry.endsWith("/plan"))).toBe(false);
+
+      // A lost apply outcome is held — no retry — but the review can close,
+      // and the rest of the page is usable again.
+      await review.getByRole("button", { name: "Allow and update", exact: true }).click();
+      await expect(review.getByRole("alert").filter({ hasText: "could not be confirmed" })).toBeVisible();
+      await expect(review.getByRole("button", { name: "Allow and update", exact: true })).toBeDisabled();
+      await review.getByRole("button", { name: "Close", exact: true }).click();
+      await expect(version.getByTestId("app-review")).toHaveCount(0);
+      await expect(app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true })).toBeEnabled();
+      expect(seenMutations.filter((entry) => entry.endsWith("/apply"))).toHaveLength(1);
+
+      // Settings work for an app without a provider binding set; a reviewed
+      // change leaves a clean form, a cancelled one shows what the app runs,
+      // and the next change is a new request.
+      const settings = app.getByTestId("app-settings");
+      await expect(settings.getByTestId("app-connections")).toContainText("This app doesn't use any connections.");
+      const region = settings.getByRole("textbox", { name: /^Region/u });
+      await expect(region).toHaveValue("alpha-region");
+      await region.fill("first-edit");
+      await settings.getByRole("button", { name: "Review", exact: true }).click();
+      await expect(settings.getByTestId("app-review").getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+      await settings.getByTestId("app-review").getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(settings.getByTestId("app-review")).toHaveCount(0);
+      await expect(region).toHaveValue("alpha-region");
+      await expect(settings.getByRole("button", { name: "Review", exact: true })).toBeDisabled();
+      await region.fill("first-edit");
+      await settings.getByRole("button", { name: "Review", exact: true }).click();
+      await expect(settings.getByTestId("app-review").getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+      expect(configurationKeys).toHaveLength(2);
+      expect(new Set(configurationKeys).size).toBe(2);
+      expect(configurationBodies[0]).toEqual(configurationBodies[1]);
+      expect((configurationBodies[0] as { providerBindings: unknown }).providerBindings).toEqual([]);
+      await settings.getByTestId("app-review").getByRole("button", { name: "Cancel", exact: true }).click();
+
+      // Following a linked app mounts that app's own page: no review,
+      // notice or values of the previous app carry over.
+      await version.getByRole("button", { name: "Update", exact: true }).click();
+      await expect(version.getByTestId("app-review")).toBeVisible();
+      await app.getByTestId("app-linked").getByRole("link", { name: "Keep Beta" }).click();
+      await expect(page).toHaveURL(/\/workloads\/cap_keep_b$/u);
+      await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Beta");
+      await expect(page.getByTestId("app-review")).toHaveCount(0);
+      await expect(page.getByTestId("app-settings").getByRole("textbox", { name: /^Region/u })).toHaveValue("beta-region");
+      await expect(page.getByTestId("app-state-sentence")).toHaveText("Ready to use.");
+      await page.goBack();
+      await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Alpha");
+      await expect(page.getByTestId("app-review")).toHaveCount(0);
+
+      expect(errors).toEqual([]);
+      // The only failed request is the Apply whose outcome the fixture lost.
+      expect(traffic.failures.map(({ kind, url, status }) => ({ kind, path: new URL(url).pathname, status }))).toEqual([
+        { kind: "response", path: "/api/v1/runs/run_rev_plan_3/apply", status: 503 },
+      ]);
+    });
+
+    test("uninstall now keeps the removal confirmation, and try again keeps the failed operation", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      const traffic = monitorDashboardTraffic(page, mode);
+      const origin = resolvePortableOrigin();
+      const seenMutations: string[] = [];
+      const planBodies: unknown[] = [];
+      const now = "2026-10-01T00:00:00.000Z";
+      let removals = 0;
+      const removeApp = {
+        id: "cap_remove_c", workspaceId: "ws_alpha", name: "Remove Gamma", slug: "remove-gamma", sourceId: "src_remove_c",
+        installConfigId: "cfg_cap_remove_c", environment: "production", currentStateVersionId: "sv_remove_c",
+        currentStateGeneration: 1, status: "uninstalled",
+        uninstall: { phase: "destroying", requestedAt: now, scheduledDestroyAt: now, blockedReason: "teardown_unconfirmed" },
+        createdAt: now, updatedAt: now,
+      };
+      const retryApp = {
+        ...removeApp, id: "cap_retry_d", name: "Retry Delta", slug: "retry-delta", sourceId: "src_retry_d",
+        installConfigId: "cfg_cap_retry_d", currentStateVersionId: "sv_retry_d", status: "error", uninstall: undefined,
+      };
+      const destroyPlan = (n: number) => ({
+        ...lifecycleRun(`run_destroy_plan_${n}`, "destroy_plan", n === 1 ? "succeeded" : "waiting_approval", now),
+        capsuleId: "cap_remove_c", summary: { add: 0, change: 0, destroy: 0 }, policyStatus: "pass",
+      });
+      const runs = new Map<string, unknown>([
+        ["run_sync_retry", { ...lifecycleRun("run_sync_retry", "source_sync", "succeeded", now), capsuleId: undefined, sourceId: "src_retry_d", sourceSnapshotId: "snap_retry_2", ref: "main" }],
+      ]);
+      const failedApply = { ...lifecycleRun("run_failed_retry", "apply", "failed", "2026-10-02T00:00:00.000Z", { errorCode: "apply_failed", baseStateGeneration: 1 }), capsuleId: "cap_retry_d" };
+      const configFor = (id: string) => ({ installConfig: { id: `cfg_${id}`, workspaceId: "ws_alpha", name: id, policy: {}, variableMapping: {}, variablePresentation: [], outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now } });
+
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const path = url.pathname;
+        if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
+          seenMutations.push(`${request.method()} ${path}${url.search}`);
+        }
+        for (const app of [removeApp, retryApp]) {
+          const base = `/api/v1/capsules/${app.id}`;
+          if (!path.startsWith(base)) continue;
+          const rest = path.slice(base.length);
+          if (rest === "" && request.method() === "DELETE" && url.searchParams.get("immediate") === "true") {
+            removals += 1;
+            runs.set(`run_destroy_plan_${removals}`, destroyPlan(removals));
+            return route.fulfill({ json: { run: destroyPlan(removals) } });
+          }
+          if (rest === "") return route.fulfill({ json: { capsule: app, installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
+          if (rest === "/state-versions") return route.fulfill({ json: { stateVersions: [{ id: app.currentStateVersionId, workspaceId: "ws_alpha", capsuleId: app.id, environment: "production", generation: 1, createdByRunId: `run_install_${app.id}`, createdAt: now }] } });
+          if (rest === "/provider-bindings") return route.fulfill({ json: { providerBindingSet: null } });
+          if (rest === "/current-resource-inventory") return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: app.id, workspaceId: "ws_alpha", environment: "production", stateVersionId: app.currentStateVersionId, generation: 1, applyRunId: "run_x", planRunId: "run_y", recordedAt: now, availability: "legacy_unavailable" } } });
+          if (rest === "/usage-summary") return route.fulfill({ json: { summary: { capsuleId: app.id, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
+          if (rest === "/plan" && request.method() === "POST") {
+            planBodies.push(request.postDataJSON());
+            const retryPlan = { ...lifecycleRun("run_retry_plan", "plan", "succeeded", now), capsuleId: app.id, summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass", planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }] };
+            runs.set("run_retry_plan", retryPlan);
+            return route.fulfill({ json: { run: retryPlan } });
+          }
+        }
+        if (path === "/api/v1/capsule-configs/cfg_cap_remove_c") return route.fulfill({ json: configFor("cap_remove_c") });
+        if (path === "/api/v1/capsule-configs/cfg_cap_retry_d") return route.fulfill({ json: configFor("cap_retry_d") });
+        if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: [failedApply] } });
+        if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
+        if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
+        if (path === "/api/v1/sources" && request.method() === "GET") return route.fulfill({ json: { sources: [] } });
+        // Try again on an installed app re-reads the latest source first.
+        if (path === "/api/v1/sources/src_retry_d/sync" && request.method() === "POST") return route.fulfill({ json: { run: { id: "run_sync_retry" } } });
+        if (path === "/api/v1/sources/src_retry_d/snapshots") {
+          return route.fulfill({ json: { snapshots: [{
+            id: "snap_retry_2", origin: "git", workspaceId: "ws_alpha", sourceId: "src_retry_d", url: "https://github.com/example/retry.git",
+            ref: "main", resolvedCommit: PORTABLE_SOURCE_COMMIT, path: ".", archiveRef: "fixture", archiveDigest: `sha256:${"e".repeat(64)}`,
+            archiveSizeBytes: 1, fetchedByRunId: "run_sync_retry", fetchedAt: now,
+          }] } });
+        }
+        if (path === "/api/v1/sources/src_retry_d/compatibility-check" && request.method() === "POST") return route.fulfill({ json: { report: { id: "rep_retry_2" } } });
+        const runMatch = path.match(/^\/api\/v1\/runs\/([^/]+)(\/[a-z]+)?$/u);
+        if (runMatch && runs.has(runMatch[1]!)) {
+          const [, id, suffix] = runMatch;
+          if (suffix === "/approve") return route.fulfill({ json: { run: runs.get(id!) } });
+          if (suffix === "/cost") return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+          if (suffix === "/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (suffix === "/stream") return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+          return route.fulfill({ json: { run: runs.get(id!) } });
+        }
+        return route.fallback();
+      });
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/workloads/cap_remove_c", { waitUntil: "domcontentloaded" });
+      const problems = page.getByTestId("app-problems");
+      const scheduled = problems.locator('[data-problem="uninstall"]');
+      await scheduled.getByRole("button", { name: "Uninstall now", exact: true }).click();
+      const review = problems.getByTestId("app-review");
+      await expect(review.getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
+      // A removal that recorded no deletions has unknown counts, not 0/0/0,
+      // and always needs the explicit check before it can run.
+      await expect(review.getByRole("definition")).toHaveCount(0);
+      const allow = review.getByRole("button", { name: "Allow and uninstall", exact: true });
+      await expect(allow).toBeDisabled();
+      await review.getByRole("checkbox", { name: "I reviewed these changes" }).check();
+      await expect(allow).toBeEnabled();
+      await review.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(problems.getByTestId("app-review")).toHaveCount(0);
+
+      // A removal that waits for approval asks before approving.
+      await scheduled.getByRole("button", { name: "Uninstall now", exact: true }).click();
+      await problems.getByTestId("app-review").getByRole("button", { name: "Approve this change", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("Run this deletion?");
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(seenMutations.some((entry) => entry.endsWith("/approve"))).toBe(false);
+      expect(seenMutations.some((entry) => entry.endsWith("/apply"))).toBe(false);
+
+      // Try again on an installed app's failed change re-reads the latest
+      // source and plans an update, exactly like the run page.
+      await page.goto("/workloads/cap_retry_d", { waitUntil: "domcontentloaded" });
+      const failed = page.getByTestId("app-problems").locator('[data-problem="failed-run"]');
+      await failed.getByRole("button", { name: "Review again", exact: true }).click();
+      await expect(page.getByTestId("app-problems").getByTestId("app-review").getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+      expect(planBodies).toEqual([{ compatibilityReportId: "rep_retry_2" }]);
+      expect(seenMutations).toEqual([
+        "DELETE /api/v1/capsules/cap_remove_c?immediate=true",
+        "DELETE /api/v1/capsules/cap_remove_c?immediate=true",
+        "POST /api/v1/sources/src_retry_d/sync",
+        "POST /api/v1/sources/src_retry_d/compatibility-check",
+        "POST /api/v1/capsules/cap_retry_d/plan",
       ]);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();

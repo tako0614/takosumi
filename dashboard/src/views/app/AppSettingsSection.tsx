@@ -142,6 +142,10 @@ export default function AppSettingsSection(props: {
   readonly workspaceId: string;
   readonly installConfig: InstallConfig | undefined;
   readonly installConfigLoading: boolean;
+  /** The configuration the app runs now; the form must be read from it. */
+  readonly capsuleInstallConfigId: string;
+  /** Changes when a settings review closes unapplied: the form re-reads what the app runs. */
+  readonly seed: number;
   readonly authorityGuard: string | undefined;
   readonly bindings: ProviderBindings | undefined;
   readonly bindingsFailed: boolean;
@@ -163,9 +167,11 @@ export default function AppSettingsSection(props: {
   const [connectionMessages, setConnectionMessages] = createSignal<
     Readonly<Record<number, string>>
   >({});
-  // Reuse the key only while retrying byte-identical reviewed intent. If the
-  // first response is lost after the server commits, the next click observes
-  // the canonical successor/Plan instead of minting a second authority.
+  // Reuse the key only while retrying byte-identical reviewed intent whose
+  // outcome is unknown or failed. If the first response is lost after the
+  // server commits, the next click observes the canonical successor/Plan
+  // instead of minting a second authority. Once the Plan id comes back the
+  // key is released: the server would replay that Plan for it.
   let configurationAttempt:
     | { readonly requestJson: string; readonly idempotencyKey: string }
     | undefined;
@@ -173,8 +179,8 @@ export default function AppSettingsSection(props: {
 
   createEffect(
     on(
-      () => props.bindings,
-      (bindings) => {
+      [() => props.bindings, () => props.seed],
+      ([bindings]) => {
         if (!bindings) return;
         setRows([...bindings]);
         setBindingsDirty(false);
@@ -185,8 +191,8 @@ export default function AppSettingsSection(props: {
   // re-seeding the rows and discarding unsaved edits.
   createEffect(
     on(
-      () => props.installConfig,
-      (config) => setVariableRows([...configRowsFromInstallConfig(config, locale())]),
+      [() => props.installConfig, () => props.seed],
+      ([config]) => setVariableRows([...configRowsFromInstallConfig(config, locale())]),
     ),
   );
 
@@ -281,11 +287,22 @@ export default function AppSettingsSection(props: {
     props.onConnectionsChanged();
   };
 
+  /**
+   * The values and the authority guard come from separate reads. Review is
+   * offered only when the form was read from the configuration the app runs
+   * now, so a refresh after an apply can never pair the previous version's
+   * screens with the new guard.
+   */
+  const configCurrent = () =>
+    !props.installConfigLoading &&
+    props.installConfig !== undefined &&
+    props.installConfig.id === props.capsuleInstallConfigId;
+
   const submit = () => {
     setFormError(undefined);
     const config = props.installConfig;
     const guard = props.authorityGuard;
-    if (!config || !guard || props.bindings === undefined) {
+    if (!config || !guard || props.bindings === undefined || !configCurrent()) {
       setFormError(t("app.settings.notReady"));
       return;
     }
@@ -314,6 +331,14 @@ export default function AppSettingsSection(props: {
     configurationAttempt = { requestJson, idempotencyKey };
     props.onReview(async () => {
       const result = await createCapsuleConfigurationPlan(props.capsuleId, request, idempotencyKey);
+      // The reviewed successor and its Plan exist now: release the key and
+      // mark the form clean, so leaving is not blocked and the next change
+      // is a new request rather than a replay of this one.
+      if (configurationAttempt?.idempotencyKey === idempotencyKey) configurationAttempt = undefined;
+      setBindingsDirty(false);
+      setVariableRows((current) =>
+        current.map((row) => ({ ...row, dirty: false, deleted: false, resetToDefault: false })),
+      );
       return result.configurationPlan.planRunId;
     });
   };
@@ -463,7 +488,7 @@ export default function AppSettingsSection(props: {
             busy={props.starting}
             disabled={
               props.reviewBusy ||
-              !props.installConfig ||
+              !configCurrent() ||
               !props.authorityGuard ||
               props.bindings === undefined ||
               !dirty()

@@ -122,17 +122,11 @@ describe("RunView", () => {
     expect(source).not.toContain("<Match when={run.loading}>");
   });
 
-  test("プランを再実行 re-plans the FRESH snapshot via planCapsuleUpdate", () => {
-    // A deployed update refreshes the Source, but an incomplete first install
-    // must preserve its reviewed snapshot/report pair. Refreshing only the
-    // report makes the next plan fail closed on a snapshot mismatch.
-    expect(source).toContain("capsule.currentStateGeneration === 0");
-    expect(source).toContain("await planCapsule(instId, {");
-    expect(source).toMatch(
-      /compatibilityReportId:\s+initialReport \?\? currentRun\.compatibilityReportId/u,
-    );
-    expect(source).toContain("initialPlanRetryReport(currentRun, capsule)");
-    expect(source).toContain("planCapsuleUpdate(instId)");
+  test("try again re-plans through the shared retry selector", () => {
+    // Behavior lives in lib/run-retry.ts (tests/dashboard/src/views/runs/
+    // run-retry_test.ts); the run page and the app page both call it.
+    expect(source).toContain("retryPlanForRun(currentRun, capsule)");
+    expect(source).toContain("const capsule = await getCapsule(instId);");
   });
 
   test("a failed first-install Plan abandons its stale snapshot before rebuilding from latest source", () => {
@@ -168,11 +162,6 @@ describe("RunView", () => {
     expect(en["run.restartLatestSourceConfirm.message"]).toContain(
       "stays in history",
     );
-  });
-
-  test("destroy retry preserves the destroy operation", () => {
-    expect(source).toContain('currentRun.type === "destroy_plan"');
-    expect(source).toContain("await destroyPlanCapsule(instId)");
   });
 
   test("terminal applies clear the install-config list cache with the rest", () => {

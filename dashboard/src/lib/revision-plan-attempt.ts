@@ -2,7 +2,10 @@
  * Retains one idempotency key per Capsule/request pair for revision-plan
  * retries. A POST or later reconcile response can be lost after the durable
  * coordinator committed, so failed attempts must remain replayable even when
- * the failure is a definite HTTP response.
+ * the failure is a definite HTTP response. Once a Plan id comes back the
+ * attempt is finished and its key is released: the server replays the
+ * original record for a reused key, so the next request for the same ref
+ * (after Cancel, a failed apply, or a later update) must mint a new one.
  */
 import { randomUuid } from "./random-uuid.ts";
 
@@ -32,4 +35,13 @@ export function getOrCreateRevisionPlanAttempt(
   };
   attempts.set(key, created);
   return created;
+}
+
+/** Releases the attempt whose Plan id was returned; the next request mints a new key. */
+export function releaseRevisionPlanAttempt(
+  attempts: RevisionPlanAttemptStore,
+  capsuleId: string,
+  requestJson: string,
+): void {
+  attempts.delete(attemptKey(capsuleId, requestJson));
 }
