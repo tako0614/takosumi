@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { shredCredentialDir } from "../../runner/lib/util.ts";
+import {
+  assertShreddableCredentialDir,
+  shredCredentialDir,
+} from "../../runner/lib/util.ts";
 
 const SYNTHETIC_VALUE = "synthetic-credential-value-must-not-surface";
 
@@ -142,21 +145,44 @@ test("shredCredentialDir maps a removal error without an errno code to a fixed c
   }
 });
 
-test("shredCredentialDir refuses a path that could name more than one run-owned directory", async () => {
+test("the credential directory guard refuses every path that could name more than one run-owned directory", () => {
+  // Pure predicate calls: nothing here can reach a removal.
+  const unsafe = [
+    "",
+    ".",
+    "..",
+    "credentials",
+    "./credentials",
+    "/",
+    "//",
+    "/tmp",
+    "/tmp/",
+    "/tmp/credentials/",
+    "/tmp/a/../b",
+    "/tmp//credentials",
+    "/tmp/./credentials",
+  ];
+  for (const path of unsafe) {
+    expect(() => assertShreddableCredentialDir(path), JSON.stringify(path))
+      .toThrow("credential directory path is unsafe");
+  }
+  for (const path of ["/tmp/takosumi-run-credentials-0123456789abcdef-AbCdEf", "/tmp/takosumi-runs/run_1/source-credentials"]) {
+    expect(() => assertShreddableCredentialDir(path), path).not.toThrow();
+  }
+});
+
+test("shredCredentialDir checks the path before it starts any removal", async () => {
   const root = await fixtureRoot();
   try {
     const sibling = join(root, "sibling");
     await mkdir(sibling, { mode: 0o700 });
     await writeFile(join(sibling, "keep"), "keep");
+    // Harmless even if the guard or the injected remover were ignored: an
+    // empty path, a relative name nothing owns, and a sibling fixture.
     const unsafe = [
       "",
-      "credentials",
-      "./credentials",
-      "/",
-      "/tmp",
+      `takosumi-credential-cleanup-absent-${crypto.randomUUID()}`,
       `${root}/credentials/../sibling`,
-      `${join(root, "credentials")}/`,
-      `${root}//credentials`,
     ];
     const calls: string[] = [];
 
@@ -167,7 +193,6 @@ test("shredCredentialDir refuses a path that could name more than one run-owned 
       expect(error.message).toBe("credential directory path is unsafe");
     }
 
-    // The injected remover is never reached, so no recursive removal started.
     expect(calls).toEqual([]);
     expect(await readFile(join(sibling, "keep"), "utf8")).toBe("keep");
   } finally {

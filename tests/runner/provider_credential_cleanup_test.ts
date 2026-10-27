@@ -13,7 +13,6 @@ import {
 import type { RunWorkspace } from "../../runner/lib/types.ts";
 
 const SYNTHETIC_VALUE = "synthetic-provider-credential-must-not-surface";
-const FIXED_CLEANUP_ERROR = /^credential directory cleanup failed: (EACCES|EPERM)$/;
 
 async function fixtureRoot(): Promise<string> {
   return await mkdtemp(join(tmpdir(), "takosumi-provider-cleanup-"));
@@ -180,14 +179,16 @@ async function runProbe(scenario: "cleanup-failure" | "setup-failure", root: str
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
-test("a failed credential directory removal fails cleanup with a fixed error and poisons the lease", async () => {
+test("a failed credential directory removal poisons the lease without replacing the operation outcome", async () => {
   const root = await fixtureRoot();
   const workspace = workspaceUnder(root);
   try {
     const result = await runProbe("cleanup-failure", root);
 
-    expect(String(result.cleanup)).toMatch(FIXED_CLEANUP_ERROR);
-    // The directory really is still there while the child reports the failure.
+    // cleanup() runs in the caller's `finally`: a throw there would replace a
+    // finished apply/destroy result the host still has to persist.
+    expect(result.cleanup).toBe("resolved");
+    // The directory really is still there while the child reports success.
     expect(result.directoriesAfter).toBe(1);
     expect(result.nextBuild).toBe("source build isolation is unavailable");
     expect(result.nextSensitive).toBe("source build isolation is unavailable");

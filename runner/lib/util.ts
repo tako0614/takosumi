@@ -21,8 +21,10 @@ type RemoveCredentialDir = (
  * Removes one credential directory tree. A directory that is already gone is
  * success, but every other failure is raised: credential files may remain, so
  * callers must not release the sensitive-file phase lease or report success.
- * The raised error is fixed and value-free (an errno code at most) because the
- * raw `rm` error names the directory path. `remove` is a test seam only.
+ * What a caller then does with the failure is its own call (see
+ * prepareProviderCredentialFiles). The raised error is fixed and value-free
+ * (an errno code at most) because the raw `rm` error names the directory path.
+ * `remove` is a test seam only.
  */
 export async function shredCredentialDir(
   credentialDir: string,
@@ -36,11 +38,12 @@ export async function shredCredentialDir(
   }
 }
 
-// Recursive removal is only ever aimed at one run-owned directory below a
-// parent. Refuse anything that could name more: a relative or non-normalized
-// path (resolve() differs), the filesystem root, or a top-level directory such
-// as /tmp itself.
-function assertShreddableCredentialDir(credentialDir: string): void {
+// A lexical last line of defence, not an ownership proof: it cannot know which
+// prefix a caller owns. It refuses what a recursive removal must never be aimed
+// at: a relative or non-normalized path (resolve() differs), the filesystem
+// root, or a top-level directory such as /tmp itself. Callers pass an absolute
+// run directory (mkdtemp under /tmp, or <run root>/<run>/source-credentials).
+export function assertShreddableCredentialDir(credentialDir: string): void {
   const parent = dirname(credentialDir);
   if (
     resolve(credentialDir) !== credentialDir ||
