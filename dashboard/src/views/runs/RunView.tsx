@@ -1560,7 +1560,7 @@ function Inner() {
               when={capsuleId()}
               fallback={
                 <Button variant="ghost" href="/">
-                  {t("app.backToList")}
+                  {t("app.backHome")}
                 </Button>
               }
             >
@@ -1616,8 +1616,8 @@ function Inner() {
                 title={t("run.notFoundTitle")}
                 message={t("run.notFoundMessage")}
                 action={
-                  <Button variant="secondary" href="/runs">
-                    {t("nav.runs")}
+                  <Button variant="secondary" href="/">
+                    {t("app.backHome")}
                   </Button>
                 }
               />

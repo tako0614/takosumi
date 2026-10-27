@@ -20,6 +20,7 @@ import {
   stateVersionLabels,
   versionLabel,
 } from "../../../../../dashboard/src/lib/app-page.ts";
+import { planResourceName } from "../../../../../dashboard/src/lib/run-plan-resources.ts";
 import type {
   ActivityEvent,
   Capsule,
@@ -258,6 +259,12 @@ describe("what the app created", () => {
     ]);
     expect(resourceTypeLabel("random_password", "random")).toBe("Password");
     expect(resourceTypeLabel("cloudflare", "cloudflare")).toBe("Cloudflare");
+  });
+
+  test("a review names each resource so two of one kind can be told apart", () => {
+    expect(planResourceName({ address: "cloudflare_d1_database.cache", type: "cloudflare_d1_database" })).toBe("cache");
+    expect(planResourceName({ address: "module.db.aws_db_instance.main[0]", type: "aws_db_instance" })).toBe("main[0]");
+    expect(planResourceName({ address: "random_password", type: "random_password" })).toBeUndefined();
   });
 
   test("an unknown cost is unknown, never free", () => {

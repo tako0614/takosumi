@@ -63,13 +63,13 @@ export default function CostSummary(props: CostSummaryProps) {
             fallback={
               <>
                 <p class="muted">{t("run.cost.operatorHelp")}</p>
-                <Button variant="secondary" size="sm" href="/settings/billing">
+                <Button variant="secondary" size="sm" href="/account/billing">
                   {t("run.cost.quotaCta")}
                 </Button>
               </>
             }
           >
-            <Button variant="secondary" size="sm" href="/settings/billing">
+            <Button variant="secondary" size="sm" href="/account/billing">
               {t("run.cost.billingCta")}
             </Button>
           </Show>

@@ -86,6 +86,20 @@ export function planResourceScopeLabel(
   return parts.length > 0 ? parts.join(" / ") : undefined;
 }
 
+/**
+ * The name the app's definition gives one resource: the last address segment
+ * (`cloudflare_d1_database.cache` → `cache`, `module.db.aws_db_instance.main[0]`
+ * → `main[0]`). It tells two resources of the same kind apart.
+ */
+export function planResourceName(resource: Pick<RunPlanResource, "address" | "type">): string | undefined {
+  const address = resource.address.trim();
+  const typeAt = address.lastIndexOf(`${resource.type}.`);
+  const name = typeAt >= 0
+    ? address.slice(typeAt + resource.type.length + 1)
+    : address.split(".").at(-1);
+  return name && name !== resource.type ? name : undefined;
+}
+
 export function planResourceDisplayLabel(resource: RunPlanResource): string {
   const tail = resource.type.trim().split(".").at(-1) ?? resource.type;
   const words = tail

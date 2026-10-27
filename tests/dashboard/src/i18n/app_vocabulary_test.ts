@@ -1,5 +1,7 @@
 /**
- * Vocabulary gate for the app, install and run surfaces (TASK-0115).
+ * Vocabulary gate for the app, install and run surfaces, including the run
+ * operation names (op.*) that also appear inside notification sentences
+ * (TASK-0115).
  *
  * The thing a person installs is an app (アプリ); a launchable Interface is a
  * screen (画面); what it makes in the cloud are resources (リソース); credentials
@@ -11,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { en } from "../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../dashboard/src/i18n/ja.ts";
 
-const NAMESPACES = /^(app|apps|installStore|run|workloads?|services?|capsules?)\./u;
+const NAMESPACES = /^(app|apps|installStore|run|op|workloads?|services?|capsules?)\./u;
 
 /**
  * Keys in these namespaces still read by another owner's surfaces; they move
@@ -20,8 +22,9 @@ const NAMESPACES = /^(app|apps|installStore|run|workloads?|services?|capsules?)\
 const OTHER_OWNER_KEYS = new Set<string>(["apps.add"]);
 
 // 非公開 (private) and 公開リポジトリ (public repository) are ordinary words.
-const BANNED_JA = /サービス|ワークロード|デプロイ|(?<!非)公開(?!リポジトリ)|反映/u;
-const BANNED_EN = /\b(?:services?|workloads?|deploy(?:s|ed|ing|ment)?)\b/iu;
+// A workspace is a スペース / space in the UI.
+const BANNED_JA = /サービス|ワークロード|デプロイ|(?<!非)公開(?!リポジトリ)|反映|ワークスペース/u;
+const BANNED_EN = /\b(?:services?|workloads?|deploy(?:s|ed|ing|ment)?|workspaces?)\b/iu;
 
 const keys = (Object.keys(ja) as Array<keyof typeof ja>).filter(
   (key) => NAMESPACES.test(key) && !OTHER_OWNER_KEYS.has(key),

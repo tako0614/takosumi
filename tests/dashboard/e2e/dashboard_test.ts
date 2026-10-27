@@ -1,5 +1,6 @@
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import { registerInstallDetailCases } from "./install_detail_case.ts";
+import { registerAppPageCases } from "./app_page_case.ts";
 import {
   expect,
   request as apiRequest,
@@ -15,7 +16,6 @@ import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
-  PORTABLE_UI_SURFACES,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import { resolvePortableOrigin } from "./portable-origin.ts";
@@ -474,7 +474,7 @@ async function stubProviderDestinationFixture(
       environment: "production", currentStateGeneration: 1,
       currentStateVersionId: "sv_provider_apply_e2e", status: "active",
       createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
-    } } });
+    }, installConfigReAdoption: { authorityGuard: `sha256:${"d".repeat(64)}` } } });
     if (path === "/api/v1/provider-connections") {
       return route.fulfill({
         json: { providerConnections },
@@ -772,10 +772,9 @@ function installConnectionRows(page: Page) {
 }
 
 /**
- * Press the app page's one Install button and wait for the install sheet.
- * Advanced settings is opened so module details can be read. A sheet whose
- * only field is the app name and whose connections are ready goes straight
- * to Review, which creates the Plan; it never applies it.
+ * Press the app page's one Install button and wait for the install sheet. A
+ * sheet whose only required field is the app name and whose connections are
+ * ready goes straight to Review, which creates the Plan; it never applies it.
  */
 async function prepareInlineFixture(page: Page): Promise<void> {
   await page.getByRole("button", { name: /^(Install|インストール)$/u }).click();
@@ -786,10 +785,8 @@ async function prepareInlineFixture(page: Page): Promise<void> {
   ).toBe(true);
   const config = page.getByTestId("install-configuration");
   if (!await config.isVisible()) return;
-  const advanced = config.locator(":scope > .iv-sheet-block details.iv-advanced").last();
-  if (await advanced.count() && !await advanced.getAttribute("open")) await advanced.locator("summary").first().click();
   if (await config.getAttribute("data-install-state") === "ready" &&
-    await config.locator(".iv-fields input, .iv-fields select, .iv-fields textarea").count() === 1) {
+    await config.locator(".iv-sheet-block > .iv-fields").locator("input, select, textarea").count() === 1) {
     await reviewInlineFixture(page);
   }
 }
@@ -1080,7 +1077,6 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(page.getByTestId("install-provenance")).toContainText(
         "github.com/example/cloudflare-service",
       );
-      await page.locator("details.iv-advanced > summary", { hasText: "Source and version" }).click();
       await expect(page.getByLabel("Git URL")).toHaveValue(
         "https://github.com/example/cloudflare-service.git",
       );
@@ -1367,7 +1363,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
 
     // Billing is disabled here: provider pricing is explained, never "$0.00".
-    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
+    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this space.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
@@ -1865,9 +1861,10 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(page.getByRole("button", { name: "選び直す", exact: true })).toBeVisible();
       await expect(page.getByTestId("install-provenance")).toContainText("github.com/example/service");
       await expect(page.getByTestId("install-configuration")).toHaveCount(0);
-      // A Store listing exposes only its version, folded under Source and version.
+      // A Store listing exposes only its version, shown plainly.
       await expect(page.getByTestId("install-start").locator("input")).toHaveCount(1);
-      await expect(page.getByTestId("install-start").locator("input")).toBeHidden();
+      await expect(page.getByTestId("install-start").locator("input")).toBeVisible();
+      await expect(page.getByTestId("install-start").locator("details")).toHaveCount(0);
       await page.screenshot({ path: test.info().outputPath("selected-375.png") });
       for (const width of [320, 375, 390, 414, 768, 1440]) {
         await page.setViewportSize({ width, height: 844 });
@@ -2250,7 +2247,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("module review shows all scanned providers and mixed required connections before apply", async ({
+  test("module review shows each required connection before apply", async ({
     page,
   }) => {
     test.skip(
@@ -2333,21 +2330,15 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "missing");
     const awsDestination = rows.nth(1).locator("select");
     await expect(awsDestination).toHaveValue("");
-    const summary = page.getByTestId("install-source-summary");
-    await expect(page.getByRole("region", { name: "Configuration and connections" })).toBeVisible();
-    await expect(summary.locator("dt").first()).toHaveText("Configuration");
-    await expect(summary.getByTestId("install-selected-module")).toHaveText("deploy/opentofu/portable");
-    const packages = summary.getByTestId("install-provider-packages");
-    await expect(packages.locator("li")).toHaveCount(3);
-    await expect(packages).toContainText("registry.opentofu.org/hashicorp/random");
-    await expect(packages).toContainText("3.6.0");
-    await expect(summary.getByTestId("install-required-connection")).toHaveCount(2);
-    await expect(summary.getByTestId("install-required-connection").nth(0)).toContainText("Cloudflare host");
-    await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("Not selected");
+    // The module's package list and provider addresses are not part of
+    // installing; each required connection is its own row.
+    const summary = page.getByTestId("install-configuration");
+    await expect(page.getByTestId("install-source-summary")).toHaveCount(0);
+    await expect(page.getByTestId("install-module-requirements")).toHaveCount(0);
+    await expect(summary).not.toContainText("registry.opentofu.org");
     expect(state.installPlanBody).toBeUndefined();
     await awsDestination.selectOption("pc_aws_primary_mixed");
     await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "connected");
-    await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("AWS primary");
     await page.screenshot({ path: test.info().outputPath("module-sheet-desktop.png"), fullPage: true });
     for (const width of [320, 375, 390, 414, 768, 1440]) {
       await page.setViewportSize({ width, height: 1000 });
@@ -2500,15 +2491,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(choices.nth(index)).toHaveAttribute("data-connection-state", "connected");
     }
 
-    // The module details name each exact tuple's chosen connection.
-    const connectionSummary = page.getByTestId("install-source-summary").getByTestId("install-required-connection");
-    await expect(connectionSummary).toHaveCount(3);
-    await expect(connectionSummary.nth(0)).toHaveAttribute("data-child-alias", "primary");
-    await expect(connectionSummary.nth(1)).toHaveAttribute("data-child-alias", "secondary");
-    await expect(connectionSummary.nth(2)).toHaveAttribute("data-child-alias", "edge");
-    await expect(connectionSummary.nth(0)).toContainText("AWS primary");
-    await expect(connectionSummary.nth(1)).toContainText("AWS secondary");
-    await expect(connectionSummary.nth(2)).toContainText("AWS primary");
+    // Each same-provider row is told apart by its alias, and only by that.
+    await expect(choices.nth(0)).toContainText("(primary)");
+    await expect(choices.nth(1)).toContainText("(secondary)");
+    await expect(choices.nth(2)).toContainText("(edge)");
+    await expect(page.getByTestId("install-source-summary")).toHaveCount(0);
     await reviewInlineFixture(page);
 
     await expect
@@ -3278,455 +3265,6 @@ test.describe("Takosumi dashboard browser surface", () => {
   storeSetupRetryTest("none", { path: "deploy/takoform", exposed: true });
   storeSetupRetryTest("none", { path: "deploy/moved", exposed: false });
 
-  test("Workload settings submit one complete Configuration Plan and open its Run review", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the deterministic configuration authority fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const now = "2026-08-05T00:00:00.000Z";
-    const capsuleId = "cap_repository_office";
-    const installConfigId = `cfg_${capsuleId}`;
-    const sourceId = `src_${capsuleId}`;
-    const planRunId = "run_configuration_plan_e2e";
-    const authorityGuard = `sha256:${"a".repeat(64)}`;
-    const stateVersionId = "sv_configuration_e2e";
-    let multipleSurfaces = false;
-    const configurationPlanBodies: unknown[] = [];
-    const seenMutations: string[] = [];
-    const capsule = {
-      id: capsuleId,
-      workspaceId: "ws_alpha",
-      name: PORTABLE_EXPECTATIONS.appName,
-      slug: "repository-office",
-      sourceId,
-      installConfigId,
-      environment: "production",
-      currentStateVersionId: stateVersionId,
-      currentStateGeneration: 1,
-      status: "active",
-      freshness: "fresh",
-      createdAt: now,
-      updatedAt: now,
-    };
-    const stateVersion = {
-      id: stateVersionId,
-      workspaceId: "ws_alpha",
-      capsuleId,
-      environment: "production",
-      generation: 1,
-      createdByRunId: "run_original_apply",
-      createdAt: now,
-    };
-
-    await page.route("**/api/v1/**", async (route) => {
-      const request = route.request();
-      const url = new URL(request.url());
-      const path = url.pathname;
-      if (
-        shouldRecordControlPlaneMutation(
-          mode,
-          mutationOrigin,
-          request.url(),
-          request.method(),
-        )
-      ) {
-        seenMutations.push(`${request.method()} ${path}`);
-      }
-      if (path === `/api/v1/capsules/${capsuleId}`) {
-        return route.fulfill({
-          json: {
-            capsule,
-            installConfigReAdoption: { authorityGuard },
-          },
-        });
-      }
-      if (path === `/api/v1/state-versions/${stateVersionId}`) {
-        return route.fulfill({ json: { stateVersion } });
-      }
-      if (path === `/api/v1/capsules/${capsuleId}/state-versions`) {
-        return route.fulfill({ json: { stateVersions: [stateVersion] } });
-      }
-      if (
-        path === `/api/v1/capsules/${capsuleId}/backups` &&
-        request.method() === "POST"
-      ) {
-        return route.fulfill({
-          status: 201,
-          json: {
-            backup: {
-              id: "bkp_partial_export_e2e",
-              workspaceId: "ws_alpha",
-              capsuleId,
-              environment: "production",
-              ref: "backup_control/ws_alpha/bkp_partial_export_e2e/control.tar.zst",
-              digest: `sha256:${"b".repeat(64)}`,
-              sizeBytes: 256,
-              createdAt: now,
-            },
-          },
-        });
-      }
-      if (path === `/api/v1/capsules/${capsuleId}/current-resource-inventory`) {
-        return route.fulfill({
-          json: {
-            inventory: {
-              kind: "takosumi.capsule-current-resource-inventory@v1",
-              capsuleId,
-              workspaceId: "ws_alpha",
-              environment: "production",
-              stateVersionId,
-              generation: 1,
-              applyRunId: "run_original_apply",
-              planRunId: "run_original_plan",
-              recordedAt: now,
-              availability: "recorded",
-              resources: [],
-            },
-          },
-        });
-      }
-      if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" && multipleSurfaces) {
-        const original = PORTABLE_UI_SURFACES.ws_alpha[0];
-        const surface = (id: string, title: string, sortOrder: number) => ({
-          ...original,
-          metadata: { ...original.metadata, id: `if_${id}`, name: `app.${id}` },
-          spec: {
-            ...original.spec,
-            document: { launcher: true, display: { title, sortOrder } },
-            inputs: { url: { source: "capsule_output", capsuleId, outputName: `${id}_url` } },
-          },
-          status: { ...original.status, resolvedInputs: { url: `https://apps.example.test/${id}` } },
-        });
-        // The API order differs from the Interface's declared primary order.
-        return route.fulfill({
-          json: { interfaces: [surface("documentation", "Documentation", 20), surface("control", "Control panel", 10)] },
-        });
-      }
-      if (path === "/api/v1/workspaces/ws_alpha/graph") {
-        return route.fulfill({ json: { nodes: [], edges: [] } });
-      }
-      if (path === `/api/v1/capsule-configs/${installConfigId}`) {
-        return route.fulfill({
-          json: {
-            installConfig: {
-              id: installConfigId,
-              workspaceId: "ws_alpha",
-              name: PORTABLE_EXPECTATIONS.appName,
-              sourceSelector: {
-                kind: "git",
-                url: "https://github.com/example/repository-office.git",
-                ref: PORTABLE_SOURCE_COMMIT,
-                path: ".",
-              },
-              policy: {},
-              variableMapping: { region: "initial" },
-              variablePresentation: [
-                {
-                  name: "region",
-                  type: "string",
-                  required: true,
-                  label: { ja: "リージョン", en: "Region" },
-                },
-              ],
-              outputAllowlist: {},
-              interfaceBlueprints: [],
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-        });
-      }
-      if (path === `/api/v1/capsules/${capsuleId}/provider-bindings`) {
-        return route.fulfill({
-          json: {
-            providerBindingSet: {
-              id: "pbs_configuration_plan_e2e",
-              workspaceId: "ws_alpha",
-              capsuleId,
-              environment: "production",
-              bindings: [],
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-        });
-      }
-      if (path === `/api/v1/capsules/${capsuleId}/usage-summary`) {
-        return route.fulfill({
-          json: {
-            summary: {
-              capsuleId,
-              usdMicros: 0,
-              eventCount: 0,
-              ratedEventCount: 0,
-              unratedEventCount: 0,
-            },
-          },
-        });
-      }
-      if (path === "/api/v1/sources") {
-        return route.fulfill({
-          json: {
-            sources: [
-              {
-                id: sourceId,
-                workspaceId: "ws_alpha",
-                name: PORTABLE_EXPECTATIONS.appName,
-                url: "https://github.com/example/repository-office.git",
-                defaultRef: PORTABLE_SOURCE_COMMIT,
-                defaultPath: ".",
-                status: "active",
-                autoSync: false,
-                createdAt: now,
-                updatedAt: now,
-              },
-            ],
-          },
-        });
-      }
-      if (path === "/api/v1/provider-connections") {
-        return route.fulfill({ json: { providerConnections: [] } });
-      }
-      if (
-        path === `/api/v1/capsules/${capsuleId}/configuration-plans` &&
-        request.method() === "POST"
-      ) {
-        configurationPlanBodies.push(request.postDataJSON());
-        return route.fulfill({
-          status: 201,
-          json: {
-            capsule: { ...capsule, installConfigId: "cfg_configuration_e2e" },
-            configurationPlan: {
-              replayed: false,
-              previousInstallConfigId: installConfigId,
-              targetInstallConfigId: "cfg_configuration_e2e",
-              sourceSnapshotId: "snap_configuration_e2e",
-              planRunId,
-            },
-            links: { run: `/api/v1/runs/${planRunId}` },
-          },
-        });
-      }
-      if (path === `/api/v1/runs/${planRunId}`) {
-        return route.fulfill({
-          json: {
-            run: {
-              id: planRunId,
-              workspaceId: "ws_alpha",
-              capsuleId,
-              type: "plan",
-              status: "succeeded",
-              summary: { add: 0, change: 1, destroy: 0 },
-              policyStatus: "pass",
-              createdBy: "portable-e2e",
-              createdAt: now,
-            },
-          },
-        });
-      }
-      if (path === `/api/v1/runs/${planRunId}/logs`) {
-        return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
-      }
-      if (path === `/api/v1/runs/${planRunId}/cost`) {
-        return route.fulfill({
-          json: {
-            cost: {
-              runId: planRunId,
-              billingMode: "disabled",
-              estimatedUsdMicros: 0,
-              ratingStatus: "not_applicable",
-              blocked: false,
-              reasons: [],
-            },
-          },
-        });
-      }
-      if (path === `/api/v1/runs/${planRunId}/stream`) {
-        return route.fulfill({
-          status: 200,
-          contentType: "text/event-stream",
-          body: "",
-        });
-      }
-      if (
-        path === "/api/v1/workspaces/ws_alpha/runs" &&
-        url.searchParams.get("limit") === "200"
-      ) {
-        return route.fulfill({ json: { runs: [] } });
-      }
-      return route.fallback();
-    });
-
-    await page.setViewportSize({ width: 1180, height: 757 });
-    await gotoDashboardDocument(page, `/workloads/${capsuleId}`);
-    const header = page.locator(".tg-page-header");
-    const openApp = page.getByRole("link", { name: /Open Repository Office|Repository Office.*開/u });
-    await expect(openApp).toBeVisible();
-    await expect(openApp).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
-    await expect(openApp).toHaveAttribute("rel", "noreferrer noopener");
-    const openBox = await openApp.boundingBox();
-    expect(openBox!.y, "Open app belongs in the visible header").toBeLessThan(300);
-    const urlDetails = page.locator("details").filter({
-      has: page.locator("summary", { hasText: /URLとアクセス情報|URLs and access information/u }),
-    });
-    await expect(urlDetails).not.toHaveAttribute("open");
-    await expect(urlDetails.locator("code")).toBeHidden();
-    await expect(page.getByRole("button", { name: /削除の確認|Review deletion/u })).toHaveCount(0);
-    await page.screenshot({ path: test.info().outputPath("overview-1180.png") });
-    await urlDetails.locator("summary").click();
-    await expect(urlDetails.locator("code")).toHaveText(PORTABLE_EXPECTATIONS.appUrl);
-    await expect(urlDetails.locator(".muted")).toBeVisible();
-    multipleSurfaces = true;
-    await page.reload({ waitUntil: "domcontentloaded" });
-    const namedOpen = header.getByRole("link", { name: "Open Control panel in a new tab" });
-    await expect(namedOpen).toBeVisible();
-    await expect(namedOpen).toContainText("Control panel");
-    await expect(namedOpen).toHaveAttribute("href", "https://apps.example.test/control");
-    await expect(header.locator(".tg-btn-primary")).toHaveCount(1);
-    await expect(urlDetails).not.toHaveAttribute("open");
-    await expect(header.getByRole("link", { name: "Open Documentation in a new tab" })).toHaveCount(0);
-    for (const width of [320, 375, 414, 768]) {
-      await page.setViewportSize({ width, height: 844 });
-      await expect(namedOpen).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
-    }
-    await page.screenshot({ path: test.info().outputPath("overview-multiple-768.png") });
-    await page.setViewportSize({ width: 1180, height: 757 });
-    multipleSurfaces = false;
-    // Bookmarked /danger routes still reach the warning and the same delete flow.
-    await page.goto(`/workloads/${capsuleId}/danger`, { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(new RegExp(`/workloads/${capsuleId}/settings#delete$`, "u"));
-    const deletion = page.locator("details#delete");
-    await expect(deletion).toHaveAttribute("open", "");
-    await expect(deletion.getByRole("button", { name: /削除の確認|Review deletion/u })).toBeVisible();
-    await expect(deletion).toContainText(PORTABLE_EXPECTATIONS.appName);
-    await expect(page.getByRole("button", { name: /削除の確認|Review deletion/u })).toHaveCount(1);
-    await expect(header.getByRole("link", { name: /削除|Delete/u })).toHaveCount(0);
-    expect(seenMutations).toEqual([]);
-
-    await gotoDashboardDocument(page, `/workloads/${capsuleId}/deploys`);
-    const versionCard = page.locator(".tg-card").filter({
-      has: page.locator(".tg-card-title", { hasText: /^(取得元のバージョン|Source version)$/u }),
-    });
-    await expect(versionCard).toHaveCount(1);
-    const trackedRef = versionCard.locator("code", { hasText: PORTABLE_SOURCE_COMMIT });
-    const changeVersion = versionCard.locator("summary", { hasText: /^(バージョンを変更|Change version)$/u });
-    const updateReview = versionCard.getByRole("button", { name: /^(変更を確認|Review changes)$/u });
-    await expect(trackedRef).toBeVisible();
-    await expect(changeVersion).toBeVisible();
-    await expect(updateReview).toBeEnabled();
-    expect((await trackedRef.boundingBox())!.y).toBeLessThan((await changeVersion.boundingBox())!.y);
-    expect((await changeVersion.boundingBox())!.y).toBeLessThan((await updateReview.boundingBox())!.y);
-    const revision = versionCard.getByRole("textbox", { name: /ブランチ・タグ・コミット|Git ref/u, includeHidden: true });
-    await expect(revision).toBeHidden();
-    await changeVersion.click();
-    await expect(revision).toBeVisible();
-    await revision.fill("v1.2.3");
-    await expect(versionCard.getByRole("button", { name: /このバージョンを確認|Review this version/u })).toBeEnabled();
-    expect(seenMutations).toEqual([]);
-    await page.screenshot({ path: test.info().outputPath("updates-1180.png") });
-
-    const exportActions = versionCard.locator("details").filter({
-      has: page.locator("summary", { hasText: /^(必要なときだけ使う操作|Extra actions)$/u }),
-    });
-    await exportActions.locator("summary").click();
-    await expect(exportActions).toContainText(/ワークスペースの管理情報の一部|selected workspace management records/u);
-    await expect(exportActions).toContainText(/このデータの取り込み・復元には対応していません|This export cannot be imported or used to restore a service/u);
-    const createExport = exportActions.getByRole("button", { name: /^(管理情報の一部を書き出す|Create partial export)$/u });
-    for (const width of [320, 375, 414, 768]) {
-      await page.setViewportSize({ width, height: 844 });
-      await expect(createExport).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
-    }
-    await createExport.click();
-    const exportNotice = versionCard.locator(".wa-notice");
-    await expect(exportNotice).toContainText(/管理情報の一部を書き出しました|Partial export created/u);
-    await expect(exportNotice).toContainText(/このデータの取り込み・復元には対応していません|This export cannot be imported or used to restore a service/u);
-    await expect(exportNotice.locator("code")).toBeHidden();
-    await expect(exportNotice.locator("summary")).toHaveText(/^(書き出し ID|Export ID)$/u);
-    expect(seenMutations).toEqual([`POST /api/v1/capsules/${capsuleId}/backups`]);
-    await page.screenshot({ path: test.info().outputPath("partial-export-768.png") });
-    await page.setViewportSize({ width: 1180, height: 757 });
-
-    await gotoDashboardDocument(
-      page,
-      `/workloads/${capsuleId}/settings`,
-    );
-    const region = page.getByRole("textbox", { name: /^(リージョン|Region)$/u });
-    await expect(region).toHaveValue("initial");
-    await expect(page.locator(".tg-card-title").filter({ hasText: /^(設定値|Settings)$/u })).toHaveCount(1);
-    await expect(page.locator("code", { hasText: /^region$/u })).toBeHidden();
-    const autoUpdate = page.locator("details").filter({
-      has: page.locator("summary", { hasText: /自動更新|Automatic updates/u }),
-    });
-    await expect(autoUpdate).not.toHaveAttribute("open");
-    expect((await region.boundingBox())!.y).toBeLessThan((await autoUpdate.boundingBox())!.y);
-    await expect(deletion).not.toHaveAttribute("open");
-    await page.screenshot({ path: test.info().outputPath("settings-1180.png") });
-    for (const width of [320, 375, 414, 768]) {
-      await page.setViewportSize({ width, height: 844 });
-      await expect(region).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
-    }
-    await page.setViewportSize({ width: 1180, height: 757 });
-    await region.fill("edited");
-    await page
-      .getByRole("button", { name: /変更を確認|Review changes/u })
-      .click();
-
-    await expect.poll(() => configurationPlanBodies.length).toBe(1);
-    expect(configurationPlanBodies).toEqual([
-      {
-        variablePatch: { set: { region: "edited" }, remove: [] },
-        providerBindings: [],
-        interfaceBlueprints: [],
-        expected: { authorityGuard },
-      },
-    ]);
-    expect(seenMutations).toEqual([
-      `POST /api/v1/capsules/${capsuleId}/backups`,
-      `POST /api/v1/capsules/${capsuleId}/configuration-plans`,
-    ]);
-    await expect(page).toHaveURL(new RegExp(`/runs/${planRunId}$`, "u"));
-    await expect(
-      page.getByRole("heading", { name: /変更内容を確認|Review changes/u }),
-    ).toBeVisible();
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("manual Git module input survives preparation reset and submits its scanned path", async ({ page }) => {
-    test.skip(mode !== "portable", "the deterministic direct Git install fixture is portable-only");
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(page, [], [], {
-      modulePath: "deploy/selected",
-    });
-    const query = new URLSearchParams({
-      git: "https://github.com/tako0614/yurucommu.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      name: "yurucommu",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.locator("summary").filter({ hasText: /取得元と版|Source and version/u }).click();
-    const modulePath = page.getByRole("textbox", { name: /モジュールのフォルダ|Module folder/u });
-    await modulePath.fill("");
-    await modulePath.pressSequentially("deploy/selected");
-    await expect(modulePath).toHaveValue("deploy/selected");
-    await prepareInlineFixture(page);
-    await expect.poll(() => state.compatibilityBodies.length).toBe(1);
-    expect(state.compatibilityBodies[0]).toMatchObject({
-      modulePath: "deploy/selected",
-      sourceSnapshotId: "snap_provider_destination_e2e",
-    });
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
   test("direct Git installs submit the exact scanned module path", async ({
     page,
   }) => {
@@ -3784,11 +3322,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    const app = page
-      .locator('a.av-tile[target="_blank"]')
-      .filter({ hasText: expectations.appName })
-      .first();
-    await expect(app).toBeVisible();
+    const card = page.getByTestId("home-app").filter({ hasText: expectations.appName }).first();
+    await expect(card).toBeVisible();
+    const app = card.getByRole("link", { name: `Open ${expectations.appName} in a new tab` });
     await expect(app).toHaveAttribute("href", expectations.appUrl);
     await expect(app).toHaveAttribute("target", "_blank");
     await assertNoPageErrors(errors);
@@ -3900,7 +3436,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await gotoDashboardDocument(page, "/workloads/cap_missing_e2e");
     await expect(
       page.getByRole("heading", {
-        name: /Service not found|サービスが見つかりません/u,
+        name: /App not found|アプリが見つかりません/u,
       }),
     ).toBeVisible();
     await expect(homeLink(page)).toBeVisible();
@@ -3941,7 +3477,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ).toHaveCount(0);
     await expect(
-      page.locator("a.av-tile").filter({ hasText: expectations.appName }).first(),
+      page.getByTestId("home-app").filter({ hasText: expectations.appName }).first(),
     ).toBeVisible();
     await assertNoPageErrors(errors);
   });
@@ -3952,7 +3488,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     test.skip(mode !== "portable", "synthetic list failures are portable-only");
     const errors = pageErrors(page);
     const appTile = page
-      .locator("a.av-tile")
+      .getByTestId("home-app")
       .filter({ hasText: expectations.appName })
       .first();
     await gotoDashboardDocument(page, "/");
@@ -4002,7 +3538,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       page.getByRole("main").getByRole("link", { name: /^(Find apps in the store|ストアでアプリを探す)$/u }),
     ).toBeVisible();
 
-    // An available update is said in words on the tile, not only as a dot.
+    // An available update is said in words on the app's Home card.
     await page.route(
       (url) => url.pathname === "/api/v1/workspaces/ws_alpha/capsules",
       (route) =>
@@ -4019,11 +3555,11 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     await gotoDashboardDocument(page, "/");
     const tile = page
-      .locator("a.av-tile")
+      .getByTestId("home-app")
       .filter({ hasText: expectations.appName })
       .first();
-    await expect(tile).toContainText(/Update available|更新があります/u);
-    await expect(tile.locator(".av-tile-dot")).toBeVisible();
+    await expect(tile).toContainText(/Update available|更新あり/u);
+    await expect(tile).toHaveAttribute("data-app-state", "update_available");
     await assertNoPageErrors(errors);
   });
 
@@ -4380,6 +3916,7 @@ test.describe("public-live bootstrap response local regression", () => {
   });
 });
 
+registerAppPageCases(mode);
 registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinationFixture(
   page,
   [],

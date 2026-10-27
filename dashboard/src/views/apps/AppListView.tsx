@@ -314,7 +314,7 @@ function HomeAppCard(props: { readonly app: HomeApp }) {
             </Button>
           }
         >
-          <OpenAppButton surfaces={props.app.surfaces} appName={props.app.inst.name} size="sm" />
+          <OpenAppButton surfaces={props.app.surfaces} appName={props.app.inst.name} size="sm" labelWithApp />
           <a
             class="ap-app-manage"
             href={pageHref()}

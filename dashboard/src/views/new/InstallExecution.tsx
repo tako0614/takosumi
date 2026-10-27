@@ -542,7 +542,7 @@ export default function InstallExecution(props: Props) {
         disabled={applying() || discarding()}
         onClick={() => void discard()}
       >
-        {t("installStore.discard")}
+        {props.purpose && props.purpose !== "install" ? t("app.review.cancel") : t("installStore.discard")}
       </Button>
     </Show>
   );

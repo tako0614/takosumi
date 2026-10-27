@@ -66,6 +66,11 @@ export function OpenAppButton(props: {
   readonly size?: "sm" | "md";
   /** Shown for an unnamed screen. */
   readonly appName: string;
+  /**
+   * Names the app in the accessible label where several apps' Open buttons
+   * sit side by side (Home). On the app page the visible text is enough.
+   */
+  readonly labelWithApp?: boolean;
 }): JSX.Element {
   const [open, setOpen] = createSignal(false);
   let container: HTMLDivElement | undefined;
@@ -102,7 +107,11 @@ export function OpenAppButton(props: {
             target="_blank"
             rel="noreferrer noopener"
             icon={<ExternalLink size={16} />}
-            aria-label={t("app.open.aria", { name: surfaceName(surface(), 0) })}
+            aria-label={
+              props.labelWithApp
+                ? t("app.open.aria", { name: surfaceName(surface(), 0) })
+                : undefined
+            }
           >
             {t("app.open.cta")}
             <Show when={props.surfaces.length > 1}>

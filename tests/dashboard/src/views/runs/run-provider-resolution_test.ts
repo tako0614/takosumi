@@ -93,7 +93,9 @@ describe("Run review ProviderConnection evidence", () => {
     expect(planResourceListSource).toContain("planResourceDisplayLabel");
     expect(planResourceListSource).toContain("planResourceActionLabel");
     expect(planResourceListSource).toContain('t("run.resources.title")');
-    expect(planResourceListSource).toContain('t("run.resources.identifiers")');
+    // A resource's own name and scope are shown as they are, not folded away.
+    expect(planResourceListSource).toContain("planResourceName(resource)");
+    expect(planResourceListSource).not.toContain("<details");
     expect(planResourcesSource).toContain(
       "export const PLAN_RESOURCE_REVIEW_LIMIT = 25;",
     );
@@ -107,8 +109,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.resources.title"]).toBe("変更予定");
     expect(en["run.resources.kicker"]).toBe("Review");
     expect(ja["run.resources.kicker"]).toBe("確認");
-    expect(en["run.resources.identifiers"]).toBe("Reference IDs");
-    expect(ja["run.resources.identifiers"]).toBe("参照 ID");
+
     for (const source of [runViewSource, planResourceListSource]) {
       expect(source).not.toContain("change.before");
       expect(source).not.toContain("change.after");
@@ -287,15 +288,16 @@ describe("Run review ProviderConnection evidence", () => {
   test("gates commercial recovery behind the generic capability surface", () => {
     expect(costSummarySource).toContain("hasPlatformExtensionCapability");
     expect(costSummarySource).toContain('"billing.commercial.v1"');
-    expect(costSummarySource).toContain('href="/settings/billing"');
+    expect(costSummarySource).toContain('href="/account/billing"');
+    expect(costSummarySource).not.toContain('href="/settings/billing"');
     expect(costSummarySource).not.toContain('href="/billing"');
     expect(runViewSource).not.toContain('href="/billing"');
     expect(costSummarySource).toContain('"run.cost.billingCta"');
     expect(costSummarySource).toContain('"run.cost.operatorHelp"');
     expect(en["run.cost.billingCta"]).toContain("billing");
-    expect(en["run.cost.operatorHelp"]).toContain("workspace");
+    expect(en["run.cost.operatorHelp"]).toContain("space");
     expect(ja["run.cost.billingCta"]).toContain("お支払い");
-    expect(ja["run.cost.operatorHelp"]).toContain("ワークスペース");
+    expect(ja["run.cost.operatorHelp"]).toContain("スペース");
   });
 
   test("keeps launch URLs Interface-owned instead of inferring them from run state or outputs", () => {

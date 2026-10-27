@@ -85,6 +85,7 @@ import {
 import {
   capsuleDisplayName,
   isCapsuleRuntimeOpenable,
+  isStateVersionRuntimeReady,
   releaseActivationStatusForStateVersion,
 } from "../../lib/capsules-ui.ts";
 import { resolveAppIcon } from "../../lib/app-face.ts";
@@ -153,6 +154,8 @@ export default function AppManagePage(props: {
   readonly tab?: string;
   /** Shown once right after the install page applied the first install. */
   readonly justInstalled?: boolean;
+  /** Every fresh read of the app, so an embedding page can follow it. */
+  readonly onCapsule?: (capsule: Capsule) => void;
 }): JSX.Element {
   const navigate = useNavigate();
   const { confirm } = useConfirmDialog();
@@ -219,14 +222,20 @@ export default function AppManagePage(props: {
   const surfaceList = () => settledValue(surfaces) ?? [];
   // StateVersion is readiness/provenance only. URL and presentation authority
   // comes exclusively from the authorized Capsule-owned UI Interfaces above.
-  const openable = createMemo(() =>
-    isCapsuleRuntimeOpenable(
-      capsule(),
-      capsuleId(),
-      currentStateVersion(),
-      activityList(),
-    ),
-  );
+  // An app whose later change failed keeps the screen of its last successful
+  // apply: Open stays available while the problem card says it needs
+  // attention. A recovered state (no successful apply) stays closed.
+  const openable = createMemo(() => {
+    const inst = capsule();
+    const version = currentStateVersion();
+    if (isCapsuleRuntimeOpenable(inst, capsuleId(), version, activityList())) return true;
+    if (inst?.status !== "error" || !version || inst.currentStateVersionId !== version.id) return false;
+    const createdBy = runList().find((item) => item.id === version.createdByRunId);
+    return (
+      createdBy?.type === "apply" && createdBy.status === "succeeded" &&
+      isStateVersionRuntimeReady(version, activityList(), capsuleId())
+    );
+  });
   const activation = createMemo(() =>
     releaseActivationStatusForStateVersion(
       currentStateVersion(),
@@ -235,7 +244,7 @@ export default function AppManagePage(props: {
     ),
   );
 
-  const [graph] = createResource(
+  const [graph, { refetch: refetchGraph }] = createResource(
     () => (destroyed() ? null : (workspaceId() ?? null)),
     getWorkspaceGraph,
   );
@@ -349,11 +358,22 @@ export default function AppManagePage(props: {
     else if (context.error) setDocumentTitle(t("app.notFound"));
   });
 
-  // Old tab routes land on the matching section of this one page.
+  createEffect(() => {
+    const inst = capsule();
+    if (inst) props.onCapsule?.(inst);
+  });
+
+  // Old tab routes land on the matching section of this one page, once the
+  // sections above it have loaded and stopped moving it down.
+  let scrolledTo: string | undefined;
   createEffect(() => {
     const target = props.tab ? TAB_SECTIONS[props.tab] : undefined;
-    if (!target || !capsule()) return;
-    queueMicrotask(() =>
+    if (!target || !capsule() || scrolledTo === `${capsuleId()}:${target}`) return;
+    const settling = [installConfig, stateVersions, runs, graph, inventory, bindingSet, usage, sources]
+      .some((resource) => resource.loading);
+    if (settling) return;
+    scrolledTo = `${capsuleId()}:${target}`;
+    requestAnimationFrame(() =>
       document.getElementById(target)?.scrollIntoView({ block: "start", behavior: "instant" }),
     );
   });
@@ -570,6 +590,10 @@ export default function AppManagePage(props: {
   const uninstall = async () => {
     const inst = capsule();
     if (!inst || uninstallBusy()) return;
+    // Name the apps it affects from a fresh read, right before confirming.
+    setUninstallBusy(true);
+    await Promise.resolve(refetchGraph()).catch(() => undefined);
+    setUninstallBusy(false);
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
       message: [
@@ -714,10 +738,23 @@ export default function AppManagePage(props: {
                   </Show>
                 </h1>
                 <p class="ap-state" data-testid="app-state-sentence">{stateSentence()}</p>
+                <Show when={managed() && surfaces.error}>
+                  <p class="ap-muted" role="alert">{t("app.open.loadFailed")}</p>
+                </Show>
               </div>
               <div class="ap-actions">
                 <Show when={openable() && surfaceList().length > 0}>
                   <OpenAppButton surfaces={surfaceList()} appName={displayName()} />
+                </Show>
+                <Show when={managed() && surfaces.error}>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    busy={surfaces.loading}
+                    onClick={() => void refetchSurfaces()}
+                  >
+                    {t("app.open.reload")}
+                  </Button>
                 </Show>
                 <Show when={updateAvailable() && revisionReady()}>
                   <Button

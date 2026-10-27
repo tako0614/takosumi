@@ -54,7 +54,12 @@ export type AppState =
 export function appState(
   capsule: Pick<
     Capsule,
-    "status" | "freshness" | "updatedAt" | "currentStateVersionId" | "uninstall"
+    | "status"
+    | "freshness"
+    | "updatedAt"
+    | "currentStateVersionId"
+    | "currentStateGeneration"
+    | "uninstall"
   >,
   options: { readonly now?: number } = {},
 ): AppState {
@@ -65,7 +70,8 @@ export function appState(
     return capsule.status === "error" ? "needs_attention" : "uninstalling";
   }
   const status = effectiveCapsuleStatus(capsule, options);
-  if (!capsule.currentStateVersionId) {
+  // Applied once a state exists, even where a projection omits its id.
+  if (!capsule.currentStateVersionId && !(capsule.currentStateGeneration > 0)) {
     return status === "error" || status === "needs_attention"
       ? "needs_attention"
       : "installing";

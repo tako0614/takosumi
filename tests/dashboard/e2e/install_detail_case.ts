@@ -77,8 +77,13 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     }
     if (path === `/api/v1/capsules/${capId}`) {
       if (request.method() === "DELETE") capsuleStatus = "uninstalled";
-      return route.fulfill({ json: { capsule: capsule(), graceDays: 7 } });
+      // A capsule read always carries the configuration authority guard.
+      return route.fulfill({ json: { capsule: capsule(), graceDays: 7, installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
     }
+    if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
+    if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: "registry.opentofu.org/cloudflare/cloudflare" })) } } });
+    if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
+    if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
     if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
     if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
     if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
@@ -104,7 +109,7 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     return route.fallback();
   });
   await page.context().route("https://apps.example.test/inline-app", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Installed application</h1>" }));
-  return { initial, mutations, authorize: () => { connected = true; }, finish: () => { applyStatus = "succeeded"; capsuleStatus = "active"; }, fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; }, destroy: () => { capsuleStatus = "destroyed"; }, problem: (status: string) => { capsuleStatus = status; }, failRetry: (failed: boolean) => { retryFailed = failed; } };
+  return { initial, mutations, authorize: () => { connected = true; }, finish: () => { applied = true; applyStatus = "succeeded"; capsuleStatus = "active"; }, fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; }, destroy: () => { capsuleStatus = "destroyed"; }, problem: (status: string) => { capsuleStatus = status; }, failRetry: (failed: boolean) => { retryFailed = failed; } };
 }
 
 /** The install sheet opened by the app page's single Install button. */
@@ -274,7 +279,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.goto(sourceUrl);
       const sheet = await openInstallSheet(page);
       await sheet.getByRole("textbox", { name: domainField }).fill("oauth-chosen.example.net");
-      await sheet.getByText("Advanced settings", { exact: true }).click();
+      // Optional settings are shown plainly, not behind a disclosure.
+      await expect(sheet.getByTestId("install-optional-settings")).toBeVisible();
       await expect(sheet.getByRole("textbox", { name: /^Service name(?:\s*\*)?$/ })).toHaveValue("cloudflare-service");
       await sheet.getByLabel("Custom domain", { exact: true }).fill("custom.example.org");
       const row = connectionRows(page);
@@ -354,8 +360,18 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByTestId("install-run-logs")).toContainText("Installing fixture resources");
       f.finish();
       await expect(page.getByTestId("install-lifecycle")).toHaveAttribute("data-install-state", "installed", { timeout: 15000 });
-      const open = page.getByRole("link", { name: "Open", exact: true });
+      // Once installed, the page is the app's own page: the same sections as
+      // everywhere else, with the install header giving way to the app's.
+      const app = page.getByTestId("app-page");
+      await expect(app).toBeVisible();
+      await expect(page.getByTestId("install-app-header")).toHaveCount(0);
+      const open = page.getByTestId("app-header").getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", "https://apps.example.test/inline-app");
+      for (const section of ["app-version", "app-settings", "app-created", "app-history", "app-uninstall"]) {
+        await expect(app.getByTestId(section)).toBeVisible();
+      }
+      await expect(app.getByTestId("app-created-groups")).toContainText("Workers Script");
+      await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       await captureInstallState(page, "app-installed");
       const popupPromise = context.waitForEvent("page"); await open.click(); const popup = await popupPromise;
       await expect(popup.getByRole("heading")).toHaveText("Installed application"); await popup.close();
@@ -385,7 +401,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         await expect(costBlock.getByRole("heading", { name: "Cost estimate", exact: true })).toBeVisible();
         const expectedCost = {
           rated_zero: "The estimate is $0.00.",
-          not_applicable: "Takosumi doesn't calculate costs in this workspace.",
+          not_applicable: "Takosumi doesn't calculate costs in this space.",
           unrated: "Usage measured; no price policy is configured.",
           unavailable: "Couldn't load the cost estimate. Treat the cost as unknown.",
         }[cost];
@@ -509,33 +525,39 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
       f.fail(true); f.failRetry(true); await page.reload();
-      await expect(page.getByTestId("install-lifecycle").getByRole("heading", { name: "Needs attention", exact: true })).toBeVisible();
+      // The failure is this app's problem, on its own page.
+      const problem = page.getByTestId("app-problems").locator('[data-problem="failed-run"]');
+      await expect(problem).toContainText("The last change couldn't be applied");
+      await expect(problem.getByRole("link", { name: "See reason and logs" })).toHaveAttribute("href", `/runs/${applyId}`);
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Manage app", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Retry installation" })).toBeVisible();
-      await page.getByRole("button", { name: "Retry installation" }).click();
+      await problem.getByRole("button", { name: "Review again", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(1);
-      await expect(page.locator('.iv-error a[href="/runs/run_retry_fixture_1"]')).toBeVisible();
-      await expect(page.getByRole("button", { name: "Retry installation" })).toBeEnabled();
+      const review = page.getByTestId("app-review");
+      await expect(review.locator('.iv-error a[href="/runs/run_retry_fixture_1"]')).toBeVisible();
       f.failRetry(false);
-      await page.getByRole("button", { name: "Retry installation" }).click();
+      await review.getByRole("button", { name: "Review again", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(2);
-      await expect(page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true })).toBeVisible();
+      await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
       expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
       expect(f.mutations.some((m) => m.includes("/abandon"))).toBe(false);
     });
     test("Uninstall confirms once, restores its real reservation, and supports cancellation", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
       await page.goto(`/new?capsule=${capId}`);
-      await page.getByRole("button", { name: "Uninstall", exact: true }).click();
+      const section = page.getByTestId("app-uninstall");
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       expect(f.mutations.some((m) => m.startsWith("DELETE"))).toBe(false);
-      await page.getByRole("button", { name: "Uninstall", exact: true }).click();
-      await page.getByRole("dialog").getByRole("button", { name: "Schedule deletion", exact: true }).click();
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByTestId("install-lifecycle")).toHaveAttribute("data-install-state", "uninstalling");
       await page.reload(); await expect(page.getByTestId("install-lifecycle")).toHaveAttribute("data-install-state", "uninstalling");
       expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
-      await page.getByRole("button", { name: "Cancel deletion", exact: true }).click();
+      // The scheduled uninstall is this app's problem until it runs.
+      const scheduled = page.getByTestId("app-problems").locator('[data-problem="uninstall"]');
+      await expect(scheduled).toContainText("will be uninstalled on");
+      await expect(page.getByTestId("app-uninstall")).toHaveCount(0);
+      await scheduled.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       f.destroy(); await page.reload();
       await expect(page.getByTestId("install-lifecycle")).toHaveAttribute("data-install-state", "not-installed");
@@ -553,21 +575,23 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     });
     test("launch read failure is retryable and a later failed update retains management", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish(); f.problem("error");
-      let reads = 0;
-      await page.route("**/workspaces/ws_alpha/ui-surfaces**", (route) => ++reads === 1
+      let failScreens = true;
+      await page.route("**/workspaces/ws_alpha/ui-surfaces**", (route) => failScreens
         ? route.fulfill({ status: 503, json: { error: "fixture_read_unavailable" } }) : route.fallback());
       await page.goto(`/new?capsule=${capId}`);
+      await expect(page.getByTestId("app-problems").locator('[data-problem="error"]')).toContainText("This app has a problem");
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Manage app", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Refresh launch URL", exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Refresh launch URL", exact: true }).click();
-      // The error Capsule still has a real applied state; expose its declared
-      // surface when the server authorizes it, without claiming it is healthy.
+      const header = page.getByTestId("app-header");
+      await expect(header.getByRole("alert")).toContainText("Its screens couldn't be loaded");
+      failScreens = false;
+      await header.getByRole("button", { name: "Reload screens", exact: true }).click();
+      // The error app still has the state its last successful apply made;
+      // its authorized screen stays openable while the problem is shown.
       await expect(page.getByTestId("install-lifecycle")).toHaveAttribute("data-install-state", "installed");
-      await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+      await expect(header.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       f.problem("disabled"); await page.reload();
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
-      await expect(page.getByRole("link", { name: "Manage app", exact: true })).toBeVisible();
+      await expect(page.getByTestId("app-state-sentence")).toHaveText("Stopped.");
       await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     });
     test("deletion confirmation includes dependent apps and failed dependency reads", async ({ page }) => {
@@ -577,12 +601,15 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         ? route.fulfill({ status: 503, json: { error: "fixture_graph_unavailable" } })
         : route.fulfill({ json: { nodes: [{ capsuleId: "cap_consumer", name: "Dependent app" }], edges: [{ id: "dep_fixture", producerCapsuleId: capId, consumerCapsuleId: "cap_consumer", outputs: {} }] } }));
       await page.goto(`/new?capsule=${capId}`);
+      // The apps that use this one are named before anything is confirmed.
+      await expect(page.getByTestId("app-uninstall")).toContainText("Dependent app");
+      await expect(page.getByTestId("app-linked")).toContainText("Dependent app");
       await page.getByRole("button", { name: "Uninstall", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("Dependent app");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       failGraph = true;
       await page.getByRole("button", { name: "Uninstall", exact: true }).click();
-      await expect(page.getByRole("dialog")).toContainText("Connected services could not be checked");
+      await expect(page.getByRole("dialog")).toContainText("Couldn't check linked apps");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       expect(f.mutations.some((m) => m.startsWith("DELETE"))).toBe(false);
     });
