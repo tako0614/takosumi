@@ -139,7 +139,7 @@ export default function InstallLifecycle(props: {
         <Show when={value().capsule.status === "error" || value().capsule.status === "disabled"}><p role="alert">{t("installStore.installedNeedsAttention")}</p></Show>
         <Show when={value().capsule.status === "error" && value().run}>{(run) =>
           <InstallExecution planRunId={run().planRunId ?? run().id} initialRunId={run().id} capsuleId={props.capsuleId}
-            onDone={() => { clearCaches(); void refetch().then(() => refetchSurfaces()); }} />
+            onDone={() => { clearCaches(); void Promise.resolve(refetch()).then(() => refetchSurfaces()); }} />
         }</Show>
         <div class="iv-action-row">
           <Show when={launchUrl()}>{(url) => <Button variant="primary" size="lg" href={url()} target="_blank" rel="noopener noreferrer" icon={<ExternalLink size={18} />}>{t("installStore.open")}</Button>}</Show>
