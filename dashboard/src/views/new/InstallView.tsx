@@ -1560,6 +1560,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
    * Only a never-applied Capsule is abandoned (the server refuses an applied
    * one), and only the Source this attempt created is deleted, best effort.
    */
+  // The direct-Git link fields that describe this app, so a reload after
+  // discarding still shows the same app and the version it was linked to.
+  const directGitQuery = (): string => {
+    const params = new URLSearchParams({ git: gitUrl().trim() });
+    const ref = gitRef().trim();
+    if (ref && !gitRefResolvedFromListing()) params.set("ref", ref);
+    if (sourcePath() !== ".") params.set("sourcePath", sourcePath());
+    if (modulePathExplicit() && modulePath().trim()) params.set("path", modulePath().trim());
+    if (name().trim()) params.set("name", name().trim());
+    return params.toString();
+  };
+
   const discardAttempt = async () => {
     // A Plan request in flight has an unknown outcome; never discard over it.
     // Only repository preparation can be cancelled while busy.
@@ -1602,7 +1614,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       const appSearch = selectedListing
         ? `?${buildNewQuery(selectedListing)}`
         : gitUrl().trim()
-          ? `?${new URLSearchParams({ git: gitUrl().trim(), name: name().trim() }).toString()}`
+          ? `?${directGitQuery()}`
           : "";
       navigate(appendAppHandoff(`${location.pathname}${appSearch}`, appHandoff())!, { replace: true });
       if (gitRefResolvedFromListing()) {
@@ -1732,7 +1744,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       await submitInstallPlan(installPlanAttempt);
     } catch (cause) {
       setError(installFlowErrorMessage(cause));
-      setPhase(storeEntry() ? "setup" : "configure");
+      // Every prepared install has the sheet (at least its app name), not
+      // only apps with settings: return there, not to the bare app page.
+      setPhase(compatibility() && installConfig() ? "setup" : "configure");
     } finally {
       setBusy(false);
     }
@@ -1844,7 +1858,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       } else {
         setError(installFlowErrorMessage(cause));
       }
-      setPhase(storeEntry() ? "setup" : "configure");
+      // Every prepared install has the sheet (at least its app name), not
+      // only apps with settings: return there, not to the bare app page.
+      setPhase(compatibility() && installConfig() ? "setup" : "configure");
     } finally {
       setBusy(false);
     }
@@ -2027,7 +2043,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setProviderRows((rows) => rows.map((row) => {
         const choices = candidatesFor(row.provider);
         if (choices.some((c) => c.id === row.connectionId)) return row;
-        return { ...row, connectionId: preferredProviderConnection(choices, effectiveProviderPolicy())?.id ?? "" };
+        const connectionId = preferredProviderConnection(choices, effectiveProviderPolicy())?.id ?? "";
+        // An unchanged row keeps its identity, so <For> keeps its DOM (and the
+        // focused row toggle) instead of re-creating the row.
+        return connectionId === row.connectionId ? row : { ...row, connectionId };
       }));
     } catch (cause) { if (!controller.signal.aborted && workspaceIsCurrent(workspace)) setError(installFlowErrorMessage(cause)); }
   };
@@ -2047,7 +2066,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const versionLabel = (): string | undefined => {
     const version = preparedVersion();
-    if (!version) return gitRef().trim() || undefined;
+    if (!version) {
+      const ref = gitRef().trim();
+      // A pinned full commit reads as its short form, like after preparation.
+      return /^[0-9a-f]{40}$/iu.test(ref) ? ref.slice(0, 7) : ref || undefined;
+    }
     const commit = version.commit.slice(0, 7);
     return version.ref && version.ref !== version.commit && version.ref !== "HEAD"
       ? `${version.ref} · ${commit}`
@@ -2056,6 +2079,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const connectFormId = (row: ProviderConnectionRow) =>
     `install-connect-${providerRowKey(row).replace(/[^A-Za-z0-9_-]/gu, "-")}`;
+
+  /**
+   * Closing a row's form removes the focused control (or re-renders the row
+   * with its new selection). Return focus that fell to the page to the row's
+   * toggle instead of the top of the document.
+   */
+  const focusRowToggleIfLost = (row: ProviderConnectionRow) =>
+    queueMicrotask(() => {
+      if (disposed || (document.activeElement && document.activeElement !== document.body)) return;
+      document.querySelector<HTMLElement>(`[aria-controls="${connectFormId(row)}"]`)?.focus({ preventScroll: true });
+    });
 
   const setConnectionError = (row: ProviderConnectionRow, message?: string) =>
     setConnectionErrors((current) => {
@@ -2072,7 +2106,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     if (candidatesFor(row.provider).some((connection) => connection.id === connectionId)) {
       updateProviderRow(row, connectionId);
       setConnectionError(row);
-      if (connectingProvider() === providerRowKey(row)) setConnectingProvider(undefined);
+      if (connectingProvider() === providerRowKey(row)) {
+        setConnectingProvider(undefined);
+        focusRowToggleIfLost(row);
+      }
       return;
     }
     // A verified connection the install policy refuses must say so, not
@@ -2104,6 +2141,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     const key = providerRowKey(row);
     if (connectingProvider() === key) {
       setConnectingProvider(undefined);
+      focusRowToggleIfLost(row);
       void refreshProviderChoices();
       return;
     }
@@ -2196,14 +2234,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         </Show>
         <Show when={open() && workspaceId()}>
           <div class="iv-inline-connect" id={connectFormId(row)}>
-            <ConnectionCreateForm
-              workspaceId={workspaceId()}
-              initialProviderSource={row.provider}
-              restrictToInitialProvider
-              onCreated={(connection) => adoptRowConnection(row, connection.id)}
-              verifyConnection={(connectionId) => verifyRowConnection(row, connectionId)}
-              onCancel={() => toggleConnect(row)}
-            />
+            {/* The form reads the setup catalog; suspend here, not the whole
+                page (which blanked the sheet and lost the scroll position). */}
+            <Suspense fallback={<div role="status"><Spinner size={18} />{t("common.loading")}</div>}>
+              <ConnectionCreateForm
+                workspaceId={workspaceId()}
+                initialProviderSource={row.provider}
+                restrictToInitialProvider
+                onCreated={(connection) => adoptRowConnection(row, connection.id)}
+                verifyConnection={(connectionId) => verifyRowConnection(row, connectionId)}
+              />
+            </Suspense>
           </div>
         </Show>
       </article>

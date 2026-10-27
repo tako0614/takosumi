@@ -500,6 +500,7 @@ interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly sourceCreateBodies: Record<string, unknown>[];
   readonly sourceAutoSyncPatches: Record<string, unknown>[];
   installPlanBody?: {
+    readonly capsule?: Readonly<Record<string, unknown>>;
     readonly options?: {
       readonly providerBindings?: readonly Record<string, unknown>[];
     };
@@ -514,6 +515,8 @@ interface ProviderDestinationFixtureCoordinates {
   readonly freshCompatibilityIds?: boolean;
   readonly providerPackages?: readonly { readonly source: string; readonly version?: string }[];
   readonly rootProviderRequirements?: readonly Record<string, unknown>[];
+  /** Resource types the compatibility report previews before any Plan. */
+  readonly resources?: readonly Record<string, unknown>[];
 }
 
 /** Stub a complete manual source check while retaining mutation ordering. */
@@ -751,7 +754,7 @@ async function stubProviderDestinationFixture(
                   ? { credentialRequired: true }
                   : {}),
               })),
-            resources: [],
+            resources: coordinates.resources ?? [],
             rootModuleVariables: [],
           },
         },
@@ -839,14 +842,45 @@ async function stubProviderDestinationFixture(
         body: "",
       });
     }
+    if (path === `/api/v1/runs/${planRunId}/cost`) {
+      // Billing is disabled in this Workspace: the review explains provider
+      // pricing instead of showing a rated $0.00 estimate.
+      return route.fulfill({
+        json: {
+          cost: {
+            runId: planRunId,
+            billingMode: "disabled",
+            estimatedUsdMicros: 0,
+            ratingStatus: "not_applicable",
+            blocked: false,
+            reasons: [],
+          },
+        },
+      });
+    }
     return route.fallback();
   });
   return state;
 }
 
-/** Follow the new visible detail/form actions, without granting consent on reload. */
+/** The install sheet's own actions (Review / Connect, Stop installing). */
+function installSheetActions(page: Page) {
+  return page.getByTestId("install-configuration").locator(":scope > .iv-action-row");
+}
+
+/** Provider rows in the install sheet's connection block. */
+function installConnectionRows(page: Page) {
+  return page.getByTestId("install-connections").getByTestId("install-required-connection");
+}
+
+/**
+ * Press the app page's one Install button and wait for the install sheet.
+ * Advanced settings is opened so module details can be read. A sheet whose
+ * only field is the app name and whose connections are ready goes straight
+ * to Review, which creates the Plan; it never applies it.
+ */
 async function prepareInlineFixture(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /^(Install|インストール|Add|追加)$/u }).click();
+  await page.getByRole("button", { name: /^(Install|インストール)$/u }).click();
   await expect.poll(async () =>
     await page.getByTestId("install-configuration").isVisible() ||
     await page.getByTestId("install-module-chooser").isVisible() ||
@@ -854,19 +888,17 @@ async function prepareInlineFixture(page: Page): Promise<void> {
   ).toBe(true);
   const config = page.getByTestId("install-configuration");
   if (!await config.isVisible()) return;
-  const advanced = config.locator("details.iv-advanced").last();
+  const advanced = config.locator(":scope > .iv-sheet-block details.iv-advanced").last();
   if (await advanced.count() && !await advanced.getAttribute("open")) await advanced.locator("summary").first().click();
-  if (await config.getAttribute("data-install-state") === "provider-required") {
-    await page.locator(".iv-cloud-summary").getByRole("button").click();
-  } else if (await config.getAttribute("data-install-state") === "ready" &&
-    await config.locator(".iv-fields input, .iv-fields select, .iv-fields textarea").count() === 0) {
-    await installInlineFixture(page);
+  if (await config.getAttribute("data-install-state") === "ready" &&
+    await config.locator(".iv-fields input, .iv-fields select, .iv-fields textarea").count() === 1) {
+    await reviewInlineFixture(page);
   }
 }
-async function installInlineFixture(page: Page): Promise<void> {
-  const close = page.getByRole("button", { name: /Back to settings|設定に戻る/u });
-  if (await close.isVisible()) await close.click();
-  await page.getByTestId("install-configuration").getByRole("button", { name: /^(Install|インストール)$/u }).click();
+
+/** Review creates the install Plan. Nothing is applied until Allow and install. */
+async function reviewInlineFixture(page: Page): Promise<void> {
+  await installSheetActions(page).getByRole("button", { name: /^(Review|内容を確認)$/u }).click();
 }
 
 type ReadinessRouteHandler = (route: Route) => Promise<void>;
@@ -948,12 +980,15 @@ async function startReadinessBrowserFixture(
       await expect(page.locator(".iv-execution")).toBeVisible();
       const installUrl = new URL(page.url());
       const originatingInstallPath = `${installUrl.pathname}${installUrl.search}`;
+      const allow = page
+        .locator(".iv-execution")
+        .getByRole("button", { name: "Allow and install", exact: true });
+      await expect(allow).toBeVisible();
+      // A reviewed Plan never applies on its own.
+      expect(applyPosts).toEqual([]);
       const confirmation = page.getByRole("checkbox", { name: "I reviewed these changes" });
       if (await confirmation.isVisible()) await confirmation.check();
-      await page
-        .locator(".iv-execution")
-        .getByRole("button", { name: "Install", exact: true })
-        .click();
+      await allow.click();
       await expect.poll(() => applyPosts.length).toBe(1);
       return originatingInstallPath;
     },
@@ -1085,7 +1120,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(new URL(page.url()).searchParams.get("return")).toBe(
       originatingInstallPath,
     );
-    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     await expect(page.locator(".iv-execution")).toHaveCount(0);
     expect(fixture.applyPosts).toHaveLength(1);
     expect(fixture.readinessRequests).toContain(
@@ -1122,11 +1157,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       const returnTo = new URL(page.url()).searchParams.get("return") ?? "";
       expect(returnTo.startsWith("/new?")).toBe(true);
       await expect(
-        page.getByRole("heading", { name: "Sign in to continue adding" }),
+        page.getByRole("heading", { name: "Sign in to continue installing" }),
       ).toBeVisible();
       await expect(page.locator(".sign-in-return-context")).toContainText(
         "cloudflare-service",
       );
+      await expect(page.locator(".sign-in-return-context")).toContainText("App to install");
 
       await context.addCookies([
         {
@@ -1143,7 +1179,10 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(
         page.getByRole("heading", { level: 1, name: "cloudflare-service" }),
       ).toBeVisible();
-      await page.getByText("Source details", { exact: true }).click();
+      await expect(page.getByTestId("install-provenance")).toContainText(
+        "github.com/example/cloudflare-service",
+      );
+      await page.locator("details.iv-advanced > summary", { hasText: "Source and version" }).click();
       await expect(page.getByLabel("Git URL")).toHaveValue(
         "https://github.com/example/cloudflare-service.git",
       );
@@ -1187,7 +1226,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.locator(".sidebar-nav").getByRole("link", { name: "Home", exact: true }),
     ).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
     expect(fixture.applyPosts).toHaveLength(1);
     expect(fixture.readinessRequests).toHaveLength(0);
@@ -1228,7 +1267,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const fixture = await startReadinessBrowserFixture(page, holdRead, holdRead);
     await fixture.startApply();
     await readsStarted;
-    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
 
     await page.locator('a[href="/settings"]').first().click();
     await expect(page).toHaveURL(/\/settings$/u);
@@ -1247,7 +1286,7 @@ test.describe("Takosumi dashboard browser surface", () => {
 
     await expect(page.locator(".iv-execution")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     expect(fixture.applyPosts).toHaveLength(1);
     await assertNoPageErrors(errors);
   });
@@ -1408,14 +1447,18 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.getByRole("button", { name: "Readiness Service", exact: true }).click();
     await expect(page.getByTestId("install-app-header")).toContainText("Synthetic fixture: input and activation gated.");
     await prepareInlineFixture(page);
-    await expect(page.getByRole("heading", { name: "Cloud connection" })).toBeVisible();
-    await page.getByRole("combobox", { name: "Host / account" }).selectOption("pc_takosumi_cloud");
-    await page.getByRole("button", { name: "Back to settings" }).click();
-    await expect(page.getByRole("heading", { name: /Set up the service/u })).toBeVisible();
+    const sheet = page.getByTestId("install-configuration");
+    await expect(sheet.getByRole("heading", { name: "Cloud connection" })).toBeVisible();
+    // Two candidates: the row asks for a choice and Review waits for it.
+    await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
+    await expect(installSheetActions(page).getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+    await sheet.getByRole("combobox", { name: "Host / account" }).selectOption("pc_takosumi_cloud");
+    await expect(installConnectionRows(page)).toHaveAttribute("data-connection-state", "connected");
+    await expect(sheet.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
     await page.getByLabel("Region").fill("us-west-2");
-    await installInlineFixture(page);
-    await expect(page.getByRole("heading", { name: /Review installation/u })).toBeVisible();
-    const addButton = page.getByRole("button", { name: "Install", exact: true });
+    await reviewInlineFixture(page);
+    await expect(page.getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
+    const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
     await expect(addButton).toBeDisabled();
     expect(install.installPlanBody).toMatchObject({
       variables: { region: "us-west-2" },
@@ -1425,6 +1468,8 @@ test.describe("Takosumi dashboard browser surface", () => {
       })] },
     });
 
+    // Billing is disabled here: provider pricing is explained, never "$0.00".
+    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
@@ -1432,16 +1477,16 @@ test.describe("Takosumi dashboard browser surface", () => {
     await addButton.click();
     await expect.poll(() => applyPosts.length).toBe(1);
     await assertNoPageErrors(errors);
-    await expect(page.getByRole("alert")).toContainText(/readiness state could not be checked/u);
+    await expect(page.getByRole("alert")).toContainText(/readiness could not be checked/u);
     await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "Technical details" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(page.getByText("Waiting for the service launch link to become available.")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Open service" })).toHaveCount(0);
+    await expect(page.getByText("Waiting for the app's launch link to become available.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
     activationAction = "release_activation.succeeded";
-    const openService = page.getByRole("link", { name: "Open service" });
+    const openService = page.getByRole("link", { name: "Open", exact: true });
     await expect(openService).toBeVisible({ timeout: 15_000 });
     await expect(openService).toHaveAttribute("href", "https://service.example.test/fixture");
     expect(requests).toContain(`GET ${mutationOrigin}/api/v1/capsules/cap_provider_destination_e2e/state-versions`);
@@ -1904,7 +1949,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByLabel(/Git URL/u)).toHaveValue(
       "https://github.com/example/service.git",
     );
-    await expect(page.getByLabel(/Ref \(optional\)|ref（省略可）/u)).toHaveValue(
+    await expect(page.getByLabel(/^Version \(tag, branch or commit; optional\)|^版（tag・branch・commit。省略可）/u)).toHaveValue(
       "0123456789abcdef0123456789abcdef01234567",
     );
     await expect(page.getByLabel(/Module folder|モジュールのフォルダ/u)).toHaveValue(
@@ -2045,9 +2090,11 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.goto("/new", { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("heading", {
-        name: /サービスを追加|Add a service/u,
+        level: 1,
+        name: /アプリをインストール|Install an app/u,
       }),
     ).toBeVisible();
+    await expect(page.getByRole("region", { name: /アプリを探す|Find apps/u })).toBeVisible();
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect(page.getByTestId("install-steps")).toHaveCount(0);
     const search = page.locator('input[name="storeSearch"]');
@@ -2081,10 +2128,24 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(page.getByRole("heading", { level: 1 })).toHaveText("Example Service");
       await expect(page.getByRole("heading", { level: 2, name: "Example Service" })).toHaveCount(0);
       await expect(page.getByTestId("install-steps")).toHaveCount(0);
+      // One primary Install plus "choose again"; no second form behind it.
+      await expect(page.getByRole("button", { name: "インストール", exact: true })).toHaveCount(1);
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "選び直す", exact: true })).toBeVisible();
+      await expect(page.getByTestId("install-provenance")).toContainText("github.com/example/service");
       await expect(page.getByTestId("install-configuration")).toHaveCount(0);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+      // A Store listing exposes only its version, folded under Source and version.
+      await expect(page.getByTestId("install-start").locator("input")).toHaveCount(1);
+      await expect(page.getByTestId("install-start").locator("input")).toBeHidden();
       await page.screenshot({ path: test.info().outputPath("selected-375.png") });
+      for (const width of [320, 375, 390, 414, 768, 1440]) {
+        await page.setViewportSize({ width, height: 844 });
+        await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+          `the app page must not overflow at ${width}px`,
+        ).toBeLessThanOrEqual(1);
+      }
     }
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2142,7 +2203,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     phase = "failed";
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "failed");
-    await expect(page.getByRole("heading", { name: /追加の準備は停止|Adding stopped/u })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /インストールの準備は停止|The install stopped/u })).toBeVisible();
     await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
     expect(coordinatorReads).toHaveLength(3);
     expect(mutations).toEqual([]);
@@ -2203,8 +2264,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       "Cloudflare account A",
       "Cloudflare account B",
     ]);
+    await expect(installConnectionRows(page)).toHaveAttribute("data-connection-state", "missing");
+    expect(state.installPlanBody).toBeUndefined();
     await destinationControl.selectOption("pc_cloudflare_account_b_v02");
-    await installInlineFixture(page);
+    await expect(installConnectionRows(page)).toHaveAttribute("data-connection-state", "connected");
+    await reviewInlineFixture(page);
 
     await expect
       .poll(() => state.installPlanBody?.options?.providerBindings)
@@ -2275,25 +2339,34 @@ test.describe("Takosumi dashboard browser surface", () => {
       await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
       await prepareInlineFixture(page);
       await expect.poll(() => posts.length).toBe(1);
-      const add = page.getByRole("button", { name: /^(追加|Add|インストール|Install)$/u });
-      await expect(add).toBeEnabled();
+      // The unknown outcome returns to the sheet with its inputs intact.
+      const review = installSheetActions(page).getByRole("button", { name: "Review", exact: true });
+      await expect(review).toBeEnabled();
       // No automatic mutation retry after an unknown outcome.
       expect(posts).toHaveLength(1);
       expect(state.sourceAutoSyncPatches).toEqual([]);
-      if (edited) await page.locator(".iv-form input").first().fill("edited-service");
-      await add.click();
-      if (edited) await installInlineFixture(page);
+      if (edited) {
+        await page.getByTestId("install-configuration")
+          .getByRole("textbox", { name: /^App name\b/u }).fill("edited-service");
+      }
+      await review.click();
       await expect.poll(() => posts.length).toBe(2);
       await expect(page.locator(".iv-execution")).toBeVisible();
       expect(posts[0]!.key).toBeTruthy();
       if (edited) {
+        // A renamed request is a new request; the immutable Source and
+        // compatibility evidence are reused because the name is not bound to them.
         expect(posts[1]!.key).not.toBe(posts[0]!.key);
-        expect(JSON.parse(posts[1]!.body).capsule.name).toBe("edited-service");
-        expect(state.compatibilityBodies).toHaveLength(2);
+        const [first, retried] = posts.map((post) => JSON.parse(post.body));
+        expect(retried.capsule.name).toBe("edited-service");
+        expect(first.capsule.name).toBe("cloudflare-service");
+        // The Source keeps its registered name; only the Capsule is renamed.
+        expect(retried.source.name).toBe("cloudflare-service");
+        expect(retried.preflight).toEqual(first.preflight);
       } else {
         expect(posts[1]).toEqual(posts[0]);
-        expect(state.compatibilityBodies).toHaveLength(1);
       }
+      expect(state.compatibilityBodies).toHaveLength(1);
     });
   }
 
@@ -2423,9 +2496,13 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
-    await expect(
-      page.getByTestId("install-connections-panel"),
-    ).toBeVisible();
+    const row = installConnectionRows(page);
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute("data-connection-state", "missing");
+    await expect(row.getByRole("button", { name: /^(Connect|接続する)$/u })).toBeEnabled();
+    await expect(page.getByTestId("install-configuration")).toHaveAttribute("data-install-state", "provider-required");
+    await expect(installSheetActions(page).getByRole("button", { name: /^(Connect|接続する)$/u })).toBeVisible();
+    await expect(installSheetActions(page).getByRole("button", { name: /^(Review|内容を確認)$/u })).toHaveCount(0);
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
@@ -2513,8 +2590,18 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
-    const destinations = page.locator(".iv-connection-list select");
-    await expect(destinations).toHaveCount(2);
+    // One row per required provider: the single Cloudflare candidate is
+    // already chosen, while two AWS candidates ask for a choice.
+    const rows = installConnectionRows(page);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute("data-provider-source", "registry.opentofu.org/cloudflare/cloudflare-v02");
+    await expect(rows.nth(0)).toHaveAttribute("data-connection-state", "connected");
+    await expect(rows.nth(0)).toContainText("Cloudflare host");
+    await expect(rows.nth(0).locator("select")).toHaveCount(0);
+    await expect(rows.nth(1)).toHaveAttribute("data-provider-source", "registry.opentofu.org/hashicorp/aws");
+    await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "missing");
+    const awsDestination = rows.nth(1).locator("select");
+    await expect(awsDestination).toHaveValue("");
     const summary = page.getByTestId("install-source-summary");
     await expect(page.getByRole("region", { name: "Configuration and connections" })).toBeVisible();
     await expect(summary.locator("dt").first()).toHaveText("Configuration");
@@ -2524,34 +2611,45 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(packages).toContainText("registry.opentofu.org/hashicorp/random");
     await expect(packages).toContainText("3.6.0");
     await expect(summary.getByTestId("install-required-connection")).toHaveCount(2);
+    await expect(summary.getByTestId("install-required-connection").nth(0)).toContainText("Cloudflare host");
     await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("Not selected");
-    await expect(destinations.nth(0)).toHaveValue("pc_cloudflare_host_v02_mixed");
-    await destinations.nth(1).selectOption("pc_aws_primary_mixed");
+    expect(state.installPlanBody).toBeUndefined();
+    await awsDestination.selectOption("pc_aws_primary_mixed");
+    await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "connected");
     await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("AWS primary");
-    await installInlineFixture(page);
+    await page.screenshot({ path: test.info().outputPath("module-sheet-desktop.png"), fullPage: true });
+    for (const width of [320, 375, 390, 414, 768, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await expect(summary).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        `the install sheet must not overflow at ${width}px`,
+      ).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await reviewInlineFixture(page);
 
     await expect(
-      page.getByRole("heading", { name: /追加前の確認|Review installation/u }),
+      page.getByRole("heading", { name: /このアプリがあなたのクラウドに作るもの|What this app will create in your cloud/u }),
     ).toBeVisible();
-    // A succeeded plan is ready to review; nothing has been added yet.
+    // A succeeded plan is ready to review; nothing has been installed yet.
     const reviewBadge = page.locator(".iv-review-head .tg-badge");
     await expect(reviewBadge).toHaveText(/確認できます|Ready to review/u);
     await expect(reviewBadge).not.toHaveText(/成功|Succeeded/u);
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
-    await expect(summary).toBeVisible();
-    await expect(summary.getByTestId("install-selected-module")).toHaveText("deploy/opentofu/portable");
-    await expect(packages.locator("li")).toHaveCount(3);
-    await expect(summary.getByTestId("install-required-connection").nth(0)).toContainText("Cloudflare host");
-    await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("AWS primary");
+    await expect(page.getByTestId("install-plan-cost")).toBeVisible();
     await expect(page.getByRole("link", { name: /Technical details/u }).first()).toHaveAttribute("href", "/runs/run_provider_plan_e2e");
     expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
     await page.screenshot({ path: test.info().outputPath("module-review-desktop.png"), fullPage: true });
-    for (const width of [320, 375, 414, 768]) {
+    for (const width of [320, 375, 390, 414, 768, 1440]) {
       await page.setViewportSize({ width, height: 1000 });
-      await expect(summary).toBeVisible();
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await expect(page.locator(".iv-execution")).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        `the review must not overflow at ${width}px`,
+      ).toBe(true);
       if (width === 375) {
         await page.screenshot({ path: test.info().outputPath("module-review-mobile.png"), fullPage: true });
       }
@@ -2642,7 +2740,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
-    const choices = page.locator(".iv-connection-choice");
+    const choices = installConnectionRows(page);
     await expect(choices).toHaveCount(3);
     await expect(choices.nth(0)).toHaveAttribute(
       "data-provider-source",
@@ -2660,18 +2758,27 @@ test.describe("Takosumi dashboard browser surface", () => {
       "data-module-local-name",
       "aws-edge",
     );
+    await expect(choices.nth(0)).toHaveAttribute("data-child-alias", "primary");
+    await expect(choices.nth(1)).toHaveAttribute("data-child-alias", "secondary");
+    await expect(choices.nth(2)).toHaveAttribute("data-child-alias", "edge");
     await choices.nth(0).locator("select").selectOption("pc_aws_primary_tuple");
     await choices.nth(1).locator("select").selectOption("pc_aws_secondary_tuple");
     await choices.nth(2).locator("select").selectOption("pc_aws_primary_tuple");
-    await installInlineFixture(page);
+    for (const [index, connection] of ["pc_aws_primary_tuple", "pc_aws_secondary_tuple", "pc_aws_primary_tuple"].entries()) {
+      await expect(choices.nth(index).locator("select")).toHaveValue(connection);
+      await expect(choices.nth(index)).toHaveAttribute("data-connection-state", "connected");
+    }
 
-    const connectionSummary = page.getByTestId("install-required-connection");
+    // The module details name each exact tuple's chosen connection.
+    const connectionSummary = page.getByTestId("install-source-summary").getByTestId("install-required-connection");
     await expect(connectionSummary).toHaveCount(3);
     await expect(connectionSummary.nth(0)).toHaveAttribute("data-child-alias", "primary");
     await expect(connectionSummary.nth(1)).toHaveAttribute("data-child-alias", "secondary");
     await expect(connectionSummary.nth(2)).toHaveAttribute("data-child-alias", "edge");
     await expect(connectionSummary.nth(0)).toContainText("AWS primary");
     await expect(connectionSummary.nth(1)).toContainText("AWS secondary");
+    await expect(connectionSummary.nth(2)).toContainText("AWS primary");
+    await reviewInlineFixture(page);
 
     await expect
       .poll(() => state.installPlanBody?.options?.providerBindings)
@@ -2748,13 +2855,22 @@ test.describe("Takosumi dashboard browser surface", () => {
     ).toHaveCount(0);
     const destination = page.getByLabel(/Host \/ account/u);
     await expect(destination).toBeVisible();
+    await expect(destination).toHaveValue("");
     await expect(destination.locator("option")).toContainText([
       "Cloudflare connection A",
       "Cloudflare connection B",
     ]);
+    // Choosing is enough: no connection form opens on its own, and adding
+    // another account stays a collapsed, explicit choice.
+    const row = installConnectionRows(page);
+    await expect(row).toHaveAttribute("data-connection-state", "missing");
+    await expect(page.locator(".iv-inline-connect")).toHaveCount(0);
+    const another = row.getByRole("button", { name: /Connect another account|別のアカウントで接続/u });
+    await expect(another).toHaveAttribute("aria-expanded", "false");
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
+    expect(state.installPlanBody).toBeUndefined();
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2784,7 +2900,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await prepareInlineFixture(page);
 
     await expect(
-      page.getByRole("heading", { name: /追加前の確認|Review installation/u }),
+      page.getByRole("heading", { name: /このアプリがあなたのクラウドに作るもの|What this app will create in your cloud/u }),
     ).toBeVisible();
     const destination = page.locator(
       '[data-install-provider-destination="auto-selected"]',
@@ -2879,9 +2995,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
-    await expect(
-      page.getByTestId("install-connections-panel"),
-    ).toBeVisible();
+    // The v01 connection is not offered for the v02 provider row.
+    const row = installConnectionRows(page);
+    await expect(row).toHaveAttribute("data-provider-source", "registry.opentofu.org/cloudflare/cloudflare-v02");
+    await expect(row).toHaveAttribute("data-connection-state", "missing");
+    await expect(row.locator("select")).toHaveCount(0);
+    await expect(row).not.toContainText("Cloudflare v01 connection");
+    await expect(row.getByRole("button", { name: /^(Connect|接続する)$/u })).toBeEnabled();
+    expect(state.installPlanBody).toBeUndefined();
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -2928,12 +3049,20 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
-    await expect(
-      page.getByTestId("install-connections-panel"),
-    ).toBeVisible();
-    await expect(
-      page.getByTestId("install-configuration").getByRole("button", { name: /Connect|接続/u }).last(),
-    ).toBeEnabled();
+    const rows = installConnectionRows(page);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute("data-provider-source", "registry.opentofu.org/cloudflare/cloudflare");
+    await expect(rows.nth(0)).toHaveAttribute("data-connection-state", "connected");
+    await expect(rows.nth(1)).toHaveAttribute("data-provider-source", "registry.opentofu.org/hashicorp/aws");
+    await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "missing");
+    const connectAws = rows.nth(1).getByRole("button", { name: /^(Connect|接続する)$/u });
+    await expect(connectAws).toBeEnabled();
+    // Connecting the unsupported provider opens a form for that provider only.
+    await connectAws.click();
+    const form = rows.nth(1).locator(".iv-inline-connect");
+    await expect(form).toBeVisible();
+    await expect(rows.nth(0).locator(".iv-inline-connect")).toHaveCount(0);
+    expect(state.installPlanBody).toBeUndefined();
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -3336,10 +3465,10 @@ test.describe("Takosumi dashboard browser surface", () => {
       sourceSnapshotId: "snap_install_e2e",
     });
     await expect(
-      page.getByRole("heading", { name: /サービスを設定|Set up the service/u }),
+      page.getByTestId("install-configuration").getByRole("heading", { name: /^(設定|Settings)$/u }),
     ).toBeVisible();
     await page.getByLabel(/リージョン|Region/u).fill("edited");
-    await installInlineFixture(page);
+    await reviewInlineFixture(page);
     await expect
       .poll(() =>
         seenMutations.includes("POST /api/v1/workspaces/ws_alpha/install-plans"),
@@ -3359,7 +3488,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ]);
     if (retryMode !== "none") {
-      const next = page.getByTestId("install-configuration").getByRole("button", { name: /インストール|Install/u });
+      const next = installSheetActions(page).getByRole("button", { name: /^(内容を確認|Review)$/u });
       await expect(next).toBeEnabled();
       expect(installPlanBodies).toHaveLength(1);
       if (retryMode === "edited") await page.getByLabel(/リージョン|Region/u).fill("changed-again");
@@ -3852,7 +3981,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "yurucommu",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.locator("summary").filter({ hasText: /取得元の詳細|Source details/u }).click();
+    await page.locator("summary").filter({ hasText: /取得元と版|Source and version/u }).click();
     const modulePath = page.getByRole("textbox", { name: /モジュールのフォルダ|Module folder/u });
     await modulePath.fill("");
     await modulePath.pressSequentially("deploy/selected");
@@ -4552,4 +4681,9 @@ test.describe("public-live bootstrap response local regression", () => {
   });
 });
 
-registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinationFixture(page, [], needsProvider ? [{ source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", credentialRequired: true }] : []));
+registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinationFixture(
+  page,
+  [],
+  needsProvider ? [{ source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", credentialRequired: true }] : [],
+  { resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }, { type: "cloudflare_d1_database", count: 2, allowed: true }] },
+));

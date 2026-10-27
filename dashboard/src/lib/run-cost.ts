@@ -43,7 +43,12 @@ export async function readRunCost(
   read: () => Promise<RunCostInfo>,
 ): Promise<RunCostRead> {
   try {
-    return { status: "loaded", cost: await read() };
+    const cost = await read();
+    // A response without the cost envelope is an unknown cost, not a crash.
+    if (!cost || typeof cost.estimatedUsdMicros !== "number") {
+      return { status: "unavailable" };
+    }
+    return { status: "loaded", cost };
   } catch {
     // Best-effort: a failed read never breaks the deploy UI, but it surfaces
     // as an unknown cost instead of disappearing.

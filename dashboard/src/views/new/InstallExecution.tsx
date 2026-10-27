@@ -541,7 +541,7 @@ export default function InstallExecution(props: Props) {
             </Show>
 
             <Show when={reviewedPlanRunId()}>
-              <section class="iv-sheet-block" data-testid="install-plan-resources">
+              <section data-testid="install-plan-resources">
                 <PlanResourceList resources={current().planResources ?? []} sortByAction />
               </section>
               <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
@@ -753,7 +753,9 @@ export default function InstallExecution(props: Props) {
         }</pre>}</Show>
       </details>
 
-      <Show when={error() && !readinessFailure()}>
+      {/* The keyed value must be the message itself; `error() && …` passed
+          `true` and rendered an empty alert. */}
+      <Show when={!readinessFailure() && error()}>
         {(message) => (
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />
