@@ -1909,7 +1909,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     queueMicrotask(() => {
       if (disposed || !connectionPanelOpen()) return;
       document.getElementById("install-connections-title")?.focus({ preventScroll: true });
-      document.getElementById("install-connections-panel")?.scrollIntoView({ block: "start" });
+      document.getElementById("install-connections-panel")?.scrollIntoView({ block: "start", behavior: "instant" });
     });
   };
 

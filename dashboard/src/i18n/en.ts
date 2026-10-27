@@ -125,7 +125,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.runDetails": "Technical details",
   "installStore.installing": "Installing",
   "installStore.installingHint":
-    "Installation continues in the background. Return here to check its progress.",
+    "Your app is being installed in the background. Return here to check its progress.",
   "installStore.planBlocked": "These changes can't be deployed",
   "installStore.planBlockedHint": "Check the policy or the change details.",
   "installStore.readinessFailed":
@@ -137,7 +137,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Waiting for the service launch link to become available.",
   "installStore.launchNotReady":
     "The service was applied, but its launch link is not ready yet. Retry the check or open the service details.",
-  "installStore.runFailed": "Installation did not finish",
+  "installStore.runFailed": "The app could not be installed",
   "installStore.restartWithLatestSource": "Start again from the latest source",
   "installStore.restartConfirmTitle": "Start again from the latest source?",
   "installStore.restartConfirmMessage":
