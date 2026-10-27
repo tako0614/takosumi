@@ -628,6 +628,10 @@ export interface ControlPlaneOperations {
     Record<
       string,
       {
+        readonly providerSource?: string;
+        readonly browserBindingRequired?: boolean;
+        readonly credentialRecipe?: { readonly id: string; readonly authMode: string };
+        readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
         /**
          * `subject` is the authenticated account subject of the cookie-gated
          * caller. The helper signs it INTO the OAuth state so the cross-site
@@ -639,6 +643,7 @@ export interface ControlPlaneOperations {
           readonly workspaceId: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
+          readonly scopeHints?: ConnectionScopeHints;
           /** Private Workspace admission tuple captured before OAuth awaits. */
           readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }): Promise<ConnectionOAuthStartResponse>;

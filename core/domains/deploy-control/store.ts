@@ -1288,6 +1288,8 @@ function planRunPreparationIdentity(run: PlanRun) {
 export type StoredSecretBlobKind = string;
 
 export interface StoredSecretBlob {
+  /** Private durable single-flight claim. An expired claim requires reconnect, never blind reuse. */
+  readonly renewalLease?: { readonly owner: string; readonly expiresAt: string };
   readonly id: string;
   /** Opaque owner reference; not necessarily a ProviderConnection id. */
   readonly connectionId: string;
@@ -1337,6 +1339,8 @@ export interface CommitConnectionTestResultInput {
   /** null means material was observed absent, not an omitted CAS condition. */
   readonly expectedSecretBlob: StoredSecretBlob | null;
   readonly replacement: ProviderConnection;
+  /** Atomic renewal of the exact observed sealed material, never a new owner. */
+  readonly replacementSecretBlob?: StoredSecretBlob;
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   readonly actorAuthority: ConnectionActorAuthority | null;
 }
@@ -1364,6 +1368,17 @@ export function prepareConnectionTestResult(
 ): CommitConnectionTestResultInput {
   const snapshot = structuredClone(input);
   const { expectedConnection, expectedSecretBlob, replacement } = snapshot;
+  const renewed = snapshot.replacementSecretBlob;
+  if (renewed?.renewalLease && (typeof renewed.renewalLease.owner !== "string" ||
+    !renewed.renewalLease.owner || renewed.renewalLease.owner.length > 100 ||
+    finiteConnectionTimestamp(renewed.renewalLease.expiresAt) === undefined)) {
+    throw new TypeError("Connection renewal lease must have a bounded owner and finite expiry");
+  }
+  if (renewed && (!expectedSecretBlob || renewed.id !== expectedSecretBlob.id ||
+    renewed.connectionId !== expectedConnection.id || renewed.workspaceId !== expectedConnection.workspaceId ||
+    renewed.kind !== expectedSecretBlob.kind || renewed.createdAt !== expectedSecretBlob.createdAt)) {
+    throw new TypeError("Connection renewal cannot replace sealed-material ownership");
+  }
   // Both commands require the same exact management scope, but verification
   // may replace only its own result fields, never identity or configuration.
   prepareConnectionRevocation(snapshot);
@@ -7501,7 +7516,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async commitConnectionTestResult(input: CommitConnectionTestResultInput): Promise<boolean> {
-    const { expectedConnection, expectedSecretBlob, replacement, expectedWorkspaceManagementAuthority, actorAuthority } =
+    const { expectedConnection, expectedSecretBlob, replacement, replacementSecretBlob, expectedWorkspaceManagementAuthority, actorAuthority } =
       prepareConnectionTestResult(input);
     if (expectedConnection.workspaceId !== undefined) {
       assertWorkspaceManagementAdmission(this.#workspaceManagement.get(expectedConnection.workspaceId),
@@ -7514,6 +7529,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       JSON.stringify(blob) !== JSON.stringify(expectedSecretBlob)) return false;
     // No await between the management, row and material predicates and write.
     this.#connections.set(replacement.id, replacement);
+    if (replacementSecretBlob) this.#secretBlobs.set(replacement.id, replacementSecretBlob);
     return true;
   }
 

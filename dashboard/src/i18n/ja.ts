@@ -1037,7 +1037,12 @@ export const ja = {
     "自分の認証情報で外部プロバイダーを接続します。利用できるかどうかは、運営者のポリシーとデプロイ時の承認によって決まります。",
   "conn.providerConnections.title": "接続済みアカウント",
   "conn.expiresAt": "期限: {date}",
+  "conn.oauth.accountSettings": "アカウントの指定（任意）",
+  "conn.oauth.manual": "API トークンで接続する",
   "conn.oauth.connected": "プロバイダー接続を保存しました。",
+  "conn.oauth.connect": "{provider} に接続",
+  "conn.oauth.waiting": "開いた接続先の画面でアクセスを許可してください。アプリの設定はこの画面に残っています。",
+  "conn.oauth.retryHint": "接続が完了しませんでした。認可画面を開けることを確認して再試行するか、下の API トークンを使用してください。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.oauth.error.missingCode":
     "認証の応答が不完全でした。もう一度お試しください。",

@@ -1,3 +1,4 @@
+import { CredentialRecipeRefreshFailure } from "./driver_ports.ts";
 /**
  * In-process credential Vault broker (Phase 1A credential core).
  *
@@ -955,7 +956,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (actorAccountId !== null) requireNonEmpty(actorAccountId, "actorAccountId");
     const originalAuthority = expectedWorkspaceManagementAuthority === undefined
       ? undefined : structuredClone(expectedWorkspaceManagementAuthority);
-    const connection = structuredClone(await this.#requireConnection(connectionId));
+    let connection = structuredClone(await this.#requireConnection(connectionId));
     if (connection.status === "revoked") {
       throw new ConnectionVaultError(
         "failed_precondition",
@@ -981,7 +982,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         detail: `connection ${connectionId} expired at ${connection.expiresAt}`,
       };
     }
-    const observed = await this.#observeProviderMaterialForConnection(connection);
+    const observed = await this.#renewProviderMaterial(connection, authority, actorAuthority);
+    connection = observed.connection;
     const material = observed.material;
     const testSnapshot: ConnectionTestSnapshot = {
       expectedConnection: structuredClone(connection), expectedSecretBlob: observed.secretBlob,
@@ -1247,6 +1249,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const env: Record<string, string> = {};
+    const applyForBudget = options?.runId ? await this.#store.getApplyRun(options.runId) : undefined;
+    const planForBudget = options?.runId ? await this.#store.getPlanRun(applyForBudget?.planRunId ?? options.runId) : undefined;
+    const profileForBudget = planForBudget ? await this.#store.getRunnerProfile(planForBudget.runnerProfileId) : undefined;
+    if (planForBudget && planForBudget.workspaceId !== workspaceId) throw connectionVerificationRaceError();
+    const requiredRunLifetimeSeconds = (profileForBudget?.resourceLimits?.maxRunSeconds ?? 900) + 120;
+    const minimumLifetimeSeconds = Math.max(1800, requiredRunLifetimeSeconds);
     const files: MintedFileInternal[] = [];
     const evidence: ProviderCredentialMintEvidence[] = [];
     for (const entry of entries) {
@@ -1346,7 +1354,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
               connection.id,
             )
           : undefined,
+        minimumLifetimeSeconds,
       );
+      if (minted.evidence.expiresAt && this.#credentialDriver(connection)?.refresh) {
+        if (Date.parse(minted.evidence.expiresAt) < this.#now().getTime() + requiredRunLifetimeSeconds * 1000) {
+          throw new ConnectionVaultError("failed_precondition", "Provider token cannot cover this RunnerProfile execution budget",
+            undefined, "provider_credential_lifetime_insufficient");
+        }
+      }
       evidence.push(minted.evidence);
       mergeCredentialEnv(env, minted.values, entry);
       if (minted.files) files.push(...minted.files);
@@ -1675,6 +1690,100 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (!replaced) throw connectionVerificationRaceError();
   }
 
+  /** Renew only the exact opened row/blob, with the original admission fence. */
+  async #renewProviderMaterial(
+    connection: ProviderConnection,
+    authority?: WorkspaceManagementAuthority,
+    actorAuthority: ConnectionActorAuthority | null = null,
+    minimumLifetimeSeconds = 1800,
+    claimRetries = 0,
+  ): Promise<ObservedProviderSecretMaterial & { readonly connection: ProviderConnection }> {
+    const driver = this.#credentialDriver(connection);
+    let observed = await this.#observeProviderMaterialForConnection(connection);
+    if (!driver?.refresh || !driver.refreshRequired?.(observed.material.env, this.#now(), minimumLifetimeSeconds)) return { ...observed, connection };
+    if (this.#operatorProviderConnections.has(connection.id) || !observed.secretBlob) {
+      throw new ConnectionVaultError("failed_precondition", "Release-owned credentials cannot be renewed at runtime");
+    }
+    const capturedAuthority = await this.#captureManagementAuthority(connection.workspaceId, authority);
+    const lease = observed.secretBlob.renewalLease;
+    if (lease) {
+      if (Date.parse(lease.expiresAt) <= this.#now().getTime()) {
+        await this.#verificationFailed({ expectedConnection: connection, expectedSecretBlob: observed.secretBlob,
+          expectedWorkspaceManagementAuthority: capturedAuthority, actorAuthority }, "Provider credential renewal was interrupted");
+        throw new ConnectionVaultError("failed_precondition", "Provider credential renewal was interrupted; reconnect this provider",
+          undefined, "provider_connection_setup_required");
+      }
+      const deadline = Date.now() + 25000;
+      let interval = 100;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, interval));
+        interval = Math.min(1000, interval * 2);
+        const current = await this.#requireConnection(connection.id);
+        if (current.workspaceId !== connection.workspaceId || current.scope !== connection.scope ||
+          current.provider !== connection.provider || JSON.stringify(current.credentialRecipe) !== JSON.stringify(connection.credentialRecipe) ||
+          (connection.status === "verified" && current.status !== "verified")) throw connectionVerificationRaceError();
+        const blob = await this.#store.getSecretBlob(connection.id);
+        if (!blob?.renewalLease) return await this.#renewProviderMaterial(current, capturedAuthority, actorAuthority, minimumLifetimeSeconds, claimRetries);
+      }
+      throw new ConnectionVaultError("failed_precondition", "Provider credentials are being renewed; retry shortly");
+    }
+    const claimedBlob = { ...observed.secretBlob, renewalLease: { owner: crypto.randomUUID(),
+      expiresAt: new Date(this.#now().getTime() + 60000).toISOString() } };
+    const claimed = await this.#store.commitConnectionTestResult({ expectedConnection: connection,
+      expectedSecretBlob: observed.secretBlob, replacement: connection, replacementSecretBlob: claimedBlob,
+      expectedWorkspaceManagementAuthority: capturedAuthority, actorAuthority });
+    if (!claimed) {
+      if (claimRetries >= 1) throw connectionVerificationRaceError();
+      const current = await this.#requireConnection(connection.id);
+      if (current.workspaceId !== connection.workspaceId || current.scope !== connection.scope || current.provider !== connection.provider ||
+        JSON.stringify(current.credentialRecipe) !== JSON.stringify(connection.credentialRecipe) ||
+        (connection.status === "verified" && current.status !== "verified")) throw connectionVerificationRaceError();
+      return await this.#renewProviderMaterial(current, capturedAuthority, actorAuthority, minimumLifetimeSeconds, claimRetries + 1);
+    }
+    const originalBlob = observed.secretBlob;
+    observed = { ...observed, secretBlob: claimedBlob };
+    let values: Readonly<Record<string, string>> | undefined;
+    try {
+      values = await driver.refresh({ connection, values: observed.material.env, minimumLifetimeSeconds,
+        files: observed.material.files, fetch: this.#fetch, now: this.#now,
+        staticEvidence: () => staticCredentialEvidence(connection, this.#now()) });
+    } catch (error) {
+      if (error instanceof CredentialRecipeRefreshFailure && error.retrySafe) {
+        const released = await this.#store.commitConnectionTestResult({ expectedConnection: connection,
+          expectedSecretBlob: claimedBlob, replacement: connection, replacementSecretBlob: originalBlob,
+          expectedWorkspaceManagementAuthority: capturedAuthority, actorAuthority });
+        if (!released) throw connectionVerificationRaceError();
+        throw new ConnectionVaultError("failed_precondition", "Provider token service is temporarily unavailable; retry shortly",
+          undefined, "credential_service_unavailable");
+      }
+      await this.#verificationFailed({ expectedConnection: connection, expectedSecretBlob: claimedBlob,
+        expectedWorkspaceManagementAuthority: capturedAuthority, actorAuthority }, "Provider authorization must be renewed");
+      throw new ConnectionVaultError("failed_precondition", "Provider authorization could not be renewed; reconnect this provider",
+        undefined, "provider_connection_setup_required");
+    }
+    if (!values) {
+      const released = await this.#store.commitConnectionTestResult({ expectedConnection: connection,
+        expectedSecretBlob: claimedBlob, replacement: connection, replacementSecretBlob: originalBlob,
+        expectedWorkspaceManagementAuthority: capturedAuthority, actorAuthority });
+      if (!released) throw connectionVerificationRaceError();
+      return { ...observed, secretBlob: originalBlob, connection };
+    }
+    const partition = secretPartitionForConnection(connection);
+    const sealed = await this.#crypto.seal(JSON.stringify({ env: values, files: observed.material.files }),
+      partition, connectionEnvelopeAad(connection, 2));
+    const replacementSecretBlob = { ...makeStoredSecretBlob({ connectionId: connection.id,
+      workspaceId: connection.workspaceId, provider: connection.provider, sealed,
+      secretPartition: partition, createdAt: originalBlob.createdAt, crypto: this.#crypto }),
+      id: originalBlob.id, rotatedAt: this.#now().toISOString() };
+    const replacement = { ...connection, updatedAt: this.#now().toISOString() };
+    const replaced = await this.#store.commitConnectionTestResult({ expectedConnection: connection,
+      expectedSecretBlob: observed.secretBlob, replacement, replacementSecretBlob,
+      expectedWorkspaceManagementAuthority: capturedAuthority, actorAuthority });
+    if (!replaced) throw connectionVerificationRaceError();
+    return { connection: replacement, secretBlob: replacementSecretBlob,
+      material: { env: values, files: observed.material.files } };
+  }
+
   async #observeStoredProviderMaterial(connection: ProviderConnection): Promise<ObservedProviderSecretMaterial> {
     // Keep the exact sealed bytes BEFORE crypto/driver awaits. A fresh read at
     // commit would attach old verification evidence to newly rotated material.
@@ -1786,6 +1895,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     run?: CredentialRecipeDriverRunContext,
     runCredentialSettings?: CapsuleProviderBindingMintEntry["runCredentialSettings"],
     issuanceAttemptRef?: `sha256:${string}`,
+    minimumLifetimeSeconds = 1800,
   ): Promise<MintedProviderValues> {
     if (connectionIsExpired(connection, this.#now())) {
       await this.#markConnectionExpired(connection);
@@ -1794,7 +1904,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `connection ${connection.id} expired at ${connection.expiresAt}`,
       );
     }
-    const material = await this.#providerMaterialForConnection(connection);
+    const observed = await this.#renewProviderMaterial(connection, undefined, null, minimumLifetimeSeconds);
+    connection = observed.connection;
+    const material = observed.material;
     const staticEvidence = () =>
       staticCredentialEvidence(connection, this.#now());
     const driver = this.#credentialDriver(connection);

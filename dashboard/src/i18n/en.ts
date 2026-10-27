@@ -1033,7 +1033,12 @@ export const en: Record<keyof typeof ja, string> = {
     "Connect an external provider with your own credentials. Whether it can be used depends on your operator's policy and on approval at deploy time.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.expiresAt": "Expires: {date}",
+  "conn.oauth.accountSettings": "Account settings (optional)",
+  "conn.oauth.manual": "Use an API token instead",
   "conn.oauth.connected": "Provider connection saved.",
+  "conn.oauth.connect": "Connect {provider}",
+  "conn.oauth.waiting": "Authorize access in the provider window. Your app settings stay here.",
+  "conn.oauth.retryHint": "Connection was not completed. Allow the authorization window and try again, or use an API token below.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.oauth.error.missingCode":
     "The authorization response was incomplete. Please try again.",

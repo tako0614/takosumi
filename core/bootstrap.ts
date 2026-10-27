@@ -933,11 +933,16 @@ export interface TakosumiOperations {
     Record<
       string,
       {
+        readonly providerSource?: string;
+        readonly credentialRecipe?: { readonly id: string; readonly authMode: string };
+        readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
+        readonly browserBindingRequired?: boolean;
         start(input: {
           readonly subject: string;
           readonly workspaceId: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
+          readonly scopeHints?: import("takosumi-contract/connections").ConnectionScopeHints;
           /** Private Workspace admission tuple captured before OAuth awaits. */
           readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }): Promise<ConnectionOAuthStartResponse>;
@@ -2073,6 +2078,10 @@ export async function createTakosumiService(
             Object.entries(connectionOAuthHelpers).map(([helperId, helper]) => [
               helperId,
               {
+                ...(helper.providerSource ? { providerSource: helper.providerSource } : {}),
+                ...(helper.browserBindingRequired ? { browserBindingRequired: true } : {}),
+                ...(helper.credentialRecipe ? { credentialRecipe: helper.credentialRecipe } : {}),
+                ...(helper.setupFields ? { setupFields: helper.setupFields } : {}),
                 start: (input) =>
                   helper.start({
                     helperId,
@@ -2085,6 +2094,7 @@ export async function createTakosumiService(
                       // Sign the authenticated subject INTO the OAuth state so the
                       // cross-site callback can authorize without a session cookie.
                       subject: input.subject,
+                      ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
                       ...(input.displayName
                         ? { displayName: input.displayName }
                         : {}),

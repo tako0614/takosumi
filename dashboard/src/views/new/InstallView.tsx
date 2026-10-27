@@ -680,7 +680,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     if (!entry) return [];
     return entry.inputs.filter(
       (field) =>
-        !storeInputIsDerived(field) && storeInputIsActive(entry, field),
+        storeInputIsActive(entry, field),
     );
   };
 
@@ -2482,12 +2482,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             )}
           </Show>
           <div class="iv-fields">
-            <For each={visibleSetupFields().filter((field) => field.required)}>{renderSetupField}</For>
+            <For each={visibleSetupFields().filter((field) => field.required && !storeInputIsDerived(field))}>{renderSetupField}</For>
           </div>
           <details class="iv-advanced">
             <summary>{t("installStore.advancedSettings")}</summary>
-            <FormField label={t("installStore.name")} required><Input value={name()} readOnly /></FormField>
-            <For each={visibleSetupFields().filter((field) => !field.required)}>{renderSetupField}</For>
+            <For each={visibleSetupFields().filter((field) => !field.required || storeInputIsDerived(field))}>{renderSetupField}</For>
             {selectedModuleDetails()}
           </details>
           <Show when={setupError()}>{(message) => <p class="iv-muted" role="status">{message()}</p>}</Show>

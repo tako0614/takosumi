@@ -40,6 +40,7 @@ import {
   CLOUDFLARE_ACCOUNT_WORKERS_SUBDOMAIN_VERIFIER_ID,
 } from "./cloudflare/credentials.ts";
 import { cloudflareProviderSettings } from "./cloudflare/settings.ts";
+import { cloudflareOAuthExpiresAt, cloudflareOAuthRefreshRequired, refreshCloudflareOAuthValues } from "./cloudflare/oauth.ts";
 import { buildAwsAssumeRoleConnection } from "./aws/setup.ts";
 import {
   buildGitHttpsTokenConnection,
@@ -272,6 +273,37 @@ const cloudflareDriver: CredentialRecipeRuntimeDriver = {
   },
 };
 
+const cloudflareOAuthDriver: CredentialRecipeRuntimeDriver = {
+  ...cloudflareDriver,
+  evidenceIssuer: "cloudflare_oauth",
+  refresh: refreshCloudflareOAuthValues,
+  refreshRequired: cloudflareOAuthRefreshRequired,
+  async verify(input) {
+    if (input.values.CLOUDFLARE_ACCOUNT_ID || cloudflareProviderSettings(input.connection.scopeHints).accountId) {
+      return await cloudflareDriver.verify!(input);
+    }
+    // OAuth consent determines the available accounts. Never silently select
+    // the first account when the token can access several.
+    const response = await input.fetch("https://api.cloudflare.com/client/v4/accounts?per_page=2", {
+      headers: { authorization: `Bearer ${input.values.CLOUDFLARE_API_TOKEN}` }, redirect: "error",
+    });
+    const body: unknown = await response.json().catch(() => null);
+    const accounts = body && typeof body === "object" && "result" in body && Array.isArray(body.result) ? body.result : [];
+    if (!response.ok || accounts.length !== 1 || typeof accounts[0]?.id !== "string") {
+      return { ok: false, detail: "Select one Cloudflare account during authorization, or provide its account ID before connecting" };
+    }
+    return await cloudflareDriver.verify!({ ...input, values: { ...input.values, CLOUDFLARE_ACCOUNT_ID: accounts[0].id } });
+  },
+  async mint(input) {
+    if (!input.values.CLOUDFLARE_OAUTH_SESSION && !input.connection.credentialRecipe?.preRunAction) {
+      return await cloudflareDriver.mint!(input);
+    }
+    return { env: { CLOUDFLARE_API_TOKEN: input.values.CLOUDFLARE_API_TOKEN! },
+      evidence: { ...input.staticEvidence(), issuer: "cloudflare_oauth",
+        ...(cloudflareOAuthExpiresAt(input.values) ? { expiresAt: cloudflareOAuthExpiresAt(input.values)! } : {}) } };
+  },
+};
+
 const awsAssumeRoleDriver: CredentialRecipeRuntimeDriver = {
   evidenceIssuer: "aws_sts_assume_role",
   async verify({ connection, values, fetch, now }) {
@@ -378,7 +410,7 @@ export const REFERENCE_CREDENTIAL_RECIPE_DRIVERS: CredentialRecipeDriverRegistry
     [credentialRecipeDriverKey({ id: "cloudflare", authMode: "api_token" })]:
       cloudflareDriver,
     [credentialRecipeDriverKey({ id: "cloudflare", authMode: "oauth" })]:
-      cloudflareDriver,
+      cloudflareOAuthDriver,
     [credentialRecipeDriverKey({ id: "aws", authMode: "assume_role" })]:
       awsAssumeRoleDriver,
     [credentialRecipeDriverKey({ id: "generic-env", authMode: "env" })]:
@@ -388,6 +420,16 @@ export const REFERENCE_CREDENTIAL_RECIPE_DRIVERS: CredentialRecipeDriverRegistry
       authMode: "service_account_json",
     })]: googleServiceAccountDriver,
   };
+
+/** Current operator credentials remain host-owned and rotate without tenant rewrites. */
+export function referenceCredentialDriversFromEnv(env: Readonly<Record<string, string | undefined>>): CredentialRecipeDriverRegistry {
+  return { ...REFERENCE_CREDENTIAL_RECIPE_DRIVERS,
+    "cloudflare/oauth": { ...cloudflareOAuthDriver, refresh: (input) => refreshCloudflareOAuthValues(input, {
+      clientId: env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_ID,
+      clientSecret: env.TAKOSUMI_CLOUDFLARE_OAUTH_CLIENT_SECRET,
+      tokenUrl: env.TAKOSUMI_CLOUDFLARE_OAUTH_TOKEN_URL,
+    }) } };
+}
 
 /**
  * Projects a candidate recipe catalog into the modes this host can honestly

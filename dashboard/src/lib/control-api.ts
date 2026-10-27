@@ -4363,6 +4363,7 @@ export async function startConnectionOAuth(input: {
   readonly helperId: string;
   readonly workspaceId: string;
   readonly displayName?: string;
+  readonly scopeHints?: ConnectionScopeHints;
 }): Promise<ConnectionOAuthStart> {
   return await controlFetch<ConnectionOAuthStart>(
     `${BASE}/connections/oauth/${encodeURIComponent(input.helperId)}/start`,
@@ -4370,6 +4371,7 @@ export async function startConnectionOAuth(input: {
       method: "POST",
       body: {
         workspaceId: input.workspaceId,
+        ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
       },
     },
@@ -4389,10 +4391,25 @@ export function isOAuthUnavailable(error: unknown): boolean {
 export async function listCredentialRecipes(): Promise<
   readonly CredentialRecipe[]
 > {
+  return (await connectionSetupCatalog()).recipes;
+}
+
+export interface ConnectionOAuthSetup {
+  readonly id: string;
+  readonly providerSource: string;
+  readonly credentialRecipe: { readonly id: string; readonly authMode: string };
+  readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
+}
+
+export async function connectionSetupCatalog(): Promise<{
+  readonly recipes: readonly CredentialRecipe[];
+  readonly oauthHelpers: readonly ConnectionOAuthSetup[];
+}> {
   const body = await controlFetch<{
     recipes?: readonly CredentialRecipe[];
+    oauthHelpers?: readonly ConnectionOAuthSetup[];
   }>(`${BASE}/credential-recipes`);
-  return body.recipes ?? [];
+  return { recipes: body.recipes ?? [], oauthHelpers: body.oauthHelpers ?? [] };
 }
 
 // --- OutputShares ----------------------------------------------------------

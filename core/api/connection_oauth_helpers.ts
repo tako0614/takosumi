@@ -74,6 +74,10 @@ function createOAuthHelperFromConfig(
   fetchImpl: typeof fetch,
 ): ConnectionOAuthHelper {
   return {
+    providerSource: config.providerSource,
+    ...(config.browserBindingRequired ? { browserBindingRequired: true } : {}),
+    credentialRecipe: config.credentialRecipe,
+    ...(config.setupFields ? { setupFields: config.setupFields } : {}),
     start: async (input) => startOAuth(config, input),
     complete: async (input) => completeOAuth(config, input, fetchImpl),
   };
@@ -123,6 +127,13 @@ async function startOAuth(
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
+  if (config.pkce) {
+    const verifier = await hmac(`pkce:${state}`, config.stateSecret);
+    url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("code_challenge", base64UrlEncode(new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+    )));
+  }
   if (config.scopes.length > 0) {
     url.searchParams.set("scope", config.scopes.join(" "));
   }
@@ -160,8 +171,9 @@ async function completeOAuth(
     input.code,
     redirectUri,
     fetchImpl,
+    input.state,
   );
-  const values = valuesFromTokenResponse(config, tokenResponse);
+  const values = valuesFromTokenResponse(config, tokenResponse, state.body.scopeHints);
   if (state.expectedWorkspaceManagementAuthority !== undefined) {
     try {
       assertWorkspaceManagementAuthorityInput(
@@ -205,6 +217,7 @@ async function exchangeCode(
   code: string,
   redirectUri: string,
   fetchImpl: typeof fetch,
+  state: string,
 ): Promise<Record<string, unknown>> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -213,6 +226,7 @@ async function exchangeCode(
     redirect_uri: redirectUri,
   });
   if (config.clientSecret) body.set("client_secret", config.clientSecret);
+  if (config.pkce) body.set("code_verifier", await hmac(`pkce:${state}`, config.stateSecret));
   const response = await fetchImpl(config.tokenUrl, {
     method: "POST",
     headers: {
@@ -240,6 +254,7 @@ async function exchangeCode(
 function valuesFromTokenResponse(
   config: OAuthProviderConfig,
   tokenResponse: Record<string, unknown>,
+  scopeHints?: ConnectionOAuthStartInput["body"]["scopeHints"],
 ): Readonly<Record<string, string>> {
   let mapped: Readonly<Record<string, string>>;
   try {
@@ -247,6 +262,7 @@ function valuesFromTokenResponse(
       tokenResponse,
       helperId: config.id,
       clientId: config.clientId,
+      ...(scopeHints ? { scopeHints } : {}),
       ...(config.clientSecret ? { clientSecret: config.clientSecret } : {}),
     });
   } catch (error) {

@@ -9075,6 +9075,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       expectedConnection,
       expectedSecretBlob,
       replacement,
+      replacementSecretBlob,
       expectedWorkspaceManagementAuthority,
       actorAuthority,
     } = prepareConnectionTestResult(input);
@@ -9232,6 +9233,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         })
         .where(and(connectionFence, blobFence))
         .returning({ id: pgSchema.connections.id });
+      if (updated.length === 1 && replacementSecretBlob) {
+        await db.update(pgSchema.secretBlobs).set({
+          ciphertext: replacementSecretBlob.ciphertext, encryptedDek: replacementSecretBlob.encryptedDek,
+          nonce: replacementSecretBlob.nonce, aad: replacementSecretBlob.aad,
+          keyVersion: replacementSecretBlob.keyVersion, rotatedAt: replacementSecretBlob.rotatedAt ?? null,
+          blobJson: replacementSecretBlob,
+        }).where(eq(pgSchema.secretBlobs.connectionId, expectedConnection.id));
+      }
       return updated.length === 1;
     });
   }
