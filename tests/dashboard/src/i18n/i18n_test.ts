@@ -111,10 +111,33 @@ describe("i18n dictionaries", () => {
   });
 
   test("the install actions consistently use the user's Install terminology", () => {
+    // TASK-0115: one label per meaning. Install states the intent, Review
+    // makes the Plan, and only "Allow and install" applies it.
     expect(ja["installStore.install"]).toBe("インストール");
-    expect(ja["installStore.add"]).toBe("インストール");
+    expect(ja["installStore.reviewChanges"]).toBe("内容を確認");
+    expect(ja["installStore.allowInstall"]).toBe("許可してインストール");
     expect(ja["installStore.installing"]).toContain("インストール");
     expect(en["installStore.install"]).toBe("Install");
+    expect(en["installStore.reviewChanges"]).toBe("Review");
+    expect(en["installStore.allowInstall"]).toBe("Allow and install");
+  });
+
+  test("the install and app surfaces use the app vocabulary only", () => {
+    // The thing a user installs is an app. Old nouns and verbs (service,
+    // workload, add, deploy) must not come back into the install surface,
+    // its sign-in context, or its recovery copy.
+    const installKeys = (Object.keys(ja) as Array<keyof typeof ja>).filter(
+      (key) => key.startsWith("installStore.") || key.startsWith("auth.install"),
+    );
+    expect(installKeys.length).toBeGreaterThan(50);
+    for (const key of installKeys) {
+      expect({ key, value: ja[key] }).not.toEqual(
+        expect.objectContaining({ value: expect.stringMatching(/サービス|ワークロード|追加|デプロイ/u) }),
+      );
+      expect({ key, value: en[key] }).not.toEqual(
+        expect.objectContaining({ value: expect.stringMatching(/\b(?:services?|workloads?|add|adding|deploy(?:ed|ing)?)\b/iu) }),
+      );
+    }
   });
 
   test("no dictionary key is left behind by removed UI", () => {

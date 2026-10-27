@@ -15,6 +15,14 @@ const source = readFileSync(
   ),
   "utf8",
 );
+// The add flow is the extracted ConnectionCreateForm the tab renders.
+const formSource = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../../../../../dashboard/src/views/workspace/connections/ConnectionCreateForm.tsx",
+  ),
+  "utf8",
+);
 
 describe("ConnectionsTab per-connection test state", () => {
   test("busy and error state are keyed by connection id", () => {
@@ -73,22 +81,60 @@ describe("ConnectionsTab per-connection test state", () => {
 
 describe("ConnectionsTab guided-first add flow", () => {
   test("installed recipes are the default surface; BYOK is the advanced path", () => {
-    expect(source).toContain("providerSetupOptionsFromCredentialRecipes");
-    expect(source).toContain("setProvider(options[0].id)");
-    expect(source).not.toContain("PROVIDERS");
-    expect(source).not.toContain("providerDescriptor");
-    expect(source).not.toContain("tokenHelper");
+    expect(source).toContain("<ConnectionCreateForm");
+    expect(formSource).toContain("providerSetupOptionsFromCredentialRecipes");
+    expect(formSource).toContain("setProvider(options[0].id)");
+    for (const current of [source, formSource]) {
+      expect(current).not.toContain("PROVIDERS");
+      expect(current).not.toContain("providerDescriptor");
+      expect(current).not.toContain("tokenHelper");
+      // The old inverted IA (BYOK-first with a preset-shortcut intro) is gone.
+      expect(current).not.toContain("wc-preset-intro");
+      expect(current).not.toContain('t("conn.presets.body")');
+      expect(current).not.toContain('t("conn.byok.backToByok")');
+    }
     // The quiet advanced entry into the raw env editor.
-    expect(source).toContain("const openByokEditor = ()");
-    expect(source).toContain('t("conn.add.genericEnvOption")');
-    // The old inverted IA (BYOK-first with a preset-shortcut intro) is gone.
-    expect(source).not.toContain("wc-preset-intro");
-    expect(source).not.toContain('t("conn.presets.body")');
-    expect(source).not.toContain('t("conn.byok.backToByok")');
+    expect(formSource).toContain("const openByokEditor = ()");
+    expect(formSource).toContain('t("conn.add.genericEnvOption")');
   });
 
   test("the BYOK panel heading sits at h2 under the page h1", () => {
-    expect(source).toContain('<h2 class="wc-byok-title">');
+    expect(formSource).toContain('<h2 class="wc-byok-title">');
+    expect(formSource).not.toContain("<h4");
     expect(source).not.toContain("<h4");
+  });
+});
+
+describe("ConnectionsTab create-form wiring", () => {
+  test("the tab shares one recipe read and owns post-create state", () => {
+    expect(source).toContain("setupCatalog={credentialRecipes}");
+    expect(source).toContain("initialProviderSource={props.initialProviderSource}");
+    expect(source).toContain("onCreated={afterConnectionCreated}");
+    expect(source).toContain("verifyConnection={verifyCreatedConnection}");
+    // The first test still runs through the tab's per-connection runTest,
+    // even when the form closed itself in onCreated; only unmount skips it.
+    expect(source).toMatch(
+      /const verifyCreatedConnection = async \(id: string\) => \{\s*if \(!disposed\) await runTest\(id\);\s*\};/,
+    );
+    // The form never gates the callbacks on its own open/mounted state.
+    const saved = formSource.slice(
+      formSource.indexOf("const connectionSaved = async"),
+      formSource.indexOf("const connectOAuth = async"),
+    );
+    expect(saved).toContain("await props.onCreated(connection);");
+    expect(saved).toContain("await props.verifyConnection(connection.id);");
+    expect(saved).not.toContain("disposed");
+  });
+
+  test("typed-credential paths verify; the OAuth path arrives checked", () => {
+    expect(formSource.match(/await connectionSaved\(connection, true\);/g)).toHaveLength(2);
+    expect(formSource).toContain("await connectionSaved(connection, false);");
+    expect(formSource).toContain("connectProviderWithPopup");
+    expect(source).not.toContain("connectProviderWithPopup");
+  });
+
+  test("the OAuth callback relay stays on the Connections route", () => {
+    expect(source).toContain("takosumi.oauth.${flow}");
+    expect(formSource).not.toContain("connection_flow");
   });
 });

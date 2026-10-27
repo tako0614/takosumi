@@ -5,12 +5,12 @@
  * wording in the active locale. Unknown operations render as neutral copy in
  * primary UI; raw backend values belong in folded support/debug details.
  *
- * Vocabulary contract (see i18n/ja.ts): the user-facing noun for a Capsule is
- * サービス / service on the add-flow (/new), service detail, store, runs, and
- * workspace surfaces; the home launcher and the install celebration call the
- * same thing アプリ / app. Never mix the two nouns within one panel. Verbs:
- * 追加 / 変更を確認 / デプロイ / デプロイ済み (Add / Review changes / Deploy /
- * Deployed).
+ * Vocabulary contract (see i18n/ja.ts, TASK-0115): the user-facing noun for a
+ * Capsule is アプリ / app, from the store through install to app management;
+ * a launchable Interface is a 画面 / screen. Verbs: インストール / 内容を確認 /
+ * 許可してインストール / インストール済み (Install / Review / Allow and
+ * install / Installed). Surfaces not yet migrated still say サービス /
+ * ワークロード / デプロイ; never mix old and new nouns within one panel.
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { Tone } from "../components/ui/Badge.tsx";

@@ -88,15 +88,15 @@ describe("SignInView disabled OAuth guidance", () => {
       '{pendingInstall()?.label ?? t("auth.installContextTitle")}',
     );
     expect(signInViewSource).not.toContain("ctx.sourceLabel");
-    expect(en["auth.installContextAria"].toLowerCase()).toContain("service");
+    expect(en["auth.installContextAria"].toLowerCase()).toContain("app");
     expect(en["auth.installContextRootPath"].toLowerCase()).not.toContain(
       "module",
     );
-    expect(ja["auth.installContextAria"]).toContain("サービス");
+    expect(ja["auth.installContextAria"]).toContain("アプリ");
     expect(ja["auth.installContextRootPath"]).not.toContain("module");
   });
 
-  test("says what signing in is for and that it does not add a pending app", () => {
+  test("says what signing in is for and that it does not install a pending app", () => {
     expect(signInViewSource).toContain(
       'pendingInstall() ? t("auth.installSignInTitle") : t("auth.signIn")',
     );
@@ -105,8 +105,8 @@ describe("SignInView disabled OAuth guidance", () => {
     );
     expect(en["auth.installSignInSub"]).toContain("{name}");
     expect(ja["auth.installSignInSub"]).toContain("{name}");
-    expect(en["auth.installSignInSub"]).toContain("does not add the service");
-    expect(ja["auth.installSignInSub"]).toContain("まだ追加はされません");
+    expect(en["auth.installSignInSub"]).toContain("does not install it yet");
+    expect(ja["auth.installSignInSub"]).toContain("サインインしただけではインストールされません");
   });
 
   test("renders generic provider descriptors returned by discovery", () => {

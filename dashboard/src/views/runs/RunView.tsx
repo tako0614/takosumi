@@ -58,12 +58,11 @@ import {
   type ProviderResolution,
   type Run,
   type RunAuditEvent,
-  type RunCostInfo,
   type RunDiagnostic,
   type RunLogs,
-  type RunPlanResource,
 } from "../../lib/control-api.ts";
-import { hasPlatformExtensionCapability } from "../../lib/runtime-capabilities.ts";
+import { readRunCost, runCostDisplayState } from "../../lib/run-cost.ts";
+import { isActionablePlanResource } from "../../lib/run-plan-resources.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import {
@@ -122,7 +121,6 @@ import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
   formatEpochDateTime,
-  locale,
   setDocumentTitle,
   t,
 } from "../../i18n/index.ts";
@@ -139,6 +137,8 @@ import {
   StatusBadge,
   type Tone,
 } from "../../components/ui/index.ts";
+import CostSummary from "../../components/run/CostSummary.tsx";
+import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import {
   createLastGoodValue,
@@ -154,19 +154,6 @@ const SIBLING_RUNS_LIMIT = 200;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
-}
-
-function formatUsdMicros(value: number): string {
-  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: value % 10_000 === 0 ? 2 : 6,
-  }).format(value / 1_000_000);
-}
-
-function costEstimatedUsdMicros(cost: RunCostInfo): number {
-  return cost.estimatedUsdMicros;
 }
 
 function isRequestTimeout(error: unknown): boolean {
@@ -194,60 +181,6 @@ function latestApplyRunForPlan(
     if (candidate.capsuleId !== planRun.capsuleId) return false;
     return candidate.planRunId === planRun.id;
   });
-}
-
-function hasCostToShow(cost: RunCostInfo): boolean {
-  return (
-    cost.blocked ||
-    cost.ratingStatus === "unrated" ||
-    costEstimatedUsdMicros(cost) > 0 ||
-    cost.reasons.length > 0
-  );
-}
-
-/** Pre-apply cost / shortfall panel — backend-computed values only. */
-function CostNotice(props: { readonly cost: RunCostInfo }) {
-  const cost = () => props.cost;
-  const commercialBilling = () =>
-    hasPlatformExtensionCapability("billing.commercial.v1");
-  const estimatedUsdMicros = () => costEstimatedUsdMicros(cost());
-  return (
-    <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
-      <Show when={cost().ratingStatus === "unrated"}>
-        <p class="wa-cost-line">{t("run.cost.unrated")}</p>
-      </Show>
-      <Show when={estimatedUsdMicros() > 0}>
-        <p class="wa-cost-line">
-          {t("run.cost.required", {
-            n: formatUsdMicros(estimatedUsdMicros()),
-          })}
-        </p>
-      </Show>
-      <Show when={cost().blocked}>
-        <p class="wa-error">{t("run.cost.capacityBlocked")}</p>
-        <Show when={cost().reasons.length > 0}>
-          <ul class="wa-cost-reasons">
-            <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
-          </ul>
-        </Show>
-        <Show
-          when={commercialBilling()}
-          fallback={
-            <>
-              <p class="muted">{t("run.cost.operatorHelp")}</p>
-              <Button variant="secondary" size="sm" href="/settings/billing">
-                {t("run.cost.quotaCta")}
-              </Button>
-            </>
-          }
-        >
-          <Button variant="secondary" size="sm" href="/settings/billing">
-            {t("run.cost.billingCta")}
-          </Button>
-        </Show>
-      </Show>
-    </div>
-  );
 }
 
 function diagnosticDisplayText(value: string | undefined): string | undefined {
@@ -566,131 +499,6 @@ function ProviderResolutionTable(props: {
   );
 }
 
-const PLAN_RESOURCE_REVIEW_LIMIT = 25;
-
-function isActionablePlanResource(resource: RunPlanResource): boolean {
-  return resource.actions.some((action) => action !== "no-op");
-}
-
-function planResourceTone(resource: RunPlanResource): Tone {
-  if (resource.actions.includes("delete")) return "danger";
-  if (
-    resource.actions.includes("create") &&
-    resource.actions.includes("delete")
-  )
-    return "danger";
-  if (resource.actions.includes("update")) return "warn";
-  if (resource.actions.includes("create")) return "ok";
-  return "muted";
-}
-
-function planResourceActionLabel(resource: RunPlanResource): string {
-  const actions = resource.actions;
-  if (actions.includes("delete") && actions.includes("create")) {
-    return t("run.resources.actionReplace");
-  }
-  if (actions.includes("delete")) return t("run.resources.actionDelete");
-  if (actions.includes("update")) return t("run.resources.actionUpdate");
-  if (actions.includes("create")) return t("run.resources.actionCreate");
-  return actions.join(" / ") || t("common.unknown");
-}
-
-function planResourceScopeLabel(
-  scope: RunPlanResource["scope"] | undefined,
-): string | undefined {
-  if (!scope) return undefined;
-  const parts = Object.entries(scope.facts)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([dimension, value]) => `${dimension}: ${String(value)}`);
-  return parts.length > 0 ? parts.join(" / ") : undefined;
-}
-
-function planResourceDisplayLabel(resource: RunPlanResource): string {
-  const tail = resource.type.trim().split(".").at(-1) ?? resource.type;
-  const words = tail
-    .split("_")
-    .map((word) => word.trim())
-    .filter(Boolean);
-  if (words.length === 0) return resource.type || resource.address;
-  return words
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
-function PlanResourceReview(props: {
-  readonly resources: readonly RunPlanResource[];
-}) {
-  const actionable = () => props.resources.filter(isActionablePlanResource);
-  const [expanded, setExpanded] = createSignal(false);
-  const visible = () =>
-    expanded()
-      ? actionable()
-      : actionable().slice(0, PLAN_RESOURCE_REVIEW_LIMIT);
-  const hiddenCount = () =>
-    expanded()
-      ? 0
-      : Math.max(0, actionable().length - PLAN_RESOURCE_REVIEW_LIMIT);
-  return (
-    <Show when={actionable().length > 0}>
-      <div class="wa-plan-resources">
-        <div class="wa-plan-resources-head">
-          <div>
-            <p class="wa-section-kicker">{t("run.resources.kicker")}</p>
-            {/* h2, not h3: the page h1 is the only heading above this one. */}
-            <h2>{t("run.resources.title")}</h2>
-          </div>
-          <Badge tone="muted">
-            {t("run.resources.count", { n: actionable().length })}
-          </Badge>
-        </div>
-        <div class="wa-plan-resource-list">
-          <For each={visible()}>
-            {(resource) => (
-              <div class="wa-plan-resource-row">
-                <Badge tone={planResourceTone(resource)}>
-                  {planResourceActionLabel(resource)}
-                </Badge>
-                <div class="wa-plan-resource-main">
-                  <strong>{planResourceDisplayLabel(resource)}</strong>
-                  <details class="wb-inline-details">
-                    <summary>{t("run.resources.identifiers")}</summary>
-                    <p>
-                      <span class="muted">{t("run.resources.address")}</span>{" "}
-                      <code>{resource.address}</code>
-                    </p>
-                    <p>
-                      <span class="muted">{t("run.resources.type")}</span>{" "}
-                      <code>{resource.type}</code>
-                    </p>
-                    <Show when={planResourceScopeLabel(resource.scope)}>
-                      {(scope) => (
-                        <p class="wa-plan-resource-scope">
-                          <span class="muted">{t("run.resources.scope")}</span>{" "}
-                          {scope()}
-                        </p>
-                      )}
-                    </Show>
-                  </details>
-                </div>
-              </div>
-            )}
-          </For>
-        </div>
-        <Show when={hiddenCount() > 0}>
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            onClick={() => setExpanded(true)}
-          >
-            {t("run.resources.more", { n: hiddenCount() })}
-          </Button>
-        </Show>
-      </div>
-    </Show>
-  );
-}
-
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
@@ -747,14 +555,11 @@ function Inner() {
     if (latest) setLogsSnapshot(latest);
   });
   const logData = (): RunLogs | undefined => logsSnapshot();
-  const [cost] = createResource(runId, async (id) => {
-    try {
-      return await getRunCostInfo(id);
-    } catch {
-      // Best-effort: absent cost info never breaks the deploy UI.
-      return undefined;
-    }
-  });
+  // Best-effort: a failed cost read never breaks the deploy UI, but it is kept
+  // as `unavailable` (shown as an unknown cost), never as "no cost".
+  const [cost] = createResource(runId, (id) =>
+    readRunCost(() => getRunCostInfo(id)),
+  );
   const providerConnectionRequest = createMemo(() => {
     const current = runLatest();
     const referencedConnectionIds = providerConnectionIdsFromResolutions(
@@ -1522,8 +1327,12 @@ function Inner() {
     return r !== undefined && canCancelRun(r);
   };
 
-  const costInfo = () => cost.latest;
-  const costBlocked = () => costInfo()?.blocked === true;
+  // `readRunCost` never rejects, so reading `.latest` cannot throw.
+  const costRead = () => cost.latest;
+  const costBlocked = () => {
+    const read = costRead();
+    return read?.status === "loaded" && read.cost.blocked;
+  };
   const appConnectHref = () =>
     createAppHandoffConnectHref(appHandoff, completedRunLaunchUrl());
 
@@ -1966,15 +1775,17 @@ function Inner() {
                     )}
                   </Show>
 
-                  {/* cost (backend values only) */}
+                  {/* cost (backend values only). A failed read is an explicit
+                      unknown-cost line, never silence; a rated-zero or
+                      billing-disabled cost renders nothing unless blocked. */}
                   <Show
                     when={(() => {
-                      const c = costInfo();
-                      if (!c || !isDeployableRun(r())) return undefined;
-                      return hasCostToShow(c) ? c : undefined;
+                      const read = costRead();
+                      if (!read || !isDeployableRun(r())) return undefined;
+                      return runCostDisplayState(read);
                     })()}
                   >
-                    {(c) => <CostNotice cost={c()} />}
+                    {(state) => <CostSummary state={state()} />}
                   </Show>
 
                   {/* primary action */}
@@ -2307,7 +2118,7 @@ function Inner() {
                 {/* ===== change detail — surfaced by default, not buried ===== */}
                 <Show when={planResources().some(isActionablePlanResource)}>
                   <Card>
-                    <PlanResourceReview resources={planResources()} />
+                    <PlanResourceList resources={planResources()} />
                   </Card>
                 </Show>
 
