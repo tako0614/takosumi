@@ -275,7 +275,8 @@ const cloudflareDriver: CredentialRecipeRuntimeDriver = {
 
 const cloudflareOAuthDriver: CredentialRecipeRuntimeDriver = {
   ...cloudflareDriver,
-  evidenceIssuer: "cloudflare_oauth",
+  // Keep the existing host evidence identity for already-reviewed OAuth rows.
+  evidenceIssuer: cloudflareDriver.evidenceIssuer,
   refresh: refreshCloudflareOAuthValues,
   refreshRequired: cloudflareOAuthRefreshRequired,
   async verify(input) {
@@ -299,7 +300,7 @@ const cloudflareOAuthDriver: CredentialRecipeRuntimeDriver = {
       return await cloudflareDriver.mint!(input);
     }
     return { env: { CLOUDFLARE_API_TOKEN: input.values.CLOUDFLARE_API_TOKEN! },
-      evidence: { ...input.staticEvidence(), issuer: "cloudflare_oauth",
+      evidence: { ...input.staticEvidence(), issuer: cloudflareDriver.evidenceIssuer,
         ...(cloudflareOAuthExpiresAt(input.values) ? { expiresAt: cloudflareOAuthExpiresAt(input.values)! } : {}) } };
   },
 };

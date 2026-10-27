@@ -11,7 +11,7 @@ const account = "0123456789abcdef0123456789abcdef";
 const start = Date.parse("2026-10-27T00:00:00Z");
 const authority = { workspaceId: "ws_oauth", managementState: "active" as const, managementEpoch: 1 };
 
-async function fixture() {
+async function fixture(legacy = false) {
   const store = new InMemoryOpenTofuControlStore();
   await store.putWorkspace({ id: authority.workspaceId, handle: "oauth", displayName: "OAuth", type: "personal",
     ownerUserId: "owner", createdAt: new Date(start).toISOString(), updatedAt: new Date(start).toISOString() });
@@ -45,7 +45,7 @@ async function fixture() {
   });
   const connection = await vault.register({ workspaceId: authority.workspaceId, provider,
     credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" },
-    materialization: "oauth", values: cloudflareOAuthValues({ clientId: "client-id-fixture",
+    materialization: "oauth", values: legacy ? { CLOUDFLARE_API_TOKEN: "legacy-access-fixture" } : cloudflareOAuthValues({ clientId: "client-id-fixture",
       tokenResponse: { access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, now: start }) }, authority, null);
   return { store, vault, connection, advance: (elapsed = 3600_000) => { now += elapsed; },
     refreshes: () => refreshes, failRefresh: (kind: "terminal" | "temporary" = "terminal") => { refreshFailure = kind; }, recover: () => { refreshFailure = undefined; },
@@ -182,3 +182,15 @@ for (const budget of [2800, 7200]) {
     }
   });
 }
+
+
+test("persisted pre-refresh OAuth rows retain their credential evidence protocol", async () => {
+  const f = await fixture(true);
+  const registered = (await f.store.getConnection(f.connection.id))!;
+  const { preRunAction: _preRun, ...recipe } = registered.credentialRecipe!;
+  await f.store.putConnection({ ...registered, credentialRecipe: recipe,
+    status: "verified", verifiedAt: new Date(start).toISOString() });
+  const minted = await f.vault.mint(authority.workspaceId, [provider]);
+  expect(minted.env).toEqual({ CLOUDFLARE_API_TOKEN: "legacy-access-fixture" });
+  expect(f.refreshes()).toBe(0);
+});
