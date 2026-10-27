@@ -181,29 +181,22 @@ describe("single-screen install surface", () => {
     const configure = view.slice(configureStart);
 
     expect(view).toContain('"iv-configure-page": phase() === "configure"');
-    expect(view).toContain("? selectedTitle()");
+    expect(view).toContain('data-testid="install-app-header"');
     expect(configure).not.toContain('class="iv-app-summary"');
     expect(configure.indexOf('label={t("installStore.name")}')).toBeGreaterThan(-1);
-    expect(configure.indexOf('label={t("installStore.name")}')).toBeLessThan(
-      configure.indexOf('summary>{t("installStore.sourceDetails")}'),
-    );
-    expect(view).toContain('phase() !== "configure"');
+    expect(configure).toContain('<Show when={!configurationExpanded()}>');
+    expect(configure).toContain('<Show when={configurationExpanded()}>');
+    expect(view).toContain("configurationExpanded()");
     expect(view).toContain('phase() !== "browse"');
   });
 
-  test("introduces the prefilled source and the steps before anything changes", () => {
+  test("the initial Install expands preparation without creating a Plan", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    const configure = view.slice(view.indexOf('<Show when={phase() === "configure"}>'));
-    const intro = configure.indexOf('class="iv-intro"');
-
-    // The intro only reads the validated prefill; it cannot widen what is accepted.
-    expect(configure).toContain("installReturnContext(\n              installReturnPathFromPrefill({");
-    expect(intro).toBeGreaterThan(-1);
-    expect(intro).toBeLessThan(configure.indexOf('label={t("installStore.name")}'));
-    expect(configure.slice(intro)).toContain('t("installStore.reviewTitle")');
-    expect(en["installStore.configureHint"]).toContain("Nothing is deployed until you press Add");
-    expect(ja["installStore.configureHint"]).toContain("「追加する」を押すまで、デプロイはされません");
-    expect(ja["installStore.introStepReviewBody"]).toContain("作成・変更・削除");
+    expect(view).toContain('when={!configurationExpanded()}');
+    expect(view).toContain('setConfigurationExpanded(true); void prepareInstall();');
+    const preparation = view.slice(view.indexOf("const prepareInstall ="), view.indexOf("const restartFailedInstall ="));
+    expect(preparation).toContain('setPhase("setup")');
+    expect(preparation).not.toContain("await preparePlan(");
   });
 
   test("Add starts preparation before compatibility or providers are known", () => {
@@ -299,7 +292,7 @@ describe("single-screen install surface", () => {
     );
     expect(execution).toContain('current().type === "plan"');
     expect(execution).toContain('t("installStore.restartWithLatestSource")');
-    expect(execution).toContain("await props.onRestart();");
+    expect(execution).toContain("await props.onRestart?.();");
   });
 
   test("workspace and provider discovery stay lazy until an explicit action", () => {
@@ -373,7 +366,7 @@ describe("single-screen install surface", () => {
     expect(view).toContain("setModulePathExplicit(false);");
     expect(view).toContain("setModulePathExplicit(true);");
     expect(view).toContain(
-      "...(modulePathExplicit() ? { path: modulePath() } : {}),",
+      "modulePathHint() &&",
     );
     expect(view).toContain("path: selectedModulePath,");
     expect(view).toContain("modulePath: modulePath().trim(),");
@@ -485,9 +478,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain('t("installStore.sourceBuildWorkingDirectory")');
     expect(view).toContain('t("installStore.sourceBuildOutputs")');
     expect(view).toContain("sourceBuild()");
-    expect(view.indexOf("sourceBuild()")) .toBeLessThan(
-      view.indexOf("await preparePlan(workspace, result, config, rows, undefined)"),
-    );
+    expect(view).toContain('<details class="iv-source-build">');
+    expect(view).not.toContain("await preparePlan(workspace, result, config, rows, undefined)");
     expect(view).not.toContain("sourceBuild.env");
   });
 
@@ -513,14 +505,12 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("disabled={field.secret}");
   });
 
-  test("uses three conceptual steps and no external document chooser", () => {
+  test("keeps app identity with inline states instead of a step wizard", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('data-testid="install-steps"');
-    expect(view).toContain('t("installStore.stepSource")');
-    expect(view).toContain('t("installStore.stepConfigure")');
-    expect(view).toContain('t("installStore.stepReview")');
-    expect(view).not.toContain("entry-confirm");
-    expect(view).not.toContain("entryChoices");
+    expect(view).toContain('data-testid="install-app-header"');
+    expect(view).toContain('data-install-state={uiState()}');
+    expect(view).toContain("<ConnectionsTab");
+    expect(view).not.toContain('data-testid="install-steps"');
     expect(view).not.toContain("parseCapsuleSourceOptions");
   });
 
@@ -535,7 +525,7 @@ describe("single-screen install surface", () => {
     expect(summary).toContain("module.providerPackages");
     expect(summary).toContain("candidatesFor(row.provider)");
     // An aborted/blocked compatibility check must not claim no connection is needed.
-    expect(summary).toContain('phase() === "connections" || phase() === "setup" || phase() === "review"');
+    expect(summary).toContain('phase() === "setup" || phase() === "review"');
     const review = view.slice(view.indexOf('<Show when={phase() === "review" &&'));
     expect(review.indexOf("selectedModuleDetails()")).toBeLessThan(review.indexOf("<InstallExecution"));
     expect(summary).not.toContain("createApplyRun");
@@ -560,9 +550,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain("installConfigRequiresUiSurface");
     expect(view).toContain("UI_SURFACE_READBACK_ATTEMPTS");
     expect(view).toContain("await listAuthorizedUiSurfaces");
-    expect(view.indexOf('setPhase("finishing")')).toBeLessThan(
-      view.indexOf('setPhase("done")'),
-    );
+    const finishing = view.slice(view.indexOf("const finishInstallation ="));
+    expect(finishing.indexOf('setPhase("finishing")')).toBeLessThan(finishing.indexOf('setPhase("done")'));
     expect(view).toContain('t("installStore.launchNotReady")');
     expect(view).toContain('t("common.retry")');
   });

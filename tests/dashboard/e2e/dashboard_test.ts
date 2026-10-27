@@ -1,3 +1,5 @@
+import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
+import { registerInstallDetailCases } from "./install_detail_case.ts";
 import {
   expect,
   request as apiRequest,
@@ -563,6 +565,15 @@ async function stubProviderDestinationFixture(
     if (path === "/api/v1/connections") {
       return route.fulfill({ json: { connections: [] } });
     }
+    if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES } });
+    if (path === "/api/v1/connections" && request.method() === "GET") return route.fulfill({ json: { connections: providerConnections.filter((c) => c.scope === "workspace") } });
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e") return route.fulfill({ json: { capsule: {
+      id: "cap_provider_destination_e2e", workspaceId: "ws_alpha", sourceId,
+      installConfigId: "cfg-default-opentofu-capsule", name: sourceName, slug: sourceName,
+      environment: "production", currentStateGeneration: 1,
+      currentStateVersionId: "sv_provider_apply_e2e", status: "active",
+      createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+    } } });
     if (path === "/api/v1/provider-connections") {
       return route.fulfill({
         json: { providerConnections },
@@ -813,6 +824,7 @@ async function stubProviderDestinationFixture(
             type: "plan",
             status: "succeeded",
             summary: { add: 1, change: 0, destroy: 0 },
+            requiresApproval: true,
             policyStatus: "pass",
             createdBy: "portable-e2e",
             createdAt: "2026-08-01T00:00:00.000Z",
@@ -830,6 +842,31 @@ async function stubProviderDestinationFixture(
     return route.fallback();
   });
   return state;
+}
+
+/** Follow the new visible detail/form actions, without granting consent on reload. */
+async function prepareInlineFixture(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /^(Install|インストール|Add|追加)$/u }).click();
+  await expect.poll(async () =>
+    await page.getByTestId("install-configuration").isVisible() ||
+    await page.getByTestId("install-module-chooser").isVisible() ||
+    await page.locator(".iv-error, .iv-compat-warning").count() > 0,
+  ).toBe(true);
+  const config = page.getByTestId("install-configuration");
+  if (!await config.isVisible()) return;
+  const advanced = config.locator("details.iv-advanced").last();
+  if (await advanced.count() && !await advanced.getAttribute("open")) await advanced.locator("summary").first().click();
+  if (await config.getAttribute("data-install-state") === "provider-required") {
+    await page.locator(".iv-cloud-summary").getByRole("button").click();
+  } else if (await config.getAttribute("data-install-state") === "ready" &&
+    await config.locator(".iv-fields input, .iv-fields select, .iv-fields textarea").count() === 0) {
+    await installInlineFixture(page);
+  }
+}
+async function installInlineFixture(page: Page): Promise<void> {
+  const close = page.getByRole("button", { name: /Back to settings|設定に戻る/u });
+  if (await close.isVisible()) await close.click();
+  await page.getByTestId("install-configuration").getByRole("button", { name: /^(Install|インストール)$/u }).click();
 }
 
 type ReadinessRouteHandler = (route: Route) => Promise<void>;
@@ -907,13 +944,15 @@ async function startReadinessBrowserFixture(
           `&ref=${PORTABLE_SOURCE_COMMIT}&path=.&name=cloudflare-service`,
         { waitUntil: "domcontentloaded" },
       );
-      await page.getByRole("button", { name: "Add", exact: true }).click();
+      await prepareInlineFixture(page);
       await expect(page.locator(".iv-execution")).toBeVisible();
       const installUrl = new URL(page.url());
       const originatingInstallPath = `${installUrl.pathname}${installUrl.search}`;
+      const confirmation = page.getByRole("checkbox", { name: "I reviewed these changes" });
+      if (await confirmation.isVisible()) await confirmation.check();
       await page
         .locator(".iv-execution")
-        .getByRole("button", { name: "Add", exact: true })
+        .getByRole("button", { name: "Install", exact: true })
         .click();
       await expect.poll(() => applyPosts.length).toBe(1);
       return originatingInstallPath;
@@ -985,7 +1024,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           `&ref=${PORTABLE_SOURCE_COMMIT}&path=.&name=cloudflare-service`,
         { waitUntil: "domcontentloaded" },
       );
-      await page.getByRole("button", { name: "Add", exact: true }).click();
+      await prepareInlineFixture(page);
       const readCount = () => page.evaluate(() =>
         (window as typeof window & { __installRunReadProbe?: { requests: number } })
           .__installRunReadProbe?.requests ?? 0);
@@ -1041,7 +1080,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const originatingInstallPath = await fixture.startApply();
 
-    await expect(page.locator(".sign-in-return-context")).toBeVisible();
+    await expect(page.locator(".sign-in-return-context")).toHaveCount(0);
     await expect(page).toHaveURL(/\/sign-in\?return=/u);
     expect(new URL(page.url()).searchParams.get("return")).toBe(
       originatingInstallPath,
@@ -1366,21 +1405,16 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByRole("heading", { name: "Readiness Service" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Noise Service" })).toHaveCount(0);
     await page.getByRole("button", { name: "Readiness Service", exact: true }).click();
-    const details = page.getByRole("dialog", { name: "Readiness Service" });
-    await expect(details.getByText("Synthetic fixture: input and activation gated.")).toBeVisible();
-    await details.locator("details.tcs-advanced summary").click();
-    await expect(details.getByText("https://github.com/example/cloudflare-service")).toBeVisible();
-    await details.getByRole("button", { name: "Add Readiness Service", exact: true }).click();
-
-    await page.getByRole("button", { name: "Add", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Choose a Host / account" })).toBeVisible();
+    await expect(page.getByTestId("install-app-header")).toContainText("Synthetic fixture: input and activation gated.");
+    await prepareInlineFixture(page);
+    await expect(page.getByRole("heading", { name: "Cloud connection" })).toBeVisible();
     await page.getByRole("combobox", { name: "Host / account" }).selectOption("pc_takosumi_cloud");
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Back to settings" }).click();
     await expect(page.getByRole("heading", { name: /Set up the service/u })).toBeVisible();
     await page.getByLabel("Region").fill("us-west-2");
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await expect(page.getByRole("heading", { name: /Review before adding/u })).toBeVisible();
-    const addButton = page.getByRole("button", { name: "Add", exact: true });
+    await installInlineFixture(page);
+    await expect(page.getByRole("heading", { name: /Review installation/u })).toBeVisible();
+    const addButton = page.getByRole("button", { name: "Install", exact: true });
     await expect(addButton).toBeDisabled();
     expect(install.installPlanBody).toMatchObject({
       variables: { region: "us-west-2" },
@@ -2042,11 +2076,12 @@ test.describe("Takosumi dashboard browser surface", () => {
     await manual.locator("summary").click();
     await expect(manual.getByRole("textbox", { name: /Git URL/u })).toBeVisible();
     if (mode === "portable") {
-      await page.getByRole("button", { name: "追加: Example Service", exact: true }).click();
+      await page.getByRole("button", { name: "Example Service", exact: true }).click();
       await expect(page.getByRole("heading", { level: 1 })).toHaveText("Example Service");
       await expect(page.getByRole("heading", { level: 2, name: "Example Service" })).toHaveCount(0);
       await expect(page.getByTestId("install-steps")).toHaveCount(0);
-      await expect(page.getByRole("textbox", { name: /サービス名|Service name/u })).toHaveValue("example-service");
+      await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeVisible();
+      await expect(page.getByTestId("install-configuration")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
       await page.screenshot({ path: test.info().outputPath("selected-375.png") });
     }
@@ -2154,11 +2189,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /Host \/ accountを選択|Choose a Host \/ account/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     const destinationControl = page.getByLabel(/Host \/ account/u);
@@ -2168,7 +2203,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       "Cloudflare account B",
     ]);
     await destinationControl.selectOption("pc_cloudflare_account_b_v02");
-    await page.getByRole("button", { name: /続ける|Continue/u }).click();
+    await installInlineFixture(page);
 
     await expect
       .poll(() => state.installPlanBody?.options?.providerBindings)
@@ -2237,15 +2272,16 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: "cloudflare-service",
       });
       await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: /追加|Add/u }).click();
+      await prepareInlineFixture(page);
       await expect.poll(() => posts.length).toBe(1);
-      const add = page.getByRole("button", { name: /追加|Add/u });
+      const add = page.getByRole("button", { name: /^(追加|Add|インストール|Install)$/u });
       await expect(add).toBeEnabled();
       // No automatic mutation retry after an unknown outcome.
       expect(posts).toHaveLength(1);
       expect(state.sourceAutoSyncPatches).toEqual([]);
       if (edited) await page.locator(".iv-form input").first().fill("edited-service");
       await add.click();
+      if (edited) await installInlineFixture(page);
       await expect.poll(() => posts.length).toBe(2);
       await expect(page.locator(".iv-execution")).toBeVisible();
       expect(posts[0]!.key).toBeTruthy();
@@ -2282,7 +2318,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
     await expect(page.locator(".iv-execution")).toBeVisible();
     await expect.poll(() => patchBodies.length).toBe(1);
     const warning = page.getByTestId("install-source-auto-sync-retry");
@@ -2324,7 +2360,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: "cloudflare-service",
       });
       await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: /追加|Add/u }).click();
+      await prepareInlineFixture(page);
       await expect.poll(() => Boolean(heldPatch)).toBe(true);
       const trigger = workspaceTrigger(page);
       await trigger.click();
@@ -2351,7 +2387,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           } } }
         : { status: 503, json: { error: { code: "unavailable", message: "Stale polling failure" } } });
       await response;
-      await expect(page.getByRole("button", { name: /追加|Add/u })).toBeEnabled();
+      await expect(page.getByRole("button", { name: /^(インストール|Install)$/u })).toBeEnabled();
       await expect(page.getByTestId("install-source-auto-sync-retry")).toHaveCount(0);
       await expect(page.locator(".iv-execution")).toHaveCount(0);
       await expect(page.locator("body")).not.toContainText("Stale polling failure");
@@ -2379,17 +2415,15 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /互換性のあるHost \/ accountが必要|A compatible Host \/ account is needed/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", {
-        name: /新しい接続を追加|Add a new connection/u,
-      }),
+      page.getByTestId("install-connections-panel"),
     ).toBeVisible();
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
@@ -2471,11 +2505,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /Host \/ accountを選択|Choose a Host \/ account/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     const destinations = page.locator(".iv-connection-list select");
@@ -2493,10 +2527,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(destinations.nth(0)).toHaveValue("pc_cloudflare_host_v02_mixed");
     await destinations.nth(1).selectOption("pc_aws_primary_mixed");
     await expect(summary.getByTestId("install-required-connection").nth(1)).toContainText("AWS primary");
-    await page.getByRole("button", { name: /続ける|Continue/u }).click();
+    await installInlineFixture(page);
 
     await expect(
-      page.getByRole("heading", { name: /追加前の確認|Review before adding/u }),
+      page.getByRole("heading", { name: /追加前の確認|Review installation/u }),
     ).toBeVisible();
     // A succeeded plan is ready to review; nothing has been added yet.
     const reviewBadge = page.locator(".iv-review-head .tg-badge");
@@ -2600,11 +2634,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "aws-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /Host \/ accountを選択|Choose a Host \/ account/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     const choices = page.locator(".iv-connection-choice");
@@ -2628,7 +2662,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await choices.nth(0).locator("select").selectOption("pc_aws_primary_tuple");
     await choices.nth(1).locator("select").selectOption("pc_aws_secondary_tuple");
     await choices.nth(2).locator("select").selectOption("pc_aws_primary_tuple");
-    await page.getByRole("button", { name: /続ける|Continue/u }).click();
+    await installInlineFixture(page);
 
     const connectionSummary = page.getByTestId("install-required-connection");
     await expect(connectionSummary).toHaveCount(3);
@@ -2699,11 +2733,11 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /Host \/ accountを選択|Choose a Host \/ account/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     await expect(
@@ -2746,10 +2780,10 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
-      page.getByRole("heading", { name: /追加前の確認|Review before adding/u }),
+      page.getByRole("heading", { name: /追加前の確認|Review installation/u }),
     ).toBeVisible();
     const destination = page.locator(
       '[data-install-provider-destination="auto-selected"]',
@@ -2834,20 +2868,18 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /互換性のあるHost \/ accountが必要|A compatible Host \/ account is needed/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("link", {
-        name: /新しい接続を追加|Add a new connection/u,
-      }),
+      page.getByTestId("install-connections-panel"),
     ).toBeVisible();
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
@@ -2888,21 +2920,19 @@ test.describe("Takosumi dashboard browser surface", () => {
       name: "cloudflare-service",
     });
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
 
     await expect(
       page.getByRole("heading", {
-        name: /互換性のあるHost \/ accountが必要|A compatible Host \/ account is needed/u,
+        name: /クラウド接続|Cloud connection/u,
       }),
     ).toBeVisible();
     await expect(
-      page.getByRole("link", {
-        name: /新しい接続を追加|Add a new connection/u,
-      }),
+      page.getByTestId("install-connections-panel"),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: /続ける|Continue/u }),
-    ).toBeDisabled();
+      page.getByTestId("install-configuration").getByRole("button", { name: /Connect|接続/u }).last(),
+    ).toBeEnabled();
     expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
@@ -3258,7 +3288,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
     await expect(hostingOption).toHaveCount(0);
     expect(prematureConfigReads).toEqual([]);
-    await page.getByRole("button", { name: /追加|Add/u }).last().click();
+    await prepareInlineFixture(page);
     const moduleChooser = page.getByTestId("install-module-chooser");
     // This revision's tracked OpenTofu files expose two root modules, so the
     // chooser is where the destination comes from. A Store listing that
@@ -3308,7 +3338,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       page.getByRole("heading", { name: /サービスを設定|Set up the service/u }),
     ).toBeVisible();
     await page.getByLabel(/リージョン|Region/u).fill("edited");
-    await page.getByRole("button", { name: /続ける|Continue/u }).click();
+    await installInlineFixture(page);
     await expect
       .poll(() =>
         seenMutations.includes("POST /api/v1/workspaces/ws_alpha/install-plans"),
@@ -3328,7 +3358,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ]);
     if (retryMode !== "none") {
-      const next = page.getByRole("button", { name: /続ける|Continue/u });
+      const next = page.getByTestId("install-configuration").getByRole("button", { name: /インストール|Install/u });
       await expect(next).toBeEnabled();
       expect(installPlanBodies).toHaveLength(1);
       if (retryMode === "edited") await page.getByLabel(/リージョン|Region/u).fill("changed-again");
@@ -3826,7 +3856,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await modulePath.fill("");
     await modulePath.pressSequentially("deploy/selected");
     await expect(modulePath).toHaveValue("deploy/selected");
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
     await expect.poll(() => state.compatibilityBodies.length).toBe(1);
     expect(state.compatibilityBodies[0]).toMatchObject({
       modulePath: "deploy/selected",
@@ -3859,7 +3889,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("install-module-chooser")).toHaveCount(0);
 
-    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await prepareInlineFixture(page);
     await expect
       .poll(() => state.sourcePosts.length)
       .toBe(1);
@@ -4520,3 +4550,5 @@ test.describe("public-live bootstrap response local regression", () => {
     }
   });
 });
+
+registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinationFixture(page, [], needsProvider ? [{ source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", credentialRequired: true }] : []));

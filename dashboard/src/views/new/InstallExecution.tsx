@@ -12,6 +12,9 @@ import {
   ControlApiError,
   createApplyRun,
   getRun,
+  getRunLogs,
+  planCapsule,
+  extractRunId,
   listActivity,
   listStateVersions,
   openRunStream,
@@ -27,13 +30,18 @@ import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
 } from "../../lib/capsules-ui.ts";
+import { canAutoInstallRun } from "./install-lifecycle.ts";
 import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
 
 interface Props {
   readonly planRunId: string;
+  readonly initialRunId?: string;
+  readonly installRequested?: boolean;
+  readonly onState?: (state: "installing" | "failed" | "ready") => void;
   readonly capsuleId: string;
   readonly onDone: () => void;
-  readonly onRestart: () => Promise<void>;
+  readonly onRestart?: () => Promise<void>;
+  readonly restartLabel?: string;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -163,22 +171,40 @@ export async function readInstallReadiness(
 }
 
 export default function InstallExecution(props: Props) {
-  const [runId, setRunId] = createSignal(props.planRunId);
-  const [run, { mutate, refetch }] = createResource(runId, getRun);
+  const [runId, setRunId] = createSignal(props.initialRunId ?? props.planRunId);
+  const [run, { mutate, refetch }] = createResource(runId, async (id) => {
+    const value = await getRun(id);
+    if (value.id !== id || value.capsuleId !== props.capsuleId) throw new Error(t("installStore.recoveryUnverified"));
+    return value;
+  });
   // Never `run()` / `run.latest`: both THROW once a load has failed, and the
   // 3s fallback read below means one 5xx mid-install replaced the whole app
   // with the root reload card. A failed refetch keeps the last good run.
   const runLatest = createLastGoodValue(run, (r) => r.id === runId());
   const [applying, setApplying] = createSignal(false);
+  const [applyUnconfirmed, setApplyUnconfirmed] = createSignal(false);
+  const [logsOpen, setLogsOpen] = createSignal(false);
+  const [logs, { refetch: refetchLogs }] = createResource(
+    () => logsOpen() ? runId() : false, async (id) => ({ runId: id, logs: await getRunLogs(id) }),
+  );
+  const logLatest = createLastGoodValue(logs, (value) => value.runId === runId());
+  createEffect(() => {
+    if (!logsOpen()) return;
+    const timer = setInterval(() => { if (!logs.loading) void refetchLogs(); }, 3_000);
+    onCleanup(() => clearInterval(timer));
+  });
   const [approving, setApproving] = createSignal(false);
   const [confirmed, setConfirmed] = createSignal(false);
   const [restarting, setRestarting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [hasSeenApply, setHasSeenApply] = createSignal(false);
+  createEffect(() => { if (runLatest()?.type === "apply") setHasSeenApply(true); });
 
   createEffect(() => {
     const id = runId();
     const close = openRunStream(id, {
       onRun: (next) => {
+        if (next.id !== runId() || next.capsuleId !== props.capsuleId) return;
         mutate(next);
         // A failed read's error outlives `mutate`; re-read so the pushed
         // status shows now rather than at the next fallback read.
@@ -313,7 +339,7 @@ export default function InstallExecution(props: Props) {
   };
 
   const install = async () => {
-    if (!planReady() || (destructive() && !confirmed())) return;
+    if (applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
     setApplying(true);
     setError(null);
     try {
@@ -323,10 +349,41 @@ export default function InstallExecution(props: Props) {
     } catch (cause) {
       // A timeout after POST is indeterminate. Do not retry from this surface;
       // the run detail remains the recovery/audit path.
-      setError(friendlyError(cause, t).message);
+      if (!(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500) {
+        setApplyUnconfirmed(true);
+        setError(t("installStore.applyUnconfirmed"));
+      } else setError(friendlyError(cause, t).message);
     } finally {
       setApplying(false);
     }
+  };
+
+  // The in-memory Install click authorizes only this clean plan. It is never
+  // reconstructed from a URL or storage after reload. Unknown POSTs are held.
+  let autoInstallStarted = false;
+  let observedInitialRun = props.initialRunId ?? props.planRunId;
+  createEffect(() => {
+    const id = props.initialRunId ?? props.planRunId;
+    if (id === observedInitialRun) return;
+    observedInitialRun = id;
+    autoInstallStarted = false;
+    setConfirmed(false); setApplyUnconfirmed(false); setError(null);
+    mutate(undefined); setRunId(id);
+  });
+  createEffect(() => {
+    if (props.installRequested && !autoInstallStarted && canAutoInstallRun(runLatest()) && !destructive()) {
+      autoInstallStarted = true;
+      void install();
+    }
+  });
+  const retryFailedApply = async () => {
+    setRestarting(true); setError(null);
+    try {
+      const id = extractRunId(await planCapsule(props.capsuleId));
+      if (!id) throw new Error(t("installStore.planMissing"));
+      setConfirmed(false); setApplyUnconfirmed(false); mutate(undefined); setRunId(id);
+    } catch (cause) { setError(friendlyError(cause, t).message); }
+    finally { setRestarting(false); }
   };
 
   const retryReadiness = () => {
@@ -338,7 +395,7 @@ export default function InstallExecution(props: Props) {
     setRestarting(true);
     setError(null);
     try {
-      await props.onRestart();
+      await props.onRestart?.();
     } catch (cause) {
       setError(friendlyError(cause, t).message);
     } finally {
@@ -350,6 +407,10 @@ export default function InstallExecution(props: Props) {
     const status = runLatest()?.status;
     return status === "failed" || status === "cancelled" || status === "expired";
   };
+
+  createEffect(() => {
+    props.onState?.(failed() || error() ? "failed" : planReady() ? "ready" : "installing");
+  });
 
   return (
     <section class="iv-execution" aria-labelledby="iv-review-title">
@@ -470,7 +531,7 @@ export default function InstallExecution(props: Props) {
                   variant="primary"
                   size="lg"
                   busy={applying()}
-                  disabled={destructive() && !confirmed()}
+                  disabled={applyUnconfirmed() || (destructive() && !confirmed())}
                   onClick={() => void install()}
                 >
                   {t("installStore.install")}
@@ -582,15 +643,18 @@ export default function InstallExecution(props: Props) {
                 <strong>{t("installStore.runFailed")}</strong>
                 <p>{runFailureHint(current().errorCode)}</p>
                 <div class="iv-action-row">
+                  <Show when={current().type === "apply"}>
+                    <Button type="button" variant="primary" busy={restarting()} onClick={() => void retryFailedApply()}>{t("installStore.retryInstall")}</Button>
+                  </Show>
                   <Show when={current().type === "plan"}>
                     <Button
                       type="button"
                       variant="primary"
                       busy={restarting()}
                       disabled={restarting()}
-                      onClick={() => void restartWithLatestSource()}
+                      onClick={() => void (props.onRestart && !hasSeenApply() ? restartWithLatestSource() : retryFailedApply())}
                     >
-                      {t("installStore.restartWithLatestSource")}
+                      {props.onRestart && !hasSeenApply() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : t("installStore.retryInstall")}
                     </Button>
                   </Show>
                   <Button
@@ -606,6 +670,15 @@ export default function InstallExecution(props: Props) {
           </>
         )}
       </Show>
+
+      <details class="iv-advanced" onToggle={(event) => setLogsOpen(event.currentTarget.open)}>
+        <summary>{t("installStore.logs")}</summary>
+        <Show when={logs.loading && !logLatest()}><Spinner size={16} /></Show>
+        <Show when={logs.error}><p role="alert">{fetchFailedMessage(logs.error, t)}</p></Show>
+        <Show when={!logs.error && logLatest()}>{(value) => <pre class="iv-log-lines" data-testid="install-run-logs">{
+          value().logs.diagnostics.map((d) => `[${d.severity}] ${d.message}${d.detail ? `\n${d.detail}` : ""}`).join("\n") || t("installStore.noLogs")
+        }</pre>}</Show>
+      </details>
 
       <Show when={error() && !readinessFailure()}>
         {(message) => (

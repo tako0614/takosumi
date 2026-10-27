@@ -218,9 +218,7 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain('inst().status === "uninstalled"');
     expect(source).toContain("<Show when={uninstallCancellable(inst())}>");
     // Cancel mirrors the server: before teardown, or blocked before dispatch.
-    expect(source).toMatch(
-      /const uninstallCancellable = \(inst: Capsule\): boolean =>\s*inst\.status === "uninstalled" &&\s*\(inst\.uninstall\?\.phase === "scheduled" \|\|\s*\(inst\.uninstall\?\.phase === "destroying" &&\s*inst\.uninstall\.blockedReason !== undefined\)\);/,
-    );
+    expect(source).toContain('from "../../lib/capsule-uninstall.ts"');
     expect(source).toContain(
       "href={`/workloads/${encodeURIComponent(capsuleId())}/settings#delete`}",
     );
@@ -248,8 +246,8 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain("edge.producerCapsuleId === inst.id");
     expect(deleteFlow).toContain("uninstallDependencyWarning()");
     expect(deleteFlow).toContain("uninstallDependencyCheckStatus()");
-    expect(source).toContain('"app.uninstall.dependencyWarning"');
-    expect(source).toContain('"app.uninstall.dependencyCheckFailed"');
+    expect(source).toContain("capsuleUninstallDependencyWarning(serviceLabel()");
+    expect(source).toContain('uninstallDependencyReadWarning(graph.error ? "failed"');
     expect(en["app.uninstall.dependencyWarning"]).toContain("{services}");
     expect(ja["app.uninstall.dependencyWarning"]).toContain("{services}");
     expect(source).toContain("uninstallDependencyWarning(),");

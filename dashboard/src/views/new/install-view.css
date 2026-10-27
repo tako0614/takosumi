@@ -7,11 +7,6 @@
 .iv-hero h1 { font-size: clamp(2rem, 7vw, 3.75rem); line-height: 0.96; }
 .iv-hero p, .iv-section-head p, .iv-app-summary p, .iv-status span, .iv-review-head p, .iv-review-warning p, .iv-error p, .iv-centered p { margin: var(--tg-s-2) 0 0; color: var(--tg-fg-muted); }
 .iv-kicker { display: block; margin-bottom: var(--tg-s-3); color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); letter-spacing: 0.12em; }
-.iv-steps { width: min(100%, 46rem); margin: 0 auto var(--tg-s-5); }
-.iv-steps ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--tg-s-2); margin: 0; padding: 0; list-style: none; }
-.iv-steps li { padding: var(--tg-s-2) var(--tg-s-3); border-bottom: 2px solid var(--tg-line); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); text-align: center; }
-.iv-steps li[data-state="active"] { border-bottom-color: var(--tg-accent); color: var(--tg-fg); font-weight: 700; }
-.iv-steps li[data-state="complete"] { border-bottom-color: var(--tg-success); color: var(--tg-fg); }
 .iv-catalogue, .iv-workbench { border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); box-shadow: var(--tg-shadow-sm); }
 .iv-catalogue { padding: var(--tg-s-5); }
 .iv-workbench { width: min(100%, 46rem); margin-inline: auto; padding: var(--tg-s-5); }
@@ -21,22 +16,6 @@
 .iv-manual-row { display: grid; gap: var(--tg-s-3); }
 .iv-app-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-4); margin: var(--tg-s-4) 0 var(--tg-s-6); }
 .iv-app-summary > :first-child { width: 4rem; height: 4rem; }
-/* Prefill intro: where the service comes from and the steps before anything is deployed. */
-.iv-intro { margin: var(--tg-s-4) 0 var(--tg-s-5); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); }
-.iv-intro-source { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-2); margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); overflow-wrap: anywhere; }
-.iv-intro-source > span { color: var(--tg-fg); font-weight: 600; }
-.iv-intro-steps { display: grid; gap: var(--tg-s-2); margin: var(--tg-s-3) 0 0; padding-left: 1.25rem; }
-.iv-intro-steps strong, .iv-intro-steps span { display: block; }
-.iv-intro-steps span { margin-top: 2px; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
-/* With the phone layout (bottom tab bar, see shell.css) the steps become
-   short numbered rows, so Add stays within reach. */
-@media (max-width: 880px) {
-  .iv-intro-steps { display: flex; flex-wrap: wrap; gap: var(--tg-s-1) var(--tg-s-3); padding-left: 0; list-style: none; counter-reset: iv-intro-step; }
-  .iv-intro-steps li { counter-increment: iv-intro-step; font-size: var(--tg-fs-sm); }
-  .iv-intro-steps li::before { content: counter(iv-intro-step) ". "; color: var(--tg-fg-muted); }
-  .iv-intro-steps strong { display: inline; }
-  .iv-intro-steps span { display: none; }
-}
 .iv-source-summary { margin-bottom: var(--tg-s-5); padding-bottom: var(--tg-s-4); border-bottom: 1px solid var(--tg-line); min-width: 0; }
 .iv-source-coordinates { display: grid; gap: var(--tg-s-3); margin: 0; }
 .iv-source-coordinates dt, .iv-provider-summary h2 { margin: 0; font-size: var(--tg-fs-sm); font-weight: 650; }
@@ -94,3 +73,35 @@
   .iv-action-row { align-items: stretch; flex-direction: column; }
   .iv-action-row .tg-btn, .iv-form > .tg-btn { width: 100%; justify-content: center; }
 }
+
+/* One persistent app detail, with in-place disclosure rather than a wizard. */
+.iv-app-detail { width: min(100%, 46rem); margin: 0 auto var(--tg-s-6); display: flex; gap: var(--tg-s-5); align-items: center; }
+.iv-app-icon { width: 5.5rem; height: 5.5rem; flex: none; display: grid; place-items: center; overflow: hidden; border-radius: var(--tg-r-lg); background: var(--tg-bg-subtle); border: 1px solid var(--tg-line); font-size: 1.75rem; font-weight: 700; }
+.iv-app-icon img { width: 100%; height: 100%; object-fit: cover; }
+.iv-app-detail h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.25rem); line-height: 1.2; overflow-wrap: anywhere; letter-spacing: -.03em; }
+.iv-app-detail p, .iv-muted { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }
+.iv-cloud-summary, .iv-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--tg-s-4); }
+.iv-cloud-summary { padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); margin-bottom: var(--tg-s-5); }
+.iv-cloud-summary p { margin: var(--tg-s-1) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-connect-panel { margin-top: var(--tg-s-4); scroll-margin-top: calc(var(--tg-topbar-h) + var(--tg-s-4)); }
+.iv-connect-panel, .iv-connection-choice { min-width: 0; }
+.iv-connection-provider { display: grid; gap: var(--tg-s-1); margin-bottom: var(--tg-s-3); }
+.iv-connection-provider > span { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-connection-provider code { font-size: var(--tg-fs-xs); overflow-wrap: anywhere; }
+.iv-connect-panel .tg-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.iv-connect-panel .wc-form, .iv-connect-panel .wc-form-actions, .iv-connect-panel .wc-guided { min-width: 0; }
+.iv-panel-heading { margin-bottom: var(--tg-s-5); }
+.iv-panel-heading h2 { font-size: var(--tg-fs-lg); }
+.iv-uninstall { margin-top: var(--tg-s-7); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-lifecycle { min-height: 12rem; }
+.iv-binding-selectors { margin-bottom: var(--tg-s-5); }
+.iv-log-lines { max-height: 18rem; overflow: auto; padding: var(--tg-s-3); background: var(--tg-bg-subtle); border-radius: var(--tg-r-md); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 39.99rem) {
+  .iv-app-detail { align-items: flex-start; gap: var(--tg-s-3); }
+  .iv-app-icon { width: 4rem; height: 4rem; font-size: 1.25rem; }
+  .iv-cloud-summary { align-items: flex-start; flex-direction: column; }
+  .iv-cloud-summary .tg-btn { width: 100%; }
+  .iv-panel-heading { flex-wrap: wrap; }
+}
+.iv-configure-page .iv-workbench > .tg-btn { width: 100%; min-height: 3.25rem; justify-content: center; }
+.iv-handoff-actions { width: min(100%, 46rem); margin-inline: auto; }

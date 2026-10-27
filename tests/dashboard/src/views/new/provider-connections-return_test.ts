@@ -10,13 +10,12 @@ const connections = read(
 );
 
 describe("/new Provider Connections return context", () => {
-  test("the single install view preserves its exact return target", () => {
-    expect(install).toContain("installReturnPathFromPrefill");
-    expect(install).toContain("providerConnectionsHrefForInstallReturn");
-    expect(install).toContain("git: gitUrl()");
-    expect(install).toContain("ref: gitRef()");
-    expect(install).toContain("path: modulePath()");
-    expect(install).toContain("name: name()");
+  test("the single install view embeds connection setup without serializing configuration", () => {
+    expect(install).toContain("<ConnectionsTab");
+    expect(install).toContain("embedded initialProviderSource");
+    expect(install).toContain("refreshProviderChoices()");
+    expect(install).not.toContain("providerConnectionsHrefForInstallReturn");
+    expect(install).not.toContain("sessionStorage");
   });
 
   test("the Connections screen restores and validates that return target", () => {
