@@ -1,13 +1,13 @@
 /**
- * Primary navigation: a persistent left rail with the everyday consumer trio
- * (home / store / settings) from the shared nav model. Hosting management
- * lives behind 設定 > 管理 — nothing else competes for the rail.
+ * Primary navigation: a persistent left rail with the four behaviors (home /
+ * store / connections / account) from the shared nav model. The space
+ * switcher sits above them only when there are two or more spaces.
  */
 import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft } from "lucide-solid";
 import { For, Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
-import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
+import SpaceSwitcher from "./SpaceSwitcher.tsx";
 import { isNavActive, PRIMARY_NAV } from "./nav.ts";
 import { t } from "../../../../i18n/index.ts";
 import {
@@ -38,8 +38,8 @@ export default function Sidebar() {
         </a>
       </Show>
       <Show when={!takosEmbedded()}>
-        <div class="sidebar-workspace">
-          <WorkspaceSwitcher />
+        <div class="sidebar-space">
+          <SpaceSwitcher />
         </div>
       </Show>
       <nav class="sidebar-nav" aria-label={t("nav.primary")}>

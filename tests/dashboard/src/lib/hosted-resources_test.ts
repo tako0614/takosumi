@@ -1,137 +1,17 @@
+/**
+ * Hosted-resource contribution client (lib/hosted-resources.ts). The
+ * standalone hosted-resources screen left the UI (TASK-0115): an app's page
+ * shows what that app created. The client stays for that page.
+ */
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import {
-  HOSTED_RESOURCES_SLOT,
   HOSTED_RESOURCE_INVENTORY_KIND,
-  hostedResourceInventoryQuery,
   loadHostedResourceContribution,
   listHostedResourceInventoryPage,
   parsePlatformExtensionCatalog,
   parseHostedResourceInventory,
   resolveHostedResourceContribution,
-} from "../../../../../dashboard/src/lib/hosted-resources.ts";
-import { filterByContributionSlots } from "../../../../../dashboard/src/lib/platform-contributions.ts";
-
-const dashboardRoot = resolve(import.meta.dir, "../../../../../dashboard/src");
-const read = (path: string) =>
-  readFileSync(resolve(dashboardRoot, path), "utf8");
-
-test("hosted resources are a manage route backed by the native contribution", () => {
-  const router = read("index.tsx");
-  const nav = read("views/account/components/shell/nav.ts");
-  const manage = read("views/settings/ManageView.tsx");
-
-  expect(router).toContain("HostedResourcesView");
-  expect(router).toContain(
-    '<Route path="/settings/manage/hosted-resources" component={HostedResourcesView} />',
-  );
-  expect(nav).toContain('href: "/settings/manage/hosted-resources"');
-  expect(nav).toContain(
-    "requiresContributionSlot: HOSTED_RESOURCES_SLOT",
-  );
-  expect(manage).toContain("MANAGE_DESTINATIONS");
-  expect(manage).toContain("loadHostedResourceContribution");
-  expect(manage).toContain("filterByContributionSlots");
-  expect(manage).not.toContain("<For each={MANAGE_DESTINATIONS}>");
-  expect(manage).not.toContain('href="/resources"');
-  expect(router).not.toContain('path="/resources"');
-  expect(router).not.toContain("import(\"./views/resources/");
-});
-
-test("manage catalog hides retired hosted destination without its native contribution", () => {
-  const destinations = [
-    { href: "/settings/manage/hosted-resources" },
-    { href: "/workloads" },
-  ] as const;
-  const withoutHostedResources = filterByContributionSlots(
-    [
-      { ...destinations[0], requiresContributionSlot: HOSTED_RESOURCES_SLOT },
-      destinations[1],
-    ],
-    [],
-  );
-  expect(
-    withoutHostedResources.some(
-      (destination) =>
-        destination.href === "/settings/manage/hosted-resources",
-    ),
-  ).toBe(false);
-
-  const withHostedResources = filterByContributionSlots(
-    [
-      { ...destinations[0], requiresContributionSlot: HOSTED_RESOURCES_SLOT },
-      destinations[1],
-    ],
-    [HOSTED_RESOURCES_SLOT],
-  );
-  expect(
-    withHostedResources.some(
-      (destination) =>
-        destination.href === "/settings/manage/hosted-resources",
-    ),
-  ).toBe(true);
-  expect(withHostedResources.length).toBe(2);
-});
-
-test("retired direct path keeps inventory loading disabled without a contribution", () => {
-  expect(
-    hostedResourceInventoryQuery(undefined, "workspace_1"),
-  ).toBeUndefined();
-  expect(
-    hostedResourceInventoryQuery(
-      { href: "/extensions/hosted-resources/inventory" },
-      undefined,
-    ),
-  ).toBeUndefined();
-  expect(
-    hostedResourceInventoryQuery(
-      { href: "/extensions/hosted-resources/inventory" },
-      "workspace_1",
-    ),
-  ).toEqual({
-    href: "/extensions/hosted-resources/inventory",
-    workspaceId: "workspace_1",
-  });
-  const view = read("views/settings/HostedResourcesView.tsx");
-  expect(view).toContain("hostedResourceInventoryQuery(");
-  expect(view).toContain("createResource(\n    query,");
-});
-
-test(
-  "hosted resource view uses the native contribution and provider-neutral inventory DTO",
-  () => {
-    const view = read("views/settings/HostedResourcesView.tsx");
-    const client = read("lib/hosted-resources.ts");
-
-    expect(view).not.toContain("loadPlatformContributions");
-    expect(view).not.toContain("platformContributionsForSlot");
-    expect(view).not.toContain("hasPlatformExtensionCapability");
-    expect(view).toContain("loadHostedResourceContribution");
-    expect(view).toContain("contribution.latest");
-    expect(view).toContain("HostedResourceInventory");
-    expect(view).toContain("currentWorkspaceId");
-    expect(view).toContain(
-      'href={`/workloads/${encodeURIComponent(item.workloadId)}`}',
-    );
-    expect(view).toContain('t("hostedResources.column.kind")');
-    expect(view).toContain('t("hostedResources.column.name")');
-    expect(view).toContain('t("hostedResources.column.status")');
-    expect(view).toContain('t("hostedResources.column.generation")');
-    expect(view).not.toContain("backendHandle");
-    expect(view).not.toContain("providerId");
-    expect(view).not.toContain("spec");
-    expect(view).not.toContain("outputs");
-    expect(view).not.toContain("delete");
-    expect(view).not.toContain("update");
-    expect(client).toContain(
-      '"takosumi.hosted-resource-inventory@v1"',
-    );
-    expect(client).toContain("nextCursor");
-    expect(client).toContain("workspaceId");
-    expect(client).toContain("__takosumi/platform/extensions");
-  },
-);
+} from "../../../../dashboard/src/lib/hosted-resources.ts";
 
 const hostedExtension = (overrides: Record<string, unknown> = {}) => ({
   basePath: "/extensions/hosted-resources",
@@ -348,30 +228,6 @@ test("hosted catalog loader authenticates and returns only the resolved href", a
     method: "GET",
     credentials: "include",
   });
-});
-
-test("hosted resource UI has unavailable, loading, retry, empty, and pagination states", () => {
-  const view = read("views/settings/HostedResourcesView.tsx");
-  const css = read("styles/app-views.css");
-  const ja = read("i18n/ja.ts");
-  const en = read("i18n/en.ts");
-
-  for (const key of [
-    "hostedResources.unavailableTitle",
-    "hostedResources.loadError",
-    "hostedResources.emptyTitle",
-    "hostedResources.loadMore",
-  ]) {
-    expect(view).toContain(`t("${key}")`);
-    expect(ja).toContain(`"${key}"`);
-    expect(en).toContain(`"${key}"`);
-  }
-  expect(view).toContain('t("common.retry")');
-  expect(view).toContain('t("common.loading")');
-  expect(view).toContain('class="hosted-resources-table"');
-  expect(view).toContain('class="hosted-resources-cards"');
-  expect(css).toContain(".hosted-resources-table");
-  expect(css).toContain(".hosted-resources-cards");
 });
 
 test("hosted inventory parsing is strict about version, workspace, and shape", () => {

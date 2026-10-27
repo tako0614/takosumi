@@ -4,15 +4,17 @@
  * the English side to follow. Keys are namespaced `area.item`; `{param}`
  * placeholders are interpolated by `t()`.
  *
- * Vocabulary contract (TASK-0115; do not reintroduce 公開/反映):
+ * Vocabulary contract (TASK-0115; do not reintroduce サービス / ワークロード /
+ * デプロイ / 公開 / 反映 — 「公開リポジトリ」は普通の日本語なのでよい):
  *   Noun: Git で定義され、ストアに並び、インストールされる単位はアプリ
  *   (Capsule)。起動できる Interface は画面、クラウド上の実体はリソース、
- *   資格情報は接続。
+ *   資格情報は接続、Workspace はスペース。
  *   Verb: インストール (意図) → 内容を確認 (plan) → 許可してインストール
  *   (apply) → インストール済み。以後は 更新 / 設定を変更 / アンインストール。
- *   install と app detail の面はこの語彙。まだ移行していない面 (一覧・履歴
- *   など) に残るサービス / ワークロード / デプロイは、移行時に置き換える。
- *   同じパネルで新旧の語を混ぜない。
+ *   すべての面 (ナビ・ホーム・ストア・アプリ・接続・アカウント・通知) が
+ *   この語彙を使う。スペースは、2つ以上あるときか、作る・招待する場面に
+ *   だけ出す。API の handle (自動生成の `workspace-…`) は名前の代わりに
+ *   出さない。
  */
 export const ja = {
   "installStore.title": "アプリをインストール",
@@ -190,7 +192,6 @@ export const ja = {
   "common.loading": "読み込み中…",
   "common.retry": "再試行",
   "common.refresh": "更新",
-  "common.create": "作成",
   "common.creating": "作成中…",
   "common.cancel": "キャンセル",
   "common.save": "保存",
@@ -210,26 +211,18 @@ export const ja = {
   "common.daysAgo": "{n}日前",
   "common.empty": "データがありません",
   "common.loadMore": "さらに読み込む",
-  "common.showingRecent": "直近 {n} 件を表示しています",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
-  "nav.workloads": "ワークロード",
   "nav.store": "ストア",
-  "nav.settings": "設定",
-  "nav.graph": "依存関係",
-  "nav.runs": "デプロイ履歴",
-  "nav.connections": "接続済みアカウント",
-  "nav.billing": "使用量",
-  "nav.activity": "操作履歴",
-  "nav.primary": "主な操作",
+  "nav.runs": "履歴",
+  "nav.connections": "接続",
+  "nav.primary": "主なメニュー",
   "nav.notifications": "通知",
-  "nav.workspaceSettings": "ワークスペース設定",
   "nav.account": "アカウント",
-  "nav.hostedResources": "ホスト済みリソース",
   "nav.docs": "ドキュメント",
   "nav.backToTakos": "Takos に戻る",
-  "nav.deployContext": "サービス運用",
+  "nav.deployContext": "アプリの管理",
   "shell.skipToContent": "本文へスキップ",
   "shell.userMenu": "ユーザーメニュー",
   "shell.signOut": "サインアウト",
@@ -240,96 +233,65 @@ export const ja = {
   "theme.light": "ライト",
   "theme.dark": "ダーク",
 
-  // --- settings hub -----------------------------------------------------------
-  "settings.title": "設定",
-  "settings.subtitle":
-    "アカウント、使用量、通知、詳しい管理画面はここからです。",
-  "settings.section.general": "全般",
-  "settings.section.advanced": "詳しい管理",
-  "settings.account.title": "アカウント",
-  "settings.account.desc": "プロフィールとサインイン情報",
-  "settings.billing.title": "使用量",
-  "settings.billing.desc": "利用状況と、運営者が示す費用の内訳",
-  "settings.notifications.title": "通知",
-  "settings.notifications.desc": "お知らせと要対応の確認",
-  "settings.manage.entry": "管理ツール",
-  "settings.manage.entryDesc":
-    "サービスの内部、接続、実行履歴などの詳しい管理画面",
-  "settings.manage.title": "管理ツール",
-  "settings.manage.subtitle":
-    "ホスティングの内部を直接あつかう画面です。ふだんの利用では開く必要はありません。",
-  "settings.manage.workloads": "デプロイ済みワークロードと状態の一覧",
-  "settings.manage.connections": "クラウドアカウントの接続とカギの管理",
-  "settings.manage.runs": "デプロイと変更の実行記録",
-  "settings.manage.graph": "サービス間の依存関係の表示",
-  "settings.manage.activity": "だれが何を変更したかの操作履歴",
-  "settings.manage.workspace":
-    "アクセスと共有、キー、バックアップ、ポリシー",
-  "settings.manage.backups": "管理情報の一部の書き出し",
-  "settings.manage.shares": "サービス間で共有する値の管理",
-  "settings.manage.interfaceRecovery":
-    "公開に失敗した Interface を確認して再試行",
-  "settings.manage.hostedResources": "ホスト環境で管理されているリソースの確認",
-
-  // --- hosted resources ----------------------------------------------------
-  "hostedResources.title": "ホスト済みリソース",
-  "hostedResources.subtitle":
-    "選択中のワークスペースで管理されているリソースを確認します。変更はワークロードの更新から行います。",
-  "hostedResources.unavailableTitle": "ホスト済みリソースは利用できません",
-  "hostedResources.unavailableMessage":
-    "このTakosumi環境はホスト済みリソースの読み取り機能を提供していません。",
-  "hostedResources.workspaceRequired": "ワークスペースを選択してください",
-  "hostedResources.workspaceRequiredMessage":
-    "リソースを表示するには、先にワークスペースを選択してください。",
-  "hostedResources.loadError":
-    "ホスト済みリソースを読み込めませんでした。時間をおいて再試行してください。",
-  "hostedResources.emptyTitle": "ホスト済みリソースはありません",
-  "hostedResources.emptyMessage":
-    "このワークスペースには、まだホスト済みリソースがありません。",
-  "hostedResources.loadMore": "さらに読み込む",
-  "hostedResources.loading": "ホスト済みリソースを読み込んでいます…",
-  "hostedResources.column.kind": "種類",
-  "hostedResources.column.name": "名前",
-  "hostedResources.column.status": "状態",
-  "hostedResources.column.generation": "世代",
-  "hostedResources.column.workload": "ワークロード",
-  "hostedResources.noWorkload": "関連するワークロードなし",
-  "hostedResources.openWorkload": "ワークロードを開く",
-  "hostedResources.status.ready": "準備完了",
-  "hostedResources.status.needsAttention": "要確認",
-  "hostedResources.status.pending": "処理中",
-  "hostedResources.status.unknown": "状態を確認できません",
-
-  // --- workspace switcher -------------------------------------------------------
-  "workspace.label": "自分のワークスペース",
-  "workspace.none": "ワークスペースがまだありません",
-  "workspace.select": "この画面で使うワークスペースを選択",
-  "workspace.selectMessage":
-    "この作業を保存するワークスペースを選びます。",
-  "workspace.loading": "ワークスペースを読み込み中…",
-  "workspace.loadFailed": "ワークスペースを読み込めませんでした — {message}",
-  "workspace.settings": "ワークスペース設定",
-  "workspace.switcherAria":
-    "自分のワークスペースを切り替え（現在: {name}）",
+  // --- spaces (Workspaces; スペース in the UI) -------------------------------
+  "workspace.selectMessage": "この作業をどのスペースで行うか選びます。",
   "workspace.defaultName": "個人",
-  "workspace.start.aria": "自分のワークスペースを始める",
-  "workspace.start.kicker": "自分のワークスペース",
-  "workspace.start.title": "用途ごとのワークスペースを作成",
-  "workspace.start.body":
-    "サービス、接続済みアカウント、履歴、使用量、設定を自分のワークスペースにまとめます。",
-  "workspace.start.create": "新しいワークスペース",
+  "workspace.start.aria": "スペースを始める",
+  "workspace.start.kicker": "はじめに",
+  "workspace.start.title": "アプリを置くスペースを作成",
+  "workspace.start.body": "アプリ、接続、履歴、利用量をひとつのスペースにまとめます。最初は自分だけのものです。",
+  "workspace.start.create": "スペースを作成",
   "workspace.start.creating": "作成中…",
-  "workspace.create.nameLabel": "用途または名前",
-  "workspace.create.namePlaceholder": "個人、仕事、実験、Client A",
-  "workspace.create.nameRequired": "用途または名前を入力してください。",
-  "workspace.create.purposeHelp":
-    "初期状態は自分専用です。共有は詳しい設定から後で行えます。",
-  "workspace.create.failed": "ワークスペースを作成できませんでした — {message}",
+  "space.label": "スペース",
+  "space.switcherAria": "スペースを切り替え（現在: {name}）",
+  "space.loading": "読み込み中…",
+  "space.loadFailed": "スペースを読み込めませんでした — {message}",
+  "space.settings": "スペースの設定",
+  "space.unnamed": "名前のないスペース",
+  "space.createdOn": "{date} に作成",
+  "space.scopeNote": "スペース「{name}」",
+  "space.noneTitle": "まだスペースがありません",
+  "space.noneMessage": "ホームから始めると、ここも使えるようになります。",
+  "space.noneCta": "ホームへ",
+  "space.create.environment": "環境を分ける",
+  "space.create.environmentBody": "本番と試験のように、アプリと接続を分けて持ちます。",
+  "space.create.team": "チームで使う",
+  "space.create.teamBody": "メンバーを招待して、アプリと接続を一緒に使います。",
+  "space.create.environmentNameLabel": "環境の名前",
+  "space.create.teamNameLabel": "チームの名前",
+  "space.create.environmentPlaceholder": "例: 試験用、個人の実験",
+  "space.create.teamPlaceholder": "例: デザインチーム、Client A",
+  "space.create.environmentHelp": "作成すると、新しいスペースに切り替わります。最初は自分だけのものです。",
+  "space.create.teamHelp": "作成したあと、メンバーを招待する画面に進みます。",
+  "space.create.submit": "作成",
+  "space.create.failed": "スペースを作成できませんでした — {message}",
+  "space.create.done": "スペース「{name}」を作成し、切り替えました。",
+  "space.thisSpace": "このスペース",
+  "space.name": "名前",
+  "space.nameHint": "メンバーと切り替えに表示される名前です。",
+  "space.nameRequired": "名前を入力してください。",
+  "space.saved": "名前を保存しました。",
+  "space.notFound": "このスペースは見つかりませんでした。切り替えるか、下のアーカイブ済みから復元してください。",
+  "space.createdLabel": "作成:",
+  "space.new.title": "スペースを追加",
+  "space.new.body": "目的を選ぶと、そのためのスペースを作ります。",
+  "space.archive.title": "このスペースをアーカイブ",
+  "space.archive.body":
+    "切り替えに出なくなります。アプリ・接続・履歴・利用量は止まらず、消えません。下の「アーカイブ済み」から戻せます。",
+  "space.archive.lastSpace": "最後のスペースはアーカイブできません。",
+  "space.archive.cta": "アーカイブ",
+  "space.archive.confirmTitle": "「{name}」をアーカイブ",
+  "space.archive.confirmMessage":
+    "切り替えに出なくなるだけです。このスペースのアプリはそのまま動き続け、接続・履歴・利用量も消えません。いつでも復元できます。",
+  "space.archive.done": "「{name}」をアーカイブしました。アプリはそのまま動いています。",
+  "space.archived.title": "アーカイブ済みのスペース",
+  "space.archived.body": "復元すると、切り替えに戻ります。",
+  "space.archived.restore": "復元",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
   "legal.policiesNav": "運営者のポリシー",
-  "auth.signInSub": "サインインすると、ワークスペースのアプリと設定を開けます。",
+  "auth.signInSub": "サインインすると、自分のアプリと設定を開けます。",
   "auth.singleSignOn": "シングルサインオン",
   "auth.continueWith": "{provider} で続ける",
   "auth.providerChecking": "利用可否を確認中です",
@@ -926,22 +888,6 @@ export const ja = {
   "run.audit.empty": "活動記録はありません。",
   "run.audit.detail": "記録の詳細",
 
-  // --- run history --------------------------------------------------------------
-  "runList.title": "デプロイ履歴",
-  "runList.subtitle": "最近の確認・承認・デプロイを新しい順に表示します。",
-  "runList.open": "詳細",
-  "runList.review": "確認する",
-  "runList.openAria": "詳細を開く: {title}",
-  "runList.reviewAria": "確認する: {title}",
-  "runList.empty.title": "まだ更新履歴はありません",
-  "runList.empty.message":
-    "サービスを追加して変更を確認すると、ここに履歴が並びます。",
-  "runList.applied": "デプロイ",
-  "runList.destroyed": "削除",
-  "runList.failed": "{operation}に失敗しました",
-  "runList.namesUnavailable":
-    "サービス名を取得できませんでした。名前なしで表示しています。",
-
   // --- add flow (/new) -------------------------------------------------------
   "new.git.defaultRef": "Git の既定ブランチ",
   "new.compat.ready": "このまま追加できます",
@@ -984,62 +930,35 @@ export const ja = {
     "このサービスの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
   "new.error.alreadyExistsGeneric":
     "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
-  "workspaceSettings.title": "設定",
-  "workspaceSettings.tabsLabel": "設定セクション",
-  "workspaceSettings.subtitle":
-    "ワークスペース名、接続、使用量、必要に応じたアクセス設定を確認します。",
-  "workspaceSettings.tab.general": "一般",
-  "workspaceSettings.tab.members": "アクセスと共有",
-  "workspaceSettings.tab.connections": "接続",
-  "workspaceSettings.tab.billing": "使用量",
-  "workspaceSettings.tab.usageQuota": "使用量",
-  "workspaceSettings.tab.backups": "バックアップ",
-  "workspaceSettings.tab.shares": "共有値",
-  "workspaceSettings.tab.interfaceRecovery": "Interface の復旧",
-  "workspaceSettings.general.displayName": "表示名",
-  "workspaceSettings.general.handle": "ハンドル",
-  "workspaceSettings.general.type": "種別",
-  "workspaceSettings.general.owner": "オーナー",
-  "workspaceSettings.general.updated": "更新日時",
-  "workspaceSettings.general.advancedDetails": "詳細情報",
-  "workspaceSettings.general.saved": "設定を保存しました。",
-  "workspaceSettings.general.archive": "ワークスペースを非表示",
-  "workspaceSettings.general.archiveConfirm":
-    "ワークスペースを通常の切り替え一覧から非表示にするだけです。実行中のサービス、履歴、使用量、保存データは停止・削除されません。下の「アーカイブ済み」からいつでも元に戻せます。",
-  "workspaceSettings.general.archivedNamed":
-    "「{name}」を通常の切り替え一覧から非表示にしました。",
-  "workspaceSettings.general.archivedHint":
-    "表示が変わるだけで、サービスと使用量はこれまでどおりです。復元は下のアーカイブ済み一覧から、別のワークスペースへの移動はワークスペース切り替えからできます。",
-  "workspaceSettings.general.notFound":
-    "このワークスペースは見つかりませんでした。切り替えるか、下のアーカイブ済みから復元してください。",
-  "workspaceSettings.general.archivedTitle": "アーカイブ済みのワークスペース",
-  "workspaceSettings.general.unarchive": "復元",
-  "workspaceSettings.general.archiveLastError":
-    "最後のワークスペースは非表示にできません。",
-  "workspaceSettings.general.nameRequired": "表示名を入力してください。",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "オーナー",
   "members.role.admin": "管理者",
   "members.role.member": "メンバー",
   "members.role.viewer": "閲覧のみ",
+  "members.title": "メンバー",
+  "members.subtitle": "このスペースを一緒に使う人です。",
+  "members.listLabel": "メンバー一覧",
+  "members.roleHelp.owner": "すべてを管理できます。メンバーの役割の変更と削除もできます。",
+  "members.roleHelp.admin": "アプリのインストール・更新・アンインストール、接続の管理、メンバーの招待ができます。",
+  "members.roleHelp.member": "アプリを開いて使えます。インストールや設定の変更はできません。",
+  "members.roleHelp.viewer": "アプリと状態を見られます。アプリには「閲覧のみ」として伝わります。",
+  "members.unnamed": "メンバー（{id}）",
+  "members.loadFailedTitle": "メンバーを読み込めませんでした",
+  "members.invite.open": "メンバーを招待",
+  "members.removeTitle": "「{name}」をこのスペースから外す",
   "members.status.active": "有効",
   "members.status.invited": "招待中",
   "members.status.suspended": "停止中",
-  "members.invite.title": "アクセスを共有",
   "members.invite.subtitle":
-    "一度サインイン済みの相手のメールアドレスを入力してください。追加するとすぐに利用できます（メールは送られません）。",
+    "一度 Takosumi にサインインしたことがある人のメールアドレスを入力します。招待するとすぐに使えます（メールは送られません）。",
   "members.invite.email": "メールアドレス",
   "members.invite.role": "役割",
-  "members.invite.cta": "追加",
+  "members.invite.cta": "招待",
   "members.invite.notFound":
     "そのメールアドレスの Takosumi アカウントが見つかりません。相手に一度サインインしてもらってください。",
   "members.invite.emailRequired": "メールアドレスを入力してください。",
-  "members.invite.success": "{email} を追加しました。すぐに利用できます。",
-  "members.col.member": "メンバー",
-  "members.col.roles": "役割",
-  "members.col.status": "状態",
-  "members.col.actions": "操作",
+  "members.invite.success": "{email} を招待しました。すぐに使えます。",
   "members.you": "あなた",
   "members.changeRole": "役割を変更",
   "members.roleSelectLabel": "{name} の役割",
@@ -1048,187 +967,108 @@ export const ja = {
     "{name} の役割を「{role}」に変更しますか？",
   "members.lastOwnerDemote":
     "最後のオーナーは降格できません。先に別のオーナーを指名してください。",
-  "members.lastOwnerRemove":
-    "最後のオーナーは削除できません。先に別のオーナーを指名してください。",
-  "members.remove": "削除",
-  "members.removeSelf": "自分を削除",
-  "members.removeSelfConfirm":
-    "自分をこのワークスペースから削除します。以後このワークスペースにアクセスできなくなり、自分では戻せません。",
-  "members.removeConfirm": "このメンバーを削除しますか？（{account}）",
-  "members.empty": "このワークスペースにはまだメンバーがいません。",
-  "members.viewerNote":
-    "メンバーの招待・役割変更・削除はオーナーまたは管理者のみ行えます。",
+  "members.lastOwnerRemove": "最後のオーナーは外せません。先に別のオーナーを指名してください。",
+  "members.remove": "外す",
+  "members.removeSelf": "このスペースから抜ける",
+  "members.removeSelfConfirm": "このスペースから抜けます。以後このスペースのアプリと接続を使えなくなり、自分では戻れません。",
+  "members.removeConfirm":
+    "「{name}」はこのスペースのアプリと接続を使えなくなります。インストール済みのアプリはそのまま動きます。もう一度招待すれば戻せます。",
+  "members.empty": "まだメンバーがいません。",
+  "members.viewerNote": "メンバーの招待・役割の変更・削除は、オーナーと管理者が行えます。",
 
   // --- connections -------------------------------------------------------------
-  "conn.subtitle":
-    "自分の認証情報で外部プロバイダーを接続します。利用できるかどうかは、運営者のポリシーとデプロイ時の承認によって決まります。",
-  "conn.providerConnections.title": "接続済みアカウント",
+  "conn.subtitle": "アプリがあなたのクラウドにリソースを作るときに使う接続です。接続ごとに、それを使っているアプリを表示します。",
+  "conn.title": "接続",
+  "conn.footnote": "アプリが使う接続を切り替えるときは、そのアプリを開いて設定から選びます。",
+  "conn.operatorProvided": "運営者が用意した接続",
+  "conn.apps.label": "使っているアプリ",
+  "conn.apps.loading": "確認中…",
+  "conn.apps.none": "まだどのアプリも使っていません",
+  "conn.apps.unknown": "使っているアプリを確認できませんでした",
+  "conn.oauth.accountSettingsHint": "空欄でも接続できます。特定のアカウントだけを使うときに入力します。",
+  "conn.add.displayNameHint": "同じクラウドに複数つなぐときの見分けに使います。",
+  "conn.byok.unavailable": "ここでは、一覧にないクラウドをつなげません。運営者に確認してください。",
+  "conn.genericEnv.providerHint":
+    "アプリのインストール画面に表示されるクラウドの名前（例: cloudflare/cloudflare）です。",
+  "conn.genericEnv.removeRow": "この行を消す",
+  "conn.remove.cta": "削除",
+  "conn.remove.confirm": "削除する",
+  "conn.remove.affectsApps":
+    "次のアプリがこの接続を使っています: {apps}。これらのアプリは、次に更新・設定変更・アンインストールするとき、別の接続を選ぶ必要があります。",
+  "conn.remove.noApps": "この接続を使っているアプリはありません。",
+  "conn.remove.appsUnknown":
+    "使っているアプリを確認できませんでした。使っているアプリがあれば、次に更新・設定変更・アンインストールするとき、別の接続を選ぶ必要があります。",
+  "conn.remove.keepsResources": "保存したキーは削除され、元に戻せません。アプリが作ったリソースは削除されません。",
   "conn.expiresAt": "期限: {date}",
-  "conn.oauth.accountSettings": "アカウントの指定（任意）",
-  "conn.oauth.manual": "API トークンで接続する",
-  "conn.oauth.connected": "プロバイダー接続を保存しました。",
+  "conn.oauth.manual": "キーを入力して接続する",
+  "conn.oauth.connected": "接続を保存しました。",
   "conn.oauth.connect": "{provider} に接続",
   "conn.oauth.waiting": "開いた接続先の画面でアクセスを許可してください。アプリの設定はこの画面に残っています。",
-  "conn.oauth.retryHint": "接続が完了しませんでした。認可画面を開けることを確認して再試行するか、下の API トークンを使用してください。",
+  "conn.oauth.retryHint": "接続が完了しませんでした。認可の画面が開けるか確認してもう一度試すか、下のキー入力を使ってください。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.oauth.error.missingCode":
     "認証の応答が不完全でした。もう一度お試しください。",
-  "conn.oauth.error.forbidden":
-    "このワークスペースに接続する権限がありません。",
+  "conn.oauth.error.forbidden": "このスペースに接続を追加する権限がありません。オーナーか管理者に依頼してください。",
   "conn.oauth.error.oauthFailed":
     "プロバイダーとの認証に失敗しました。時間をおいてもう一度お試しください。",
   "conn.oauth.errorCode": "エラーコード: {code}",
-  "conn.return.title": "{name} の追加に戻る",
-  "conn.return.subtitle":
-    "接続済みアカウントを保存してから、サービス追加の続きに戻ります。",
-  "conn.return.cta": "サービス追加に戻る",
+  "conn.return.title": "「{name}」のインストールに戻る",
+  "conn.return.subtitle": "接続を保存したら、インストールの続きに戻れます。",
+  "conn.return.cta": "インストールに戻る",
   "conn.saved.message": "{name} を保存しました。",
-  "conn.saved.needsTest":
-    "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
+  "conn.saved.needsTest": "{name} を保存しました。インストールに戻る前に、接続を確認してください。",
   "conn.saved.testCta": "接続を確認",
-  "conn.saved.returnCta": "追加に戻る",
-  "conn.add.provider": "接続先",
-  "conn.add.genericEnvOption": "その他の接続（詳細）",
-  "conn.add.title": "アカウントを接続",
-  "conn.add.open": "アカウントを接続",
+  "conn.saved.returnCta": "インストールに戻る",
+  "conn.add.provider": "つなぐクラウド",
+  "conn.add.genericEnvOption": "一覧にないクラウドをつなぐ",
+  "conn.add.title": "クラウドをつなぐ",
+  "conn.add.open": "接続を追加",
   "conn.add.close": "閉じる",
-  "conn.add.optionalSettings": "この接続に名前をつける",
-  "conn.add.displayName": "接続名",
-  "conn.add.displayNamePlaceholder": "任意の名前",
+  "conn.add.displayName": "接続の名前（任意）",
+  "conn.add.displayNamePlaceholder": "例: 本番用",
   "conn.guided.openProvider": "{provider} のアクセス設定を開く",
-  "conn.guided.instructions": "手順を表示",
-  "conn.byok.title": "自分のカギで外部プロバイダーを接続",
+  "conn.byok.title": "キーを入力してクラウドをつなぐ",
   "conn.byok.body":
-    "プロバイダーの取得元 (source) と必要な環境変数を入力します。この接続にも運営者のポリシーとデプロイ時の承認が適用されます。",
+    "このクラウドには案内付きの接続方法がありません。クラウドの管理画面で作ったキーを、そのクラウドが求める名前で入力します。",
   "conn.byok.noBillingNote":
-    "Takosumi の料金がある場合は変更の確認で表示されます。外部プロバイダーの料金は、そのプロバイダーから別途請求されます。",
-  "conn.byok.usePreset": "用意されている接続方法を使う",
+    "Takosumi の料金があるときは、インストール内容の確認で表示されます。クラウドの料金は、そのクラウドから請求されます。",
+  "conn.byok.usePreset": "一覧から選ぶ",
   "conn.register": "接続を保存",
   "conn.registering": "保存中…",
-  "conn.genericEnv.providerName": "プロバイダーの取得元",
-  "conn.genericEnv.providerPlaceholder": "examplecorp/example",
-  "conn.genericEnv.envName": "env 名",
-  "conn.genericEnv.envNamePlaceholder": "EXAMPLE_API_TOKEN",
-  "conn.genericEnv.value": "値",
+  "conn.genericEnv.providerName": "つなぐクラウド",
+  "conn.genericEnv.providerPlaceholder": "cloudflare/cloudflare",
+  "conn.genericEnv.envName": "キーの名前",
+  "conn.genericEnv.envNamePlaceholder": "例: CLOUDFLARE_API_TOKEN",
+  "conn.genericEnv.value": "キーの値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
-  "conn.genericEnv.addRow": "値を追加",
-  "conn.genericEnv.providerRequired":
-    "プロバイダーの取得元を入力してください。",
-  "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
+  "conn.genericEnv.addRow": "キーを追加",
+  "conn.genericEnv.providerRequired": "つなぐクラウドの名前を入力してください。",
+  "conn.genericEnv.nameRequired": "値を入れた行には、キーの名前が必要です。",
   "conn.genericEnv.invalidName":
-    "「{name}」は使えません。EXAMPLE_API_TOKEN のような大文字の env 名を使ってください。",
+    "「{name}」はキーの名前に使えません。CLOUDFLARE_API_TOKEN のような大文字の名前にしてください。",
   "conn.genericEnv.reservedName":
-    "「{name}」は実行環境が使う予約名です。プロバイダー固有の env 名を使ってください。",
+    "「{name}」は Takosumi が使う名前です。そのクラウド用の名前にしてください。",
   "conn.genericEnv.duplicateName": "「{name}」はすでに追加されています。",
-  "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
-  "conn.error.invalidProvider": "接続先が不正です。",
+  "conn.genericEnv.oneRequired": "キーを 1 つ以上入力してください。",
+  "conn.error.invalidProvider": "このクラウドには、ここから接続できません。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "自分のカギで外部プロバイダーを接続",
-  "conn.empty.message":
-    "自分の認証情報を接続し、運営者のポリシー・承認・料金の範囲で外部プロバイダーを利用します。",
-  "conn.test": "アクセス確認",
+  "conn.empty.title": "まだクラウドをつないでいません",
+  "conn.empty.message": "アプリはここでつないだクラウドにリソースを作ります。ストアでアプリを選ぶと、必要な接続も案内されます。",
+  "conn.test": "接続を確認",
   "conn.testing": "確認中…",
-  "conn.test.notReady":
-    "このアカウントはまだ利用できません（状態: {status}）。",
-  "conn.remove.confirmTitle": "接続済みアカウントを削除",
-  "conn.remove.confirmMessage":
-    "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
-  "conn.remove.bindingWarning":
-    "この接続を使うサービスのデプロイは失敗します。",
-
-  // --- backups -----------------------------------------------------------------
-  "backups.subtitle":
-    "部分的な control export を作成・確認します。import / restore には対応していません。",
-  "backups.create": "バックアップを作成",
-  "backups.creating": "バックアップを作成しています。",
-  "backups.col.createdAt": "作成日時",
-  "backups.col.contents": "内容",
-  "backups.controlExport": "部分的な control export",
-  "backups.empty.title": "まだバックアップがありません",
-  "backups.empty.message":
-    "このワークスペースの最初のバックアップを作成できます。",
-
-  // --- shared values -------------------------------------------------------------
-  "shares.subtitle": "別のワークスペースから使える公開値を管理します。",
-  "shares.create.title": "共有を作成",
-  "shares.create.toWorkspace": "共有先ワークスペース",
-  "shares.create.producer": "共有元サービス",
-  "shares.create.workspacesError": "ワークスペース一覧を読み込めませんでした。",
-  "shares.create.workspacesEmpty":
-    "共有先にできる他のワークスペースがありません。",
-  "shares.create.capsulesError": "サービス一覧を読み込めませんでした。",
-  "shares.create.capsulesEmpty": "共有元にできるサービスがありません。",
-  "shares.create.selectPlaceholder": "選択してください",
-  "shares.create.outputs": "共有する値",
-  "shares.create.addOutput": "共有する値を追加",
-  "shares.create.removeOutput": "削除",
-  "shares.create.outputName": "値の名前",
-  "shares.create.outputAlias": "表示名",
-  "shares.create.sensitiveValue": "機微な値",
-  "shares.create.sensitiveReason": "機微な値を共有する理由",
-  "shares.create.sensitivePlaceholder": "共有が必要な理由",
-  "shares.create.cta": "共有を作成",
-  "shares.error.outputsRequired":
-    "共有する値の名前を 1 つ以上入力してください。",
-  "shares.error.reasonRequired": "機微な値を共有する理由を入力してください。",
-  "shares.error.toWorkspaceRequired":
-    "共有先ワークスペースを選択してください。",
-  "shares.error.producerRequired": "共有元サービスを選択してください。",
-  "shares.col.direction": "方向",
-  "shares.col.capsule": "サービス",
-  "shares.col.outputs": "共有する値",
-  "shares.col.status": "状態",
-  "shares.approve": "承認",
-  "shares.revoke": "取り消し",
-  "shares.revokeConfirmTitle": "共有の取り消し",
-  "shares.revokeConfirmMessage":
-    "{target} への共有を取り消しますか？共有先のワークスペースはこの値を使えなくなります。",
-  "shares.status.active": "有効",
-  "shares.status.pending": "承認待ち",
-  "shares.status.revoked": "取り消し済み",
-  "shares.list.title": "共有一覧",
-  "shares.empty": "共有はまだありません。",
-
-  // --- Interface materialization recovery ----------------------------------
-  "interfaceRecovery.title": "Interface の復旧",
-  "interfaceRecovery.subtitle":
-    "Interface の永続化に失敗した項目を確認し、観測した状態で再試行をキューに追加します。",
-  "interfaceRecovery.col.capsule": "ワークロード",
-  "interfaceRecovery.col.error": "エラー",
-  "interfaceRecovery.col.recordedAt": "記録日時",
-  "interfaceRecovery.col.progress": "進み具合",
-  "interfaceRecovery.col.attempts": "試行回数",
-  "interfaceRecovery.col.actions": "操作",
-  "interfaceRecovery.progress": "{total} 件中 {next} 件処理済み",
-  "interfaceRecovery.retry": "再試行をキューに追加",
-  "interfaceRecovery.retryFor": "{capsule} の再試行をキューに追加",
-  "interfaceRecovery.retryQueued":
-    "{capsule} の再試行をキューに追加しました。保留中であり、この画面では完了とは表示しません。",
-  "interfaceRecovery.retryStale":
-    "この失敗は変更されたか、すでに存在しません。一覧を更新しました。現在の行から再試行してください。",
-  "interfaceRecovery.retryForbidden":
-    "再試行をキューに追加できるのはワークスペースのオーナーまたは管理者です。",
-  "interfaceRecovery.retryFailed":
-    "再試行をキューに追加できませんでした。一覧を更新して、もう一度お試しください。",
-  "interfaceRecovery.empty.title": "Interface の失敗はありません",
-  "interfaceRecovery.empty.message":
-    "対応が必要な Interface の永続化失敗があると、ここに表示されます。",
-  "interfaceRecovery.limitNote":
-    "最大 100 件まで表示しています。この上限に達している場合、全件とは限りません。",
+  "conn.test.notReady": "この接続はまだ使えません（状態: {status}）。",
+  "conn.remove.confirmTitle": "「{name}」を削除",
 
   // --- notifications -------------------------------------------------------------
   "notif.markAllRead": "すべて既読にする",
   "notif.title": "通知",
-  "notif.subtitle":
-    "追加・デプロイ・承認・失敗など、最近の出来事を新しい順に表示します。",
+  "notif.subtitle": "インストール・更新・失敗など、最近の出来事を新しい順に表示します。",
   "notif.empty.title": "まだ通知はありません",
-  "notif.empty.message":
-    "サービスを追加したりデプロイしたりすると、ここに出来事が並びます。",
+  "notif.empty.message": "アプリをインストールしたり更新したりすると、ここに出来事が並びます。",
+  "notif.empty.cta": "ストアでアプリを探す",
   "notif.attention": "要対応の出来事が {n} 件あります。",
   "notif.badge.attention": "要対応",
-  "notif.supportSummary": "参照情報",
-  "notif.viewRaw": "履歴を開く →",
-  "notif.event.installCreated": "サービス「{name}」を追加しました",
+  "notif.event.installCreated": "「{name}」のインストールを始めました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
   "notif.event.planReadyNamed": "「{name}」の{operation}の準備ができました",
@@ -1236,73 +1076,56 @@ export const ja = {
   "notif.event.planBlockedDetail": "ポリシーにより承認が止まっています",
   "notif.event.approved": "{operation}を承認しました",
   "notif.event.approvedNamed": "「{name}」の{operation}を承認しました",
-  "notif.event.applied": "サービスの変更をデプロイしました",
-  "notif.event.appliedNamed": "「{name}」の変更をデプロイしました",
-  "notif.event.appliedDetail": "公開値 {n} 件を更新",
-  "notif.event.destroyed": "サービスを削除しました",
-  "notif.event.destroyedNamed": "「{name}」を削除しました",
+  "notif.event.applied": "アプリの変更を適用しました",
+  "notif.event.appliedNamed": "「{name}」の変更を適用しました",
+  "notif.event.appliedDetail": "値 {n} 件を更新",
+  "notif.event.destroyed": "アプリをアンインストールしました",
+  "notif.event.destroyedNamed": "「{name}」をアンインストールしました",
   "notif.event.failed": "{operation}に失敗しました",
   "notif.event.failedNamed": "「{name}」の{operation}に失敗しました",
-  "notif.event.drift": "サービスの実状態が保存済みの記録とズレています",
-  "notif.event.driftNamed": "「{name}」の実状態が保存済みの記録とズレています",
+  "notif.event.drift": "アプリのクラウド上の状態が記録とずれています",
+  "notif.event.driftNamed": "「{name}」のクラウド上の状態が記録とずれています",
   "notif.event.driftDetail": "実際の状態が設定とずれている可能性があります",
-  "notif.event.stale": "依存先が更新されたため、このサービスに更新があります",
-  "notif.event.staleNamed":
-    "依存先が更新されたため、「{name}」に更新があります",
+  "notif.event.stale": "連携先のアプリが更新されたため、このアプリに更新があります",
+  "notif.event.staleNamed": "連携先のアプリが更新されたため、「{name}」に更新があります",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.staleSource": "このサービスの新しいバージョンがあります",
-  "notif.event.staleSourceNamed": "「{name}」の新しいバージョンがあります",
-  "notif.event.connCreated": "接続済みアカウント「{provider}」を追加しました",
-  "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
-  "notif.event.connRevoked":
-    "接続済みアカウント「{provider}」が無効になりました",
-  "notif.event.connRevokedGeneric": "接続済みアカウントが無効になりました",
-  "notif.event.backupCreated": "バックアップを作成しました",
-  "notif.event.depCreated": "サービス間の連携を追加しました",
-  "notif.event.depDeleted": "サービス間の連携を解除しました",
-  "notif.event.shareRequested": "値の共有リクエストが届きました",
-  "notif.event.shareApproved": "値の共有を承認しました",
-  "notif.event.shareRevoked": "値の共有を取り消しました",
+  "notif.event.staleSource": "このアプリの新しい版があります",
+  "notif.event.staleSourceNamed": "「{name}」の新しい版があります",
+  "notif.event.connCreated": "接続「{provider}」を追加しました",
+  "notif.event.connCreatedGeneric": "接続を追加しました",
+  "notif.event.connRevoked": "接続「{provider}」が無効になりました",
+  "notif.event.connRevokedGeneric": "接続が無効になりました",
+  "notif.event.backupCreated": "管理情報を書き出しました",
+  "notif.event.depCreated": "アプリ同士を連携しました",
+  "notif.event.depDeleted": "アプリ同士の連携を解除しました",
+  "notif.event.shareRequested": "スペース間の値の共有を依頼されました",
+  "notif.event.shareApproved": "スペース間の値の共有を承認しました",
+  "notif.event.shareRevoked": "スペース間の値の共有を取り消しました",
   "notif.event.groupCreated": "まとめての更新を開始しました",
   "notif.event.autoUpdateOn": "自動更新をオンにしました",
   "notif.event.autoUpdateOff": "自動更新をオフにしました",
   "notif.event.autoUpdateFailed": "自動更新を完了できませんでした",
   "notif.event.autoUpdateFailedNamed":
     "「{name}」の自動更新を完了できませんでした",
-  "notif.event.autoUpdateFailedDetail":
-    "サービス画面から更新内容を確認してください",
-  "notif.event.uninstallScheduled": "サービスの削除を予約しました",
-  "notif.event.uninstallScheduledNamed": "「{name}」の削除を予約しました",
-  "notif.event.uninstallCancelled": "削除の予約を取り消しました",
-  "notif.event.uninstallCancelledNamed": "「{name}」の削除の予約を取り消しました",
-  "notif.event.uninstallBlocked": "予約した削除が止まりました",
-  "notif.event.uninstallBlockedNamed": "「{name}」の予約した削除が止まりました",
-  "notif.event.uninstallBlockedDetail":
-    "取り消すか、サービスの設定から今すぐ削除してください",
-  "notif.event.interfaceDeadLettered": "Interface を公開できませんでした",
-  "notif.event.interfaceDeadLetteredNamed":
-    "「{name}」の Interface を公開できませんでした",
-  "notif.event.interfaceDeadLetteredDetail":
-    "Interface の復旧から再試行してください",
-  "notif.event.interfaceRetryRequested":
-    "Interface の公開の再試行をキューに追加しました",
-  "notif.event.interfaceRetryRequestedNamed":
-    "「{name}」の Interface の公開の再試行をキューに追加しました",
+  "notif.event.autoUpdateFailedDetail": "アプリのページで更新内容を確認してください",
+  "notif.event.uninstallScheduled": "アプリのアンインストールを予約しました",
+  "notif.event.uninstallScheduledNamed": "「{name}」のアンインストールを予約しました",
+  "notif.event.uninstallCancelled": "アンインストールの予約を取り消しました",
+  "notif.event.uninstallCancelledNamed": "「{name}」のアンインストールの予約を取り消しました",
+  "notif.event.uninstallBlocked": "予約したアンインストールが止まりました",
+  "notif.event.uninstallBlockedNamed": "「{name}」の予約したアンインストールが止まりました",
+  "notif.event.uninstallBlockedDetail": "アプリのページで、取り消すか今すぐアンインストールしてください",
+  "notif.event.interfaceDeadLettered": "アプリの画面を用意できませんでした",
+  "notif.event.interfaceDeadLetteredNamed": "「{name}」の画面を用意できませんでした",
+  "notif.event.interfaceDeadLetteredDetail": "アプリのページから、もう一度試してください",
+  "notif.event.interfaceRetryRequested": "アプリの画面の準備をもう一度試しています",
+  "notif.event.interfaceRetryRequestedNamed": "「{name}」の画面の準備をもう一度試しています",
   "notif.event.recorded": "記録された操作",
-  "notif.otherWorkspace": "別のワークスペース「{name}」",
+  "notif.otherWorkspace": "別のスペース「{name}」",
 
   // --- activity -------------------------------------------------------------------
-  "activity.title": "操作履歴",
-  "activity.subtitle": "サービスやアカウントの出来事を新しい順に記録します。",
-  "activity.details": "参照情報",
-  "activity.detailsBody": "イベントを確認するときに使う参照情報です。",
-  "activity.debug": "参照 ID",
-  "activity.actorLine": "実行者: {actor}",
   "activity.actorYou": "あなた",
   "activity.actorSystem": "Takosumi（自動）",
-  "activity.empty.title": "まだ記録はありません",
-  "activity.empty.message":
-    "このワークスペースで操作が行われると、ここに記録されます。",
 
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "ワークスペース更新",
@@ -1324,53 +1147,44 @@ export const ja = {
   "runGroup.refreshFailed":
     "最新の状態を取得できませんでした。最後に取得した内容を表示しています。",
 
-  // --- graph ---------------------------------------------------------------------
-  "graph.title": "依存関係",
-  "graph.subtitle":
-    "どのサービスが他のサービスの値を使っているかを表示します。",
-  "graph.layer": "グループ {n}",
-  "graph.cycle": "確認が必要",
-  "graph.dependsOn": "{names} を利用",
-  "graph.empty.title": "サービスがありません",
-  "graph.empty.message": "このワークスペースにはまだサービスがありません。",
-  "graph.noEdges.title": "依存関係はまだありません",
-  "graph.noEdges.message":
-    "サービスが他のサービスの値を使うようになると、ここにつながりが表示されます。",
-
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
-  "account.subtitle": "サインイン情報と言語・表示の設定です。",
-  "account.profile.title": "サインイン情報",
-  "account.profile.subject": "サインイン参照 ID",
-  "account.profile.displayName": "表示名",
+  "account.sectionsLabel": "アカウントの項目",
+  "account.section.me": "自分",
+  "account.section.members": "メンバー",
+  "account.section.billing": "料金と利用量",
+  "account.section.space": "スペース",
+  "account.section.cli": "CLI・APIから使う",
+  "account.profile.title": "サインイン中のアカウント",
+  "account.profile.displayName": "名前",
   "account.profile.email": "メール",
   "account.profile.notSet": "未設定",
   "account.profile.provider": "サインイン方法",
-  "account.profile.expires": "セッション期限",
-  "account.session.userAgent": "ブラウザ",
-  "account.session.details": "セッション詳細",
-  "account.session.debug": "参照 ID",
-  "account.session.signOut": "このブラウザからサインアウト",
-  "account.session.signOutConfirm": "このブラウザからサインアウトしますか？",
-  "account.session.otherNote":
-    "ここでサインアウトできるのは、このブラウザのセッションのみです。",
+  "account.profile.nameHint":
+    "名前とメールは、サインインに使ったアカウントのものです。名前は同じスペースのメンバーに、メールはそのスペースのオーナーと管理者にだけ表示されます。",
   "account.language.title": "言語",
   "account.theme.title": "表示",
-  "account.preferences.title": "表示設定",
-  "account.preferences.body": "言語と見た目を変更できます。",
-  "account.installTarget.title": "ストアからの追加先",
+  "account.preferences.title": "表示と言語",
+  "account.preferences.body": "このブラウザでの見た目と言語です。",
+  "account.installTarget.title": "ストアのインストールリンク",
   "account.installTarget.body":
-    "ストアの「追加」ボタンを、この端末ではこの Takosumi で開くようブラウザに登録します。登録後は、別のストアからでもここに着地します。",
+    "ストアの「インストール」ボタンを、この端末ではこのダッシュボードで開くようブラウザに登録します。",
   "account.installTarget.register": "この端末を登録",
-  "account.installTarget.registered": "この端末で登録済み",
-  "account.installTarget.done":
-    "登録しました。ブラウザの確認ダイアログに応じてください。",
+  "account.installTarget.registered": "この端末は登録済み",
+  "account.installTarget.done": "登録しました。ブラウザの確認に応じてください。",
   "account.installTarget.unsupported":
-    "このブラウザはこの機能に未対応です。ストア側でインスタンス URL を入力してください。",
-  "account.apiKeys.title": "Takosumi API キー",
+    "このブラウザは登録に対応していません。ストアでこのダッシュボードの URL を入力してください。",
+  "account.morePages.title": "運営者のページ",
+  "account.signOut.title": "サインアウト",
+  "account.signOut.body": "このブラウザからサインアウトします。ほかの端末のサインインはそのままです。",
+  "account.signOut.cta": "このブラウザからサインアウト",
+  "account.signOut.confirm": "サインアウトしますか？",
+  "account.apiKeys.title": "CLI・APIから使う",
   "account.apiKeys.subtitle":
-    "CLIや外部ツールから /api/v1 の Takosumi API を使うためのキーを発行・失効できます。",
-  "account.apiKeys.secretOnce": "秘密値は作成時のみ表示",
+    "Takosumi CLI や自動化から、あなたとして操作するためのキーです。CLI では --token にキーを渡します。",
+  "account.apiKeys.apiHelp":
+    "API を直接呼ぶときは、同じキーを Authorization: Bearer ヘッダーに入れて /api/v1 に送ります。",
+  "account.apiKeys.secretOnce": "キーの値は、作成した直後に一度だけ表示されます。",
   "account.apiKeys.name": "キーの名前",
   "account.apiKeys.namePlaceholder": "例: 開発用 CLI",
   "account.apiKeys.expiresLabel": "有効期間",
@@ -1382,13 +1196,13 @@ export const ja = {
   "account.apiKeys.scopeCatalog.loadFailed":
     "利用できる権限を読み込めませんでした。読み込みが完了するまでキーは作成できません。",
   "account.apiKeys.scopeCatalog.retry": "権限を再読み込み",
-  "account.apiKeys.scopeCatalog.empty":
-    "この環境では、この画面から付与できる権限が公開されていません。",
+  "account.apiKeys.scopeCatalog.empty": "この環境では、この画面から付与できる権限がありません。",
   "account.apiKeys.scopeCatalog.workspaceRequired":
-    "この権限を持つキーを作成するには、先にワークスペースを選択してください。",
-  "account.apiKeys.restrictWorkspace":
-    "現在のワークスペースだけで使用できるようにする",
-  "account.apiKeys.create": "API キーを作成",
+    "この権限のキーを作るには、先にスペースを作成してください。",
+  "account.apiKeys.restrictWorkspace": "今のスペースでだけ使えるようにする",
+  "account.apiKeys.create": "キーを作成",
+  "account.apiKeys.createSubmit": "作成",
+  "account.apiKeys.listLabel": "あなたのキー",
   "account.apiKeys.created": "API キーを作成しました",
   "account.apiKeys.createdHint":
     "この値は再表示できません。今すぐ安全な場所へ保存してください。",
@@ -1397,48 +1211,38 @@ export const ja = {
   "account.apiKeys.copyFailed":
     "コピーできませんでした。表示されている値を手動で保存してください。",
   "account.apiKeys.error": "API キーの操作を完了できませんでした: {message}",
-  "account.apiKeys.empty": "API キーはまだありません。",
-  "account.apiKeys.key": "キー",
-  "account.apiKeys.access": "アクセス範囲",
-  "account.apiKeys.workspaceBound": "このワークスペースのみ",
-  "account.apiKeys.lastUsed": "最終使用",
+  "account.apiKeys.empty": "まだキーはありません。",
+  "account.apiKeys.workspaceBound": "このスペースだけ",
+  "account.apiKeys.lastUsed": "最後に使用:",
   "account.apiKeys.neverUsed": "未使用",
-  "account.apiKeys.status": "状態",
   "account.apiKeys.status.active": "有効",
-  "account.apiKeys.status.revoked": "失効済み",
+  "account.apiKeys.status.revoked": "無効",
   "account.apiKeys.status.expired": "期限切れ",
   "account.apiKeys.expires": "{date} まで",
   "account.apiKeys.noExpiry": "期限なし",
-  "account.apiKeys.action": "操作",
-  "account.apiKeys.revoke": "失効",
-  "account.apiKeys.revokeConfirm": "失効する",
+  "account.apiKeys.revoke": "無効にする",
+  "account.apiKeys.revokeConfirm": "無効にする",
+  "account.apiKeys.revokeConsequence": "このキーを使っている CLI や自動化は、すぐに使えなくなります。",
 
   // --- billing -------------------------------------------------------------------
-  "billing.usageQuotaTitle": "利用状況",
-  "billing.usageQuotaSubtitle":
-    "この ワークスペース の記録モードとプロバイダー非依存な使用量を確認します。",
-  "billing.mode.disabled": "この ワークスペース ではショーバックは無効です。",
-  "billing.mode.label": "モード",
-  "billing.mode.showback": "使用量は記録されますが、請求はありません。",
-  "billing.loadError": "使用量設定を読み込めませんでした: {message}",
-  "billing.usage.title": "使用量",
-  "billing.usage.subtitle":
-    "このワークスペースに記録された使用量です。金額確定済みの行には対応する米ドル換算額を表示します。",
+  "billing.mode.disabled": "このスペースでは、Takosumi は料金を請求しません。",
+  "billing.mode.showback": "Takosumi はこのスペースの利用量を記録しますが、請求はしません。",
+  "billing.loadError": "料金を読み込めませんでした: {message}",
+  "billing.title": "料金",
+  "billing.ownersOnly": "料金と利用量は、このスペースのオーナーと管理者が確認できます。",
+  "billing.cloudCosts": "アプリが作るクラウドのリソースは、それぞれのクラウドから請求されます。",
+  "billing.usage.quantityLine": "量 {quantity}",
+  "billing.usage.amountUnknown": "金額不明",
+  "billing.usage.removedApp": "削除済みのアプリ",
+  "billing.usage.title": "利用量",
+  "billing.usage.subtitle": "このスペースで記録された利用量です。新しい順に並びます。",
   "billing.usage.more": "さらに読み込む",
-  "billing.usage.error": "使用量を読み込めませんでした: {message}",
-  "billing.usage.empty": "使用量はまだありません。",
-  "billing.usage.kind": "種別",
-  "billing.usage.time": "日時",
+  "billing.usage.error": "利用量を読み込めませんでした: {message}",
+  "billing.usage.empty": "まだ利用量はありません。",
   "billing.usage.kind.runner_minute": "実行時間",
-  "billing.usage.kind.operation": "サービス操作",
+  "billing.usage.kind.operation": "アプリの操作",
   "billing.usage.kind.compute": "コンピュート",
   "billing.usage.kind.storage": "ストレージ",
-  "billing.usage.quantity": "数量",
-  "billing.usage.amount": "確定金額",
-  "billing.usage.unrated": "未評価",
-  "billing.commercial.pageTitle": "プリペイドクレジットと使用量",
-  "billing.commercial.pageSubtitle":
-    "利用可能クレジットの確認、プリペイドクレジットの追加、自動チャージの管理を行います。",
   "billing.commercial.description":
     "プリペイドクレジットはTakosumiの使用量に充当され、有効期限はありません。",
   "billing.commercial.loadError":
@@ -1448,7 +1252,7 @@ export const ja = {
   "billing.commercial.unavailable":
     "支払い設定を一時的に利用できません。既存の使用量記録には影響しません。",
   "billing.commercial.checkout.success":
-    "支払いが完了しました。決済サービスによる確定後、プリペイドクレジットが反映されます。",
+    "支払いが完了しました。決済事業者による確定後、プリペイドクレジットが追加されます。",
   "billing.commercial.checkout.cancelled":
     "支払い設定をキャンセルしました。変更はありません。",
   "billing.commercial.manage": "支払い方法を管理",
@@ -1487,8 +1291,7 @@ export const ja = {
   "billing.commercial.credits.subtitle":
     "追加するプリペイドクレジット額を選びます。Checkoutで支払い方法を安全に保存しますが、自動チャージは下で有効にするまで行いません。",
   "billing.commercial.credits.choose": "追加するプリペイドクレジット額を選択",
-  "billing.commercial.credits.taxNote":
-    "適用される税金は決済時に決済サービスが計算します。",
+  "billing.commercial.credits.taxNote": "適用される税金は、決済時に決済事業者が計算します。",
   "billing.commercial.credits.add": "プリペイドクレジットを追加",
   "billing.commercial.autoRecharge.title": "自動チャージ",
   "billing.commercial.autoRecharge.subtitle":
@@ -1521,8 +1324,7 @@ export const ja = {
   "billing.commercial.payment.status.refunded": "返金済み",
   "billing.commercial.payment.status.disputed": "異議申し立て中",
   "billing.commercial.transaction.title": "利用明細",
-  "billing.commercial.transaction.subtitle":
-    "このワークスペースの課金済み・取り消し済みの利用明細です。",
+  "billing.commercial.transaction.subtitle": "このスペースの課金済み・取り消し済みの利用明細です。",
   "billing.commercial.transaction.empty": "利用明細はまだありません。",
   "billing.commercial.transaction.error":
     "利用明細を読み込めませんでした: {message}",

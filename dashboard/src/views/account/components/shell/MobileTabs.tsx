@@ -1,8 +1,7 @@
 /**
- * Mobile bottom bar: the same everyday trio as the sidebar (home / store /
- * settings), from the shared nav model. Icons carry the meaning (labels are
- * dropped for a calmer bar; the accessible name stays on each link). Hosting
- * management is reached through 設定 > 管理.
+ * Mobile bottom bar: the same four behaviors as the sidebar (home / store /
+ * connections / account), from the shared nav model, each with its icon and a
+ * short label so the destination reads in words.
  */
 import { A, useLocation } from "@solidjs/router";
 import { For } from "solid-js";
@@ -19,9 +18,10 @@ export default function MobileTabs() {
             href={tab.href}
             class="mobile-tab"
             classList={{ active: isNavActive(loc.pathname, tab) }}
-            aria-label={t(tab.labelKey)}
+            aria-current={isNavActive(loc.pathname, tab) ? "page" : undefined}
           >
-            <tab.icon size={24} />
+            <tab.icon size={22} aria-hidden="true" />
+            <span class="mobile-tab-label">{t(tab.labelKey)}</span>
           </A>
         )}
       </For>

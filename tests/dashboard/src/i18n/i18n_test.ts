@@ -140,6 +140,78 @@ describe("i18n dictionaries", () => {
     }
   });
 
+  test("navigation, connections, account, space, billing and sign-in copy use the app vocabulary", () => {
+    // TASK-0115: every surface says アプリ / 画面 / リソース / 接続 / スペース.
+    // These namespaces belong to the navigation and account side.
+    const prefixes = [
+      "nav.",
+      "shell.",
+      "conn.",
+      "account.",
+      "members.",
+      "workspace.",
+      "space.",
+      "billing.",
+      "auth.",
+      "notif.",
+    ];
+    const keys = (Object.keys(ja) as Array<keyof typeof ja>).filter((key) =>
+      prefixes.some((prefix) => key.startsWith(prefix)),
+    );
+    expect(keys.length).toBeGreaterThan(300);
+    for (const key of keys) {
+      expect({ key, value: ja[key] }).not.toEqual(
+        expect.objectContaining({
+          value: expect.stringMatching(
+            /ワークスペース|サービス|ワークロード|デプロイ|公開(?!リポジトリ)|反映/u,
+          ),
+        }),
+      );
+      // "Terms of Service" is the legal document's name.
+      if (key === "auth.termsOfService") continue;
+      expect({ key, value: en[key] }).not.toEqual(
+        expect.objectContaining({
+          value: expect.stringMatching(
+            /\b(?:workspaces?|services?|workloads?|deploy(?:s|ed|ing)?)\b/iu,
+          ),
+        }),
+      );
+    }
+    expect(ja["nav.connections"]).toBe("接続");
+    expect(ja["account.section.space"]).toBe("スペース");
+  });
+
+  test("the settings hub, manage catalog and removed space tools have no copy left", () => {
+    for (const removed of [
+      "settings.",
+      "workspaceSettings.",
+      "shares.",
+      "backups.",
+      "interfaceRecovery.",
+      "hostedResources.",
+      "graph.",
+      "runList.",
+    ]) {
+      expect({
+        removed,
+        keys: Object.keys(ja).filter((key) => key.startsWith(removed)),
+      }).toEqual({ removed, keys: [] });
+    }
+    // Generated API handles never appear in copy as if they were names.
+    for (const [locale, messages] of [
+      ["ja", ja],
+      ["en", en],
+    ] as const) {
+      for (const [key, value] of Object.entries(messages)) {
+        expect({ locale, key, leaked: value.includes("@workspace-") }).toEqual({
+          locale,
+          key,
+          leaked: false,
+        });
+      }
+    }
+  });
+
   test("no dictionary key is left behind by removed UI", () => {
     // Key-set parity is compile-enforced, but nothing caught copy whose SCREEN
     // was deleted — 10 such keys had accumulated, including a copy-to-clipboard

@@ -68,7 +68,8 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     const paths = routePaths(source);
     // The redirect destination must be a real route, not another dead link.
     expect(paths).toContain("/sign-in");
-    // A spot-check of pre-existing routes the fix must not disturb.
+    // A spot-check of routes the fix must not disturb, including old URLs
+    // that now redirect.
     for (const p of [
       "/",
       "/home",
@@ -83,26 +84,91 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     }
   });
 
-  test("normal connection and billing routes stay first-class", () => {
+  test("the four behaviors are first-class routes", () => {
+    expect(source).toContain('<Route path="/" component={AppListView} />');
+    expect(source).toContain('<Route path="/new" component={InstallView} />');
     expect(source).toContain(
       '<Route path="/connections" component={ConnectionsView} />',
     );
-    // Billing lives in the settings hub; the old /billing URL keeps bouncing.
+    expect(source).toContain('<Route path="/account" component={AccountView} />');
     expect(source).toContain(
-      '<Route path="/settings/billing" component={BillingView} />',
+      '<Route path="/account/:section" component={AccountView} />',
     );
-    expect(source).toMatch(
-      /<Route\s+path="\/billing"\s+component=\{\(\)\s*=>\s*<RedirectWithQuery\s+to="\/settings\/billing"\s*\/>\}\s*\/>/,
-    );
-    // The old advanced Workspace billing URL is redirect-only too; billing
-    // has one normal-user home under the settings hub.
-    expect(source).toMatch(
-      /<Route\s+path="\/advanced\/workspace\/billing"\s+component=\{\(\)\s*=>\s*<RedirectWithQuery\s+to="\/settings\/billing"\s*\/>\}\s*\/>/,
-    );
-    expect(source).toContain('params.tab === "billing"');
+    // An app's page and the details opened from its history stay routable.
     expect(source).toContain(
-      '<Route path="/advanced/workspace" component={AdvancedWorkspaceView} />',
+      '<Route path="/workloads/:id" component={WorkloadDetailView} />',
     );
+    expect(source).toContain(
+      '<Route path="/workloads/:id/:tab" component={WorkloadDetailView} />',
+    );
+    expect(source).toContain('<Route path="/runs/:id" component={RunView} />');
+    expect(source).toContain(
+      '<Route path="/run-groups/:id" component={RunGroupView} />',
+    );
+    expect(source).toContain(
+      '<Route path="/notifications" component={NotificationsView} />',
+    );
+  });
+
+  test("screens that were internal concepts redirect to where the behavior lives", () => {
+    const redirects: readonly (readonly [string, string])[] = [
+      ["/runs", "/"],
+      ["/activity", "/"],
+      ["/graph", "/"],
+      ["/workloads", "/"],
+      ["/services", "/"],
+      ["/capsules", "/"],
+      ["/settings", "/account"],
+      ["/settings/account", "/account"],
+      ["/settings/manage", "/account"],
+      ["/settings/manage/hosted-resources", "/"],
+      ["/advanced/workspace", "/account/space"],
+      ["/workspace/settings", "/account/space"],
+      ["/members", "/account/members"],
+      ["/backups", "/account/space"],
+      ["/output-shares", "/account/space"],
+      ["/providers", "/connections"],
+      ["/account/settings", "/account/space"],
+      ["/account/profile", "/account"],
+      ["/account/sessions", "/account"],
+    ];
+    for (const [from, to] of redirects) {
+      expect(source).toMatch(
+        new RegExp(
+          `<Route\\s+path="${from.replace(/[/]/gu, "\\/")}"\\s+component=\\{\\(\\)\\s*=>\\s*<Navigate\\s+href="${to.replace(/[/]/gu, "\\/")}"\\s*\\/>\\}\\s*\\/>`,
+        ),
+      );
+    }
+    // Billing keeps its query (a payment provider's return carries it).
+    for (const from of ["/billing", "/settings/billing"]) {
+      expect(source).toMatch(
+        new RegExp(
+          `<Route\\s+path="${from.replace(/[/]/gu, "\\/")}"\\s+component=\\{\\(\\)\\s*=>\\s*<RedirectWithQuery\\s+to="\\/account\\/billing"\\s*\\/>\\}\\s*\\/>`,
+        ),
+      );
+    }
+    // Old Workspace-settings tabs map onto 接続 and アカウント sections.
+    expect(source).toContain('<Route\n        path="/advanced/workspace/:tab"');
+    expect(source).toContain('<Route\n        path="/workspace/settings/:tab"');
+    expect(source).toContain('case "members":\n      return "/account/members";');
+    expect(source).toContain('case "connections":\n      return "/connections";');
+    expect(source).toContain('case "billing":\n      return "/account/billing";');
+    expect(source).toContain('case "interface-recovery":\n      return "/";');
+    expect(source).toContain('default:\n      return "/account/space";');
+    // No removed screen is still mounted.
+    for (const removed of [
+      "RunsListView",
+      "ActivityView",
+      "GraphView",
+      "WorkloadListView",
+      "SettingsView",
+      "ManageView",
+      "HostedResourcesView",
+      "WorkspaceSettingsView",
+      "AdvancedWorkspaceView",
+    ]) {
+      expect(source).not.toContain(removed);
+    }
   });
 
   test("Navigate is imported from @solidjs/router", () => {

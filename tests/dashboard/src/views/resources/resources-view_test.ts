@@ -8,7 +8,7 @@ const source = (path: string) => readFileSync(resolve(dashboardRoot, path), "utf
 test("Resource dashboard surface is no longer mounted or advertised", () => {
   const index = source("index.tsx");
   const nav = source("views/account/components/shell/nav.ts");
-  const settings = source("views/settings/SettingsView.tsx");
+  const account = source("views/account/AccountView.tsx");
 
   expect(index).not.toContain('import("./views/resources/ResourcesView.tsx")');
   expect(index).not.toContain("ResourceDetailView");
@@ -16,8 +16,8 @@ test("Resource dashboard surface is no longer mounted or advertised", () => {
   expect(index).not.toContain('path="/resources/:kind/:name"');
   expect(nav).not.toContain("nav.resources");
   expect(nav).not.toContain("/^\\/resources");
-  expect(settings).not.toContain('href: "/resources"');
-  expect(settings).not.toContain('titleKey: "nav.resources"');
+  expect(account).not.toContain('"/resources"');
+  expect(account).not.toContain("nav.resources");
   for (const path of [
     "views/resources/ResourcesView.tsx",
     "views/resources/ResourceDetailView.tsx",

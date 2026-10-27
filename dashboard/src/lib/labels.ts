@@ -6,11 +6,13 @@
  * primary UI; raw backend values belong in folded support/debug details.
  *
  * Vocabulary contract (see i18n/ja.ts, TASK-0115): the user-facing noun for a
- * Capsule is アプリ / app, from the store through install to app management;
- * a launchable Interface is a 画面 / screen. Verbs: インストール / 内容を確認 /
+ * Capsule is アプリ / app; a launchable Interface is a 画面 / screen; cloud
+ * objects are リソース / resources; credentials are 接続 / connections; a
+ * Workspace is a スペース / space. Verbs: インストール / 内容を確認 /
  * 許可してインストール / インストール済み (Install / Review / Allow and
- * install / Installed). Surfaces not yet migrated still say サービス /
- * ワークロード / デプロイ; never mix old and new nouns within one panel.
+ * install / Installed), then 更新 / 設定を変更 / アンインストール. Every
+ * surface uses this vocabulary; サービス / ワークロード / デプロイ / 公開 /
+ * 反映 are not used.
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { Tone } from "../components/ui/Badge.tsx";

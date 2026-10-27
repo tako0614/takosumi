@@ -1,11 +1,11 @@
 /**
  * Where an activity event goes when you click it.
  *
- * Shared by /notifications and /activity: the history page used to render the
- * same events as plain, unclickable text, so a failure you found there was a
- * dead end while the identical row on /notifications linked straight to the
- * run. Connection, output-share and Interface-publication events route to the
- * pages that act on them.
+ * Used by the notification feed. Run events open the run, app events open
+ * the app's page, and connection events open 接続. Events about things that
+ * live on an app's page (a screen that could not be published) open ホーム,
+ * which lists the app with what needs attention. Value sharing between spaces
+ * has no screen, so its events are not links.
  */
 import type { ActivityEvent } from "./control-api.ts";
 
@@ -22,13 +22,13 @@ export function activityEventHref(event: ActivityEvent): string | undefined {
   if (event.targetType === "connection") {
     return "/connections";
   }
-  if (event.targetType === "output_share") {
-    return "/advanced/workspace/shares";
-  }
   if (event.targetType === "capsule_interface_materialization_intent") {
-    // A dead-lettered Interface publication is retried only from the
-    // Workspace's Interface recovery list.
-    return "/advanced/workspace/interface-recovery";
+    // The event targets the publication intent, not the app; the app's page
+    // owns the retry and ホーム shows which app needs attention.
+    const capsuleId = event.metadata?.capsuleId;
+    return typeof capsuleId === "string" && capsuleId
+      ? `/workloads/${encodeURIComponent(capsuleId)}`
+      : "/";
   }
   return undefined;
 }

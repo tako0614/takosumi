@@ -1,0 +1,281 @@
+/* 接続 and アカウント pages. Lists are cards at every width, so nothing
+ * scrolls sideways on a phone; rows wrap their actions under the text below
+ * 640px. */
+
+.acct-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+  max-width: 880px;
+}
+.acct-tabs {
+  margin-bottom: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.acct-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+}
+.acct-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-4);
+}
+.acct-space-note {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+}
+.acct-help,
+.acct-footnote {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
+}
+.acct-footnote {
+  color: var(--tg-fg-subtle);
+}
+.acct-pref + .acct-pref {
+  margin-top: var(--tg-s-4);
+}
+.acct-pref-label {
+  margin: 0 0 var(--tg-s-2);
+  font-weight: 650;
+}
+
+/* Lists of people, keys, usage, connections. */
+.acct-list-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.acct-list-title {
+  margin: 0;
+  font-size: var(--tg-fs-base);
+  font-weight: 700;
+}
+.acct-list,
+.conn-list,
+.acct-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.acct-row {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-3) var(--tg-s-4);
+}
+.acct-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+}
+.acct-row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.acct-row-title strong {
+  overflow-wrap: anywhere;
+}
+.acct-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-1) var(--tg-s-3);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.acct-person-email {
+  overflow-wrap: anywhere;
+}
+.acct-row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+.acct-row-actions .tg-select {
+  min-width: 9rem;
+}
+.acct-row-amount {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.acct-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-sm);
+}
+.acct-link-list a {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+
+/* Roles, one line each. */
+.acct-roles {
+  margin: 0;
+  display: grid;
+  gap: var(--tg-s-2);
+}
+.acct-role {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: var(--tg-s-3);
+  font-size: var(--tg-fs-sm);
+}
+.acct-role dt {
+  font-weight: 650;
+}
+.acct-role dd {
+  margin: 0;
+  color: var(--tg-fg-muted);
+}
+.acct-invite-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  max-width: 28rem;
+}
+
+/* Space: archive row and the create-by-purpose choices. */
+.acct-danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-4);
+}
+.acct-danger-row p {
+  margin: 0;
+}
+.acct-purpose-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--tg-s-3);
+}
+.acct-purpose {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--tg-s-1);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--tg-dur) var(--tg-ease);
+}
+.acct-purpose:hover,
+.acct-purpose:focus-visible {
+  border-color: var(--tg-line-strong);
+}
+.acct-purpose svg {
+  color: var(--tg-accent-text);
+}
+.acct-purpose-title {
+  font-weight: 700;
+}
+.acct-purpose-body {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.45;
+}
+
+/* 接続: one card per connection, with the apps that use it. */
+.conn-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  padding: var(--tg-s-4);
+}
+.conn-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+.conn-card-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.conn-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-1) var(--tg-s-3);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.conn-apps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  font-size: var(--tg-fs-sm);
+}
+.conn-apps-label {
+  color: var(--tg-fg-subtle);
+  font-weight: 600;
+}
+.conn-apps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-1) var(--tg-s-2);
+}
+.conn-apps-list a {
+  display: inline-flex;
+  padding: 2px var(--tg-s-2);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-full);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+.conn-apps-list a:hover {
+  border-color: var(--tg-line-strong);
+}
+.conn-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+
+@media (max-width: 640px) {
+  .acct-row,
+  .acct-danger-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .acct-row-amount {
+    align-self: flex-start;
+  }
+  .acct-role {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}

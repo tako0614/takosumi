@@ -1,17 +1,23 @@
 /**
- * Workspace settings — 接続. Port of the former ConnectionsView, now fully on the
- * session-authed control surface (`/api/v1/connections*`): list / create /
- * test / revoke all go through control-api (the legacy `/v1/connections` RPC
- * is gone). The create form (guided recipe fields, provider OAuth popup, raw
- * bring-your-own-key editor) lives in ../connections/ConnectionCreateForm.tsx;
- * this tab owns the list, the per-connection test / remove state, and the
- * first test of each connection the form saves.
+ * 接続 — the behavior "connect my cloud". Lists the space's connections on the
+ * session-authed control surface (`/api/v1/connections*`), and for each one
+ * shows which installed apps use it, a test, and removal that names the
+ * affected apps. The create form (guided recipe fields, provider OAuth popup,
+ * or keys for a cloud without a guided method) lives in
+ * ../connections/ConnectionCreateForm.tsx; this component owns the list, the
+ * per-connection test / remove state, and the first test of each connection
+ * the form saves.
+ *
+ * Which apps use a connection is derived from each app's provider bindings
+ * (lib/connection-usage.ts). The install review embeds this component with
+ * `embedded` and skips that read: there the question is which connection to
+ * pick, not who already uses it.
  *
  * A credential OAuth callback redirects to `/connections?connected=1` plus an
  * opaque `connection_id` / `connection_status`, which the router forwards here
  * query-intact; the one-time banner reads and strips those params. `/new` links
  * may also include a safe `return=/new?...` target so users can create a
- * ProviderConnection, then jump back to the add flow.
+ * connection, then jump back to the install.
  */
 import "../../../styles/wave-c.css";
 import {
@@ -24,7 +30,8 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { ArrowLeft, Plug, Plus, Trash } from "lucide-solid";
+import { A } from "@solidjs/router";
+import { ArrowLeft, Plug, Plus, RefreshCw } from "lucide-solid";
 import {
   providerSetupOptionsFromCredentialRecipes,
   type ProviderConnectionSetupOption,
@@ -52,7 +59,11 @@ import {
 } from "../../../lib/control-api.ts";
 import { readableProviderSourceLabel } from "../../../lib/provider-labels.ts";
 import { providerConnectionDisplayName } from "../../../lib/provider-connections.ts";
-import { formatDateTime, locale, t } from "../../../i18n/index.ts";
+import {
+  type ConnectionAppRef,
+  loadConnectionUsage,
+} from "../../../lib/connection-usage.ts";
+import { formatDate, formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -116,6 +127,22 @@ export default function ConnectionsTab(props: {
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(workspaceId, listProviderConnections);
   const [credentialRecipes] = createResource(connectionSetupCatalog);
+  // Which apps use each connection. Not read inside the install review.
+  const [usage, { refetch: refetchUsage }] = createResource(
+    () => (props.embedded ? null : workspaceId()),
+    (id) => loadConnectionUsage(id),
+  );
+  /** Apps using the connection; `undefined` while unknown. */
+  const appsUsing = (
+    connectionId: string,
+  ): readonly ConnectionAppRef[] | undefined => {
+    if (props.embedded || usage.loading || usage.error) return undefined;
+    const known = usage.latest;
+    if (!known) return undefined;
+    const apps = known.appsByConnection.get(connectionId) ?? [];
+    // An incomplete read cannot say "no app uses this".
+    return apps.length === 0 && known.incomplete ? undefined : apps;
+  };
   const installedCredentialRecipes = () =>
     credentialRecipes.error ? [] : (credentialRecipes.latest?.recipes ?? []);
   const providerOptions = createMemo(() =>
@@ -137,7 +164,7 @@ export default function ConnectionsTab(props: {
   );
   // An errored resource THROWS on read; every data read goes through this
   // guarded accessor so a failed list surfaces the error toast below instead
-  // of crashing the tab (mirrors RunsListView / RunGroupView).
+  // of crashing the tab.
   const providerConnectionRows = (): readonly ProviderConnection[] =>
     providerConnections.error ? [] : (providerConnections.latest ?? []);
   const hasProviderConnections = () => providerConnectionRows().length > 0;
@@ -147,6 +174,8 @@ export default function ConnectionsTab(props: {
     await refetchProviderConnections();
     if (!disposed) props.onChanged?.();
   };
+  const appNames = (apps: readonly ConnectionAppRef[]) =>
+    apps.map((app) => app.name).join(locale() === "ja" ? "、" : ", ");
 
   const afterConnectionCreated = async (connection: ProviderConnection) => {
     if (disposed || connection.workspaceId !== workspaceId()) return;
@@ -297,7 +326,7 @@ export default function ConnectionsTab(props: {
 
   // Which connection is being revoked — remove is one shared action, so
   // without this every row's delete button would look busy during a single
-  // revoke (same per-row idiom as SharesTab/BackupsTab).
+  // revoke.
   const [removingId, setRemovingId] = createSignal<string | null>(null);
   const remove = createAction(async (id: string) => {
     setRemovingId(id);
@@ -309,6 +338,7 @@ export default function ConnectionsTab(props: {
         setLastCreatedVerifiedHint(false);
       }
       await refreshConnections();
+      if (!props.embedded && !disposed) void refetchUsage();
     } finally {
       setRemovingId(null);
     }
@@ -333,27 +363,83 @@ export default function ConnectionsTab(props: {
     const name =
       providerConnectionDisplayName(connection) ||
       providerConnectionProviderLabel(connection, providerOptions());
+    const apps = appsUsing(connection.id);
+    // The consequence is stated with the apps it affects: their next update,
+    // settings change or uninstall needs another connection. Removing never
+    // deletes what the apps created.
+    const consequence =
+      apps === undefined
+        ? t("conn.remove.appsUnknown")
+        : apps.length === 0
+          ? t("conn.remove.noApps")
+          : t("conn.remove.affectsApps", { apps: appNames(apps) });
     const ok = await confirm({
-      title: t("conn.remove.confirmTitle"),
-      // Warn that live Capsules' ProviderBindings referencing this connection
-      // will fail their next Run (provider_connection_setup_required).
-      message: `${t("conn.remove.confirmMessage", { name })} ${t(
-        "conn.remove.bindingWarning",
-      )}`,
-      confirmText: t("common.delete"),
+      title: t("conn.remove.confirmTitle", { name }),
+      message: `${consequence} ${t("conn.remove.keepsResources")}`,
+      confirmText: t("conn.remove.confirm"),
       danger: true,
     });
     if (!ok) return;
     void remove.run(connection.id);
   };
 
+  /** Workspace connections can be removed; operator-provided ones cannot. */
+  const removable = (connection: ProviderConnection) =>
+    connection.scope !== "operator";
+
+  const usageLine = (connection: ProviderConnection) => (
+    <Show when={!props.embedded}>
+      <div class="conn-apps">
+        <span class="conn-apps-label">{t("conn.apps.label")}</span>
+        <Switch>
+          <Match when={usage.loading && !usage.latest}>
+            <span class="muted">{t("conn.apps.loading")}</span>
+          </Match>
+          <Match when={appsUsing(connection.id)}>
+            {(apps) => (
+              <Show
+                when={apps().length > 0}
+                fallback={<span class="muted">{t("conn.apps.none")}</span>}
+              >
+                <ul class="conn-apps-list">
+                  <For each={apps()}>
+                    {(app) => (
+                      <li>
+                        <A href={`/workloads/${encodeURIComponent(app.capsuleId)}`}>
+                          {app.name}
+                        </A>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
+            )}
+          </Match>
+          <Match when>
+            <span class="muted">{t("conn.apps.unknown")}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              icon={<RefreshCw size={14} />}
+              busy={usage.loading}
+              onClick={() => void refetchUsage()}
+            >
+              {t("common.retry")}
+            </Button>
+          </Match>
+        </Switch>
+      </div>
+    </Show>
+  );
+
   const providerConnectionList = () => (
-    <ul class="wc-conn-list">
+    <ul class="conn-list">
       <For each={providerConnectionRows()}>
         {(connection) => (
-          <li class="wc-conn-row">
-            <div class="wc-conn-head">
-              <span class="wc-conn-name">
+          <li class="conn-card tg-card">
+            <div class="conn-card-head">
+              <span class="conn-card-name">
                 {providerConnectionDisplayName(connection) ||
                   providerConnectionProviderLabel(
                     connection,
@@ -364,24 +450,26 @@ export default function ConnectionsTab(props: {
                 {providerConnectionStatusLabel(connection.status)}
               </Badge>
             </div>
-            <div class="wc-conn-meta">
+            <div class="conn-card-meta">
               <span>
                 {providerConnectionProviderLabel(
                   connection,
                   providerOptions(),
                 )}
               </span>
+              <Show when={connection.scope === "operator"}>
+                <span>{t("conn.operatorProvided")}</span>
+              </Show>
               <Show when={connection.expiresAt}>
                 {(expiresAt) => (
-                  <span>
-                    {t("conn.expiresAt", {
-                      date: formatDateTime(expiresAt()),
-                    })}
+                  <span title={formatDateTime(expiresAt())}>
+                    {t("conn.expiresAt", { date: formatDate(expiresAt()) })}
                   </span>
                 )}
               </Show>
             </div>
-            <div class="wc-conn-actions">
+            {usageLine(connection)}
+            <div class="conn-card-actions">
               <Button
                 variant="secondary"
                 size="sm"
@@ -391,17 +479,19 @@ export default function ConnectionsTab(props: {
               >
                 {testBusy(connection.id) ? t("conn.testing") : t("conn.test")}
               </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                type="button"
-                onClick={() => void confirmRemoveProviderConnection(connection)}
-                busy={remove.busy() && removingId() === connection.id}
-                disabled={remove.busy()}
-                icon={<Trash size={14} />}
-              >
-                {t("common.delete")}
-              </Button>
+              <Show when={removable(connection)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  class="conn-remove"
+                  onClick={() => void confirmRemoveProviderConnection(connection)}
+                  busy={remove.busy() && removingId() === connection.id}
+                  disabled={remove.busy()}
+                >
+                  {t("conn.remove.cta")}
+                </Button>
+              </Show>
             </div>
             <Show when={testError(connection.id)}>
               {(failure) => (
@@ -551,7 +641,7 @@ export default function ConnectionsTab(props: {
           <Show when={!createFormOpen()}>
             <div class="wc-card-action-row">
               <Button
-                variant="primary"
+                variant="secondary"
                 size="sm"
                 type="button"
                 icon={<Plus size={14} />}

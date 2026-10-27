@@ -1,8 +1,13 @@
 /**
- * Provider-neutral Workspace usage/showback surface. Optional commercial
- * account management is activated by a platform extension contribution. The
- * dashboard owns its native presentation while the extension remains the sole
- * owner of prices, payment processing, tax policy, and billing records.
+ * アカウント > 料金と利用量: what this space costs and what it used, in plain
+ * words. Takosumi itself either charges nothing for the space or records use
+ * without billing it; the clouds an app's resources run on bill separately.
+ * An amount Takosumi has not priced is shown as unknown, never as zero.
+ *
+ * Optional commercial account management is activated by a platform extension
+ * contribution. The dashboard owns its native presentation while the extension
+ * remains the sole owner of prices, payment processing, tax policy, and
+ * billing records.
  */
 import "../../../styles/wave-b.css";
 import {
@@ -23,6 +28,7 @@ import {
   usageUsdMicros,
 } from "../../../lib/billing-format.ts";
 import {
+  ControlApiError,
   getWorkspaceBilling,
   listWorkspaceUsagePage,
   type UsageEvent,
@@ -35,29 +41,26 @@ import {
   type PlatformContribution,
 } from "../../../lib/platform-contributions.ts";
 import { hasPlatformExtensionCapability } from "../../../lib/runtime-capabilities.ts";
-import {
-  formatDateTime,
-  intlLocale,
-  type MessageKey,
-  t,
-} from "../../../i18n/index.ts";
+import { createServiceNames } from "../../../lib/service-names.ts";
+import { intlLocale, type MessageKey, t } from "../../../i18n/index.ts";
 import {
   Button,
   Card,
   CardHeader,
-  type Column,
-  DataTable,
-  KVList,
+  CardSection,
+  Skeleton,
   Toast,
 } from "../../../components/ui/index.ts";
 import { friendlyError } from "../../../lib/error-copy.ts";
 import CommercialBillingPanel from "../../../components/billing/CommercialBillingPanel.tsx";
+import RelativeTime from "../../account/components/RelativeTime.tsx";
 
+/** What Takosumi does with this space's use, by billing mode. */
 const MODE_KEY: Record<string, MessageKey> = {
   disabled: "billing.mode.disabled",
   showback: "billing.mode.showback",
 };
-const USAGE_LEDGER_PAGE_SIZE = 25;
+const USAGE_PAGE_SIZE = 25;
 
 export default function BillingTab(props: { readonly workspaceId: string }) {
   const [billing, { refetch }] = createResource(
@@ -65,15 +68,18 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     getWorkspaceBilling,
   );
   const [contributions] = createResource(loadPlatformContributions);
+  const appNames = createServiceNames(() => props.workspaceId);
   const [usageRows, setUsageRows] = createSignal<readonly UsageEvent[]>([]);
   const [usageCursor, setUsageCursor] = createSignal<string | undefined>();
   const [usageLoading, setUsageLoading] = createSignal(false);
   const [usageLoaded, setUsageLoaded] = createSignal(false);
-  const [usageDetailsOpen, setUsageDetailsOpen] = createSignal(false);
   const [usageError, setUsageError] = createSignal<string | undefined>();
 
   const current = createMemo(() => (billing.error ? undefined : billing()));
   const mode = createMemo(() => current()?.settings.mode ?? "disabled");
+  /** Billing is readable by the space's owners and admins only. */
+  const forbidden = () =>
+    billing.error instanceof ControlApiError && billing.error.status === 403;
   const commercialBillingEnabled = createMemo(
     () =>
       hasPlatformExtensionCapability("billing.commercial.v1") &&
@@ -83,37 +89,13 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       ).some((contribution) => contribution.presentation === "native"),
   );
 
-  const usageColumns = createMemo<readonly Column<UsageEvent>[]>(() => [
-    {
-      header: t("billing.usage.time"),
-      cell: (event) => formatDateTime(event.createdAt),
-    },
-    {
-      header: t("billing.usage.kind"),
-      cell: (event) => usageKindLabel(event.kind),
-    },
-    {
-      header: t("billing.usage.quantity"),
-      align: "right",
-      cell: (event) => formatBillingNumber(event.quantity),
-    },
-    {
-      header: t("billing.usage.amount"),
-      align: "right",
-      cell: (event) =>
-        event.ratingStatus === "rated"
-          ? formatUsdMicros(usageUsdMicros(event))
-          : t("billing.usage.unrated"),
-    },
-  ]);
-
   const loadUsage = async (append: boolean) => {
     if (usageLoading()) return;
     setUsageLoading(true);
     setUsageError(undefined);
     try {
       const page = await listWorkspaceUsagePage(props.workspaceId, {
-        limit: USAGE_LEDGER_PAGE_SIZE,
+        limit: USAGE_PAGE_SIZE,
         ...(append && usageCursor() ? { cursor: usageCursor() } : {}),
       });
       setUsageRows((rows) =>
@@ -127,43 +109,45 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       setUsageLoading(false);
     }
   };
+  // This section exists to show use, so it reads it on open.
+  onMount(() => void loadUsage(false));
 
-  const handleUsageToggle = (event: Event) => {
-    const details = event.currentTarget as HTMLDetailsElement | null;
-    if (!details?.open) return;
-    setUsageDetailsOpen(true);
-    if (!usageLoaded() && !usageLoading()) void loadUsage(false);
-  };
+  const amount = (event: UsageEvent) =>
+    event.ratingStatus === "rated"
+      ? formatUsdMicros(usageUsdMicros(event))
+      : t("billing.usage.amountUnknown");
 
   return (
-    <div class="wa-stack">
-      <Show when={billing.error}>
-        <Toast tone="error">
-          {t("billing.loadError", {
-            message: friendlyError(billing.error, t).message,
-          })}
-          <Button size="sm" variant="secondary" onClick={() => void refetch()}>
-            {t("common.retry")}
-          </Button>
-        </Toast>
-      </Show>
-
-      <Show when={current() && !commercialBillingEnabled()}>
-        <Card>
-          <CardHeader
-            title={t("billing.usageQuotaTitle")}
-            subtitle={t("billing.usageQuotaSubtitle")}
-          />
-          <KVList
-            items={[
-              {
-                label: t("billing.mode.label"),
-                value: t(MODE_KEY[mode()] ?? "billing.mode.disabled"),
-              },
-            ]}
-          />
-        </Card>
-      </Show>
+    <div class="acct-stack">
+      <Switch>
+        <Match when={forbidden()}>
+          <Card>
+            <CardHeader
+              title={t("billing.title")}
+              subtitle={t("billing.ownersOnly")}
+            />
+          </Card>
+        </Match>
+        <Match when={billing.error}>
+          <Toast tone="error">
+            {t("billing.loadError", {
+              message: friendlyError(billing.error, t).message,
+            })}
+            <Button size="sm" variant="secondary" onClick={() => void refetch()}>
+              {t("common.retry")}
+            </Button>
+          </Toast>
+        </Match>
+        <Match when={current() && !commercialBillingEnabled()}>
+          <Card>
+            <CardHeader title={t("billing.title")} />
+            <CardSection>
+              <p>{t(MODE_KEY[mode()] ?? "billing.mode.disabled")}</p>
+              <p class="muted">{t("billing.cloudCosts")}</p>
+            </CardSection>
+          </Card>
+        </Match>
+      </Switch>
 
       <For
         each={platformContributionsForSlot(
@@ -218,60 +202,77 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         }}
       </For>
 
-      <Card class="wb-billing-history">
-        <details
-          class="wb-billing-disclosure"
-          onToggle={handleUsageToggle}
-        >
-          <summary>
-            <span>
-              <span>
-                <strong>{t("billing.usage.title")}</strong>
-                <small>{t("billing.usage.subtitle")}</small>
-              </span>
-            </span>
-            <span>{t("common.details")}</span>
-          </summary>
-          <Show when={usageDetailsOpen()}>
-            <div class="wb-billing-history-body">
-              <Show when={usageError()}>
-                {(message) => (
-                  <Toast tone="error">
-                    {t("billing.usage.error", { message: message() })}
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      type="button"
-                      busy={usageLoading()}
-                      onClick={() => void loadUsage(false)}
-                    >
-                      {t("common.retry")}
-                    </Button>
-                  </Toast>
-                )}
-              </Show>
-              <Show when={!usageError()}>
-                <DataTable
-                  columns={usageColumns()}
-                  rows={usageRows()}
-                  rowKey={(event) => event.id}
-                  loading={usageLoading() && usageRows().length === 0}
-                  empty={t("billing.usage.empty")}
-                />
-                <Show when={usageCursor()}>
+      <Show when={!forbidden()}>
+        <section class="acct-list-section" aria-label={t("billing.usage.title")}>
+          <h2 class="acct-list-title">{t("billing.usage.title")}</h2>
+          <p class="muted">{t("billing.usage.subtitle")}</p>
+          <Switch>
+            <Match when={usageError()}>
+              {(message) => (
+                <Toast tone="error">
+                  {t("billing.usage.error", { message: message() })}
                   <Button
                     variant="secondary"
+                    size="sm"
+                    type="button"
                     busy={usageLoading()}
-                    onClick={() => void loadUsage(true)}
+                    onClick={() => void loadUsage(false)}
                   >
-                    {t("billing.usage.more")}
+                    {t("common.retry")}
                   </Button>
-                </Show>
+                </Toast>
+              )}
+            </Match>
+            <Match when={!usageLoaded()}>
+              <Skeleton variant="card" count={2} />
+            </Match>
+            <Match when={usageRows().length === 0}>
+              <p class="muted">{t("billing.usage.empty")}</p>
+            </Match>
+            <Match when>
+              <ul class="acct-list">
+                <For each={usageRows()}>
+                  {(event) => (
+                    <li class="acct-row tg-card">
+                      <div class="acct-row-main">
+                        <div class="acct-row-title">
+                          <strong>{usageKindLabel(event.kind)}</strong>
+                          <Show when={event.capsuleId}>
+                            {(capsuleId) => (
+                              <span class="muted">
+                                {appNames().get(capsuleId()) ??
+                                  t("billing.usage.removedApp")}
+                              </span>
+                            )}
+                          </Show>
+                        </div>
+                        <div class="acct-row-meta">
+                          <RelativeTime iso={event.createdAt} />
+                          <span>
+                            {t("billing.usage.quantityLine", {
+                              quantity: formatBillingNumber(event.quantity),
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="acct-row-amount">{amount(event)}</div>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <Show when={usageCursor()}>
+                <Button
+                  variant="secondary"
+                  busy={usageLoading()}
+                  onClick={() => void loadUsage(true)}
+                >
+                  {t("billing.usage.more")}
+                </Button>
               </Show>
-            </div>
-          </Show>
-        </details>
-      </Card>
+            </Match>
+          </Switch>
+        </section>
+      </Show>
     </div>
   );
 }

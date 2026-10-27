@@ -1,7 +1,8 @@
 /**
  * Notifications (`/notifications`) — the plain-language feed for the signed-in
- * person, aggregated across a bounded recent set of active Workspaces plus the
- * current Workspace (the friendly counterpart of the raw Activity view).
+ * person, aggregated across a bounded recent set of active spaces plus the
+ * current one. Each entry links to where it can be acted on: the app's page,
+ * the run, or 接続.
  *
  * Honesty contract: every sentence renders ONLY values the backend already
  * recorded as public-safe Activity metadata (names, ids, counts, compact error
@@ -24,8 +25,10 @@ import {
 } from "../../lib/notifications.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
+import { spaceName } from "../../lib/space-labels.ts";
 import { readyOrUndefined } from "../../lib/resource-read.ts";
-import { relativeTime, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
+import RelativeTime from "../account/components/RelativeTime.tsx";
 import {
   Badge,
   Button,
@@ -46,6 +49,8 @@ function NotificationRow(props: {
   entry: FeedEntry;
   serviceName?: string | undefined;
   workspaceName: string;
+  /** Spaces are named only when there is more than one. */
+  showSpace: boolean;
 }) {
   const failure = () => isFailureAction(props.entry.event.action);
   const description = () => describeActivityEvent(props.entry.event, props.serviceName);
@@ -77,19 +82,19 @@ function NotificationRow(props: {
           {(detail) => <p class="wc-notif-detail">{detail()}</p>}
         </Show>
         <p class="wc-notif-foot">
-          <Show
-            when={otherWorkspace()}
-            fallback={<span>{props.workspaceName}</span>}
-          >
-            <span>
-              {t("notif.otherWorkspace", { name: props.workspaceName })}
-            </span>
+          <Show when={props.showSpace}>
+            <Show
+              when={otherWorkspace()}
+              fallback={<span>{props.workspaceName}</span>}
+            >
+              <span>
+                {t("notif.otherWorkspace", { name: props.workspaceName })}
+              </span>
+            </Show>
+            <span aria-hidden="true">·</span>
           </Show>
           <Show when={props.entry.event.createdAt}>
-            <span aria-hidden="true">·</span>
-            <time datetime={props.entry.event.createdAt}>
-              {relativeTime(props.entry.event.createdAt)}
-            </time>
+            {(createdAt) => <RelativeTime iso={createdAt()} />}
           </Show>
         </p>
       </div>
@@ -119,14 +124,15 @@ export default function NotificationsView() {
         // Entries carry the Workspace handle (or id); people know their
         // Workspaces by display name. The list is the shell's cached copy.
         const [workspaces] = createResource(() => listWorkspacesCached());
+        const multipleSpaces = () =>
+          (readyOrUndefined(workspaces) ?? []).length >= 2;
         const workspaceNameFor = (entry: FeedEntry): string => {
           const workspace = (readyOrUndefined(workspaces) ?? []).find(
             (item) => item.id === entry.event.workspaceId,
           );
-          return (
-            workspace?.displayName?.trim() ||
-            `@${workspace?.handle ?? entry.workspaceHandle}`
-          );
+          return workspace
+            ? spaceName(workspace)
+            : spaceName({ displayName: "", handle: entry.workspaceHandle });
         };
         // Skeleton / error only before the FIRST snapshot exists; afterwards a
         // failed background refresh silently keeps the last-known entries
@@ -188,7 +194,7 @@ export default function NotificationsView() {
                         message={t("notif.empty.message")}
                         action={
                           <Button variant="primary" href="/new">
-                            {t("apps.add")}
+                            {t("notif.empty.cta")}
                           </Button>
                         }
                       />
@@ -208,16 +214,11 @@ export default function NotificationsView() {
                               entry={entry}
                               serviceName={serviceNameFor(entry.event)}
                               workspaceName={workspaceNameFor(entry)}
+                              showSpace={multipleSpaces()}
                             />
                           )}
                         </For>
                       </ul>
-                      <details class="wb-disclosure wc-notif-support">
-                        <summary>{t("notif.supportSummary")}</summary>
-                        <p class="muted">
-                          <A href="/activity">{t("notif.viewRaw")}</A>
-                        </p>
-                      </details>
                     </div>
                   </Show>
                 )}

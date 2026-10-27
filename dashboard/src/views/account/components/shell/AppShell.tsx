@@ -21,10 +21,10 @@ interface Props {
 }
 
 /**
- * Dashboard chrome: a persistent left sidebar (primary nav: home / cloud
- * accounts / settings) + a top bar (add / notifications / profile menu) over the
- * content well, with mobile bottom tabs. The home screen stays an app launcher;
- * the sidebar restores the wayfinding the chromeless shell had removed.
+ * Dashboard chrome: a persistent left sidebar (primary nav: home / store /
+ * connections / account) + a top bar (section title / notifications / profile
+ * menu) over the content well, with mobile bottom tabs carrying the same four
+ * destinations.
  */
 export default function AppShell(props: Props) {
   const location = useLocation();
@@ -49,9 +49,9 @@ export default function AppShell(props: Props) {
     const segments = location.pathname.split("/").filter(Boolean);
     const isDetailTab =
       segments.length === 3 &&
-      (segments[0] === "workloads" ||
-        segments[0] === "services" ||
-        segments[0] === "advanced");
+      (segments[0] === "workloads" || segments[0] === "services");
+    // アカウント keeps its sections in the trailing segment (`/account/:section`).
+    if (segments[0] === "account") return "account";
     return isDetailTab ? segments.slice(0, 2).join("/") : location.pathname;
   };
   createEffect(

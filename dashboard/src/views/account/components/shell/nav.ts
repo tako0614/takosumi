@@ -1,31 +1,19 @@
 /**
  * Shell navigation — the single source of truth.
  *
- * The dashboard is a consumer app first: the primary nav is the everyday trio
- * (home launcher / store / settings) and is shared verbatim by the desktop
- * sidebar and the mobile bottom bar. Hosting internals are not deleted — they
- * live behind 設定 > 管理 (`/settings/manage`), listed here as
- * MANAGE_DESTINATIONS so the settings hub and any future surface render the
- * same catalog. TopBar section titles derive from the same table so a route
- * rename cannot desync the chrome.
+ * The primary nav is what people do with Takosumi (TASK-0115):
+ *   ホーム   — open and keep the apps you installed
+ *   ストア   — find an app and install it (`/new`)
+ *   接続     — connect your own cloud
+ *   アカウント — you, the people you share a space with, and what it costs
+ * The desktop sidebar and the mobile bottom bar render this list verbatim, and
+ * the top bar names the section from the same table, so a route rename cannot
+ * desync the chrome. Nothing else is a top-level destination: run history,
+ * activity, dependencies, recovery and created resources belong to each app's
+ * page, and space-wide tools that no behavior needs stay in the API and CLI.
  */
-import {
-  Archive,
-  Clock3,
-  CloudCog,
-  History,
-  LayoutGrid,
-  Link2,
-  Network,
-  RotateCcw,
-  Server,
-  Settings,
-  Share2,
-  SlidersHorizontal,
-  Store,
-} from "lucide-solid";
+import { LayoutGrid, Link2, Store, UserCircle2 } from "lucide-solid";
 import type { MessageKey } from "../../../../i18n/index.ts";
-import { HOSTED_RESOURCES_SLOT } from "../../../../lib/hosted-resources.ts";
 
 export type ShellNavItem = {
   readonly href: string;
@@ -33,120 +21,46 @@ export type ShellNavItem = {
   readonly icon: typeof LayoutGrid;
   /** Match only the exact path (the "/" home link). */
   readonly end?: boolean;
+  /** Other path prefixes that belong to this destination. */
+  readonly alsoActiveOn?: readonly string[];
 };
 
-/** Everyday consumer nav — identical on the sidebar and the mobile bottom bar. */
+/** The four behaviors — identical on the sidebar and the mobile bottom bar. */
 export const PRIMARY_NAV: readonly ShellNavItem[] = [
-  { href: "/", labelKey: "nav.home", icon: LayoutGrid, end: true },
-  // ストア = browse + add in one page (`/new`). There is no separate add tab.
+  // An installed app's page and the run details opened from its history are
+  // part of keeping your apps, so they keep ホーム selected.
+  {
+    href: "/",
+    labelKey: "nav.home",
+    icon: LayoutGrid,
+    end: true,
+    alsoActiveOn: ["/workloads", "/runs", "/run-groups"],
+  },
+  // ストア = browse + install in one page (`/new`).
   { href: "/new", labelKey: "nav.store", icon: Store },
-  { href: "/settings", labelKey: "nav.settings", icon: Settings },
+  { href: "/connections", labelKey: "nav.connections", icon: Link2 },
+  { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
-
-export type ManageDestination = ShellNavItem & {
-  readonly descriptionKey: MessageKey;
-  readonly requiresContributionSlot?: string;
-};
-
-/**
- * Hosting-management destinations surfaced on 設定 > 管理. Relocated from the
- * old top-level nav — optional surfaces are shown only when their contribution
- * is available.
- */
-export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
-  {
-    href: "/settings/manage/hosted-resources",
-    labelKey: "nav.hostedResources",
-    descriptionKey: "settings.manage.hostedResources",
-    icon: CloudCog,
-    requiresContributionSlot: HOSTED_RESOURCES_SLOT,
-  },
-  {
-    href: "/workloads",
-    labelKey: "nav.workloads",
-    descriptionKey: "settings.manage.workloads",
-    icon: Server,
-  },
-  {
-    href: "/connections",
-    labelKey: "nav.connections",
-    descriptionKey: "settings.manage.connections",
-    icon: Link2,
-  },
-  {
-    href: "/runs",
-    labelKey: "nav.runs",
-    descriptionKey: "settings.manage.runs",
-    icon: Clock3,
-  },
-  {
-    href: "/graph",
-    labelKey: "nav.graph",
-    descriptionKey: "settings.manage.graph",
-    icon: Network,
-  },
-  {
-    href: "/activity",
-    labelKey: "nav.activity",
-    descriptionKey: "settings.manage.activity",
-    icon: History,
-  },
-  {
-    href: "/advanced/workspace",
-    labelKey: "nav.workspaceSettings",
-    descriptionKey: "settings.manage.workspace",
-    icon: SlidersHorizontal,
-  },
-  {
-    href: "/advanced/workspace/backups",
-    labelKey: "workspaceSettings.tab.backups",
-    descriptionKey: "settings.manage.backups",
-    icon: Archive,
-  },
-  {
-    href: "/advanced/workspace/shares",
-    labelKey: "workspaceSettings.tab.shares",
-    descriptionKey: "settings.manage.shares",
-    icon: Share2,
-  },
-  {
-    href: "/advanced/workspace/interface-recovery",
-    labelKey: "workspaceSettings.tab.interfaceRecovery",
-    descriptionKey: "settings.manage.interfaceRecovery",
-    icon: RotateCcw,
-  },
-] as const;
 
 /** Section title shown in the top bar, by route. Detail routes show the
  * section they belong to (the item's own name stays in the page header). */
 export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/$/, "nav.home"],
-  [/^\/settings\/manage(\/|$)/, "settings.manage.title"],
-  // `/account` and `/billing` now live under `/settings`, so their specific
-  // rows must be matched BEFORE the generic `/settings` row — otherwise the top
-  // bar said 設定 while the page header said アカウント / 使用量.
-  [/^\/settings\/account(\/|$)/, "nav.account"],
-  [/^\/settings\/billing(\/|$)/, "nav.billing"],
-  [/^\/settings(\/|$)/, "nav.settings"],
-  [/^\/composition(\/|$)/, "nav.store"],
-  [/^\/workloads(\/|$)/, "nav.workloads"],
+  [/^\/workloads(\/|$)/, "nav.home"],
+  [/^\/runs(\/|$)/, "nav.home"],
+  [/^\/run-groups(\/|$)/, "nav.home"],
   [/^\/new(\/|$)/, "nav.store"],
   [/^\/connections(\/|$)/, "nav.connections"],
-  [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],
-  [/^\/billing(\/|$)/, "nav.billing"],
-  [/^\/runs(\/|$)/, "nav.runs"],
-  [/^\/run-groups(\/|$)/, "nav.runs"],
-  [/^\/graph(\/|$)/, "nav.graph"],
-  [/^\/notifications(\/|$)/, "nav.notifications"],
-  [/^\/activity(\/|$)/, "nav.activity"],
   [/^\/account(\/|$)/, "nav.account"],
+  [/^\/notifications(\/|$)/, "nav.notifications"],
 ];
 
 /** Route-active test shared by the sidebar and the bottom bar. */
-export function isNavActive(
-  pathname: string,
-  item: { readonly href: string; readonly end?: boolean },
-): boolean {
-  if (item.end) return pathname === item.href;
-  return pathname === item.href || pathname.startsWith(item.href + "/");
+export function isNavActive(pathname: string, item: ShellNavItem): boolean {
+  const matches = (href: string, exact: boolean) =>
+    exact
+      ? pathname === href
+      : pathname === href || pathname.startsWith(href + "/");
+  if (matches(item.href, item.end === true)) return true;
+  return (item.alsoActiveOn ?? []).some((prefix) => matches(prefix, false));
 }
