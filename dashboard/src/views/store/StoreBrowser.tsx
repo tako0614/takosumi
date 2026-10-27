@@ -145,6 +145,8 @@ const EMPTY: TcsAggregateState = {
 export interface StoreBrowserProps {
   readonly locale: TcsLocale;
   readonly onConfigure: (listing: TcsListing) => void;
+  /** Hosts with their own persistent detail view can skip this component's drawer. */
+  readonly onSelectListing?: (listing: TcsListing) => void;
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
   readonly loadRemoteOnMount?: boolean;
@@ -547,7 +549,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       <button
                         type="button"
                         class="tcs-card-open"
-                        onClick={() => setSelected(listing)}
+                        onClick={() => props.onSelectListing ? props.onSelectListing(listing) : setSelected(listing)}
                       >
                         {pick(listing.name, props.locale)}
                       </button>

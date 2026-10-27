@@ -1,3 +1,4 @@
+import { uninstallCancellable, uninstallTeardownFailed, capsuleUninstallBanner, capsuleUninstallDependencyWarning, uninstallDependencyReadWarning } from "../../lib/capsule-uninstall.ts";
 /**
  * Workload detail (`/workloads/:id` + tab routes) — one deployed Capsule. The primary tabs
  * stay focused on using/opening the service and reviewing updates; source,
@@ -557,37 +558,10 @@ function Inner() {
     await refetchCapsule();
   });
   /** Mirrors the server rule: before teardown, or blocked before dispatch. */
-  const uninstallCancellable = (inst: Capsule): boolean =>
-    inst.status === "uninstalled" &&
-    (inst.uninstall?.phase === "scheduled" ||
-      (inst.uninstall?.phase === "destroying" &&
-        inst.uninstall.blockedReason !== undefined));
   const uninstallTeardownRunning = (inst: Capsule): boolean =>
     inst.uninstall?.phase === "destroying" &&
     inst.uninstall.blockedReason === undefined;
-  /** A scheduled teardown whose provider destroy failed ends in `error`. */
-  const uninstallTeardownFailed = (inst: Capsule): boolean =>
-    inst.status === "error" && inst.uninstall?.phase === "destroying";
-  const uninstallBanner = (inst: Capsule): string => {
-    const uninstall = inst.uninstall;
-    const name = serviceLabel();
-    if (uninstallTeardownFailed(inst)) {
-      return t("app.uninstall.bannerFailed", { name });
-    }
-    if (!uninstall) return t("app.uninstall.bannerDue", { name });
-    if (uninstall.blockedReason) {
-      return t("app.uninstall.bannerBlocked", { name });
-    }
-    if (uninstall.phase === "destroying") {
-      return t("app.uninstall.bannerDestroying", { name });
-    }
-    return Date.parse(uninstall.scheduledDestroyAt) > Date.now()
-      ? t("app.uninstall.banner", {
-          name,
-          date: formatDateTime(uninstall.scheduledDestroyAt),
-        })
-      : t("app.uninstall.bannerDue", { name });
-  };
+  const uninstallBanner = (inst: Capsule): string => capsuleUninstallBanner(inst, serviceLabel());
   const uninstallExportNote = (inst: Capsule): string | undefined => {
     switch (inst.uninstall?.preDestroyExport?.status) {
       case "exported":
@@ -602,21 +576,10 @@ function Inner() {
         return undefined;
     }
   };
-  const uninstallDependencyWarning = (): string | undefined => {
-    const dependentNames = consumers().map((consumer) => consumer.name);
-    if (dependentNames.length === 0) return undefined;
-    return t("app.uninstall.dependencyWarning", {
-      name: serviceLabel(),
-      services: dependentNames.join(", "),
-    });
-  };
-  const uninstallDependencyCheckStatus = (): string | undefined => {
-    if (graph.error) return t("app.uninstall.dependencyCheckFailed");
-    if (graph.loading || graphData() === undefined) {
-      return t("app.uninstall.dependencyCheckLoading");
-    }
-    return undefined;
-  };
+  const uninstallDependencyWarning = (): string | undefined =>
+    capsuleUninstallDependencyWarning(serviceLabel(), consumers().map((consumer) => consumer.name));
+  const uninstallDependencyCheckStatus = (): string | undefined =>
+    uninstallDependencyReadWarning(graph.error ? "failed" : graph.loading || graphData() === undefined ? "loading" : "ready");
   const confirmDestroy = async (): Promise<void> => {
     if (!destroyIsImmediate()) {
       await destroyPlan.run();

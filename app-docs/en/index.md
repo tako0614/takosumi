@@ -11,20 +11,22 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 ## Your first deployment
 
 1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
-2. Press **Add** on an app in the **Store**, or enter a Git URL under
-   **Add from a Git repository**. Opening an app's add link leads to the same screen.
-3. Check the service name and source, then press **Add**. Takosumi pins the Git version
-   and checks the module and the connections it needs. No resources are created yet.
-4. If a connection has to be chosen, pick it on **Choose a Host / account** and press
-   **Continue**. Providers that need no credentials need no connection. If the app asks
-   for input, fill it in on **Set up the service** and press **Continue**.
-5. On **Review before adding**, check how many resources will be created, changed, and
-   deleted, then press **Add**.
-   - A change that deletes, replaces, or imports something first needs
-     **Approve this change** and the **I reviewed these changes** checkbox.
-   - A change that a policy or billing check stops shows **Service setup did not finish**,
-     and **Technical details** opens its Run.
-6. When **Service added** appears, **Open service** takes you to it.
+2. Choose an app in the **Store**. Git URLs and app install links open the same app detail.
+3. Press **Install** to expand settings in place. Takosumi pins the Git revision,
+   checks its module, and displays only the required setup, with declared defaults filled in.
+   No app resources are created yet. Open advanced settings only when needed.
+4. If a cloud connection is needed, press **Connect**. The inline panel lets you choose
+   a verified connection or set up and verify a supported Provider. Closing it keeps app inputs.
+5. Press **Install** below the settings. A known, non-destructive, policy-pass Plan
+   requiring no additional approval continues to Apply. Other Plans stay in **Review installation**
+   for explicit confirmation. Expand progress and logs, or reload to inspect the existing run.
+   Reloading or opening a URL never grants Apply consent.
+6. After **Installed**, **Open service** opens the app's authorized launch URL, when it has one.
+   Otherwise use **Manage app**. Failures show recovery actions and can be retried with a new
+   Plan without discarding partially created state.
+7. **Uninstall** asks for confirmation before scheduling deletion. The service and its data
+   remain during the grace period. The same screen shows progress and permits cancellation
+   while the server allows it. Provider secrets and install inputs are not saved to browser storage.
 
 ```text
 Git repository

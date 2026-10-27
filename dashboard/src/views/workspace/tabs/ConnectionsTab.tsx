@@ -17,6 +17,7 @@ import {
   createMemo,
   createResource,
   createSignal,
+  onCleanup,
   For,
   Index,
   Match,
@@ -117,9 +118,14 @@ function oauthErrorHint(code: string): string | null {
 
 export default function ConnectionsTab(props: {
   readonly workspaceId: string;
+  readonly embedded?: boolean;
+  readonly initialProviderSource?: string;
+  readonly onChanged?: () => void;
 }) {
   const { confirm } = useConfirmDialog();
   const workspaceId = () => props.workspaceId;
+  let disposed = false;
+  onCleanup(() => { disposed = true; });
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(workspaceId, listProviderConnections);
@@ -139,9 +145,9 @@ export default function ConnectionsTab(props: {
   >(null);
   const [lastCreatedVerifiedHint, setLastCreatedVerifiedHint] =
     createSignal(false);
-  const installReturn = currentInstallReturnContext();
+  const installReturn = props.embedded ? undefined : currentInstallReturnContext();
   const [createFormOpen, setCreateFormOpen] = createSignal(
-    Boolean(installReturn),
+    Boolean(installReturn) || Boolean(props.embedded),
   );
   // An errored resource THROWS on read; every data read goes through this
   // guarded accessor so a failed list surfaces the error toast below instead
@@ -153,9 +159,11 @@ export default function ConnectionsTab(props: {
 
   const refreshConnections = async () => {
     await refetchProviderConnections();
+    if (!disposed) props.onChanged?.();
   };
 
   const afterConnectionCreated = async (connection: ProviderConnection) => {
+    if (disposed || connection.workspaceId !== workspaceId()) return;
     // Never show a raw conn_… id in the toast — fall back to the provider name.
     setLastCreatedConnectionName(
       providerConnectionDisplayName(connection) ||
@@ -189,8 +197,15 @@ export default function ConnectionsTab(props: {
   ]);
   const isGenericEnvProvider = () => provider() === GENERIC_ENV_PROVIDER_OPTION;
 
+  let initialProviderSelected = false;
   createEffect(() => {
     const options = providerOptions();
+    if (!initialProviderSelected && !credentialRecipes.loading && props.initialProviderSource) {
+      initialProviderSelected = true;
+      const match = options.find((option) => option.providerSource === props.initialProviderSource || option.providerAliases.includes(props.initialProviderSource!));
+      if (match) setProvider(match.id);
+      else { setProvider(GENERIC_ENV_PROVIDER_OPTION); setGenericEnvProvider(props.initialProviderSource); }
+    }
     if (isGenericEnvProvider()) return;
     if (options.some((option) => option.id === provider())) return;
     if (options[0]) setProvider(options[0].id);
@@ -244,7 +259,7 @@ export default function ConnectionsTab(props: {
     const notice = oauthNotice();
     return notice && notice.kind === "error" ? notice.code : "";
   };
-  if (typeof window !== "undefined") {
+  if (!props.embedded && typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
     if (params.get("connected")) {
       setOauthNotice({ kind: "ok" });
@@ -298,7 +313,7 @@ export default function ConnectionsTab(props: {
       values: submitValues,
     });
     await afterConnectionCreated(connection);
-    await runTest(connection.id);
+    if (!disposed && connection.workspaceId === workspaceId()) await runTest(connection.id);
   });
 
   // Generic ProviderConnection submit. This is the first-class path for any
@@ -351,7 +366,7 @@ export default function ConnectionsTab(props: {
       values: submitValues,
     });
     await afterConnectionCreated(connection);
-    await runTest(connection.id);
+    if (!disposed && connection.workspaceId === workspaceId()) await runTest(connection.id);
   });
 
   // Per-connection test / remove. Busy and error state are tracked PER
