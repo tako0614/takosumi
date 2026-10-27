@@ -84,6 +84,21 @@ describe("listMembers", () => {
     expect(rows).toEqual([MEMBER]);
   });
 
+  test("passes through the display name and the role-gated email", async () => {
+    const named = {
+      ...MEMBER,
+      displayName: "Alice",
+      email: "alice@example.test",
+    };
+    stubFetch({ members: [named, { ...MEMBER, accountId: "acct_bob" }] });
+    const rows = await listMembers("workspace_1");
+    expect(rows[0]?.displayName).toBe("Alice");
+    expect(rows[0]?.email).toBe("alice@example.test");
+    // The server omits both when it has no name or the caller may not see it.
+    expect(rows[1]?.displayName).toBeUndefined();
+    expect(rows[1]?.email).toBeUndefined();
+  });
+
   test("defaults to an empty list when the body omits `members`", async () => {
     stubFetch({});
     expect(await listMembers("workspace_1")).toEqual([]);
