@@ -82,8 +82,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByTestId("install-connections-panel")).toBeVisible();
       await expect(page.locator("#install-connections-title")).toBeFocused();
       await expect(page.locator('#connection-field-CLOUDFLARE_API_TOKEN')).toBeVisible();
-      expect((await page.locator("#install-connections-title").boundingBox())!.y).toBeGreaterThanOrEqual(56);
-      expect((await page.locator("#install-connections-title").boundingBox())!.y).toBeLessThan(160);
+      const heading = (await page.locator("#install-connections-title").boundingBox())!;
+      const tabs = (await page.locator(".mobile-tabs").boundingBox())!;
+      expect(heading.y).toBeGreaterThanOrEqual(56);
+      expect(heading.y + heading.height).toBeLessThanOrEqual(tabs.y);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       expect(await page.getByTestId("install-connections-panel").evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
       await page.screenshot({ path: test.info().outputPath("install-connect-mobile.png") });

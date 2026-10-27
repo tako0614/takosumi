@@ -1143,8 +1143,9 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(
         page.getByRole("heading", { level: 1, name: "cloudflare-service" }),
       ).toBeVisible();
-      await expect(page.locator(".iv-intro")).toContainText(
-        "github.com/example/cloudflare-service",
+      await page.getByText("Source details", { exact: true }).click();
+      await expect(page.getByLabel("Git URL")).toHaveValue(
+        "https://github.com/example/cloudflare-service.git",
       );
       // Showing the context is read-only: nothing is registered or planned yet.
       expect(writes).toEqual([]);
