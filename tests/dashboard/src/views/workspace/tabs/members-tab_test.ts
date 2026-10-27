@@ -123,6 +123,12 @@ describe("MembersTab access-control surface", () => {
     expect(source).not.toContain("shortSubject(member.accountId)");
   });
 
+  test("each role select starts on that member's role", () => {
+    // The select's value is assigned before its options render; without
+    // `selected` on the option every row showed the first role.
+    expect(source).toContain('selected={role === (member.roles[0] ?? "member")}');
+  });
+
   test("roles are explained one line each", () => {
     for (const role of ["owner", "admin", "member", "viewer"]) {
       expect(source).toContain(`${role}: "members.roleHelp.${role}"`);

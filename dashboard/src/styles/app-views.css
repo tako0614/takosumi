@@ -858,115 +858,6 @@
   text-align: center;
   gap: var(--tg-s-3);
 }
-
-/* ===== settings hub (/settings) + management catalog (/settings/manage) ===== */
-.settings-view {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: var(--tg-s-5) var(--tg-s-5) var(--tg-s-8);
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-6);
-}
-@media (max-width: 640px) {
-  /* Match Home's tighter phone gutter — 24px side padding is cramped on a
-     360px screen. */
-  .settings-view {
-    padding: var(--tg-s-4) var(--tg-s-3) var(--tg-s-7);
-  }
-}
-.settings-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-}
-.settings-group-title {
-  margin: 0;
-  font-size: var(--tg-fs-sm);
-  font-weight: 600;
-  color: var(--tg-fg-muted);
-}
-.settings-links {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-}
-.settings-link {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-4);
-  padding: var(--tg-s-4) var(--tg-s-5);
-  text-decoration: none;
-  color: var(--tg-fg);
-}
-.settings-link-icon {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-  color: var(--tg-fg-muted);
-}
-.settings-link-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.settings-link-title {
-  font-weight: 600;
-}
-.settings-link-desc {
-  font-size: var(--tg-fs-sm);
-  color: var(--tg-fg-muted);
-}
-.settings-link-chev {
-  margin-left: auto;
-  flex: none;
-  color: var(--tg-fg-muted);
-}
-
-/* ===== hosted resources management ===== */
-.hosted-resources-view {
-  width: min(1100px, 100%);
-  margin: 0 auto;
-  padding: var(--tg-s-5) var(--tg-s-5) var(--tg-s-8);
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-5);
-}
-.hosted-resources-card {
-  overflow: hidden;
-}
-.hosted-resources-table {
-  min-width: 0;
-}
-.hosted-resources-cards {
-  display: none;
-}
-.hosted-resources-kind {
-  color: var(--tg-fg-muted);
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-}
-.hosted-resources-workload {
-  color: var(--tg-accent-text);
-  font-weight: 700;
-  text-decoration: none;
-}
-.hosted-resources-workload:hover {
-  text-decoration: underline;
-}
-.hosted-resources-loading {
-  padding: var(--tg-s-4) var(--tg-s-5) var(--tg-s-5);
-  color: var(--tg-fg-muted);
-}
-.hosted-resources-pagination {
-  display: flex;
-  justify-content: center;
-}
 .hosted-resource-card {
   display: grid;
   gap: var(--tg-s-4);
@@ -1006,38 +897,6 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 720px) {
-  .hosted-resources-view {
-    padding: var(--tg-s-4) var(--tg-s-3) var(--tg-s-7);
-  }
-  .hosted-resources-table {
-    display: none;
-  }
-  .hosted-resources-cards {
-    display: block;
-    padding: var(--tg-s-4);
-  }
-}
-
-/* ===== settings hub billing summary strip ===== */
-.settings-billing-summary {
-  padding: var(--tg-s-4) var(--tg-s-5);
-}
-.settings-billing-row {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-4);
-}
-.settings-billing-row .settings-link-text {
-  flex: 1;
-  min-width: 0;
-}
-.settings-billing-row .settings-link-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-}
-
 /* ===== per-app showback amount (service overview) ===== */
 .wa-usage-amount {
   font-size: var(--tg-fs-lg);
@@ -1066,22 +925,6 @@
   border: 1px solid color-mix(in srgb, var(--tg-success) 42%, var(--tg-line));
   background: color-mix(in srgb, var(--tg-success) 10%, transparent);
   font-size: var(--tg-fs-sm);
-}
-
-/* Archived-workspace restore list (workspace general tab). */
-.wc-archived-list {
-  list-style: none;
-  margin: var(--tg-s-2) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-2);
-}
-.wc-archived-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--tg-s-3);
 }
 
 /* Launcher tile status caption under the name: 更新があります for an available

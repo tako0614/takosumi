@@ -1021,7 +1021,7 @@ export const ja = {
   "conn.saved.returnCta": "インストールに戻る",
   "conn.add.provider": "つなぐクラウド",
   "conn.add.genericEnvOption": "一覧にないクラウドをつなぐ",
-  "conn.add.title": "クラウドをつなぐ",
+  "conn.add.title": "アカウントを接続",
   "conn.add.open": "接続を追加",
   "conn.add.close": "閉じる",
   "conn.add.displayName": "接続の名前（任意）",

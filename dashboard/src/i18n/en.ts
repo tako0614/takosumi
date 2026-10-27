@@ -1010,7 +1010,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.oauth.connect": "Connect {provider}",
   "conn.oauth.waiting": "Authorize access in the provider window. Your app settings stay here.",
   "conn.oauth.retryHint":
-    "The connection didn't finish. Check that the authorization window can open and try again, or enter a key below.",
+    "Connection was not completed. Check that the authorization window can open and try again, or enter a key below.",
   "conn.oauth.failed": "Connection failed. Please try again.",
   "conn.oauth.error.missingCode":
     "The authorization response was incomplete. Please try again.",
@@ -1030,7 +1030,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.saved.returnCta": "Back to install",
   "conn.add.provider": "Cloud to connect",
   "conn.add.genericEnvOption": "Connect a cloud that isn't listed",
-  "conn.add.title": "Connect a cloud",
+  "conn.add.title": "Connect account",
   "conn.add.open": "Add a connection",
   "conn.add.close": "Close",
   "conn.add.displayName": "Connection name (optional)",

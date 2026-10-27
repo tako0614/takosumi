@@ -252,8 +252,18 @@ export default function MembersTab(props: {
                 : t("members.changeRole")
             }
           >
+            {/* `selected` on the option: the select's value is assigned
+                before its options render, which left every row on the
+                first option. */}
             <For each={ROLE_ORDER}>
-              {(role) => <option value={role}>{t(ROLE_KEY[role])}</option>}
+              {(role) => (
+                <option
+                  value={role}
+                  selected={role === (member.roles[0] ?? "member")}
+                >
+                  {t(ROLE_KEY[role])}
+                </option>
+              )}
             </For>
           </Select>
           <Button
