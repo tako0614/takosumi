@@ -20,6 +20,7 @@ import {
 } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
+import { buildNewQuery } from "../store/store-link.ts";
 import {
   Badge,
   Button,
@@ -281,6 +282,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [preparedVersion, setPreparedVersion] = createSignal<
     { readonly ref: string; readonly commit: string }
   >();
+  // The Source keeps the name it was registered with. The install Plan must
+  // repeat that exact name for `preflight.sourceId`; renaming the app before
+  // the Plan only changes the Capsule name.
+  let preparedSourceName: string | undefined;
   const [sourceCreateReconciliationToken, setSourceCreateReconciliationToken] =
     createSignal<SourceCreateReconciliationToken>();
   const [sourceAuthConnectionId, setSourceAuthConnectionId] = createSignal("");
@@ -315,6 +320,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [connectionPanelOpen, setConnectionPanelOpen] = createSignal(false);
   // The provider row whose connection form is open inside the install sheet.
   const [connectingProvider, setConnectingProvider] = createSignal<string>();
+  // Per-row connection problems shown inside the install sheet.
+  const [connectionErrors, setConnectionErrors] = createSignal<
+    Readonly<Record<string, string>>
+  >({});
   // A Source this attempt created itself. Only that Source is offered for
   // cleanup when the user discards the attempt; a reused Source is never deleted.
   let attemptCreatedSourceId: string | undefined;
@@ -941,6 +950,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setStoreFeatureSelections({});
     setProviderRows([]);
     setAutoSelectedProviderRows(new Set<string>());
+    setConnectionErrors({});
     setCapsuleId(undefined);
     setPlanRunId(undefined);
     setInterfaceUrl(undefined);
@@ -965,6 +975,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setPreparedVersion(undefined);
+    preparedSourceName = undefined;
     setSourceCreateReconciliationToken(undefined);
     setInstallModulesLoading(false);
     setInstallModuleCatalog({ status: "none", modules: [] });
@@ -1144,6 +1155,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       let preparedSourceSnapshotId = sourceSnapshotId();
       if (!preparedSourceId || !preparedSourceSnapshotId) {
         const creatingSource = !preparedSourceId;
+        const sourceName = name().trim();
         const prepared = await prepareCapsuleSourceSnapshot({
           workspaceId: workspace,
           sourceId: preparedSourceId,
@@ -1151,7 +1163,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           ref: gitRef().trim(),
           sourcePath: sourcePath(),
           resolveAbsentRefToStableSemver: listing() !== null,
-          name: name().trim(),
+          name: sourceName,
           ...(sourceAuthConnectionId()
             ? { authConnectionId: sourceAuthConnectionId() }
             : {}),
@@ -1194,6 +1206,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         }
         setSourceId(prepared.sourceId);
         setSourceSnapshotId(prepared.sourceSnapshotId);
+        if (creatingSource || !preparedSourceName) preparedSourceName = sourceName;
         setPreparedVersion({
           ref: prepared.snapshot.ref,
           commit: prepared.snapshot.resolvedCommit,
@@ -1548,6 +1561,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
    * one), and only the Source this attempt created is deleted, best effort.
    */
   const discardAttempt = async () => {
+    // A Plan request in flight has an unknown outcome; never discard over it.
+    // Only repository preparation can be cancelled while busy.
+    const cancellingPreparation =
+      phase() === "preparing" && preparationStage() !== "plan";
+    if (discarding() || (busy() && !cancellingPreparation)) return;
     const workspace = workspaceId();
     activePreparationController?.abort();
     setDiscarding(true);
@@ -1570,13 +1588,23 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       }
       const createdSourceId = attemptCreatedSourceId;
       if (createdSourceId && workspace && workspaceIsCurrent(workspace)) {
-        // A refusal (still referenced, or no management authority) keeps the
-        // Source. It is harmless and never blocks discarding the attempt.
-        await deleteSource(createdSourceId).catch(() => undefined);
+        // A refusal (still referenced, a sync in flight, or no management
+        // authority) keeps the Source. Stop it polling Git instead; neither
+        // outcome blocks discarding the attempt.
+        await deleteSource(createdSourceId).catch(() =>
+          patchSource(createdSourceId, { autoSync: false }).catch(() => undefined)
+        );
       }
       if (disposed || (workspace && !workspaceIsCurrent(workspace))) return;
       attemptCreatedSourceId = undefined;
-      navigate(appendAppHandoff(location.pathname, appHandoff())!, { replace: true });
+      // Return to the same app page, so a reload still shows this app.
+      const selectedListing = listing();
+      const appSearch = selectedListing
+        ? `?${buildNewQuery(selectedListing)}`
+        : gitUrl().trim()
+          ? `?${new URLSearchParams({ git: gitUrl().trim(), name: name().trim() }).toString()}`
+          : "";
+      navigate(appendAppHandoff(`${location.pathname}${appSearch}`, appHandoff())!, { replace: true });
       if (gitRefResolvedFromListing()) {
         setGitRef("");
         setGitRefResolvedFromListing(false);
@@ -1672,7 +1700,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         workspace,
         {
           source: {
-            name: name().trim(),
+            name: preparedSourceName ?? name().trim(),
             url: gitUrl().trim(),
             ref: gitRef().trim() || "HEAD",
             path: sourcePath(),
@@ -1859,6 +1887,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setSourceId(undefined);
     setSourceSnapshotId(undefined);
     setPreparedVersion(undefined);
+    preparedSourceName = undefined;
     setSourceCreateReconciliationToken(undefined);
     setInstallModulesLoading(false);
     setInstallModuleCatalog({ status: "none", modules: [] });
@@ -2009,7 +2038,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     "not-installed";
 
   // Renaming before the Plan only changes the Capsule name in the Plan request.
-  // The Source and compatibility evidence are not bound to it, so they stay.
+  // The Source keeps its registered name (preparedSourceName), and the
+  // compatibility evidence is not bound to the app name, so both stay.
   const updateName = (value: string) => {
     installPlanAttempt = undefined;
     setName(value);
@@ -2027,9 +2057,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const connectFormId = (row: ProviderConnectionRow) =>
     `install-connect-${providerRowKey(row).replace(/[^A-Za-z0-9_-]/gu, "-")}`;
 
-  const [connectionErrors, setConnectionErrors] = createSignal<
-    Readonly<Record<string, string>>
-  >({});
   const setConnectionError = (row: ProviderConnectionRow, message?: string) =>
     setConnectionErrors((current) => {
       const next = { ...current };
@@ -2046,6 +2073,13 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       updateProviderRow(row, connectionId);
       setConnectionError(row);
       if (connectingProvider() === providerRowKey(row)) setConnectingProvider(undefined);
+      return;
+    }
+    // A verified connection the install policy refuses must say so, not
+    // silently stay unselected.
+    const created = providerConnections().find((connection) => connection.id === connectionId);
+    if (created?.status === "verified") {
+      setConnectionError(row, t("installStore.connectionNotAllowed"));
     }
   };
 
@@ -2523,7 +2557,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     value={gitRefResolvedFromListing() ? "" : gitRef()}
                     placeholder={listing() ? t("installStore.sourceRefStable") : undefined}
                     onInput={(event) => {
-                      resetPreparedSource();
+                      // A listing's reviewed module stays a hint for the new version.
+                      resetPreparedSource({ preserveModuleSelection: listing() !== null });
                       setGitRefResolvedFromListing(false);
                       setGitRef(event.currentTarget.value);
                     }}
@@ -2758,7 +2793,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               variant="primary"
               size="lg"
               busy={busy()}
-              disabled={providerRowsReady() && Boolean(setupError())}
+              disabled={discarding() || (providerRowsReady() && Boolean(setupError()))}
               onClick={() => {
                 if (!providerRowsReady()) { openFirstMissingConnection(); return; }
                 void preparePlan();
@@ -2770,6 +2805,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               type="button"
               variant="ghost"
               busy={discarding()}
+              disabled={busy()}
               onClick={() => void discardAttempt()}
             >
               {t("installStore.discard")}
@@ -2780,6 +2816,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
       <Show when={phase() === "review" && planRunId() && capsuleId()}>
         <section class="iv-workbench iv-sheet">
+          {sectionError()}
           {autoSelectedDestinationSummary()}
           <InstallExecution
             planRunId={planRunId()!}
@@ -2828,6 +2865,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         <section class="iv-workbench"><p role="status">{t("installStore.selectWorkspace")}</p><Button type="button" variant="secondary" onClick={reset}>{t("installStore.chooseAnother")}</Button></section>
       </Show>
       <Show when={phase() === "done" && capsuleId() && workspaceId()}>
+        <Show when={error()}>
+          <div class="iv-handoff-actions">{sectionError()}</div>
+        </Show>
         <InstallLifecycle capsuleId={capsuleId()!} workspaceId={workspaceId()}
           onIdentity={(capsule, config) => { setName(capsule.name); setInstallConfig(config);
             if (!storeEntry()) setStoreEntry(storeEntryFromRepositoryConfig(config, { gitUrl: gitUrl(), name: capsule.name })); }}

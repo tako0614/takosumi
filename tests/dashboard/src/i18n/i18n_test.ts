@@ -132,7 +132,7 @@ describe("i18n dictionaries", () => {
     expect(installKeys.length).toBeGreaterThan(50);
     for (const key of installKeys) {
       expect({ key, value: ja[key] }).not.toEqual(
-        expect.objectContaining({ value: expect.stringMatching(/サービス|ワークロード|追加|デプロイ/u) }),
+        expect.objectContaining({ value: expect.stringMatching(/サービス|ワークロード|追加|デプロイ|公開(?!リポジトリ)|反映/u) }),
       );
       expect({ key, value: en[key] }).not.toEqual(
         expect.objectContaining({ value: expect.stringMatching(/\b(?:services?|workloads?|add|adding|deploy(?:ed|ing)?)\b/iu) }),

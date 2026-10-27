@@ -416,7 +416,10 @@ export default function InstallExecution(props: Props) {
     readRunCost(() => getRunCostInfo(id)),
   );
   const costState = (): RunCostDisplayState | undefined => {
-    const read = planCost.error ? { status: "unavailable" as const } : planCost.latest;
+    // Never show the previous Plan's cost while the current one loads.
+    if (planCost.loading) return undefined;
+    if (planCost.error) return { kind: "unavailable" };
+    const read = planCost();
     return read ? runCostDisplayState(read) : undefined;
   };
   const costLine = (state: RunCostDisplayState): string | undefined => {
@@ -437,7 +440,7 @@ export default function InstallExecution(props: Props) {
   };
   // Discarding is offered only before anything was applied.
   const discardButton = () => (
-    <Show when={props.onDiscard && !hasSeenApply()}>
+    <Show when={props.onDiscard && !hasSeenApply() && !applyUnconfirmed()}>
       <Button
         type="button"
         variant="ghost"
@@ -597,7 +600,7 @@ export default function InstallExecution(props: Props) {
                   variant="primary"
                   size="lg"
                   busy={applying()}
-                  disabled={applyUnconfirmed() || (destructive() && !confirmed())}
+                  disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
                   onClick={() => void install()}
                 >
                   {t("installStore.allowInstall")}

@@ -601,7 +601,11 @@ describe("single-screen install surface", () => {
     expect(discard).toContain("abandonUnappliedCapsule(pendingCapsuleId)");
     expect(discard).toContain("capsuleAbandonmentCompleted(");
     expect(discard).toContain("attemptCreatedSourceId");
-    expect(discard).toContain("deleteSource(createdSourceId).catch(() => undefined)");
+    expect(discard).toContain("deleteSource(createdSourceId).catch(");
+    // A Source the server keeps stops polling Git instead of lingering.
+    expect(discard).toContain("patchSource(createdSourceId, { autoSync: false })");
+    // A Plan request in flight is never discarded over.
+    expect(discard).toContain("busy() && !cancellingPreparation");
     expect(discard).toContain('setPhase("configure")');
     expect(view).toContain("attemptCreatedSourceId = createdSourceId;");
   });
