@@ -18,3 +18,9 @@ Validation in progress: independent Claude reviews v1/v2 findings preserved and 
 Rollback: restore the prior reviewed Worker/config using the existing owner release. Existing token connections retain behavior. New OAuth sessions require this refresh driver and are not usable on the old artifact; do not delete/rewrite their sealed blobs to force compatibility. Forward-repair by restoring this reviewed driver or reconnecting through a supported credential mode. No blind retry of unknown refresh grants.
 
 Final gate/evidence is stored outside product source at /root/dev/operator-runs/takosumi-cloudflare-oauth-20261027/evidence/.
+
+## Native Worker verification repair
+
+A real authorized Cloudflare flow saved its sealed connection, but verification raised the generic credential-driver failure. The exact runtime cause is that workerd rejects `redirect: "error"` while constructing Request, before network I/O. Bun-only transport stubs had not exercised that constructor. Discovery and renewal now use `manual`; existing non-success handling refuses redirect responses without forwarding credentials. No grant replay, credential rewrite, or guard relaxation.
+
+The new isolated workerd regression runs the actual vault and provider driver with synthetic encrypted material and an outbound Request constructor, returning only synthetic protocol responses without external network access. RED before both fixes reproduces the live failure; RED after discovery alone proves renewal still fails independently. Four native cases then pass, including both redirect refusal paths, alongside the existing provider/vault regressions. The required current-source full gate and independent review remain pending; prior whole-source greens are not reused for this patch. Real connection re-verification and public promotion remain pending until the repair is published.
