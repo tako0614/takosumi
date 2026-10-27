@@ -213,7 +213,7 @@ function Inner() {
               {t("common.refresh")}
             </Button>
             <Button variant="ghost" href="/">
-              {t("app.backToList")}
+              {t("app.backHome")}
             </Button>
           </>
         }

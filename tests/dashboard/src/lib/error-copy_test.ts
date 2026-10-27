@@ -23,7 +23,7 @@ describe("friendlyError plan deadline copy", () => {
       // The review step is 変更の確認 everywhere else; the internal "plan"
       // noun must not resurface in the timeout copy.
       expect(friendly.message).not.toMatch(/プラン|Plan/u);
-      expect(friendly.message).toContain("デプロイ履歴");
+      expect(friendly.message).toContain("アプリの履歴");
       expect(friendly.detail).toBeUndefined();
     });
 
@@ -37,7 +37,7 @@ describe("friendlyError plan deadline copy", () => {
       const friendly = friendlyError(error, (key) => en[key]);
       expect(friendly.message).toBe(en["error.planReconcileTimeout"]);
       expect(friendly.message).not.toMatch(/\bplan\b/iu);
-      expect(friendly.message).toContain("Deploy history");
+      expect(friendly.message).toContain("the app's history");
       expect(friendly.detail).toBeUndefined();
     });
   }

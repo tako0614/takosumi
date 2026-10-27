@@ -1,9 +1,10 @@
 /**
  * Reviewable list of a plan's resource changes (Run `planResources`): one row
- * per create / update / replace / delete with a plain display label, and the
- * raw address / type / scope folded behind "Reference IDs". No-op rows are
- * dropped and the whole list renders nothing when no row changes anything.
- * Long plans show the first PLAN_RESOURCE_REVIEW_LIMIT rows until expanded.
+ * per create / update / replace / delete with a plain display label, the
+ * resource's own name (which tells two resources of one kind apart) and its
+ * scope, shown as they are rather than folded away. No-op rows are dropped
+ * and the whole list renders nothing when no row changes anything. Long plans
+ * show the first PLAN_RESOURCE_REVIEW_LIMIT rows until expanded.
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
@@ -14,6 +15,7 @@ import {
   PLAN_RESOURCE_REVIEW_LIMIT,
   planResourceActionLabel,
   planResourceDisplayLabel,
+  planResourceName,
   planResourceScopeLabel,
   planResourceTone,
   reviewablePlanResources,
@@ -62,25 +64,17 @@ export default function PlanResourceList(props: PlanResourceListProps) {
                 </Badge>
                 <div class="wa-plan-resource-main">
                   <strong>{planResourceDisplayLabel(resource)}</strong>
-                  <details class="wb-inline-details">
-                    <summary>{t("run.resources.identifiers")}</summary>
-                    <p>
-                      <span class="muted">{t("run.resources.address")}</span>{" "}
-                      <code>{resource.address}</code>
-                    </p>
-                    <p>
-                      <span class="muted">{t("run.resources.type")}</span>{" "}
-                      <code>{resource.type}</code>
-                    </p>
-                    <Show when={planResourceScopeLabel(resource.scope)}>
-                      {(scope) => (
-                        <p class="wa-plan-resource-scope">
-                          <span class="muted">{t("run.resources.scope")}</span>{" "}
-                          {scope()}
-                        </p>
-                      )}
-                    </Show>
-                  </details>
+                  <Show when={planResourceName(resource)}>
+                    {(name) => <code class="wa-plan-resource-name">{name()}</code>}
+                  </Show>
+                  <Show when={planResourceScopeLabel(resource.scope)}>
+                    {(scope) => (
+                      <p class="wa-plan-resource-scope">
+                        <span class="muted">{t("run.resources.scope")}</span>{" "}
+                        {scope()}
+                      </p>
+                    )}
+                  </Show>
                 </div>
               </div>
             )}

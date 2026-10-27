@@ -32,11 +32,13 @@ test("reload resumes an acknowledged coordinator by read-only GET", () => {
   expect(recoveryView).toContain('href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}');
 });
 
-test("accepted initial review does not offer a revision Plan as recovery", () => {
-  const view = read("dashboard/src/views/apps/WorkloadDetailView.tsx");
-  expect(view).toContain("acceptedInitialInstallPlan(");
-  expect(view).toContain("config.id !== inst.installConfigId || initialReviewRequired()");
-  expect(view).toContain("if (!sourceRevisionReady()) {");
-  expect(view).toContain("<Show when={!props.initialReviewRequired}>");
-  expect(view).toContain('href={`/runs/${encodeURIComponent(run().id)}`}');
+test("an unfinished install continues on the install page, never through a revision Plan", () => {
+  const page = read("dashboard/src/views/app/AppManagePage.tsx");
+  // Version and settings changes exist only for an applied app.
+  expect(page).toContain("const managed = () => applied() && !destroyed();");
+  expect(page).toContain("const revisionReady = () => {");
+  expect(page).toContain("return managed() && typeof ref === \"string\"");
+  // The unfinished install restores its own review on /new.
+  expect(page).toContain("href={`/new?capsule=${encodeURIComponent(inst().id)}`}");
+  expect(page).toContain('t("app.problem.continueInstall")');
 });

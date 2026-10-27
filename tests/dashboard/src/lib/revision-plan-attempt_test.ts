@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { getOrCreateRevisionPlanAttempt } from "../../../../dashboard/src/lib/revision-plan-attempt.ts";
+import { getOrCreateRevisionPlanAttempt, releaseRevisionPlanAttempt } from "../../../../dashboard/src/lib/revision-plan-attempt.ts";
 
 test("retains A after an unknown A outcome and a definite B failure", () => {
   const attempts = new Map();
@@ -34,4 +34,17 @@ test("separate Capsules do not share retained revision attempts", () => {
   );
 
   expect(capsuleA.idempotencyKey).not.toBe(capsuleB.idempotencyKey);
+});
+
+test("a returned Plan releases its key so the same ref later gets a fresh one", () => {
+  const attempts = new Map();
+  const request = JSON.stringify({ ref: "main" });
+  const first = getOrCreateRevisionPlanAttempt(attempts, "capsule_1", request);
+  releaseRevisionPlanAttempt(attempts, "capsule_1", request);
+  const next = getOrCreateRevisionPlanAttempt(attempts, "capsule_1", request);
+  expect(next.idempotencyKey).not.toBe(first.idempotencyKey);
+  // Releasing one Capsule's attempt leaves another's intact.
+  const other = getOrCreateRevisionPlanAttempt(attempts, "capsule_2", request);
+  releaseRevisionPlanAttempt(attempts, "capsule_1", request);
+  expect(getOrCreateRevisionPlanAttempt(attempts, "capsule_2", request)).toEqual(other);
 });
