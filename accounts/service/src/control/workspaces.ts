@@ -86,7 +86,8 @@ import type {
   RunLogsResponse,
   PublicRun,
 } from "takosumi-contract/runs";
-import type { AccountsStore } from "../store.ts";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import type { AccountsStore, TakosumiAccountRecord } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -248,8 +249,10 @@ export async function handleWorkspaces(
         if (method === "GET") {
           return await listWorkspaceMembers(
             operations,
+            store,
             workspaceId,
             ctx.session.subject,
+            ctx.session.requireCurrentMembership,
           );
         }
         if (method === "POST") {
@@ -954,6 +957,19 @@ function findCaller(
   return members.find((member) => member.accountId === subject);
 }
 
+/** The role view mutation gates use, built from one roster read. */
+function effectiveRoster(
+  workspace: Pick<Workspace, "ownerUserId">,
+  members: readonly MemberAuthorization[],
+  requireCurrentMembership: boolean,
+): readonly MemberAuthorization[] {
+  if (requireCurrentMembership) return members;
+  return [
+    ...members.filter((member) => member.accountId !== workspace.ownerUserId),
+    { accountId: workspace.ownerUserId, roles: ["owner"], status: "active" },
+  ];
+}
+
 /** Shared callers use the real roster; ordinary callers retain owner repair. */
 async function effectiveMembers(
   operations: ControlPlaneOperations,
@@ -964,17 +980,65 @@ async function effectiveMembers(
     operations.workspaces.getWorkspace(workspaceId),
     operations.members.listMembers(workspaceId),
   ]);
-  if (requireCurrentMembership) return members;
-  return [
-    ...members.filter((member) => member.accountId !== workspace.ownerUserId),
-    { accountId: workspace.ownerUserId, roles: ["owner"], status: "active" },
-  ];
+  return effectiveRoster(workspace, members, requireCurrentMembership);
+}
+
+/**
+ * One roster row as the member list returns it. `displayName` is the member's
+ * account profile name and is visible to every member who may read the
+ * roster. `email` is present only when the caller is an active owner or admin
+ * of this Workspace; nobody else can read another member's address here.
+ */
+type WorkspaceMemberListEntry = PublicWorkspaceMember & {
+  readonly displayName?: string;
+  readonly email?: string;
+};
+
+/** Account profile reads per roster page are bounded to this many at once. */
+const MEMBER_PROFILE_READ_CONCURRENCY = 16;
+
+async function memberProfiles(
+  store: AccountsStore,
+  accountIds: readonly string[],
+): Promise<ReadonlyMap<string, TakosumiAccountRecord>> {
+  const profiles = new Map<string, TakosumiAccountRecord>();
+  const unique = [...new Set(accountIds)];
+  for (let start = 0; start < unique.length; start += MEMBER_PROFILE_READ_CONCURRENCY) {
+    const batch = unique.slice(start, start + MEMBER_PROFILE_READ_CONCURRENCY);
+    const records = await Promise.all(
+      batch.map((accountId) => store.findAccount(accountId as TakosumiSubject)),
+    );
+    for (const record of records) {
+      if (record) profiles.set(record.subject, record);
+    }
+  }
+  return profiles;
+}
+
+function memberListEntry(
+  member: PublicWorkspaceMember,
+  profile: TakosumiAccountRecord | undefined,
+  includeEmail: boolean,
+): WorkspaceMemberListEntry {
+  const displayName = profile?.displayName?.trim();
+  // An address the identity provider explicitly marked unverified is not shown
+  // as somebody's identity, even to owners and admins.
+  const email = includeEmail && profile?.emailVerified !== false
+    ? profile?.email?.trim()
+    : undefined;
+  return {
+    ...member,
+    ...(displayName ? { displayName } : {}),
+    ...(email ? { email } : {}),
+  };
 }
 
 async function listWorkspaceMembers(
   operations: ControlPlaneOperations,
+  store: AccountsStore,
   workspaceId: string,
   subject: string,
+  requireCurrentMembership = false,
 ): Promise<Response> {
   const [workspace, members] = await Promise.all([
     operations.workspaces.getWorkspace(workspaceId),
@@ -986,7 +1050,24 @@ async function listWorkspaceMembers(
   if (subject !== workspace.ownerUserId && caller && caller.status !== "active") {
     return memberForbidden("Your membership in this Workspace is not active.");
   }
-  return json({ members });
+  // Email visibility uses the same role view as the member mutation gates:
+  // only an active owner or admin may read other members' addresses.
+  const effectiveCaller = findCaller(
+    effectiveRoster(workspace, members, requireCurrentMembership),
+    subject,
+  );
+  const includeEmail = effectiveCaller?.status === "active" &&
+    (effectiveCaller.roles.includes("owner") ||
+      effectiveCaller.roles.includes("admin"));
+  const profiles = await memberProfiles(
+    store,
+    members.map((member) => member.accountId),
+  );
+  return json({
+    members: members.map((member) =>
+      memberListEntry(member, profiles.get(member.accountId), includeEmail)
+    ),
+  });
 }
 
 async function addWorkspaceMember(

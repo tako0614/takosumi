@@ -251,6 +251,11 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
+メンバー一覧の各行は、membership の field に加えて、アカウントに表示名があれば
+`displayName` を返します。`email` は呼び出し元がその Workspace の active な owner または
+admin のときだけ返し、identity provider が未確認と示したアドレスは返しません。member と
+viewer には他のメンバーのメールを返しません。追加・役割変更・削除の応答はどちらも含みません。
+
 空の Workspace だけが owner によって削除できます。非破棄 Capsule、Source、
 進行中 Run、利用量の証拠、保持された backup が一つでも残ると `409 workspace_not_empty` で拒否します。
 保持された backup は削除後に到達できなくなるため、削除前に明示的に扱ってください。

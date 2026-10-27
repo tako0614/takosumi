@@ -34,19 +34,19 @@ describe("MembersTab access-control surface", () => {
     // The server matches a member by `accountId === subject`; the UI gate must
     // do the same so it never shows a control the server would reject.
     expect(source).toContain("props.session.subject");
-    expect(source).toMatch(/m\.accountId === /);
+    expect(source).toMatch(/member\.accountId === callerSubject\(\)/);
   });
 
   test("invite is gated to owner/admin; role-change + remove to owner only", () => {
     expect(source).toMatch(/canInvite = \(\) =>[\s\S]*?"owner"[\s\S]*?"admin"/);
     expect(source).toMatch(/canManage = \(\) =>[\s\S]*?"owner"/);
-    // The 操作 column (役割変更・削除) is owner-only.
-    expect(source).toContain("<Show when={canManage()}");
+    // Role change and removal render only for an owner.
+    expect(source).toContain('<Show when={canManage() && member.status === "active"}>');
+    expect(source).toContain("<Show when={canInvite() && !inviteOpen()}>");
   });
 
   test("only an owner may offer the owner role in the invite form", () => {
-    expect(source).toContain("callerIsOwner");
-    expect(source).toMatch(/role !== "owner" \|\| callerIsOwner\(\)/);
+    expect(source).toMatch(/role !== "owner" \|\| canManage\(\)/);
   });
 
   test("the last-owner guard disables demote + remove for the sole owner", () => {
@@ -90,7 +90,7 @@ describe("MembersTab access-control surface", () => {
     // …and a failed setMemberRole reverts before surfacing the error.
     expect(source).toMatch(/catch \(err\) \{\s*revert\(\);\s*throw err;\s*\}/);
     // The onChange handler passes the select element for the rollback.
-    expect(source).toContain("e.currentTarget,");
+    expect(source).toContain("event.currentTarget,");
   });
 
   test("labels go through the locale dictionary (no hardcoded copy)", () => {
@@ -113,16 +113,35 @@ describe("MembersTab access-control surface", () => {
     expect(source).not.toContain('createSignal<ControlWorkspaceRole>("owner")');
   });
 
-  test("member cell truncates raw subjects, keeping the full id on title", () => {
+  test("members read by display name; emails only appear when the server sends them", () => {
     expect(source).toContain('from "../../../lib/account-labels.ts"');
-    expect(source).toContain("{shortSubject(member.accountId)}");
-    // Your own row reads as your name (the session knows it); others keep
-    // the short subject until the roster carries names.
-    expect(source).toContain("sessionDisplayName(props.session)");
-    expect(source).toContain("title={member.accountId}");
-    expect(source).not.toContain(
-      '<code class="wb-mono">{member.accountId}</code>',
-    );
+    expect(source).toContain("memberLabel(member, props.session)");
+    // The server returns `email` only to owners and admins; the view shows
+    // whatever it received and never asks for more.
+    expect(source).toContain("<Show when={member.email}>");
+    expect(source).not.toContain("<code");
+    expect(source).not.toContain("shortSubject(member.accountId)");
+  });
+
+  test("each role select starts on that member's role", () => {
+    // The select's value is assigned before its options render; without
+    // `selected` on the option every row showed the first role.
+    expect(source).toContain('selected={role === (member.roles[0] ?? "member")}');
+  });
+
+  test("roles are explained one line each", () => {
+    for (const role of ["owner", "admin", "member", "viewer"]) {
+      expect(source).toContain(`${role}: "members.roleHelp.${role}"`);
+    }
+    expect(source).toContain("t(ROLE_HELP_KEY[role])");
+  });
+
+  test("removal states its consequence and the invite form opens on request", () => {
+    expect(source).toContain('t("members.removeConfirm", { name: label(member) })');
+    expect(source).toContain("const [inviteOpen, setInviteOpen] = createSignal(false);");
+    // Lists are cards at every width.
+    expect(source).not.toContain("<DataTable");
+    expect(source).toContain('class="acct-row tg-card"');
   });
 
   test("remove is busy per member row, not for the whole roster", () => {

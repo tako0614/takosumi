@@ -257,6 +257,12 @@ lightly edited for readers.
 | POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Create a Workspace plan update Run |
 | POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Create a Workspace drift check Run |
 
+Each member list row carries the membership fields plus `displayName` when the
+account has one. `email` is returned only when the caller is an active owner or
+admin of that Workspace, and never for an address the identity provider marked
+unverified. Members and viewers do not receive other members' email addresses.
+Add, role change, and remove responses carry neither field.
+
 ### Projects and Capsules
 
 | Method | Path | Description |

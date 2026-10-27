@@ -66,20 +66,24 @@ describe("WorkloadListView (/workloads)", () => {
     expect(serviceListSource).toContain('t("workloads.deleteAria"');
   });
 
-  test("is wired to /workloads, distinct from the Apps home and the detail", () => {
-    expect(routerSource).toContain("WorkloadListView");
-    expect(routerSource).toContain(
-      'path="/workloads" component={WorkloadListView}',
-    );
+  test("the all-apps list is ホーム: /workloads redirects there, the detail stays", () => {
+    // TASK-0115: ホーム lists every installed app, so the separate list
+    // screen is no longer routed (owner A decides whether this view's rows
+    // move into ホーム).
+    expect(routerSource).not.toContain("WorkloadListView");
     expect(routerSource).toContain('path="/" component={AppListView}');
+    expect(routerSource).toContain(
+      'path="/workloads" component={() => <Navigate href="/" />}',
+    );
     expect(routerSource).toContain(
       'path="/apps" component={() => <Navigate href="/" />}',
     );
     expect(routerSource).toContain(
       'path="/workloads/:id" component={WorkloadDetailView}',
     );
-    expect(routerSource).toContain('path="/services"');
-    expect(routerSource).toContain('<RedirectWithQuery to="/workloads" />');
+    expect(routerSource).toContain(
+      'path="/services" component={() => <Navigate href="/" />}',
+    );
   });
 
   test("has dedicated row styling", () => {

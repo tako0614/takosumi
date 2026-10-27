@@ -87,6 +87,23 @@ describe("Takosumi API key management", () => {
     );
   });
 
+  test("CLI・APIから使う: the list leads and the create form opens only on request", () => {
+    expect(component).toContain("const [formOpen, setFormOpen] = createSignal(false);");
+    expect(component).toContain("<Show when={formOpen()}>");
+    expect(component).toContain("<Show when={!formOpen()}>");
+    // The CLI flag is the headline; the API detail is one plain line.
+    expect(ja["account.apiKeys.subtitle"]).toContain("--token");
+    expect(en["account.apiKeys.subtitle"]).toContain("--token");
+    expect(ja["account.apiKeys.title"]).not.toContain("/api/v1");
+    expect(ja["account.apiKeys.apiHelp"]).toContain("/api/v1");
+    expect(component).toContain('t("account.apiKeys.apiHelp")');
+    // Revoking states its consequence before it happens.
+    expect(component).toContain('t("account.apiKeys.revokeConsequence")');
+    // Rows are cards at every width, so nothing scrolls sideways on a phone.
+    expect(component).not.toContain("<DataTable");
+    expect(component).toContain('class="acct-row tg-card"');
+  });
+
   test("shows a new secret once and keeps list rows metadata-only", () => {
     expect(component).toContain("created()?.token");
     expect(component).toContain('t("account.apiKeys.createdHint")');
@@ -271,7 +288,7 @@ describe("Takosumi API key management", () => {
       "workspace",
     );
     expect(ja["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
-      "ワークスペース",
+      "スペース",
     );
   });
 

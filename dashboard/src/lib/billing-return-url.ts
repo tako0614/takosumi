@@ -6,7 +6,7 @@
  * parameter because the dashboard's WorkspaceSwitcher owns the active
  * Workspace selection rather than encoding it in the route.
  */
-export const WORKSPACE_BILLING_ROUTE = "/settings/billing" as const;
+export const WORKSPACE_BILLING_ROUTE = "/account/billing" as const;
 
 export type BillingCheckoutResult = "success" | "cancelled";
 

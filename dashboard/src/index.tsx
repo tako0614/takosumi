@@ -42,49 +42,27 @@ const SignInCallbackView = lazy(() =>
 const LegalView = lazy(() => import("./views/legal/LegalView.tsx"));
 const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
-// --- Normal hosted-service surface --------------------------------------------
+// --- Signed-in surface ---------------------------------------------------------
 // Every authenticated screen nests under ShellLayout (AuthGuard + AppShell) —
-// views no longer wrap themselves in the chrome.
+// views no longer wrap themselves in the chrome. The primary destinations are
+// the four behaviors in views/account/components/shell/nav.ts.
 const ShellLayout = lazy(
   () => import("./views/account/components/shell/ShellLayout.tsx"),
 );
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
-const SettingsView = lazy(() => import("./views/settings/SettingsView.tsx"));
-const ManageView = lazy(() => import("./views/settings/ManageView.tsx"));
-const HostedResourcesView = lazy(
-  () => import("./views/settings/HostedResourcesView.tsx"),
-);
-const WorkloadListView = lazy(
-  () => import("./views/apps/WorkloadListView.tsx"),
-);
 const WorkloadDetailView = lazy(
   () => import("./views/apps/WorkloadDetailView.tsx"),
 );
 const InstallView = lazy(() => import("./views/new/InstallView.tsx"));
-const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
-const GraphView = lazy(() => import("./views/graph/GraphView.tsx"));
-const ActivityView = lazy(() => import("./views/activity/ActivityView.tsx"));
 const NotificationsView = lazy(
   () => import("./views/notifications/NotificationsView.tsx"),
 );
-const WorkspaceSettingsView = lazy(
-  () => import("./views/workspace/WorkspaceSettingsView.tsx"),
+const ConnectionsView = lazy(
+  () => import("./views/workspace/ConnectionsView.tsx"),
 );
 const AccountView = lazy(() => import("./views/account/AccountView.tsx"));
-
-function ConnectionsView() {
-  return <WorkspaceSettingsView standaloneTab="connections" />;
-}
-
-function BillingView() {
-  return <WorkspaceSettingsView standaloneTab="billing" />;
-}
-
-function AdvancedWorkspaceView() {
-  return <WorkspaceSettingsView />;
-}
 
 // --- redirects ---------------------------------------------------------------
 
@@ -136,15 +114,31 @@ function RedirectLegacyWorkloadDetail() {
   return <Navigate href={`/workloads/${id}${tab}`} />;
 }
 
+/**
+ * Where an old Workspace-settings tab lives now. Connections are the 接続
+ * page; members, billing and the workspace itself are アカウント sections. Value
+ * sharing and the management export left the UI (API and CLI only), so their
+ * old tabs land on the workspace section; per-app screen recovery moved to each
+ * app's page, which ホーム lists.
+ */
+function legacyWorkspaceSettingsTarget(tab: string | undefined): string {
+  switch (tab) {
+    case "members":
+      return "/account/members";
+    case "connections":
+      return "/connections";
+    case "billing":
+      return "/account/billing";
+    case "interface-recovery":
+      return "/";
+    default:
+      return "/account/workspace";
+  }
+}
+
 function RedirectLegacyWorkspaceSettingsTab() {
   const params = useParams<{ tab: string }>();
-  const target =
-    params.tab === "billing"
-      ? "/settings/billing"
-      : `/advanced/workspace/${encodeURIComponent(params.tab)}`;
-  return (
-    <RedirectWithQuery to={target} />
-  );
+  return <RedirectWithQuery to={legacyWorkspaceSettingsTarget(params.tab)} />;
 }
 
 function App() {
@@ -169,54 +163,23 @@ function App() {
         component={() => <RedirectWithQuery to="/sign-in" />}
       />
 
-      {/* Normal hosted-service surface — ShellLayout owns AuthGuard + chrome.
-          Primary tabs: / (launcher), /new (ストア: browse AND add in one page),
-          /settings (hub). Hosting management stays fully reachable via
-          /settings/manage. */}
+      {/* Signed-in surface — ShellLayout owns AuthGuard + chrome. Primary
+          destinations: / (ホーム), /new (ストア: browse AND install in one
+          page), /connections (接続), /account (アカウント). An app's page and
+          the run details opened from its history stay routable. */}
       <Route component={ShellLayout}>
         <Route path="/" component={AppListView} />
-        <Route path="/settings" component={SettingsView} />
-        <Route path="/settings/account" component={AccountView} />
-        <Route path="/settings/billing" component={BillingView} />
-        <Route path="/settings/manage" component={ManageView} />
-        <Route path="/settings/manage/hosted-resources" component={HostedResourcesView} />
-        <Route path="/workloads" component={WorkloadListView} />
         <Route path="/new" component={InstallView} />
         <Route path="/connections" component={ConnectionsView} />
+        <Route path="/account" component={AccountView} />
+        <Route path="/account/:section" component={AccountView} />
         <Route path="/workloads/:id" component={WorkloadDetailView} />
         <Route path="/workloads/:id/:tab" component={WorkloadDetailView} />
-        <Route path="/runs" component={RunsListView} />
         <Route path="/runs/:id" component={RunView} />
+        {/* Notifications link grouped updates here. */}
         <Route path="/run-groups/:id" component={RunGroupView} />
-        <Route path="/graph" component={GraphView} />
-        <Route path="/activity" component={ActivityView} />
         <Route path="/notifications" component={NotificationsView} />
-        <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />
-        <Route
-          path="/advanced/workspace/billing"
-          component={() => <RedirectWithQuery to="/settings/billing" />}
-        />
-        <Route
-          path="/advanced/workspace/:tab"
-          component={AdvancedWorkspaceView}
-        />
       </Route>
-      <Route
-        path="/workspace/settings"
-        component={() => <RedirectWithQuery to="/advanced/workspace" />}
-      />
-      <Route
-        path="/workspace/settings/:tab"
-        component={RedirectLegacyWorkspaceSettingsTab}
-      />
-      <Route
-        path="/account"
-        component={() => <RedirectWithQuery to="/settings/account" />}
-      />
-      <Route
-        path="/billing"
-        component={() => <RedirectWithQuery to="/settings/billing" />}
-      />
 
       {/* The store browser and the add flow are ONE page (`/new`). `/store` was
           the second, duplicate store surface and is now just a compatibility
@@ -224,65 +187,100 @@ function App() {
           pre-fills. */}
       <Route path="/store" component={() => <RedirectWithQuery to="/new" />} />
 
-      {/* Old paths → new homes. /install is the external install link
-          (client-handled): it forwards its query to /new, where
-          lib/install-link.ts pre-fills the Git form — pre-fill only, the visitor
-          always confirms before anything installs. A provider OAuth helper
-          callback's /connections keeps its result query too. */}
+      {/* Old paths → where that behavior lives now. Screens that were internal
+          concepts (run list, activity, dependency graph, the all-apps list)
+          became parts of each app's page, which ホーム lists. Settings,
+          management and Workspace tabs became 接続 and アカウント. /install is
+          the external install link (client-handled): it forwards its query to
+          /new, where lib/install-link.ts pre-fills the Git form — pre-fill
+          only, the visitor always confirms before anything installs. A
+          provider OAuth helper callback's /connections keeps its result query
+          too. */}
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/" />} />
+      <Route path="/workloads" component={() => <Navigate href="/" />} />
+      <Route path="/runs" component={() => <Navigate href="/" />} />
+      <Route path="/activity" component={() => <Navigate href="/" />} />
+      <Route path="/graph" component={() => <Navigate href="/" />} />
+      <Route path="/sources" component={() => <Navigate href="/" />} />
+      <Route path="/services" component={() => <Navigate href="/" />} />
+      <Route path="/capsules" component={() => <Navigate href="/" />} />
       <Route path="/apps/:id" component={RedirectLegacyWorkloadDetail} />
       <Route path="/apps/:id/:tab" component={RedirectLegacyWorkloadDetail} />
-      <Route
-        path="/services"
-        component={() => <RedirectWithQuery to="/workloads" />}
-      />
       <Route path="/services/:id" component={RedirectLegacyWorkloadDetail} />
       <Route
         path="/services/:id/:tab"
         component={RedirectLegacyWorkloadDetail}
-      />
-      <Route
-        path="/capsules"
-        component={() => <RedirectWithQuery to="/workloads" />}
       />
       <Route path="/capsules/:id" component={RedirectLegacyWorkloadDetail} />
       <Route
         path="/capsules/:id/:tab"
         component={RedirectLegacyWorkloadDetail}
       />
+      <Route path="/settings" component={() => <Navigate href="/account" />} />
+      <Route
+        path="/settings/account"
+        component={() => <Navigate href="/account" />}
+      />
+      <Route
+        path="/settings/billing"
+        component={() => <RedirectWithQuery to="/account/billing" />}
+      />
+      <Route
+        path="/settings/manage"
+        component={() => <Navigate href="/account" />}
+      />
+      <Route
+        path="/settings/manage/hosted-resources"
+        component={() => <Navigate href="/" />}
+      />
+      <Route
+        path="/advanced/workspace"
+        component={() => <Navigate href="/account/workspace" />}
+      />
+      <Route
+        path="/advanced/workspace/:tab"
+        component={RedirectLegacyWorkspaceSettingsTab}
+      />
+      <Route
+        path="/workspace/settings"
+        component={() => <Navigate href="/account/workspace" />}
+      />
+      <Route
+        path="/workspace/settings/:tab"
+        component={RedirectLegacyWorkspaceSettingsTab}
+      />
       <Route
         path="/members"
-        component={() => <Navigate href="/advanced/workspace/members" />}
+        component={() => <Navigate href="/account/members" />}
       />
       <Route
         path="/backups"
-        component={() => <Navigate href="/advanced/workspace/backups" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/output-shares"
-        component={() => <Navigate href="/advanced/workspace/shares" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
-      <Route path="/sources" component={() => <Navigate href="/" />} />
       <Route
         path="/providers"
         component={() => <Navigate href="/connections" />}
       />
       <Route
-        path="/account/settings"
-        component={() => <Navigate href="/advanced/workspace" />}
+        path="/billing"
+        component={() => <RedirectWithQuery to="/account/billing" />}
       />
       <Route
-        path="/account/billing"
-        component={() => <Navigate href="/settings/billing" />}
+        path="/account/settings"
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/account/profile"
-        component={() => <Navigate href="/settings/account" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/account/sessions"
-        component={() => <Navigate href="/settings/account" />}
+        component={() => <Navigate href="/account" />}
       />
       {/* Anything else is a real 404 — no silent bounce to home. */}
       <Route path="*" component={NotFoundView} />

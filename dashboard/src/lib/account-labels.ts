@@ -1,11 +1,11 @@
 /**
  * Human labels for the people behind opaque account subjects.
  *
- * Workspace rosters and Activity records carry only account subjects; names
- * and emails of OTHER people are not part of those responses. The signed-in
- * person's own name is known from the session, so their rows read as them
- * instead of an id. Everyone else keeps a short, stable subject prefix that
- * matches between the member list and the history.
+ * The member list carries each member's display name (and, for owners and
+ * admins only, their email). Activity records carry only account subjects.
+ * The signed-in person's own name is known from the session, so their rows
+ * read as them. Anyone without a name reads as "メンバー" plus a short,
+ * stable subject prefix that matches between the member list and history.
  */
 import { t } from "../i18n/index.ts";
 
@@ -50,4 +50,19 @@ export function activityActorLabel(
   // the control plane itself as the actor.
   if (actorId === "system") return t("activity.actorSystem");
   return shortSubject(actorId);
+}
+
+/** A roster member's label: you, their display name, or "メンバー" + short id. */
+export function memberLabel(
+  member: { readonly accountId: string; readonly displayName?: string },
+  session: SessionIdentity | undefined,
+): string {
+  if (isSessionAccount(member.accountId, session)) {
+    const own = sessionDisplayName(session);
+    if (own) return own;
+  }
+  return (
+    member.displayName?.trim() ||
+    t("members.unnamed", { id: shortSubject(member.accountId) })
+  );
 }

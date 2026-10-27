@@ -1,9 +1,11 @@
 /**
- * "Connect account" form: create one ProviderConnection from a
+ * "Connect your cloud" form: create one ProviderConnection from a
  * service-installed credential recipe (guided fields, or the provider's OAuth
- * popup via lib/connection-oauth-popup.ts) or from the raw bring-your-own-key
- * env editor. Extracted from the Workspace Connections tab so another screen
- * (an install review, for instance) can embed the same flow.
+ * popup via lib/connection-oauth-popup.ts). The guided path is the default
+ * whenever the service has one. A cloud without a guided method is connected
+ * by typing the keys that cloud asks for, phrased as that behavior rather than
+ * as raw environment variables. Shared by the 接続 page and the install review
+ * (props are a stable API for both).
  *
  * Secret values are write-only — kept in component state only until the
  * submit resolves, then cleared. The embedding screen owns what happens next:
@@ -143,6 +145,14 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
     { name: "", value: "" },
   ]);
   const isGenericEnvProvider = () => provider() === GENERIC_ENV_PROVIDER_OPTION;
+  /** The service accepts keys for clouds without a guided method. */
+  const genericEnvAvailable = () =>
+    installedCredentialRecipes().some(
+      (recipe) =>
+        recipe.id === "generic-env" &&
+        recipe.authModes.env !== undefined &&
+        Boolean(recipe.secretPartition),
+    );
 
   let initialProviderSelected = false;
   createEffect(() => {
@@ -391,28 +401,27 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
             </FormField>
           </Show>
 
-          <details class="connection-advanced">
-            <summary>{t("conn.add.optionalSettings")}</summary>
-            <FormField label={t("conn.add.displayName")}>
-              <Input
-                id="connection-display-name"
-                name="displayName"
-                type="text"
-                value={displayName()}
-                onInput={(e) => setDisplayName(e.currentTarget.value)}
-                placeholder={t("conn.add.displayNamePlaceholder")}
-                autocomplete="off"
-              />
-            </FormField>
-          </details>
+          <FormField
+            label={t("conn.add.displayName")}
+            hint={t("conn.add.displayNameHint")}
+          >
+            <Input
+              id="connection-display-name"
+              name="displayName"
+              type="text"
+              value={displayName()}
+              onInput={(e) => setDisplayName(e.currentTarget.value)}
+              placeholder={t("conn.add.displayNamePlaceholder")}
+              autocomplete="off"
+            />
+          </FormField>
 
           <Show when={!isGenericEnvProvider() && oauthHelper()}>
-            <details class="connection-advanced"><summary>{t("conn.oauth.accountSettings")}</summary>
-              <For each={oauthSetupFields()}>{(field) => <FormField
-                label={fields().find((candidate) => candidate.envName === field.envName)?.label ?? field.key}>
-                <Input value={values()[field.envName] ?? ""} onInput={(event) => setFieldValue(field.envName, event.currentTarget.value)} autocomplete="off" />
-              </FormField>}</For>
-            </details>
+            <For each={oauthSetupFields()}>{(field) => <FormField
+              label={fields().find((candidate) => candidate.envName === field.envName)?.label ?? field.key}
+              hint={t("conn.oauth.accountSettingsHint")}>
+              <Input value={values()[field.envName] ?? ""} onInput={(event) => setFieldValue(field.envName, event.currentTarget.value)} autocomplete="off" />
+            </FormField>}</For>
             <div class="wc-form-actions">
               <Button type="button" variant="primary" busy={oauthBusy()} onClick={() => void connectOAuth()}>
                 {t("conn.oauth.connect", { provider: installedCredentialRecipes().find((recipe) => recipe.id === oauthHelper()?.credentialRecipe.id)?.displayName ?? "" })}
@@ -447,14 +456,11 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
                         </Button>
                       </div>
                       <Show when={guide().steps.length > 0}>
-                        <details class="connection-instructions">
-                          <summary>{t("conn.guided.instructions")}</summary>
-                          <ol class="wc-steps">
-                            <For each={guide().steps}>
-                              {(step) => <li>{step}</li>}
-                            </For>
-                          </ol>
-                        </details>
+                        <ol class="wc-steps">
+                          <For each={guide().steps}>
+                            {(step) => <li>{step}</li>}
+                          </For>
+                        </ol>
                       </Show>
                     </div>
                   )}
@@ -506,15 +512,18 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
               </div>
             }
           >
-            {/* Advanced bring-your-own-key editor: any OpenTofu provider,
-                no allowlist / approval / billing. h2 keeps the heading
-                hierarchy flat under the page h1, like sibling sections. */}
+            {/* A cloud without a guided method: type the keys it asks for.
+                h2 keeps the heading hierarchy flat under the page h1, like
+                sibling sections. */}
             <div class="wc-guided">
               <div class="wc-byok-intro">
                 <h2 class="wc-byok-title">{t("conn.byok.title")}</h2>
                 <p class="muted">{t("conn.byok.body")}</p>
                 <p class="wc-byok-note">{t("conn.byok.noBillingNote")}</p>
               </div>
+              <Show when={!credentialRecipes.loading && !genericEnvAvailable()}>
+                <Toast tone="neutral">{t("conn.byok.unavailable")}</Toast>
+              </Show>
               <Show when={!restrictedProviderSource()}>
                 <div class="wc-form-actions">
                   <Button
@@ -532,12 +541,17 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
               </Show>
               <form
                 class="wc-form"
+                hidden={!credentialRecipes.loading && !genericEnvAvailable()}
                 onSubmit={(e) => {
                   e.preventDefault();
                   void createGenericEnvProvider.run();
                 }}
               >
-                <FormField label={t("conn.genericEnv.providerName")} required>
+                <FormField
+                  label={t("conn.genericEnv.providerName")}
+                  hint={t("conn.genericEnv.providerHint")}
+                  required
+                >
                   <Input
                     id="connection-generic-provider"
                     name="genericProvider"
@@ -595,7 +609,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
                           onClick={() => removeEnvPair(index)}
                           icon={<Trash size={16} />}
                         >
-                          {t("common.delete")}
+                          {t("conn.genericEnv.removeRow")}
                         </Button>
                       </Show>
                     </div>
@@ -627,8 +641,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
           </Show>
 
           <Show when={!isGenericEnvProvider() && !restrictedProviderSource()}>
-            {/* Quiet advanced entry: providers without a preset connect via
-                the raw BYOK env editor. */}
+            {/* A cloud missing from the list connects by typing its keys. */}
             <div class="wc-form-actions">
               <Button
                 variant="ghost"

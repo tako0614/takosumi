@@ -101,54 +101,6 @@
     align-items: stretch;
   }
 }
-
-/* ===== Connections: registered list rows ===== */
-.wc-conn-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-}
-.wc-conn-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-2);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-}
-.wc-conn-head {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  flex-wrap: wrap;
-}
-.wc-conn-name {
-  font-weight: 700;
-  font-family: var(--tg-font-display);
-  letter-spacing: 0;
-}
-.wc-conn-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  flex-wrap: wrap;
-  font-size: var(--tg-fs-sm);
-  color: var(--tg-fg-muted);
-}
-.wc-conn-meta code {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-}
-.wc-conn-actions {
-  display: flex;
-  gap: var(--tg-s-2);
-  flex-wrap: wrap;
-  margin-top: var(--tg-s-1);
-}
 .wc-conn-main {
   display: flex;
   min-width: 0;

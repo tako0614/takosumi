@@ -12,13 +12,6 @@ import { activityEventHref } from "../../../../../dashboard/src/lib/activity-lin
 import { isFailureAction } from "../../../../../dashboard/src/lib/notifications.ts";
 import { locale, setLocale } from "../../../../../dashboard/src/i18n/index.ts";
 
-const activitySource = readFileSync(
-  resolve(
-    import.meta.dir,
-    "../../../../../dashboard/src/views/activity/ActivityView.tsx",
-  ),
-  "utf8",
-);
 const notificationsSource = readFileSync(
   resolve(
     import.meta.dir,
@@ -46,8 +39,8 @@ const notificationsLibSource = readFileSync(
   "utf8",
 );
 
-describe("History and notifications", () => {
-  test("does not credit a dependency when the service's own source changed", () => {
+describe("Notifications", () => {
+  test("does not credit a dependency when the app's own source changed", () => {
     expect(activityCopySource).toContain(
       'metaString(m, "reason") === "source_ref_changed"',
     );
@@ -73,80 +66,38 @@ describe("History and notifications", () => {
       );
       setLocale("ja");
       expect(describeActivityEvent(event, "アプリ").title).toBe(
-        "「アプリ」の新しいバージョンがあります",
+        "「アプリ」の新しい版があります",
       );
     } finally {
       setLocale(previousLocale);
     }
   });
 
-  test("keeps raw audit identifiers inside nested debug details", () => {
-    const detailsIndex = activitySource.indexOf(
-      '<summary>{t("activity.details")}</summary>',
-    );
-    const debugIndex = activitySource.indexOf(
-      '<summary>{t("activity.debug")}</summary>',
-    );
-    // The raw actor CHIP (actor=<code>…</code>) stays in the nested debug
-    // layer; the friendly per-row actor line lives on the row (next test).
-    const actorChipIndex = activitySource.indexOf(
-      '<span class="muted">actor</span>',
-    );
-
-    expect(detailsIndex).toBeGreaterThan(-1);
-    expect(debugIndex).toBeGreaterThan(detailsIndex);
-    expect(actorChipIndex).toBeGreaterThan(debugIndex);
-    expect(activitySource).toContain('<span class="muted">action</span>');
-    expect(activitySource).toContain('<span class="muted">target</span>');
-    // History and Notifications share one sentence per event.
-    expect(activitySource).toContain(
-      "describeActivityEvent(props.event, props.serviceName)",
-    );
-    expect(activitySource).not.toContain("function activityTitle");
-    expect(activityCopySource).toContain('t("notif.event.recorded")');
-    expect(en["activity.details"]).toBe("Reference info");
-    expect(ja["activity.details"]).toBe("参照情報");
-    expect(en["activity.debug"]).toBe("Reference ID");
-    expect(ja["activity.debug"]).toBe("参照 ID");
-  });
-
-  test("activity rows surface WHO acted, honoring the page's だれが claim", () => {
-    // The recorded actorId renders on the row itself (backend data, never
-    // invented), before the details disclosure — not only in the debug layer.
-    const rowActorIndex = activitySource.indexOf('t("activity.actorLine"');
-    const detailsIndex = activitySource.indexOf(
-      '<summary>{t("activity.details")}</summary>',
-    );
-    expect(rowActorIndex).toBeGreaterThan(-1);
-    expect(rowActorIndex).toBeLessThan(detailsIndex);
-    expect(activitySource).toContain("<Show when={props.event.actorId}>");
-    expect(ja["activity.actorLine"]).toContain("{actor}");
-    expect(en["activity.actorLine"]).toContain("{actor}");
-  });
-
-  test("notifications link to history without advertising raw audit logs", () => {
-    expect(notificationsSource).toContain('href="/activity"');
-    expect(notificationsSource).toContain('t("notif.supportSummary")');
+  test("notifications link to where each event is acted on, with no raw history screen", () => {
+    expect(notificationsSource).not.toContain('href="/activity"');
+    expect(notificationsSource).not.toContain("notif.viewRaw");
     expect(notificationsSource).toContain("describeActivityEvent(");
+    expect(notificationsSource).toContain("activityEventHref");
     expect(activityCopySource).toContain('t("notif.event.recorded")');
     expect(notificationsSource).not.toContain("title: event.action");
-    expect(notificationsSource).toMatch(
-      /<details class="wb-disclosure wc-notif-support">[\s\S]*href="\/activity"/,
-    );
-    expect(en["notif.supportSummary"]).toBe("Reference info");
-    expect(ja["notif.supportSummary"]).toBe("参照情報");
-    expect(en["notif.viewRaw"]).toBe("Open history →");
-    expect(ja["notif.viewRaw"]).toBe("履歴を開く →");
-    expect(en["notif.viewRaw"].toLowerCase()).not.toContain("raw");
-    expect(en["notif.viewRaw"].toLowerCase()).not.toContain("audit");
-    expect(en["notif.viewRaw"].toLowerCase()).not.toContain("support");
-    expect(ja["notif.viewRaw"]).not.toContain("生");
-    expect(ja["notif.viewRaw"]).not.toContain("監査");
-    expect(ja["notif.viewRaw"]).not.toContain("サポート");
+    // An empty feed offers the next behavior: finding an app.
+    expect(notificationsSource).toContain('t("notif.empty.cta")');
+    expect(notificationsSource).toContain('href="/new"');
     expect(en["notif.event.recorded"]).toBe("Recorded activity");
     expect(ja["notif.event.recorded"]).toBe("記録された操作");
+    const base = {
+      id: "act",
+      workspaceId: "ws_alpha",
+      action: "run.applied",
+      metadata: {},
+      createdAt: "2026-10-27T00:00:00.000Z",
+    };
+    expect(activityEventHref({ ...base, targetType: "run", targetId: "run_1" })).toBe("/runs/run_1");
+    expect(activityEventHref({ ...base, targetType: "capsule", targetId: "cap_1" })).toBe("/workloads/cap_1");
+    expect(activityEventHref({ ...base, targetType: "connection", targetId: "pc_1" })).toBe("/connections");
+    // Value sharing between workspaces has no screen any more.
+    expect(activityEventHref({ ...base, targetType: "output_share", targetId: "share_1" })).toBeUndefined();
   });
-
   test("topbar badge and /notifications share the same failure-count derivation without a navigation fanout", () => {
     // One derivation, owned by lib/notifications.ts: attentionCount. The
     // notifications page may load its cross-Workspace feed, while ordinary
@@ -210,10 +161,13 @@ describe("History and notifications", () => {
       "(!workspaceId || entry.event.workspaceId === workspaceId)",
     );
     expect(notificationsSource).toContain('t("notif.otherWorkspace"');
-    // Named by the Workspace's display name, not its @handle / id.
+    // Named by the workspace's name, never its generated handle / id, and only
+    // when there is more than one workspace to tell apart.
     expect(ja["notif.otherWorkspace"]).toContain("{name}");
     expect(en["notif.otherWorkspace"]).toContain("{name}");
-    expect(notificationsSource).toContain("workspace?.displayName?.trim()");
+    expect(ja["notif.otherWorkspace"]).toContain("スペース");
+    expect(notificationsSource).toContain("workspaceName(workspace)");
+    expect(notificationsSource).toContain("showWorkspace={multipleWorkspaces()}");
   });
 
   test("the bell opens onto the existing snapshot, not a full skeleton", () => {
@@ -231,7 +185,7 @@ describe("History and notifications", () => {
     );
   });
 
-  test("run/service notification lines name the service when the payload allows", () => {
+  test("run and app notification lines name the app when the payload allows", () => {
     // The batched projection carries only a recorded name; the page never
     // opens a second per-Workspace Capsule-list fan-out.
     expect(notificationsLibSource).toContain("includeNotifications: true");
@@ -245,9 +199,7 @@ describe("History and notifications", () => {
     expect(notificationsSource).toContain("activityServiceName(event)");
     expect(activityCopySource).toContain('t("notif.event.planReadyNamed"');
     expect(activityCopySource).toContain('t("notif.event.failedNamed"');
-    // History names the service too, resolving ids over deleted services.
-    expect(activitySource).toContain("activityServiceName(");
-    expect(activitySource).toContain("createServiceNames(workspaceId)");
+    // Billing usage rows resolve app ids over removed apps the same way.
     expect(serviceNamesSource).toContain(
       "listCapsulesCached(id, { includeDestroyed: true })",
     );
@@ -266,15 +218,7 @@ describe("History and notifications", () => {
     }
   });
 
-  test("activity trail paging is honest: load more + end-of-list note", () => {
-    expect(activitySource).toContain("ACTIVITY_PAGE_SIZE");
-    expect(activitySource).toContain("ACTIVITY_MAX_LIMIT");
-    expect(activitySource).toContain('t("common.loadMore")');
-    expect(activitySource).toContain(
-      't("common.showingRecent", { n: list().length })',
-    );
-  });
-  test("a dead-lettered Interface publication reads as a failure that leads to its retry screen", () => {
+  test("a dead-lettered screen publication reads as a failure that opens its app", () => {
     // Recorded by core/domains/interfaces/materialization_intent_drain.ts.
     // It used to render as the neutral "Recorded activity" line with no link,
     // so the only screen that can retry it was reachable only through
@@ -295,12 +239,12 @@ describe("History and notifications", () => {
     };
     expect(isFailureAction(deadLettered.action)).toBe(true);
     expect(isFailureAction(retryRequested.action)).toBe(false);
-    expect(activityEventHref(deadLettered)).toBe(
-      "/advanced/workspace/interface-recovery",
-    );
-    expect(activityEventHref(retryRequested)).toBe(
-      "/advanced/workspace/interface-recovery",
-    );
+    // The app's page owns the retry; without an app id the link opens ホーム.
+    expect(activityEventHref(deadLettered)).toBe("/workloads/cap_app");
+    expect(activityEventHref(retryRequested)).toBe("/workloads/cap_app");
+    expect(
+      activityEventHref({ ...deadLettered, metadata: { errorCode: "x" } }),
+    ).toBe("/");
     expect(
       activityServiceName(deadLettered, new Map([["cap_app", "App service"]])),
     ).toBe("App service");
@@ -308,26 +252,23 @@ describe("History and notifications", () => {
     try {
       setLocale("en");
       expect(describeActivityEvent(deadLettered, "App service")).toEqual({
-        title: "Interfaces for “App service” could not be published",
-        detail: "Retry them from Interface recovery",
+        title: "The screen for “App service” couldn't be set up",
+        detail: "Try again from the app's page",
       });
       expect(describeActivityEvent(retryRequested).title).toBe(
-        "Queued a retry of Interface publication",
+        "Retrying an app's screen setup",
       );
       setLocale("ja");
       expect(describeActivityEvent(deadLettered, "アプリ")).toEqual({
-        title: "「アプリ」の Interface を公開できませんでした",
-        detail: "Interface の復旧から再試行してください",
+        title: "「アプリ」の画面を用意できませんでした",
+        detail: "アプリのページから、もう一度試してください",
       });
       expect(describeActivityEvent(deadLettered).title).not.toBe(
         ja["notif.event.recorded"],
       );
-      // The detail names the screen the link opens.
+      // The detail names where the link goes.
       expect(ja["notif.event.interfaceDeadLetteredDetail"]).toContain(
-        ja["interfaceRecovery.title"],
-      );
-      expect(en["notif.event.interfaceDeadLetteredDetail"]).toContain(
-        en["interfaceRecovery.title"],
+        "アプリのページ",
       );
     } finally {
       setLocale(previousLocale);

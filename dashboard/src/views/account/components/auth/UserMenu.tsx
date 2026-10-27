@@ -1,10 +1,11 @@
 /**
- * Avatar pill in TopBar: signed-in identity, account link, language switch
- * (EN/JA — persists via i18n setLocale), and sign-out.
+ * Avatar pill in TopBar: signed-in identity, the アカウント destination (the
+ * same one the primary nav carries), docs, language and theme, and sign-out
+ * as the last, plain item.
  */
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Clock3, HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
+import { HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
 import {
   clearSession,
   onSessionChange,
@@ -115,13 +116,9 @@ export default function UserMenu() {
               {(email) => <div class="user-menu-sub">{email()}</div>}
             </Show>
           </div>
-          <a class="user-menu-item" href="/runs" onClick={() => setOpen(false)}>
-            <Clock3 size={16} /> {t("nav.runs")}
-          </a>
-          <div class="user-menu-divider" />
           <a
             class="user-menu-item"
-            href="/settings/account"
+            href="/account"
             onClick={() => setOpen(false)}
           >
             <UserCircle2 size={16} /> {t("nav.account")}
@@ -178,11 +175,8 @@ export default function UserMenu() {
               </button>
             ))}
           </div>
-          <button
-            class="user-menu-item user-menu-danger"
-            type="button"
-            onClick={signOut}
-          >
+          <div class="user-menu-divider" />
+          <button class="user-menu-item" type="button" onClick={signOut}>
             <LogOut size={16} /> {t("shell.signOut")}
           </button>
         </div>

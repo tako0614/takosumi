@@ -1218,7 +1218,10 @@ export type ControlMembershipStatus = "active" | "invited" | "suspended";
  * `PublicWorkspaceMember`). `accountId` is the member's account subject — the same
  * value the session `/api/v1/account/session/me` returns for the signed-in caller —
  * so the view can match the caller against the roster to decide which mutation
- * controls to show. Carries no credential / email / PII beyond the handle.
+ * controls to show. The list read adds the member's account display name for
+ * every reader, and the member's email only when the caller is an active owner
+ * or admin of the Workspace (the server decides; members and viewers never
+ * receive another member's address). Mutation responses carry neither.
  */
 export interface PublicWorkspaceMember {
   readonly id: string;
@@ -1228,6 +1231,10 @@ export interface PublicWorkspaceMember {
   readonly status: ControlMembershipStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Account profile name; absent when the account has none. */
+  readonly displayName?: string;
+  /** Present only for owner/admin callers of the member list. */
+  readonly email?: string;
 }
 
 /**
