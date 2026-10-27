@@ -202,6 +202,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
   "nav.store": "Store",
+  "nav.app": "App",
   "nav.runs": "History",
   "nav.connections": "Connections",
   "nav.primary": "Main menu",
@@ -220,65 +221,65 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.light": "Light",
   "theme.dark": "Dark",
 
-  // --- spaces (Workspaces; スペース in the UI) -------------------------------
-  "workspace.selectMessage": "Choose which space this belongs to.",
+  // --- workspaces (スペース in the Japanese UI) -----------------------------------
+  "workspace.selectMessage": "Choose which workspace this belongs to.",
   "workspace.defaultName": "Personal",
-  "workspace.start.aria": "Start a space",
+  "workspace.start.aria": "Start a workspace",
   "workspace.start.kicker": "Getting started",
-  "workspace.start.title": "Create a space for your apps",
+  "workspace.start.title": "Create a workspace for your apps",
   "workspace.start.body":
-    "A space keeps your apps, connections, history and usage together. It's yours alone to start.",
-  "workspace.start.create": "Create a space",
+    "A workspace keeps your apps, connections, history and usage together. It's yours alone to start.",
+  "workspace.start.create": "Create a workspace",
   "workspace.start.creating": "Creating…",
-  "space.label": "Spaces",
-  "space.switcherAria": "Switch space (current: {name})",
-  "space.loading": "Loading…",
-  "space.loadFailed": "Couldn't load spaces — {message}",
-  "space.settings": "Space settings",
-  "space.unnamed": "Unnamed space",
-  "space.createdOn": "Created {date}",
-  "space.scopeNote": "Space: {name}",
-  "space.noneTitle": "No space yet",
-  "space.noneMessage": "Start from Home and this page becomes available.",
-  "space.noneCta": "Go to Home",
-  "space.create.environment": "Separate an environment",
-  "space.create.environmentBody":
+  "workspace.label": "Workspaces",
+  "workspace.switcherAria": "Switch workspace (current: {name})",
+  "workspace.loading": "Loading…",
+  "workspace.loadFailed": "Couldn't load workspaces — {message}",
+  "workspace.settings": "Workspace settings",
+  "workspace.unnamed": "Unnamed workspace",
+  "workspace.createdOn": "Created {date}",
+  "workspace.scopeNote": "Workspace: {name}",
+  "workspace.noneTitle": "No workspace yet",
+  "workspace.noneMessage": "Start from Home and this page becomes available.",
+  "workspace.noneCta": "Go to Home",
+  "workspace.create.environment": "Separate an environment",
+  "workspace.create.environmentBody":
     "Keep apps and connections apart, such as production and testing.",
-  "space.create.team": "Use with a team",
-  "space.create.teamBody": "Invite people and share apps and connections.",
-  "space.create.environmentNameLabel": "Environment name",
-  "space.create.teamNameLabel": "Team name",
-  "space.create.environmentPlaceholder": "e.g. Testing, Experiments",
-  "space.create.teamPlaceholder": "e.g. Design team, Client A",
-  "space.create.environmentHelp":
-    "You switch to the new space when it's created. It's yours alone to start.",
-  "space.create.teamHelp":
+  "workspace.create.team": "Use with a team",
+  "workspace.create.teamBody": "Invite people and share apps and connections.",
+  "workspace.create.environmentNameLabel": "Environment name",
+  "workspace.create.teamNameLabel": "Team name",
+  "workspace.create.environmentPlaceholder": "e.g. Testing, Experiments",
+  "workspace.create.teamPlaceholder": "e.g. Design team, Client A",
+  "workspace.create.environmentHelp":
+    "You switch to the new workspace when it's created. It's yours alone to start.",
+  "workspace.create.teamHelp":
     "After creating it, you continue to inviting members.",
-  "space.create.submit": "Create",
-  "space.create.failed": "Couldn't create the space — {message}",
-  "space.create.done": "Created “{name}” and switched to it.",
-  "space.thisSpace": "This space",
-  "space.name": "Name",
-  "space.nameHint": "The name members and the space switcher show.",
-  "space.nameRequired": "Enter a name.",
-  "space.saved": "Name saved.",
-  "space.notFound":
-    "This space wasn't found. Switch spaces, or restore it from Archived below.",
-  "space.createdLabel": "Created",
-  "space.new.title": "Add a space",
-  "space.new.body": "Pick what it's for, and a space is created for it.",
-  "space.archive.title": "Archive this space",
-  "space.archive.body":
-    "It leaves the space switcher. Apps, connections, history and usage keep running and are not deleted. Restore it from Archived below.",
-  "space.archive.lastSpace": "Your last space can't be archived.",
-  "space.archive.cta": "Archive",
-  "space.archive.confirmTitle": "Archive “{name}”",
-  "space.archive.confirmMessage":
-    "It only leaves the space switcher. Its apps keep running, and its connections, history and usage stay. You can restore it any time.",
-  "space.archive.done": "Archived “{name}”. Its apps keep running.",
-  "space.archived.title": "Archived spaces",
-  "space.archived.body": "Restoring brings a space back to the switcher.",
-  "space.archived.restore": "Restore",
+  "workspace.create.submit": "Create",
+  "workspace.create.failed": "Couldn't create the workspace — {message}",
+  "workspace.create.done": "Created “{name}” and switched to it.",
+  "workspace.thisWorkspace": "This workspace",
+  "workspace.name": "Name",
+  "workspace.nameHint": "The name members and the workspace switcher show.",
+  "workspace.nameRequired": "Enter a name.",
+  "workspace.saved": "Name saved.",
+  "workspace.notFound":
+    "This workspace wasn't found. Switch workspaces, or restore it from Archived below.",
+  "workspace.createdLabel": "Created",
+  "workspace.new.title": "Add a workspace",
+  "workspace.new.body": "Pick what it's for, and a workspace is created for it.",
+  "workspace.archive.title": "Archive this workspace",
+  "workspace.archive.body":
+    "It leaves the workspace switcher. Apps, connections, history and usage keep running and are not deleted. Restore it from Archived below.",
+  "workspace.archive.lastWorkspace": "Your last workspace can't be archived.",
+  "workspace.archive.cta": "Archive",
+  "workspace.archive.confirmTitle": "Archive “{name}”",
+  "workspace.archive.confirmMessage":
+    "It only leaves the workspace switcher. Its apps keep running, and its connections, history and usage stay. You can restore it any time.",
+  "workspace.archive.done": "Archived “{name}”. Its apps keep running.",
+  "workspace.archived.title": "Archived workspaces",
+  "workspace.archived.body": "Restoring brings a workspace back to the switcher.",
+  "workspace.archived.restore": "Restore",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -931,7 +932,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.role.member": "Member",
   "members.role.viewer": "Viewer",
   "members.title": "Members",
-  "members.subtitle": "People who use this space with you.",
+  "members.subtitle": "People who use this workspace with you.",
   "members.listLabel": "Member list",
   "members.roleHelp.owner":
     "Manages everything, including changing and removing members.",
@@ -944,7 +945,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.unnamed": "Member ({id})",
   "members.loadFailedTitle": "Couldn't load members",
   "members.invite.open": "Invite a member",
-  "members.removeTitle": "Remove “{name}” from this space",
+  "members.removeTitle": "Remove “{name}” from this workspace",
   "members.status.active": "Active",
   "members.status.invited": "Invited",
   "members.status.suspended": "Suspended",
@@ -967,11 +968,11 @@ export const en: Record<keyof typeof ja, string> = {
   "members.lastOwnerRemove":
     "The last owner can't be removed. Appoint another owner first.",
   "members.remove": "Remove",
-  "members.removeSelf": "Leave this space",
+  "members.removeSelf": "Leave this workspace",
   "members.removeSelfConfirm":
-    "You'll leave this space and lose access to its apps and connections. You can't rejoin on your own.",
+    "You'll leave this workspace and lose access to its apps and connections. You can't rejoin on your own.",
   "members.removeConfirm":
-    "{name} loses access to this space's apps and connections. Installed apps keep running. Invite them again to restore access.",
+    "{name} loses access to this workspace's apps and connections. Installed apps keep running. Invite them again to restore access.",
   "members.empty": "No members yet.",
   "members.viewerNote":
     "Owners and admins invite members and change or remove them.",
@@ -1015,7 +1016,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.oauth.error.missingCode":
     "The authorization response was incomplete. Please try again.",
   "conn.oauth.error.forbidden":
-    "You can't add connections to this space. Ask an owner or admin.",
+    "You can't add connections to this workspace. Ask an owner or admin.",
   "conn.oauth.error.oauthFailed":
     "Authentication with the provider failed. Please wait a moment and try again.",
   "conn.oauth.errorCode": "Error code: {code}",
@@ -1112,9 +1113,9 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.depCreated": "Linked two apps",
   "notif.event.depDeleted": "Unlinked two apps",
   "notif.event.shareRequested":
-    "Received a request to share values between spaces",
-  "notif.event.shareApproved": "Approved sharing values between spaces",
-  "notif.event.shareRevoked": "Revoked sharing values between spaces",
+    "Received a request to share values between workspaces",
+  "notif.event.shareApproved": "Approved sharing values between workspaces",
+  "notif.event.shareRevoked": "Revoked sharing values between workspaces",
   "notif.event.groupCreated": "Started a grouped update",
   "notif.event.autoUpdateOn": "Automatic updates turned on",
   "notif.event.autoUpdateOff": "Automatic updates turned off",
@@ -1140,7 +1141,7 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.interfaceRetryRequestedNamed":
     "Retrying the screen setup for “{name}”",
   "notif.event.recorded": "Recorded activity",
-  "notif.otherWorkspace": "Other space: {name}",
+  "notif.otherWorkspace": "Other workspace: {name}",
 
   // --- activity -------------------------------------------------------------------
   "activity.actorYou": "You",
@@ -1173,7 +1174,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.section.me": "You",
   "account.section.members": "Members",
   "account.section.billing": "Billing & usage",
-  "account.section.space": "Space",
+  "account.section.workspace": "Workspace",
   "account.section.cli": "CLI & API",
   "account.profile.title": "Signed in as",
   "account.profile.displayName": "Name",
@@ -1181,7 +1182,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.profile.notSet": "Not set",
   "account.profile.provider": "Signed in with",
   "account.profile.nameHint":
-    "Your name and email come from the account you signed in with. Members of your spaces see your name; only their owners and admins see your email.",
+    "Your name and email come from the account you signed in with. Members of your workspaces see your name; only their owners and admins see your email.",
   "account.language.title": "Language",
   "account.theme.title": "Appearance",
   "account.preferences.title": "Display & language",
@@ -1222,8 +1223,8 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.scopeCatalog.empty":
     "This environment has no permissions that can be granted here.",
   "account.apiKeys.scopeCatalog.workspaceRequired":
-    "Create a space before making a key with this permission.",
-  "account.apiKeys.restrictWorkspace": "Only allow use in the current space",
+    "Create a workspace before making a key with this permission.",
+  "account.apiKeys.restrictWorkspace": "Only allow use in the current workspace",
   "account.apiKeys.create": "Create key",
   "account.apiKeys.createSubmit": "Create",
   "account.apiKeys.listLabel": "Your keys",
@@ -1237,7 +1238,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.error":
     "Could not complete the API key operation: {message}",
   "account.apiKeys.empty": "No keys yet.",
-  "account.apiKeys.workspaceBound": "This space only",
+  "account.apiKeys.workspaceBound": "This workspace only",
   "account.apiKeys.lastUsed": "Last used",
   "account.apiKeys.neverUsed": "Never",
   "account.apiKeys.status.active": "Active",
@@ -1251,20 +1252,20 @@ export const en: Record<keyof typeof ja, string> = {
     "Any CLI or automation using this key stops working immediately.",
 
   // --- billing -------------------------------------------------------------------
-  "billing.mode.disabled": "Takosumi doesn't charge for this space.",
+  "billing.mode.disabled": "Takosumi doesn't charge for this workspace.",
   "billing.mode.showback":
-    "Takosumi records this space's usage but doesn't bill it.",
+    "Takosumi records this workspace's usage but doesn't bill it.",
   "billing.loadError": "Couldn't load charges: {message}",
   "billing.title": "Charges",
   "billing.ownersOnly":
-    "The space's owners and admins can see charges and usage.",
+    "The workspace's owners and admins can see charges and usage.",
   "billing.cloudCosts":
     "Cloud resources your apps create are billed by each cloud.",
   "billing.usage.quantityLine": "Quantity {quantity}",
   "billing.usage.amountUnknown": "Amount unknown",
   "billing.usage.removedApp": "Removed app",
   "billing.usage.title": "Usage",
-  "billing.usage.subtitle": "Usage recorded for this space, newest first.",
+  "billing.usage.subtitle": "Usage recorded for this workspace, newest first.",
   "billing.usage.more": "Load more",
   "billing.usage.error": "Couldn't load usage: {message}",
   "billing.usage.empty": "No usage yet.",
@@ -1354,7 +1355,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.payment.status.disputed": "Disputed",
   "billing.commercial.transaction.title": "Usage transactions",
   "billing.commercial.transaction.subtitle":
-    "Charged and reversed wallet usage for this space.",
+    "Charged and reversed wallet usage for this workspace.",
   "billing.commercial.transaction.empty": "No usage transactions yet.",
   "billing.commercial.transaction.error":
     "Could not load usage transactions: {message}",

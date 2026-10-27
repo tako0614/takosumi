@@ -1,13 +1,13 @@
 /**
  * Primary navigation: a persistent left rail with the four behaviors (home /
- * store / connections / account) from the shared nav model. The space
- * switcher sits above them only when there are two or more spaces.
+ * store / connections / account) from the shared nav model. The workspace
+ * switcher sits above them only when there are two or more workspaces.
  */
 import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft } from "lucide-solid";
 import { For, Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
-import SpaceSwitcher from "./SpaceSwitcher.tsx";
+import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { isNavActive, PRIMARY_NAV } from "./nav.ts";
 import { t } from "../../../../i18n/index.ts";
 import {
@@ -38,8 +38,8 @@ export default function Sidebar() {
         </a>
       </Show>
       <Show when={!takosEmbedded()}>
-        <div class="sidebar-space">
-          <SpaceSwitcher />
+        <div class="sidebar-workspace">
+          <WorkspaceSwitcher />
         </div>
       </Show>
       <nav class="sidebar-nav" aria-label={t("nav.primary")}>

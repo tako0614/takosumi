@@ -95,7 +95,7 @@ describe("Notifications", () => {
     expect(activityEventHref({ ...base, targetType: "run", targetId: "run_1" })).toBe("/runs/run_1");
     expect(activityEventHref({ ...base, targetType: "capsule", targetId: "cap_1" })).toBe("/workloads/cap_1");
     expect(activityEventHref({ ...base, targetType: "connection", targetId: "pc_1" })).toBe("/connections");
-    // Value sharing between spaces has no screen any more.
+    // Value sharing between workspaces has no screen any more.
     expect(activityEventHref({ ...base, targetType: "output_share", targetId: "share_1" })).toBeUndefined();
   });
   test("topbar badge and /notifications share the same failure-count derivation without a navigation fanout", () => {
@@ -161,13 +161,13 @@ describe("Notifications", () => {
       "(!workspaceId || entry.event.workspaceId === workspaceId)",
     );
     expect(notificationsSource).toContain('t("notif.otherWorkspace"');
-    // Named by the space's name, never its generated handle / id, and only
-    // when there is more than one space to tell apart.
+    // Named by the workspace's name, never its generated handle / id, and only
+    // when there is more than one workspace to tell apart.
     expect(ja["notif.otherWorkspace"]).toContain("{name}");
     expect(en["notif.otherWorkspace"]).toContain("{name}");
     expect(ja["notif.otherWorkspace"]).toContain("スペース");
-    expect(notificationsSource).toContain("spaceName(workspace)");
-    expect(notificationsSource).toContain("showSpace={multipleSpaces()}");
+    expect(notificationsSource).toContain("workspaceName(workspace)");
+    expect(notificationsSource).toContain("showWorkspace={multipleWorkspaces()}");
   });
 
   test("the bell opens onto the existing snapshot, not a full skeleton", () => {

@@ -21,7 +21,7 @@
   flex-direction: column;
   gap: var(--tg-s-4);
 }
-.acct-space-note {
+.acct-workspace-note {
   margin: 0;
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
@@ -158,7 +158,7 @@
   max-width: 28rem;
 }
 
-/* Space: archive row and the create-by-purpose choices. */
+/* Workspace: archive row and the create-by-purpose choices. */
 .acct-danger-row {
   display: flex;
   align-items: center;

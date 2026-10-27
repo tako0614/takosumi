@@ -1,6 +1,6 @@
 /**
  * Notifications (`/notifications`) — the plain-language feed for the signed-in
- * person, aggregated across a bounded recent set of active spaces plus the
+ * person, aggregated across a bounded recent set of active workspaces plus the
  * current one. Each entry links to where it can be acted on: the app's page,
  * the run, or 接続.
  *
@@ -25,7 +25,7 @@ import {
 } from "../../lib/notifications.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { spaceName } from "../../lib/space-labels.ts";
+import { workspaceName } from "../../lib/workspace-labels.ts";
 import { readyOrUndefined } from "../../lib/resource-read.ts";
 import { t } from "../../i18n/index.ts";
 import RelativeTime from "../account/components/RelativeTime.tsx";
@@ -49,8 +49,8 @@ function NotificationRow(props: {
   entry: FeedEntry;
   serviceName?: string | undefined;
   workspaceName: string;
-  /** Spaces are named only when there is more than one. */
-  showSpace: boolean;
+  /** Workspaces are named only when there is more than one. */
+  showWorkspace: boolean;
 }) {
   const failure = () => isFailureAction(props.entry.event.action);
   const description = () => describeActivityEvent(props.entry.event, props.serviceName);
@@ -82,7 +82,7 @@ function NotificationRow(props: {
           {(detail) => <p class="wc-notif-detail">{detail()}</p>}
         </Show>
         <p class="wc-notif-foot">
-          <Show when={props.showSpace}>
+          <Show when={props.showWorkspace}>
             <Show
               when={otherWorkspace()}
               fallback={<span>{props.workspaceName}</span>}
@@ -124,15 +124,15 @@ export default function NotificationsView() {
         // Entries carry the Workspace handle (or id); people know their
         // Workspaces by display name. The list is the shell's cached copy.
         const [workspaces] = createResource(() => listWorkspacesCached());
-        const multipleSpaces = () =>
+        const multipleWorkspaces = () =>
           (readyOrUndefined(workspaces) ?? []).length >= 2;
         const workspaceNameFor = (entry: FeedEntry): string => {
           const workspace = (readyOrUndefined(workspaces) ?? []).find(
             (item) => item.id === entry.event.workspaceId,
           );
           return workspace
-            ? spaceName(workspace)
-            : spaceName({ displayName: "", handle: entry.workspaceHandle });
+            ? workspaceName(workspace)
+            : workspaceName({ displayName: "", handle: entry.workspaceHandle });
         };
         // Skeleton / error only before the FIRST snapshot exists; afterwards a
         // failed background refresh silently keeps the last-known entries
@@ -214,7 +214,7 @@ export default function NotificationsView() {
                               entry={entry}
                               serviceName={serviceNameFor(entry.event)}
                               workspaceName={workspaceNameFor(entry)}
-                              showSpace={multipleSpaces()}
+                              showWorkspace={multipleWorkspaces()}
                             />
                           )}
                         </For>

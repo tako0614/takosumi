@@ -1,18 +1,19 @@
 /**
- * Space switcher: the single owner of "which space am I using" for the whole
- * dashboard. A space is a Workspace; the UI calls it スペース / space.
+ * Workspace switcher (スペース in the Japanese UI): the single owner of
+ * "which workspace am I using" for the whole dashboard.
  *
- * Spaces matter (one person alone, one person keeping environments apart, a
- * team) but stay out of the way: with a single space the chrome shows no
- * switcher and no space name at all. The switcher appears once there are two
- * or more spaces, and it lists them by name — never by the generated API
- * handle (see lib/space-labels.ts). New spaces are offered by purpose
- * (環境を分ける / チームで使う); a team space continues to member invites.
+ * Workspaces matter (one person alone, one person keeping environments apart,
+ * a team) but stay out of the way: with a single workspace the chrome shows no
+ * switcher and no workspace name at all. The switcher appears once there are
+ * two or more workspaces, and it lists them by name — never by the generated
+ * API handle (see lib/workspace-labels.ts). New workspaces are offered by
+ * purpose (環境を分ける / チームで使う); a team workspace continues to member
+ * invites.
  *
  * Every view reads the same `workspace-state.ts` selection this control
  * writes. The initial read is a bounded recent projection that always pins the
- * current space; opening the menu discovers the first cursor and "load more"
- * keeps every space reachable.
+ * current workspace; opening the menu discovers the first cursor and "load more"
+ * keeps every workspace reachable.
  */
 import { A, useLocation, useNavigate } from "@solidjs/router";
 import { Check, ChevronsUpDown, Layers, Settings, Users } from "lucide-solid";
@@ -45,27 +46,27 @@ import {
   setCurrentWorkspaceId,
 } from "../../../../lib/workspace-state.ts";
 import {
-  duplicatedSpaceNames,
-  spaceDisambiguator,
-  spaceName,
-  type SpacePurpose,
-} from "../../../../lib/space-labels.ts";
+  duplicatedWorkspaceNames,
+  workspaceDisambiguator,
+  workspaceName,
+  type WorkspacePurpose,
+} from "../../../../lib/workspace-labels.ts";
 import { fetchFailedMessage, friendlyError } from "../../../../lib/error-copy.ts";
 import { t } from "../../../../i18n/index.ts";
-import SpaceCreateForm from "../SpaceCreateForm.tsx";
+import WorkspaceCreateForm from "../WorkspaceCreateForm.tsx";
 
 interface Props {
   readonly compact?: boolean;
 }
 
-function spaceInitial(name: string): string {
+function workspaceInitial(name: string): string {
   return (name.trim()[0] ?? "?").toUpperCase();
 }
 
 /**
- * Routes whose content belongs to one app or run, not to the selected space.
+ * Routes whose content belongs to one app or run, not to the selected workspace.
  * After a switch they would keep showing — and accepting actions on — the
- * previous space's object, so the switch returns to ホーム.
+ * previous workspace's object, so the switch returns to ホーム.
  */
 const ENTITY_SCOPED_ROUTES: readonly RegExp[] = [
   /^\/workloads\/[^/]+/u,
@@ -73,7 +74,7 @@ const ENTITY_SCOPED_ROUTES: readonly RegExp[] = [
   /^\/run-groups\/[^/]+/u,
 ];
 
-export default function SpaceSwitcher(props: Props = {}) {
+export default function WorkspaceSwitcher(props: Props = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   const [workspaces, { refetch }] = createResource(() =>
@@ -85,10 +86,10 @@ export default function SpaceSwitcher(props: Props = {}) {
   const [page, setPage] = createSignal<WorkspaceListPage | null>(null);
   const [pageLoading, setPageLoading] = createSignal(false);
   const [pageError, setPageError] = createSignal<string | null>(null);
-  const [creating, setCreating] = createSignal<SpacePurpose | null>(null);
+  const [creating, setCreating] = createSignal<WorkspacePurpose | null>(null);
   // Reading an errored createResource THROWS. This switcher is mounted in BOTH
   // the sidebar and the top bar, so an unguarded read would take the whole
-  // chrome down on every page when the space list fails.
+  // chrome down on every page when the workspace list fails.
   const loadedWorkspaces = createMemo(() =>
     mergeWorkspaceLists(
       workspaces.error ? [] : (workspaces.latest ?? []),
@@ -101,24 +102,24 @@ export default function SpaceSwitcher(props: Props = {}) {
   const selectedWorkspace = createMemo(() =>
     loadedWorkspaces().find((workspace) => workspace.id === selectedWorkspaceId()),
   );
-  const duplicates = createMemo(() => duplicatedSpaceNames(loadedWorkspaces()));
+  const duplicates = createMemo(() => duplicatedWorkspaceNames(loadedWorkspaces()));
   const selectedName = () => {
     const workspace = selectedWorkspace();
-    return workspace ? spaceName(workspace) : "";
+    return workspace ? workspaceName(workspace) : "";
   };
-  /** Only two or more spaces need a switcher. */
+  /** Only two or more workspaces need a switcher. */
   const visible = () => !workspaces.loading && loadedWorkspaces().length >= 2;
   const menuId = () =>
-    props.compact ? "space-switcher-compact" : "space-switcher-sidebar";
+    props.compact ? "workspace-switcher-compact" : "workspace-switcher-sidebar";
 
   // Reconcile a persisted selection after sign-in: a browser can keep the
   // previous user's value, so never keep an id absent from the loaded list.
   // The selection is read UNTRACKED — reconciling on every selection change
-  // made a just-created space flap back to the first one before the refetch
+  // made a just-created workspace flap back to the first one before the refetch
   // landed it.
   createEffect(() => {
     if (workspaces.loading) return;
-    // A failed read is not evidence that the user has no spaces; keep the
+    // A failed read is not evidence that the user has no workspaces; keep the
     // selection until a list actually loads.
     if (workspaces.error) return;
     const list = loadedWorkspaces();
@@ -205,20 +206,20 @@ export default function SpaceSwitcher(props: Props = {}) {
     triggerRef?.focus();
   };
 
-  const created = (_workspace: Workspace, purpose: SpacePurpose) => {
+  const created = (_workspace: Workspace, purpose: WorkspacePurpose) => {
     setCreating(null);
     setOpen(false);
-    // A team space exists to be shared: continue straight to inviting people.
+    // A team workspace exists to be shared: continue straight to inviting people.
     if (purpose === "team") navigate("/account/members");
     else triggerRef?.focus();
   };
 
-  // Re-opening the menu starts at the space list, not a half-open form.
+  // Re-opening the menu starts at the workspace list, not a half-open form.
   createEffect(() => {
     if (!open()) setCreating(null);
   });
 
-  // role="menu" keyboard model: focus the checked space on open, then arrows /
+  // role="menu" keyboard model: focus the checked workspace on open, then arrows /
   // Home / End rove between items. It stands down inside the create form.
   const menuItems = (): HTMLElement[] =>
     menuRef
@@ -237,7 +238,7 @@ export default function SpaceSwitcher(props: Props = {}) {
     });
   });
   const onMenuKeyDown = (event: KeyboardEvent) => {
-    if ((event.target as HTMLElement | null)?.closest(".space-create-form")) return;
+    if ((event.target as HTMLElement | null)?.closest(".workspace-create-form")) return;
     const items = menuItems();
     if (items.length === 0) return;
     const index = items.indexOf(document.activeElement as HTMLElement);
@@ -264,35 +265,35 @@ export default function SpaceSwitcher(props: Props = {}) {
   return (
     <Show when={visible() || workspaces.error}>
       <div
-        class="space-switcher"
+        class="workspace-switcher"
         classList={{ compact: props.compact }}
         ref={rootRef}
       >
         <Show when={visible()}>
-          <div class="space-switcher-picker">
+          <div class="workspace-switcher-picker">
             <button
               type="button"
-              class="space-switcher-current"
-              aria-label={t("space.switcherAria", { name: selectedName() })}
+              class="workspace-switcher-current"
+              aria-label={t("workspace.switcherAria", { name: selectedName() })}
               aria-haspopup="menu"
               aria-expanded={open()}
               aria-controls={menuId()}
               ref={triggerRef}
               onClick={toggle}
             >
-              <span class="space-switcher-avatar" aria-hidden="true">
-                {spaceInitial(selectedName())}
+              <span class="workspace-switcher-avatar" aria-hidden="true">
+                {workspaceInitial(selectedName())}
               </span>
-              <span class="space-switcher-name">{selectedName()}</span>
+              <span class="workspace-switcher-name">{selectedName()}</span>
               <ChevronsUpDown
-                class="space-switcher-caret"
+                class="workspace-switcher-caret"
                 size={15}
                 aria-hidden="true"
               />
             </button>
             <Show when={open()}>
               <div
-                class="space-switcher-menu"
+                class="workspace-switcher-menu"
                 id={menuId()}
                 // A <form> is invalid content for role="menu"; while the create
                 // form is open the popover is presented as a dialog.
@@ -301,14 +302,14 @@ export default function SpaceSwitcher(props: Props = {}) {
                 ref={menuRef}
                 onKeyDown={onMenuKeyDown}
               >
-                <div class="space-switcher-menu-head" id={`${menuId()}-label`}>
-                  {t("space.label")}
+                <div class="workspace-switcher-menu-head" id={`${menuId()}-label`}>
+                  {t("workspace.label")}
                 </div>
                 <Switch>
                   <Match when={creating()}>
                     {(purpose) => (
-                      <div class="space-switcher-create">
-                        <SpaceCreateForm
+                      <div class="workspace-switcher-create">
+                        <WorkspaceCreateForm
                           purpose={purpose()}
                           idPrefix={`${menuId()}-create`}
                           autofocus
@@ -322,7 +323,7 @@ export default function SpaceSwitcher(props: Props = {}) {
                     )}
                   </Match>
                   <Match when={!creating()}>
-                    <ul class="space-switcher-list" role="none">
+                    <ul class="workspace-switcher-list" role="none">
                       <For each={loadedWorkspaces()}>
                         {(workspace) => (
                           <li role="none">
@@ -330,26 +331,26 @@ export default function SpaceSwitcher(props: Props = {}) {
                               type="button"
                               role="menuitemradio"
                               aria-checked={workspace.id === selectedWorkspaceId()}
-                              class="space-switcher-item"
+                              class="workspace-switcher-item"
                               classList={{
                                 current: workspace.id === selectedWorkspaceId(),
                               }}
                               onClick={() => choose(workspace.id)}
                             >
-                              <span class="space-switcher-avatar" aria-hidden="true">
-                                {spaceInitial(spaceName(workspace))}
+                              <span class="workspace-switcher-avatar" aria-hidden="true">
+                                {workspaceInitial(workspaceName(workspace))}
                               </span>
-                              <span class="space-switcher-item-name">
-                                {spaceName(workspace)}
+                              <span class="workspace-switcher-item-name">
+                                {workspaceName(workspace)}
                               </span>
-                              <Show when={duplicates().has(spaceName(workspace))}>
-                                <span class="space-switcher-item-hint">
-                                  {spaceDisambiguator(workspace)}
+                              <Show when={duplicates().has(workspaceName(workspace))}>
+                                <span class="workspace-switcher-item-hint">
+                                  {workspaceDisambiguator(workspace)}
                                 </span>
                               </Show>
                               <Show when={workspace.id === selectedWorkspaceId()}>
                                 <Check
-                                  class="space-switcher-check"
+                                  class="workspace-switcher-check"
                                   size={16}
                                   aria-hidden="true"
                                 />
@@ -363,48 +364,48 @@ export default function SpaceSwitcher(props: Props = {}) {
                       <button
                         type="button"
                         role="menuitem"
-                        class="space-switcher-action"
+                        class="workspace-switcher-action"
                         disabled={pageLoading()}
                         onClick={loadMore}
                       >
                         <span>
-                          {pageLoading() ? t("space.loading") : t("common.loadMore")}
+                          {pageLoading() ? t("workspace.loading") : t("common.loadMore")}
                         </span>
                       </button>
                     </Show>
                     <Show when={pageError()}>
                       {(message) => (
-                        <p class="space-switcher-error" role="alert">
-                          {t("space.loadFailed", { message: message() })}
+                        <p class="workspace-switcher-error" role="alert">
+                          {t("workspace.loadFailed", { message: message() })}
                         </p>
                       )}
                     </Show>
                     <button
                       type="button"
                       role="menuitem"
-                      class="space-switcher-action"
+                      class="workspace-switcher-action"
                       onClick={() => setCreating("environment")}
                     >
                       <Layers size={15} aria-hidden="true" />
-                      <span>{t("space.create.environment")}</span>
+                      <span>{t("workspace.create.environment")}</span>
                     </button>
                     <button
                       type="button"
                       role="menuitem"
-                      class="space-switcher-action"
+                      class="workspace-switcher-action"
                       onClick={() => setCreating("team")}
                     >
                       <Users size={15} aria-hidden="true" />
-                      <span>{t("space.create.team")}</span>
+                      <span>{t("workspace.create.team")}</span>
                     </button>
                     <A
-                      href="/account/space"
-                      class="space-switcher-action"
+                      href="/account/workspace"
+                      class="workspace-switcher-action"
                       role="menuitem"
                       onClick={() => setOpen(false)}
                     >
                       <Settings size={15} aria-hidden="true" />
-                      <span>{t("space.settings")}</span>
+                      <span>{t("workspace.settings")}</span>
                     </A>
                   </Match>
                 </Switch>
@@ -413,11 +414,11 @@ export default function SpaceSwitcher(props: Props = {}) {
           </div>
         </Show>
         <Show when={workspaces.error}>
-          <div class="space-switcher-error" role="alert">
+          <div class="workspace-switcher-error" role="alert">
             <span>{fetchFailedMessage(workspaces.error, t)}</span>
             <button
               type="button"
-              class="space-switcher-retry"
+              class="workspace-switcher-retry"
               onClick={() => void refetch()}
             >
               {t("common.retry")}

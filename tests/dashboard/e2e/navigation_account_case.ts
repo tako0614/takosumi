@@ -1,7 +1,7 @@
 /**
  * Navigation, 接続 and アカウント (TASK-0115) against the portable fixture.
  *
- * Reads the fixture server for the space list, apps and activity, and stubs
+ * Reads the fixture server for the workspace list, apps and activity, and stubs
  * only the reads these pages add (connections, bindings, members, billing,
  * API keys). Set TAKOSUMI_E2E_SHOTS_DIR to save desktop (1440x900) and phone
  * (390x844) screenshots of each surface.
@@ -43,8 +43,8 @@ function collectPageErrors(page: Page): string[] {
   return errors;
 }
 
-/** Narrow the fixture's space list to one space (bootstrap and page reads). */
-async function singleSpace(page: Page): Promise<void> {
+/** Narrow the fixture's workspace list to one workspace (bootstrap and page reads). */
+async function singleWorkspace(page: Page): Promise<void> {
   await page.route(
     (url) =>
       url.pathname === "/api/v1/dashboard/bootstrap" ||
@@ -235,16 +235,16 @@ export function registerNavigationAccountCases(mode: string): void {
   test.describe("Navigation, connections and account", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
 
-    test("the primary nav is the four behaviors and one space shows no switcher", async ({ page }) => {
+    test("the primary nav is the four behaviors and one workspace shows no switcher", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
-      await singleSpace(page);
+      await singleWorkspace(page);
       await page.setViewportSize(DESKTOP);
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const sidebar = page.locator(".sidebar-nav");
       await expect(sidebar.getByRole("link")).toHaveText(["ホーム", "ストア", "接続", "アカウント"]);
-      // One space: no switcher and no space name anywhere in the chrome.
-      await expect(page.getByRole("button", { name: /スペースを切り替え|Switch space/u })).toHaveCount(0);
+      // One workspace: no switcher and no workspace name anywhere in the chrome.
+      await expect(page.getByRole("button", { name: /スペースを切り替え|Switch workspace/u })).toHaveCount(0);
       await expect(page.locator(".sidebar")).not.toContainText(PORTABLE_EXPECTATIONS.workspaceName);
       await expect(page.locator(".topbar")).not.toContainText(PORTABLE_EXPECTATIONS.workspaceName);
       // The profile menu matches: アカウント, no run history.
@@ -253,20 +253,20 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(menu.getByRole("link", { name: "アカウント" })).toHaveAttribute("href", "/account");
       await expect(menu).not.toContainText("デプロイ履歴");
       await page.keyboard.press("Escape");
-      await shot(page, "nav-desktop-single-space");
+      await shot(page, "nav-desktop-single-workspace");
 
       await page.setViewportSize(PHONE);
       const tabs = page.locator(".mobile-tabs");
       await expect(tabs.getByRole("link")).toHaveText(["ホーム", "ストア", "接続", "アカウント"]);
-      await expect(page.getByRole("button", { name: /スペースを切り替え|Switch space/u })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /スペースを切り替え|Switch workspace/u })).toHaveCount(0);
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
       ).toBeLessThanOrEqual(1);
-      await shot(page, "nav-mobile-single-space");
+      await shot(page, "nav-mobile-single-workspace");
       expect(errors).toEqual([]);
     });
 
-    test("two or more spaces show a switcher by name with create-by-purpose", async ({ page }) => {
+    test("two or more workspaces show a switcher by name with create-by-purpose", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       await page.setViewportSize(DESKTOP);
@@ -280,14 +280,14 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(menu).not.toContainText("@workspace-");
       await expect(menu.getByRole("menuitem", { name: "環境を分ける" })).toBeVisible();
       await expect(menu.getByRole("menuitem", { name: "チームで使う" })).toBeVisible();
-      await shot(page, "space-switcher-desktop");
+      await shot(page, "workspace-switcher-desktop");
       await page.keyboard.press("Escape");
 
       await page.setViewportSize(PHONE);
       const compact = page.getByRole("button", { name: /スペースを切り替え/u }).first();
       await compact.click();
       await expect(page.locator('[role="menu"]:visible').first()).toBeVisible();
-      await shot(page, "space-switcher-mobile");
+      await shot(page, "workspace-switcher-mobile");
       expect(errors).toEqual([]);
     });
 
@@ -319,7 +319,7 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
-    test("アカウント sections: you, members by name, billing, space and CLI keys", async ({ page }) => {
+    test("アカウント sections: you, members by name, billing, workspace and CLI keys", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const fixture = await accountFixture(page);
@@ -356,14 +356,14 @@ export function registerNavigationAccountCases(mode: string): void {
       await shots(page, "account-billing");
 
       await tabs.getByRole("link", { name: "スペース" }).click();
-      await expect(page).toHaveURL(/\/account\/space$/u);
+      await expect(page).toHaveURL(/\/account\/workspace$/u);
       await expect(page.getByRole("textbox", { name: /名前/u }).first()).toHaveValue(
         PORTABLE_EXPECTATIONS.workspaceName,
       );
       await expect(page.locator(".acct-section")).not.toContainText("@alpha");
       await expect(page.getByRole("button", { name: /環境を分ける/u })).toBeVisible();
       await expect(page.getByRole("button", { name: /チームで使う/u })).toBeVisible();
-      await shots(page, "account-space");
+      await shots(page, "account-workspace");
 
       await tabs.getByRole("link", { name: "CLI・APIから使う" }).click();
       await expect(page).toHaveURL(/\/account\/cli$/u);
@@ -384,7 +384,7 @@ export function registerNavigationAccountCases(mode: string): void {
         ["/settings", "/account"],
         ["/settings/billing", "/account/billing"],
         ["/settings/manage", "/account"],
-        ["/advanced/workspace", "/account/space"],
+        ["/advanced/workspace", "/account/workspace"],
         ["/advanced/workspace/members", "/account/members"],
         ["/advanced/workspace/connections", "/connections"],
         ["/members", "/account/members"],

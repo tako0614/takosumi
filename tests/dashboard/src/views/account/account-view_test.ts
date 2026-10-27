@@ -1,6 +1,6 @@
 /**
  * アカウント (`/account[/:section]`): you, members, billing & usage, the
- * space, and CLI/API keys as one page with sections. Source-text tests, like
+ * workspace, and CLI/API keys as one page with sections. Source-text tests, like
  * the rest of the dashboard view suite.
  */
 import { describe, expect, test } from "bun:test";
@@ -17,7 +17,7 @@ const read = (relativePath: string) =>
 
 const source = read("views/account/AccountView.tsx");
 const profile = read("views/account/sections/ProfileSection.tsx");
-const currentSpace = read("views/account/lib/current-space.tsx");
+const currentWorkspaceSource = read("views/account/lib/current-workspace.tsx");
 
 describe("AccountView", () => {
   test("one page with the five account sections as sub-routes", () => {
@@ -25,7 +25,7 @@ describe("AccountView", () => {
       ["/account", "account.section.me"],
       ["/account/members", "account.section.members"],
       ["/account/billing", "account.section.billing"],
-      ["/account/space", "account.section.space"],
+      ["/account/workspace", "account.section.workspace"],
       ["/account/cli", "account.section.cli"],
     ] as const) {
       expect(source).toContain(`href: "${href}", labelKey: "${key}"`);
@@ -36,24 +36,24 @@ describe("AccountView", () => {
       "<MembersTab workspaceId={workspaceId} session={props.session} />",
     );
     expect(source).toContain("<BillingTab workspaceId={workspaceId} />");
-    expect(source).toContain("<SpaceTab />");
+    expect(source).toContain("<WorkspaceTab />");
     expect(source).toContain("TakosumiApiKeysCard");
     expect(source).toContain("workspaceId={currentWorkspaceId() || undefined}");
     // An unknown section returns to the account page instead of a blank one.
     expect(source).toContain('fallback={<Navigate href="/account" />}');
     expect(ja["account.section.cli"]).toBe("CLI・APIから使う");
     expect(ja["account.section.billing"]).toBe("料金と利用量");
-    expect(ja["account.section.space"]).toBe("スペース");
+    expect(ja["account.section.workspace"]).toBe("スペース");
   });
 
-  test("space-scoped sections name their space only when there are two or more", () => {
-    expect(source).toContain("<SpaceScopeNote space={space} />");
-    expect(currentSpace).toContain("list().length >= 2");
-    expect(currentSpace).toContain(
-      "props.space.multiple() ? props.space.current() : undefined",
+  test("workspace-scoped sections name their workspace only when there are two or more", () => {
+    expect(source).toContain("<WorkspaceScopeNote context={currentWorkspace} />");
+    expect(currentWorkspaceSource).toContain("list().length >= 2");
+    expect(currentWorkspaceSource).toContain(
+      "props.context.multiple() ? props.context.current() : undefined",
     );
-    // Without a space, the page offers the next step instead of a dead end.
-    expect(source).toContain('t("space.noneCta")');
+    // Without a workspace, the page offers the next step instead of a dead end.
+    expect(source).toContain('t("workspace.noneCta")');
   });
 
   test("自分 shows the profile plainly and signs out last, not as a red headline", () => {

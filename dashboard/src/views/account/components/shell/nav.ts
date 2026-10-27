@@ -5,12 +5,12 @@
  *   ホーム   — open and keep the apps you installed
  *   ストア   — find an app and install it (`/new`)
  *   接続     — connect your own cloud
- *   アカウント — you, the people you share a space with, and what it costs
+ *   アカウント — you, the people you share a workspace with, and what it costs
  * The desktop sidebar and the mobile bottom bar render this list verbatim, and
  * the top bar names the section from the same table, so a route rename cannot
  * desync the chrome. Nothing else is a top-level destination: run history,
  * activity, dependencies, recovery and created resources belong to each app's
- * page, and space-wide tools that no behavior needs stay in the API and CLI.
+ * page, and workspace-wide tools that no behavior needs stay in the API and CLI.
  */
 import { LayoutGrid, Link2, Store, UserCircle2 } from "lucide-solid";
 import type { MessageKey } from "../../../../i18n/index.ts";
@@ -46,7 +46,8 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
  * section they belong to (the item's own name stays in the page header). */
 export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/$/, "nav.home"],
-  [/^\/workloads(\/|$)/, "nav.home"],
+  // An installed app's page is titled アプリ / App; ホーム stays selected.
+  [/^\/workloads(\/|$)/, "nav.app"],
   [/^\/runs(\/|$)/, "nav.home"],
   [/^\/run-groups(\/|$)/, "nav.home"],
   [/^\/new(\/|$)/, "nav.store"],

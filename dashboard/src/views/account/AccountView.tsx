@@ -2,15 +2,17 @@
  * アカウント (`/account[/:section]`) — the behavior "use Takosumi with others
  * and pay", plus you yourself. One page with five sections:
  *
- *   自分              (`/account`)          name, display and language, sign-out
- *   メンバー          (`/account/members`)  invite people, roles, display names
- *   料金と利用量      (`/account/billing`)  what this space costs and uses
- *   スペース          (`/account/space`)    this space's name, new spaces by purpose
- *   CLI・APIから使う  (`/account/cli`)      keys for the CLI (`--token`) and API
+ *   自分              (`/account`)            name, display and language, sign-out
+ *   メンバー          (`/account/members`)    invite people, roles, display names
+ *   料金と利用量      (`/account/billing`)    what this workspace costs and uses
+ *   スペース          (`/account/workspace`)  this workspace's name, new
+ *                                             workspaces by purpose
+ *   CLI・APIから使う  (`/account/cli`)        keys for the CLI (`--token`) and API
  *
- * Members, billing and the space are about the selected space. The page names
- * that space only when there are two or more (lib: current-space.tsx); one
- * person with one space never has to learn the word.
+ * Members, billing and the workspace section are about the selected workspace
+ * (スペース in the Japanese UI). The page names that workspace only when there
+ * are two or more (lib: current-workspace.tsx); one person with one workspace
+ * never has to learn the word.
  */
 import "../../styles/wave-b.css";
 import "../../styles/wave-c.css";
@@ -20,11 +22,11 @@ import { Navigate, useParams } from "@solidjs/router";
 import { Layers } from "lucide-solid";
 import Page from "./components/auth/Page.tsx";
 import type { SessionRecord } from "./lib/session.ts";
-import { createCurrentSpace, SpaceScopeNote } from "./lib/current-space.tsx";
+import { createCurrentWorkspace, WorkspaceScopeNote } from "./lib/current-workspace.tsx";
 import ProfileSection from "./sections/ProfileSection.tsx";
 import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
 import MembersTab from "../workspace/tabs/MembersTab.tsx";
-import SpaceTab from "../workspace/tabs/SpaceTab.tsx";
+import WorkspaceTab from "../workspace/tabs/WorkspaceTab.tsx";
 import BillingTab from "../workspace/tabs/BillingTab.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { type MessageKey, t } from "../../i18n/index.ts";
@@ -35,7 +37,7 @@ import {
   Tabs,
 } from "../../components/ui/index.ts";
 
-export type AccountSection = "me" | "members" | "billing" | "space" | "cli";
+export type AccountSection = "me" | "members" | "billing" | "workspace" | "cli";
 
 export const ACCOUNT_SECTIONS: readonly {
   readonly id: AccountSection;
@@ -45,7 +47,7 @@ export const ACCOUNT_SECTIONS: readonly {
   { id: "me", href: "/account", labelKey: "account.section.me" },
   { id: "members", href: "/account/members", labelKey: "account.section.members" },
   { id: "billing", href: "/account/billing", labelKey: "account.section.billing" },
-  { id: "space", href: "/account/space", labelKey: "account.section.space" },
+  { id: "workspace", href: "/account/workspace", labelKey: "account.section.workspace" },
   { id: "cli", href: "/account/cli", labelKey: "account.section.cli" },
 ];
 
@@ -66,23 +68,23 @@ export default function AccountView() {
 function Inner(props: { readonly session: SessionRecord }) {
   const params = useParams<{ section?: string }>();
   const section = () => sectionFromParam(params.section);
-  const space = createCurrentSpace();
+  const currentWorkspace = createCurrentWorkspace();
 
-  /** Members, billing and the space need a selected space. */
-  const inSpace = (render: (workspaceId: string) => JSX.Element) => (
+  /** Members, billing and the workspace need a selected workspace. */
+  const inWorkspace = (render: (workspaceId: string) => JSX.Element) => (
     <>
-      <SpaceScopeNote space={space} />
+      <WorkspaceScopeNote context={currentWorkspace} />
       <Show
         when={currentWorkspaceId() || null}
         keyed
         fallback={
           <EmptyState
             icon={<Layers size={28} />}
-            title={t("space.noneTitle")}
-            message={t("space.noneMessage")}
+            title={t("workspace.noneTitle")}
+            message={t("workspace.noneMessage")}
             action={
               <Button variant="primary" href="/">
-                {t("space.noneCta")}
+                {t("workspace.noneCta")}
               </Button>
             }
           />
@@ -113,17 +115,17 @@ function Inner(props: { readonly session: SessionRecord }) {
                 <ProfileSection session={props.session} />
               </Match>
               <Match when={current() === "members"}>
-                {inSpace((workspaceId) => (
+                {inWorkspace((workspaceId) => (
                   <MembersTab workspaceId={workspaceId} session={props.session} />
                 ))}
               </Match>
               <Match when={current() === "billing"}>
-                {inSpace((workspaceId) => <BillingTab workspaceId={workspaceId} />)}
+                {inWorkspace((workspaceId) => <BillingTab workspaceId={workspaceId} />)}
               </Match>
-              <Match when={current() === "space"}>
-                {/* Creating a space by purpose works with no space yet. */}
-                <SpaceScopeNote space={space} />
-                <SpaceTab />
+              <Match when={current() === "workspace"}>
+                {/* Creating a workspace by purpose works with no workspace yet. */}
+                <WorkspaceScopeNote context={currentWorkspace} />
+                <WorkspaceTab />
               </Match>
               <Match when={current() === "cli"}>
                 <TakosumiApiKeysCard

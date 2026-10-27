@@ -140,7 +140,7 @@ describe("i18n dictionaries", () => {
     }
   });
 
-  test("navigation, connections, account, space, billing and sign-in copy use the app vocabulary", () => {
+  test("navigation, connections, account, workspace, billing and sign-in copy use the app vocabulary", () => {
     // TASK-0115: every surface says アプリ / 画面 / リソース / 接続 / スペース.
     // These namespaces belong to the navigation and account side.
     const prefixes = [
@@ -150,7 +150,6 @@ describe("i18n dictionaries", () => {
       "account.",
       "members.",
       "workspace.",
-      "space.",
       "billing.",
       "auth.",
       "notif.",
@@ -172,16 +171,28 @@ describe("i18n dictionaries", () => {
       expect({ key, value: en[key] }).not.toEqual(
         expect.objectContaining({
           value: expect.stringMatching(
-            /\b(?:workspaces?|services?|workloads?|deploy(?:s|ed|ing)?)\b/iu,
+            /\b(?:services?|workloads?|deploy(?:s|ed|ing)?)\b/iu,
           ),
         }),
       );
     }
     expect(ja["nav.connections"]).toBe("接続");
-    expect(ja["account.section.space"]).toBe("スペース");
+    // スペース is the Japanese UI word; English keeps the product noun
+    // Workspace, never the retired "Space" alias.
+    expect(ja["account.section.workspace"]).toBe("スペース");
+    expect(en["account.section.workspace"]).toBe("Workspace");
+    for (const key of keys) {
+      expect({ key, retiredAlias: /\bspaces?\b/iu.test(en[key]) }).toEqual({
+        key,
+        retiredAlias: false,
+      });
+    }
+    // The app page is titled as an app in the top bar.
+    expect(ja["nav.app"]).toBe("アプリ");
+    expect(en["nav.app"]).toBe("App");
   });
 
-  test("the settings hub, manage catalog and removed space tools have no copy left", () => {
+  test("the settings hub, manage catalog and removed workspace tools have no copy left", () => {
     for (const removed of [
       "settings.",
       "workspaceSettings.",

@@ -8,7 +8,7 @@
  * Vocabulary contract (see i18n/ja.ts, TASK-0115): the user-facing noun for a
  * Capsule is アプリ / app; a launchable Interface is a 画面 / screen; cloud
  * objects are リソース / resources; credentials are 接続 / connections; a
- * Workspace is a スペース / space. Verbs: インストール / 内容を確認 /
+ * Workspace is a スペース in the Japanese UI. Verbs: インストール / 内容を確認 /
  * 許可してインストール / インストール済み (Install / Review / Allow and
  * install / Installed), then 更新 / 設定を変更 / アンインストール. Every
  * surface uses this vocabulary; サービス / ワークロード / デプロイ / 公開 /

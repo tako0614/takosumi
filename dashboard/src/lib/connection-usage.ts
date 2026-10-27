@@ -1,9 +1,9 @@
 /**
  * Which installed apps use each connection, for the 接続 page.
  *
- * Derived from the existing reads: the space's app list and each app's
+ * Derived from the existing reads: the workspace's app list and each app's
  * ProviderBinding set (`GET /api/v1/capsules/:id/provider-bindings`). The
- * control plane keeps binding sets per app and has no space-wide binding
+ * control plane keeps binding sets per app and has no workspace-wide binding
  * index, so this is a bounded client fan-out instead of a new endpoint: reads
  * run a few at a time, and an app whose bindings cannot be read makes the
  * result incomplete rather than silently "unused".

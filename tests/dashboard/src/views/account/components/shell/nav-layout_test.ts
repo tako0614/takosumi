@@ -20,8 +20,8 @@ const navSource = read("views/account/components/shell/nav.ts");
 const sidebarSource = read("views/account/components/shell/Sidebar.tsx");
 const mobileTabsSource = read("views/account/components/shell/MobileTabs.tsx");
 const topBarSource = read("views/account/components/shell/TopBar.tsx");
-const spaceSwitcherSource = read(
-  "views/account/components/shell/SpaceSwitcher.tsx",
+const workspaceSwitcherSource = read(
+  "views/account/components/shell/WorkspaceSwitcher.tsx",
 );
 const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
 const runtimeCapabilitiesSource = read("lib/runtime-capabilities.ts");
@@ -107,7 +107,7 @@ describe("dashboard shell navigation layout", () => {
   test("top bar titles follow the four behaviors", () => {
     for (const [pattern, key] of [
       ["/^\\/$/", "nav.home"],
-      ["/^\\/workloads(\\/|$)/", "nav.home"],
+      ["/^\\/workloads(\\/|$)/", "nav.app"],
       ["/^\\/runs(\\/|$)/", "nav.home"],
       ["/^\\/new(\\/|$)/", "nav.store"],
       ["/^\\/connections(\\/|$)/", "nav.connections"],
@@ -143,12 +143,12 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
-  test("top bar keeps the bell and profile, and the compact space switcher", () => {
+  test("top bar keeps the bell and profile, and the compact workspace switcher", () => {
     expect(topBarSource).not.toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
     expect(topBarSource).toContain("<UserMenu />");
-    expect(topBarSource).toContain("<SpaceSwitcher compact />");
-    expect(shellCssSource).toContain(".topbar-mobile-space");
+    expect(topBarSource).toContain("<WorkspaceSwitcher compact />");
+    expect(shellCssSource).toContain(".topbar-mobile-workspace");
     expect(topBarSource).not.toContain("Wordmark");
   });
 
@@ -169,7 +169,7 @@ describe("dashboard shell navigation layout", () => {
       'isTakosEmbeddedRuntime() ? "https://docs.takos.jp" : "/docs/"',
     );
     expect(userMenuSource).not.toContain("app.takosumi.com");
-    expect(userMenuSource).not.toContain("SpaceSwitcher");
+    expect(userMenuSource).not.toContain("WorkspaceSwitcher");
     expect(userMenuSource).not.toContain("aria-haspopup");
     expect(userMenuSource).toContain("onSessionChange");
   });

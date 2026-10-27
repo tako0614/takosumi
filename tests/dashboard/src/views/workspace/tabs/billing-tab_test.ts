@@ -64,7 +64,7 @@ test("billing copy is plain: no showback, recording mode or provider-neutral jar
   for (const [key, value] of Object.entries(en)) {
     if (!key.startsWith("billing.") || key.startsWith("billing.commercial.")) continue;
     expect({ key, value }).not.toEqual(
-      expect.objectContaining({ value: expect.stringMatching(/showback|provider-neutral|workspace/iu) }),
+      expect.objectContaining({ value: expect.stringMatching(/showback|provider-neutral/iu) }),
     );
   }
   // Members and viewers learn who can see charges instead of an error.

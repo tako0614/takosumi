@@ -1,12 +1,13 @@
 /**
- * アカウント > スペース: this space's name, new spaces by purpose, and
- * archiving. A space is a Workspace. Its generated API handle is never shown
- * (lib/space-labels.ts); people know a space by its name.
+ * アカウント > スペース: this workspace's name, new workspaces by purpose, and
+ * archiving (a workspace is called スペース in the Japanese UI). Its generated
+ * API handle is never shown (lib/workspace-labels.ts); people know a workspace
+ * by its name.
  *
- * New spaces are offered by what they are for — keeping an environment apart,
- * or using Takosumi with a team (which continues to member invites) — so
- * nobody has to learn the mechanism first. Creating works even before the
- * first space exists.
+ * New workspaces are offered by what they are for — keeping an environment
+ * apart, or using Takosumi with a team (which continues to member invites) —
+ * so nobody has to learn the mechanism first. Creating works even before the
+ * first workspace exists.
  */
 import {
   createEffect,
@@ -29,8 +30,8 @@ import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../../lib/error-copy.ts";
 import { latestOrUndefined } from "../../../lib/resource-read.ts";
 import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
-import { spaceName, type SpacePurpose } from "../../../lib/space-labels.ts";
-import SpaceCreateForm from "../../account/components/SpaceCreateForm.tsx";
+import { workspaceName, type WorkspacePurpose } from "../../../lib/workspace-labels.ts";
+import WorkspaceCreateForm from "../../account/components/WorkspaceCreateForm.tsx";
 import RelativeTime from "../../account/components/RelativeTime.tsx";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -43,39 +44,39 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 
-// Archiving the SELECTED space makes the switcher reconcile the selection onto
-// another space, which re-keys this view — so the "archived" notice must
+// Archiving the SELECTED workspace makes the switcher reconcile the selection onto
+// another workspace, which re-keys this view — so the "archived" notice must
 // outlive the component instance.
 const [archiveNotice, setArchiveNotice] = createSignal<string | null>(null);
 
-const notifySpacesChanged = () => {
+const notifyWorkspacesChanged = () => {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
   }
 };
 
-export default function SpaceTab() {
+export default function WorkspaceTab() {
   return (
     <div class="acct-stack">
       <Show when={archiveNotice()}>
         {(name) => (
           <Toast tone="success">
-            {t("space.archive.done", { name: name() })}
+            {t("workspace.archive.done", { name: name() })}
           </Toast>
         )}
       </Show>
       <Show when={currentWorkspaceId() || null} keyed>
         {(workspaceId) => (
-          <ThisSpaceCard workspaceId={workspaceId} />
+          <ThisWorkspaceCard workspaceId={workspaceId} />
         )}
       </Show>
-      <NewSpaceCard />
-      <ArchivedSpaces />
+      <NewWorkspaceCard />
+      <ArchivedWorkspaces />
     </div>
   );
 }
 
-function ThisSpaceCard(props: { readonly workspaceId: string }) {
+function ThisWorkspaceCard(props: { readonly workspaceId: string }) {
   const { confirm } = useConfirmDialog();
   const [workspacePage, { refetch }] = createResource(() =>
     listWorkspacePage({
@@ -91,20 +92,20 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
       (item) => item.id === props.workspaceId,
     ),
   );
-  const activeSpaceCount = () => workspacePage.latest?.total ?? 0;
+  const activeWorkspaceCount = () => workspacePage.latest?.total ?? 0;
   const [nameDraft, setNameDraft] = createSignal("");
   const [saving, setSaving] = createSignal(false);
   const [archiving, setArchiving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [saveMessage, setSaveMessage] = createSignal<string | null>(null);
 
-  // Seed the draft from the space only while the user has no unsaved edit.
+  // Seed the draft from the workspace only while the user has no unsaved edit.
   let seededName: string | null = null;
   createEffect(() => {
     const current = workspace();
     if (!current) return;
     const draft = untrack(nameDraft);
-    const shown = spaceName(current);
+    const shown = workspaceName(current);
     const clean = seededName === null || draft === seededName || draft === shown;
     if (!clean) return;
     seededName = shown;
@@ -118,7 +119,7 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
     if (!current) return;
     const displayName = nameDraft().trim();
     if (!displayName) {
-      setSaveError(t("space.nameRequired"));
+      setSaveError(t("workspace.nameRequired"));
       return;
     }
     setSaving(true);
@@ -127,8 +128,8 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
     try {
       await updateWorkspace(current.id, { displayName });
       await refetch();
-      notifySpacesChanged();
-      setSaveMessage(t("space.saved"));
+      notifyWorkspacesChanged();
+      setSaveMessage(t("workspace.saved"));
     } catch (err) {
       setSaveError(friendlyError(err, t).message);
     } finally {
@@ -141,9 +142,9 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
     const current = workspace();
     if (!current) return;
     const ok = await confirm({
-      title: t("space.archive.confirmTitle", { name: spaceName(current) }),
-      message: t("space.archive.confirmMessage"),
-      confirmText: t("space.archive.cta"),
+      title: t("workspace.archive.confirmTitle", { name: workspaceName(current) }),
+      message: t("workspace.archive.confirmMessage"),
+      confirmText: t("workspace.archive.cta"),
     });
     if (!ok) return;
     setArchiving(true);
@@ -152,9 +153,9 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
       await updateWorkspace(current.id, { archived: true });
       // Do NOT clear the selection here; the switcher reconciles it and the
       // archived list keeps 復元 one click away.
-      setArchiveNotice(spaceName(current));
+      setArchiveNotice(workspaceName(current));
       await refetch();
-      notifySpacesChanged();
+      notifyWorkspacesChanged();
     } catch (err) {
       setSaveError(friendlyError(err, t).message);
     } finally {
@@ -164,7 +165,7 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
 
   return (
     <Card>
-      <CardHeader title={t("space.thisSpace")} />
+      <CardHeader title={t("workspace.thisWorkspace")} />
       <Show
         when={workspace()}
         fallback={
@@ -175,7 +176,7 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
                 <p class="muted">
                   {workspacePage.loading
                     ? t("common.loading")
-                    : t("space.notFound")}
+                    : t("workspace.notFound")}
                 </p>
               }
             >
@@ -198,14 +199,14 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
           <>
             <CardSection>
               <form class="wc-form" onSubmit={save}>
-                <FormField label={t("space.name")} hint={t("space.nameHint")}>
+                <FormField label={t("workspace.name")} hint={t("workspace.nameHint")}>
                   <Input
                     value={nameDraft()}
                     onInput={(event) => setNameDraft(event.currentTarget.value)}
                   />
                 </FormField>
                 <p class="muted">
-                  {t("space.createdLabel")} <RelativeTime iso={current().createdAt} />
+                  {t("workspace.createdLabel")} <RelativeTime iso={current().createdAt} />
                 </p>
                 <div class="wc-form-actions">
                   <Button variant="primary" type="submit" busy={saving()}>
@@ -220,11 +221,11 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
             <CardSection>
               <div class="acct-danger-row">
                 <div>
-                  <p class="acct-pref-label">{t("space.archive.title")}</p>
+                  <p class="acct-pref-label">{t("workspace.archive.title")}</p>
                   <p class="muted">
-                    {activeSpaceCount() <= 1
-                      ? t("space.archive.lastSpace")
-                      : t("space.archive.body")}
+                    {activeWorkspaceCount() <= 1
+                      ? t("workspace.archive.lastWorkspace")
+                      : t("workspace.archive.body")}
                   </p>
                 </div>
                 <Button
@@ -232,10 +233,10 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
                   type="button"
                   icon={<Archive size={15} />}
                   busy={archiving()}
-                  disabled={archiving() || activeSpaceCount() <= 1}
+                  disabled={archiving() || activeWorkspaceCount() <= 1}
                   onClick={() => void archive()}
                 >
-                  {t("space.archive.cta")}
+                  {t("workspace.archive.cta")}
                 </Button>
               </div>
             </CardSection>
@@ -253,23 +254,23 @@ function ThisSpaceCard(props: { readonly workspaceId: string }) {
   );
 }
 
-function NewSpaceCard() {
+function NewWorkspaceCard() {
   const navigate = useNavigate();
-  const [purpose, setPurpose] = createSignal<SpacePurpose | null>(null);
+  const [purpose, setPurpose] = createSignal<WorkspacePurpose | null>(null);
   const [created, setCreated] = createSignal<string | null>(null);
-  const onCreated = (workspace: Workspace, chosen: SpacePurpose) => {
+  const onCreated = (workspace: Workspace, chosen: WorkspacePurpose) => {
     setPurpose(null);
     setArchiveNotice(null);
-    // A team space exists to be shared: continue straight to invites.
+    // A team workspace exists to be shared: continue straight to invites.
     if (chosen === "team") {
       navigate("/account/members");
       return;
     }
-    setCreated(spaceName(workspace));
+    setCreated(workspaceName(workspace));
   };
   return (
     <Card>
-      <CardHeader title={t("space.new.title")} subtitle={t("space.new.body")} />
+      <CardHeader title={t("workspace.new.title")} subtitle={t("workspace.new.body")} />
       <CardSection>
         <Show
           when={purpose()}
@@ -285,10 +286,10 @@ function NewSpaceCard() {
               >
                 <Layers size={20} aria-hidden="true" />
                 <span class="acct-purpose-title">
-                  {t("space.create.environment")}
+                  {t("workspace.create.environment")}
                 </span>
                 <span class="acct-purpose-body">
-                  {t("space.create.environmentBody")}
+                  {t("workspace.create.environmentBody")}
                 </span>
               </button>
               <button
@@ -300,18 +301,18 @@ function NewSpaceCard() {
                 }}
               >
                 <Users size={20} aria-hidden="true" />
-                <span class="acct-purpose-title">{t("space.create.team")}</span>
+                <span class="acct-purpose-title">{t("workspace.create.team")}</span>
                 <span class="acct-purpose-body">
-                  {t("space.create.teamBody")}
+                  {t("workspace.create.teamBody")}
                 </span>
               </button>
             </div>
           }
         >
           {(chosen) => (
-            <SpaceCreateForm
+            <WorkspaceCreateForm
               purpose={chosen()}
-              idPrefix="account-space-create"
+              idPrefix="account-workspace-create"
               autofocus
               onCreated={onCreated}
               onCancel={() => setPurpose(null)}
@@ -320,7 +321,7 @@ function NewSpaceCard() {
         </Show>
         <Show when={created()}>
           {(name) => (
-            <Toast tone="success">{t("space.create.done", { name: name() })}</Toast>
+            <Toast tone="success">{t("workspace.create.done", { name: name() })}</Toast>
           )}
         </Show>
       </CardSection>
@@ -328,7 +329,7 @@ function NewSpaceCard() {
   );
 }
 
-function ArchivedSpaces() {
+function ArchivedWorkspaces() {
   const [archivedPage, { mutate, refetch }] = createResource(() =>
     listWorkspacePage({ includeArchived: true, limit: 50, order: "updated_desc" }),
   );
@@ -356,7 +357,7 @@ function ArchivedSpaces() {
       await updateWorkspace(id, { archived: false });
       setArchiveNotice(null);
       await refetch();
-      notifySpacesChanged();
+      notifyWorkspacesChanged();
     } catch (err) {
       setError(friendlyError(err, t).message);
     } finally {
@@ -397,15 +398,15 @@ function ArchivedSpaces() {
     >
       <Card>
         <CardHeader
-          title={t("space.archived.title")}
-          subtitle={t("space.archived.body")}
+          title={t("workspace.archived.title")}
+          subtitle={t("workspace.archived.body")}
         />
         <ul class="acct-list">
           <For each={archived()}>
             {(workspace) => (
               <li class="acct-row">
                 <div class="acct-row-main">
-                  <strong>{spaceName(workspace)}</strong>
+                  <strong>{workspaceName(workspace)}</strong>
                 </div>
                 <div class="acct-row-actions">
                   <Button
@@ -416,7 +417,7 @@ function ArchivedSpaces() {
                     disabled={restoringId() !== null}
                     onClick={() => void restore(workspace.id)}
                   >
-                    {t("space.archived.restore")}
+                    {t("workspace.archived.restore")}
                   </Button>
                 </div>
               </li>

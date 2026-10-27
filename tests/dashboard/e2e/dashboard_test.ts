@@ -354,7 +354,7 @@ async function expectInsideViewport(
 
 function workspaceTrigger(page: Page) {
   return page
-    .getByRole("button", { name: /スペースを切り替え|Switch space/u })
+    .getByRole("button", { name: /スペースを切り替え|Switch workspace/u })
     .first();
 }
 
@@ -1665,7 +1665,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       error: "invalid_token",
     });
 
-    for (const path of ["/account", "/connections", "/account/space", "/new"]) {
+    for (const path of ["/account", "/connections", "/account/workspace", "/new"]) {
       await gotoDashboardDocument(page, path);
       await expect(page.locator("body")).not.toContainText("undefined.trim");
     }
@@ -1698,7 +1698,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
   });
 
-  test("keeps the current space name visible on compact widths and disambiguates duplicates", async ({
+  test("keeps the current workspace name visible on compact widths and disambiguates duplicates", async ({
     page,
   }) => {
     test.skip(
@@ -1712,14 +1712,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     for (const width of [320, 390, 880]) {
       await page.setViewportSize({ width, height: 844 });
       const trigger = workspaceTrigger(page);
-      await expect(trigger.locator(".space-switcher-name")).toContainText(
+      await expect(trigger.locator(".workspace-switcher-name")).toContainText(
         PORTABLE_EXPECTATIONS.workspaceName,
       );
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth - window.innerWidth,
         ),
-        `Space chrome must not overflow a ${width}px viewport`,
+        `Workspace chrome must not overflow a ${width}px viewport`,
       ).toBeLessThanOrEqual(1);
     }
 
@@ -1729,7 +1729,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       await trigger.click();
       const menu = page.locator('[role="menu"]:visible').first();
       await expect(menu).toBeVisible();
-      await expectInsideViewport(page, menu, `Space menu at ${width}px`);
+      await expectInsideViewport(page, menu, `Workspace menu at ${width}px`);
       const duplicates = menu
         .getByRole("menuitemradio")
         .filter({ hasText: PORTABLE_EXPECTATIONS.workspaceName });
@@ -1747,19 +1747,19 @@ test.describe("Takosumi dashboard browser surface", () => {
         .getByRole("menuitem", { name: /環境を分ける|Separate an environment/u })
         .click();
       const dialog = page.getByRole("dialog").first();
-      const form = dialog.locator("form.space-create-form");
+      const form = dialog.locator("form.workspace-create-form");
       const input = dialog.getByRole("textbox", {
         name: /環境の名前|Environment name/u,
       });
       await expect(dialog).toBeVisible();
       await expect(form).toBeVisible();
       await expect(input).toBeVisible();
-      await expectInsideViewport(page, form, `Space create form at ${width}px`);
-      await expectInsideViewport(page, input, `Space create input at ${width}px`);
+      await expectInsideViewport(page, form, `Workspace create form at ${width}px`);
+      await expectInsideViewport(page, input, `Workspace create input at ${width}px`);
       await expect(input).toHaveAttribute("required", "");
       await expect(input).toHaveAttribute(
         "aria-describedby",
-        /space-switcher-compact-create-name-help/u,
+        /workspace-switcher-compact-create-name-help/u,
       );
       await dialog
         .getByRole("button", { name: /キャンセル|Cancel/u })
@@ -3977,7 +3977,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       window.dispatchEvent(new Event("takosumi:workspaces-changed")),
     );
     await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(2);
-    await expect(page.locator(".space-switcher-error:visible").first()).toBeVisible();
+    await expect(page.locator(".workspace-switcher-error:visible").first()).toBeVisible();
 
     // The failure is not evidence of "no Workspaces": the selection and the
     // launcher survive instead of resetting to first-Workspace onboarding.

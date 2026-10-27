@@ -16,10 +16,10 @@ const connectionsTabSource = read("workspace/tabs/ConnectionsTab.tsx");
 const connectionCreateFormSource = read(
   "workspace/connections/ConnectionCreateForm.tsx",
 );
-const spaceTabSource = read("workspace/tabs/SpaceTab.tsx");
+const workspaceTabSource = read("workspace/tabs/WorkspaceTab.tsx");
 const userMenuSource = read("account/components/auth/UserMenu.tsx");
 
-describe("space and account surfaces", () => {
+describe("workspace and account surfaces", () => {
   test("screens that no behavior needs are removed, not folded away", () => {
     for (const removed of [
       "workspace/WorkspaceSettingsView.tsx",
@@ -40,14 +40,14 @@ describe("space and account surfaces", () => {
     }
   });
 
-  test("the space form never exposes policy JSON or the generated handle", () => {
-    expect(spaceTabSource).toContain(
+  test("the workspace form never exposes policy JSON or the generated handle", () => {
+    expect(workspaceTabSource).toContain(
       "updateWorkspace(current.id, { displayName })",
     );
-    expect(spaceTabSource).not.toContain("policyDraft");
-    expect(spaceTabSource).not.toContain("Textarea");
-    expect(spaceTabSource).not.toContain("ownerUserId");
-    expect(spaceTabSource).not.toContain("current().type");
+    expect(workspaceTabSource).not.toContain("policyDraft");
+    expect(workspaceTabSource).not.toContain("Textarea");
+    expect(workspaceTabSource).not.toContain("ownerUserId");
+    expect(workspaceTabSource).not.toContain("current().type");
   });
 
   test("connections never render raw ids, sources, or env names", () => {
@@ -81,9 +81,9 @@ describe("space and account surfaces", () => {
     expect(ja["conn.empty.message"]).not.toMatch(/policy|approval|billing/u);
   });
 
-  test("space and account copy uses スペース and the app vocabulary", () => {
+  test("workspace and account copy uses スペース and the app vocabulary", () => {
     const keys = (Object.keys(ja) as Array<keyof typeof ja>).filter((key) =>
-      ["nav.", "conn.", "account.", "members.", "workspace.", "space.", "notif."].some(
+      ["nav.", "conn.", "account.", "members.", "workspace.", "notif."].some(
         (prefix) => key.startsWith(prefix),
       ),
     );
@@ -99,7 +99,7 @@ describe("space and account surfaces", () => {
       expect({ key, value: en[key] }).not.toEqual(
         expect.objectContaining({
           value: expect.stringMatching(
-            /\b(?:workspaces?|services?|workloads?|deploy(?:s|ed|ing)?)\b/iu,
+            /\b(?:services?|workloads?|deploy(?:s|ed|ing)?)\b/iu,
           ),
         }),
       );

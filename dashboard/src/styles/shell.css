@@ -126,13 +126,13 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.sidebar-space {
+.sidebar-workspace {
   padding: 0 var(--tg-s-1) var(--tg-s-4);
 }
-.sidebar-space:empty {
+.sidebar-workspace:empty {
   display: none;
 }
-.sidebar-space .space-switcher {
+.sidebar-workspace .workspace-switcher {
   width: 100%;
   max-width: none;
 }
@@ -232,11 +232,11 @@
   align-items: center;
   gap: var(--tg-s-2);
 }
-/* ===== Space switcher (only with two or more spaces) ===== */
-.topbar-mobile-space {
+/* ===== Workspace switcher (only with two or more workspaces) ===== */
+.topbar-mobile-workspace {
   display: none;
 }
-.space-switcher {
+.workspace-switcher {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -244,13 +244,13 @@
   gap: var(--tg-s-2);
   min-width: 0;
 }
-.space-switcher-picker {
+.workspace-switcher-picker {
   position: relative;
   flex: 1;
   min-width: 0;
 }
-/* Current-space chip: avatar + name + caret, a single tap opens the menu. */
-.space-switcher-current {
+/* Current-workspace chip: avatar + name + caret, a single tap opens the menu. */
+.workspace-switcher-current {
   width: 100%;
   min-height: 38px;
   display: flex;
@@ -271,11 +271,11 @@
     background 120ms ease,
     border-color 120ms ease;
 }
-.space-switcher-current:hover {
+.workspace-switcher-current:hover {
   border-color: var(--tg-line-strong);
   background: var(--tg-bg-subtle);
 }
-.space-switcher-avatar {
+.workspace-switcher-avatar {
   flex: none;
   display: grid;
   place-items: center;
@@ -289,14 +289,14 @@
   font-weight: 700;
   font-size: 0.82rem;
 }
-.space-switcher-name {
+.workspace-switcher-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.space-switcher-item-hint {
+.workspace-switcher-item-hint {
   flex: none;
   min-width: 0;
   max-width: 14ch;
@@ -307,12 +307,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.space-switcher-caret {
+.workspace-switcher-caret {
   flex: none;
   color: var(--tg-fg-subtle);
 }
-/* Popover menu of spaces. */
-.space-switcher-menu {
+/* Popover menu of workspaces. */
+.workspace-switcher-menu {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
@@ -325,11 +325,11 @@
   background: var(--tg-bg-elev);
   box-shadow: var(--tg-shadow-lg);
 }
-.space-switcher.compact .space-switcher-menu {
+.workspace-switcher.compact .workspace-switcher-menu {
   left: auto;
   right: 0;
 }
-.space-switcher-menu-head {
+.workspace-switcher-menu-head {
   padding: var(--tg-s-2) var(--tg-s-2) var(--tg-s-1);
   color: var(--tg-fg-subtle);
   font-family: var(--tg-font-mono);
@@ -337,14 +337,14 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.space-switcher-list {
+.workspace-switcher-list {
   list-style: none;
   margin: 0;
   padding: 0;
   max-height: 320px;
   overflow-y: auto;
 }
-.space-switcher-item {
+.workspace-switcher-item {
   width: 100%;
   display: flex;
   align-items: center;
@@ -360,30 +360,30 @@
   text-align: left;
   cursor: pointer;
 }
-.space-switcher-item:hover {
+.workspace-switcher-item:hover {
   background: var(--tg-bg-subtle);
 }
-.space-switcher-item.current {
+.workspace-switcher-item.current {
   background: var(--tg-accent-soft);
   color: var(--tg-accent-text);
 }
-.space-switcher-item.current .space-switcher-avatar {
+.workspace-switcher-item.current .workspace-switcher-avatar {
   color: var(--tg-accent-text);
   box-shadow: inset 0 0 0 1px
     color-mix(in srgb, var(--tg-accent) 40%, var(--tg-line));
 }
-.space-switcher-item-name {
+.workspace-switcher-item-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.space-switcher-check {
+.workspace-switcher-check {
   flex: none;
   color: var(--tg-accent-text);
 }
-.space-switcher-error {
+.workspace-switcher-error {
   display: flex;
   align-items: center;
   gap: var(--tg-s-2);
@@ -392,7 +392,7 @@
   font-size: var(--tg-fs-xs);
   margin: 0;
 }
-.space-switcher-retry {
+.workspace-switcher-retry {
   flex: none;
   background: none;
   border: 1px solid var(--tg-line-strong);
@@ -403,14 +403,14 @@
   min-height: 28px;
   cursor: pointer;
 }
-.space-switcher-retry:hover {
+.workspace-switcher-retry:hover {
   background: var(--tg-bg-subtle);
   border-color: var(--tg-line-strong);
 }
-/* Shared by the space-settings <a> and the create-by-purpose <button>s. The
+/* Shared by the workspace-settings <a> and the create-by-purpose <button>s. The
  * buttons need their native chrome reset, or the UA paints a grey fill and an
  * outset bevel border over the flat popover. */
-.space-switcher-action {
+.workspace-switcher-action {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
@@ -434,34 +434,34 @@
     color 120ms ease,
     background 120ms ease;
 }
-.space-switcher-action:hover {
+.workspace-switcher-action:hover {
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
 }
-.space-switcher-action + .space-switcher-action {
+.workspace-switcher-action + .workspace-switcher-action {
   margin-top: 0;
   border-top: 0;
   border-radius: var(--tg-r-md);
 }
-/* Create-a-space form (switcher popover and アカウント > スペース). */
-.space-create-form {
+/* Create-a-workspace form (switcher popover and アカウント > スペース). */
+.workspace-create-form {
   display: flex;
   flex-direction: column;
   gap: var(--tg-s-2);
 }
-.space-switcher-create {
+.workspace-switcher-create {
   padding: var(--tg-s-2);
 }
-.space-create-actions {
+.workspace-create-actions {
   display: flex;
   gap: var(--tg-s-2);
 }
-.space-create-error {
+.workspace-create-error {
   margin: 0;
   color: var(--tg-danger-text);
   font-size: var(--tg-fs-xs);
 }
-.space-create-hint {
+.workspace-create-hint {
   margin: -2px 0 0;
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
@@ -660,34 +660,34 @@
     font-size: var(--tg-fs-base);
     font-weight: 700;
   }
-  .topbar-mobile-space {
+  .topbar-mobile-workspace {
     display: block;
     flex: 1 1 auto;
     margin-left: auto;
     min-width: 0;
   }
-  /* Keep the current space name in the compact chip. The flex minimum and
+  /* Keep the current workspace name in the compact chip. The flex minimum and
      ellipsis make long purpose names fit without reducing the control to an
      ambiguous initial. */
-  .space-switcher.compact .space-switcher-current {
+  .workspace-switcher.compact .workspace-switcher-current {
     min-height: 36px;
     padding: 3px var(--tg-s-2) 3px 3px;
     gap: var(--tg-s-1);
   }
-  .space-switcher.compact .space-switcher-name {
+  .workspace-switcher.compact .workspace-switcher-name {
     display: block;
   }
-  .space-switcher.compact {
+  .workspace-switcher.compact {
     width: 100%;
     max-width: min(100%, 260px);
   }
   /* The compact picker is part of the topbar flow, but its open menu must be
-     contained by the viewport rather than by the narrow space chip. */
-  .space-switcher.compact,
-  .space-switcher.compact .space-switcher-picker {
+     contained by the viewport rather than by the narrow workspace chip. */
+  .workspace-switcher.compact,
+  .workspace-switcher.compact .workspace-switcher-picker {
     position: static;
   }
-  .space-switcher.compact .space-switcher-menu {
+  .workspace-switcher.compact .workspace-switcher-menu {
     left: auto;
     right: auto;
     inset-inline-start: auto;

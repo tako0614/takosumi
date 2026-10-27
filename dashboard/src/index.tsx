@@ -116,9 +116,9 @@ function RedirectLegacyWorkloadDetail() {
 
 /**
  * Where an old Workspace-settings tab lives now. Connections are the 接続
- * page; members, billing and the space itself are アカウント sections. Value
+ * page; members, billing and the workspace itself are アカウント sections. Value
  * sharing and the management export left the UI (API and CLI only), so their
- * old tabs land on the space section; per-app screen recovery moved to each
+ * old tabs land on the workspace section; per-app screen recovery moved to each
  * app's page, which ホーム lists.
  */
 function legacyWorkspaceSettingsTarget(tab: string | undefined): string {
@@ -132,7 +132,7 @@ function legacyWorkspaceSettingsTarget(tab: string | undefined): string {
     case "interface-recovery":
       return "/";
     default:
-      return "/account/space";
+      return "/account/workspace";
   }
 }
 
@@ -236,7 +236,7 @@ function App() {
       />
       <Route
         path="/advanced/workspace"
-        component={() => <Navigate href="/account/space" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/advanced/workspace/:tab"
@@ -244,7 +244,7 @@ function App() {
       />
       <Route
         path="/workspace/settings"
-        component={() => <Navigate href="/account/space" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/workspace/settings/:tab"
@@ -256,11 +256,11 @@ function App() {
       />
       <Route
         path="/backups"
-        component={() => <Navigate href="/account/space" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/output-shares"
-        component={() => <Navigate href="/account/space" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/providers"
@@ -272,7 +272,7 @@ function App() {
       />
       <Route
         path="/account/settings"
-        component={() => <Navigate href="/account/space" />}
+        component={() => <Navigate href="/account/workspace" />}
       />
       <Route
         path="/account/profile"

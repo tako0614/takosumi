@@ -9,9 +9,9 @@ import { Show } from "solid-js";
 import { Link2 } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import {
-  createCurrentSpace,
-  SpaceScopeNote,
-} from "../account/lib/current-space.tsx";
+  createCurrentWorkspace,
+  WorkspaceScopeNote,
+} from "../account/lib/current-workspace.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { t } from "../../i18n/index.ts";
 import { Button, EmptyState, PageHeader } from "../../components/ui/index.ts";
@@ -22,22 +22,22 @@ export default function ConnectionsView() {
 }
 
 function Inner() {
-  const space = createCurrentSpace();
+  const currentWorkspace = createCurrentWorkspace();
   return (
     <div class="acct-page">
       <PageHeader title={t("conn.title")} subtitle={t("conn.subtitle")} />
-      <SpaceScopeNote space={space} />
+      <WorkspaceScopeNote context={currentWorkspace} />
       <Show
         when={currentWorkspaceId() || null}
         keyed
         fallback={
           <EmptyState
             icon={<Link2 size={28} />}
-            title={t("space.noneTitle")}
-            message={t("space.noneMessage")}
+            title={t("workspace.noneTitle")}
+            message={t("workspace.noneMessage")}
             action={
               <Button variant="primary" href="/">
-                {t("space.noneCta")}
+                {t("workspace.noneCta")}
               </Button>
             }
           />

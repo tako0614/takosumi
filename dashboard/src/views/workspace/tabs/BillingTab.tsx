@@ -1,6 +1,6 @@
 /**
- * アカウント > 料金と利用量: what this space costs and what it used, in plain
- * words. Takosumi itself either charges nothing for the space or records use
+ * アカウント > 料金と利用量: what this workspace costs and what it used, in plain
+ * words. Takosumi itself either charges nothing for the workspace or records use
  * without billing it; the clouds an app's resources run on bill separately.
  * An amount Takosumi has not priced is shown as unknown, never as zero.
  *
@@ -55,7 +55,7 @@ import { friendlyError } from "../../../lib/error-copy.ts";
 import CommercialBillingPanel from "../../../components/billing/CommercialBillingPanel.tsx";
 import RelativeTime from "../../account/components/RelativeTime.tsx";
 
-/** What Takosumi does with this space's use, by billing mode. */
+/** What Takosumi does with this workspace's use, by billing mode. */
 const MODE_KEY: Record<string, MessageKey> = {
   disabled: "billing.mode.disabled",
   showback: "billing.mode.showback",
@@ -77,7 +77,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
 
   const current = createMemo(() => (billing.error ? undefined : billing()));
   const mode = createMemo(() => current()?.settings.mode ?? "disabled");
-  /** Billing is readable by the space's owners and admins only. */
+  /** Billing is readable by the workspace's owners and admins only. */
   const forbidden = () =>
     billing.error instanceof ControlApiError && billing.error.status === 403;
   const commercialBillingEnabled = createMemo(

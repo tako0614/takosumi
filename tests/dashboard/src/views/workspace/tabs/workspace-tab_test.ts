@@ -1,6 +1,6 @@
 /**
- * アカウント > スペース (SpaceTab): the name is edited without the generated
- * handle, new spaces are created by purpose, and archiving says what it does
+ * アカウント > スペース (WorkspaceTab): the name is edited without the generated
+ * handle, new workspaces are created by purpose, and archiving says what it does
  * (and does not do) before it happens.
  */
 import { describe, expect, test } from "bun:test";
@@ -14,15 +14,15 @@ const read = (path: string) =>
     resolve(import.meta.dir, "../../../../../../dashboard/src", path),
     "utf8",
   );
-const source = read("views/workspace/tabs/SpaceTab.tsx");
-const createForm = read("views/account/components/SpaceCreateForm.tsx");
+const source = read("views/workspace/tabs/WorkspaceTab.tsx");
+const createForm = read("views/account/components/WorkspaceCreateForm.tsx");
 
-describe("SpaceTab name", () => {
+describe("WorkspaceTab name", () => {
   test("never shows the generated handle before (or instead of) the name", () => {
     expect(source).not.toContain("current().handle");
     expect(source).not.toContain("@${");
     expect(source).not.toContain("workspaceSettings.general.handle");
-    expect(source).toContain("spaceName(current)");
+    expect(source).toContain("workspaceName(current)");
     expect(source).not.toContain("<details");
   });
 
@@ -40,23 +40,23 @@ describe("SpaceTab name", () => {
   });
 });
 
-describe("SpaceTab create by purpose", () => {
+describe("WorkspaceTab create by purpose", () => {
   test("offers 環境を分ける and チームで使う instead of the mechanism", () => {
     expect(source).toContain('setPurpose("environment")');
     expect(source).toContain('setPurpose("team")');
-    expect(ja["space.create.environment"]).toBe("環境を分ける");
-    expect(ja["space.create.team"]).toBe("チームで使う");
-    // A team space continues straight to inviting members.
+    expect(ja["workspace.create.environment"]).toBe("環境を分ける");
+    expect(ja["workspace.create.team"]).toBe("チームで使う");
+    // A team workspace continues straight to inviting members.
     expect(source).toContain('navigate("/account/members")');
-    // Creating works before the first space exists.
-    expect(source).toContain("<NewSpaceCard />");
-    expect(source.indexOf("<NewSpaceCard />")).toBeGreaterThan(
+    // Creating works before the first workspace exists.
+    expect(source).toContain("<NewWorkspaceCard />");
+    expect(source.indexOf("<NewWorkspaceCard />")).toBeGreaterThan(
       source.indexOf("<Show when={currentWorkspaceId() || null} keyed>"),
     );
   });
 
   test("the shared create form asks only for a name and generates the handle", () => {
-    expect(createForm).toContain("handle: newSpaceHandle()");
+    expect(createForm).toContain("handle: newWorkspaceHandle()");
     expect(createForm).toContain("type: workspaceTypeForPurpose(props.purpose)");
     expect(createForm).toContain(
       'window.dispatchEvent(new Event("takosumi:workspaces-changed"))',
@@ -65,18 +65,18 @@ describe("SpaceTab create by purpose", () => {
   });
 });
 
-describe("SpaceTab archive lifecycle", () => {
+describe("WorkspaceTab archive lifecycle", () => {
   test("archiving keeps the user here and states that apps keep running", () => {
     expect(source).not.toContain('setCurrentWorkspaceId("")');
     expect(source).toMatch(
       /^const \[archiveNotice, setArchiveNotice\] = createSignal/m,
     );
-    expect(source).toContain('t("space.archive.confirmMessage")');
-    expect(source).toContain('t("space.archive.lastSpace")');
-    expect(source).toContain("disabled={archiving() || activeSpaceCount() <= 1}");
-    expect(ja["space.archive.confirmMessage"]).toContain("動き続け");
-    expect(en["space.archive.confirmMessage"]).toContain("keep running");
-    expect(ja["space.archive.done"]).toContain("{name}");
+    expect(source).toContain('t("workspace.archive.confirmMessage")');
+    expect(source).toContain('t("workspace.archive.lastWorkspace")');
+    expect(source).toContain("disabled={archiving() || activeWorkspaceCount() <= 1}");
+    expect(ja["workspace.archive.confirmMessage"]).toContain("動き続け");
+    expect(en["workspace.archive.confirmMessage"]).toContain("keep running");
+    expect(ja["workspace.archive.done"]).toContain("{name}");
   });
 
   test("restore is busy per row, guards double submits, and pages", () => {

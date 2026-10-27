@@ -1,5 +1,5 @@
 /**
- * 接続 — the behavior "connect my cloud". Lists the space's connections on the
+ * 接続 — the behavior "connect my cloud". Lists the workspace's connections on the
  * session-authed control surface (`/api/v1/connections*`), and for each one
  * shows which installed apps use it, a test, and removal that names the
  * affected apps. The create form (guided recipe fields, provider OAuth popup,

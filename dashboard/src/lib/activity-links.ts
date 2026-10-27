@@ -4,7 +4,7 @@
  * Used by the notification feed. Run events open the run, app events open
  * the app's page, and connection events open 接続. Events about things that
  * live on an app's page (a screen that could not be published) open ホーム,
- * which lists the app with what needs attention. Value sharing between spaces
+ * which lists the app with what needs attention. Value sharing between workspaces
  * has no screen, so its events are not links.
  */
 import type { ActivityEvent } from "./control-api.ts";

@@ -122,13 +122,13 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
       ["/settings/account", "/account"],
       ["/settings/manage", "/account"],
       ["/settings/manage/hosted-resources", "/"],
-      ["/advanced/workspace", "/account/space"],
-      ["/workspace/settings", "/account/space"],
+      ["/advanced/workspace", "/account/workspace"],
+      ["/workspace/settings", "/account/workspace"],
       ["/members", "/account/members"],
-      ["/backups", "/account/space"],
-      ["/output-shares", "/account/space"],
+      ["/backups", "/account/workspace"],
+      ["/output-shares", "/account/workspace"],
       ["/providers", "/connections"],
-      ["/account/settings", "/account/space"],
+      ["/account/settings", "/account/workspace"],
       ["/account/profile", "/account"],
       ["/account/sessions", "/account"],
     ];
@@ -154,7 +154,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain('case "connections":\n      return "/connections";');
     expect(source).toContain('case "billing":\n      return "/account/billing";');
     expect(source).toContain('case "interface-recovery":\n      return "/";');
-    expect(source).toContain('default:\n      return "/account/space";');
+    expect(source).toContain('default:\n      return "/account/workspace";');
     // No removed screen is still mounted.
     for (const removed of [
       "RunsListView",

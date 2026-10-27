@@ -285,7 +285,7 @@ describe("Takosumi API key management", () => {
     expect(component).toContain("scope.label[locale()]");
     expect(component).toContain("scope.description[locale()]");
     expect(en["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
-      "space",
+      "workspace",
     );
     expect(ja["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
       "スペース",

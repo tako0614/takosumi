@@ -1,5 +1,5 @@
 /**
- * アカウント > メンバー: the people who use this space, by name.
+ * アカウント > メンバー: the people who use this workspace, by name.
  *
  * The roster shows each member's display name; emails come back from the
  * server only for owners and admins, so everyone else simply never sees them.
@@ -104,7 +104,7 @@ export default function MembersTab(props: {
   const memberRows = (): readonly PublicWorkspaceMember[] =>
     members.error ? [] : (members.latest ?? []);
   // Suspended rows are people who were removed; the list is about who uses
-  // the space now.
+  // the workspace now.
   const visibleRows = () =>
     memberRows().filter((member) => member.status !== "suspended");
 
