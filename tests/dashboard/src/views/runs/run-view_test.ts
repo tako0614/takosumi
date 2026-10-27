@@ -11,6 +11,13 @@ const source = readFileSync(
   ),
   "utf8",
 );
+const planResourceListSource = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../../../../dashboard/src/components/run/PlanResourceList.tsx",
+  ),
+  "utf8",
+);
 
 describe("RunView", () => {
   test("the Run ledger no longer becomes a second install screen", () => {
@@ -219,11 +226,17 @@ describe("RunView", () => {
   });
 
   test("allows the full Plan change list to be reviewed above the initial limit", () => {
-    expect(source).toContain("const [expanded, setExpanded] = createSignal(false)");
-    expect(source).toMatch(
+    // The list lives in the shared PlanResourceList component RunView renders.
+    expect(source).toContain("<PlanResourceList resources={planResources()} />");
+    expect(planResourceListSource).toContain(
+      "const [expanded, setExpanded] = createSignal(false)",
+    );
+    expect(planResourceListSource).toMatch(
       /expanded\(\)\s*\? actionable\(\)\s*:\s*actionable\(\)\.slice\(0, PLAN_RESOURCE_REVIEW_LIMIT\)/,
     );
-    expect(source).toContain("onClick={() => setExpanded(true)}");
-    expect(source).toContain('t("run.resources.more", { n: hiddenCount() })');
+    expect(planResourceListSource).toContain("onClick={() => setExpanded(true)}");
+    expect(planResourceListSource).toContain(
+      't("run.resources.more", { n: hiddenCount() })',
+    );
   });
 });

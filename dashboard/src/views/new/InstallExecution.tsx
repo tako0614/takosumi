@@ -12,6 +12,7 @@ import {
   ControlApiError,
   createApplyRun,
   getRun,
+  getRunCostInfo,
   getRunLogs,
   planCapsule,
   extractRunId,
@@ -24,24 +25,33 @@ import { t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
 import { fetchFailedMessage, friendlyError } from "../../lib/error-copy.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
+import {
+  formatUsdMicros,
+  readRunCost,
+  runCostDisplayHasContent,
+  runCostDisplayState,
+  type RunCostDisplayState,
+} from "../../lib/run-cost.ts";
+import CostSummary from "../../components/run/CostSummary.tsx";
+import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
 } from "../../lib/capsules-ui.ts";
-import { canAutoInstallRun } from "./install-lifecycle.ts";
 import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
 
 interface Props {
   readonly planRunId: string;
   readonly initialRunId?: string;
-  readonly installRequested?: boolean;
   readonly onState?: (state: "installing" | "failed" | "ready") => void;
   readonly capsuleId: string;
   readonly onDone: () => void;
   readonly onRestart?: () => Promise<void>;
   readonly restartLabel?: string;
+  /** Discards a never-applied attempt; omitted where the app is already installed. */
+  readonly onDiscard?: () => Promise<void>;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -358,23 +368,16 @@ export default function InstallExecution(props: Props) {
     }
   };
 
-  // The in-memory Install click authorizes only this clean plan. It is never
-  // reconstructed from a URL or storage after reload. Unknown POSTs are held.
-  let autoInstallStarted = false;
+  // Apply starts only from the "Allow and install" click on the reviewed Plan.
+  // Nothing applies automatically, and no consent survives a reload or URL.
+  // Unknown POSTs are held.
   let observedInitialRun = props.initialRunId ?? props.planRunId;
   createEffect(() => {
     const id = props.initialRunId ?? props.planRunId;
     if (id === observedInitialRun) return;
     observedInitialRun = id;
-    autoInstallStarted = false;
     setConfirmed(false); setApplyUnconfirmed(false); setError(null);
     mutate(undefined); setRunId(id);
-  });
-  createEffect(() => {
-    if (props.installRequested && !autoInstallStarted && canAutoInstallRun(runLatest()) && !destructive()) {
-      autoInstallStarted = true;
-      void install();
-    }
   });
   const retryFailedApply = async () => {
     setRestarting(true); setError(null);
@@ -402,6 +405,53 @@ export default function InstallExecution(props: Props) {
       setRestarting(false);
     }
   };
+
+  // The review shows what the Plan will do in the user's cloud and what it is
+  // estimated to cost. A failed cost read is shown as unknown, never as free.
+  const reviewedPlanRunId = () => {
+    const latest = runLatest();
+    return latest?.type === "plan" && latest.status === "succeeded" ? latest.id : undefined;
+  };
+  const [planCost] = createResource(reviewedPlanRunId, (id) =>
+    readRunCost(() => getRunCostInfo(id)),
+  );
+  const costState = (): RunCostDisplayState | undefined => {
+    // Never show the previous Plan's cost while the current one loads.
+    if (planCost.loading) return undefined;
+    if (planCost.error) return { kind: "unavailable" };
+    const read = planCost();
+    return read ? runCostDisplayState(read) : undefined;
+  };
+  const costLine = (state: RunCostDisplayState): string | undefined => {
+    if (runCostDisplayHasContent(state)) return undefined;
+    return state.kind === "rated_zero"
+      ? t("installStore.costRatedZero", { amount: formatUsdMicros(0) })
+      : t("installStore.costNotApplicable");
+  };
+
+  const [discarding, setDiscarding] = createSignal(false);
+  const discard = async () => {
+    setDiscarding(true);
+    try {
+      await props.onDiscard?.();
+    } finally {
+      setDiscarding(false);
+    }
+  };
+  // Discarding is offered only before anything was applied.
+  const discardButton = () => (
+    <Show when={props.onDiscard && !hasSeenApply() && !applyUnconfirmed()}>
+      <Button
+        type="button"
+        variant="ghost"
+        busy={discarding()}
+        disabled={applying() || discarding()}
+        onClick={() => void discard()}
+      >
+        {t("installStore.discard")}
+      </Button>
+    </Show>
+  );
 
   const failed = () => {
     const status = runLatest()?.status;
@@ -490,6 +540,25 @@ export default function InstallExecution(props: Props) {
               </dl>
             </Show>
 
+            <Show when={reviewedPlanRunId()}>
+              <section data-testid="install-plan-resources">
+                <PlanResourceList resources={current().planResources ?? []} sortByAction />
+              </section>
+              <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
+                <h3 id="iv-cost-title">{t("installStore.costTitle")}</h3>
+                <Show when={costState()} fallback={<Spinner size={16} />}>
+                  {(state) => (
+                    <>
+                      <CostSummary state={state()} />
+                      <Show when={costLine(state())}>
+                        {(line) => <p class="iv-muted">{line()}</p>}
+                      </Show>
+                    </>
+                  )}
+                </Show>
+              </section>
+            </Show>
+
             <Show when={current().status === "waiting_approval"}>
               <div class="iv-action-row">
                 <Button
@@ -531,11 +600,12 @@ export default function InstallExecution(props: Props) {
                   variant="primary"
                   size="lg"
                   busy={applying()}
-                  disabled={applyUnconfirmed() || (destructive() && !confirmed())}
+                  disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
                   onClick={() => void install()}
                 >
-                  {t("installStore.install")}
+                  {t("installStore.allowInstall")}
                 </Button>
+                {discardButton()}
                 <Button
                   href={`/runs/${encodeURIComponent(current().id)}`}
                   variant="ghost"
@@ -558,13 +628,16 @@ export default function InstallExecution(props: Props) {
                 <div>
                   <strong>{t("installStore.planBlocked")}</strong>
                   <p>{t("installStore.planBlockedHint")}</p>
-                  <Button
-                    href={`/runs/${encodeURIComponent(current().id)}`}
-                    variant="secondary"
-                    icon={<ExternalLink size={16} />}
-                  >
-                    {t("installStore.runDetails")}
-                  </Button>
+                  <div class="iv-action-row">
+                    <Button
+                      href={`/runs/${encodeURIComponent(current().id)}`}
+                      variant="secondary"
+                      icon={<ExternalLink size={16} />}
+                    >
+                      {t("installStore.runDetails")}
+                    </Button>
+                    {discardButton()}
+                  </div>
                 </div>
               </div>
             </Show>
@@ -680,7 +753,9 @@ export default function InstallExecution(props: Props) {
         }</pre>}</Show>
       </details>
 
-      <Show when={error() && !readinessFailure()}>
+      {/* The keyed value must be the message itself; `error() && …` passed
+          `true` and rendered an empty alert. */}
+      <Show when={!readinessFailure() && error()}>
         {(message) => (
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />

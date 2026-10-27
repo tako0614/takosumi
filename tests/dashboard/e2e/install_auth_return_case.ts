@@ -696,9 +696,14 @@ function registerLiveInstallReturnCase(): void {
         expect(/^hcons_[A-Za-z0-9_-]+$/u.test(transaction), "real one-use consent transaction required").toBe(true);
         await form.getByRole("button", { name: "Continue", exact: true }).click({ noWaitAfter: true });
         await expect.poll(() => page.url() === input.app + input.returnPath, { message: "callback must restore the exact local install context" }).toBe(true);
-        await expect(page.locator(".iv-workbench")).toBeVisible();
-        const fields = page.locator(".iv-form input");
-        for (const [index, value] of [input.name, input.git, input.ref, input.sourcePath, input.modulePath].entries()) await expect(fields.nth(index)).toHaveValue(value);
+        // The returned app page names the app and keeps the exact source and
+        // version under "Source and version"; nothing has been installed.
+        await expect(page.getByTestId("install-start")).toBeVisible();
+        await expect(page.getByTestId("install-app-header").getByRole("heading", { level: 1 })).toHaveText(input.name);
+        await expect(page.getByTestId("install-configuration")).toHaveCount(0);
+        const fields = page.getByTestId("install-start").locator("details.iv-advanced input");
+        await expect(fields).toHaveCount(4);
+        for (const [index, value] of [input.git, input.ref, input.sourcePath, input.modulePath].entries()) await expect(fields.nth(index)).toHaveValue(value);
         await expect(page.getByRole("button", { name: /ワークスペースを切り替え|Switch workspace/u }).first()).toContainText(input.workspace);
         const session = await page.evaluate(async () => {
           const response = await fetch("/api/v1/account/session/me", { credentials: "include", headers: { accept: "application/json" } });

@@ -4,20 +4,48 @@
  * the English side to follow. Keys are namespaced `area.item`; `{param}`
  * placeholders are interpolated by `t()`.
  *
- * Vocabulary contract (the unified verb set — do not reintroduce 公開/反映):
- *   Noun (surface split): ストアの商品はサービス、デプロイされた Capsule は
- *   ワークロード、実体はリソース、利用可能な接続口は Interface、ホームで
- *   起動するものはアプリ。同じパネル内でこれらを混同しない。
- *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → デプロイ済み (active)
+ * Vocabulary contract (TASK-0115; do not reintroduce 公開/反映):
+ *   Noun: Git で定義され、ストアに並び、インストールされる単位はアプリ
+ *   (Capsule)。起動できる Interface は画面、クラウド上の実体はリソース、
+ *   資格情報は接続。
+ *   Verb: インストール (意図) → 内容を確認 (plan) → 許可してインストール
+ *   (apply) → インストール済み。以後は 更新 / 設定を変更 / アンインストール。
+ *   install と app detail の面はこの語彙。まだ移行していない面 (一覧・履歴
+ *   など) に残るサービス / ワークロード / デプロイは、移行時に置き換える。
+ *   同じパネルで新旧の語を混ぜない。
  */
 export const ja = {
-  "installStore.title": "サービスを追加",
-  "installStore.browseTitle": "サービスを探す",
-  "installStore.manual": "Gitリポジトリから追加",
+  "installStore.title": "アプリをインストール",
+  "installStore.browseTitle": "アプリを探す",
+  "installStore.manual": "Gitリポジトリからインストール",
   "installStore.back": "選び直す",
+  "installStore.provenance": "取得元と版",
+  "installStore.startHint": "まだクラウドには何も作りません。押すとGitの版を読み、このアプリが作るもの・必要な接続・設定を確認します。途中でやめることもできます。",
+  "installStore.sourceRefStable": "最新の安定版",
+  "installStore.sourceRefStableHint": "空欄のときは、リリース済みの最新の安定版を使います。",
+  "installStore.sheetTitle": "インストール内容",
+  "installStore.sheetHint": "このアプリがあなたのクラウドに作るものと、必要な接続・設定です。「許可してインストール」を押すまで、クラウドには何も作りません。",
+  "installStore.plannedTitle": "このアプリが作るもの（予定）",
+  "installStore.plannedHint": "接続と設定がそろったら「内容を確認」で、正確な一覧と料金の目安を表示します。",
+  "installStore.plannedEmpty": "事前に数えられるリソースはありません。正確な内容は「内容を確認」で表示します。",
+  "installStore.plannedNotAllowed": "ポリシーで許可されていません",
+  "installStore.nameHint": "ワークスペースの中でこのアプリを見分ける名前です。半角小文字・数字・ハイフンで入力します。",
+  "installStore.connectionReady": "接続済み",
+  "installStore.connectionMissing": "未接続",
+  "installStore.connectionNotAllowed": "この接続は、このアプリのポリシーでは使えません。別の接続を選ぶか、別のアカウントで接続してください。",
+  "installStore.addConnection": "別のアカウントで接続",
+  "installStore.connectionTechnical": "技術情報",
+  "installStore.reviewChanges": "内容を確認",
+  "installStore.discard": "やめる",
+  "installStore.discardUnavailable": "途中のインストールを片付けられませんでした。アプリ一覧で状態を確認してください。",
+  "installStore.allowInstall": "許可してインストール",
+  "installStore.costTitle": "料金の目安",
+  "installStore.costRatedZero": "見積もり額は {amount} です。",
+  "installStore.costNotApplicable": "このワークスペースでは Takosumi は料金を計算していません。作られるリソースには、各クラウドの料金がかかります。",
+  "run.cost.unavailable": "料金の目安を取得できませんでした。料金は不明として扱ってください。",
   "installStore.moduleTitle": "モジュールを選択",
   "installStore.moduleHint":
-    "このリポジトリ版を走査して見つかったモジュールから、追加するものを選びます。末尾は必要なプロバイダーです。",
+    "このリポジトリの版で見つかったモジュールから、インストールするものを選びます。末尾は必要なプロバイダーです。",
   "installStore.moduleOption": "{path} — {providers}",
   "installStore.moduleNoProviders": "プロバイダー不要",
   "installStore.moduleChoose": "モジュールディレクトリ",
@@ -25,7 +53,7 @@ export const ja = {
   "installStore.moduleUnavailable":
     "このリポジトリ版のモジュールを安全に特定できませんでした。",
   "installStore.moduleMissing":
-    "このリポジトリ版には追加できるモジュールがありません。",
+    "このリポジトリの版には、インストールできるモジュールがありません。",
   "installStore.moduleRequirements": "プロバイダーの詳細",
   "installStore.sourceSummary": "構成と接続",
   "installStore.selectedModule": "構成",
@@ -38,10 +66,10 @@ export const ja = {
   "installStore.moduleRequirement":
     "{source}・モジュール {module}{alias} {version}",
   "installStore.stepReview": "確認",
-  "installStore.name": "サービス名",
-  "installStore.sourceDetails": "取得元の詳細",
+  "installStore.name": "アプリ名",
+  "installStore.sourceDetails": "取得元と版",
   "installStore.sourceUrl": "Git URL",
-  "installStore.sourceRef": "ref（省略可）",
+  "installStore.sourceRef": "版（tag・branch・commit。省略可）",
   "installStore.sourcePath": "リポジトリのサブディレクトリ（省略可）",
   "installStore.modulePath": "モジュールのフォルダ（省略可）",
   "installStore.sourceAuth": "Git接続",
@@ -64,40 +92,39 @@ export const ja = {
   "installStore.closeConnections": "設定に戻る",
   "installStore.advancedSettings": "詳細設定",
   "installStore.appDescription": "必要な設定を選んで、このワークスペースにインストールします。",
-  "installStore.noLaunchUrl": "このアプリには公開された起動URLがありません。アプリの管理画面から状態を確認できます。",
+  "installStore.noLaunchUrl": "このアプリには起動URLがありません。アプリの管理画面から状態を確認できます。",
   "installStore.uninstalling": "アンインストールを予約しました",
   "installStore.uninstalled": "アンインストール済み",
   "installStore.logs": "進捗とログ",
   "installStore.retryInstall": "インストールを再試行",
   "installStore.applyUnconfirmed": "実行結果を確認できませんでした。再実行せず、実行履歴で状態を確認してください。",
-  "installStore.add": "インストール",
-  "installStore.preparing": "追加の準備をしています",
+  "installStore.preparing": "インストールの準備をしています",
   "installStore.preparingFetching":
     "リポジトリを取得しています。初回は1分ほどかかることがあります。",
   "installStore.preparingWorkspace": "選択中のワークスペースを確認しています。",
   "installStore.preparingConnections": "利用できる接続を確認しています。",
   "installStore.preparingSource": "リポジトリの内容を取得しています。",
   "installStore.preparingCompatibility":
-    "この環境で追加できるか確認しています。",
-  "installStore.preparingConfig": "サービスの設定項目を準備しています。",
+    "この環境でインストールできるか確認しています。",
+  "installStore.preparingConfig": "アプリの設定項目を準備しています。",
   "installStore.preparingPlan": "確認用の変更内容を準備しています。",
   "installStore.preparingTimeout":
-    "準備に時間がかかりすぎました。デプロイは開始されていませんが、リポジトリの登録結果を確認できませんでした。登録状況を確認してから再試行してください。",
+    "準備に時間がかかりすぎました。クラウドには何も作っていませんが、リポジトリの登録結果を確認できませんでした。登録状況を確認してから再試行してください。",
   "installStore.sourceRegistrationUnconfirmed":
-    "デプロイは開始されていません。リポジトリの登録結果を確認できませんでした。「追加」をもう一度押すと同じ試行を確認します（リポジトリが重複して登録されることはありません）。",
+    "クラウドには何も作っていません。リポジトリの登録結果を確認できませんでした。「インストール」をもう一度押すと同じ試行を確認します（リポジトリが重複して登録されることはありません）。",
   "installStore.sourceBaselineUnavailable":
-    "デプロイは開始されていません。一時的にリポジトリの一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「追加」を再実行してください。",
+    "クラウドには何も作っていません。一時的にリポジトリの一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「インストール」をもう一度押してください。",
   "installStore.sourceAutoSyncFailed":
-    "ソースの自動更新を有効にできませんでした。再試行すると、このサービスの自動更新を有効にします。",
+    "ソースの自動更新を有効にできませんでした。再試行すると、このアプリの自動更新を有効にします。",
   "installStore.providerHint":
     "選択したプロバイダー / モジュールに必要なホスト / アカウントだけを選びます。",
   "installStore.chooseConnection": "ホスト / アカウントを選択",
   "installStore.destination": "ホスト / アカウント",
   "installStore.destinationSummary": "ホスト / アカウント: {destination}",
   "installStore.providerModule": "プロバイダー / モジュール",
-  "installStore.connect": "接続",
+  "installStore.connect": "接続する",
   "installStore.continue": "続ける",
-  "installStore.setupTitle": "サービスを設定",
+  "installStore.setupTitle": "設定",
   "installStore.sourceBuildTitle": "リポジトリのビルド手順",
   "installStore.sourceBuildHint":
     "変更の確認を始める前に、認証情報を使わないコマンドと生成されるパスを確認してください。",
@@ -105,18 +132,18 @@ export const ja = {
   "installStore.sourceBuildWorkingDirectory": "作業ディレクトリ",
   "installStore.sourceBuildSourceRoot": "リポジトリのルート",
   "installStore.sourceBuildOutputs": "生成されるパス",
-  "installStore.setupUnavailableTitle": "サービスの設定を表示できません",
+  "installStore.setupUnavailableTitle": "アプリの設定を表示できません",
   "installStore.secretSetupUnavailableTitle": "シークレットを設定できません",
   "installStore.optionalFeatures": "オプション機能",
   "installStore.sourceBuildArguments": "コマンドの引数",
-  "installStore.setupInvalid": "サービスの設定定義が無効です。",
+  "installStore.setupInvalid": "アプリの設定定義が無効です。",
   "installStore.setupRequired": "{label}を入力してください。",
   "installStore.secretUnavailable":
     "このシークレットは接続として設定してください。",
   "installStore.reviewing": "変更内容を確認しています",
-  "installStore.reviewingHint": "デプロイする前に変更内容を確認しています。",
-  "installStore.reviewTitle": "インストール内容の確認",
-  "installStore.reviewHint": "Takosumiが行う変更です。",
+  "installStore.reviewingHint": "インストールする前に変更内容を確認しています。",
+  "installStore.reviewTitle": "このアプリがあなたのクラウドに作るもの",
+  "installStore.reviewHint": "内容を確かめたら「許可してインストール」で適用します。それまでクラウドには何も作りません。",
   "installStore.reviewReady": "確認できます",
   "installStore.changes": "変更数",
   "installStore.createCount": "作成",
@@ -131,34 +158,34 @@ export const ja = {
   "installStore.runDetails": "技術的な詳細",
   "installStore.installing": "インストール中",
   "installStore.installingHint": "バックグラウンドでインストールを続けます。後から進捗を確認できます。",
-  "installStore.planBlocked": "この変更はデプロイできません",
+  "installStore.planBlocked": "この内容はインストールできません",
   "installStore.planBlockedHint":
     "ポリシーまたは変更内容の詳細を確認してください。",
   "installStore.readinessFailed":
-    "サービスの公開状態を確認できませんでした。技術的な詳細を確認してください。",
+    "アプリの起動準備を確認できませんでした。技術的な詳細を確認してください。",
   "installStore.activationFailed":
-    "サービスの公開処理に失敗しました。技術的な詳細を確認してください。",
-  "installStore.finalizing": "サービスを準備しています",
+    "アプリの起動準備に失敗しました。技術的な詳細を確認してください。",
+  "installStore.finalizing": "アプリを準備しています",
   "installStore.finalizingHint":
-    "サービスを開くためのリンクが利用可能になるまで待っています。",
+    "アプリを開くためのリンクが使えるようになるまで待っています。",
   "installStore.launchNotReady":
-    "サービスは適用されましたが、起動リンクをまだ確認できません。再確認するか、サービスの詳細を開いてください。",
+    "アプリは適用されましたが、起動リンクをまだ確認できません。再確認するか、アプリの管理画面を開いてください。",
   "installStore.runFailed": "インストールを完了できませんでした",
   "installStore.restartWithLatestSource": "最新のソースでやり直す",
   "installStore.restartConfirmTitle": "最新のソースで最初からやり直しますか？",
   "installStore.restartConfirmMessage":
-    "未適用のサービスを破棄し、同じ名前でリポジトリを取得し直します。失敗した変更の確認はデプロイ履歴に残ります。",
+    "未適用のアプリを破棄し、同じ名前でリポジトリを取得し直します。失敗した変更の確認は履歴に残ります。",
   "installStore.restartUnavailable":
-    "未適用のサービスを安全に破棄できなかったため、最初からやり直せませんでした。技術的な詳細を確認してください。",
+    "未適用のアプリを安全に破棄できなかったため、最初からやり直せませんでした。技術的な詳細を確認してください。",
   "installStore.doneTitle": "インストール完了",
-  "installStore.open": "サービスを開く",
-  "installStore.chooseAnother": "別のサービスを追加",
+  "installStore.open": "開く",
+  "installStore.chooseAnother": "別のアプリを探す",
   "installStore.invalidSource": "有効なhttpsのGit URLを入力してください。",
   "installStore.invalidName":
-    "サービス名は半角小文字・数字・ハイフンで入力してください。",
+    "アプリ名は半角小文字・数字・ハイフンで入力してください。",
   "installStore.planMissing": "変更の確認を開始できたか確認できませんでした。",
   "installStore.listingUnavailable":
-    "このサービスをストアから取得できませんでした。",
+    "このアプリをストアから取得できませんでした。",
   // --- common -------------------------------------------------------------
   "common.loading": "読み込み中…",
   "common.retry": "再試行",
@@ -321,15 +348,15 @@ export const ja = {
   "auth.sessionMaintenanceTitle": "ダッシュボードは一時的に利用できません",
   "auth.sessionMaintenanceBody":
     "メンテナンス中です。しばらくしてからもう一度お試しください。",
-  "auth.installContextAria": "サインイン後に続行するサービス",
-  "auth.installContextKicker": "追加するサービス",
+  "auth.installContextAria": "サインイン後に続けるアプリ",
+  "auth.installContextKicker": "インストールするアプリ",
   "auth.installSignInTitle": "サインインして続ける",
   "auth.installSignInSub":
-    "サインイン後、{name} の追加画面に戻ります。まだ追加はされません。",
+    "サインイン後、{name} のインストール画面に戻ります。サインインしただけではインストールされません。",
   "auth.installContextTitle": "サインイン後に続行します",
   "auth.installContextRef": "バージョン {ref}",
   "auth.installContextDefaultRef": "既定のバージョン",
-  "auth.installContextRootPath": "フォルダは追加時に調べます",
+  "auth.installContextRootPath": "フォルダはインストール時に調べます",
   "auth.termsPrefix": "続行することで",
   "auth.termsOfService": "利用規約",
   "auth.and": "と",
@@ -657,16 +684,16 @@ export const ja = {
   "app.setupIncomplete.openInitialReview": "初回導入の確認を開く",
   "app.setupIncomplete.loadingInitialReview": "初回導入の確認を探しています…",
   "app.setupIncomplete.initialReviewUnavailable": "取得できる記録から最初の変更の確認を特定できません。元の追加リンクがあれば開き直し、なければ運営者に問い合わせてください。更新の確認で代わりにしないでください。",
-  "installStore.recoveryUnverified": "追加の状況を確認できません",
-  "installStore.recoveryUnverifiedHint": "元の追加がまだ進行中の可能性があります。もう一度追加する前に状況を再取得するか、デプロイ履歴を確認してください。",
-  "installStore.recoveryContinue": "追加の準備を続けられます",
-  "installStore.recoveryContinueHint": "続けると、確認用の変更内容を準備するだけです。デプロイはまだ行いません。",
+  "installStore.recoveryUnverified": "インストールの状況を確認できません",
+  "installStore.recoveryUnverifiedHint": "元のインストールがまだ進行中の可能性があります。もう一度インストールする前に状況を再取得するか、履歴を確認してください。",
+  "installStore.recoveryContinue": "インストールの準備を続けられます",
+  "installStore.recoveryContinueHint": "続けると、確認用の変更内容を準備するだけです。まだ適用はしません。",
   "installStore.recoveryReview": "最初の変更を確認できます",
-  "installStore.recoveryReviewHint": "最初の変更の確認を開いて内容を確かめてください。デプロイは別の操作で行います。",
-  "installStore.recoveryFailed": "追加の準備は停止しました",
-  "installStore.recoveryFailedHint": "この記録から開ける変更の確認はありません。途中の準備が取り消されたとは限りません。もう一度追加する前にワークロードを確認するか、運営者に相談してください。",
-  "installStore.recoveryFailedRun": "追加の準備は停止しました。変更の確認を開けます",
-  "installStore.recoveryFailedRunHint": "記録された変更の確認を開いて状況を確かめ、再試行する場合は明示的に選んでください。自動で再試行やデプロイはしません。",
+  "installStore.recoveryReviewHint": "最初の変更の確認を開いて内容を確かめてください。適用は別の操作で行います。",
+  "installStore.recoveryFailed": "インストールの準備は停止しました",
+  "installStore.recoveryFailedHint": "この記録から開ける変更の確認はありません。途中の準備が取り消されたとは限りません。もう一度インストールする前にアプリ一覧を確認するか、運営者に相談してください。",
+  "installStore.recoveryFailedRun": "インストールの準備は停止しました。変更の確認を開けます",
+  "installStore.recoveryFailedRunHint": "記録された変更の確認を開いて状況を確かめ、再試行する場合は明示的に選んでください。自動で再試行や適用はしません。",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "変更の確認",

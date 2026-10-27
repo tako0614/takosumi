@@ -14,6 +14,24 @@ const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
   "utf8",
 );
+// The plan resource list and the cost panel are shared components RunView
+// renders; their invariants are asserted where the code now lives.
+const planResourceListSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/components/run/PlanResourceList.tsx"),
+  "utf8",
+);
+const planResourcesSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/run-plan-resources.ts"),
+  "utf8",
+);
+const costSummarySource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/components/run/CostSummary.tsx"),
+  "utf8",
+);
+const runCostSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/run-cost.ts"),
+  "utf8",
+);
 
 describe("Run review ProviderConnection evidence", () => {
   test("keeps public provider resolution fields on the dashboard Run shape", () => {
@@ -64,20 +82,25 @@ describe("Run review ProviderConnection evidence", () => {
     expect(controlApiSource).toContain(
       "readonly planResources?: readonly RunPlanResource[]",
     );
-    expect(runViewSource).toContain("PlanResourceReview");
-    expect(runViewSource).toContain("PLAN_RESOURCE_REVIEW_LIMIT");
-    expect(runViewSource).toContain("runLatest()?.planResources ?? []");
-    expect(runViewSource).toContain("planResourceDisplayLabel");
-    expect(runViewSource).toContain("planResourceActionLabel");
-    expect(runViewSource).toContain('t("run.resources.title")');
-    expect(runViewSource).toContain('t("run.resources.identifiers")');
     expect(runViewSource).toContain(
-      "<PlanResourceReview resources={planResources()} />",
+      'import PlanResourceList from "../../components/run/PlanResourceList.tsx"',
+    );
+    expect(runViewSource).toContain("runLatest()?.planResources ?? []");
+    expect(runViewSource).toContain(
+      "<PlanResourceList resources={planResources()} />",
+    );
+    expect(planResourceListSource).toContain("PLAN_RESOURCE_REVIEW_LIMIT");
+    expect(planResourceListSource).toContain("planResourceDisplayLabel");
+    expect(planResourceListSource).toContain("planResourceActionLabel");
+    expect(planResourceListSource).toContain('t("run.resources.title")');
+    expect(planResourceListSource).toContain('t("run.resources.identifiers")');
+    expect(planResourcesSource).toContain(
+      "export const PLAN_RESOURCE_REVIEW_LIMIT = 25;",
     );
     // The per-resource change list is surfaced by default (right after the
     // change-count strip), NOT buried inside the folded "Reference info"
     // expert details. It must appear before that expert-details summary.
-    expect(runViewSource.indexOf("<PlanResourceReview")).toBeLessThan(
+    expect(runViewSource.indexOf("<PlanResourceList")).toBeLessThan(
       runViewSource.indexOf('summary>{t("run.details.title")}</summary>'),
     );
     expect(en["run.resources.title"]).toBe("Planned changes");
@@ -86,8 +109,10 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.resources.kicker"]).toBe("確認");
     expect(en["run.resources.identifiers"]).toBe("Reference IDs");
     expect(ja["run.resources.identifiers"]).toBe("参照 ID");
-    expect(runViewSource).not.toContain("change.before");
-    expect(runViewSource).not.toContain("change.after");
+    for (const source of [runViewSource, planResourceListSource]) {
+      expect(source).not.toContain("change.before");
+      expect(source).not.toContain("change.after");
+    }
   });
 
   test("keeps run identifiers and raw audit detail nested under support details", () => {
@@ -128,21 +153,38 @@ describe("Run review ProviderConnection evidence", () => {
   });
 
   test("does not infer host extension behavior from error-code prefixes", () => {
-    expect(runViewSource).not.toContain("isBillingActionRequiredRun");
-    expect(runViewSource).not.toContain('startsWith("billing_")');
-    expect(runViewSource).not.toContain("billingActionRequired");
-    expect(runViewSource).toContain("cost().blocked");
-    expect(runViewSource).toContain('"billing.commercial.v1"');
+    for (const source of [runViewSource, costSummarySource, runCostSource]) {
+      expect(source).not.toContain("isBillingActionRequiredRun");
+      expect(source).not.toContain('startsWith("billing_")');
+      expect(source).not.toContain("billingActionRequired");
+    }
+    // The blocked gate reads only the structured `blocked` decision.
+    expect(costSummarySource).toContain("cost()?.blocked === true");
+    expect(runViewSource).toContain(
+      'return read?.status === "loaded" && read.cost.blocked;',
+    );
+    expect(costSummarySource).toContain('"billing.commercial.v1"');
   });
 
   test("shows unrated showback without presenting it as a free zero estimate", () => {
     expect(controlApiSource).toContain(
       'readonly ratingStatus: "not_applicable" | "rated" | "unrated"',
     );
-    expect(runViewSource).toContain('cost.ratingStatus === "unrated"');
-    expect(runViewSource).toContain('t("run.cost.unrated")');
+    expect(runCostSource).toContain('cost.ratingStatus === "unrated"');
+    expect(costSummarySource).toContain('t("run.cost.unrated")');
     expect(en["run.cost.unrated"]).toContain("no price policy");
     expect(ja["run.cost.unrated"]).toContain("価格ポリシー");
+  });
+
+  test("shows a failed cost read as an unknown cost instead of hiding it", () => {
+    // The read keeps failure as its own state (never `undefined` = "no cost")
+    // and the summary renders an explicit unavailable line for it.
+    expect(runViewSource).toContain("readRunCost(() => getRunCostInfo(id))");
+    expect(runViewSource).toContain("runCostDisplayState(read)");
+    expect(runViewSource).toContain("<CostSummary state={state()} />");
+    expect(runViewSource).not.toContain("hasCostToShow");
+    expect(runCostSource).toContain('return { status: "unavailable" };');
+    expect(costSummarySource).toContain('t("run.cost.unavailable")');
   });
 
   test("classifies stale connected-account verification failures as a re-review action", () => {
@@ -243,12 +285,13 @@ describe("Run review ProviderConnection evidence", () => {
   });
 
   test("gates commercial recovery behind the generic capability surface", () => {
-    expect(runViewSource).toContain("hasPlatformExtensionCapability");
-    expect(runViewSource).toContain('"billing.commercial.v1"');
-    expect(runViewSource).toContain('href="/settings/billing"');
+    expect(costSummarySource).toContain("hasPlatformExtensionCapability");
+    expect(costSummarySource).toContain('"billing.commercial.v1"');
+    expect(costSummarySource).toContain('href="/settings/billing"');
+    expect(costSummarySource).not.toContain('href="/billing"');
     expect(runViewSource).not.toContain('href="/billing"');
-    expect(runViewSource).toContain('"run.cost.billingCta"');
-    expect(runViewSource).toContain('"run.cost.operatorHelp"');
+    expect(costSummarySource).toContain('"run.cost.billingCta"');
+    expect(costSummarySource).toContain('"run.cost.operatorHelp"');
     expect(en["run.cost.billingCta"]).toContain("billing");
     expect(en["run.cost.operatorHelp"]).toContain("workspace");
     expect(ja["run.cost.billingCta"]).toContain("お支払い");

@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { canAutoInstallRun, capsuleInstallState, installCapsuleId, installCapsuleSearch, latestInstallRun } from "../../../../../dashboard/src/views/new/install-lifecycle.ts";
+import { capsuleInstallState, installCapsuleId, installCapsuleSearch, latestInstallRun } from "../../../../../dashboard/src/views/new/install-lifecycle.ts";
 import type { Capsule, Run } from "../../../../../dashboard/src/lib/control-api.ts";
 const capsule = { id: "cap_test", workspaceId: "ws_a", status: "pending" } as Capsule;
 const plan = { id: "plan_a", type: "plan", workspaceId: "ws_a", capsuleId: "cap_test", status: "succeeded", policyStatus: "pass", summary: { add: 1, change: 0, destroy: 0 }, createdAt: "2026-10-27T01:00:00Z" } as Run;
@@ -20,9 +21,15 @@ test("scheduled uninstall is not completed deletion", () => {
   expect(capsuleInstallState(capsule, { ...plan, status: "failed" })).toBe("failed");
   expect(capsuleInstallState(capsule, { ...plan, status: "running" })).toBe("installing");
 });
-test("auto-install refuses missing counts, approval, warning and destructive Plans", () => {
-  expect(canAutoInstallRun(plan)).toBe(true);
-  for (const r of [{ ...plan, requiresApproval: true }, { ...plan, status: "waiting_approval" }, { ...plan, policyStatus: "warn" }, { ...plan, type: "destroy_plan" }, { ...plan, summary: {} }, { ...plan, summary: undefined }, { ...plan, summary: { add: -1, change: 0, destroy: 0 } }, { ...plan, summary: { add: 0, change: 0, destroy: 1 } }]) expect(canAutoInstallRun(r as Run)).toBe(false);
+test("Apply starts only from the explicit Allow and install click", () => {
+  // TASK-0115: nothing applies automatically, so no consent can be replayed
+  // from a reload, a URL, or a stale in-memory flag.
+  const source = readFileSync(new URL("../../../../../dashboard/src/views/new/InstallExecution.tsx", import.meta.url), "utf8");
+  expect(source).not.toContain("installRequested");
+  expect(source).not.toContain("canAutoInstallRun");
+  const installCalls = [...source.matchAll(/void install\(\)/gu)];
+  expect(installCalls).toHaveLength(1);
+  expect(source).toContain("onClick={() => void install()}");
 });
 
 test("a later failed update or disabled app keeps installed management actions", () => {

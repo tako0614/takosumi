@@ -18,6 +18,10 @@ const connectionsTabSource = readFileSync(
   resolve(viewRoot, "workspace/tabs/ConnectionsTab.tsx"),
   "utf8",
 );
+const connectionCreateFormSource = readFileSync(
+  resolve(viewRoot, "workspace/connections/ConnectionCreateForm.tsx"),
+  "utf8",
+);
 const backupsTabSource = readFileSync(
   resolve(viewRoot, "workspace/tabs/BackupsTab.tsx"),
   "utf8",
@@ -86,6 +90,8 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).not.toContain("{connection.providerSource}");
     expect(connectionsTabSource).not.toContain("connectionEnvNames");
     expect(connectionsTabSource).not.toContain("c.envNames.join");
+    expect(connectionCreateFormSource).not.toContain("managedProvider");
+    expect(connectionCreateFormSource).not.toContain("connectionEnvNames");
   });
 
   test("keeps connection creation behind an explicit action", () => {
@@ -96,10 +102,18 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).toContain('t("conn.empty.title")');
     expect(connectionsTabSource).toContain('t("conn.empty.message")');
     expect(connectionsTabSource).toContain('t("conn.add.open")');
-    expect(connectionsTabSource).toContain('t("conn.add.close")');
     expect(connectionsTabSource).toContain(
       "const shouldShowCreateForm = () => createFormOpen();",
     );
+    // The extracted form renders only while the tab holds it open, and its
+    // close action comes from the tab (offered once a connection exists).
+    expect(connectionsTabSource).toContain("open={shouldShowCreateForm()}");
+    expect(connectionsTabSource).toContain(
+      "hasProviderConnections() ? () => setCreateFormOpen(false) : undefined",
+    );
+    expect(connectionCreateFormSource).toContain("<Show when={props.open ?? true}>");
+    expect(connectionCreateFormSource).toContain("<Show when={props.onCancel}>");
+    expect(connectionCreateFormSource).toContain('t("conn.add.close")');
     expect(en["conn.add.open"]).toBe("Connect account");
     expect(ja["conn.add.open"]).toBe("アカウントを接続");
     expect(en["conn.empty.title"]).toBe(

@@ -23,7 +23,7 @@ describe("service add install posture", () => {
     expect(workloadListViewSource).not.toContain("createService(");
     expect(installViewSource).toContain("StoreBrowser");
     expect(installViewSource).toContain("prepareInstall");
-    expect(en["installStore.browseTitle"]).toBe("Find a service");
-    expect(ja["installStore.browseTitle"]).toBe("サービスを探す");
+    expect(en["installStore.browseTitle"]).toBe("Find apps");
+    expect(ja["installStore.browseTitle"]).toBe("アプリを探す");
   });
 });

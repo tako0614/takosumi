@@ -2690,6 +2690,19 @@ export async function patchSource(
   return decodeSourceEnvelope(body);
 }
 
+/**
+ * Deletes a Source. The server refuses a Source that a live Capsule still
+ * references and requires Workspace management authority, so callers treat a
+ * refusal as "kept", never as a failed install.
+ */
+export async function deleteSource(sourceId: string): Promise<Source> {
+  const body = await controlFetch<unknown>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}`,
+    { method: "DELETE" },
+  );
+  return decodeSourceEnvelope(body);
+}
+
 function sourceIdentityMatches(
   source: Source,
   capsule: Capsule,
