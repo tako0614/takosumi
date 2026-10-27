@@ -162,7 +162,6 @@ export const en: Record<keyof typeof ja, string> = {
   "common.cancel": "Cancel",
   "common.save": "Save",
   "common.saving": "Saving…",
-  "common.delete": "Delete",
   "common.none": "None",
   "common.unknown": "Unknown",
   "common.dismiss": "Dismiss",
@@ -181,7 +180,6 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.home": "Home",
   "nav.store": "Store",
   "nav.app": "App",
-  "nav.runs": "History",
   "nav.connections": "Connections",
   "nav.primary": "Main menu",
   "nav.notifications": "Notifications",
@@ -200,7 +198,6 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.dark": "Dark",
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
-  "workspace.selectMessage": "Choose which workspace this belongs to.",
   "workspace.defaultName": "Personal",
   "workspace.start.aria": "Start a workspace",
   "workspace.start.kicker": "Getting started",
@@ -385,7 +382,6 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.state.installing": "Installing",
   "apps.state.uninstalling": "Uninstall scheduled",
   "apps.state.stopped": "Stopped",
-  "apps.add": "Add service",
   "apps.sectionYours": "Your apps",
   "apps.manage": "Manage",
   "apps.manageAria": "Manage {name}",
@@ -400,7 +396,6 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- Installed app page -----------------------------------------------------
   "app.notFound": "App not found",
-  "app.backToList": "Back to list",
   "app.loadFailedTitle": "Couldn't load this app",
   "app.refreshFailed":
     "Couldn't fetch the latest state — showing the last loaded version.",

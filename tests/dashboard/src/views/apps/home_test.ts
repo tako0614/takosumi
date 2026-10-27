@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../../../../../dashboard/src");
 const home = readFileSync(resolve(root, "views/apps/AppListView.tsx"), "utf8");
-const workloads = readFileSync(resolve(root, "views/apps/WorkloadListView.tsx"), "utf8");
+const router = readFileSync(resolve(root, "index.tsx"), "utf8");
 
 describe("Home", () => {
   test("lists every installed app, not only apps with a screen", () => {
@@ -57,7 +57,11 @@ describe("Home", () => {
     expect(home).toContain("refetchUiSurfaces()");
   });
 
-  test("the old all-apps list forwards to Home", () => {
-    expect(workloads).toContain('<Navigate href="/" />');
+  test("Home is the all-apps list: /workloads redirects there, the app page stays", () => {
+    expect(router).not.toContain("WorkloadListView");
+    expect(router).toContain('path="/" component={AppListView}');
+    expect(router).toContain('path="/workloads" component={() => <Navigate href="/" />}');
+    expect(router).toContain('path="/workloads/:id" component={WorkloadDetailView}');
+    expect(router).toContain('path="/workloads/:id/:tab" component={WorkloadDetailView}');
   });
 });

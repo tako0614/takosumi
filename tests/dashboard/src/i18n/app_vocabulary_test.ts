@@ -25,14 +25,6 @@ type Key = keyof typeof ja;
 const NAMESPACES =
   /^(app|apps|installStore|run|runError|runGroup|op|new|controlError|error|status\.run|status\.capsule|workloads?|services?|capsules?)\./u;
 
-/**
- * Keys these surfaces render but another owner is rewriting (PR #621):
- * apps.add (notifications and activity empty states) and the no-workspace
- * start panel. Remove each exception once that change has landed.
- */
-const OTHER_OWNER_KEYS = new Set<string>(["apps.add"]);
-const OTHER_OWNER_PREFIXES = ["workspace.start."];
-
 // 非公開 (private) and 公開リポジトリ (public repository) are ordinary words.
 const BANNED_JA = /サービス|ワークロード|デプロイ|(?<!非)公開(?!リポジトリ)|反映|ワークスペース/u;
 const BANNED_EN = /\b(?:services?|workloads?|deploy(?:s|ed|ing|ment)?)\b/iu;
@@ -65,9 +57,6 @@ const SURFACE_FILES = [
 ];
 const surfaceSource = SURFACE_FILES.map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
 
-const exempt = (key: string) =>
-  OTHER_OWNER_KEYS.has(key) || OTHER_OWNER_PREFIXES.some((prefix) => key.startsWith(prefix));
-
 function offenders(keys: readonly Key[]): readonly { key: Key; ja?: string; en?: string }[] {
   return keys.flatMap((key) => {
     const badJa = BANNED_JA.test(ja[key]);
@@ -79,10 +68,10 @@ function offenders(keys: readonly Key[]): readonly { key: Key; ja?: string; en?:
 }
 
 const namespaceKeys = (Object.keys(ja) as Key[]).filter(
-  (key) => NAMESPACES.test(key) && !exempt(key),
+  (key) => NAMESPACES.test(key),
 );
 const renderedKeys = (Object.keys(ja) as Key[]).filter(
-  (key) => surfaceSource.includes(`"${key}"`) && !exempt(key),
+  (key) => surfaceSource.includes(`"${key}"`),
 );
 
 describe("app, install and run vocabulary", () => {

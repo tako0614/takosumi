@@ -174,7 +174,6 @@ export const ja = {
   "common.cancel": "キャンセル",
   "common.save": "保存",
   "common.saving": "保存中…",
-  "common.delete": "削除",
   "common.none": "なし",
   "common.unknown": "不明",
   "common.dismiss": "閉じる",
@@ -194,7 +193,6 @@ export const ja = {
   "nav.home": "ホーム",
   "nav.store": "ストア",
   "nav.app": "アプリ",
-  "nav.runs": "履歴",
   "nav.connections": "接続",
   "nav.primary": "主なメニュー",
   "nav.notifications": "通知",
@@ -213,7 +211,6 @@ export const ja = {
   "theme.dark": "ダーク",
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
-  "workspace.selectMessage": "この作業をどのスペースで行うか選びます。",
   "workspace.defaultName": "個人",
   "workspace.start.aria": "スペースを始める",
   "workspace.start.kicker": "はじめに",
@@ -394,7 +391,6 @@ export const ja = {
   "apps.state.installing": "インストール中",
   "apps.state.uninstalling": "アンインストール予定",
   "apps.state.stopped": "停止中",
-  "apps.add": "サービスを追加",
   "apps.sectionYours": "あなたのアプリ",
   "apps.manage": "管理",
   "apps.manageAria": "{name} を管理",
@@ -409,7 +405,6 @@ export const ja = {
 
   // --- Installed app page -----------------------------------------------------
   "app.notFound": "アプリが見つかりません",
-  "app.backToList": "一覧へ",
   "app.loadFailedTitle": "アプリを読み込めませんでした",
   "app.refreshFailed":
     "最新の状態を取得できませんでした。表示は最後に取得した内容です。",
