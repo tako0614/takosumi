@@ -26,6 +26,7 @@ import {
 import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import { assertExpectedResponseUrl } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
 import { registerInstallAuthReturnCase } from "./install_auth_return_case.ts";
+import { registerNavigationAccountCases } from "./navigation_account_case.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -42,6 +43,7 @@ if (rawMode !== "portable" && rawMode !== "live" && rawMode !== "public-live") {
 }
 const mode: DashboardE2EMode = rawMode;
 registerInstallAuthReturnCase(mode);
+registerNavigationAccountCases(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
@@ -352,112 +354,8 @@ async function expectInsideViewport(
 
 function workspaceTrigger(page: Page) {
   return page
-    .getByRole("button", { name: /ワークスペースを切り替え|Switch workspace/u })
+    .getByRole("button", { name: /スペースを切り替え|Switch space/u })
     .first();
-}
-
-const PORTABLE_HOSTED_RESOURCE_PATH =
-  "/extensions/hosted-resources/inventory";
-
-const PORTABLE_EMPTY_PLATFORM_CONTRIBUTIONS = {
-  kind: "takosumi.platform-extension-contributions@v1",
-  generatedAt: "2026-08-16T00:00:00.000Z",
-  contributions: [],
-};
-
-function portableHostedResourceCatalog(
-  contribution: Record<string, unknown> = {},
-): Record<string, unknown> {
-  const extensions = [
-    {
-      basePath: "/extensions/hosted-resources",
-      configured: true,
-      capabilities: ["hosted-resource.inventory.v1"],
-      authMode: "platform",
-      requiredScopes: ["resources:read"],
-      selfServicePatScopes: ["resources:read"],
-      workspaceContext: "query-required",
-      contributions: [
-        {
-          id: "hosted-resources",
-          slot: "workspace.hosted-resources",
-          href: PORTABLE_HOSTED_RESOURCE_PATH,
-          presentation: "native",
-          label: "Hosted resources",
-          ...contribution,
-        },
-      ],
-    },
-  ];
-  return {
-    kind: "takosumi.platform-extensions@v1",
-    generatedAt: "2026-08-16T00:00:00.000Z",
-    serviceUrl: "https://operator.example",
-    extensions,
-    summary: { total: 1, configured: 1, missing: 0 },
-  };
-}
-
-function portableHostedResourceInventory(workspaceId: string) {
-  return {
-    kind: "takosumi.hosted-resource-inventory@v1",
-    workspaceId,
-    items: [
-      {
-        apiVersion: "takosumi.dev/v1alpha1",
-        kind: "HostedResource",
-        name: "portable-sponsorship",
-        formRef: {
-          apiVersion: "takosumi.dev/v1alpha1",
-          kind: "Form",
-          definitionVersion: "v1",
-          schemaDigest: `sha256:${"4".repeat(64)}`,
-        },
-        uid: "uid_portable_sponsorship",
-        generation: "1",
-        revision: "1",
-        conditions: [
-          {
-            type: "Ready",
-            status: "True",
-            reason: "Ready",
-            lastTransitionTime: "2026-08-16T00:00:00.000Z",
-          },
-        ],
-        workloadId: "cap_repository_office",
-      },
-    ],
-  };
-}
-
-async function installHostedResourceBrowserFixture(
-  page: Page,
-  catalog: unknown,
-): Promise<{ readonly inventoryRequests: string[] }> {
-  const inventoryRequests: string[] = [];
-  await page.route("**/__takosumi/platform/extensions", async (route) => {
-    await route.fulfill({ json: catalog });
-  });
-  await page.route(
-    "**/__takosumi/platform/contributions",
-    async (route) => {
-      await route.fulfill({ json: PORTABLE_EMPTY_PLATFORM_CONTRIBUTIONS });
-    },
-  );
-  await page.route("**/extensions/hosted-resources/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (request.method() === "GET") {
-      inventoryRequests.push(`${url.pathname}${url.search}`);
-    }
-    if (url.pathname !== PORTABLE_HOSTED_RESOURCE_PATH) {
-      await route.fallback();
-      return;
-    }
-    const workspaceId = url.searchParams.get("workspaceId") ?? "";
-    await route.fulfill({ json: portableHostedResourceInventory(workspaceId) });
-  });
-  return { inventoryRequests };
 }
 
 const SOURCE_ARCHIVE_DIGEST = `sha256:${"1".repeat(64)}`;
@@ -1269,9 +1167,9 @@ test.describe("Takosumi dashboard browser surface", () => {
     await readsStarted;
     await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
 
-    await page.locator('a[href="/settings"]').first().click();
-    await expect(page).toHaveURL(/\/settings$/u);
-    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await page.locator('a[href="/account"]').first().click();
+    await expect(page).toHaveURL(/\/account$/u);
+    await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
     await failedReads;
     releaseInterceptions();
     expect([...failedReadErrors.keys()].sort()).toEqual(
@@ -1716,173 +1614,6 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("hides hosted-resource management when no native contribution is present", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the contribution fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const fixture = await installHostedResourceBrowserFixture(page, {
-      kind: "takosumi.platform-extensions@v1",
-      generatedAt: "2026-08-16T00:00:00.000Z",
-      serviceUrl: "https://operator.example",
-      extensions: [],
-      summary: { total: 0, configured: 0, missing: 0 },
-    });
-
-    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
-    await expect(
-      page.getByRole("heading", { name: /管理ツール|Manage/u }),
-    ).toBeVisible();
-    await expect(
-      page.locator('a[href="/settings/manage/hosted-resources"]'),
-    ).toHaveCount(0);
-
-    await page.goto("/settings/manage/hosted-resources", {
-      waitUntil: "domcontentloaded",
-    });
-    await expect(
-      page.getByRole("heading", {
-        name: /ホスト済みリソースは利用できません|Hosted resources are unavailable/u,
-      }),
-    ).toBeVisible();
-    await page.waitForLoadState("networkidle");
-    expect(fixture.inventoryRequests).toEqual([]);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("opens a native hosted-resource contribution in the current Workspace", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the contribution fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const fixture = await installHostedResourceBrowserFixture(
-      page,
-      portableHostedResourceCatalog(),
-    );
-
-    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
-    const manageHeading = page.getByRole("heading", {
-      name: /管理ツール|Manage/u,
-    });
-    await expect(manageHeading).toBeVisible();
-    const hostedLink = page.locator(
-      'a[href="/settings/manage/hosted-resources"]',
-    );
-    await expect(hostedLink).toBeVisible();
-
-    const trigger = workspaceTrigger(page);
-    await trigger.click();
-    const menu = page.locator('[role="menu"]:visible').first();
-    await expect(menu).toBeVisible();
-    await menu
-      .getByRole("menuitemradio")
-      .filter({ hasText: expectations.switchWorkspaceName })
-      .first()
-      .click();
-    await expect(trigger).toHaveAttribute(
-      "aria-label",
-      new RegExp(
-        expectations.switchWorkspaceName.replace(
-          /[.*+?^${}()|[\]\\]/gu,
-          "\\$&",
-        ),
-      ),
-    );
-
-    await hostedLink.click();
-    await expect(page).toHaveURL(/\/settings\/manage\/hosted-resources$/u);
-    await expect(
-      page.locator("strong").filter({ hasText: "portable-sponsorship" }),
-    ).toBeVisible();
-    await expect.poll(() => fixture.inventoryRequests.length).toBe(1);
-    expect(fixture.inventoryRequests).toEqual([
-      `${PORTABLE_HOSTED_RESOURCE_PATH}?workspaceId=ws_beta&limit=25`,
-    ]);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("does not advertise malformed hosted-resource contributions", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the contribution fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const fixture = await installHostedResourceBrowserFixture(
-      page,
-      portableHostedResourceCatalog({ label: undefined }),
-    );
-
-    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
-    await expect(
-      page.getByRole("heading", { name: /管理ツール|Manage/u }),
-    ).toBeVisible();
-    await expect(
-      page.locator('a[href="/settings/manage/hosted-resources"]'),
-    ).toHaveCount(0);
-
-    await page.goto("/settings/manage/hosted-resources", {
-      waitUntil: "domcontentloaded",
-    });
-    await expect(
-      page.getByRole("heading", {
-        name: /ホスト済みリソースは利用できません|Hosted resources are unavailable/u,
-      }),
-    ).toBeVisible();
-    await page.waitForLoadState("networkidle");
-    expect(fixture.inventoryRequests).toEqual([]);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("does not advertise non-native hosted-resource contributions", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the contribution fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const fixture = await installHostedResourceBrowserFixture(
-      page,
-      portableHostedResourceCatalog({ presentation: "link" }),
-    );
-
-    await page.goto("/settings/manage", { waitUntil: "domcontentloaded" });
-    await expect(
-      page.getByRole("heading", { name: /管理ツール|Manage/u }),
-    ).toBeVisible();
-    await expect(
-      page.locator('a[href="/settings/manage/hosted-resources"]'),
-    ).toHaveCount(0);
-
-    await page.goto("/settings/manage/hosted-resources", {
-      waitUntil: "domcontentloaded",
-    });
-    await expect(
-      page.getByRole("heading", {
-        name: /ホスト済みリソースは利用できません|Hosted resources are unavailable/u,
-      }),
-    ).toBeVisible();
-    await page.waitForLoadState("networkidle");
-    expect(fixture.inventoryRequests).toEqual([]);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
   test("live probes keep OIDC, unauthenticated API, and SPA documents on one Version", async ({
     page,
   }) => {
@@ -1934,7 +1665,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       error: "invalid_token",
     });
 
-    for (const path of ["/settings", "/workloads", "/advanced/workspace", "/new"]) {
+    for (const path of ["/account", "/connections", "/account/space", "/new"]) {
       await gotoDashboardDocument(page, path);
       await expect(page.locator("body")).not.toContainText("undefined.trim");
     }
@@ -1967,7 +1698,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
   });
 
-  test("keeps the current Workspace name visible on compact widths and disambiguates duplicates", async ({
+  test("keeps the current space name visible on compact widths and disambiguates duplicates", async ({
     page,
   }) => {
     test.skip(
@@ -1981,14 +1712,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     for (const width of [320, 390, 880]) {
       await page.setViewportSize({ width, height: 844 });
       const trigger = workspaceTrigger(page);
-      await expect(trigger.locator(".topbar-workspace-name")).toContainText(
+      await expect(trigger.locator(".space-switcher-name")).toContainText(
         PORTABLE_EXPECTATIONS.workspaceName,
       );
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth - window.innerWidth,
         ),
-        `Workspace chrome must not overflow a ${width}px viewport`,
+        `Space chrome must not overflow a ${width}px viewport`,
       ).toBeLessThanOrEqual(1);
     }
 
@@ -1998,7 +1729,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       await trigger.click();
       const menu = page.locator('[role="menu"]:visible').first();
       await expect(menu).toBeVisible();
-      await expectInsideViewport(page, menu, `Workspace menu at ${width}px`);
+      await expectInsideViewport(page, menu, `Space menu at ${width}px`);
       const duplicates = menu
         .getByRole("menuitemradio")
         .filter({ hasText: PORTABLE_EXPECTATIONS.workspaceName });
@@ -2013,22 +1744,22 @@ test.describe("Takosumi dashboard browser surface", () => {
       ).toBeVisible();
 
       await menu
-        .getByRole("menuitem", { name: /新しいワークスペース|New workspace/u })
+        .getByRole("menuitem", { name: /環境を分ける|Separate an environment/u })
         .click();
       const dialog = page.getByRole("dialog").first();
-      const form = dialog.locator("form.topbar-workspace-create");
+      const form = dialog.locator("form.space-create-form");
       const input = dialog.getByRole("textbox", {
-        name: /用途または名前|Purpose or name/u,
+        name: /環境の名前|Environment name/u,
       });
       await expect(dialog).toBeVisible();
       await expect(form).toBeVisible();
       await expect(input).toBeVisible();
-      await expectInsideViewport(page, form, `Workspace create form at ${width}px`);
-      await expectInsideViewport(page, input, `Workspace create input at ${width}px`);
+      await expectInsideViewport(page, form, `Space create form at ${width}px`);
+      await expectInsideViewport(page, input, `Space create input at ${width}px`);
       await expect(input).toHaveAttribute("required", "");
       await expect(input).toHaveAttribute(
         "aria-describedby",
-        /workspace-switcher-compact-create-name-help/u,
+        /space-switcher-compact-create-name-help/u,
       );
       await dialog
         .getByRole("button", { name: /キャンセル|Cancel/u })
@@ -4183,14 +3914,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     test.skip(mode !== "portable", "blocking a route chunk is portable-only");
     const errors = pageErrors(page);
     let blockedChunkRequests = 0;
-    await page.route("**/assets/GraphView-*.js", (route) => {
+    await page.route("**/assets/AccountView-*.js", (route) => {
       blockedChunkRequests += 1;
       return route.abort();
     });
 
     // A stale chunk reloads once onto the new build; when the chunk is still
     // missing after that, the page-level card appears instead of a blank app.
-    await gotoDashboardDocument(page, "/graph");
+    await gotoDashboardDocument(page, "/account");
     // The first fallback can render while location.reload() is still pending.
     // Observe the second chunk request before checking the final error card.
     await expect.poll(() => blockedChunkRequests).toBeGreaterThanOrEqual(2);
@@ -4246,7 +3977,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       window.dispatchEvent(new Event("takosumi:workspaces-changed")),
     );
     await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(2);
-    await expect(page.locator(".topbar-workspace-error:visible").first()).toBeVisible();
+    await expect(page.locator(".space-switcher-error:visible").first()).toBeVisible();
 
     // The failure is not evidence of "no Workspaces": the selection and the
     // launcher survive instead of resetting to first-Workspace onboarding.
@@ -4255,52 +3986,20 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
-  test("history and the launcher name people, services and state in words", async ({
+  test("notifications and the launcher say the next step and state in words", async ({
     page,
   }) => {
-    test.skip(mode !== "portable", "synthetic history rows are portable-only");
+    test.skip(mode !== "portable", "synthetic launcher rows are portable-only");
     const errors = pageErrors(page);
-    await page.route(
-      (url) => url.pathname === "/api/v1/workspaces/ws_alpha/activity",
-      (route) =>
-      route.fulfill({
-        json: {
-          events: [
-            {
-              id: "act_e2e_applied",
-              workspaceId: "ws_alpha",
-              actorId: "sub_portable_e2e",
-              action: "run.applied",
-              targetType: "run",
-              targetId: "run_e2e_applied",
-              metadata: { capsuleId: "cap_repository_office" },
-              createdAt: "2026-08-01T00:00:03.000Z",
-            },
-          ],
-        },
-      }),
-    );
-    // A fresh session has no stored Workspace yet: the history must still
-    // show the events that arrive once the Workspace is selected (it used to
-    // clear them and say "No activity yet").
-    await gotoDashboardDocument(page, "/activity");
-    await expect(page.locator(".wa-activity-row")).toHaveCount(1);
-    // The event records only ids: the row names the service and reads your
-    // own subject as you instead of `sub_…`.
-    await expect(
-      page.getByText(
-        /Deployed changes to “Repository Office”|「Repository Office」の変更をデプロイしました/u,
-      ),
-    ).toBeVisible();
-    await expect(page.getByText(/^(By You|実行者: あなた)$/u)).toBeVisible();
-    await expect(page.locator(".wa-activity-rowmeta")).not.toContainText(
-      "sub_portable_e2e",
-    );
+    // The run history and activity screens left the UI; their old URLs land
+    // on ホーム.
+    await page.goto("/activity", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/$/u);
 
     // An empty notification feed offers the next step, not just a sentence.
     await gotoDashboardDocument(page, "/notifications");
     await expect(
-      page.getByRole("main").getByRole("link", { name: /^(Add service|サービスを追加)$/u }),
+      page.getByRole("main").getByRole("link", { name: /^(Find apps in the store|ストアでアプリを探す)$/u }),
     ).toBeVisible();
 
     // An available update is said in words on the tile, not only as a dot.
