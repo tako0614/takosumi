@@ -82,7 +82,7 @@ export async function refreshCloudflareOAuthValues(
   // arbitrary destination for the client secret or refresh token.
   let response: Response;
   try {
-    response = await input.fetch(client.tokenUrl ?? TOKEN_URL, { method: "POST", redirect: "error", signal: AbortSignal.timeout(15000),
+    response = await input.fetch(client.tokenUrl ?? TOKEN_URL, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(15000),
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body });
   } catch { throw new CloudflareCredentialError("Cloudflare token refresh could not be completed"); }
   if (!response.ok) {

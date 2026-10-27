@@ -286,7 +286,7 @@ const cloudflareOAuthDriver: CredentialRecipeRuntimeDriver = {
     // OAuth consent determines the available accounts. Never silently select
     // the first account when the token can access several.
     const response = await input.fetch("https://api.cloudflare.com/client/v4/accounts?per_page=2", {
-      headers: { authorization: `Bearer ${input.values.CLOUDFLARE_API_TOKEN}` }, redirect: "error",
+      headers: { authorization: `Bearer ${input.values.CLOUDFLARE_API_TOKEN}` }, redirect: "manual",
     });
     const body: unknown = await response.json().catch(() => null);
     const accounts = body && typeof body === "object" && "result" in body && Array.isArray(body.result) ? body.result : [];
