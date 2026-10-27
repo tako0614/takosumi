@@ -1,10 +1,14 @@
 /**
- * Apps home (`/`) — the Workspace app launcher. Installed state comes from
- * Capsule records, while every visible/openable tile comes from an authorized
- * Capsule-owned `interface.ui.surface` Interface. Store metadata and OpenTofu
- * Outputs are never launcher authorities. The full Capsule list and OpenTofu
- * detail live on the separate `/workloads` page.
+ * Home (`/`) — every installed app, the "keep my apps" overview (TASK-0115).
+ *
+ * Each card shows the app's state in words (needs attention, update
+ * available, installing, uninstall scheduled) and offers "Open" when the app
+ * has a screen. Installed state comes from Capsule records; every Open target
+ * comes from an authorized Capsule-owned `interface.ui.surface` Interface.
+ * Store metadata and OpenTofu Outputs are never launcher authorities. The
+ * card's name opens the app page, where the app is kept.
  */
+import "../app/app-page.css";
 import {
   createEffect,
   createMemo,
@@ -16,7 +20,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Plus, Server, Settings2, Sparkles } from "lucide-solid";
+import { Plus, Search, Sparkles } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { resolveAppIcon } from "../../lib/app-face.ts";
@@ -39,45 +43,36 @@ import {
   type Capsule,
   type Workspace,
 } from "../../lib/control-api.ts";
+import { isVisibleServiceCapsule } from "../../lib/capsules-ui.ts";
+import { type AppState, appState, appStateRank } from "../../lib/app-page.ts";
 import {
-  type AppSurface,
-  effectiveCapsuleStatus,
-  isLauncherServiceCapsule,
-  needsAttention,
-} from "../../lib/capsules-ui.ts";
-import { capsuleStatusLabel } from "../../lib/labels.ts";
-import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
-import { locale, t } from "../../i18n/index.ts";
-import { Button, Toast } from "../../components/ui/index.ts";
+  type AuthorizedUiSurface,
+  listAuthorizedUiSurfaces,
+} from "../../lib/ui-surface-interfaces.ts";
+import { locale, type MessageKey, t } from "../../i18n/index.ts";
+import { Badge, Button, type Tone, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { OpenAppButton } from "../app/app-ui.tsx";
 
-/** One launcher tile: a Takosumi-owned surface belonging to a service. */
-interface AppTile {
+/** One installed app on Home with the screens it may open. */
+interface HomeApp {
   readonly inst: Capsule;
-  readonly surface: AppSurface;
-  readonly key: string;
+  readonly state: AppState;
+  readonly surfaces: readonly AuthorizedUiSurface[];
 }
+
+const STATE_BADGE: Readonly<Partial<Record<AppState, { readonly label: MessageKey; readonly tone: Tone }>>> = {
+  needs_attention: { label: "apps.state.needsAttention", tone: "danger" },
+  update_available: { label: "apps.state.updateAvailable", tone: "info" },
+  installing: { label: "apps.state.installing", tone: "info" },
+  uninstalling: { label: "apps.state.uninstalling", tone: "warn" },
+  stopped: { label: "apps.state.stopped", tone: "muted" },
+};
 
 export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
 }
-
-/** Kind key for the tinted monogram fallback tile (worker/site/storage/…). */
-function kindClass(kind: string | undefined): string {
-  switch (kind) {
-    case "site":
-    case "storage":
-    case "worker":
-      return `av-tile-k-${kind}`;
-    default:
-      return "av-tile-k-default";
-  }
-}
-
-// The monogram fallback (initials on a kind-tinted tile) and the icon
-// resolution both live in lib/app-face.ts + components/AppFace.tsx, so the same
-// service wears the same face here, in the store grid, and in the add flow.
 
 function Inner() {
   const navigate = useNavigate();
@@ -120,10 +115,8 @@ function Inner() {
     }
   });
 
-  // The launcher needs only the Capsule ledger. `listCapsulesCached` follows the
-  // bounded API's nextCursor itself, so the home screen neither waits for the
-  // wider dashboard overview (Activity, StateVersions, InstallConfigs) nor
-  // re-reads its first Capsule page when more than one page exists.
+  // Home needs only the Capsule ledger and the authorized screens.
+  // `listCapsulesCached` follows the bounded API's nextCursor itself.
   const [capsules, { refetch: refetchCapsules }] = createResource(
     workspaceId,
     (id) => listCapsulesCached(id, { includeDestroyed: false }),
@@ -145,58 +138,29 @@ function Inner() {
     workspaceId,
     (id) => listAuthorizedUiSurfaces(id),
   );
-  // Interface discovery can fail independently of the canonical Capsule list.
-  // Keep the established incomplete-list warning and retry without treating a
-  // missing authorization projection as a first-run Workspace.
-  const supplementalFetchError = createMemo(
-    () => uiSurfaces.error as Error | undefined,
-  );
-  const retryUiSurfaces = () => {
-    if (uiSurfaces.error) void refetchUiSurfaces();
-  };
-  const visibleCapsules = createMemo(() =>
-    (capsules.error ? [] : (capsules.latest ?? [])).filter(
-      isLauncherServiceCapsule,
-    ),
-  );
-  // Capsule is the installed-app ledger. Interface is the only launcher/runtime
-  // surface authority; its explicit URL mapping has already been resolved and
-  // its exact Principal Binding checked by listAuthorizedUiSurfaces.
+  // Screen discovery can fail independently of the app list: the apps still
+  // show, with a notice that their Open buttons could not be read.
+  const surfacesFailed = () => Boolean(uiSurfaces.error);
   const surfacesByCapsule = createMemo(() => {
-    const map = new Map<string, AppSurface[]>();
+    const map = new Map<string, AuthorizedUiSurface[]>();
     if (uiSurfaces.error) return map;
     for (const surface of uiSurfaces() ?? []) {
       const entries = map.get(surface.capsuleId) ?? [];
-      entries.push({
-        interfaceId: surface.interfaceId,
-        url: surface.url,
-        ...(surface.name ? { name: surface.name } : {}),
-        ...(surface.icon ? { icon: surface.icon } : {}),
-        ...(surface.category ? { category: surface.category } : {}),
-        ...(surface.sortOrder !== undefined
-          ? { sortOrder: surface.sortOrder }
-          : {}),
-      });
+      entries.push(surface);
       map.set(surface.capsuleId, entries);
     }
     return map;
   });
-
-  const appTiles = createMemo<AppTile[]>(() => {
-    const map = surfacesByCapsule();
-    const tiles: AppTile[] = [];
-    for (const inst of visibleCapsules()) {
-      const surfaces = map.get(inst.id);
-      if (!surfaces) continue;
-      surfaces.forEach((surface, i) =>
-        tiles.push({
-          inst,
-          surface: surface.name ? surface : { ...surface, name: inst.name },
-          key: surface.interfaceId || `${inst.id}:${i}`,
-        }),
-      );
-    }
-    return tiles.sort(compareAppTiles);
+  const apps = createMemo<readonly HomeApp[]>(() => {
+    const surfaces = surfacesByCapsule();
+    return (capsules.error ? [] : (capsules.latest ?? []))
+      .filter(isVisibleServiceCapsule)
+      .map((inst) => ({
+        inst,
+        state: appState(inst),
+        surfaces: surfaces.get(inst.id) ?? [],
+      }))
+      .sort(compareHomeApps);
   });
 
   const createFirstWorkspace = createAction(async (): Promise<Workspace> => {
@@ -212,97 +176,167 @@ function Inner() {
   });
 
   return (
-    <>
-      <Show
-        when={workspaceId()}
-        fallback={
-          <NoWorkspaceStartPanel
-            busy={createFirstWorkspace.busy()}
-            error={createFirstWorkspace.error()}
-            onCreate={() => void createFirstWorkspace.run()}
-          />
-        }
-      >
-        <Switch>
-          <Match when={capsules.loading || uiSurfaces.loading}>
-            <LauncherSkeleton />
-          </Match>
-          <Match when={capsules.error}>
-            <Toast tone="error">
-              {fetchFailedMessage(capsules.error, t)}
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                onClick={() => void refetchCapsules()}
-              >
-                {t("common.retry")}
-              </Button>
-            </Toast>
-          </Match>
-          <Match when={capsules.latest}>
-            <Show when={supplementalFetchError()}>
-              <Toast tone="error">
-                {t("apps.listIncomplete")}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={retryUiSurfaces}
-                >
-                  {t("common.retry")}
-                </Button>
-              </Toast>
-            </Show>
-            <Show
-              when={appTiles().length > 0}
-              fallback={
-                // A load failure or a workspace whose services simply have no
-                // screen must never render the first-run panel.
-                supplementalFetchError() ? null : visibleCapsules().length >
-                  0 ? (
-                  <NoLaunchableAppsPanel count={visibleCapsules().length} />
-                ) : (
-                  <WorkspaceStartPanel />
-                )
-              }
+    <Show
+      when={workspaceId()}
+      fallback={
+        <NoWorkspaceStartPanel
+          busy={createFirstWorkspace.busy()}
+          error={createFirstWorkspace.error()}
+          onCreate={() => void createFirstWorkspace.run()}
+        />
+      }
+    >
+      <Switch>
+        <Match when={capsules.loading || uiSurfaces.loading}>
+          <HomeSkeleton />
+        </Match>
+        <Match when={capsules.error}>
+          <Toast tone="error">
+            {fetchFailedMessage(capsules.error, t)}
+            <Button
+              variant="secondary"
+              size="sm"
+              type="button"
+              onClick={() => void refetchCapsules()}
             >
-              <AppLauncher tiles={appTiles()} />
-            </Show>
-          </Match>
-        </Switch>
-      </Show>
-    </>
+              {t("common.retry")}
+            </Button>
+          </Toast>
+        </Match>
+        <Match when={capsules.latest}>
+          <Show when={apps().length > 0} fallback={<WorkspaceStartPanel />}>
+            <div class="ap-home" data-testid="home-apps">
+              <div class="ap-home-head">
+                {/* The page's only heading. */}
+                <h1>
+                  {t("apps.sectionYours")}
+                  <span class="ap-home-count">{apps().length}</span>
+                </h1>
+                <Button variant="secondary" href="/new" icon={<Search size={16} />}>
+                  {t("apps.browse")}
+                </Button>
+              </div>
+              <Show when={surfacesFailed()}>
+                <Toast tone="error">
+                  {t("apps.listIncomplete")}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => void refetchUiSurfaces()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                </Toast>
+              </Show>
+              <ul class="ap-app-grid">
+                <For each={apps()}>
+                  {(app) => (
+                    <li>
+                      <HomeAppCard app={app} />
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
+          </Show>
+        </Match>
+      </Switch>
+    </Show>
   );
 }
 
-function compareAppTiles(a: AppTile, b: AppTile): number {
-  const declaredOrder =
-    (a.surface.sortOrder ?? Number.MAX_SAFE_INTEGER) -
-    (b.surface.sortOrder ?? Number.MAX_SAFE_INTEGER);
-  if (declaredOrder !== 0) return declaredOrder;
-  // Prioritize apps that need attention so broken/stale installs do not get
-  // buried behind healthy services on the everyday launcher.
-  const attentionRank =
-    Number(needsAttention(b.inst)) - Number(needsAttention(a.inst));
-  if (attentionRank !== 0) return attentionRank;
-  return appTileLabel(a).localeCompare(appTileLabel(b), locale(), {
+/** Needs attention first, then updates, then installing; alphabetical within. */
+function compareHomeApps(a: HomeApp, b: HomeApp): number {
+  const rank = appStateRank(a.state) - appStateRank(b.state);
+  if (rank !== 0) return rank;
+  return homeAppName(a).localeCompare(homeAppName(b), locale(), {
     sensitivity: "base",
   });
 }
 
-function appTileLabel(tile: AppTile): string {
-  return tile.surface.name || tile.inst.name;
+function homeAppName(app: HomeApp): string {
+  return app.surfaces.length === 1 && app.surfaces[0]!.name
+    ? app.surfaces[0]!.name
+    : app.inst.name;
 }
 
-function LauncherSkeleton() {
+/**
+ * One installed app. Its name opens the app page; "Open" (when the app has a
+ * screen and is not being removed) opens the screen in a new tab.
+ */
+function HomeAppCard(props: { readonly app: HomeApp }) {
+  const name = () => homeAppName(props.app);
+  const icon = () => {
+    const surface = props.app.surfaces[0];
+    return surface ? resolveAppIcon(surface.icon, surface.url) : {};
+  };
+  const badge = () => STATE_BADGE[props.app.state];
+  const canOpen = () =>
+    props.app.surfaces.length > 0 &&
+    props.app.state !== "uninstalling" &&
+    props.app.state !== "stopped" &&
+    props.app.state !== "installing";
+  const pageHref = () => `/workloads/${encodeURIComponent(props.app.inst.id)}`;
   return (
-    <ul class="av-launcher">
-      <For each={Array.from({ length: 6 })}>
+    <article
+      class="ap-app-card"
+      data-testid="home-app"
+      data-app-state={props.app.state}
+      data-capsule-id={props.app.inst.id}
+    >
+      <AppFace
+        class="ap-app-face"
+        name={name()}
+        iconUrl={icon().imageSrc}
+        emoji={icon().emoji}
+      />
+      <div class="ap-app-info">
+        <a class="ap-app-name" href={pageHref()}>
+          {name()}
+        </a>
+        <Show when={badge()}>
+          {(state) => (
+            <span>
+              <Badge tone={state().tone}>{t(state().label)}</Badge>
+            </span>
+          )}
+        </Show>
+      </div>
+      <div class="ap-app-card-actions">
+        <Show
+          when={canOpen()}
+          fallback={
+            <Button variant="primary" size="sm" href={pageHref()}>
+              {props.app.state === "needs_attention" || props.app.state === "update_available"
+                ? t("apps.review")
+                : t("apps.manage")}
+            </Button>
+          }
+        >
+          <OpenAppButton surfaces={props.app.surfaces} appName={props.app.inst.name} size="sm" />
+          <a
+            class="ap-app-manage"
+            href={pageHref()}
+            aria-label={t("apps.manageAria", { name: name() })}
+          >
+            {t("apps.manage")}
+          </a>
+        </Show>
+      </div>
+    </article>
+  );
+}
+
+function HomeSkeleton() {
+  return (
+    <ul class="ap-app-grid" aria-hidden="true">
+      <For each={Array.from({ length: 4 })}>
         {() => (
           <li>
-            <span class="av-tile" aria-hidden="true">
-              <span class="tg-skel av-tile-skel" />
+            <span class="ap-app-card">
+              <span class="tg-skel ap-app-face" />
+              <span class="tg-skel" />
             </span>
           </li>
         )}
@@ -341,125 +375,13 @@ function NoWorkspaceStartPanel(props: {
   );
 }
 
-function AppLauncher(props: { readonly tiles: readonly AppTile[] }) {
-  return (
-    <>
-      <div class="av-section-head">
-        {/* Top heading of the launcher page — h1, the page has no other. */}
-        <h1>{t("apps.sectionYours")}</h1>
-        <span class="av-section-head-count">{props.tiles.length}</span>
-      </div>
-      <ul class="av-launcher">
-        <For each={props.tiles}>
-          {(tile) => (
-            <li>
-              <AppTileView tile={tile} />
-            </li>
-          )}
-        </For>
-        <li>
-          <a class="av-tile av-tile-add" href="/new">
-            <span class="av-tile-icon" aria-hidden="true">
-              <Plus />
-            </span>
-            <span class="av-tile-name">{t("apps.addShort")}</span>
-          </a>
-        </li>
-      </ul>
-    </>
-  );
-}
-
-/**
- * One authorized Interface tile. The face is an Interface-declared icon or the
- * app initials; the resolved URL opens in a new tab. Needs-attention is Capsule
- * lifecycle presentation only and never changes the runtime URL authority.
- */
-function AppTileView(props: { readonly tile: AppTile }) {
-  const surface = () => props.tile.surface;
-  const attention = () => needsAttention(props.tile.inst);
-  // Say WHICH kind of attention: an available update read the same as a
-  // failure (one dot + a screen-reader-only "要対応").
-  const attentionStatus = () =>
-    attention() ? effectiveCapsuleStatus(props.tile.inst) : undefined;
-  const attentionKind = () =>
-    attentionStatus() === "stale" ? "update" : "alert";
-  const name = () => surface().name ?? props.tile.inst.name;
-  const openUrl = () => surface().url;
-  // Product-specific marks come only from the Interface document. A Capsule
-  // name is fallback presentation text, never an implicit product identity.
-  const icon = () => resolveAppIcon(surface().icon, surface().url);
-
-  const body = () => (
-    <>
-      <AppFace
-        class="av-tile-icon"
-        imageFrameClass="av-tile-icon-image"
-        monogramFrameClass={kindClass(surface().category)}
-        imageClass="av-tile-image"
-        emojiClass="av-tile-emoji"
-        monogramClass="av-tile-mono"
-        name={name()}
-        iconUrl={icon().imageSrc}
-        emoji={icon().emoji}
-      >
-        <Show when={attention()}>
-          <span class={`av-tile-dot av-tile-dot-${attentionKind()}`} />
-        </Show>
-      </AppFace>
-      <span class="av-tile-name">{name()}</span>
-      <Show when={attentionStatus()}>
-        {(status) => (
-          <span class={`av-tile-state av-tile-state-${attentionKind()}`}>
-            {capsuleStatusLabel(status())}
-          </span>
-        )}
-      </Show>
-    </>
-  );
-
-  const detailHref = () =>
-    `/workloads/${encodeURIComponent(props.tile.inst.id)}`;
-
-  return (
-    <span class="av-tile-wrap">
-      <Show when={openUrl()}>
-        {(url) => (
-          <>
-            <a
-              class="av-tile"
-              href={url()}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              {body()}
-            </a>
-          </>
-        )}
-      </Show>
-      <span class="av-tile-actions">
-        {/* Every tile repeats the same visible "管理"; the accessible name
-            says which app it manages (WCAG 2.4.4). */}
-        <a
-          class="av-tile-manage"
-          href={detailHref()}
-          aria-label={t("apps.manageAria", { name: name() })}
-        >
-          <Settings2 size={13} aria-hidden="true" />
-          <span>{t("apps.manage")}</span>
-        </a>
-      </span>
-    </span>
-  );
-}
-
 function defaultWorkspaceHandle(): string {
   const time = Date.now().toString(36).slice(-6);
   const random = Math.random().toString(36).slice(2, 8) || "new";
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
-/** Workspace exists but has no authorized Capsule UI-surface Interfaces. */
+/** The Workspace has no installed apps yet. */
 function WorkspaceStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>
@@ -471,32 +393,6 @@ function WorkspaceStartPanel() {
       <a href="/new" class="av-start-action">
         <Sparkles size={18} aria-hidden="true" />
         <span>{t("apps.start.optionStore")}</span>
-      </a>
-    </section>
-  );
-}
-
-/**
- * The launcher only holds services that expose a `interface.ui.surface`
- * Interface. A workspace can legitimately own services with no screen (storage,
- * git hosting), and a service mid-first-deploy has not resolved its Interface
- * yet — in both cases the launcher is empty while the workspace is NOT. Saying
- * 「まだアプリがありません」 there is a lie about the user's own account, and its
- * only CTA (install another one) is the wrong next step.
- */
-function NoLaunchableAppsPanel(props: { readonly count: number }) {
-  return (
-    <section class="av-start" aria-label={t("apps.start.aria")}>
-      <div class="av-start-copy">
-        <span class="av-start-kicker">{t("apps.noLaunchable.kicker")}</span>
-        <h2 class="av-start-title">
-          {t("apps.noLaunchable.title", { count: String(props.count) })}
-        </h2>
-        <p class="av-start-sub">{t("apps.noLaunchable.body")}</p>
-      </div>
-      <a href="/workloads" class="av-start-action">
-        <Server size={18} aria-hidden="true" />
-        <span>{t("apps.noLaunchable.cta")}</span>
       </a>
     </section>
   );

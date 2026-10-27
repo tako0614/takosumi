@@ -149,7 +149,6 @@ import {
 } from "./install-helpers.ts";
 import InstallExecution from "./InstallExecution.tsx";
 import InstallLifecycle from "./InstallLifecycle.tsx";
-import ConnectionsTab from "../workspace/tabs/ConnectionsTab.tsx";
 import ConnectionCreateForm from "../workspace/connections/ConnectionCreateForm.tsx";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
@@ -317,7 +316,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     Record<string, boolean>
   >({});
   const [capsuleId, setCapsuleId] = createSignal<string | undefined>(installCapsuleId(location.search));
-  const [connectionPanelOpen, setConnectionPanelOpen] = createSignal(false);
   // The provider row whose connection form is open inside the install sheet.
   const [connectingProvider, setConnectingProvider] = createSignal<string>();
   // Per-row connection problems shown inside the install sheet.
@@ -331,6 +329,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [lifecycleState, setLifecycleState] = createSignal<InstallUiState>("configuring");
   const [executionState, setExecutionState] = createSignal<InstallUiState>("installing");
   const [planRunId, setPlanRunId] = createSignal<string>();
+  // True once "Allow and install" finished in this page view (not a reload).
+  const [completedHere, setCompletedHere] = createSignal(false);
   let installPlanAttempt: InstallPlanAttempt | undefined;
   const [recovery, setRecovery] = createSignal<
     | { readonly status: "loading" | "unavailable" }
@@ -400,17 +400,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     return description && description !== selectedTitle() ? description : t("installStore.appDescription");
   };
 
-  const selectedModule = createMemo(() => {
-    const catalog = installModuleCatalog();
-    if (catalog.status !== "ready") return undefined;
-    const path = modulePath().trim();
-    return catalog.modules.find((module) => module.path === path);
-  });
-
-  const selectedModuleProviderRequirements = createMemo(
-    () => selectedModule()?.rootProviderRequirements ?? [],
-  );
-
   /**
    * The chooser is the one place the user picks a destination, so every
    * candidate carries the provider set Takosumi derived from that exact
@@ -434,120 +423,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           ? providers.join(", ")
           : t("installStore.moduleNoProviders"),
     });
-  };
-
-  const selectedModuleDetails = () => {
-    const catalog = installModuleCatalog();
-    const module = selectedModule();
-    if (!module || catalog.status !== "ready") return undefined;
-    return (
-      <section
-        class="iv-source-summary"
-        data-testid="install-source-summary"
-        aria-label={t("installStore.sourceSummary")}
-      >
-        <dl class="iv-source-coordinates">
-          <div>
-            <dt>{t("installStore.selectedModule")}</dt>
-            <dd>
-              <code data-testid="install-selected-module">{module.path}</code>
-            </dd>
-          </div>
-          <Show when={catalog.scopePath !== "."}>
-            <div>
-              <dt>{t("installStore.sourceScope")}</dt>
-              <dd><code>{catalog.scopePath}</code></dd>
-            </div>
-          </Show>
-        </dl>
-        <div class="iv-provider-summary">
-          <h2>{t("installStore.detectedProviders")}</h2>
-          <Show
-            when={module.providerPackages.length > 0}
-            fallback={<p>{t("installStore.noProviderPackages")}</p>}
-          >
-            <ul data-testid="install-provider-packages">
-              <For each={module.providerPackages}>
-                {(provider) => (
-                  <li>
-                    <code>{provider.source}</code>
-                    <Show when={provider.version}>
-                      <span>{provider.version}</span>
-                    </Show>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        </div>
-        <Show when={phase() === "setup" || phase() === "review"}>
-          <div class="iv-provider-summary">
-            <h2>{t("installStore.requiredConnections")}</h2>
-            <Show
-              when={providerRows().length > 0}
-              fallback={<p>{t("installStore.noRequiredConnections")}</p>}
-            >
-              <ul>
-                <For each={providerRows()}>
-                  {(row) => {
-                    const connection = () => candidatesFor(row.provider).find(
-                      (candidate) => candidate.id === row.connectionId,
-                    );
-                    return (
-                      <li
-                        data-testid="install-required-connection"
-                        data-provider-source={row.provider}
-                        data-module-local-name={row.moduleLocalName}
-                        data-child-alias={row.childAlias}
-                      >
-                        <span>
-                          {providerModuleLabel(row)}
-                          {row.childAlias ? ` (${row.childAlias})` : ""}
-                        </span>
-                        <strong>
-                          {connection()
-                            ? providerConnectionDisplayName(connection()!)
-                            : t("installStore.connectionNotSelected")}
-                        </strong>
-                      </li>
-                    );
-                  }}
-                </For>
-              </ul>
-            </Show>
-          </div>
-        </Show>
-        <details
-          class="iv-module-details"
-          data-testid="install-module-requirements"
-        >
-          <summary>{t("installStore.moduleRequirements")}</summary>
-          <Show
-            when={module.rootProviderRequirements.length > 0}
-            fallback={<p>{t("common.none")}</p>}
-          >
-            <ul>
-              <For each={module.rootProviderRequirements}>
-                {(requirement) => (
-                  <li>
-                    {t("installStore.moduleRequirement", {
-                      source: requirement.source,
-                      module: requirement.moduleLocalName,
-                      alias: requirement.childAlias
-                        ? ` (${requirement.childAlias})`
-                        : "",
-                      version: requirement.version
-                        ? `v${requirement.version}`
-                        : "",
-                    })}
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        </details>
-      </section>
-    );
   };
 
   const sourceCandidates = () =>
@@ -593,9 +468,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ),
     );
   };
-
-  const providerModuleLabel = (row: ProviderConnectionRow): string =>
-    providerDisplayName(row.provider) + " / " + row.moduleLocalName;
 
   const providerRowKey = (row: ProviderConnectionRow): string =>
     `${row.provider}|${row.moduleLocalName}|${row.childAlias}`;
@@ -996,7 +868,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     observedWorkspaceId = selected;
     setWorkspaceId(selected);
     if (hydrating) return;
-    setConnectionPanelOpen(false);
     setConnectingProvider(undefined);
     attemptCreatedSourceId = undefined;
     if (installCapsuleId(location.search)) navigate(location.pathname, { replace: true });
@@ -1032,13 +903,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
     if (next && next !== capsuleId()) {
       resetPreparedSource(); setListing(null); setName(""); setCapsuleId(next);
-      setConnectionPanelOpen(false); setConnectingProvider(undefined); setPhase("done");
+      setConnectingProvider(undefined); setPhase("done");
     }
   });
 
   const chooseListing = (selected: TcsListing) => {
     resetPreparedSource();
-    setConnectionPanelOpen(false);
     setConnectingProvider(undefined);
     attemptCreatedSourceId = undefined;
     setListing(selected);
@@ -1621,8 +1491,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         setGitRef("");
         setGitRefResolvedFromListing(false);
       }
-      setConnectionPanelOpen(false);
-      setConnectingProvider(undefined);
+        setConnectingProvider(undefined);
       resetPreparedSource({ preserveModuleSelection: true });
       setPhase("configure");
     } catch (cause) {
@@ -1884,7 +1753,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const reset = () => {
     completionAttempt += 1;
-    setConnectionPanelOpen(false);
+    setCompletedHere(false);
     setConnectingProvider(undefined);
     attemptCreatedSourceId = undefined;
     if (installCapsuleId(location.search)) navigate(location.pathname, { replace: true });
@@ -1980,6 +1849,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           "accepted",
       })
     ) {
+      setCompletedHere(true);
       setPhase("done");
       return;
     }
@@ -1994,6 +1864,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         const surface = surfaces[0];
         if (surface) {
           setInterfaceUrl(surface.url);
+          setCompletedHere(true);
           setPhase("done");
           return;
         }
@@ -2014,23 +1885,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const appConnectHref = () =>
     createAppHandoffConnectHref(appHandoff(), interfaceUrl());
-
-  let connectionTrigger: HTMLElement | undefined;
-  const closeConnections = () => {
-    setConnectionPanelOpen(false);
-    if (connectionTrigger?.isConnected) connectionTrigger.focus();
-    void refreshProviderChoices();
-  };
-  const openConnections = () => {
-    if (connectionPanelOpen()) { closeConnections(); return; }
-    connectionTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    setConnectionPanelOpen(true);
-    queueMicrotask(() => {
-      if (disposed || !connectionPanelOpen()) return;
-      document.getElementById("install-connections-title")?.focus({ preventScroll: true });
-      document.getElementById("install-connections-panel")?.scrollIntoView({ block: "start", behavior: "instant" });
-    });
-  };
 
   let connectionRefresh: AbortController | undefined;
   onCleanup(() => connectionRefresh?.abort());
@@ -2225,10 +2079,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 : t("installStore.addConnection")}
           </Button>
         </div>
-        <details class="iv-advanced">
-          <summary>{t("installStore.connectionTechnical")}</summary>
-          <p><code>{row.provider}</code> · {row.moduleLocalName}</p>
-        </details>
         <Show when={connectionErrors()[providerRowKey(row)]}>
           {(message) => <p class="iv-muted" role="alert">{message()}</p>}
         </Show>
@@ -2359,7 +2209,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         "iv-configure-page": phase() === "configure",
       }}
     >
-      <Show when={phase() !== "browse"} fallback={<header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>}>
+      <Show
+        when={phase() !== "browse"}
+        fallback={<header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>}
+      >
+        <Show when={!(phase() === "done" && (lifecycleState() === "installed" || lifecycleState() === "uninstalling"))}>
         <header class="iv-app-detail" data-testid="install-app-header">
           <AppFace name={selectedTitle()} iconUrl={listing()?.iconUrl ?? storeEntry()?.iconUrl} class="iv-app-icon" />
           <div><h1>{selectedTitle() || t("common.loading")}</h1>
@@ -2375,6 +2229,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             </Show>
           </div>
         </header>
+        </Show>
       </Show>
 
       <Show when={appHandoff()}>
@@ -2575,84 +2430,61 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               </Button>
             </div>
             <p class="iv-start-hint">{t("installStore.startHint")}</p>
-            <details class="iv-advanced">
-              <summary>{t("installStore.sourceDetails")}</summary>
-              <div class="iv-fields">
-                <Show when={!listing()}>
-                  <FormField label={t("installStore.sourceUrl")} required>
-                    <Input
-                      value={gitUrl()}
-                      onInput={(event) => {
-                        resetPreparedSource();
-                        setGitUrl(event.currentTarget.value);
-                      }}
-                      spellcheck={false}
-                    />
-                  </FormField>
-                </Show>
-                <FormField
-                  label={t("installStore.sourceRef")}
-                  hint={listing() ? t("installStore.sourceRefStableHint") : undefined}
-                >
+            {/* The version is part of choosing what to install, so it is shown
+                plainly. A module is chosen only when the repository's version
+                defines more than one (the chooser after Install). */}
+            <div class="iv-fields iv-source-fields" data-testid="install-source-fields">
+              <Show when={!listing()}>
+                <FormField label={t("installStore.sourceUrl")} required>
                   <Input
-                    value={gitRefResolvedFromListing() ? "" : gitRef()}
-                    placeholder={listing() ? t("installStore.sourceRefStable") : undefined}
+                    value={gitUrl()}
                     onInput={(event) => {
-                      // A listing's reviewed module stays a hint for the new version.
-                      resetPreparedSource({ preserveModuleSelection: listing() !== null });
-                      setGitRefResolvedFromListing(false);
-                      setGitRef(event.currentTarget.value);
+                      resetPreparedSource();
+                      setGitUrl(event.currentTarget.value);
                     }}
                     spellcheck={false}
                   />
                 </FormField>
-                <Show when={!listing()}>
-                  <FormField label={t("installStore.sourcePath")}>
-                    <Input
-                      value={sourcePath()}
-                      onInput={(event) => {
-                        resetPreparedSource();
-                        setSourcePath(event.currentTarget.value);
-                      }}
-                    />
-                  </FormField>
-                  <FormField label={t("installStore.modulePath")}>
-                    <Input
-                      value={modulePath()}
-                      onInput={(event) => {
-                        const value = event.currentTarget.value;
-                        resetPreparedSource();
-                        setModulePathExplicit(true);
-                        setModulePathHint(false);
-                        setModulePath(value);
-                      }}
-                    />
-                  </FormField>
-                  <Show when={sourceCandidates().length > 0}>
-                    <FormField label={t("installStore.sourceAuth")}>
-                      <Select
-                        value={sourceAuthConnectionId()}
-                        onChange={(event) => {
-                          resetPreparedSource();
-                          setSourceAuthConnectionId(event.currentTarget.value);
-                        }}
-                      >
-                        <option value="">
-                          {t("installStore.publicSource")}
+              </Show>
+              <FormField
+                label={t("installStore.sourceRef")}
+                hint={listing() ? t("installStore.sourceRefStableHint") : t("installStore.sourceRefHint")}
+              >
+                <Input
+                  value={gitRefResolvedFromListing() ? "" : gitRef()}
+                  placeholder={listing() ? t("installStore.sourceRefStable") : undefined}
+                  onInput={(event) => {
+                    // A listing's reviewed module stays a hint for the new version.
+                    resetPreparedSource({ preserveModuleSelection: listing() !== null });
+                    setGitRefResolvedFromListing(false);
+                    setGitRef(event.currentTarget.value);
+                  }}
+                  spellcheck={false}
+                />
+              </FormField>
+              <Show when={!listing() && sourceCandidates().length > 0}>
+                <FormField label={t("installStore.sourceAuth")}>
+                  <Select
+                    value={sourceAuthConnectionId()}
+                    onChange={(event) => {
+                      resetPreparedSource();
+                      setSourceAuthConnectionId(event.currentTarget.value);
+                    }}
+                  >
+                    <option value="">
+                      {t("installStore.publicSource")}
+                    </option>
+                    <For each={sourceCandidates()}>
+                      {(connection) => (
+                        <option value={connection.id}>
+                          {providerConnectionDisplayName(connection)}
                         </option>
-                        <For each={sourceCandidates()}>
-                          {(connection) => (
-                            <option value={connection.id}>
-                              {providerConnectionDisplayName(connection)}
-                            </option>
-                          )}
-                        </For>
-                      </Select>
-                    </FormField>
-                  </Show>
-                </Show>
-              </div>
-            </details>
+                      )}
+                    </For>
+                  </Select>
+                </FormField>
+              </Show>
+            </div>
           </form>
         </section>
       </Show>
@@ -2714,7 +2546,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
           <Show when={sourceBuild()}>
             {(build) => (
-              <details class="iv-source-build"><summary>{t("installStore.sourceBuildTitle")}</summary>
+              <section class="iv-source-build" aria-labelledby="iv-source-build-title">
                 <div class="iv-section-head">
                   <h3 id="iv-source-build-title">
                     {t("installStore.sourceBuildTitle")}
@@ -2761,7 +2593,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                     </For>
                   </ul>
                 </div>
-              </details>
+              </section>
             )}
           </Show>
 
@@ -2820,11 +2652,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               </FormField>
               <For each={visibleSetupFields().filter((field) => field.required)}>{renderSetupField}</For>
             </div>
-            <details class="iv-advanced">
-              <summary>{t("installStore.advancedSettings")}</summary>
-              <For each={visibleSetupFields().filter((field) => !field.required)}>{renderSetupField}</For>
-              {selectedModuleDetails()}
-            </details>
+            <Show when={visibleSetupFields().some((field) => !field.required)}>
+              <div class="iv-optional-settings" data-testid="install-optional-settings">
+                <h4>{t("installStore.optionalSettings")}</h4>
+                <p class="iv-muted">{t("installStore.optionalSettingsHint")}</p>
+                <div class="iv-fields">
+                  <For each={visibleSetupFields().filter((field) => !field.required)}>{renderSetupField}</For>
+                </div>
+              </div>
+            </Show>
           </section>
 
           <Show when={setupError()}>{(message) => <p class="iv-muted" role="status">{message()}</p>}</Show>
@@ -2895,7 +2731,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 href={`/workloads/${encodeURIComponent(capsuleId()!)}`}
                 variant="secondary"
               >
-                {t("installStore.runDetails")}
+                {t("installStore.manageApp")}
               </Button>
             </div>
           </Show>
@@ -2913,63 +2749,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           onIdentity={(capsule, config) => { setName(capsule.name); setInstallConfig(config);
             if (!storeEntry()) setStoreEntry(storeEntryFromRepositoryConfig(config, { gitUrl: gitUrl(), name: capsule.name })); }}
           onLaunch={setInterfaceUrl}
-          onState={setLifecycleState} connectionsOpen={connectionPanelOpen()} onConnect={openConnections} onChooseAnother={reset} />
+          onState={setLifecycleState} principalId={props.installingPrincipalId}
+          justInstalled={completedHere()} onChooseAnother={reset} />
         <Show when={appConnectHref()}>{(href) => <div class="iv-action-row iv-handoff-actions"><Button href={href()} variant="secondary">{appHandoff() ? t("run.appHandoff.open", { app: appHandoffProductLabel(appHandoff()!.product) }) : t("installStore.open")}</Button></div>}</Show>
-      </Show>
-      <Show when={phase() === "done" && connectionPanelOpen() && workspaceId()}>
-        <section id="install-connections-panel" class="iv-workbench iv-connect-panel" aria-labelledby="install-connections-title" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeConnections(); } }} data-testid="install-connections-panel">
-          <div class="iv-panel-heading"><h2 id="install-connections-title" tabindex="-1">{t("installStore.cloudConnection")}</h2>
-            <Button type="button" variant="ghost" onClick={closeConnections}>{phase() === "done" ? t("installStore.closePanel") : t("installStore.closeConnections")}</Button></div>
-            <Show when={providerRows().length > 0}><div class="iv-binding-selectors">          <div class="iv-connection-list">
-            <For each={providerRows()}>
-              {(row) => {
-                const choices = () => candidatesFor(row.provider);
-                return (
-                  <article
-                    class="iv-connection-choice"
-                    data-provider-source={row.provider}
-                    data-module-local-name={row.moduleLocalName}
-                  >
-                    <div class="iv-connection-provider">
-                      <span>{t("installStore.providerModule")}</span>
-                      <strong>{providerModuleLabel(row)}</strong>
-                      <code>{row.provider}</code>
-                    </div>
-                    <FormField
-                      label={t("installStore.destination")}
-                      required
-                    >
-                      <Select
-                        value={row.connectionId}
-                        onChange={(event) =>
-                          updateProviderRow(row, event.currentTarget.value)
-                        }
-                      >
-                        <option value="">
-                          {t("installStore.chooseConnection")}
-                        </option>
-                        <For each={choices()}>
-                          {(connection) => (
-                            <option
-                              value={connection.id}
-                              selected={connection.id === row.connectionId}
-                            >
-                              {providerConnectionDisplayName(connection)}
-                            </option>
-                          )}
-                        </For>
-                      </Select>
-                    </FormField>
-                  </article>
-                );
-              }}
-            </For>
-          </div>
-</div></Show>
-          <Suspense fallback={<div role="status"><Spinner size={18} />{t("common.loading")}</div>}>
-          <ConnectionsTab workspaceId={workspaceId()} embedded initialProviderSource={providerRows().find((row) => !row.connectionId)?.provider ?? providerRows()[0]?.provider} onChanged={() => void refreshProviderChoices()} />
-          </Suspense>
-        </section>
       </Show>
     </main>
       </Show>

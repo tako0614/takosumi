@@ -6,8 +6,8 @@ import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const workloadListViewSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/views/apps/WorkloadListView.tsx"),
+const homeSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/apps/AppListView.tsx"),
   "utf8",
 );
 const installViewSource = readFileSync(
@@ -15,12 +15,12 @@ const installViewSource = readFileSync(
   "utf8",
 );
 
-describe("service add install posture", () => {
-  test("routes service creation through the app-like install flow", () => {
-    expect(workloadListViewSource).toContain('href="/new"');
-    expect(workloadListViewSource).not.toContain('href="/store"');
-    expect(workloadListViewSource).not.toContain('href="/workloads/new"');
-    expect(workloadListViewSource).not.toContain("createService(");
+describe("app install posture", () => {
+  test("routes installing an app through the one install flow", () => {
+    expect(homeSource).toContain('href="/new"');
+    expect(homeSource).not.toContain('href="/store"');
+    expect(homeSource).not.toContain('href="/workloads/new"');
+    expect(homeSource).not.toContain("createService(");
     expect(installViewSource).toContain("StoreBrowser");
     expect(installViewSource).toContain("prepareInstall");
     expect(en["installStore.browseTitle"]).toBe("Find apps");

@@ -346,11 +346,11 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain('t("run.summary.activationPending")');
     expect(runViewSource).toContain('t("run.summary.activationFailed")');
     expect(runViewSource).toContain('t("run.summary.activationPending")');
-    expect(en["run.summary.activationPending"]).toContain("activation");
-    expect(ja["run.summary.activationPending"]).toContain("公開処理");
+    expect(en["run.summary.activationPending"]).toContain("screen ready");
+    expect(ja["run.summary.activationPending"]).toContain("画面を準備");
     expect(en["run.summary.activationFailed"]).toContain("failed");
     expect(ja["run.summary.activationFailed"]).toContain("失敗");
-    expect(en["run.summary.readinessUnavailable"]).toContain("could not be checked");
+    expect(en["run.summary.readinessUnavailable"]).toContain("couldn't be checked");
     expect(ja["run.summary.readinessUnavailable"]).toContain("確認できません");
   });
 });

@@ -90,11 +90,11 @@ describe("RunView", () => {
     expect(source).toMatch(
       /changeCounts\(\)\.delete > 0 \|\|\s*\n?\s*!changeCountsKnown\(\)\)/,
     );
-    // ...and the ?auto=update auto-continue must WAIT for the logs refetch
-    // to settle before evaluating the gate on a summary-less run.
-    expect(source).toContain(
-      "if (!runHasChangeSummary(r) && logs.loading) return;",
-    );
+    // Nothing on the run page applies automatically (TASK-0115): no
+    // ?auto=update flow, no consent token, no auto-continue.
+    expect(source).not.toContain("auto-apply-consent");
+    expect(source).not.toContain("autoContinue");
+    expect(source).not.toContain("useSearchParams");
     // Confirmation is a local review step over structured Run facts. There is
     // no server-error prose fallback and no retired confirmDestructive field.
     expect(source).toContain("confirmedReview !== true");
@@ -108,7 +108,7 @@ describe("RunView", () => {
     expect(source).toContain('t("run.summary.stateRecoverySucceededHint")');
     expect(ja["run.summary.stateRecoverySucceeded"]).toContain("状態データ");
     expect(ja["run.summary.stateRecoverySucceededHint"]).toContain("失敗したまま");
-    expect(en["run.summary.stateRecoverySucceeded"]).toContain("does not mean the deploy succeeded");
+    expect(en["run.summary.stateRecoverySucceeded"]).toContain("does not mean the apply succeeded");
     expect(en["run.summary.stateRecoverySucceededHint"]).toContain("remains failed");
   });
 
@@ -166,7 +166,7 @@ describe("RunView", () => {
       "履歴は残ります",
     );
     expect(en["run.restartLatestSourceConfirm.message"]).toContain(
-      "history is preserved",
+      "stays in history",
     );
   });
 

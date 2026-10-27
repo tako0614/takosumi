@@ -27,7 +27,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
+import { useNavigate, useParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
@@ -96,12 +96,6 @@ import {
   appHandoffFromSearch,
   appHandoffProductLabel,
 } from "../../lib/app-handoff.ts";
-import {
-  autoApplyModeFromParam,
-  autoApplyRunPath,
-  hasAutoApplyConsent,
-  type AutoApplyMode,
-} from "../../lib/auto-apply-consent.ts";
 import {
   diagnosticSeverityLabel,
   operationLabel,
@@ -506,32 +500,6 @@ function Inner() {
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
-  // The app detail may request a consent-gated one-tap update. Initial install
-  // stays on /new; this route remains the technical Run ledger and review view.
-  // Read ?auto REACTIVELY: this same component instance navigates run → run
-  // in place (plan → apply, retry → fresh plan), so a value captured once from
-  // location.search would leave stale install/update chrome on the next run.
-  const [searchParams] = useSearchParams();
-  // A URL parameter is never apply authority. ?auto only counts when THIS tab
-  // started the flow and minted the run-scoped consent token (lib/auto-apply-
-  // consent.ts): otherwise a crafted /runs/:id?auto=update link opened by a
-  // signed-in victim would apply their pending plan with no user action. With
-  // no token this falls through to the ordinary console + deploy button.
-  const autoMode = createMemo((): AutoApplyMode | null => {
-    const requested = autoApplyModeFromParam(searchParams.auto);
-    return requested && hasAutoApplyConsent(runId(), requested)
-      ? requested
-      : null;
-  });
-  const autoContinueEnabled = () => autoMode() === "update";
-  // Carry the flag across the plan→apply hop and any re-plan — and mint the
-  // consent for the run being navigated to, since the flag alone no longer
-  // authorizes the next screen's auto-apply.
-  const withAuto = (path: string, targetRunId: string) => {
-    const mode = autoMode();
-    return mode ? autoApplyRunPath(path, targetRunId, mode) : path;
-  };
-
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
     runId,
     getRun,
@@ -1052,24 +1020,18 @@ function Inner() {
     const applyRunId = extractRunId(envelope);
     if (applyRunId && applyRunId !== runId()) {
       navigate(
-        withAuto(
-          appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
-            `/runs/${applyRunId}`,
-          applyRunId,
-        ),
+        appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
+          `/runs/${applyRunId}`,
       );
       return;
     }
     await Promise.all([refetchRun(), refetchLogs()]);
   });
 
-  // One-action update continues a clean update Plan only. Any approval,
-  // destructive, policy, or billing gate remains explicit in the console.
-  const [autoContinued, setAutoContinued] = createSignal(false);
   // Per-run UI state must reset when this SAME component instance navigates
-  // between runs (deploy → apply run, retry → fresh plan): stale `applied`
-  // would fake a デプロイしました summary on a never-applied plan and hide the
-  // deploy button; stale autoContinued would break the update re-plan loop.
+  // between runs (apply → apply run, retry → fresh plan): a stale `applied`
+  // would fake an applied summary on a never-applied plan and hide the apply
+  // button. Nothing on this page applies automatically.
   let lastRunId = runId();
   createEffect(() => {
     const id = runId();
@@ -1077,66 +1039,6 @@ function Inner() {
     lastRunId = id;
     setApplied(false);
     setNeedsConfirm(false);
-    setAutoContinued(false);
-  });
-  // Once-per-plan-run guard that survives a re-mount: Back / revisit of an
-  // ?auto=update plan URL must NOT silently re-fire the auto-apply.
-  const autoAppliedKey = () => `takosumi.auto-applied@${runId()}`;
-  const autoAppliedAlready = () => {
-    try {
-      return sessionStorage.getItem(autoAppliedKey()) === "1";
-    } catch {
-      return false;
-    }
-  };
-  createEffect(() => {
-    const r = runLatest();
-    if (
-      !autoContinueEnabled() ||
-      autoContinued() ||
-      applied() ||
-      deploy.busy() ||
-      !r
-    ) {
-      return;
-    }
-    // Revisited ?auto plan whose deploy approval a later apply already consumed
-    // (Back / fresh tab / a different session where the sessionStorage guard is
-    // absent): isDeployableRun is false, so neither the auto-apply nor the
-    // escape below would fire and the install screen would spin 追加中… forever.
-    // Drop to the honest console (it shows すでにデプロイ済み + a link to the app).
-    if (deployApprovalConsumed(r)) {
-      return;
-    }
-    // We already auto-applied this plan earlier this session and navigated on
-    // to the apply run. Landing back here (browser Back) must not strand the
-    // user on a never-advancing "追加中…" spinner — the guard blocks a re-apply
-    // but the install screen would still render progress. Drop to the real run
-    // console (deploy button OR the settled すでにデプロイ済み summary) so the
-    // screen is always actionable, deployable or not. Checked before the logs
-    // gate below because this path never auto-applies — it only escapes.
-    if (autoAppliedAlready()) {
-      return;
-    }
-    // Destructive-gate inputs must be SETTLED before auto-continuing: with no
-    // run.summary the gate reads log-derived counts, and right after the SSE
-    // terminal flip those logs are still being refetched — evaluating against
-    // the stale fetch would read a plan with deletes as 0 and auto-apply it.
-    // logs.loading is reactive, so this effect re-runs once the fetch lands.
-    if (!runHasChangeSummary(r) && logs.loading) return;
-    if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
-      // Never auto-apply past the billing/cost gate the manual deploy button
-      // enforces — wait for the check, and stop on a blocked estimate (the
-      // install screen shows the gate card instead).
-      if (cost.loading || costBlocked()) return;
-      setAutoContinued(true);
-      try {
-        sessionStorage.setItem(autoAppliedKey(), "1");
-      } catch {
-        /* private mode: fall back to the in-instance guard */
-      }
-      void deploy.run(false);
-    }
   });
 
   const { confirm } = useConfirmDialog();
@@ -1253,11 +1155,8 @@ function Inner() {
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(
-        withAuto(
-          appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
-            `/runs/${newRunId}`,
-          newRunId,
-        ),
+        appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
+          `/runs/${newRunId}`,
       );
     }
   });
