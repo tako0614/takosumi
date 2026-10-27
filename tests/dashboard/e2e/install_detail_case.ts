@@ -401,7 +401,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         await expect(costBlock.getByRole("heading", { name: "Cost estimate", exact: true })).toBeVisible();
         const expectedCost = {
           rated_zero: "The estimate is $0.00.",
-          not_applicable: "Takosumi doesn't calculate costs in this space.",
+          not_applicable: "Takosumi doesn't calculate costs in this workspace.",
           unrated: "Usage measured; no price policy is configured.",
           unavailable: "Couldn't load the cost estimate. Treat the cost as unknown.",
         }[cost];

@@ -1363,7 +1363,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
 
     // Billing is disabled here: provider pricing is explained, never "$0.00".
-    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this space.");
+    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();

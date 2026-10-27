@@ -23,7 +23,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.plannedHint": "Once connections and settings are complete, Review shows the exact list and a cost estimate.",
   "installStore.plannedEmpty": "No resources can be counted in advance. Review shows exactly what will be created.",
   "installStore.plannedNotAllowed": "Not allowed by policy",
-  "installStore.nameHint": "The name that tells this app apart in your space. Use lowercase letters, numbers and hyphens.",
+  "installStore.nameHint": "The name that tells this app apart in your workspace. Use lowercase letters, numbers and hyphens.",
   "installStore.connectionReady": "Connected",
   "installStore.connectionMissing": "Not connected",
   "installStore.connectionNotAllowed": "This app's policy doesn't allow this connection. Choose another one or connect another account.",
@@ -34,7 +34,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.allowInstall": "Allow and install",
   "installStore.costTitle": "Cost estimate",
   "installStore.costRatedZero": "The estimate is {amount}.",
-  "installStore.costNotApplicable": "Takosumi doesn't calculate costs in this space. Each cloud's own pricing applies to the resources it creates.",
+  "installStore.costNotApplicable": "Takosumi doesn't calculate costs in this workspace. Each cloud's own pricing applies to the resources it creates.",
   "run.cost.unavailable": "Couldn't load the cost estimate. Treat the cost as unknown.",
   "installStore.moduleTitle": "Choose a module",
   "installStore.moduleHint":
@@ -57,14 +57,14 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.yes": "Yes",
   "installStore.no": "No",
   "installStore.viewApps": "Browse apps",
-  "installStore.selectWorkspace": "Select a space to view this app.",
+  "installStore.selectWorkspace": "Select a workspace to view this app.",
   "installStore.noLogs": "No logs yet.",
   "installStore.closePanel": "Close",
   "installStore.uninstall": "Uninstall",
   "installStore.manageApp": "Manage app",
   "installStore.cloudConnection": "Cloud connection",
   "installStore.cloudConnected": "Connected. Ready to install.",
-  "installStore.appDescription": "Install this app in your space with just the settings it needs.",
+  "installStore.appDescription": "Install this app in your workspace with just the settings it needs.",
   "installStore.uninstalled": "Uninstalled",
   "installStore.logs": "Progress and logs",
   "installStore.retryInstall": "Retry installation",
@@ -72,7 +72,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.preparing": "Getting the install ready",
   "installStore.preparingFetching":
     "Fetching the repository. The first time can take about a minute.",
-  "installStore.preparingWorkspace": "Confirming the selected space.",
+  "installStore.preparingWorkspace": "Confirming the selected workspace.",
   "installStore.preparingConnections": "Reading available connections.",
   "installStore.preparingSource": "Fetching the repository contents.",
   "installStore.preparingCompatibility":
@@ -315,7 +315,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- errors / error boundary ------------------------------------------
   "error.generic": "Something went wrong. Please try again in a moment.",
   "error.planReconcileTimeout":
-    "We stopped waiting for the changes to be ready for review. It may still be running; check Deploy history before starting again.",
+    "We stopped waiting for the changes to be ready for review. It may still be running; check the app's history before starting again.",
   "errorBoundary.title": "Something went wrong",
   "errorBoundary.body":
     "An unexpected error stopped this page from loading. Please reload the page.",
@@ -331,7 +331,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.capsule.needsAttention": "Needs attention",
   // `active` = the last apply succeeded and the state generation advanced; it
   // is NOT a verified-reachable signal, so say "Deployed", not "Running".
-  "status.capsule.active": "Deployed",
+  "status.capsule.active": "Installed",
   "status.capsule.stale": "Update available",
   "status.capsule.error": "Error",
   "status.capsule.disabled": "Disabled",
@@ -344,7 +344,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.run.failed": "Failed",
   "status.run.cancelled": "Cancelled",
   "status.run.expired": "Expired",
-  "status.run.ready_to_deploy": "Ready to deploy",
+  "status.run.ready_to_deploy": "Ready to apply",
   "status.policy.pass": "Pass",
   "status.policy.warn": "Warnings",
   "status.policy.deny": "Denied",
@@ -414,7 +414,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.state.sentence.ready": "Ready to use.",
   "app.state.sentence.updateAvailable": "Ready to use. A newer version is available.",
   "app.state.sentence.needsAttention": "Something needs your attention. See Needs attention below.",
-  "app.state.sentence.installing": "Installation hasn't finished.",
+  "app.state.sentence.installing": "The install hasn't finished.",
   "app.state.sentence.uninstalling": "Uninstall is scheduled.",
   "app.state.sentence.uninstalled": "Uninstalled.",
   "app.state.sentence.stopped": "Stopped.",
@@ -426,7 +426,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.open.reload": "Reload screens",
   "app.open.loadFailed": "Its screens couldn't be loaded, so Open isn't shown.",
   "app.problem.title": "Needs attention",
-  "app.problem.installIncomplete": "Installation hasn't finished",
+  "app.problem.installIncomplete": "The install hasn't finished",
   "app.problem.installIncompleteHint": "Continue on the install page to review and allow it.",
   "app.problem.continueInstall": "Continue installing",
   "app.problem.applyFailed": "The last change couldn't be applied",
@@ -653,15 +653,15 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.removed": "Deletion complete.",
   "run.summary.failed": "{operation} failed.",
   "controlError.stateGenerationMismatch":
-    "Another change ran first. Review the changes again before deploying.",
+    "Another change was applied first. Review again before applying.",
   "controlError.dependencySnapshotStale":
-    "A connected service was updated first. Review the changes again.",
+    "A linked app was updated first. Review again.",
   "controlError.dependencyUnavailable":
-    "Values from a connected service aren't available right now. Try again in a moment.",
+    "Values from a linked app aren't available right now. Try again in a moment.",
   "controlError.sourceChanged":
     "The source contents changed. Review the changes again.",
   "controlError.sourceRevisionMismatch":
-    "The source identity or exact version changed. Review the current service again.",
+    "The source identity or exact version changed. Review the current app again.",
   "controlError.invalidSourceRevision":
     "Choose a Git branch, tag, or commit before reviewing changes.",
   "controlError.compatibilityStale":
@@ -671,24 +671,24 @@ export const en: Record<keyof typeof ja, string> = {
   "controlError.sourceSyncPending":
     "The repository contents are still being fetched. Wait a moment and try again.",
   "controlError.planFailed":
-    "The changes couldn't be prepared for review. Check Deploy history, then try again.",
+    "The changes couldn't be prepared for review. Check the app's history, then try again.",
   "controlError.slotLimitReached":
-    "You've reached your limit. Delete a service you no longer need, or contact your operator.",
+    "You've reached your limit. Uninstall an app you no longer need, or contact your operator.",
   "controlError.capsuleNotFound":
-    "That service could not be found. It may have been deleted.",
+    "That app couldn't be found. It may have been uninstalled.",
   "controlError.configNotFound":
-    "Setup for this service could not be found. Add it again.",
+    "Setup for this app couldn't be found. Install it again.",
   "controlError.shareRevoked": "This share has been revoked.",
   "runError.sourceSyncFailed":
-    "The service contents could not be fetched. Check the link and version, then try again.",
+    "The app's contents couldn't be fetched. Check the link and version, then try again.",
   "runError.sourceRefNotFound":
     "The selected version was not found. Check the version, then try again.",
   "runError.stateGenerationMismatch":
-    "Another change ran first. Review the changes again before deploying.",
+    "Another change was applied first. Review again before applying.",
   "runError.planFailed":
     "The change review failed. Check the details, then try again.",
   "runError.applyFailed":
-    "The deploy failed. Check the details, then try again.",
+    "Check the reason and logs, then try again.",
   "runError.runFailed": "The run failed. Please try again.",
   "runError.backupFailed":
     "The restore point could not be created. Please try again.",
@@ -751,10 +751,10 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cancelConfirm.keep": "Keep running",
   "run.cost.required": "Estimated cost: ~{n}",
   "run.cost.unrated": "Usage measured; no price policy is configured.",
-  "run.cost.capacityBlocked": "This space can't run this action.",
+  "run.cost.capacityBlocked": "This workspace can't run this action.",
   "run.cost.billingCta": "Open billing",
   "run.cost.operatorHelp":
-    "An owner can review this space's usage and limits to enable it.",
+    "An owner can review this workspace's usage and limits to enable it.",
   "run.cost.quotaCta": "Review usage",
   "run.changes.title": "What will change",
   "run.changes.titleDone": "What changed",
@@ -829,21 +829,21 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.git.defaultRef": "Git default branch",
-  "new.compat.ready": "Can be added as is",
+  "new.compat.ready": "Can be installed as is",
   "new.compat.patch": "Needs manual changes",
-  "new.compat.unsupported": "Cannot be added right now",
+  "new.compat.unsupported": "Can't be installed right now",
   "new.compat.summary.checkFailed":
-    "The pre-add check couldn't finish. This isn't necessarily a problem with the service — try again.",
+    "The pre-install check couldn't finish. This isn't necessarily a problem with the app — try again.",
   "new.compat.summary.providerCredentials":
-    "Remove {provider} private values from the source before adding this.",
+    "Remove {provider} private values from the source before installing this.",
   "new.compat.summary.installUxInvalid":
     "This app version's setup declaration needs to be fixed by its publisher.",
   "new.compat.summary.reviewRequired":
-    "An item needs review before this can be added.",
+    "An item needs review before this can be installed.",
   "new.compat.issue.providerCredentials.message":
     "{provider} private values are written in the source.",
   "new.compat.issue.providerCredentials.detail":
-    "Do not keep API tokens or account IDs in code. Remove those values, then connect {provider} access so Takosumi can pass them only while deploying.",
+    "Do not keep API tokens or account IDs in code. Remove those values, then connect {provider} so Takosumi can pass them only while applying.",
   "new.compat.issue.installUxInvalid.message":
     "The app's setup declaration does not match the selected version.",
   "new.compat.issue.installUxInvalid.detail":
@@ -851,24 +851,24 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.issue.providerPreserved.message":
     "The repository's non-secret {provider} configuration will be preserved.",
   "new.compat.issue.backendIsolated.message":
-    "The repository's own storage settings are kept; Takosumi keeps this service's deployment records separately.",
+    "The repository's own storage settings are kept; Takosumi keeps this app's apply records separately.",
   "new.compat.issue.lockfile.message":
-    "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
+    "Pinned connection target information is included. After private values are removed, the pinned targets are reviewed during install.",
   "new.compat.issue.reviewRequired.message":
-    "An item needs review before this can be added.",
+    "An item needs review before installing.",
   "new.error.sourceRefNotFound":
     "The selected version “{ref}” was not found. Check that the link offers this version.",
   "new.error.sourceFetchFailed":
-    "The service contents could not be fetched. Check the link, version, folder, or private link access. Details: {message}",
+    "The app's contents couldn't be fetched. Check the link, version, folder, or private repository access. Details: {message}",
   "new.error.sourceFetchFailedUnknown": "No detailed cause was returned.",
   "new.error.generic":
-    "The service could not be added. Check the details and try again.",
+    "The app couldn't be installed. Check the details and try again.",
   "new.error.genericWithDetails":
-    "The service could not be added. Details: {message}",
+    "The app couldn't be installed. Details: {message}",
   "new.error.connectionRequired":
-    "Publishing this service needs a connected cloud account. Set up the connection, then try again.",
+    "Installing this app needs a cloud connection. Set up the connection, then try again.",
   "new.error.alreadyExistsGeneric":
-    "This service is already added. Open the existing service instead of creating another one.",
+    "An app with this name is already installed. Open it from Home, or choose another name.",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "Owner",
@@ -1094,17 +1094,17 @@ export const en: Record<keyof typeof ja, string> = {
   // --- run group ---------------------------------------------------------------
   "runGroup.title": "Workspace update",
   "runGroup.subtitle":
-    "Several service changes can be reviewed and approved together.",
+    "Changes to several apps can be reviewed and approved together.",
   "runGroup.approveAll": "Approve all",
   "runGroup.approveAllConfirm.title": "Approve all changes?",
   "runGroup.approveAllConfirm.message":
-    "This runs the pending changes for {n} services together.",
+    "This runs the pending changes for {n} apps together.",
   "runGroup.approveAllConfirm.messageDanger":
-    "This runs the pending changes for {n} services together, including destructive changes that delete resources. This can't be undone.",
-  "runGroup.members": "Services in this update",
-  "runGroup.membersEmpty": "No services in this update.",
-  "runGroup.openService": "Open service",
-  "runGroup.openServiceAria": "Open service “{name}”",
+    "This runs the pending changes for {n} apps together, including destructive changes that delete resources. This can't be undone.",
+  "runGroup.members": "Apps in this update",
+  "runGroup.membersEmpty": "No apps in this update.",
+  "runGroup.openService": "Open app",
+  "runGroup.openServiceAria": "Open app “{name}”",
   "runGroup.openRun": "Review change",
   "runGroup.openRunAria": "Review change for “{name}”",
   "runGroup.groupId": "Update ID",

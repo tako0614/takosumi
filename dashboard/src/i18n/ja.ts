@@ -324,7 +324,7 @@ export const ja = {
   "error.generic":
     "問題が発生しました。しばらくしてからもう一度お試しください。",
   "error.planReconcileTimeout":
-    "変更内容の準備を待つのを停止しました。サーバー側では処理が続いている可能性があります。もう一度始める前にデプロイ履歴を確認してください。",
+    "変更内容の準備を待つのを停止しました。サーバー側では処理が続いている可能性があります。もう一度始める前にアプリの履歴を確認してください。",
   "errorBoundary.title": "問題が発生しました",
   "errorBoundary.body":
     "予期しないエラーで画面を表示できませんでした。ページを再読み込みしてください。",
@@ -340,7 +340,7 @@ export const ja = {
   "status.capsule.needsAttention": "確認が必要",
   // `active` = 直近の apply が成功し state generation が前進した状態。readiness
   // 検証ではない（health probe は別）ので「稼働中」とは言わず実態どおりにする。
-  "status.capsule.active": "デプロイ済み",
+  "status.capsule.active": "インストール済み",
   "status.capsule.stale": "更新があります",
   "status.capsule.error": "エラー",
   "status.capsule.disabled": "無効",
@@ -353,7 +353,7 @@ export const ja = {
   "status.run.failed": "失敗",
   "status.run.cancelled": "キャンセル",
   "status.run.expired": "期限切れ",
-  "status.run.ready_to_deploy": "デプロイ待ち",
+  "status.run.ready_to_deploy": "適用待ち",
   "status.policy.pass": "問題なし",
   "status.policy.warn": "警告あり",
   "status.policy.deny": "拒否",
@@ -663,15 +663,15 @@ export const ja = {
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
   "controlError.stateGenerationMismatch":
-    "別の変更が先に実行されました。もう一度変更を確認してからデプロイしてください。",
+    "別の変更が先に適用されました。もう一度内容を確認してから適用してください。",
   "controlError.dependencySnapshotStale":
-    "連携しているサービスが先に更新されました。もう一度変更を確認してください。",
+    "連携しているアプリが先に更新されました。もう一度内容を確認してください。",
   "controlError.dependencyUnavailable":
-    "連携しているサービスの値をいま取得できません。時間をおいてもう一度お試しください。",
+    "連携しているアプリの値をいま取得できません。時間をおいてもう一度お試しください。",
   "controlError.sourceChanged":
     "取得元の内容が変わりました。もう一度変更を確認してください。",
   "controlError.sourceRevisionMismatch":
-    "取得元の識別情報または指定したバージョンが変わりました。現在のサービスを確認し直してください。",
+    "取得元の識別情報または指定した版が変わりました。いまのアプリを確認し直してください。",
   "controlError.invalidSourceRevision":
     "変更を確認する前に、Git のブランチ、タグ、またはコミットを指定してください。",
   "controlError.compatibilityStale":
@@ -681,24 +681,24 @@ export const ja = {
   "controlError.sourceSyncPending":
     "リポジトリの内容をまだ取得しています。少し待ってからもう一度お試しください。",
   "controlError.planFailed":
-    "変更内容を準備できませんでした。デプロイ履歴で状況を確認してから、もう一度お試しください。",
+    "変更内容を準備できませんでした。アプリの履歴で状況を確認してから、もう一度お試しください。",
   "controlError.slotLimitReached":
-    "利用できる枠の上限に達しました。不要なサービスを削除するか、運営者にお問い合わせください。",
+    "利用できる枠の上限に達しました。不要なアプリをアンインストールするか、運営者にお問い合わせください。",
   "controlError.capsuleNotFound":
-    "対象のサービスが見つかりません。削除された可能性があります。",
+    "対象のアプリが見つかりません。アンインストールされた可能性があります。",
   "controlError.configNotFound":
-    "このサービスの設定が見つかりません。追加し直してください。",
+    "このアプリの設定が見つかりません。インストールし直してください。",
   "controlError.shareRevoked": "この共有は無効になっています。",
   "runError.sourceSyncFailed":
-    "サービスの内容を取得できませんでした。リンクとバージョンを確認して、もう一度お試しください。",
+    "アプリの内容を取得できませんでした。リンクと版を確認して、もう一度お試しください。",
   "runError.sourceRefNotFound":
     "指定されたバージョンが見つかりませんでした。バージョンを確認して、もう一度お試しください。",
   "runError.stateGenerationMismatch":
-    "別の変更が先に実行されました。もう一度変更を確認してからデプロイしてください。",
+    "別の変更が先に適用されました。もう一度内容を確認してから適用してください。",
   "runError.planFailed":
     "変更内容の確認に失敗しました。詳細を確認して、もう一度お試しください。",
   "runError.applyFailed":
-    "デプロイに失敗しました。詳細を確認して、もう一度お試しください。",
+    "理由とログを確認してから、もう一度お試しください。",
   "runError.runFailed": "実行に失敗しました。もう一度お試しください。",
   "runError.backupFailed":
     "復元ポイントの作成に失敗しました。もう一度お試しください。",
@@ -836,21 +836,21 @@ export const ja = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.git.defaultRef": "Git の既定ブランチ",
-  "new.compat.ready": "このまま追加できます",
+  "new.compat.ready": "このままインストールできます",
   "new.compat.patch": "手直しが必要です",
-  "new.compat.unsupported": "今は追加できません",
+  "new.compat.unsupported": "今はインストールできません",
   "new.compat.summary.checkFailed":
-    "追加できるかの確認を完了できませんでした。サービスの問題とは限りません。もう一度お試しください。",
+    "インストールできるかの確認を完了できませんでした。アプリの問題とは限りません。もう一度お試しください。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.installUxInvalid":
     "このバージョンの初期設定宣言は配布元による修正が必要です。",
   "new.compat.summary.reviewRequired":
-    "追加する前に確認が必要な項目があります。",
+    "インストールする前に確認が必要な項目があります。",
   "new.compat.issue.providerCredentials.message":
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、{provider} の接続済みアカウントからデプロイ時だけ渡してください。値を外して接続すると続行できます。",
+    "API トークンやアカウント ID はコードに置かず、{provider} の接続から適用時だけ渡してください。値を外して接続すると続行できます。",
   "new.compat.issue.installUxInvalid.message":
     "アプリの初期設定宣言が選択したバージョンと一致していません。",
   "new.compat.issue.installUxInvalid.detail":
@@ -858,24 +858,24 @@ export const ja = {
   "new.compat.issue.providerPreserved.message":
     "取得元にある {provider} の非秘密設定はそのまま維持されます。",
   "new.compat.issue.backendIsolated.message":
-    "リポジトリ側の保存先の設定はそのまま残し、Takosumi がこのサービスのデプロイ記録を別に管理します。",
+    "リポジトリ側の保存先の設定はそのまま残し、Takosumi がこのアプリの適用記録を別に管理します。",
   "new.compat.issue.lockfile.message":
-    "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
+    "利用する接続先の固定情報が含まれています。非公開値を外したあと、インストール時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
-    "追加前に確認が必要な項目があります。",
+    "インストール前に確認が必要な項目があります。",
   "new.error.sourceRefNotFound":
     "指定されたバージョン「{ref}」が見つかりません。リンク先にこのバージョンがあるか確認してください。",
   "new.error.sourceFetchFailed":
-    "サービスの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。詳細: {message}",
+    "アプリの内容を取得できませんでした。リンク、版、フォルダ、または非公開リポジトリの接続を確認してください。詳細: {message}",
   "new.error.sourceFetchFailedUnknown": "原因を取得できませんでした。",
   "new.error.generic":
-    "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
+    "アプリをインストールできませんでした。内容を確認して、もう一度お試しください。",
   "new.error.genericWithDetails":
-    "サービスの追加に失敗しました。詳細: {message}",
+    "アプリをインストールできませんでした。詳細: {message}",
   "new.error.connectionRequired":
-    "このサービスの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
+    "このアプリのインストールにはクラウドへの接続が必要です。接続を設定してから、もう一度お試しください。",
   "new.error.alreadyExistsGeneric":
-    "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
+    "この名前のアプリはすでにインストールされています。ホームから開くか、別の名前にしてください。",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "オーナー",
@@ -1074,18 +1074,18 @@ export const ja = {
   "activity.actorSystem": "Takosumi（自動）",
 
   // --- run group ---------------------------------------------------------------
-  "runGroup.title": "ワークスペース更新",
-  "runGroup.subtitle": "複数サービスの変更をまとめて確認・承認できます。",
+  "runGroup.title": "スペースの更新",
+  "runGroup.subtitle": "複数のアプリの変更をまとめて確認・承認できます。",
   "runGroup.approveAll": "まとめて承認",
   "runGroup.approveAllConfirm.title": "まとめて承認しますか？",
   "runGroup.approveAllConfirm.message":
-    "{n} 件のサービスの変更をまとめて実行します。",
+    "{n} 件のアプリの変更をまとめて実行します。",
   "runGroup.approveAllConfirm.messageDanger":
-    "{n} 件のサービスの変更をまとめて実行します。削除を含む破壊的な変更があり、元に戻せません。",
-  "runGroup.members": "この更新に含まれるサービス",
-  "runGroup.membersEmpty": "この更新に含まれるサービスはありません。",
-  "runGroup.openService": "サービスを開く",
-  "runGroup.openServiceAria": "サービス「{name}」を開く",
+    "{n} 件のアプリの変更をまとめて実行します。削除を含む破壊的な変更があり、元に戻せません。",
+  "runGroup.members": "この更新に含まれるアプリ",
+  "runGroup.membersEmpty": "この更新に含まれるアプリはありません。",
+  "runGroup.openService": "アプリを開く",
+  "runGroup.openServiceAria": "アプリ「{name}」を開く",
   "runGroup.openRun": "変更内容を開く",
   "runGroup.openRunAria": "「{name}」の変更内容を開く",
   "runGroup.groupId": "更新 ID",
