@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 
 export const TEST_TIMINGS_PATH = "tests/.bun-test-timings.json";
+// Native runtimes and host fixtures must not inherit leaked globals or handles
+// from earlier files in the long local sweep. Keep inventory and shards intact.
 export const PORTABLE_TEST_COMMAND = [
-  "bun", "test", "--only-failures", "./tests",
+  "bun", "test", "--isolate", "--only-failures", "./tests",
   "--path-ignore-patterns=tests/dashboard/e2e/**",
   "--path-ignore-patterns=tests/runner/compatibility_check_test.ts",
   "--path-ignore-patterns=tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
