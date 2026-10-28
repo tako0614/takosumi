@@ -462,11 +462,11 @@ function linkHealth(
     iface.spec.version !== requirement.interface.version ||
     link.interface.type !== requirement.interface.type ||
     link.interface.version !== requirement.interface.version ||
-    link.deliveryType !== requirement.delivery.type ||
-    !requirement.permissions.every((permission) =>
-      link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission)
-    )
+    link.deliveryType !== requirement.delivery.type
   ) return "provider_not_ready";
+  if (!requirement.permissions.every((permission) =>
+    link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission)
+  )) return "reapproval_required";
   return "ok";
 }
 

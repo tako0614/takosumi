@@ -14,6 +14,7 @@ const STATE_LABELS: Record<CapsuleAppLink["state"], MessageKey> = {
   active: "app.links.active", declined: "app.links.declined", revoked: "app.links.revoked",
 };
 const HEALTH_LABELS: Record<Exclude<CapsuleAppLink["health"], "ok">, MessageKey> = {
+  reapproval_required: "app.links.reapproval_required",
   provider_not_ready: "app.links.provider_not_ready",
   provider_uninstall_scheduled: "app.links.provider_uninstall_scheduled",
   provider_removed: "app.links.provider_removed",

@@ -349,6 +349,10 @@ export class InterfaceService {
     this.#projectionSink = options.projectionSink;
   }
 
+  async interfaceLinksAvailable(): Promise<boolean> {
+    return this.#stores.links.available ? await this.#stores.links.available() : true;
+  }
+
   async create(
     request: CreateInterfaceRequest,
     actor?: ActorContext,
@@ -706,6 +710,7 @@ export class InterfaceService {
     readonly requirement: CapsuleRequiredInterface;
   }): Promise<readonly Interface[]> {
     validateCapsuleRequiredInterfaces([input.requirement]);
+    if (this.#stores.links.available && !await this.#stores.links.available()) return [];
     const candidates = await this.list({ workspaceId: input.workspaceId, type: input.requirement.interface.type, phase: "Resolved", ownerKind: "Capsule", limit: 1000 });
     if (candidates.length === 1000) throw new InterfaceServiceError("failed_precondition", "Interface candidate inventory exceeds bounded resolution");
     const accepted: Interface[] = [];
@@ -742,7 +747,7 @@ export class InterfaceService {
       if (!requirement) throw new InterfaceServiceError("invalid_argument", "unknown Interface requirement selection");
       const current = await this.#stores.links.getLatest({ consumerCapsuleId: input.capsuleId, requirementKey: requirement.key });
       if (current) {
-        if (current.providerInterfaceId !== selection.interfaceId || !linkMatchesRequirement(current, requirement) || (current.state !== "active" && current.state !== "pending_approval")) {
+        if (current.providerInterfaceId !== selection.interfaceId || !linkMatchesRequirementExactly(current, requirement) || (current.state !== "active" && current.state !== "pending_approval")) {
           throw new InterfaceServiceError("conflict", "Interface link selection changed");
         }
         result.push(current);
@@ -790,7 +795,7 @@ export class InterfaceService {
     if (input.selection === "auto_single" && iface.spec.access.visibility === "private") throw new InterfaceServiceError("failed_precondition", "private Interface requires explicit selection");
     const siblingLinks = await this.#stores.links.listByConsumerCapsule(input.capsuleId);
     if (siblingLinks.some((link) => link.requirementKey !== input.requirement.key && link.providerInterfaceId === iface.metadata.id && (link.state === "active" || link.state === "pending_approval"))) throw new InterfaceServiceError("conflict", "selected provider conflicts with another consumer requirement");
-    if (current?.providerInterfaceId === iface.metadata.id && (current.state === "active" || current.state === "pending_approval") && linkMatchesRequirement(current, input.requirement)) return current;
+    if (current?.providerInterfaceId === iface.metadata.id && (current.state === "active" || current.state === "pending_approval") && linkMatchesRequirementExactly(current, input.requirement)) return current;
     const requestedBy = actor?.actorAccountId ?? "system";
     const approval = await this.#linkApprovalPolicy.evaluate({ consumerWorkspaceId: input.workspaceId, providerWorkspaceId: iface.metadata.workspaceId, requestedBy });
     const now = this.#now();
@@ -814,11 +819,13 @@ export class InterfaceService {
     };
     // Prepare all known subjects before changing canonical link authority.
     // Preparatory bindings cannot authorize tokens until their link is active.
+    const preparedSubjects: string[] = [];
     if (current && next.state === "active" && current.providerInterfaceId !== next.providerInterfaceId) {
       const history = await this.#stores.bindings.listByInterface(current.providerInterfaceId);
       try {
         for (const binding of history) {
           if (!bindingBelongsToLink(binding, current) || binding.status.phase === "Revoked" || binding.spec.subjectRef.kind !== "Principal") continue;
+          preparedSubjects.push(binding.spec.subjectRef.id);
           await writeFence.assertCurrent();
           await this.#ensureLinkedPrincipalBinding(next, iface, binding.spec.subjectRef.id, next.requestedPermissions.filter((p) => next.approvedPermissions.includes(p)), input.requirement.delivery, true);
           await writeFence.assertCurrent();
@@ -851,6 +858,7 @@ export class InterfaceService {
         : [];
       await this.#revokeLinkBindings(current);
       for (const subjectId of previousSubjects) await this.#ensureLinkedPrincipalBinding(next, iface, subjectId, next.requestedPermissions.filter((permission) => next.approvedPermissions.includes(permission)), input.requirement.delivery);
+      for (const subjectId of preparedSubjects) await this.#ensureLinkedPrincipalBinding(next, iface, subjectId, next.requestedPermissions.filter((permission) => next.approvedPermissions.includes(permission)), input.requirement.delivery);
     }
     if (this.#capsules && (await this.#capsules.getCapsule(input.capsuleId)).status === "destroyed") {
       await this.revokeCapsuleInterfaceLinks(input.workspaceId, input.capsuleId);
@@ -930,23 +938,46 @@ export class InterfaceService {
 
   async #ensureLinkedPrincipalBinding(link: InterfaceLink, iface: Interface, principalId: string, permissions: readonly string[], delivery: CreateInterfaceBindingRequest["delivery"], preparing = false): Promise<void> {
     const history = await this.#stores.bindings.listByInterface(iface.metadata.id);
-    const existing = history.find((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.metadata.materializedFrom?.source === "capsule_required_interface" && binding.metadata.materializedFrom.linkId === link.id);
+    const sameLink = history.filter((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.metadata.materializedFrom?.source === "capsule_required_interface" && binding.metadata.materializedFrom.linkId === link.id);
+    const existing = sameLink.find((binding) => binding.status.phase !== "Revoked");
     const desired = { permissions: [...permissions], delivery };
-    const bindingMatches = (binding: InterfaceBinding) => JSON.stringify(binding.spec.permissions) === JSON.stringify(desired.permissions) && JSON.stringify(binding.spec.delivery) === JSON.stringify(desired.delivery);
-    if (existing?.status.phase === "Revoked") return; // Explicit revocation remains a durable deny.
+    const bindingMatches = (binding: InterfaceBinding) => samePermissionSet(binding.spec.permissions, desired.permissions) && JSON.stringify(binding.spec.delivery) === JSON.stringify(desired.delivery);
+    const linkless = history.filter((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.metadata.materializedFrom?.source === "capsule_required_interface" && !binding.metadata.materializedFrom.linkId && binding.metadata.materializedFrom.capsuleId === link.consumerCapsuleId && binding.metadata.materializedFrom.requirementKey === link.requirementKey && binding.metadata.materializedFrom.interfaceType === link.interface.type && binding.metadata.materializedFrom.interfaceVersion === link.interface.version);
+    const hasOtherGeneration = linkless.length > 0 && (await this.#stores.links.listByConsumerCapsule(link.consumerCapsuleId)).some((candidate) => candidate.requirementKey === link.requirementKey && candidate.id !== link.id);
+    const explicitDeny = !existing && (sameLink.some((binding) => binding.status.phase === "Revoked" && binding.status.conditions?.[0]?.reason !== "Superseded") || (!hasOtherGeneration && linkless.some((binding) => binding.status.phase === "Revoked")));
+    const legacyCandidate = !existing ? history.find((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.status.phase !== "Revoked" && binding.metadata.materializedFrom?.source === "capsule_required_interface" && !binding.metadata.materializedFrom.linkId && binding.metadata.materializedFrom.capsuleId === link.consumerCapsuleId && binding.metadata.materializedFrom.requirementKey === link.requirementKey && binding.metadata.materializedFrom.interfaceType === link.interface.type && binding.metadata.materializedFrom.interfaceVersion === link.interface.version && bindingMatches(binding)) : undefined;
+    // A linkId-less grant is adoptable only while this is the sole known link
+    // generation. After a repoint its origin cannot be proven, even if its
+    // permissions happen to match the new selection.
+    const legacy = legacyCandidate && !preparing && !hasOtherGeneration ? legacyCandidate : undefined;
+    const scope = { consumerCapsuleId: link.consumerCapsuleId, requirementKey: link.requirementKey };
+    if (!preparing && (await this.#stores.links.getCurrent(scope))?.id !== link.id) throw new InterfaceServiceError("conflict", "Interface link changed during grant materialization");
+    // A failed replacement or an evicted preparation can leave a grant whose
+    // link is no longer current. Reclaim only this consumer requirement's
+    // grants; unrelated manual and other-consumer grants remain authoritative.
+    for (const binding of history) {
+      const source = binding.metadata.materializedFrom;
+      if (binding === legacy || binding.status.phase === "Revoked" || binding.spec.subjectRef.kind !== "Principal" || binding.spec.subjectRef.id !== principalId || source?.source !== "capsule_required_interface" || source.capsuleId !== link.consumerCapsuleId || source.requirementKey !== link.requirementKey || source.linkId === link.id) continue;
+      const current = await this.#stores.links.getCurrent(scope);
+      if ((!preparing && current?.id !== link.id) || (preparing && source.linkId === current?.id)) throw new InterfaceServiceError("conflict", "Interface link changed during grant materialization");
+      await this.revokeBinding(iface.metadata.id, binding.metadata.id, undefined, "Superseded");
+      const activated = await this.#stores.links.getCurrent(scope);
+      if (source.linkId && activated?.id === source.linkId && activated.state === "active" && activated.providerInterfaceId === iface.metadata.id) {
+        await this.#ensureLinkedPrincipalBinding(activated, iface, principalId, binding.spec.permissions.filter((permission) => activated.requestedPermissions.includes(permission) && activated.approvedPermissions.includes(permission)), binding.spec.delivery);
+      }
+    }
+    if (explicitDeny) {
+      return; // Explicit revocation remains a durable deny.
+    }
     if (existing) {
       if (bindingMatches(existing)) return;
-      await this.revokeBinding(iface.metadata.id, existing.metadata.id);
+      await this.revokeBinding(iface.metadata.id, existing.metadata.id, undefined, "Superseded");
     }
-    const legacy = history.find((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.status.phase !== "Revoked" && binding.metadata.materializedFrom?.source === "capsule_required_interface" && !binding.metadata.materializedFrom.linkId && binding.metadata.materializedFrom.capsuleId === link.consumerCapsuleId && binding.metadata.materializedFrom.requirementKey === link.requirementKey && binding.metadata.materializedFrom.interfaceType === link.interface.type && binding.metadata.materializedFrom.interfaceVersion === link.interface.version);
     if (legacy) {
-      if (bindingMatches(legacy)) {
-        const adopted: InterfaceBinding = { ...legacy, metadata: { ...legacy.metadata, generation: legacy.metadata.generation + 1, updatedAt: this.#now(), materializedFrom: { source: "capsule_required_interface", capsuleId: link.consumerCapsuleId, requirementKey: link.requirementKey, interfaceType: link.interface.type, interfaceVersion: link.interface.version, linkId: link.id } } };
-        if (!(await this.#stores.bindings.compareAndSet(adopted, legacy.metadata.generation))) throw new InterfaceServiceError("conflict", "legacy Interface grant changed concurrently");
-        await this.#projectInterface(iface);
-        return;
-      }
-      await this.revokeBinding(iface.metadata.id, legacy.metadata.id);
+      const adopted: InterfaceBinding = { ...legacy, metadata: { ...legacy.metadata, generation: legacy.metadata.generation + 1, updatedAt: this.#now(), materializedFrom: { source: "capsule_required_interface", capsuleId: link.consumerCapsuleId, requirementKey: link.requirementKey, interfaceType: link.interface.type, interfaceVersion: link.interface.version, linkId: link.id } } };
+      if (!(await this.#stores.bindings.compareAndSet(adopted, legacy.metadata.generation))) throw new InterfaceServiceError("conflict", "legacy Interface grant changed concurrently");
+      await this.#projectInterface(iface);
+      return;
     }
     if ((await this.#stores.bindings.listByInterface(iface.metadata.id)).some((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.status.phase !== "Revoked")) {
       if (preparing) throw new InterfaceServiceError("conflict", "selected provider has a conflicting Principal grant");
@@ -2288,6 +2319,7 @@ export class InterfaceService {
     interfaceId: string,
     bindingId: string,
     actor?: ActorContext,
+    reason: "Revoked" | "Superseded" = "Revoked",
   ): Promise<InterfaceBinding> {
     const current = await this.#stores.bindings.get(bindingId);
     if (!current || current.spec.interfaceId !== interfaceId) {
@@ -2312,7 +2344,7 @@ export class InterfaceService {
           condition(
             "Ready",
             "false",
-            "Revoked",
+            reason,
             now,
             current.metadata.generation + 1,
           ),
@@ -3913,7 +3945,17 @@ function condition(
 }
 
 function linkMatchesRequirement(link: InterfaceLink, requirement: CapsuleRequiredInterface): boolean {
-  return link.interface.type === requirement.interface.type && link.interface.version === requirement.interface.version && link.deliveryType === requirement.delivery.type && JSON.stringify(link.requestedPermissions) === JSON.stringify(requirement.permissions);
+  return link.interface.type === requirement.interface.type && link.interface.version === requirement.interface.version && link.deliveryType === requirement.delivery.type;
+}
+
+function linkMatchesRequirementExactly(link: InterfaceLink, requirement: CapsuleRequiredInterface): boolean {
+  return linkMatchesRequirement(link, requirement) && samePermissionSet(link.requestedPermissions, requirement.permissions);
+}
+
+function samePermissionSet(left: readonly string[], right: readonly string[]): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === rightSet.size && [...leftSet].every((permission) => rightSet.has(permission));
 }
 
 function bindingBelongsToLink(binding: InterfaceBinding, link: InterfaceLink): boolean {

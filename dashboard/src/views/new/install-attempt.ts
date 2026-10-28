@@ -979,6 +979,10 @@ export function attemptProblemKey(code: string | undefined): MessageKey {
       return "installStore.problem.compatibility";
     case "repository_install_ux_secret_materialization_required":
       return "installStore.problem.secretSetting";
+    case "interface_link_unavailable":
+      return "installStore.problem.interfaceUnavailable";
+    case "interface_choice_conflict":
+      return "installStore.problem.interfaceConflict";
     case "plan_run_failed":
       return "installStore.problem.plan";
     case "install_plan_reconcile_retryable":
