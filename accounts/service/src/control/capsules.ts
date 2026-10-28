@@ -588,11 +588,6 @@ async function deleteCapsule(
         "delete requested before first successful apply",
         expectedWorkspaceManagementAuthority,
       );
-    } else if (!capsuleHasAppliedState(capsule)) {
-      // A caller without lifecycle admission cannot re-enter the domain
-      // abandonment operation; keep the retry cleanup best-effort fenced by
-      // the Interface service's own authority checks.
-      await operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
     }
     return jsonStatus(
       {
