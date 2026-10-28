@@ -769,6 +769,30 @@ export const interfaces = sqliteTable(
   ],
 );
 
+export const interfaceLinks = sqliteTable(
+  names.interfaceLinks,
+  {
+    id: text("id").primaryKey(),
+    generation: integer("generation").notNull(),
+    consumerCapsuleId: text("consumer_capsule_id").notNull(),
+    requirementKey: text("requirement_key").notNull(),
+    providerInterfaceId: text("provider_interface_id").notNull(),
+    providerCapsuleId: text("provider_capsule_id").notNull(),
+    state: text("state").notNull(),
+    recordJson: jsonText("record_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("interface_links_current_consumer_requirement_unique")
+      .on(table.consumerCapsuleId, table.requirementKey)
+      .where(sql`${table.state} in ('pending_approval', 'active')`),
+    index("interface_links_consumer_lineage_idx").on(table.consumerCapsuleId, table.requirementKey, table.generation),
+    index("interface_links_provider_interface_idx").on(table.providerInterfaceId),
+    index("interface_links_provider_capsule_idx").on(table.providerCapsuleId),
+  ],
+);
+
 export const interfaceBindings = sqliteTable(
   names.interfaceBindings,
   {

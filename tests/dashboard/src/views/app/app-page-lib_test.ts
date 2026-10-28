@@ -161,9 +161,10 @@ function appView(patch: Partial<CapsuleAppView> = {}): CapsuleAppView {
     primaryAction: "open",
     problems: [],
     screens: [],
+    links: { uses: [], usedBy: [] },
     version: { updateAvailable: false, stale: false, autoUpdate: false },
     progress: { revisionPreparing: false },
-    uninstall: { mode: "scheduled", graceDays: 7 },
+    uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
     observedAt: "2026-10-28T00:00:00.000Z",
     ...patch,
   };

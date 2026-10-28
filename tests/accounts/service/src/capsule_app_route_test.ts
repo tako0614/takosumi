@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleAppView } from "takosumi-contract/capsules";
+import type { CapsuleRequiredInterface, Interface, InterfaceLink } from "takosumi-contract/interfaces";
+import { TAKOSUMI_API_VERSION } from "takosumi-contract/capabilities";
 import type { ListRunsResponse } from "takosumi-contract/runs";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
@@ -41,6 +43,7 @@ async function fixture(options: {
   readonly sourceUrl?: string;
   readonly overrides?: Partial<ControlPlaneOperations>;
   readonly currentStateVersionId?: string;
+  readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
 } = {}) {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
@@ -51,6 +54,7 @@ async function fixture(options: {
     installConfigId: "cfg_app_route",
     ...(options.requiredProviders ? { requiredProviders: options.requiredProviders } : {}),
     ...(options.sourceUrl ? { sourceUrl: options.sourceUrl } : {}),
+    ...(options.requiredInterfaces ? { installConfig: { requiredInterfaces: options.requiredInterfaces } } : {}),
   });
   await ledger.putCapsule({
     ...seeded.capsule,
@@ -80,6 +84,7 @@ async function fixture(options: {
     cookie = owner,
     method = "GET",
     body?: unknown,
+    authorization?: string,
   ) {
     const url = new URL(`${ORIGIN}/api/v1/capsules/${CAPSULE}${path}`);
     const response = await handleControlRoute({
@@ -87,6 +92,7 @@ async function fixture(options: {
         method,
         headers: {
           cookie,
+          ...(authorization ? { authorization: `Bearer ${authorization}` } : {}),
           ...(body === undefined ? {} : { "content-type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -103,7 +109,7 @@ async function fixture(options: {
     expect(response.status).toBe(200);
     return ((await response.json()) as { app: CapsuleAppView }).app;
   }
-  return { ledger, core, seeded, request, app, owner, stranger };
+  return { ledger, core, seeded, request, app, owner, stranger, interfaceStores, accounts };
 }
 
 function planRun(id: string, createdAt: number, over: Partial<PlanRun> = {}): PlanRun {
@@ -492,7 +498,273 @@ test("a supporting read that fails is reported as incomplete instead of silently
   // An unread screen list must not downgrade Open to "view resources".
   expect(app.primaryAction).toBe("open");
   expect(app.screens).toEqual([]);
-  expect(app.incomplete).toEqual(["screen_problems", "screens"]);
+  expect(app.incomplete).toEqual(["links", "screen_problems", "screens"]);
+});
+
+const LINK_REQUIREMENT: CapsuleRequiredInterface = {
+  key: "data",
+  interface: { type: "data", version: "1" },
+  permissions: ["data.read"],
+  delivery: { type: "none" },
+};
+
+async function linkedFixture(requirement = LINK_REQUIREMENT, consent = LINK_REQUIREMENT.permissions) {
+  const h = await fixture({ requiredInterfaces: [requirement] });
+  const provider = await seedCapsuleModel(h.ledger, {
+    workspaceId: WORKSPACE,
+    capsuleId: "cap_link_provider",
+    sourceId: "src_link_provider",
+    snapshotId: "snap_link_provider",
+    installConfigId: "cfg_link_provider",
+    name: "database",
+    installConfig: {
+      store: {
+        order: 1,
+        surface: "app",
+        kind: "data",
+        provider: "test",
+        suggestedName: "database",
+        badge: { ja: "データ", en: "Data" },
+        name: { ja: "データベース", en: "Database" },
+        description: { ja: "データ保管", en: "Data storage" },
+        iconUrl: "https://assets.example.com/database.svg",
+      },
+    },
+  });
+  await h.ledger.putCapsule({ ...provider.capsule, status: "active", currentStateGeneration: 1 });
+  const now = new Date().toISOString();
+  const iface: Interface = {
+    apiVersion: TAKOSUMI_API_VERSION,
+    kind: "Interface",
+    metadata: {
+      id: "if_link_data",
+      workspaceId: WORKSPACE,
+      name: "data",
+      ownerRef: { kind: "Capsule", id: provider.capsule.id },
+      generation: 1,
+      createdAt: now,
+      updatedAt: now,
+    },
+    spec: {
+      type: "data",
+      version: "1",
+      document: { privateConfig: "must-not-be-projected" },
+      access: { visibility: "workspace" },
+    },
+    status: {
+      phase: "Resolved",
+      observedGeneration: 1,
+      resolvedRevision: 1,
+      resolvedInputs: { password: "must-not-be-projected" },
+    },
+  };
+  expect(await h.interfaceStores.interfaces.create(iface)).toBe(true);
+  const link: InterfaceLink = {
+    id: "ifl_app_data",
+    generation: 1,
+    consumerCapsuleId: CAPSULE,
+    requirementKey: LINK_REQUIREMENT.key,
+    interface: LINK_REQUIREMENT.interface,
+    requestedPermissions: consent,
+    approvedPermissions: consent,
+    deliveryType: "none",
+    providerInterfaceId: iface.metadata.id,
+    providerCapsuleId: provider.capsule.id,
+    state: "active",
+    selection: "explicit",
+    approval: { kind: "requester_manages_provider", approvedBy: OWNER, approvedAt: now },
+    requestedBy: OWNER,
+    createdAt: now,
+    updatedAt: now,
+  };
+  expect(await h.interfaceStores.links.create(link)).toBe(true);
+  return { ...h, provider, iface, link };
+}
+
+test("app links show exact current providers, permissions and value-free display metadata", async () => {
+  const h = await linkedFixture();
+  h.core.interfaces!.listInterfaceLinkCandidates = async () => { throw new Error("App view must not enumerate candidates"); };
+  const app = await h.app();
+  expect(app.links).toEqual({
+    uses: [{
+      linkId: h.link.id,
+      requirementKey: "data",
+      consumerCapsuleId: CAPSULE,
+      providerCapsuleId: h.provider.capsule.id,
+      providerInterfaceId: h.iface.metadata.id,
+      interfaceType: "data",
+      interfaceVersion: "1",
+      permissions: ["data.read"],
+      state: "active",
+      generation: 1,
+      health: "ok",
+      otherApp: {
+        capsuleId: h.provider.capsule.id,
+        name: "database",
+        displayName: { ja: "データベース", en: "Database" },
+        iconUrl: "https://assets.example.com/database.svg",
+      },
+      canManage: true,
+    }],
+    usedBy: [],
+  });
+  expect(app.uninstall.impact).toEqual({ usedBy: [] });
+  expect(app.problems).toEqual([]);
+  expect(JSON.stringify(app)).not.toContain("must-not-be-projected");
+  expect(JSON.stringify(app)).not.toContain("requestedBy");
+  expect(JSON.stringify(app)).not.toContain("approvedBy");
+});
+
+test("link health accepts reordered and reduced permission sets and identifies an increase", async () => {
+  for (const permissions of [["data.write", "data.read"], ["data.read"]]) {
+    const h = await linkedFixture({ ...LINK_REQUIREMENT, permissions }, ["data.read", "data.write"]);
+    const app = await h.app();
+    expect(app.links.uses[0]).toMatchObject({ health: "ok", permissions });
+    expect(app.problems).toEqual([]);
+  }
+  const increased = await linkedFixture({
+    ...LINK_REQUIREMENT, permissions: ["data.read", "data.write"],
+  });
+  const app = await increased.app();
+  expect(app.links.uses[0].health).toBe("reapproval_required");
+  expect(app.problems).toMatchObject([{ code: "interface_link_unavailable", severity: "warning" }]);
+});
+
+test("a provider uninstall degrades its link without changing consent, and removal requires repair", async () => {
+  const h = await linkedFixture();
+  const provider = (await h.ledger.getCapsule(h.provider.capsule.id))!;
+  await h.ledger.putCapsule({ ...provider, status: "uninstalled" });
+  const scheduled = await h.app();
+  expect(scheduled.links.uses[0]).toMatchObject({ state: "active", health: "provider_uninstall_scheduled" });
+  expect(scheduled.state).toBe("installed");
+  expect(scheduled.problems).toMatchObject([{ code: "interface_link_degraded", severity: "warning", requirementKey: "data" }]);
+  await h.ledger.putCapsule({ ...provider, status: "destroyed" });
+  const removed = await h.app();
+  expect(removed.links.uses[0]).toMatchObject({ state: "active", health: "provider_removed" });
+  expect(removed.state).toBe("needs_attention");
+  expect(removed.primaryAction).toBe("fix_interface_link");
+  expect(removed.problems).toMatchObject([{ code: "interface_link_unavailable", severity: "error", requirementKey: "data" }]);
+  expect((await h.interfaceStores.links.get(h.link.id))?.state).toBe("active");
+});
+
+test("incoming current consumers are included in uninstall impact while revoked history is omitted", async () => {
+  const h = await linkedFixture();
+  const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+  await h.ledger.putCapsule({ ...capsule, id: "cap_link_consumer", name: "consumer", slug: "consumer" });
+  const incoming: InterfaceLink = {
+    ...h.link,
+    id: "ifl_incoming",
+    consumerCapsuleId: "cap_link_consumer",
+    providerCapsuleId: CAPSULE,
+    providerInterfaceId: "if_incoming",
+  };
+  expect(await h.interfaceStores.interfaces.create({
+    ...h.iface,
+    metadata: { ...h.iface.metadata, id: incoming.providerInterfaceId, ownerRef: { kind: "Capsule", id: CAPSULE } },
+  })).toBe(true);
+  expect(await h.interfaceStores.links.create(incoming)).toBe(true);
+  const retained = {
+    ...incoming,
+    id: "ifl_revoked",
+    requirementKey: "retired",
+  };
+  expect(await h.interfaceStores.links.create(retained)).toBe(true);
+  expect(await h.interfaceStores.links.compareAndSet({
+    ...retained,
+    state: "revoked",
+    generation: 2,
+    revoked: { revokedBy: OWNER, revokedAt: incoming.updatedAt },
+  }, 1)).toBe(true);
+  const app = await h.app();
+  expect(app.links.usedBy).toHaveLength(1);
+  expect(app.links.usedBy[0]).toMatchObject({
+    linkId: incoming.id,
+    consumerCapsuleId: incoming.consumerCapsuleId,
+    otherApp: { capsuleId: incoming.consumerCapsuleId, name: "consumer" },
+    canManage: true,
+    health: "ok",
+  });
+  expect(app.uninstall.impact.usedBy).toEqual(app.links.usedBy);
+});
+
+test("an unset requirement is visible and a link read failure is explicitly incomplete", async () => {
+  const h = await fixture({ requiredInterfaces: [LINK_REQUIREMENT] });
+  const unset = await h.app();
+  expect(unset.links.uses[0]).toMatchObject({
+    requirementKey: "data", state: "unset", generation: 0,
+  });
+  expect(unset.problems).toMatchObject([{ code: "interface_link_unset", severity: "warning" }]);
+  expect(unset.state).toBe("installed");
+  h.interfaceStores.links.listByConsumerCapsule = async () => { throw new Error("link store unavailable"); };
+  const failed = await h.app();
+  expect(failed.links).toEqual({ uses: [], usedBy: [] });
+  expect(failed.incomplete).toContain("links");
+  expect(failed.problems).toEqual([]);
+  expect(failed.state).toBe("installed");
+});
+
+test("read-only members see link requirements without management authority", async () => {
+  const member = { workspaceId: WORKSPACE, accountId: STRANGER, status: "active", roles: ["viewer"] } as const;
+  const h = await fixture({
+    requiredInterfaces: [LINK_REQUIREMENT],
+    overrides: {
+      members: {
+        getMember: async () => member,
+        listMembers: async () => [member],
+      } as unknown as ControlPlaneOperations["members"],
+    },
+  });
+  const app = await h.app(h.stranger);
+  expect(app.links.uses[0].canManage).toBe(false);
+});
+
+test("read-only delegated credentials cannot manage links even for the Workspace owner", async () => {
+  const h = await linkedFixture();
+  const token = {
+    tokenId: "pat_link_read_id", tokenPrefix: "read", subject: OWNER,
+    name: "read only", scopes: ["read"], workspaceId: WORKSPACE, createdAt: Date.now(),
+  } as const;
+  h.accounts.savePersonalAccessToken("pat_link_read", token);
+  const response = await h.request("/app", "", "GET", undefined, "pat_link_read");
+  expect(response.status).toBe(200);
+  const app = ((await response.json()) as { app: CapsuleAppView }).app;
+  expect(app.links.uses[0].canManage).toBe(false);
+  expect(app.incomplete).toBeUndefined();
+  expect(app.state).toBe("installed");
+  h.accounts.savePersonalAccessToken("pat_link_read", { ...token, scopes: ["read", "write"] });
+  const writable = await h.request("/app", "", "GET", undefined, "pat_link_read");
+  expect(writable.status).toBe(200);
+  expect(((await writable.json()) as { app: CapsuleAppView }).app.links.uses[0].canManage).toBe(true);
+});
+
+test("an Interface that becomes NotReady is unavailable without exposing its inputs", async () => {
+  const h = await linkedFixture();
+  expect(await h.interfaceStores.interfaces.compareAndSet({
+    ...h.iface,
+    status: { ...h.iface.status, phase: "NotReady" },
+  }, { generation: 1, resolvedRevision: 1, record: h.iface })).toBe(true);
+  const app = await h.app();
+  expect(app.links.uses[0].health).toBe("provider_not_ready");
+  expect(app.primaryAction).toBe("view_resources");
+  expect(app.state).toBe("installed");
+  expect(app.problems).toMatchObject([{ code: "interface_link_unavailable", severity: "warning" }]);
+  expect(JSON.stringify(app)).not.toContain("must-not-be-projected");
+});
+
+test("app links choose the latest lineage generation after a provider replacement", async () => {
+  const h = await linkedFixture();
+  const next: InterfaceLink = { ...h.link, id: "ifl_app_replacement", generation: 3 };
+  expect(await h.interfaceStores.links.replace({
+    expected: h.link,
+    revoked: {
+      ...h.link, state: "revoked", generation: 2,
+      revoked: { revokedBy: OWNER, revokedAt: h.link.updatedAt },
+    },
+    record: next,
+  })).toBe(true);
+  const app = await h.app();
+  expect(app.links.uses).toHaveLength(1);
+  expect(app.links.uses[0]).toMatchObject({ linkId: next.id, state: "active", generation: 3, health: "ok" });
 });
 
 // --- review fixes: real uninstall records, real admission, real run shapes ----

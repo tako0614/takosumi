@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 89 件です。
+次の 92 件です。
 
 ### Account views
 
@@ -237,7 +237,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを追加する                      |
 | PATCH    | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える                  |
 | DELETE   | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す                          |
-| GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Workspace の Capsule 一覧を読む。廃止された依存 edge 一覧は空で返す |
+| GET      | `/api/v1/workspaces/{workspaceId}/installed-apps`    | ストア照合用の、値を含まないインストール済みアプリの要約を読む |
 | GET      | `/api/v1/workspaces/{workspaceId}/ui-surfaces`       | 認可済み Workspace UI surface Interface を一覧する |
 | GET      | `/api/v1/workspaces/{workspaceId}/activity`          | 操作履歴を一覧する                      |
 | GET      | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | Interface materialization の value-free な失敗を一覧する |
@@ -250,6 +250,19 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/drift-check`       | Workspace 全体の差分確認 Run を作る     |
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
+
+`GET /api/v1/workspaces/{workspaceId}/installed-apps` に query parameter はありません。その Workspace を
+読める利用者に、destroyed を除くアプリを `{ installedApps: [...], complete: boolean }` で返します。各行は
+`capsuleId`、`name`、任意の `displayName`（`{ja,en}`）と `iconUrl`、Capsule から作る簡易な `state`、
+`installedFrom: {url,path,matchable?}` を持ちます。URL は認証情報・query・fragment を含まず、`path` はリポジトリから見た
+実行する module のフォルダです。元の URL が query を含むなど、表示用 URL から正確に照合できない行には
+`matchable: false` を付け、インストール済みの照合から除外します。アプリの ID や要約は引き続き返します。
+未適用のアプリも照合から除外します。設定や取得元を読めないアプリの行は省き、他のアプリの一覧を返します。
+設定の一括取得失敗や取得元のページ上限などで一覧を確認しきれないときは `complete: false` です。
+この場合、返った行との一致は使えますが、一致しないアプリを未インストールとは判断できません。
+ref は照合に使いませんが、query は実行元の identity の一部として保持します。ストアは正規化した Git URL と module
+で照合し、「インストール済み」の件数と「開く」、副操作の「もう1つ入れる」を表示します。
+もう一度インストールしたものは独立したアプリで、データや設定は共有しません。
 
 メンバー一覧の各行は、membership の field に加えて、アカウントに表示名があれば
 `displayName` を返します。`email` は呼び出し元がその Workspace の active な owner または
@@ -330,16 +343,21 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 - `state`: `installing` / `installed` / `updating` / `needs_attention` / `stopped` /
   `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` / `retry_screen` /
-  `fix_connection` / `continue_install` / `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
-- `problems[].code`（優先順）: `connection_unavailable` / `uninstall_failed` /
+  `fix_connection` / `fix_interface_link` / `continue_install` / `cancel_uninstall` /
+  `uninstall_now` / `reinstall` / `none`
+- `problems[].code`（優先順）: `connection_unavailable` / `interface_link_unavailable` / `uninstall_failed` /
   `uninstall_blocked` / `policy_blocked` / `run_failed` / `capsule_error` /
-  `install_incomplete` / `screen_unavailable` / `uninstall_scheduled`（警告）
+  `install_incomplete` / `screen_unavailable` / `interface_link_degraded` /
+  `interface_link_unset` / `uninstall_scheduled`（最後の3つは警告）
 
 応答には、開ける画面のすべて (`screens`)、採用中の版と同じ ref の最新 snapshot
 (`version.current` / `version.latest` / `updateAvailable` / `stale` / `autoUpdate`)、
 進行中の Run と確認待ちの計画 (`progress`)、最新の Run (`latestRun`)、削除の条件
 (`uninstall.mode` と、予約前でも分かる `graceDays`、予約後の `scheduled.deleteAfter`)
-が入ります。秘密の値、Output の値、画面の起動 URL 以外の Interface 入力は含みません。
+が入ります。`links.uses` はこのアプリが使う連携、`links.usedBy` はこのアプリを使う連携です。
+`uninstall.impact.usedBy` は、削除の影響を受ける利用側を示します。提供元を削除しても利用側の
+アプリは残り、他の提供元へは自動で切り替えません。秘密の値、Output の値、画面の起動 URL
+以外の Interface 入力は含みません。
 補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
 `progress.revisionPreparing` は、インストールまたは版の更新処理がまだ計画の Run を作っていない
 間だけ true です（インストールの試みは一度も適用していないアプリに限り、止まった試みは除きます）。
@@ -382,6 +400,39 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/capsules/{capsuleId}/destroy-plan` | 破棄計画 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
+
+### Interface links
+
+| メソッド | パス | 説明 |
+| -------- | ---- | ---- |
+| GET | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates` | requirement に合う提供元と、現在の連携の generation を読む |
+| PUT | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | generation CAS で提供元を選び直す |
+| DELETE | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | 利用側または提供側の管理者として連携を解除する |
+
+候補取得の応答は `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`
+です。`generation` はその consumer と requirement key の最新記録の値で、履歴がなければ 0 です。
+候補は同じ Workspace にある別の Capsule が所有する `Resolved` Interface に限られます。
+Workspace / operator 所有の Interface は提供元になりません。
+PUT の本文は `{ interfaceId, expectedGeneration }`、DELETE は `{ expectedGeneration }` です。
+どちらも成功時は `{ link: InterfaceLink }` を返します。選び直しに Plan は不要です。
+新しい提供元への Binding を用意してから、旧提供元への Binding を取り消します。
+
+InterfaceLink は consumer Capsule と requirement key、正確な type/version、要求・承認した
+permissions、選んだ提供元の Interface / Capsule、`state`、`selection`、`generation` を記録します。
+`state` は `pending_approval|active|declined|revoked`、`selection` は `explicit|auto_single` です。
+提供元がアンインストールされても選択や state を書き換えず、アプリの読み取り時に健康状態を計算します。
+active な連携だけを実行時の認可に使い、連携の値や認証情報を OpenTofu に渡しません。
+連携がなくても OIDC のサインインは続き、その連携の Binding を作りません。
+
+GET は利用側の read アクセス、PUT は利用側の write アクセス、DELETE は利用側または提供側の
+write アクセスを確かめます。
+権限不足は 403、不正な入力は 400、generation の競合は 409、利用不可の提供元は 412 です。
+承認判断は policy port が持ち、現在の Workspace 構成では同じ Workspace の連携を即時承認します。
+
+永続化先は D1 の `interface_links`（migration v76 `d1_interface_links`）と PostgreSQL の
+`takosumi_interface_links`（migration v122 `runtime_interfaces.links.create`）です。追加のみの
+schema で、資格情報を保存しません。この変更で本番 DDL の適用・本番 rollout は行っていません。
+本番への適用は別途承認と検証を経る作業です。
 
 ### Source
 
@@ -450,6 +501,27 @@ route はありません。
 止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
 すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
 Source は削除しません。その試行自身が有効にした polling だけを止めます。
+
+`userAction.kind: "provide_inputs"` の `interfaces` は、`requirementKey`、type/version、
+permissions、値を含まない候補、`choice`、`autoSelected` を返します。候補が 0 件なら「あとで」、
+1 件で private ではなく別の要件の候補とも重複しない場合だけ自動選択します。private の提供元、
+重複する候補、複数の候補は、提供元か「あとで」を明示して選びます。PATCH の `interfaceLinks` は
+`[{requirementKey,choice:{kind:"interface",interfaceId}}]` または
+`[{requirementKey,choice:{kind:"later"}}]` という完全な回答一覧です。提供元の ID は manifest ではなく
+この選択に保存し、Capsule 作成の直後に固定した InterfaceLink を作ります。以後は候補を解決し直しません。
+
+表示した自動選択を確認するときは、`continue: true` と一緒に
+`observedInterfaces: [{requirementKey,candidateIds}]` を返します。明示した `interfaceLinks` が
+ある requirement はそちらを優先し、それ以外で送信した候補 ID 集合が現在の候補と異なれば
+409 `interface_candidate_unavailable` を返します。sheet を開いた後に候補が変わっていても、送信時点の候補集合と一致すれば
+受け付けます。観測情報を省略した要件は、sheet を開いたときの候補集合を使って確認します。
+response の `installPlan.implicitInterfaceKeys` は `options.interfaceLinks` に保存された暗黙選択
+（候補が一つのときの自動選択や「あとで」）の requirement key を示し、再開時に明示した選択と区別します。
+この観測情報は ID だけで、`options` への
+保存や権限の付与は行いません。
+Control D1 が Interface link store の導入前（schema v76 未満）の場合は候補を表示せず、
+`linkStoreUnavailable: true` と案内を返します。「あとで」を選ぶとリンクを作らずに Capsule の
+作成とインストールを進められます。導入前の候補 ID を明示しても Capsule 作成前に拒否します。
 
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の

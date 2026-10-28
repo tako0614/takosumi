@@ -80,6 +80,7 @@ docs use a different name, read it back through this table.
 | Term             | Meaning                                                                                                            |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------ |
 | Interface        | The declaration of what something you deployed provides.                                                           |
+| InterfaceLink    | The durable link from a consumer Capsule and requirement key to its selected provider Interface and Capsule, with requested and approved permissions. |
 | InterfaceBinding | The authorization for who may use that Interface, and with which permissions.                                      |
 | Principal        | The subject on the consuming side that is a person or an account.                                                  |
 | ServiceAccount   | The subject on the consuming side that is not a person.                                                            |

@@ -77,6 +77,7 @@ async function detailFixture(
       name: "cloudflare-service", environment: "production", status: capsuleStatus,
       applied: capsuleStatus !== "pending" && capsuleStatus !== "destroyed", problems: [] as Record<string, unknown>[],
       screens: [] as Record<string, unknown>[],
+      links: { uses: [], usedBy: [] },
       version: {
         repository: { url: "https://github.com/example/cloudflare-service.git", defaultRef: sourceCommit },
         ...(capsuleStatus !== "pending" && capsuleStatus !== "destroyed"
@@ -85,7 +86,7 @@ async function detailFixture(
         updateAvailable: false, stale: false, autoUpdate: false,
       },
       progress: { revisionPreparing: false } as Record<string, unknown>,
-      uninstall: { mode: "scheduled", graceDays: 7 } as Record<string, unknown>,
+      uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } } as Record<string, unknown>,
       observedAt: now,
     };
     const failedApply = { code: "run_failed", severity: "error", runId: applyId, runType: "apply", errorCode: "runner_apply_failed" };
