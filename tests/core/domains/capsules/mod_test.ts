@@ -33,6 +33,7 @@ let automaticSourceCounter = 0;
 
 function build(
   store: OpenTofuControlStore = new InMemoryOpenTofuControlStore(),
+  retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>,
 ) {
   let counter = 0;
   const newId = (prefix: string) =>
@@ -41,6 +42,7 @@ function build(
     store,
     newId,
     now: () => new Date(NOW),
+    retireOwnedSource,
   });
   STORE_BY_SERVICE.set(service, store);
   return { store, service };
@@ -575,7 +577,10 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
     ],
     { onRelease: () => (releaseCalls += 1) },
   );
-  const { service } = build(store);
+  const retireCalls: string[] = [];
+  const { service } = build(store, async (sourceId) => {
+    retireCalls.push(sourceId);
+  });
   await seedWorkspaceAndSource(store);
   const capsule = await createInitialCapsule(service, {
     capsuleId: "cap_test00000001",
@@ -605,6 +610,7 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
   );
 
   expect(abandoned.status).toBe("destroyed");
+  expect(retireCalls).toEqual([capsule.sourceId]);
   expect((await store.getCapsule(capsule.id))?.status).toBe("destroyed");
   expect(
     (await store.getPublicHostReservation("shop.app.example"))?.status,

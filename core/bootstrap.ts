@@ -65,6 +65,7 @@ import {
   type EnqueueSourceSync,
   SourcesService,
 } from "./domains/sources/mod.ts";
+import { sweepRetiredSources, type SourceRetirementSweepResult } from "./domains/sources/retirement_sweeper.ts";
 import {
   CAPSULE_LIFECYCLE_BUSY_REASON,
   type CapsuleLifecycleAdmission,
@@ -707,6 +708,8 @@ export interface TakosumiOperations {
   finalizeDueCapsuleUninstalls(options?: {
     readonly limit?: number;
   }): Promise<CapsuleUninstallFinalizeResult>;
+  /** Internal daily retry for app-owned and orphan Source retirement. */
+  sweepRetiredSources(options?: { readonly limit?: number }): Promise<SourceRetirementSweepResult>;
   /** Internal scheduled recovery; never mounted on the public API. */
   drainInterfaceMaterializationIntents(options?: {
     readonly limit?: number;
@@ -957,6 +960,7 @@ export interface TakosumiOperations {
     request: EnsureOwnedSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<SourceResponse>;
+  retireOwnedSource(sourceId: string, reason: string): Promise<"retired" | "already_retired" | "deferred">;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -972,6 +976,7 @@ export interface TakosumiOperations {
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly CreateSourceSyncResponse[]>;
   createSourceCompatibilityCheck(
     sourceId: string,
@@ -1316,6 +1321,7 @@ export async function createTakosumiService(
     capsuleLifecycleAdmission,
     uninstallGraceDays: uninstallGrace.days,
     validateUninstallRequesterAt: options.validateUninstallRequesterAt,
+    retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
   });
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
@@ -1855,6 +1861,14 @@ export async function createTakosumiService(
         },
         finalizeOptions,
       ),
+    sweepRetiredSources: (sweepOptions) =>
+      sweepRetiredSources({
+        store: sharedOpenTofuStore,
+        plans: gitInstallPlanStore,
+        retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
+        onError: (error, sourceId) =>
+          log.warn("service.source_retirement.sweep_failed", { sourceId, error }),
+      }, sweepOptions),
     drainInterfaceMaterializationIntents: (options) =>
       interfaceMaterializationIntentDrainer.drain(options),
     listInterfaceMaterializationFailures: (workspaceId, options) =>
@@ -2091,6 +2105,7 @@ export async function createTakosumiService(
         expectedWorkspaceManagementAuthority,
       ),
     ensureOwnedSource: (request, authority) => opentofuController.ensureOwnedSource(request, authority),
+    retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
     listSources: (workspaceId, params) =>
       opentofuController.listSources(workspaceId, params),
     getSource: (id) => opentofuController.getSource(id),
@@ -2103,8 +2118,8 @@ export async function createTakosumiService(
         opts ?? {},
         expectedWorkspaceManagementAuthority,
       ),
-    createSourceReconciliationSyncs: (sourceId) =>
-      opentofuController.createSourceReconciliationSyncs(sourceId),
+    createSourceReconciliationSyncs: (sourceId, reconciliationOptions) =>
+      opentofuController.createSourceReconciliationSyncs(sourceId, reconciliationOptions),
     createSourceCompatibilityCheck: (sourceId, request, context) =>
       opentofuController.createSourceCompatibilityCheck(
         sourceId,

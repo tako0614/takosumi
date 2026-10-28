@@ -5,6 +5,7 @@ import {
   CloudflareD1OpenTofuControlStore,
 } from "../../../worker/src/d1_opentofu_store.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
@@ -296,6 +297,7 @@ function makeWebhookOps(
   overrides: {
     valid?: boolean;
     throwOnVerify?: boolean;
+    missingSource?: boolean;
   } = {},
 ): {
   ops: SourceWebhookOperations;
@@ -305,6 +307,9 @@ function makeWebhookOps(
   const syncCalls: { sourceId: string; dedupe?: boolean }[] = [];
   const verifyCalls: { sourceId: string; secret: string }[] = [];
   const ops: SourceWebhookOperations = {
+    getSource: async () => {
+      if (overrides.missingSource) throw new OpenTofuControllerError("not_found", "missing source");
+    },
     verifySourceHookSecret: (sourceId, secret) => {
       verifyCalls.push({ sourceId, secret });
       if (overrides.throwOnVerify) return Promise.reject(new Error("boom"));
@@ -354,6 +359,15 @@ test("webhook rejects a wrong bearer (401) and does not trigger a sync", async (
   expect(syncCalls).toHaveLength(0);
 });
 
+test("webhook returns 404 for a retired Source with a bearer", async () => {
+  const { ops, syncCalls, verifyCalls } = makeWebhookOps({ missingSource: true });
+  const { request, url } = webhookRequest({}, { bearer: "old-hook-secret" });
+  const response = await handleSourceWebhookRequest(request, url, ops);
+  expect(response.status).toBe(404);
+  expect(syncCalls).toEqual([]);
+  expect(verifyCalls).toEqual([]);
+});
+
 test("webhook with a verify error is treated as unauthenticated (401)", async () => {
   const { ops, syncCalls } = makeWebhookOps({ throwOnVerify: true });
   const { request, url } = webhookRequest({}, { bearer: "x" });
@@ -398,6 +412,7 @@ test("webhook rejects an unsupported source id shape (404)", async () => {
 test("scheduled poll enqueues a deduped sync per autoSync source, capped", async () => {
   const syncCalls: string[] = [];
   const ops: SourcePollOperations = {
+    getSource: async () => undefined,
     verifySourceHookSecret: () => Promise.resolve(true),
     createSourceReconciliationSyncs: (sourceId) => {
       syncCalls.push(sourceId);
@@ -3770,6 +3785,7 @@ test("handlePlatformExtensionRequest returns undefined for unmatched paths", asy
 test("scheduled poll continues past a failing source", async () => {
   const syncCalls: string[] = [];
   const ops: SourcePollOperations = {
+    getSource: async () => undefined,
     verifySourceHookSecret: () => Promise.resolve(true),
     createSourceReconciliationSyncs: (sourceId) => {
       syncCalls.push(sourceId);

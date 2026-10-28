@@ -270,6 +270,8 @@ export interface CapsulesServiceDependencies {
   readonly uninstallGraceDays?: number;
   /** Accounts-owned exact-grant check at a new reservation's deadline. */
   readonly validateUninstallRequesterAt?: UninstallRequesterAtValidator;
+  /** Best-effort post-commit cleanup for the Capsule's owned Source. */
+  readonly retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
 }
 
 interface PreparedCapsuleLifecycle {
@@ -289,6 +291,7 @@ export class CapsulesService {
   readonly #projects: ProjectsService;
   readonly #uninstallGraceDays: number;
   readonly #validateUninstallRequesterAt?: UninstallRequesterAtValidator;
+  readonly #retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
   #uninstallCancellationCleanup?: (planRunId: string) => Promise<void>;
 
@@ -303,6 +306,7 @@ export class CapsulesService {
     this.#uninstallGraceDays =
       deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
     this.#validateUninstallRequesterAt = deps.validateUninstallRequesterAt;
+    this.#retireOwnedSource = deps.retireOwnedSource;
     // Fail at composition, not at the first uninstall request.
     uninstallGraceMs(this.#uninstallGraceDays);
   }
@@ -1208,7 +1212,10 @@ export class CapsulesService {
           prepared.expectedWorkspaceManagementAuthority,
         updatedAt: this.#now().toISOString(),
       });
-      if (result.kind === "unchanged") return result.capsule;
+      if (result.kind === "unchanged") {
+        await this.#retireAbandonedSource(result.capsule);
+        return result.capsule;
+      }
       if (result.kind === "not-found") {
         throw new OpenTofuControllerError(
           "not_found",
@@ -1234,6 +1241,7 @@ export class CapsulesService {
           reason,
         },
       });
+      await this.#retireAbandonedSource(updated);
       return updated;
     };
     const admission = this.#capsuleLifecycleAdmission;
@@ -1246,6 +1254,18 @@ export class CapsulesService {
           () => abandon(),
         )
       : await abandon();
+  }
+
+  async #retireAbandonedSource(capsule: Capsule): Promise<void> {
+    if (!this.#retireOwnedSource) return;
+    try {
+      await this.#retireOwnedSource(capsule.sourceId, "capsule abandoned before apply");
+    } catch (error) {
+      console.warn("capsule.abandon_source_retirement_failed", {
+        capsuleId: capsule.id,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+    }
   }
 
   // --- InstallConfig (§11) --------------------------------------------------

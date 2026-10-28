@@ -1689,7 +1689,6 @@ async function seedRecordedLegacySource(
       ...plan,
       generation: plan.generation + 1,
       sourceId: source.id,
-      ...(plan.mode === "attempt" ? { sourceCreatedByAttempt: true } : {}),
     },
     at: new Date().toISOString(),
   });
@@ -1838,7 +1837,6 @@ test("install attempt pauses once for the whole sheet, auto-selects the only con
   expect(paused.installPlan).toMatchObject({
     phase: "awaiting_input",
     awaitingInput: "inputs",
-    sourceCreatedByAttempt: true,
     installModulePath: ".",
   });
   expect(fixture.sources[0]?.ownerCapsuleId)
@@ -2201,7 +2199,7 @@ async function reachReviewable(
   return reviewable;
 }
 
-test("discarding an attempt abandons its never-applied Capsule and keeps the Source with polling off", async () => {
+test("discarding an attempt abandons its never-applied Capsule and retires its Source", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);
   const reviewable = await reachReviewable(fixture, planId);
@@ -2235,15 +2233,10 @@ test("discarding an attempt abandons its never-applied Capsule and keeps the Sou
   });
   expect(fixture.abandonedCapsules).toEqual([reviewable.installPlan.capsuleId]);
   expect(fixture.capsules[0]?.status).toBe("destroyed");
-  // The Source is never deleted; polling this attempt enabled is turned off.
-  expect(fixture.deletedSources).toEqual([]);
   const attemptSourceId = sourceIdForPlanId(planId);
-  expect(fixture.sources.map((source) => source.id)).toEqual([attemptSourceId]);
-  expect(fixture.sources[0]?.autoSync).toBe(false);
-  expect(fixture.sourcePatches).toEqual([
-    { id: attemptSourceId, autoSync: true },
-    { id: attemptSourceId, autoSync: false },
-  ]);
+  expect(fixture.deletedSources).toEqual([attemptSourceId]);
+  expect(fixture.sources).toEqual([]);
+  expect(fixture.sourcePatches).toEqual([{ id: attemptSourceId, autoSync: true }]);
   expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
 
   // Discard is idempotent once terminal.
@@ -2304,7 +2297,6 @@ test("installing the same Git address creates a distinct Source per app", async 
   const attemptSourceId = sourceIdForPlanId(planId);
   expect(paused.installPlan).toMatchObject({
     sourceId: attemptSourceId,
-    sourceCreatedByAttempt: true,
   });
   // A second install of the same Git address gets its own Source and owner.
   const legacy = await fixture.request(
@@ -2414,7 +2406,7 @@ test("reads never settle an expired or epoch-changed attempt; only the creator's
     },
     userAction: { kind: "none" },
   });
-  expect(fixture.deletedSources).toEqual([]);
+  expect(fixture.deletedSources).toContain(sourceIdForPlanId(planId));
 });
 
 test("an attempt with a Capsule never expires", async () => {
@@ -2823,7 +2815,7 @@ test("an expired attempt in a coordinator phase stops blocking Workspace managem
   expect(fixture.counts.source).toBe(0);
 });
 
-test("discard reverts Source polling only when this attempt turned it on", async () => {
+test("discard retires an owned Source even when polling was already enabled", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);
   const paused = await reconcileUntilIdle(fixture, planId);
@@ -2838,12 +2830,27 @@ test("discard reverts Source polling only when this attempt turned it on", async
   const reviewable = await reconcileUntilIdle(fixture, planId);
   expect(reviewable.installPlan.phase).toBe("reviewable");
   expect(fixture.sourcePatches).toEqual([]);
-  expect((await fixture.planStore.get(planId))?.sourcePollingEnabledByAttempt)
-    .toBeUndefined();
   const discarded = await discard(fixture, planId, reviewable.installPlan.generation);
   expect(discarded.status).toBe(200);
   expect(fixture.sourcePatches).toEqual([]);
-  expect(fixture.sources[0]?.autoSync).toBe(true);
+  expect(fixture.deletedSources).toEqual([sourceIdForPlanId(planId)]);
+  expect(fixture.sources).toEqual([]);
+});
+
+test("discard retry cleans up a Source after the terminal plan write succeeded", async () => {
+  const fixture = attemptFixture({ retirementErrorOnce: true });
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  const first = await discard(fixture, planId, reviewable.installPlan.generation);
+  expect(first.status).toBe(200);
+  const terminal = await fixture.planStore.get(planId);
+  expect(terminal?.phase).toBe("discarded");
+  expect(fixture.sources.map((source) => source.id)).toEqual([sourceIdForPlanId(planId)]);
+
+  const retried = await discard(fixture, planId, 0);
+  expect(retried.status).toBe(200);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(terminal?.generation);
+  expect(fixture.deletedSources).toEqual([sourceIdForPlanId(planId)]);
 });
 
 function installFixture(
@@ -2867,6 +2874,8 @@ function installFixture(
     readonly staleManagementCapture?: boolean;
     /** The next Capsule abandonment fails after the discard reserved the row. */
     readonly abandonErrorOnce?: boolean;
+    /** The first post-commit Source retirement fails. */
+    readonly retirementErrorOnce?: boolean;
     /** Successful sync adopts an earlier same-lane snapshot id. */
     readonly canonicalSnapshotId?: string;
   } = {},
@@ -2918,6 +2927,7 @@ function installFixture(
   const deletedSources: string[] = [];
   const abandonedCapsules: string[] = [];
   let abandonErrorPending = options.abandonErrorOnce === true;
+  let retirementErrorPending = options.retirementErrorOnce === true;
   let compatibilityMutationCount = 0;
   let installConfigMutationCount = 0;
   let approvalCalls = 0;
@@ -3132,6 +3142,20 @@ function installFixture(
       const [removed] = sources.splice(index, 1);
       deletedSources.push(id);
       return { source: removed! };
+    },
+    retireOwnedSource: async (id: string) => {
+      if (retirementErrorPending) {
+        retirementErrorPending = false;
+        throw new Error("archive custody unavailable");
+      }
+      const index = sources.findIndex((candidate) => candidate.id === id);
+      if (index < 0) return "already_retired" as const;
+      if (capsules.some((capsule) =>
+        capsule.sourceId === id && capsule.status !== "destroyed"
+      )) return "deferred" as const;
+      sources.splice(index, 1);
+      deletedSources.push(id);
+      return "retired" as const;
     },
     createSourceSync: async (
       sourceId: string,
