@@ -139,6 +139,8 @@ export interface CapsuleUsageSummary {
 }
 
 export interface UsageEvent {
+  /** Immutable recorded payer; absent on pre-v77 history. */
+  readonly payerAccountId?: string;
   readonly id: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
@@ -247,13 +249,15 @@ export const NOOP_SHOWBACK_RATER: ShowbackRater = {
 // implement them by importing `takosumi-contract` ONLY (never OSS internals).
 // ---------------------------------------------------------------------------
 
+/** Canonical app owner, resolved by Core rather than supplied by the caller. */
+export interface AppBillingIdentity {
+  readonly capsuleId: string;
+  readonly payerAccountId: string;
+}
+
 /** Context handed to {@link BillingEnforcement.reservePlanBilling} at plan time. */
-export interface BillingReservationContext {
-  readonly workspaceId: string;
-  /** Owner-account subject resolved by OSS from the canonical Workspace. */
-  readonly billingSubjectId: string;
+export interface BillingReservationContext extends AppBillingIdentity {
   readonly runId: string;
-  readonly capsuleId?: string;
   /** The OSS-resolved billing mode (`disabled` | `showback`). */
   readonly mode: BillingMode;
   /** Amount returned by the explicitly composed showback rater. */
@@ -277,28 +281,21 @@ export interface BillingEnforcementDecision {
   readonly audit?: Readonly<Record<string, JsonValue>>;
 }
 
-export interface BillingReservationCheckContext {
-  readonly workspaceId: string;
-  readonly billingSubjectId: string;
+export interface BillingReservationCheckContext extends AppBillingIdentity {
   readonly runId: string;
   readonly now: number;
 }
 
-export interface BillingCaptureContext {
-  readonly workspaceId: string;
-  readonly billingSubjectId: string;
+export interface BillingCaptureContext extends AppBillingIdentity {
   readonly runId: string;
   readonly applyRunId: string;
-  readonly capsuleId?: string;
   /** USD micros the OSS controller recorded as the captured usage estimate. */
   readonly capturedUsdMicros: number;
   readonly ratingStatus: UsageRatingStatus;
   readonly now: number;
 }
 
-export interface BillingReleaseContext {
-  readonly workspaceId: string;
-  readonly billingSubjectId: string;
+export interface BillingReleaseContext extends AppBillingIdentity {
   readonly runId: string;
   readonly now: number;
 }
@@ -313,7 +310,7 @@ export interface BillingReleaseContext {
 export interface BillingEnforcement {
   /**
    * Plan-time reservation. Returns blocking `reasons` (e.g. insufficient USD
-   * balance) for an enforce-mode Workspace; OSS returns `{ reasons: [] }`.
+   * balance) for an app; OSS returns `{ reasons: [] }`.
    */
   reservePlanBilling(
     ctx: BillingReservationContext,
@@ -339,9 +336,7 @@ export interface BillingEnforcement {
   releaseReservation(ctx: BillingReleaseContext): Promise<void>;
 }
 
-export interface QuotaEvaluationContext {
-  readonly workspaceId: string;
-  readonly billingSubjectId: string;
+export interface QuotaEvaluationContext extends AppBillingIdentity {
   readonly estimatedUsdMicros: number;
   readonly ratingStatus: UsageRatingStatus;
   readonly planResourceChanges: readonly PlanResourceChange[];
@@ -363,7 +358,7 @@ export interface QuotaPolicy {
  * accepts the existing provider-neutral context and returns a plain DTO (or
  * void); unlike BillingExtensionFactory, no function-bearing object crosses
  * the RPC boundary. Hosts expose these methods from a private WorkerEntrypoint.
- * Workspace/subject/Run authority is resolved by Core before invoking this port.
+ * App/payer/Run authority is resolved by Core before invoking this port.
  */
 export interface BillingRpcService
   extends ShowbackRater, BillingEnforcement, QuotaPolicy {}

@@ -24,7 +24,7 @@ import type {
   RunnerProfile,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
-import type { SqlClient, SqlParameters } from "../../adapters/storage/sql.ts";
+import type { SqlClient, SqlParameters, SqlValue } from "../../adapters/storage/sql.ts";
 import {
   and,
   asc,
@@ -1879,6 +1879,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   readonly persistence = "durable" as const;
   readonly #client: SqlClient;
   readonly #db: PgRemoteDatabase<typeof pgSchema>;
+  #usagePayerColumnPresent = false;
 
   constructor(input: { readonly client: SqlClient }) {
     registerIdentityControlStorage(this, input.client);
@@ -10945,27 +10946,35 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     const normalized = normalizeUsageEvent(event);
     // A missing pre-read is only an optimization, never insertion authority.
     // Recovery callers can race: the unique key chooses one immutable winner.
-    await this.#db
-      .insert(pgSchema.usageEvents)
-      .values({
-        id: normalized.id,
-        workspaceId: normalized.workspaceId,
-        capsuleId: normalized.capsuleId ?? null,
-        runId: normalized.runId ?? null,
-        meterId: normalized.meterId ?? null,
-        resourceFamily: normalized.resourceFamily ?? null,
-        resourceId: normalized.resourceId ?? null,
-        operation: normalized.operation ?? null,
-        resourceMetadataJson: normalized.resourceMetadata ?? null,
-        kind: normalized.kind,
-        quantity: normalized.quantity,
-        usdMicros: normalized.usdMicros,
-        ratingStatus: normalized.ratingStatus,
-        source: normalized.source,
-        idempotencyKey: normalized.idempotencyKey,
-        createdAt: normalized.createdAt,
-      })
-      .onConflictDoNothing({ target: pgSchema.usageEvents.idempotencyKey });
+    const columns = [
+      "id", "workspace_id", "capsule_id", "run_id", "meter_id",
+      "resource_family", "resource_id", "operation", "resource_metadata_json",
+      "kind", "quantity", "usd_micros", "rating_status", "source",
+      "idempotency_key", "created_at",
+    ];
+    const values: SqlValue[] = [
+      normalized.id, normalized.workspaceId, normalized.capsuleId ?? null,
+      normalized.runId ?? null, normalized.meterId ?? null,
+      normalized.resourceFamily ?? null, normalized.resourceId ?? null,
+      normalized.operation ?? null, normalized.resourceMetadata ?? null,
+      normalized.kind, normalized.quantity, normalized.usdMicros,
+      normalized.ratingStatus, normalized.source, normalized.idempotencyKey,
+      normalized.createdAt,
+    ];
+    if (await this.#hasUsagePayerColumn()) {
+      columns.push("payer_account_id");
+      values.push(normalized.payerAccountId ?? null);
+    }
+    const quotedColumns = columns.map((column) => `"${column}"`).join(", ");
+    const placeholders = values.map((_, index) => `$${index + 1}`).join(", ");
+    try {
+      await this.#client.query(
+        `insert into "takosumi_usage_events" (${quotedColumns}) values (${placeholders}) on conflict ("idempotency_key") do nothing`,
+        values,
+      );
+    } catch (cause) {
+      throw new Error("usage event insert failed", { cause });
+    }
     // A separate statement sees the committed winner after a conflicting
     // insert waited for it. A same-statement CTE can retain an older snapshot.
     const winner = await this.#usageEventByIdempotencyKey(
@@ -10985,7 +10994,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
-    return usageEventFromRow(row);
+    return (await this.#usageEventsWithPayer([usageEventFromRow(row)]))[0];
   }
 
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
@@ -10997,7 +11006,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         asc(pgSchema.usageEvents.createdAt),
         asc(pgSchema.usageEvents.id),
       );
-    return rows.map(usageEventFromRow);
+    return this.#usageEventsWithPayer(rows.map(usageEventFromRow));
   }
 
   async getCapsuleUsageTotals(
@@ -11037,7 +11046,54 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         desc(pgSchema.usageEvents.id),
       )
       .limit(limit + 1);
-    return pageFromProbe(rows.map(usageEventFromRow), limit);
+    return pageFromProbe(await this.#usageEventsWithPayer(rows.map(usageEventFromRow)), limit);
+  }
+
+  async listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    if (!(await this.#hasUsagePayerColumn())) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const where = cursor
+      ? `payer_account_id = $1 and (created_at < $2 or (created_at = $2 and id < $3))`
+      : `payer_account_id = $1`;
+    const values = cursor
+      ? [payerAccountId, cursor.createdAt, cursor.id, limit + 1]
+      : [payerAccountId, limit + 1];
+    const limitParameter = `$${values.length}`;
+    const result = await this.#client.query(
+      `select id, workspace_id as "workspaceId", capsule_id as "capsuleId", run_id as "runId", meter_id as "meterId", resource_family as "resourceFamily", resource_id as "resourceId", operation, resource_metadata_json as "resourceMetadataJson", kind, quantity, usd_micros as "usdMicros", rating_status as "ratingStatus", source, idempotency_key as "idempotencyKey", created_at as "createdAt", payer_account_id as "payerAccountId" from takosumi_usage_events where ${where} order by created_at desc, id desc limit ${limitParameter}`,
+      values,
+    );
+    return pageFromProbe(
+      result.rows.map((row) => usageEventFromRow(row as Parameters<typeof usageEventFromRow>[0])),
+      limit,
+    );
+  }
+
+  async #hasUsagePayerColumn(): Promise<boolean> {
+    if (this.#usagePayerColumnPresent) return true;
+    const result = await this.#client.query<{ readonly present: boolean }>(
+      `select exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'takosumi_usage_events' and column_name = 'payer_account_id') as present`,
+    );
+    const present = Boolean(result.rows[0]?.present);
+    if (present) this.#usagePayerColumnPresent = true;
+    return present;
+  }
+
+  async #usageEventsWithPayer(events: readonly UsageEvent[]): Promise<UsageEvent[]> {
+    if (!events.length || !(await this.#hasUsagePayerColumn())) return [...events];
+    const result = await this.#client.query<{ readonly id: string; readonly payer_account_id: string | null }>(
+      `select id, payer_account_id from takosumi_usage_events where id = any($1::text[])`,
+      [events.map((event) => event.id)],
+    );
+    const payers = new Map(result.rows.map((row) => [row.id, row.payer_account_id]));
+    return events.map((event) => {
+      const payerAccountId = payers.get(event.id);
+      return payerAccountId ? { ...event, payerAccountId } : event;
+    });
   }
 
   // --- backups (§33 layer 1; bytes live in the configured artifact store) ----

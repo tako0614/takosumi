@@ -4217,6 +4217,11 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     workspaceId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>>;
+  /** Payer-only history. Rows are never inferred from a Workspace owner. */
+  listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>>;
 
   // Control-backup ledger pointers. One row per sealed control-backup bundle
   // written to artifact storage. The bundle bytes
@@ -8344,6 +8349,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       (a, b) =>
         b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
     );
+    return pageSortedDesc(newestFirst, params);
+  }
+
+  async listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    const newestFirst = Array.from(this.#usageEvents.values())
+      .filter((event) => event.payerAccountId === payerAccountId)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
     return pageSortedDesc(newestFirst, params);
   }
 

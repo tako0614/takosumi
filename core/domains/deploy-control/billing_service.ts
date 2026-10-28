@@ -13,6 +13,7 @@
 import type { JsonValue } from "takosumi-contract";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type {
+  AppBillingIdentity,
   BillingEnforcement,
   BillingSettings,
   QuotaPolicy,
@@ -25,6 +26,7 @@ import {
   NOOP_QUOTA_POLICY,
   NOOP_SHOWBACK_RATER,
 } from "takosumi-contract/billing";
+import { appBillingIdentity, appBillingOwnership, type AppBillingOwnership } from "./billing_workspace_compat.ts";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
   assertWorkspaceManagementAdmission,
@@ -177,10 +179,15 @@ export class BillingService {
     // rated or commercially reserved as materialization work. Runner-minute
     // usage is recorded independently by the Run engine.
     if (planSkipsBillingReservation(input.planRun)) {
+      const identity = input.planRun.capsuleId
+        ? await this.resolveAppBillingIdentity(input.planRun.capsuleId)
+        : undefined;
       return {
         reasons: [],
         audit: {
           mode: settings.mode,
+          ...identity,
+          ...(identity ? { identityVersion: 1 } : {}),
           estimatedUsdMicros: 0,
           ratingStatus: "rated",
           blocked: false,
@@ -189,7 +196,13 @@ export class BillingService {
       };
     }
 
-    const billingSubjectId = workspace.ownerUserId;
+    const identity = input.planRun.capsuleId
+      ? await this.resolveAppBillingIdentity(input.planRun.capsuleId)
+      : undefined;
+    if (!identity && this.#enforcementRequired) {
+      throw new OpenTofuControllerError("failed_precondition", "Billing requires an app.");
+    }
+    const billingSubjectId = identity?.payerAccountId ?? workspace.ownerUserId;
     const planResourceChanges = input.result.planResourceChanges ?? [];
     const rating = normalizeShowbackRating(
       await this.#rater.ratePlan({
@@ -205,27 +218,22 @@ export class BillingService {
       "plan",
     );
     const estimatedUsdMicros = rating.usdMicros;
-    const quota = await this.#quota.evaluatePlanQuota({
-      workspaceId,
-      billingSubjectId,
+    const quota = identity ? await this.#quota.evaluatePlanQuota({
+      ...identity,
       estimatedUsdMicros,
       ratingStatus: rating.ratingStatus,
       planResourceChanges,
-    });
-    const enforcement = await this.#enforcement.reservePlanBilling({
-      workspaceId,
-      billingSubjectId,
+    }) : { reasons: [] };
+    const enforcement = identity ? await this.#enforcement.reservePlanBilling({
+      ...identity,
       runId: input.planRun.id,
-      ...(input.planRun.capsuleId
-        ? { capsuleId: input.planRun.capsuleId }
-        : {}),
       mode: settings.mode,
       estimatedUsdMicros,
       ratingStatus: rating.ratingStatus,
       planResourceChanges,
       policyPassedBeforeBilling: input.policyPassedBeforeBilling,
       now: input.now,
-    });
+    }) : { reasons: [] };
     const reasons = input.policyPassedBeforeBilling
       ? uniqueStrings([...quota.reasons, ...enforcement.reasons])
       : [];
@@ -237,6 +245,8 @@ export class BillingService {
       reasons,
       audit: {
         mode: settings.mode,
+        ...identity,
+        ...(identity ? { identityVersion: 1 } : {}),
         estimatedUsdMicros,
         ratingStatus: rating.ratingStatus,
         blocked: reasons.length > 0,
@@ -253,9 +263,17 @@ export class BillingService {
     if ((settings.mode === "disabled" && !this.#enforcementRequired) || planSkipsBillingReservation(planRun)) {
       return;
     }
+    const identity = await this.#billingIdentityForPlan(planRun);
+    if (!identity) {
+      if (this.#enforcementRequired) throw new OpenTofuControllerError("failed_precondition", "Plan billing payer is unavailable.");
+      return;
+    }
+    const current = await this.resolveAppBillingIdentity(planRun.capsuleId);
+    if (identity.payerAccountId !== current.payerAccountId) {
+      throw new OpenTofuControllerError("failed_precondition", "App owner changed after billing reservation.");
+    }
     await this.#enforcement.assertReservationSatisfied({
-      workspaceId,
-      billingSubjectId: workspace.ownerUserId,
+      ...identity,
       runId: planRun.id,
       now: this.#now(),
     });
@@ -270,14 +288,18 @@ export class BillingService {
     const workspace = await this.#requireWorkspace(workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
     if (settings.mode === "disabled" && !this.#enforcementRequired) return;
+    const identity = input.planRun.capsuleId
+      ? await this.#billingIdentityForPlan(input.planRun)
+      : undefined;
+    if (!identity && this.#enforcementRequired && !planSkipsBillingReservation(input.planRun)) {
+      throw new OpenTofuControllerError("failed_precondition", "Billing requires an app.");
+    }
     const rating = planShowbackRating(input.planRun);
     const estimatedUsdMicros = rating.usdMicros;
     if (settings.mode === "showback") await this.#store.putUsageEvent({
       id: this.#newId("usage"),
       workspaceId,
-      ...(input.planRun.capsuleId
-        ? { capsuleId: input.planRun.capsuleId }
-        : {}),
+      ...identity,
       runId: input.applyRun.id,
       kind: "opentofu.apply",
       quantity: 1,
@@ -287,15 +309,11 @@ export class BillingService {
       idempotencyKey: `${input.applyRun.id}:opentofu.apply`,
       createdAt: new Date(input.now).toISOString(),
     });
-    if (planSkipsBillingReservation(input.planRun)) return;
+    if (planSkipsBillingReservation(input.planRun) || !identity) return;
     await this.#enforcement.captureRunBilling({
-      workspaceId,
-      billingSubjectId: workspace.ownerUserId,
+      ...identity,
       runId: input.planRun.id,
       applyRunId: input.applyRun.id,
-      ...(input.planRun.capsuleId
-        ? { capsuleId: input.planRun.capsuleId }
-        : {}),
       capturedUsdMicros: estimatedUsdMicros,
       ratingStatus: rating.ratingStatus,
       now: input.now,
@@ -309,12 +327,65 @@ export class BillingService {
     if ((settings.mode === "disabled" && !this.#enforcementRequired) || planSkipsBillingReservation(planRun)) {
       return;
     }
+    const identity = await this.#billingIdentityForPlan(planRun);
+    if (!identity) {
+      if (this.#enforcementRequired) throw new OpenTofuControllerError("failed_precondition", "Plan billing payer is unavailable.");
+      return;
+    }
     await this.#enforcement.releaseReservation({
-      workspaceId,
-      billingSubjectId: workspace.ownerUserId,
+      ...identity,
       runId: planRun.id,
       now: this.#now(),
     });
+  }
+
+  async #billingIdentityForPlan(planRun: PlanRun): Promise<AppBillingIdentity | undefined> {
+    // Reservation settlement is pinned to the plan's durable billing audit.
+    // A transfer changes the payer of future work, never an existing debt or
+    // the payload replayed after provider commit / a lost capture acknowledgement.
+    for (const event of [...planRun.auditEvents].reverse()) {
+      if (event.type !== "plan.policy_evaluated") continue;
+      const value = event.data?.billing;
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      if (value.payerAccountId === undefined && value.identityVersion === undefined) break; // pre-change audit
+      if (typeof value.payerAccountId !== "string" || !value.payerAccountId.trim() ||
+        typeof value.capsuleId !== "string" || value.capsuleId !== planRun.capsuleId) {
+        throw new OpenTofuControllerError("failed_precondition", "Plan billing identity is invalid.");
+      }
+      return { capsuleId: value.capsuleId, payerAccountId: value.payerAccountId };
+    }
+    const ownership = await this.resolveAppBillingOwnership(planRun.capsuleId);
+    // Pre-change runs have no payer pin. After transfer their original owner
+    // cannot be recovered from the current row; retain unattributed evidence.
+    return ownership.ownershipEpoch === 0 ? ownership.identity : undefined;
+  }
+
+  async #runBillingIdentity(input: Pick<UsageShowbackRatingContext, "capsuleId" | "runId">): Promise<AppBillingIdentity | null | undefined> {
+    if (!input.capsuleId || !input.runId) return undefined;
+    let plan = await this.#store.getPlanRun(input.runId);
+    if (!plan) {
+      const apply = await this.#store.getApplyRun(input.runId);
+      if (apply) plan = await this.#store.getPlanRun(apply.planRunId);
+    }
+    if (!plan) return null; // a named Run without durable authority is unattributed
+    if (plan.capsuleId !== input.capsuleId) {
+      throw new OpenTofuControllerError("failed_precondition", "Usage app does not match its run.");
+    }
+    return await this.#billingIdentityForPlan(plan) ?? null;
+  }
+
+  async #usageBillingIdentity(input: Pick<UsageShowbackRatingContext, "capsuleId" | "runId">): Promise<AppBillingIdentity | undefined> {
+    if (!input.capsuleId) return undefined;
+    const recorded = await this.#runBillingIdentity(input);
+    return recorded === null ? undefined : recorded ?? this.resolveAppBillingIdentity(input.capsuleId);
+  }
+
+  resolveAppBillingOwnership(capsuleId: string | undefined): Promise<AppBillingOwnership> {
+    return appBillingOwnership(this.#store, capsuleId);
+  }
+
+  resolveAppBillingIdentity(capsuleId: string | undefined): Promise<AppBillingIdentity> {
+    return appBillingIdentity(this.#store, capsuleId);
   }
 
   /**
@@ -323,18 +394,32 @@ export class BillingService {
    */
   async rateUsageMeasurement(
     input: Omit<UsageShowbackRatingContext, "billingSubjectId">,
-  ): Promise<ShowbackRating | undefined> {
+  ): Promise<(ShowbackRating & { readonly payerAccountId?: string }) | undefined> {
     const workspace = await this.#requireWorkspace(input.workspaceId);
     const settings = this.billingSettingsForWorkspaceRecord(workspace);
     if (settings.mode === "disabled" && !this.#enforcementRequired) return undefined;
+    // Non-app legacy measurements remain unattributed. They must never enter
+    // the payer history by guessing from a Workspace or the current actor.
+    const identity = await this.#usageBillingIdentity(input);
+    if (!identity && this.#enforcementRequired) {
+      throw new OpenTofuControllerError("failed_precondition", "Billing requires an app.");
+    }
+    if (input.capsuleId && !identity) {
+      // An old app Run can outlive its ownership history. Do not send any
+      // person's subject to the host when its recorded payer is unknown.
+      return settings.mode === "disabled" ? undefined : { ratingStatus: "unrated", usdMicros: 0 };
+    }
     const rating = normalizeShowbackRating(
       await this.#rater.rateUsage({
         ...input,
-        billingSubjectId: workspace.ownerUserId,
+        billingSubjectId: identity?.payerAccountId ?? workspace.ownerUserId,
       }),
       "usage",
     );
-    return settings.mode === "disabled" ? undefined : rating;
+    return settings.mode === "disabled" ? undefined : {
+      ...rating,
+      ...(identity ? { payerAccountId: identity.payerAccountId } : {}),
+    };
   }
 }
 

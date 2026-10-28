@@ -24,6 +24,10 @@ async function callerBundle(root: string): Promise<string> {
           workspaceId: action === "pending" ? "workspace_pending" : "workspace_late_capture",
           billingSubjectId: "canonical_owner", runId: "plan_exact", now: 1700000000000,
         };
+        const appCtx = {
+          capsuleId: action === "pending" ? "capsule_pending" : "capsule_late_capture",
+          payerAccountId: "canonical_owner", runId: common.runId, now: common.now,
+        };
         const measurements = { planResourceChanges: [], estimatedUsdMicros: 37, ratingStatus: "rated" };
         try {
           switch (method) {
@@ -32,15 +36,15 @@ async function callerBundle(root: string): Promise<string> {
               ...common, kind: "runner_minute", quantity: 1.5, source: "runner", createdAt: "2026-10-14T00:00:00.000Z",
             }); break;
             case "reservePlanBilling": await ports.billingEnforcement.reservePlanBilling({
-              ...common, ...measurements, mode: "disabled", policyPassedBeforeBilling: true,
+              ...appCtx, ...measurements, mode: "disabled", policyPassedBeforeBilling: true,
             }); break;
-            case "assertReservationSatisfied": await ports.billingEnforcement.assertReservationSatisfied(common); break;
+            case "assertReservationSatisfied": await ports.billingEnforcement.assertReservationSatisfied(appCtx); break;
             case "captureRunBilling": await ports.billingEnforcement.captureRunBilling({
-              ...common, applyRunId: "apply_exact", capturedUsdMicros: 37, ratingStatus: "rated",
+              ...appCtx, applyRunId: "apply_exact", capturedUsdMicros: 37, ratingStatus: "rated",
             }); break;
-            case "releaseReservation": await ports.billingEnforcement.releaseReservation(common); break;
+            case "releaseReservation": await ports.billingEnforcement.releaseReservation(appCtx); break;
             case "evaluatePlanQuota": await ports.quotaPolicy.evaluatePlanQuota({
-              workspaceId: common.workspaceId, billingSubjectId: common.billingSubjectId, ...measurements,
+              ...appCtx, ...measurements,
             }); break;
             default: throw new Error("invalid test port");
           }
@@ -73,7 +77,7 @@ const HOST = `
     releaseReservation(ctx) { return this.pending("releaseReservation", ctx); }
     evaluatePlanQuota(ctx) { return this.pending("evaluatePlanQuota", ctx); }
     async captureRunBilling(ctx) {
-      if (ctx.workspaceId === "workspace_pending") return await this.pending("captureRunBilling", ctx);
+      if (ctx.capsuleId === "capsule_pending") return await this.pending("captureRunBilling", ctx);
       await this.env.LEDGER.prepare("insert into attempts(method, context) values (?, ?)")
         .bind("captureRunBilling", JSON.stringify(ctx)).run();
       const committed = await this.env.LEDGER.prepare(
@@ -146,7 +150,13 @@ test("workerd bounds every billing port and reconciles a late capture ACK with o
     expect(beforeReplay.settlements).toEqual([{ run_id: "plan_exact", apply_id: "apply_exact", amount: 37, late_ack: 0 }]);
     for (const method of METHODS) {
       expect(beforeReplay.attempts.filter((attempt: { method: string; context: string }) =>
-        attempt.method === method && JSON.parse(attempt.context).workspaceId === "workspace_pending",
+        attempt.method === method && (
+          method === "ratePlan" || method === "rateUsage"
+            ? JSON.parse(attempt.context).workspaceId === "workspace_pending"
+            : JSON.parse(attempt.context).capsuleId === "capsule_pending" &&
+              JSON.parse(attempt.context).payerAccountId === "canonical_owner" &&
+              !("workspaceId" in JSON.parse(attempt.context))
+        ),
       )).toHaveLength(1);
     }
     // The Run finalizer chooses this single replay, retaining every original
@@ -156,7 +166,7 @@ test("workerd bounds every billing port and reconciles a late capture ACK with o
     expect(await replay.json()).toEqual({ acknowledged: true });
     let receipts = await (await host.fetch("https://host.test/receipts")).json();
     const captures = receipts.attempts.filter((attempt: { method: string; context: string }) =>
-      attempt.method === "captureRunBilling" && JSON.parse(attempt.context).workspaceId === "workspace_late_capture",
+      attempt.method === "captureRunBilling" && JSON.parse(attempt.context).capsuleId === "capsule_late_capture",
     );
     expect(captures).toHaveLength(2);
     expect(captures[0].context).toBe(captures[1].context);

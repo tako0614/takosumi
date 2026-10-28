@@ -1,4 +1,4 @@
-/** Provider-neutral Workspace usage/showback service. */
+/** Provider-neutral app usage/showback with legacy Workspace adapters. */
 
 import type {
   BillingSettings,
@@ -18,9 +18,25 @@ import type { BillingService } from "./billing_service.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 
+/** GET /api/v1/usage source; the route supplies the authenticated account ID. */
+export async function listPayerUsage(
+  store: Pick<OpenTofuControlStore, "listUsageEventsForPayerPage">,
+  payerAccountId: string,
+  params: PageParams = {},
+): Promise<{ readonly usageEvents: readonly UsageEvent[]; readonly nextCursor?: string }> {
+  requireNonEmptyString(payerAccountId, "payerAccountId");
+  const { items, nextCursor } = await store.listUsageEventsForPayerPage(payerAccountId, params);
+  return { usageEvents: items, ...(nextCursor !== undefined ? { nextCursor } : {}) };
+}
+
 export interface RecordMeteredUsageInput {
   readonly capsuleId?: string;
   readonly runId?: string;
+  /** Trusted producer's canonical owner snapshot captured with an independent measurement. */
+  readonly ownerSnapshot?: {
+    readonly payerAccountId: string;
+    readonly ownershipEpoch: number;
+  };
   readonly meterId?: string;
   readonly resourceFamily?: UsageResourceFamily;
   readonly resourceId?: string;
@@ -133,7 +149,24 @@ export class UsageReportingService {
       () => this.#newId("usage"),
       () => new Date(this.#now()).toISOString(),
     );
-    return { usageEvent: await this.#store.putUsageEvent(usageEvent) };
+    const ownership = input.capsuleId
+      ? await this.#billing.resolveAppBillingOwnership(input.capsuleId)
+      : undefined;
+    const identity = ownership?.identity;
+    if (ownership) {
+      // A timestamp or producer-supplied runId is not historical ownership
+      // authority. After transfer, independent producers carry the canonical
+      // owner/epoch observed with the measurement; stale evidence is refused.
+      // Only Core-generated runner usage can use the plan's reserved payer.
+      const snapshot = input.ownerSnapshot;
+      if ((ownership.ownershipEpoch > 0 && !snapshot) || (snapshot && (
+        snapshot.payerAccountId !== identity?.payerAccountId ||
+        snapshot.ownershipEpoch !== ownership.ownershipEpoch
+      ))) {
+        throw new OpenTofuControllerError("failed_precondition", "Metered usage requires current ownership evidence.");
+      }
+    }
+    return { usageEvent: await this.#store.putUsageEvent({ ...usageEvent, ...identity }) };
   }
 }
 

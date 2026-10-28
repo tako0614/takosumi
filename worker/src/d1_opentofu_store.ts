@@ -2599,6 +2599,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly #orm: DrizzleD1Database<typeof schema>;
   readonly #schemaMode: D1OpenTofuControlSchemaMode;
   #initialized?: Promise<void>;
+  #usagePayerColumnPresent = false;
   #predeployedSchemaVerified: boolean;
   #requestMaintenanceScope?: D1RequestMaintenanceScope;
 
@@ -10799,27 +10800,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (existing) return existing;
     await this.#ensureSchema();
     try {
-      await this.#orm
-        .insert(schema.usageEvents)
-        .values({
-          id: event.id,
-          workspaceId: event.workspaceId,
-          capsuleId: event.capsuleId ?? null,
-          runId: event.runId ?? null,
-          meterId: event.meterId ?? null,
-          resourceFamily: event.resourceFamily ?? null,
-          resourceId: event.resourceId ?? null,
-          operation: event.operation ?? null,
-          resourceMetadataJson: event.resourceMetadata ?? null,
-          kind: event.kind,
-          quantity: event.quantity,
-          usdMicros: event.usdMicros,
-          ratingStatus: event.ratingStatus,
-          source: event.source,
-          idempotencyKey: event.idempotencyKey,
-          createdAt: event.createdAt,
-        })
-        .run();
+      const columns = [
+        "id", "workspace_id", "capsule_id", "run_id", "meter_id",
+        "resource_family", "resource_id", "operation", "resource_metadata_json",
+        "kind", "quantity", "usd_micros", "rating_status", "source",
+        "idempotency_key", "created_at",
+      ];
+      const values: unknown[] = [
+        event.id, event.workspaceId, event.capsuleId ?? null, event.runId ?? null,
+        event.meterId ?? null, event.resourceFamily ?? null, event.resourceId ?? null,
+        event.operation ?? null,
+        event.resourceMetadata == null ? null : JSON.stringify(event.resourceMetadata),
+        event.kind,
+        event.quantity, event.usdMicros, event.ratingStatus, event.source,
+        event.idempotencyKey, event.createdAt,
+      ];
+      if (await this.#hasUsagePayerColumn()) {
+        columns.push("payer_account_id");
+        values.push(event.payerAccountId ?? null);
+      }
+      const placeholders = values.map(() => "?").join(", ");
+      await this.db.prepare(
+        `insert into usage_events (${columns.join(", ")}) values (${placeholders}) on conflict (idempotency_key) do nothing`,
+      ).bind(...values).run();
     } catch (error) {
       const raced = await this.#usageEventByIdempotencyKey(
         event.idempotencyKey,
@@ -10827,7 +10830,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       if (raced && isD1UsageEventIdempotencyError(error)) return raced;
       throw error;
     }
-    return event;
+    const winner = await this.#usageEventByIdempotencyKey(event.idempotencyKey);
+    if (!winner) throw new Error("usage event winner missing after insert");
+    return winner;
   }
 
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
@@ -10837,7 +10842,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .from(schema.usageEvents)
       .where(eq(schema.usageEvents.workspaceId, workspaceId))
       .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id));
-    return rows.map(usageEventFromRow);
+    return this.#usageEventsWithPayer(rows.map(usageEventFromRow));
   }
 
   async getCapsuleUsageTotals(
@@ -10876,7 +10881,61 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .orderBy(desc(schema.usageEvents.createdAt), desc(schema.usageEvents.id))
       .limit(limit + 1);
-    return pageFromProbe(rows.map(usageEventFromRow), limit);
+    return pageFromProbe(await this.#usageEventsWithPayer(rows.map(usageEventFromRow)), limit);
+  }
+
+  async listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    await this.#ensureSchema();
+    if (!(await this.#hasUsagePayerColumn())) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const where = cursor
+      ? `payer_account_id = ? and (created_at < ? or (created_at = ? and id < ?))`
+      : `payer_account_id = ?`;
+    const values = cursor
+      ? [payerAccountId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1]
+      : [payerAccountId, limit + 1];
+    const result = await this.db.prepare(
+      `select id, workspace_id as workspaceId, capsule_id as capsuleId, run_id as runId, meter_id as meterId, resource_family as resourceFamily, resource_id as resourceId, operation, resource_metadata_json as resourceMetadataJson, kind, quantity, usd_micros as usdMicros, rating_status as ratingStatus, source, idempotency_key as idempotencyKey, created_at as createdAt, payer_account_id as payerAccountId from usage_events where ${where} order by created_at desc, id desc limit ?`,
+    ).bind(...values).all<Parameters<typeof usageEventFromRow>[0]>();
+    if (result.success !== true || !Array.isArray(result.results)) {
+      throw new Error("Usage payer page read result unavailable");
+    }
+    return pageFromProbe(result.results.map(usageEventFromRow), limit);
+  }
+
+  async #hasUsagePayerColumn(): Promise<boolean> {
+    if (this.#usagePayerColumnPresent) return true;
+    const columns = await d1ColumnNames(this.db, "usage_events");
+    const present = columns.has("payer_account_id");
+    if (present) this.#usagePayerColumnPresent = true;
+    return present;
+  }
+
+  async #usageEventsWithPayer(events: readonly UsageEvent[]): Promise<UsageEvent[]> {
+    if (!events.length || !(await this.#hasUsagePayerColumn())) return [...events];
+    const payerById = new Map<string, string | null>();
+    for (let start = 0; start < events.length; start += 90) {
+      const batch = events.slice(start, start + 90);
+      const placeholders = batch.map(() => "?").join(", ");
+      const result = await this.db.prepare(
+        `select id, payer_account_id from usage_events where id in (${placeholders})`,
+      ).bind(...batch.map((event) => event.id)).all<{
+        readonly id: string;
+        readonly payer_account_id: string | null;
+      }>();
+      if (result.success !== true || !Array.isArray(result.results)) {
+        throw new Error("Usage payer metadata read result unavailable");
+      }
+      for (const row of result.results) payerById.set(row.id, row.payer_account_id);
+    }
+    return events.map((event) => {
+      const payerAccountId = payerById.get(event.id);
+      return payerAccountId ? { ...event, payerAccountId } : event;
+    });
   }
 
   async #usageEventByIdempotencyKey(
@@ -10888,7 +10947,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .from(schema.usageEvents)
       .where(eq(schema.usageEvents.idempotencyKey, idempotencyKey))
       .get();
-    return row ? usageEventFromRow(row) : undefined;
+    return row
+      ? (await this.#usageEventsWithPayer([usageEventFromRow(row)]))[0]
+      : undefined;
   }
 
   // -- backups (§33 layer 1 / §26 R2_BACKUPS) ----------------------------------

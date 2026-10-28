@@ -20,6 +20,7 @@ function service(overrides: Partial<BillingRpcService> = {}): BillingRpcService 
 
 const plan = {
   workspaceId: "workspace_rpc", billingSubjectId: "canonical_owner",
+  capsuleId: "capsule_rpc", payerAccountId: "canonical_owner",
   runId: "plan_rpc", planResourceChanges: [], now: 1,
 } as const;
 
