@@ -1733,19 +1733,21 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           capsule.ownerAccountId !== undefined || capsule.ownershipEpoch !== undefined ||
           capsule.managementState !== undefined);
         if (capsule?.status === "destroyed") throw new ConnectionVaultError("failed_precondition", "Source app is unavailable");
-        if (appAuthorityRequired && (capsule.ownerAccountId === undefined ||
-          capsule.managementState !== "active" ||
-          !Number.isSafeInteger(capsule.ownershipEpoch) ||
-          connection.ownerAccountId !== capsule.ownerAccountId ||
-          !run || run.status !== "running" ||
-          run.sourceId !== source.id || run.workspaceId !== workspaceId ||
-          run.url !== source.url ||
-          run.ownershipEpoch !== capsule.ownershipEpoch)) {
-          throw new ConnectionVaultError("failed_precondition", "Source app ownership authority changed");
+        if (appAuthorityRequired) {
+          if (capsule.ownerAccountId === undefined ||
+            capsule.managementState !== "active" ||
+            !Number.isSafeInteger(capsule.ownershipEpoch) ||
+            connection.ownerAccountId !== capsule.ownerAccountId ||
+            !run || run.status !== "running" ||
+            run.sourceId !== source.id || run.workspaceId !== workspaceId ||
+            run.url !== source.url ||
+            run.ownershipEpoch !== capsule.ownershipEpoch) {
+            throw new ConnectionVaultError("failed_precondition", "Source app ownership authority changed");
+          }
+          await this.#requireCurrentAppAccess(
+            run.actorAccountId, capsule.id, capsule.ownerAccountId, capsule.ownershipEpoch!,
+          );
         }
-        if (appAuthorityRequired) await this.#requireCurrentAppAccess(
-          run.actorAccountId, capsule.id, capsule.ownerAccountId, capsule.ownershipEpoch!,
-        );
       }
     }
     if (connection.scope === "personal") {
