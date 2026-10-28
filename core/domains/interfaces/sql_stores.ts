@@ -567,7 +567,8 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
             coalesce(b.record_json->'metadata'->'materializedFrom'->>'source', '') <> 'capsule_required_interface'
             or exists (
               select 1 from ${names.interfaceLinks} consent
-              where consent.id = b.record_json->'metadata'->'materializedFrom'->>'linkId'
+              where (b.record_json->'metadata'->'materializedFrom'->>'linkId' is null
+                or consent.id = b.record_json->'metadata'->'materializedFrom'->>'linkId')
                 and consent.state = 'active'
                 and consent.provider_interface_id = b.interface_id
                 and exists (select 1 from ${this.#interfaces} provider

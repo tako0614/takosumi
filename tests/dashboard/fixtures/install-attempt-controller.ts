@@ -401,7 +401,7 @@ describe("install attempt controller", () => {
     await page.attempt.confirm();
     const sent = calls.filter(({ name }) => name === "answerGitInstallAttempt").map(({ args }) => args[1]);
     expect(sent).toEqual([
-      { expectedGeneration: 5, continue: true, observedInterfaces: [{ requirementKey: "chat", interfaceId: "if_a" }], variables: { api_token: SECRET } },
+      { expectedGeneration: 5, continue: true, observedInterfaces: [{ requirementKey: "chat", candidateIds: ["if_a"] }], variables: { api_token: SECRET } },
       { expectedGeneration: 5, continue: true, variables: { api_token: SECRET } },
     ]);
     await page.attempt.discard().catch(() => false);
@@ -1317,7 +1317,10 @@ describe("install attempt controller", () => {
     const page = mount(undefined, { settleMs: 5 });
     await page.attempt.start(candidate, { fromStore: false });
     await until(() => page.attempt.view().stage === "review", "the automatic Plan");
-    expect(answerBodies()).toEqual([{ expectedGeneration: 1, continue: true, observedInterfaces: [{ requirementKey: "chat", interfaceId: "if_a" }] }]);
+    expect(answerBodies()).toEqual([{ expectedGeneration: 1, continue: true, observedInterfaces: [
+      { requirementKey: "none", candidateIds: [] },
+      { requirementKey: "chat", candidateIds: ["if_a"] },
+    ] }]);
     page.dispose();
   });
 
@@ -1335,7 +1338,7 @@ describe("install attempt controller", () => {
     reset({
       getGitInstallPlan: async () => currentSheet(),
       answerGitInstallAttempt: async (_id: never, body: never) => {
-        const patch = body as { continue?: boolean; observedInterfaces?: readonly { requirementKey: string; interfaceId: string }[]; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] };
+        const patch = body as { continue?: boolean; observedInterfaces?: readonly { requirementKey: string; candidateIds: readonly string[] }[]; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] };
         generation += 1;
         if (patch.continue) {
           if (!explicitLater) throw new api.ControlApiError(409, "interface_candidate_unavailable", "The observed candidate changed");
@@ -1358,7 +1361,7 @@ describe("install attempt controller", () => {
       await page.attempt.confirm();
       expect(answerBodies()).toEqual([{
         expectedGeneration: 1, continue: true,
-        observedInterfaces: [{ requirementKey: "chat", interfaceId: "if_a" }],
+        observedInterfaces: [{ requirementKey: "chat", candidateIds: ["if_a"] }],
         variables: { api_token: SECRET },
       }]);
       expect(page.attempt.response()?.installPlan.generation).toBe(2);

@@ -642,8 +642,8 @@ class InMemoryInterfaceAuthorizationQuery
 async function hasActiveRequiredInterfaceLink(binding: InterfaceBinding, iface: Interface, links: InterfaceLinkStore, permission: string): Promise<boolean> {
   const source = binding.metadata.materializedFrom;
   if (source?.source !== "capsule_required_interface") return true;
-  if (!source.linkId) return false;
-  const link = await links.get(source.linkId);
+  const link = source.linkId ? await links.get(source.linkId)
+    : await links.getCurrent({ consumerCapsuleId: source.capsuleId, requirementKey: source.requirementKey });
   return !!link && link.state === "active" && link.providerInterfaceId === binding.spec.interfaceId &&
     iface.metadata.ownerRef.kind === "Capsule" && link.providerCapsuleId === iface.metadata.ownerRef.id &&
     link.consumerCapsuleId === source.capsuleId && link.requirementKey === source.requirementKey &&

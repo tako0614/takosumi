@@ -142,9 +142,16 @@ describe("linked app answers", () => {
       .toEqual([{ requirementKey: "no-candidate", choice: { kind: "later" } }]);
   });
 
-  test("restart and replan retain exact app choices and later without setting values", () => {
+  test("restart retains only explicit app choices while replan keeps the current sheet", () => {
     const interfaceLinks = [{ requirementKey: "chat", choice: { kind: "later" } as const }];
     expect(restartRequest(plan({ options: { interfaceLinks } })).options?.interfaceLinks).toEqual(interfaceLinks);
+    expect(restartRequest(plan({ options: { interfaceLinks }, implicitInterfaceKeys: ["chat"] })).options?.interfaceLinks).toEqual([]);
+    const mixed = [
+      ...interfaceLinks,
+      { requirementKey: "mail", choice: { kind: "interface" as const, interfaceId: "if_a" } },
+    ];
+    expect(restartRequest(plan({ options: { interfaceLinks: mixed }, implicitInterfaceKeys: ["chat"] })).options?.interfaceLinks)
+      .toEqual([mixed[1]]);
     expect(replanRequest(plan(), { name: "office", ref: COMMIT, providerBindings: [], interfaceLinks }).options?.interfaceLinks).toEqual(interfaceLinks);
   });
 

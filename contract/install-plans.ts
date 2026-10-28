@@ -178,9 +178,9 @@ export interface CreateGitInstallAttemptRequest {
  * - `providerBindings` replaces the complete explicit connection selection;
  *   requirements left unanswered still auto-select their only candidate.
  * - `interfaceLinks` replaces the complete explicit Interface selection;
- *   unanswered requirements auto-select their sole provider, defer when none
- *   exists, and otherwise need a provider choice or `later`.
- * - `observedInterfaces` echoes the automatic choices shown by the client,
+ *   unanswered requirements auto-select their sole non-private provider,
+ *   defer when none exists, and otherwise need a provider choice or `later`.
+ * - `observedInterfaces` echoes each implicit candidate set shown by the client,
  *   only with `continue: true`. It detects changed candidates and never grants
  *   authority or changes the explicit answers stored in `options`.
  * - `continue: true` confirms the sheet: the coordinator validates the
@@ -201,10 +201,10 @@ export interface PatchGitInstallPlanRequest {
   readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
   /** Replaces the complete explicit selection for this module's requirements. */
   readonly interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[];
-  /** Displayed automatic choices, checked only by the confirming request. */
+  /** Displayed implicit candidate sets, checked only by the confirming request. */
   readonly observedInterfaces?: readonly {
     readonly requirementKey: string;
-    readonly interfaceId: string;
+    readonly candidateIds: readonly string[];
   }[];
   readonly variables?: Readonly<Record<string, JsonValue>>;
   readonly continue?: boolean;
@@ -260,6 +260,8 @@ export interface GitInstallPlan {
   readonly source: GitInstallPlanSourceRequest;
   readonly capsule: GitInstallPlanCapsuleRequest;
   readonly options: GitInstallPlanOptions;
+  /** Implicit Interface answers in `options`, so restart keeps only choices the person made. */
+  readonly implicitInterfaceKeys?: readonly string[];
   /** Exact value-free preflight identity, when supplied by an installer. */
   readonly preflight?: GitInstallPlanPreflightAuthority;
   /** `"attempt"` when this record is a coordinator-owned install attempt. */

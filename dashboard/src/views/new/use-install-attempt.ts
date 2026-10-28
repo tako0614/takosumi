@@ -1092,15 +1092,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const typed = nameDraft()?.trim();
       const rename = typed !== undefined && typed !== action.name.current &&
         !awaitingResubmission(action);
-      // Snapshot only automatic Interface ids shown on this sheet. This is
+      // Snapshot every implicit candidate set shown on this sheet. This is
       // observation evidence for the final compatibility check, not a choice
       // to persist in the attempt's options. Resubmission cannot change it.
       const observedInterfaces = awaitingResubmission(action) ? [] : action.interfaces.flatMap((requirement) => {
-        const choice = requirement.choice;
-        return requirement.autoSelected && choice?.kind === "interface" &&
-          requirement.candidates.some((candidate) => candidate.id === choice.interfaceId)
-          ? [{ requirementKey: requirement.requirementKey, interfaceId: choice.interfaceId }]
-          : [];
+        return current.installPlan.options.interfaceLinks?.some((answer) =>
+          answer.requirementKey === requirement.requirementKey
+        )
+          ? []
+          : [{ requirementKey: requirement.requirementKey,
+            candidateIds: requirement.candidates.map((candidate) => candidate.id) }];
       });
       // Dated before it is sent: if the answer is lost but the server made
       // the Plan, a later read adopts this edit number for it.

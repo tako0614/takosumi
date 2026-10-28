@@ -679,7 +679,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         return attemptError(409, "install_inputs_incomplete", "Another app uses this name.", "capsule_name_conflict");
       }
       if (action.missing?.includes("interfaces")) {
-        return attemptError(409, "install_inputs_incomplete", "Choose an app or link it later.", "interface_selection_required");
+        return attemptError(409, "install_inputs_incomplete", "Choose an app or link it later.", "interface_choice_required");
       }
       const values = (body.variables ?? {}) as Record<string, unknown>;
       const missingVariables = (options.variables ?? [])

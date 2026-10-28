@@ -1084,8 +1084,16 @@ test("Capsule abandon action is idempotent and never falls through to a destroy 
   let capsule = await fixture.operations.capsules.getCapsule("cap_1");
   let abandonCalls = 0;
   let destroyPlanCalls = 0;
+  let revokeCalls = 0;
   const operations = {
     ...fixture.operations,
+    interfaces: {
+      revokeCapsuleInterfaceLinks: async (workspaceId: string, capsuleId: string) => {
+        expect(workspaceId).toBe(capsule.workspaceId);
+        expect(capsuleId).toBe(capsule.id);
+        revokeCalls += 1;
+      },
+    },
     capsules: {
       ...fixture.operations.capsules,
       getCapsule: async () => capsule,
@@ -1127,7 +1135,34 @@ test("Capsule abandon action is idempotent and never falls through to a destroy 
     capsule: { id: "cap_1", status: "destroyed" },
   });
   expect(abandonCalls).toBe(1);
+  expect(revokeCalls).toBe(2);
   expect(destroyPlanCalls).toBe(0);
+});
+
+test("unapplied Capsule DELETE revokes links and replays revocation", async () => {
+  const fixture = operationsFixture();
+  let capsule = await fixture.operations.capsules.getCapsule("cap_1");
+  let revokeCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => capsule,
+      abandonUnappliedCapsule: async () => {
+        capsule = { ...capsule, status: "destroyed" as const };
+        return capsule;
+      },
+    },
+    interfaces: {
+      revokeCapsuleInterfaceLinks: async () => { revokeCalls += 1; },
+    },
+  } as ControlPlaneOperations;
+  const request = () => new Request("https://app.example.test/api/v1/capsules/cap_1", { method: "DELETE" });
+  for (const expectedStatus of [202, 200]) {
+    const response = await handleCapsules(context(operations, request()), ["capsules", "cap_1"], "DELETE");
+    expect(response?.status).toBe(expectedStatus);
+  }
+  expect(revokeCalls).toBe(2);
 });
 
 test("Capsule abandon action rejects an applied-state race without creating a destroy Plan", async () => {
