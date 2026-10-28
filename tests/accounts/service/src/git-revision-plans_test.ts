@@ -392,6 +392,21 @@ test("a version change pinned to an older state does not block a new one", async
   expect(moved.status).toBe(201);
 });
 
+test("a version change pinned to an InstallConfig a settings change replaced does not block a new one", async () => {
+  // A settings change rebinds the InstallConfig without a new generation;
+  // the old row's reconcile can only fail on the moved base.
+  const rebound = await newRevisionBeside((row) => ({
+    ...row,
+    installConfigId: "cfg_before_settings",
+    installConfigBaseId: "cfg_before_settings",
+    revision: {
+      ...row.revision!,
+      base: { ...row.revision!.base, installConfigId: "cfg_before_settings" },
+    },
+  }));
+  expect(rebound.status).toBe(201);
+});
+
 test("Git revision reconciliation uses the original private management authority", async () => {
   const fixture = revisionFixture();
   const created = await fixture.request(

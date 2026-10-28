@@ -169,15 +169,17 @@ async function readCapsuleAppView(
         readLatestLifecycleRun(operations, capsule),
         // A coordinator row counts only until it creates its Plan Run (the
         // Run then says what is happening), a revision row only while its
-        // base is the current state generation (after another change was
-        // applied it can only fail), and an install row only while the
-        // Capsule was never applied.
+        // base is the current state generation and InstallConfig (after
+        // another change was applied, or settings rebound the Capsule, it can
+        // only fail), and an install row only while the Capsule was never
+        // applied.
         operations.gitInstallPlans.preparingCoordinatorForCapsule(
           capsule.id,
           capsule.workspaceId,
           {
             includeInstall: !applied,
             currentStateGeneration: capsule.currentStateGeneration,
+            currentInstallConfigId: capsule.installConfigId,
           },
         ),
         readConnectionIssues(operations, capsule),
@@ -291,7 +293,8 @@ async function readCapsuleAppView(
  *   expires.)
  * - A revision row holds the app until it stops moving; after that the app
  *   reads as it is and the page offers to continue it (`revisionPlanId`).
- *   A row pinned to an older state generation never reaches here.
+ *   A row pinned to an older state generation or InstallConfig never
+ *   reaches here.
  */
 export function coordinatorPreparation(
   coordinator: PreparingGitPlanCoordinator | undefined,

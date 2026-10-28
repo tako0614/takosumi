@@ -352,13 +352,14 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 `progress.installPlanAwaitingInput` が `viewer`（呼び出した本人が始めた）か `other` になり、
 その間は reconcile しても進みません。版の更新処理が計画の Run を作らないまま止まった場合は
 `progress.revisionPlanId` に名前が入り、`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`
-で続けられます。版の更新処理は、始めたときの状態の世代がいまの Capsule の世代と同じ間だけ数えます。
-その後にほかの変更が適用された処理は reconcile しても失敗するだけなので、準備中にも
+で続けられます。版の更新処理は、始めたときの状態の世代と InstallConfig がいまの Capsule と同じ間だけ
+数えます。その後にほかの変更が適用された処理や、設定の変更で InstallConfig が付け替わった処理
+（世代は変わりません）は reconcile しても失敗するだけなので、準備中にも
 `revisionPlanId` にもなりません。Workspace のメンバーなら誰でもこれらを reconcile できますが、作られる計画の Run の
 作成者には、進めたメンバーではなく処理そのもの（`git-install-plan:<id>` /
 `git-revision-plan:<id>`）が記録されます。
 同じ Capsule の版の更新処理がまだ計画を準備している間（`progress.revisionPreparing` と同じ条件:
-計画の Run がまだない、止まっていない、管理の権限を記録している、いまの世代に基づく）は、別の
+計画の Run がまだない、止まっていない、管理の権限を記録している、いまの世代と InstallConfig に基づく）は、別の
 `POST /api/v1/capsules/{capsuleId}/revision-plans` は 409（`details.reason: "revision_in_progress"`、
 `details.revisionPlanId`）で断られます。同じ Idempotency-Key の再送はそのまま返ります。
 設定の変更（`configuration-plans`）と設定の再採用（`install-config-re-adoptions`）も、同じ条件の間だけ

@@ -1151,7 +1151,10 @@ export default function AppManagePage(props: {
                   bindingsFailed={Boolean(bindingSet.error)}
                   connections={settledValue(connections) ?? []}
                   onConnectionsChanged={() => void refetchConnections()}
-                  reviewBusy={reviewBusy()}
+                  // A settings change beside a running or pending version
+                  // change would make that change fail when it is applied.
+                  reviewBusy={reviewBusy() || versionChangeBusy(view())}
+                  changeWaits={!reviewBusy() && versionChangeBusy(view())}
                   starting={startingIn("settings")}
                   error={errorFor("settings")}
                   notice={noticeFor("settings")}

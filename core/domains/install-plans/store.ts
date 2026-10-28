@@ -364,13 +364,14 @@ export interface PreparingCoordinatorCapsule {
   readonly id: string;
   readonly workspaceId: string;
   readonly currentStateGeneration: number;
+  readonly installConfigId: string;
 }
 
 /**
  * The revision coordinator that holds this Capsule's version and
  * configuration changes, if any: still preparing its Plan, still moving (not
  * stalled), reconcilable, and pinned to the Capsule's current state
- * generation. The app view, a second revision and configuration changes use
+ * generation and InstallConfig. The app view, a second revision and configuration changes use
  * this one definition, so a row the app page no longer shows as updating
  * never blocks a change either.
  */
@@ -382,7 +383,11 @@ export async function activeGitRevisionPreparation(
   const coordinator = await store.preparingCoordinatorForCapsule(
     capsule.id,
     capsule.workspaceId,
-    { includeInstall: false, currentStateGeneration: capsule.currentStateGeneration },
+    {
+      includeInstall: false,
+      currentStateGeneration: capsule.currentStateGeneration,
+      currentInstallConfigId: capsule.installConfigId,
+    },
   );
   return coordinator?.operation === "revision" &&
       !gitRevisionPreparationStalled(coordinator, now)
@@ -406,9 +411,10 @@ export interface GitInstallPlanStore {
    * is happening, so a row a client never reconciled past `planning` does not
    * keep the Capsule busy. Rows written before management-authority
    * persistence (no authority, or JSON null) can never be reconciled again
-   * and are not returned. A revision row counts only while its base state
-   * generation is `currentStateGeneration`: once another change was applied
-   * its reconcile fails on the moved base. Install rows count only with
+   * and are not returned. A revision row counts only while its base is the
+   * Capsule's current state generation and InstallConfig: once another change
+   * was applied, or settings rebound the Capsule (which keeps the
+   * generation), its reconcile fails on the moved base. Install rows count only with
    * `includeInstall` (a never-applied Capsule); an applied Capsule is never
    * held by an install row. Scoped to the Capsule's Workspace so the read
    * stays on its index.
@@ -419,6 +425,7 @@ export interface GitInstallPlanStore {
     options: {
       readonly includeInstall: boolean;
       readonly currentStateGeneration: number;
+      readonly currentInstallConfigId: string;
     },
   ): Promise<PreparingGitPlanCoordinator | undefined>;
   /**
@@ -538,6 +545,7 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     options: {
       readonly includeInstall: boolean;
       readonly currentStateGeneration: number;
+      readonly currentInstallConfigId: string;
     },
   ): Promise<PreparingGitPlanCoordinator | undefined> {
     const candidates = Array.from(this.#entries.values())
@@ -550,7 +558,8 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
         // `!= null`: JSON null reads as absent, as in the SQL stores.
         plan.workspaceManagementAuthority != null &&
         (plan.operation === "revision"
-          ? plan.revision?.base?.capsuleStateGeneration === options.currentStateGeneration
+          ? plan.revision?.base?.capsuleStateGeneration === options.currentStateGeneration &&
+            plan.revision.base.installConfigId === options.currentInstallConfigId
           : options.includeInstall)
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));

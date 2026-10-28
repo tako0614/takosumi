@@ -136,11 +136,12 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     options: {
       readonly includeInstall: boolean;
       readonly currentStateGeneration: number;
+      readonly currentInstallConfigId: string;
     },
   ): Promise<PreparingGitPlanCoordinator | undefined> {
     // A row counts until it creates its Plan Run; a revision row only while
-    // its base is the current state generation; install rows only while the
-    // Capsule was never applied.
+    // its base is the current state generation and InstallConfig; install
+    // rows only while the Capsule was never applied.
     const row = await this.#db
       .prepare(
         `select id, phase, json_extract(record_json, '$.operation') as operation,
@@ -155,6 +156,7 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
             and (case when json_extract(record_json, '$.operation') = 'revision'
                       then json_type(record_json, '$.revision.base.capsuleStateGeneration') = 'integer'
                         and json_extract(record_json, '$.revision.base.capsuleStateGeneration') = ?
+                        and json_extract(record_json, '$.revision.base.installConfigId') = ?
                       else ? = 1 end)
           order by updated_at desc, id desc
           limit 1`,
@@ -163,6 +165,7 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
         workspaceId,
         capsuleId,
         options.currentStateGeneration,
+        options.currentInstallConfigId,
         options.includeInstall ? 1 : 0,
       )
       .first<{

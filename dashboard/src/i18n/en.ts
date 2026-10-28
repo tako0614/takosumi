@@ -486,6 +486,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.settings.closeConnect": "Close",
   "app.settings.connectionMissing": "Choose a connection for {provider}.",
   "app.settings.review": "Review",
+  "app.settings.changeWaits": "Another change is under way or waiting for review. You can change settings after it finishes.",
   "app.created.title": "What it created",
   "app.created.subtitle": "Resources the last applied change created in your cloud.",
   "app.created.count": "{n} resources",

@@ -277,6 +277,11 @@ describe("installed app page", () => {
     expect(attention).toContain("disabled={props.busy || revisionWaits()}");
     // Update, check, choose a version and go back all wait.
     expect(page).toContain("reviewBusy={reviewBusy() || versionChangeBusy(view())}");
+    // Settings wait too, and say why: a settings change beside a running or
+    // pending version change would make that change fail when applied.
+    expect(page.split("reviewBusy={reviewBusy() || versionChangeBusy(view())}").length).toBe(3);
+    expect(page).toContain("changeWaits={!reviewBusy() && versionChangeBusy(view())}");
+    expect(settings).toContain('t("app.settings.changeWaits")');
     expect(page).toContain('view.state === "installed" && !versionChangeBusy(view);');
     // An attempt waiting for input says whose input it needs.
     expect(attention).toContain('who() === "viewer" ? t("app.progress.awaitingYourInput") : t("app.progress.awaitingStarterInput")');

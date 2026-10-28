@@ -144,12 +144,13 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     options: {
       readonly includeInstall: boolean;
       readonly currentStateGeneration: number;
+      readonly currentInstallConfigId: string;
     },
   ): Promise<PreparingGitPlanCoordinator | undefined> {
     // A row counts until it creates its Plan Run; a revision row only while
-    // its base is the current state generation; install rows only while the
-    // Capsule was never applied. `->>` reads JSON null authority as absent,
-    // like D1's json_extract.
+    // its base is the current state generation and InstallConfig; install
+    // rows only while the Capsule was never applied. `->>` reads JSON null
+    // authority as absent, like D1's json_extract.
     const result = await this.#client.query<{
       readonly id: string;
       readonly phase: PreparingGitPlanCoordinator["phase"];
@@ -168,11 +169,18 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
           and record_json ->> 'workspaceManagementAuthority' is not null
           and (case when record_json ->> 'operation' = 'revision'
                     then record_json #> '{revision,base,capsuleStateGeneration}' =
-                      to_jsonb($4::bigint)
+                        to_jsonb($4::bigint)
+                      and record_json #>> '{revision,base,installConfigId}' = $5
                     else $3::boolean end)
         order by updated_at desc, id desc
         limit 1`,
-      [capsuleId, workspaceId, options.includeInstall, options.currentStateGeneration],
+      [
+        capsuleId,
+        workspaceId,
+        options.includeInstall,
+        options.currentStateGeneration,
+        options.currentInstallConfigId,
+      ],
     );
     const row = result.rows[0];
     return row

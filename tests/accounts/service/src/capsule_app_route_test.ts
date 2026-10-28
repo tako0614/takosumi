@@ -809,6 +809,7 @@ async function putRevisionRow(
   h: Awaited<ReturnType<typeof fixture>>,
   updatedAt: string,
   baseGeneration = 1,
+  baseInstallConfigId = "cfg_app_route",
 ): Promise<void> {
   const authority = { workspaceId: WORKSPACE, managementState: "active" as const, managementEpoch: 1 };
   const created = await h.core.gitInstallPlans.create(
@@ -828,7 +829,7 @@ async function putRevisionRow(
         targetRef: "v2",
         base: {
           capsuleStateGeneration: baseGeneration,
-          installConfigId: "cfg_app_route",
+          installConfigId: baseInstallConfigId,
           installConfigDigest: "sha256:config",
           sourceDefaultRef: "main",
           sourceDefaultPath: ".",
@@ -867,13 +868,17 @@ test("a version change being prepared holds the app; one that stopped moving is 
 
 test("a version change pinned to an older state is neither preparing nor offered to continue", async () => {
   // Another change was applied after these rows started (the fixture Capsule
-  // is at generation 1): their reconcile can only fail on the moved base.
-  for (const updatedAt of [new Date().toISOString(), new Date(Date.now() - 20 * 60 * 1000).toISOString()]) {
-    const h = await fixture();
-    await putRevisionRow(h, updatedAt, 0);
-    const app = await h.app();
-    expect(app).toMatchObject({ state: "installed", progress: { revisionPreparing: false } });
-    expect(app.progress.revisionPlanId).toBeUndefined();
+  // is at generation 1 on cfg_app_route), or a settings change rebound the
+  // Capsule to another InstallConfig without a new generation: their
+  // reconcile can only fail on the moved base.
+  for (const [baseGeneration, baseInstallConfigId] of [[0, "cfg_app_route"], [1, "cfg_before_settings"]] as const) {
+    for (const updatedAt of [new Date().toISOString(), new Date(Date.now() - 20 * 60 * 1000).toISOString()]) {
+      const h = await fixture();
+      await putRevisionRow(h, updatedAt, baseGeneration, baseInstallConfigId);
+      const app = await h.app();
+      expect(app).toMatchObject({ state: "installed", progress: { revisionPreparing: false } });
+      expect(app.progress.revisionPlanId).toBeUndefined();
+    }
   }
 });
 
