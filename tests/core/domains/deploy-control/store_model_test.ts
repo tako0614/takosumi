@@ -6,8 +6,7 @@ import type {
   ProviderConnection,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
-import type { Dependency } from "takosumi-contract/dependencies";
-import type { Output, OutputShare } from "takosumi-contract/outputs";
+import type { Output } from "takosumi-contract/outputs";
 import type { Project } from "takosumi-contract/projects";
 import type { Workspace, WorkspaceMember } from "takosumi-contract/workspaces";
 import type { ActivityEvent } from "takosumi-contract/activity";
@@ -3209,55 +3208,5 @@ test("sealed secret create-if-absent converges under concurrent writers on every
     expect(created.filter(Boolean), label).toHaveLength(1);
     const winner = candidates[created.findIndex(Boolean)];
     expect(await store.getSecretBlob(connectionId), label).toEqual(winner);
-  }
-});
-
-test("Dependency and OutputShare use Capsule and Workspace vocabulary", async () => {
-  for (const [label, store] of await stores()) {
-    const dependency: Dependency = {
-      id: "dependency_a",
-      workspaceId: "workspace_a",
-      producerCapsuleId: "capsule_producer",
-      consumerCapsuleId: "capsule_consumer",
-      mode: "variable_injection",
-      outputs: {
-        bucket_name: {
-          from: "bucket_name",
-          to: "bucket",
-          required: true,
-        },
-      },
-      visibility: "workspace",
-      createdAt: TS,
-    };
-    const share: OutputShare = {
-      id: "share_a",
-      fromWorkspaceId: "workspace_a",
-      toWorkspaceId: "workspace_b",
-      producerCapsuleId: "capsule_producer",
-      outputs: [{ name: "bucket_name", alias: "bucket", sensitive: false }],
-      status: "active",
-      createdAt: TS,
-    };
-
-    await store.putDependency(dependency);
-    await store.putOutputShare(share);
-
-    expect(
-      (await store.listDependenciesForProducer("capsule_producer"))[0],
-      label,
-    ).toEqual(dependency);
-    expect(
-      (await store.listDependenciesForConsumer("capsule_consumer"))[0],
-      label,
-    ).toEqual(dependency);
-    expect(
-      (await store.listOutputSharesFromWorkspace("workspace_a"))[0],
-      label,
-    ).toEqual(share);
-    expect(
-      (await store.listOutputSharesToWorkspace("workspace_b"))[0],
-      label,
-    ).toEqual(share);
   }
 });

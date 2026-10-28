@@ -1,14 +1,13 @@
 /**
  * Deploy-control operation / runner-profile scope enforcement on the
  * Capsule-driven plan routes, the StateVersion rollback plan, the Workspace
- * RunGroup fan-out, and the Dependency edge writes. Every one of these creates
+ * and RunGroup fan-out routes. Every one of these creates
  * (or feeds) a privileged Run, so Workspace membership alone must not be
  * enough — the raw `POST /internal/v1/plan-runs` route has always required the
  * operation + runner-profile scopes, and these routes must agree.
  */
 import { expect, test } from "bun:test";
 import type { StateVersion } from "takosumi-contract/state-versions";
-import type { Dependency } from "takosumi-contract/dependencies";
 
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import { createApiApp } from "../../../core/api/app.ts";
@@ -285,57 +284,6 @@ test("workspace plan-update RunGroup requires the update operation", async () =>
   );
 
   expect(response.status).toEqual(403);
-});
-
-test("dependency create requires write authority, not just Workspace membership", async () => {
-  const { app } = await scopedApp({
-    workspaceIds: [WORKSPACE_ID],
-    operations: ["create"],
-    runnerProfileIds: "*",
-  });
-
-  const response = await app.request(
-    `/internal/v1/capsules/${CAPSULE_ID}/dependencies`,
-    {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({
-        producerCapsuleId: CAPSULE_ID,
-        mode: "variable_injection",
-        outputs: {},
-        visibility: "public",
-      }),
-    },
-  );
-
-  expect(response.status).toEqual(403);
-});
-
-test("dependency delete requires write authority, not just Workspace membership", async () => {
-  const { app, store } = await scopedApp({
-    workspaceIds: [WORKSPACE_ID],
-    operations: ["create"],
-    runnerProfileIds: "*",
-  });
-  const dependency: Dependency = {
-    id: "dep_scoped0001",
-    workspaceId: WORKSPACE_ID,
-    producerCapsuleId: CAPSULE_ID,
-    consumerCapsuleId: CAPSULE_ID,
-    mode: "variable_injection",
-    outputs: {},
-    visibility: "public",
-    createdAt: "2026-06-06T00:00:00.000Z",
-  };
-  await store.putDependency(dependency);
-
-  const response = await app.request(
-    "/internal/v1/dependencies/dep_scoped0001",
-    { method: "DELETE", headers: headers() },
-  );
-
-  expect(response.status).toEqual(403);
-  expect(await store.getDependency("dep_scoped0001")).toBeDefined();
 });
 
 test("internal DELETE outside the principal's Workspace scope cannot add Activity", async () => {

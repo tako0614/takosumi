@@ -123,7 +123,6 @@ test("partial state never triggers hidden import or replan in ordinary Plan, Des
     for (const runId of runIds) {
       const workspace = workspaceForRun(runId);
       await rm(workspace.root, { recursive: true, force: true });
-      await rm(workspace.depsDir, { recursive: true, force: true });
     }
     await rm(bin, { recursive: true, force: true });
   }
@@ -175,7 +174,6 @@ test("explicit import remains visible in the reviewed Plan projection", async ()
     if (originalPath === undefined) delete Bun.env.PATH;
     else Bun.env.PATH = originalPath;
     await rm(workspace.root, { recursive: true, force: true });
-    await rm(workspace.depsDir, { recursive: true, force: true });
     await rm(bin, { recursive: true, force: true });
   }
 });

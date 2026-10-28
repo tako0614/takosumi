@@ -43,12 +43,3 @@ export function appUninstallExportNote(
       return undefined;
   }
 }
-
-export function capsuleUninstallDependencyWarning(name: string, dependentNames: readonly string[]): string | undefined {
-  return dependentNames.length ? t("app.uninstall.dependencyWarning", { name, apps: dependentNames.join(", ") }) : undefined;
-}
-
-export function uninstallDependencyReadWarning(status: "ready" | "loading" | "failed"): string | undefined {
-  return status === "failed" ? t("app.uninstall.dependencyCheckFailed") :
-    status === "loading" ? t("app.uninstall.dependencyCheckLoading") : undefined;
-}

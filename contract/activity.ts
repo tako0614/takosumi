@@ -4,7 +4,7 @@
  * Activity is the Workspace-scoped audit trail surfaced in the dashboard's Activity
  * view. One {@link ActivityEvent} records a single state-changing action
  * inside a Workspace — a Capsule created, a plan / apply / destroy run reaching
- * a milestone, a Dependency added, stale propagation, a RunGroup created — keyed
+ * a milestone, a source revision changing, or a RunGroup created — keyed
  * by the Workspace so the dashboard can list a Workspace's recent activity.
  *
  * This is the PUBLIC, Workspace-level audit trail. It is distinct from the public

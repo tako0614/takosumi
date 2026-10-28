@@ -26,7 +26,6 @@ import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
   CredentialRecipe as ContractCredentialRecipe,
-  Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
   Capsule as ContractCapsule,
   CapsuleProviderPackage as ContractCapsuleProviderPackage,
@@ -269,7 +268,7 @@ export async function controlFetch<T>(
       desc === undefined,
     );
   }
-  // 204 No Content (dependency delete) resolves to undefined.
+  // 204 No Content resolves to undefined.
   return data as T;
 }
 
@@ -495,7 +494,7 @@ export interface Capsule {
   readonly currentStateGeneration: number;
   readonly status: CapsuleStatus;
   /**
-   * Read-time DERIVED freshness relative to producer Dependencies (spec §24).
+   * Read-time DERIVED freshness relative to the tracked Source revision.
    * Newer backends stop STORING `status: "stale"` and surface this field
    * instead; older backends omit it. Views must treat
    * `status === "stale" || freshness === "stale"` as the stale presentation
@@ -545,35 +544,6 @@ export interface InstallConfig {
 
 type OutputAllowlistEntry = ContractInstallConfig["outputAllowlist"][string];
 
-export type DependencyMode =
-  "remote_state" | "variable_injection" | "published_output";
-
-export type DependencyVisibility = "workspace" | "cross_workspace";
-
-export interface DependencyOutputMapping {
-  readonly from: string;
-  readonly to: string;
-  readonly required: boolean;
-  readonly type?: string;
-}
-
-export interface Dependency {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly producerCapsuleId: string;
-  readonly consumerCapsuleId: string;
-  readonly mode: DependencyMode;
-  readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
-  readonly visibility: DependencyVisibility;
-  readonly createdAt: string;
-}
-
-/** `GET /api/v1/workspaces/:id/graph` projection. */
-export interface WorkspaceGraph {
-  readonly nodes: readonly GraphNode[];
-  readonly edges: readonly GraphEdge[];
-}
-
 export interface DashboardOverview {
   readonly workspaces: readonly Workspace[];
   readonly workspace: Workspace | null;
@@ -582,20 +552,6 @@ export interface DashboardOverview {
   readonly activity: readonly ActivityEvent[];
   readonly installConfigs: readonly InstallConfig[];
   readonly nextCapsuleCursor?: string;
-}
-
-export interface GraphNode {
-  readonly capsuleId: string;
-  readonly name: string;
-  readonly environment: string;
-  readonly status: CapsuleStatus;
-}
-
-export interface GraphEdge {
-  readonly id: string;
-  readonly producerCapsuleId: string;
-  readonly consumerCapsuleId: string;
-  readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
 }
 
 export type RunType =
@@ -878,24 +834,6 @@ export interface PublicStateVersion {
   readonly createdAt: string;
 }
 
-export interface OutputShareEntry {
-  readonly name: string;
-  readonly alias?: string;
-  readonly sensitive: boolean;
-}
-
-export interface OutputShare {
-  readonly id: string;
-  readonly fromWorkspaceId: string;
-  readonly toWorkspaceId: string;
-  readonly producerCapsuleId: string;
-  readonly outputs: readonly OutputShareEntry[];
-  readonly status: "pending" | "active" | "revoked";
-  readonly createdAt: string;
-  readonly acceptedAt?: string;
-  readonly revokedAt?: string;
-}
-
 export interface ActivityEvent {
   readonly id: string;
   readonly workspaceId: string;
@@ -968,14 +906,11 @@ type _ContractResponseAssignableToDashboardMirrors = [
   AssertAssignable<Workspace, ContractWorkspace>,
   AssertAssignable<Capsule, ContractCapsule>,
   AssertAssignable<InstallConfig, ContractInstallConfig>,
-  AssertAssignable<Dependency, ContractDependency>,
   AssertAssignable<Run, ContractRun>,
   AssertAssignable<RunLogs, ContractRunLogsResponse>,
   AssertAssignable<Source, ContractSource>,
   AssertAssignable<SourceSnapshot, ContractSourceSnapshot>,
   AssertAssignable<PublicStateVersion, ContractPublicStateVersion>,
-  // Accounts normalizes the internal OutputShare contract into a canonical
-  // Workspace/Capsule-only public view before the dashboard sees it.
   AssertAssignable<ActivityEvent, ContractActivityEvent>,
   AssertAssignable<ProviderConnection, ContractProviderConnection>,
   AssertAssignable<UsageEvent, ContractUsageEvent>,
@@ -2011,16 +1946,6 @@ export async function getInstallConfig(
   return body.installConfig;
 }
 
-// --- Graph -----------------------------------------------------------------
-
-export async function getWorkspaceGraph(
-  workspaceId: string,
-): Promise<WorkspaceGraph> {
-  return await controlFetch<WorkspaceGraph>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/graph`,
-  );
-}
-
 // --- Backups ---------------------------------------------------------------
 
 export async function createWorkspaceBackup(
@@ -2049,39 +1974,6 @@ export async function listWorkspaceBackups(
   return await fetchAllPages<BackupRecord>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups`,
     (body) => (body.backups as readonly BackupRecord[]) ?? [],
-  );
-}
-
-// --- Dependencies ----------------------------------------------------------
-
-export async function createDependency(
-  consumerCapsuleId: string,
-  input: {
-    readonly producerCapsuleId: string;
-    readonly mode?: DependencyMode;
-    readonly outputs?: Readonly<Record<string, DependencyOutputMapping>>;
-    readonly visibility?: DependencyVisibility;
-  },
-): Promise<Dependency> {
-  const body = await controlFetch<{ dependency: Dependency }>(
-    `${BASE}/capsules/${encodeURIComponent(consumerCapsuleId)}/dependencies`,
-    {
-      method: "POST",
-      body: {
-        producerCapsuleId: input.producerCapsuleId,
-        ...(input.mode ? { mode: input.mode } : {}),
-        ...(input.outputs ? { outputs: input.outputs } : {}),
-        ...(input.visibility ? { visibility: input.visibility } : {}),
-      },
-    },
-  );
-  return body.dependency;
-}
-
-export async function deleteDependency(dependencyId: string): Promise<void> {
-  await controlFetch<void>(
-    `${BASE}/dependencies/${encodeURIComponent(dependencyId)}`,
-    { method: "DELETE" },
   );
 }
 
@@ -3423,57 +3315,6 @@ export async function connectionSetupCatalog(): Promise<{
     oauthHelpers?: readonly ConnectionOAuthSetup[];
   }>(`${BASE}/credential-recipes`);
   return { recipes: body.recipes ?? [], oauthHelpers: body.oauthHelpers ?? [] };
-}
-
-// --- OutputShares ----------------------------------------------------------
-
-export async function listOutputShares(
-  workspaceId: string,
-): Promise<readonly OutputShare[]> {
-  return await fetchAllPages<OutputShare>(
-    `${BASE}/output-shares${query({ workspaceId: workspaceId })}`,
-    (body) => (body.shares as readonly OutputShare[]) ?? [],
-  );
-}
-
-export async function createOutputShare(input: {
-  readonly fromWorkspaceId: string;
-  readonly toWorkspaceId: string;
-  readonly producerCapsuleId: string;
-  readonly outputs: readonly {
-    readonly name: string;
-    readonly alias?: string;
-    readonly sensitive?: boolean;
-  }[];
-  readonly sensitivePolicy?: {
-    readonly allow: boolean;
-    readonly reason?: string;
-  };
-}): Promise<OutputShare> {
-  const body = await controlFetch<{ share: OutputShare }>(
-    `${BASE}/output-shares`,
-    {
-      method: "POST",
-      body: input,
-    },
-  );
-  return body.share;
-}
-
-export async function approveOutputShare(id: string): Promise<OutputShare> {
-  const body = await controlFetch<{ share: OutputShare }>(
-    `${BASE}/output-shares/${encodeURIComponent(id)}/approve`,
-    { method: "POST" },
-  );
-  return body.share;
-}
-
-export async function revokeOutputShare(id: string): Promise<OutputShare> {
-  const body = await controlFetch<{ share: OutputShare }>(
-    `${BASE}/output-shares/${encodeURIComponent(id)}/revoke`,
-    { method: "POST" },
-  );
-  return body.share;
 }
 
 // ===========================================================================

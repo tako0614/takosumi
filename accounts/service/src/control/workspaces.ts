@@ -53,12 +53,6 @@ import {
   UI_SURFACE_INTERFACE_VERSION,
   UI_SURFACE_OPEN_PERMISSION,
 } from "takosumi-contract";
-import type {
-  Dependency,
-  DependencyMode,
-  DependencyOutputMapping,
-  DependencyVisibility,
-} from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { ProviderConnection } from "takosumi-contract/connections";
@@ -67,7 +61,6 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type {
   PublicStateVersion,
   StateVersion,
@@ -127,12 +120,7 @@ import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  dependencyModeValue,
-  dependencyVisibilityValue,
-  isOutputsMapping,
   isPlainJsonObject,
-  outputShareEntries,
-  outputShareSensitivePolicy,
   parseProviderBinding,
   parseProviderBindings,
   parseLimit,
@@ -1518,23 +1506,14 @@ async function workspaceGraph(
   operations: ControlPlaneOperations,
   workspaceId: string,
 ): Promise<Response> {
-  const [capsules, edges] = await Promise.all([
-    operations.capsules.listCapsules(workspaceId),
-    operations.listDependenciesByWorkspace(workspaceId),
-  ]);
+  const capsules = await operations.capsules.listCapsules(workspaceId);
   const nodes = capsules.map((capsule) => ({
     capsuleId: capsule.id,
     name: capsule.name,
     environment: capsule.environment,
     status: capsule.status,
   }));
-  const graphEdges = edges.map((edge) => ({
-    id: edge.id,
-    producerCapsuleId: edge.producerCapsuleId,
-    consumerCapsuleId: edge.consumerCapsuleId,
-    outputs: edge.outputs,
-  }));
-  return json({ nodes, edges: graphEdges });
+  return json({ nodes, edges: [] });
 }
 
 // --- Activity --------------------------------------------------------------

@@ -198,15 +198,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             ],
           } } });
         }
-        if (path === "/api/v1/workspaces/ws_alpha/graph") {
-          return route.fulfill({ json: {
-            nodes: [
-              { capsuleId: CAPSULE_ID, name: PORTABLE_EXPECTATIONS.appName, environment: "production", status: "active" },
-              { capsuleId: "cap_team_wiki", name: "Team Wiki", environment: "production", status: "active" },
-            ],
-            edges: [{ id: "dep_wiki", producerCapsuleId: CAPSULE_ID, consumerCapsuleId: "cap_team_wiki", outputs: {} }],
-          } });
-        }
         if (path === `/api/v1/capsule-configs/${INSTALL_CONFIG_ID}`) {
           return route.fulfill({ json: { installConfig: {
             id: INSTALL_CONFIG_ID, workspaceId: "ws_alpha", name: PORTABLE_EXPECTATIONS.appName,
@@ -289,7 +280,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // The sections follow keeping an app, and nothing is folded away. The
       // uninstall section states the grace period before anything is scheduled.
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
-      const sections = ["app-version", "app-settings", "app-created", "app-linked", "app-history", "app-uninstall"];
+      await expect(app.getByTestId("app-linked")).toHaveCount(0);
+      const sections = ["app-version", "app-settings", "app-created", "app-history", "app-uninstall"];
       const tops: number[] = [];
       for (const id of sections) {
         await expect(app.getByTestId(id)).toBeVisible();
@@ -309,8 +301,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(created).not.toContainText("cloudflare_workers_script");
       await expect(created).not.toContainText("run_settings");
       await expect(app.getByTestId("app-cost")).toContainText("$1.23");
-      await expect(app.getByTestId("app-linked")).toContainText("Team Wiki");
-      await expect(app.getByTestId("app-uninstall")).toContainText("Team Wiki");
+      await expect(app.getByTestId("app-uninstall")).not.toContainText("Team Wiki");
       // One connection row per provider; no alias inputs or screen JSON editor.
       const connectionRow = app.getByTestId("app-connection-row");
       await expect(connectionRow).toHaveCount(1);
@@ -531,12 +522,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now,
           } } });
         }
-        if (path === "/api/v1/workspaces/ws_alpha/graph") {
-          return route.fulfill({ json: {
-            nodes: [{ capsuleId: "cap_keep_a", name: "Keep Alpha", environment: "production", status: "active" }, { capsuleId: "cap_keep_b", name: "Keep Beta", environment: "production", status: "active" }],
-            edges: [{ id: "dep_keep", producerCapsuleId: "cap_keep_a", consumerCapsuleId: "cap_keep_b", outputs: {} }],
-          } });
-        }
         if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
         if (path === "/api/v1/sources" && request.method() === "GET") {
           return route.fulfill({ json: { sources: (Object.keys(apps) as AppId[]).map((id) => ({
@@ -618,20 +603,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(configurationBodies[0]).toEqual(configurationBodies[1]);
       expect((configurationBodies[0] as { providerBindings: unknown }).providerBindings).toEqual([]);
       await settings.getByTestId("app-review").getByRole("button", { name: "Cancel", exact: true }).click();
-
-      // Following a linked app mounts that app's own page: no review,
-      // notice or values of the previous app carry over.
-      await version.getByRole("button", { name: "Update", exact: true }).click();
-      await expect(version.getByTestId("app-review")).toBeVisible();
-      await app.getByTestId("app-linked").getByRole("link", { name: "Keep Beta" }).click();
-      await expect(page).toHaveURL(/\/apps\/cap_keep_b$/u);
-      await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Beta");
-      await expect(page.getByTestId("app-review")).toHaveCount(0);
-      await expect(page.getByTestId("app-settings").getByRole("textbox", { name: /^Region/u })).toHaveValue("beta-region");
-      await expect(page.getByTestId("app-state-sentence")).toHaveText("Ready to use.");
-      await page.goBack();
-      await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Alpha");
-      await expect(page.getByTestId("app-review")).toHaveCount(0);
 
       expect(errors).toEqual([]);
       // The only failed request is the Apply whose outcome the fixture lost.
@@ -730,7 +701,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         }
         if (path === "/api/v1/capsule-configs/cfg_cap_remove_c") return route.fulfill({ json: configFor("cap_remove_c") });
         if (path === "/api/v1/capsule-configs/cfg_cap_retry_d") return route.fulfill({ json: configFor("cap_retry_d") });
-        if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
         if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
         if (path === "/api/v1/sources" && request.method() === "GET") return route.fulfill({ json: { sources: [] } });
         // A failed rollback is retried as a rollback to the same version.
@@ -1004,7 +974,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (path === "/api/v1/capsule-configs/cfg_states_e") {
           return route.fulfill({ json: { installConfig: { id: "cfg_states_e", workspaceId: "ws_alpha", name: NAME, sourceSelector: { url: "https://github.com/example/state-echo.git", path: "." }, modulePath: "deploy/opentofu", policy: {}, variableMapping: {}, variablePresentation: [], outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now } } });
         }
-        if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
         if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
         const runMatch = path.match(/^\/api\/v1\/runs\/([^/]+)(\/[a-z]+)?$/u);
         if (runMatch && runsById.has(runMatch[1]!)) {

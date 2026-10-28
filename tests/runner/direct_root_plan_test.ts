@@ -91,7 +91,6 @@ test("legacy source-less destroy operator modules require the internal drain mar
     ).rejects.toThrow("operatorModule requires a generated root");
   } finally {
     await rm(workspace.root, { recursive: true, force: true });
-    await rm(workspace.depsDir, { recursive: true, force: true });
   }
 });
 
@@ -154,7 +153,6 @@ test("legacy destroy roots keep implicit terraform_data as a built-in runtime ca
     expect(result.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/u);
   } finally {
     await rm(workspace.root, { recursive: true, force: true });
-    await rm(workspace.depsDir, { recursive: true, force: true });
   }
 });
 
@@ -233,7 +231,6 @@ test("restored Git SourceSnapshot modules plan directly as the OpenTofu root", a
     ).toBe(false);
   } finally {
     await rm(workspace.root, { recursive: true, force: true });
-    await rm(workspace.depsDir, { recursive: true, force: true });
   }
 });
 
@@ -320,7 +317,6 @@ test("direct-root failed and destroy plans do not expose successful-plan-only ti
   } finally {
     for (const workspace of [failedWorkspace, destroyWorkspace]) {
       await rm(workspace.root, { recursive: true, force: true });
-      await rm(workspace.depsDir, { recursive: true, force: true });
     }
   }
 });

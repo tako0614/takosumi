@@ -382,6 +382,7 @@ export const providerBindingSets = sqliteTable(
   ],
 );
 
+// Retired ledger: retain this table unchanged until a later contract schema version.
 export const dependencies = sqliteTable(
   names.dependencies,
   {
@@ -399,6 +400,7 @@ export const dependencies = sqliteTable(
   ],
 );
 
+// Retired ledger: retain this table unchanged until a later contract schema version.
 export const dependencySnapshots = sqliteTable(
   names.dependencySnapshots,
   {
@@ -423,6 +425,7 @@ export const outputs = sqliteTable(
   (table) => [index("outputs_installation_idx").on(table.capsuleId)],
 );
 
+// Retired ledger: retain this table unchanged until a later contract schema version.
 export const outputShares = sqliteTable(
   names.outputShares,
   {

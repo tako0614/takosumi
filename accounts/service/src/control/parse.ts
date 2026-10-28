@@ -59,12 +59,6 @@ import type {
   PublicCapsule,
   SourceBuildConfig,
 } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencyMode,
-  DependencyOutputMapping,
-  DependencyVisibility,
-} from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
@@ -78,7 +72,6 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type {
   BackupRecord,
   CreateBackupResponse,
@@ -889,74 +882,6 @@ export function connectionScopeHints(
 
 export function workspaceTypeValue(value: unknown): WorkspaceType | undefined {
   return value === "personal" || value === "organization" ? value : undefined;
-}
-
-export function dependencyModeValue(
-  value: unknown,
-): DependencyMode | undefined {
-  return value === "variable_injection" ||
-    value === "remote_state" ||
-    value === "published_output"
-    ? value
-    : undefined;
-}
-
-export function dependencyVisibilityValue(
-  value: unknown,
-): DependencyVisibility | undefined {
-  return value === "workspace" || value === "cross_workspace"
-    ? value
-    : undefined;
-}
-
-export function isOutputsMapping(
-  value: unknown,
-): value is Readonly<Record<string, DependencyOutputMapping>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function outputShareEntries(value: unknown):
-  | readonly {
-      readonly name: string;
-      readonly alias?: string;
-      readonly sensitive?: boolean;
-    }[]
-  | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const out: {
-    name: string;
-    alias?: string;
-    sensitive?: boolean;
-  }[] = [];
-  for (const item of value) {
-    if (typeof item !== "object" || item === null) return undefined;
-    const record = item as Record<string, unknown>;
-    const name = stringValue(record.name);
-    if (!name) return undefined;
-    out.push({
-      name,
-      ...(stringValue(record.alias)
-        ? { alias: stringValue(record.alias) }
-        : {}),
-      ...(record.sensitive === true ? { sensitive: true } : {}),
-    });
-  }
-  return out;
-}
-
-export function outputShareSensitivePolicy(
-  value: unknown,
-): { readonly allow: boolean; readonly reason?: string } | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (record.allow !== true) return undefined;
-  const reason = stringValue(record.reason);
-  return {
-    allow: true,
-    ...(reason ? { reason } : {}),
-  };
 }
 
 export function parseLimit(

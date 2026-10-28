@@ -466,6 +466,7 @@ class InMemoryInterfaceAuthorizationQuery
         limit: undefined,
       })
     ).filter((iface) => {
+      if (hasUnownedCapsuleOutput(iface)) return false;
       if (
         input.uiSurfaceCandidates &&
         !isUiSurfaceCandidate(iface, input.capsuleId)
@@ -500,6 +501,15 @@ class InMemoryInterfaceAuthorizationQuery
       id: iface.metadata.id,
     }));
   }
+}
+
+function hasUnownedCapsuleOutput(iface: Interface): boolean {
+  return Object.values(iface.spec.inputs ?? {}).some(
+    (source) =>
+      source.source === "capsule_output" &&
+      (iface.metadata.ownerRef.kind !== "Capsule" ||
+        source.capsuleId !== iface.metadata.ownerRef.id),
+  );
 }
 
 function sameName(left: Interface, right: Interface): boolean {

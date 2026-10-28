@@ -48,7 +48,6 @@ function testWorkspace(root: string): RunWorkspace {
     generatedRootDir: join(root, "generated-root"),
     childModuleDir: join(root, "generated-root", "module"),
     artifactDir: join(root, "artifact"),
-    depsDir: join(root, "deps"),
   };
 }
 

@@ -843,7 +843,7 @@ test("lifecycle CAS preserves a newer Apply across every store", async () => {
 test(
   "Capsule stale frozen boundary preserves active and draining observation, but refuses frozen state",
   async () => {
-    const reasons = ["source-revision", "dependency-output"] as const;
+    const reasons = ["source-revision"] as const;
     for (const [label, store] of await stores()) {
       for (const managementState of ["active", "draining"] as const) {
         for (const reason of reasons) {
@@ -935,7 +935,7 @@ test(
 test(
   "Capsule stale frozen boundary refuses released state without mutation in durable stores",
   async () => {
-    const reasons = ["source-revision", "dependency-output"] as const;
+    const reasons = ["source-revision"] as const;
     for (const { label, store, setReleased } of await releasedStores()) {
       const seeded = await seedCapsuleModel(store, {
         workspaceId: `workspace_stale_released_${label}`,

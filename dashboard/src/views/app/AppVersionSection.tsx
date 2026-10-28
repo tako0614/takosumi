@@ -43,9 +43,8 @@ export default function AppVersionSection(props: {
   const [requestedRef, setRequestedRef] = createSignal("");
   const [showAllPrevious, setShowAllPrevious] = createSignal(false);
   const current = () => versionLabel(props.version.current?.ref, props.version.current?.commit);
-  // A newer commit of the same ref, or an app it uses changed (stale).
+  // Freshness only reflects a newer commit of the same tracked source ref.
   const updateAvailable = () => props.version.updateAvailable || props.version.stale;
-  const dependencyChanged = () => props.version.stale && !props.version.updateAvailable;
   const newVersion = () =>
     props.version.updateAvailable && props.version.latest
       ? versionLabel(props.version.latest.ref, props.version.latest.commit)
@@ -108,11 +107,7 @@ export default function AppVersionSection(props: {
       <div class="ap-callout" classList={{ "ap-callout-info": updateAvailable() }} data-testid="app-update">
         <div>
           <strong>
-            {updateAvailable()
-              ? dependencyChanged()
-                ? t("app.version.dependencyChanged")
-                : t("app.version.updateAvailable")
-              : t("app.version.checkTitle")}
+            {updateAvailable() ? t("app.version.updateAvailable") : t("app.version.checkTitle")}
           </strong>
           <Show when={newVersion()}>
             {(label) => (

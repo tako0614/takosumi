@@ -34,7 +34,6 @@ import type { ArtifactReferenceAllocator } from "./adapters/storage/artifact-ref
 import { currentRuntime } from "./shared/runtime/index.ts";
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
 import {
-  type DependencyValueSealer,
   type EnqueueRun,
   OpenTofuControllerError,
   OpenTofuController,
@@ -74,9 +73,6 @@ import {
 import { WorkspacesService } from "./domains/workspaces/mod.ts";
 import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
-import { DependenciesService } from "./domains/dependencies/mod.ts";
-import { OutputSharesService } from "./domains/output-shares/mod.ts";
-import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import {
@@ -212,7 +208,6 @@ import {
   finalizeDueCapsuleUninstalls,
 } from "./domains/capsules/uninstall_finalize.ts";
 import type { Run, RunPlanOrigin } from "takosumi-contract/runs";
-import type { Dependency } from "takosumi-contract/dependencies";
 import type {
   BillingSettings,
   CapsuleUsageSummary,
@@ -607,20 +602,6 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly serviceDataBackupRunner?: ServiceDataBackupRunner;
   /**
-   * Host-injected resolver for sensitive OutputShare values. Required for
-   * sensitive cross-Workspace published_output injection; when omitted the service
-   * fails closed for sensitive grants.
-   */
-  readonly sensitiveOutputResolver?: SensitiveOutputResolver;
-  /**
-   * Host-injected at-rest sealer for the sensitive pinned values of a
-   * DependencySnapshot entry (spec §11 / §18). Required whenever a sensitive
-   * cross-Workspace published_output is injected: the controller seals the resolved
-   * secret instead of persisting it as a cleartext ledger value, and unseals it
-   * at apply. Omitted ⇒ a sensitive published_output edge fails closed.
-   */
-  readonly dependencyValueSealer?: DependencyValueSealer;
-  /**
    * Optional host/operator executor for Plan-pinned service-side lifecycle
    * actions. Declared post-apply/pre-destroy phases fail closed unless this seam
    * returns terminal `succeeded`; a missing executor is never deferred work.
@@ -712,24 +693,6 @@ export interface TakosumiOperations {
     }): Promise<WorkspaceMember>;
   };
   readonly connections: ConnectionsService;
-  /**
-   * Dependencies domain service (Core Specification §14 / §15): the Workspace
-   * Capsule DAG edges over the same shared ledger.
-   */
-  readonly dependencies: DependenciesService;
-  /**
-   * Lists every Dependency edge in a Workspace (spec §14). Backs the account-plane
-   * `/api/v1/workspaces/:id/graph` projection; delegates to
-   * `dependencies.listBySpace`.
-   */
-  listDependenciesByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]>;
-  /**
-   * OutputShares domain service (Core Specification §18): the cross-Workspace output
-   * sharing grants over the same shared ledger.
-   */
-  readonly outputShares: OutputSharesService;
   /**
    * RunGroups domain service (Core Specification §19 / §24): workspace_update and
    * workspace_drift_check RunGroups over the same shared ledger + controller.
@@ -1231,7 +1194,7 @@ export async function createTakosumiService(
         })
       : undefined);
   // Activity domain (Core Specification §27 / §34): the Workspace-scoped audit
-  // trail. Constructed first so the controller + Capsule / Dependency /
+  // trail. Constructed first so the controller + Capsule /
   // RunGroup services can emit through it (fire-and-forget; a failed audit write
   // never fails the action it records).
   const activityService = new ActivityService({ store: sharedOpenTofuStore });
@@ -1346,23 +1309,6 @@ export async function createTakosumiService(
     uninstallGraceDays: uninstallGrace.days,
     validateUninstallRequesterAt: options.validateUninstallRequesterAt,
   });
-  const dependenciesService = new DependenciesService({
-    store: sharedOpenTofuStore,
-    activity: activityService,
-    // The same service-scoped coordinator protects every lifecycle admission;
-    // Workers replace the in-memory default with their DO-backed implementation.
-    coordination: capsuleCoordination,
-  });
-  // OutputShares domain (Core Specification §18): the cross-Workspace output sharing
-  // grant. Validates against the producer's latest Output over the SAME
-  // shared ledger; emits Workspace activity through the same recorder.
-  const outputSharesService = new OutputSharesService({
-    store: sharedOpenTofuStore,
-    activity: activityService,
-    ...(options.sensitiveOutputResolver
-      ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
-      : {}),
-  });
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
     validateUninstallRequester: options.validateUninstallRequester,
@@ -1414,12 +1360,6 @@ export async function createTakosumiService(
       ? { executionEvidenceAuthority: options.executionEvidenceAuthority }
       : {}),
     capsuleCoordination,
-    ...(options.sensitiveOutputResolver
-      ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
-      : {}),
-    ...(options.dependencyValueSealer
-      ? { dependencyValueSealer: options.dependencyValueSealer }
-      : {}),
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
       : {}),
@@ -1826,8 +1766,6 @@ export async function createTakosumiService(
       projectsService,
       capsulesService,
       connectionsService,
-      dependenciesService,
-      outputSharesService,
       runGroupsService,
       activityService,
       backupsService,
@@ -1890,10 +1828,6 @@ export async function createTakosumiService(
       createCapsuleExecutionAuthorityResolver(sharedOpenTofuStore),
     members,
     connections: connectionsService,
-    dependencies: dependenciesService,
-    listDependenciesByWorkspace: (workspaceId) =>
-      dependenciesService.listByWorkspace(workspaceId),
-    outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
     finalizeDueCapsuleUninstalls: (finalizeOptions) =>

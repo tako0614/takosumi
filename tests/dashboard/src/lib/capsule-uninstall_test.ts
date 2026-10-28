@@ -3,8 +3,6 @@ import type { CapsuleAppView } from "../../../../dashboard/src/lib/control-api.t
 import {
   appUninstallBanner,
   appUninstallExportNote,
-  capsuleUninstallDependencyWarning,
-  uninstallDependencyReadWarning,
 } from "../../../../dashboard/src/lib/capsule-uninstall.ts";
 import { formatDateTime, t } from "../../../../dashboard/src/i18n/index.ts";
 
@@ -67,12 +65,4 @@ test("the export note reports what was exported, and nothing when unrecorded", (
   expect(appUninstallExportNote(exported("exported", false))).toBe(t("app.uninstall.exportExportedLedgerOnly"));
   expect(appUninstallExportNote(exported("failed"))).toBe(t("app.uninstall.exportFailed"));
   expect(appUninstallExportNote(exported("skipped"))).toBe(t("app.uninstall.exportSkipped"));
-});
-
-test("uninstall confirmation preserves dependent apps and unreadable graph warnings", () => {
-  expect(capsuleUninstallDependencyWarning("App", ["Consumer A", "Consumer B"])).toContain("Consumer A, Consumer B");
-  expect(capsuleUninstallDependencyWarning("App", [])).toBeUndefined();
-  expect(uninstallDependencyReadWarning("failed")).toBe(t("app.uninstall.dependencyCheckFailed"));
-  expect(uninstallDependencyReadWarning("loading")).toBe(t("app.uninstall.dependencyCheckLoading"));
-  expect(uninstallDependencyReadWarning("ready")).toBeUndefined();
 });

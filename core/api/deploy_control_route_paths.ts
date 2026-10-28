@@ -120,16 +120,6 @@ export const TAKOSUMI_RUN_APPROVE_ROUTE =
   `${INTERNAL_V1_PREFIX}/runs/:runId/approve` as const;
 export const TAKOSUMI_RUN_CANCEL_ROUTE =
   `${INTERNAL_V1_PREFIX}/runs/:runId/cancel` as const;
-export const TAKOSUMI_CAPSULE_DEPENDENCIES_ROUTE =
-  `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/dependencies` as const;
-export const TAKOSUMI_DEPENDENCY_ROUTE =
-  `${INTERNAL_V1_PREFIX}/dependencies/:dependencyId` as const;
-export const TAKOSUMI_OUTPUT_SHARES_ROUTE =
-  `${INTERNAL_V1_PREFIX}/output-shares` as const;
-export const TAKOSUMI_OUTPUT_SHARE_APPROVE_ROUTE =
-  `${INTERNAL_V1_PREFIX}/output-shares/:shareId/approve` as const;
-export const TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE =
-  `${INTERNAL_V1_PREFIX}/output-shares/:shareId/revoke` as const;
 export const TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/plan-update` as const;
 export const TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE =

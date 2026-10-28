@@ -49,10 +49,6 @@ export interface RunWorkspace {
   readonly generatedRootDir: string;
   readonly childModuleDir: string;
   readonly artifactDir: string;
-  // remote_state dependency states (spec §15): each producer state is written
-  // read-only as <depsDir>/<name>.tfstate before init/plan/apply for the
-  // consumer's `terraform_remote_state` data sources.
-  readonly depsDir: string;
 }
 
 /** Generated root module HCL files (filename -> content). */

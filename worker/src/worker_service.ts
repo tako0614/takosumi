@@ -41,8 +41,6 @@ import {
   backupArtifactStoreFromEnv,
   backupObjectReaderFromR2,
 } from "./backup_artifact_store.ts";
-import { sensitiveOutputResolverFromEnv } from "./sensitive_output_resolver.ts";
-import { dependencyValueSealerFromEnv } from "./dependency_value_sealer.ts";
 import { CloudflareContainerOpenTofuRunner } from "./container_runner.ts";
 import {
   createCompositeReleaseActivator,
@@ -211,17 +209,6 @@ export async function createWorkerServiceApp(
     backupStorage.writeBucket,
   );
   const backupStateObjectReader = backupObjectReaderFromR2(env.R2_STATE);
-  const sensitiveOutputResolver = sensitiveOutputResolverFromEnv(
-    env.R2_ARTIFACTS,
-    runtimeEnv,
-  );
-  // At-rest sealing for sensitive DependencySnapshot values (spec §11 / §18).
-  // Reuses the same secret-boundary AES-GCM envelope as state/plan/raw-output
-  // artifacts; wired whenever the sensitive output resolver is — a sensitive
-  // published_output edge needs both to resolve AND to seal its pinned value.
-  const dependencyValueSealer = sensitiveOutputResolver
-    ? dependencyValueSealerFromEnv(runtimeEnv)
-    : undefined;
   const envReleaseActivator = releaseActivatorFromEnv(env, runtimeEnv);
   const runnerReleaseActivator = createRunnerReleaseActivator(opentofuRunner);
   const releaseActivator =
@@ -463,8 +450,6 @@ export async function createWorkerServiceApp(
     ...(backupArtifactStore ? { backupArtifactStore } : {}),
     ...(backupStateObjectReader ? { backupStateObjectReader } : {}),
     ...(backupArtifactStore ? { serviceDataBackupRunner: opentofuRunner } : {}),
-    ...(sensitiveOutputResolver ? { sensitiveOutputResolver } : {}),
-    ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
 }
