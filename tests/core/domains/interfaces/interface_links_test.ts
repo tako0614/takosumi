@@ -174,6 +174,29 @@ test("successive sign-ins narrow a grant despite older revoked rows for the same
   expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
 });
 
+test("zero approved overlap revokes an older required grant without creating an empty grant", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  await f.ensure("alice");
+  const incompatible = { ...requirement, permissions: ["mcp.admin"] };
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [incompatible] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready")).toHaveLength(0);
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [incompatible] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready")).toHaveLength(0);
+  expect((await f.stores.links.get(link.id))?.state).toBe("active");
+});
+
+test("provider approval reduction to empty revokes a previously Ready required grant", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  await f.ensure("alice");
+  expect(await f.stores.links.compareAndSet({ ...link, generation: link.generation + 1, approvedPermissions: [] }, link.generation)).toBe(true);
+  await f.ensure("alice");
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready")).toHaveLength(0);
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+});
+
 test("a legacy replacement's revoked row does not deny its newer active same-link grant", async () => {
   const f = await fixture();
   await f.link();
