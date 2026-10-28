@@ -280,7 +280,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // The sections follow keeping an app, and nothing is folded away. The
       // uninstall section states the grace period before anything is scheduled.
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
-      await expect(app.getByTestId("app-linked")).toContainText("No apps are linked.");
+      await expect(app.getByTestId("app-linked")).toHaveCount(0);
       const sections = ["app-version", "app-settings", "app-created", "app-history", "app-uninstall"];
       const tops: number[] = [];
       for (const id of sections) {
