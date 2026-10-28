@@ -252,7 +252,7 @@ export interface GitInstallPlan {
    * longer advance. Reads never change it; the creator discards it. Refreshed
    * by answers and coordinator progress, and removed once the confirming
    * request starts creating the Capsule — an attempt with a Capsule never
-   * expires.
+   * expires. An unleased expired attempt does not block Workspace management.
    */
   readonly expiresAt?: string;
   /** Present only for `operation: "revision"`. */
@@ -383,8 +383,9 @@ export type GitInstallPlanUserAction =
       /** Answers that still block `continue`. */
       readonly missing: readonly ("connections" | "name")[];
       /**
-       * Names whose values must be sent again because a confirming request
-       * could not be completed. Values are never retained between requests.
+       * Present (possibly empty) once a confirming request started creation
+       * and could not be confirmed: send `continue` again with exactly these
+       * variable names. Values are never retained between requests.
        */
       readonly resubmitVariables?: readonly string[];
     }

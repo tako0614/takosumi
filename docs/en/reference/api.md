@@ -368,12 +368,16 @@ requirement with exactly one eligible connection is selected automatically.
 Only the member who started the attempt may `PATCH` or `DELETE` it. `PATCH`
 uses `expectedGeneration` as a CAS fence, and only the confirming
 `continue: true` request carries variable values, which go straight into the
-atomic initial creation and are never stored; when that creation cannot be
-confirmed, only the same values may be sent again. `DELETE` abandons a
-never-applied Capsule the attempt created and records the terminal `discarded`
-phase; it is refused once the app is applying or applied, and for plans that
-are not attempts. The Source is never deleted; polling the attempt enabled is
-turned off.
+atomic initial creation and are never stored. Once a confirming request has
+started creation (with or without variables) a Capsule may exist, so when the
+outcome cannot be confirmed only the same values may be sent again and an
+already committed Capsule is adopted first. `DELETE` first makes sure no lease
+holder is working on the attempt, then abandons the never-applied Capsule it
+created and records the terminal `discarded` phase; if the abandonment stops,
+the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
+`DELETE` finishes it. It is refused once the app is applying or applied, and
+for plans that are not attempts. The Source is never deleted; only polling
+that the attempt itself turned on is turned off.
 
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired
@@ -382,8 +386,10 @@ while it waited (`workspace_management_changed`) is reported through
 `invalidated` and `userAction: retry`, and cleaned up only by its creator's
 `DELETE` or by a creator `PATCH` that finds it invalid (409
 `install_attempt_invalid`). `awaiting_input` holds no lease and no execution
-authority, so it does not block Workspace management; every write that
-advances it re-checks the original admission in the same statement.
+authority, so it does not block Workspace management, and neither does an
+unleased attempt that expired before its Capsule existed, since it can no
+longer advance; every write that advances an attempt re-checks the original
+admission in the same statement.
 
 Idempotency: the request digest covers variable names but never their values,
 so reusing an Idempotency-Key with different values replays the first record
