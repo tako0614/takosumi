@@ -120,7 +120,7 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     const workspaceId = decodeURIComponent(workspaceMatch[1] ?? "");
     const suffix = workspaceMatch[2] ?? "";
     if (!workspaceFor(workspaceId)) return json({ error: "not_found" }, 404);
-    if (suffix === "installed-apps") return json({ installedApps: [] });
+    if (suffix === "installed-apps") return json({ installedApps: [], complete: true });
     if (suffix === "capsules") {
       return json(page(PORTABLE_CAPSULES[workspaceId as keyof typeof PORTABLE_CAPSULES] ?? [], "capsules"));
     }

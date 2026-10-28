@@ -59,6 +59,7 @@ test("installed-apps summarizes each live install by executable module without v
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
   const body = await response.json() as ListInstalledAppsResponse;
+  expect(body.complete).toBe(true);
   expect(body.installedApps).toHaveLength(3);
   expect(body.installedApps.find((app) => app.capsuleId === "cap_first")).toEqual({
     capsuleId: "cap_first", name: "cap_first", state: "installed",
@@ -76,6 +77,7 @@ test("one unavailable app config does not hide the other installed apps", async 
   const h = await fixture(true, "https://git.example.test/team/app.git", "cap_other_module");
   const body = await (await h.request()).json() as ListInstalledAppsResponse;
   expect(body.installedApps.map((app) => app.capsuleId).sort()).toEqual(["cap_first", "cap_second"]);
+  expect(body.complete).toBe(false);
 });
 
 test("installed-apps derives old configs from the Source and selected module", async () => {
@@ -158,4 +160,74 @@ test("a large Store list uses one config batch and no per-app or Interface candi
   expect(batchCalls).toBe(1);
   expect(exactReads).toBe(0);
   expect(sourceReads).toBe(0);
+});
+
+test("a failed bulk config read marks the identity summary incomplete", async () => {
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => [{ id: "cap_unknown", workspaceId: "ws_installed", installConfigId: "cfg_unknown", sourceId: "src_unknown", name: "Unknown app", status: "active", currentStateGeneration: 1 }],
+      getInstallConfigsByIds: async () => { throw new Error("database unavailable"); },
+    },
+    listSources: async () => { throw new Error("must not read Sources without configs"); },
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(body.installedApps).toEqual([]);
+  expect(body.complete).toBe(false);
+});
+
+test("an unusable config is isolated while marking the summary incomplete", async () => {
+  const capsules = ["cap_valid", "cap_unusable"].map((id) => ({
+    id, workspaceId: "ws_installed", installConfigId: `cfg_${id}`, sourceId: `src_${id}`,
+    name: id, status: "active", currentStateGeneration: 1,
+  }));
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => capsules,
+      getInstallConfigsByIds: async () => [
+        { id: "cfg_cap_valid", workspaceId: "ws_installed", sourceSelector: { url: "https://git.example.test/team/app.git", path: "." } },
+        { id: "cfg_cap_unusable", workspaceId: "ws_other", sourceSelector: { url: "https://git.example.test/team/other.git", path: "." } },
+      ],
+    },
+    listSources: async () => { throw new Error("selector-backed configs do not need Sources"); },
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(body.installedApps.map((app) => app.capsuleId)).toEqual(["cap_valid"]);
+  expect(body.complete).toBe(false);
+});
+
+test("legacy Source lookup reports bounded pagination truncation", async () => {
+  const capsule = { id: "cap_legacy", workspaceId: "ws_installed", installConfigId: "cfg_legacy", sourceId: "src_page_9", name: "Legacy app", status: "active", currentStateGeneration: 1 };
+  let pageCalls = 0;
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => [capsule],
+      getInstallConfigsByIds: async () => [{ id: "cfg_legacy", workspaceId: "ws_installed", modulePath: "." }],
+    },
+    listSources: async (_workspaceId: string, options: { cursor?: string }) => {
+      pageCalls += 1;
+      const index = Number(options.cursor ?? "0");
+      return { sources: index === 8 ? [{ id: "src_page_9", workspaceId: "ws_installed", url: "https://git.example.test/team/legacy.git", defaultPath: "." }] : [], nextCursor: String(index + 1) };
+    },
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(pageCalls).toBe(8);
+  expect(body.installedApps).toEqual([]);
+  expect(body.complete).toBe(false);
+});
+
+test("a fully scanned but unavailable legacy Source marks identity incomplete", async () => {
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => [{ id: "cap_legacy", workspaceId: "ws_installed", installConfigId: "cfg_legacy", sourceId: "src_missing", name: "Legacy app", status: "active", currentStateGeneration: 1 }],
+      getInstallConfigsByIds: async () => [{ id: "cfg_legacy", workspaceId: "ws_installed", modulePath: "." }],
+    },
+    listSources: async () => ({ sources: [], nextCursor: undefined }),
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(body.installedApps).toEqual([]);
+  expect(body.complete).toBe(false);
 });

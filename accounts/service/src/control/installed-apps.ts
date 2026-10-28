@@ -37,18 +37,27 @@ export async function handleWorkspaceInstalledApps(
   const capsules = await ctx.operations.capsules.listCapsules(workspaceId);
   const live = capsules.filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed");
   const configIds = [...new Set(live.map((capsule) => capsule.installConfigId))];
-  // One batch read avoids per-app D1 requests. Missing configs omit only their
-  // own rows; a failed batch returns an empty optional presentation list.
-  const configs = await (ctx.operations.capsules.getInstallConfigsByIds
-    ? ctx.operations.capsules.getInstallConfigsByIds(configIds)
-    : ctx.operations.capsules.listInstallConfigs(workspaceId, { includeInternal: true }))
-    .catch(() => [] as readonly InstallConfig[]);
+  // One batch read avoids per-app D1 requests. Missing or unusable configs omit
+  // only their own rows and make the summary explicitly incomplete.
+  let complete = true;
+  let configs: readonly InstallConfig[];
+  try {
+    configs = await (ctx.operations.capsules.getInstallConfigsByIds
+      ? ctx.operations.capsules.getInstallConfigsByIds(configIds)
+      : ctx.operations.capsules.listInstallConfigs(workspaceId, { includeInternal: true }));
+  } catch {
+    // An empty result here would falsely assert that no matching app is installed.
+    complete = false;
+    configs = [];
+  }
   const configsById = new Map(configs.map((config) => [config.id, config]));
+  if (live.some((capsule) => !configsById.has(capsule.installConfigId))) complete = false;
   const sourcesById = new Map<string, Source>();
   const neededSources = new Set(live.filter((capsule) => {
     const selector = configsById.get(capsule.installConfigId)?.sourceSelector;
     return configsById.has(capsule.installConfigId) && (!selector?.url || !selector.path);
   }).map((capsule) => capsule.sourceId));
+  let sourcesTruncated = false;
   try {
     let cursor: string | undefined;
     // Legacy configs need Source fallback; bound its cost per request. Modern
@@ -61,20 +70,31 @@ export async function handleWorkspaceInstalledApps(
       cursor = page.nextCursor;
       if (!cursor) break;
     }
+    sourcesTruncated = Boolean(cursor && neededSources.size > sourcesById.size);
   } catch {
     // Keep the rows whose source already resolved; do not start per-app reads.
+    if (neededSources.size > sourcesById.size) complete = false;
   }
+  if (sourcesTruncated) complete = false;
   const installedApps = live.flatMap((capsule): InstalledAppSummary[] => {
     try {
       const config = configsById.get(capsule.installConfigId);
       const source = sourcesById.get(capsule.sourceId);
       if (!config || (config.workspaceId && config.workspaceId !== workspaceId) ||
         (source && source.workspaceId !== workspaceId) ||
-        (!source && (!config.sourceSelector?.url || !config.sourceSelector.path))) return [];
+        (!source && (!config.sourceSelector?.url || !config.sourceSelector.path))) {
+        complete = false;
+        return [];
+      }
       const sourcePath = normalizeInstallConfigSourcePath(config.sourceSelector?.path ?? source!.defaultPath);
       const modulePath = normalizeInstallConfigSourcePath(config.modulePath ?? ".");
       const path = [sourcePath, modulePath].filter((part) => part !== ".").join("/") || ".";
       const sourceUrl = config.sourceSelector?.url ?? source!.url;
+      const displaySourceUrl = installedAppSourceUrl(sourceUrl);
+      if (!displaySourceUrl) {
+        complete = false;
+        return [];
+      }
       const iconUrl = safeIconUrl(config.store?.iconUrl);
       return [{
         capsuleId: capsule.id,
@@ -83,17 +103,18 @@ export async function handleWorkspaceInstalledApps(
         ...(iconUrl ? { iconUrl } : {}),
         state: storeState(capsule),
         installedFrom: {
-          url: installedAppSourceUrl(sourceUrl),
+          url: displaySourceUrl,
           path,
           ...(installedAppSourceIsMatchable(sourceUrl) ? {} : { matchable: false as const }),
         },
       }];
     } catch {
       // One malformed app cannot take away the Store or its Install action.
+      complete = false;
       return [];
     }
   });
-  return json({ installedApps } satisfies ListInstalledAppsResponse, 200, {
+  return json({ installedApps, complete } satisfies ListInstalledAppsResponse, 200, {
     "cache-control": "no-store",
   });
 }

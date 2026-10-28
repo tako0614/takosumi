@@ -16,7 +16,7 @@ function app(capsuleId: string, name: string): InstalledAppSummary {
   return { capsuleId, name, state: "installed", installedFrom: { url: `${repository}.git/`, path: `./${modulePath}/` } };
 }
 
-async function fixture(page: Page, apps: readonly InstalledAppSummary[]) {
+async function fixture(page: Page, apps: readonly InstalledAppSummary[], complete = true) {
   await page.addInitScript(() => {
     localStorage.setItem("tg_lang", "ja");
     localStorage.setItem("tcs.stores", JSON.stringify(["https://store.example.test"]));
@@ -45,7 +45,7 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[]) {
   await page.route("https://store.example.test/tcs/v2/listings**", (route) => route.fulfill({
     json: new URL(route.request().url()).pathname === "/tcs/v2/listings" ? { items: [listing] } : listing,
   }));
-  await page.route("**/api/v1/workspaces/*/installed-apps", (route) => route.fulfill({ json: { installedApps: apps } }));
+  await page.route("**/api/v1/workspaces/*/installed-apps", (route) => route.fulfill({ json: { installedApps: apps, complete } }));
   await page.route("**/api/v1/workspaces/*/source-ref-resolutions/stable-semver", (route) => route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } }));
   return { mutations, errors };
 }
@@ -111,6 +111,33 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       expect(h.errors).toEqual([]);
     });
 
+    test("marks unmatched listings unknown for a partial summary", async ({ page }) => {
+      const knownButDifferent = {
+        ...app("cap_other_module", "other-app"),
+        installedFrom: { url: "https://github.com/example/other-repository.git", path: "." },
+      };
+      const h = await fixture(page, [knownButDifferent], false);
+      await page.goto("/new");
+      const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
+      await expect(card.getByTestId("store-installed-unknown")).toBeVisible();
+      await expect(card.getByText("インストール状況を確認できません", { exact: true })).toBeVisible();
+      await expect(card.getByRole("button", { name: "追加: 共有オフィス" })).toBeVisible();
+      await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
+      await expect(page.getByText("インストール済みのアプリを確認できませんでした。", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeEnabled();
+      expect(h.errors).toEqual([]);
+    });
+
+    test("keeps known app links but labels the count as partial", async ({ page }) => {
+      const h = await fixture(page, [app("cap_repository_office", "office-personal")], false);
+      await page.goto("/new");
+      const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
+      await expect(card.getByText("確認できた範囲では1件インストール済み", { exact: true })).toBeVisible();
+      await expect(card.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
+      await expect(card.getByText("既存アプリとの一致を確認できませんでした。続ける前にアプリ一覧を確認してください。", { exact: true })).toBeVisible();
+      expect(h.errors).toEqual([]);
+    });
+
     test("waits for installed identity and offers retry after a failed read", async ({ page }) => {
       const h = await fixture(page, []);
       let releaseRead!: () => void;
@@ -122,7 +149,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
           failed = true;
           return route.fulfill({ status: 503, json: { error: { code: "unavailable" } } });
         }
-        return route.fulfill({ json: { installedApps: [app("cap_repository_office", "office-personal")] } });
+        return route.fulfill({ json: { installedApps: [app("cap_repository_office", "office-personal")], complete: true } });
       });
       const query = new URLSearchParams({ git: repository, path: modulePath, ref: "main" });
       await page.goto(`/new?${query}`);
