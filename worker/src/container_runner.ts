@@ -780,16 +780,17 @@ export class CloudflareContainerOpenTofuRunner
   }): Promise<void> {
     if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
     const id = this.env.RUNNER.idFromName(`source-retirement-${input.sourceId}`);
-    for (const archiveRef of new Set(input.archiveRefs)) {
-      const response = await this.env.RUNNER.get(id).fetch(
-        new Request(`https://opentofu-runner.internal/sources/${encodeURIComponent(input.sourceId)}/archive/retire`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ workspaceId: input.workspaceId, sourceId: input.sourceId, archiveRef }),
-        }),
-      );
-      if (!response.ok) throw new Error(`source archive retirement rejected: ${response.status}`);
-    }
+    const archiveRefs = [...new Set(input.archiveRefs)];
+    if (archiveRefs.length < 1 || archiveRefs.length > 32)
+      throw new Error("source archive retirement requires a bounded page");
+    const response = await this.env.RUNNER.get(id).fetch(
+      new Request(`https://opentofu-runner.internal/sources/${encodeURIComponent(input.sourceId)}/archive/retire`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId: input.workspaceId, sourceId: input.sourceId, archiveRefs }),
+      }),
+    );
+    if (!response.ok) throw new Error(`source archive retirement rejected: ${response.status}`);
   }
 
   async readCapsuleSourceFiles(

@@ -1,4 +1,4 @@
-import { POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY } from "../../adapters/storage/source-archive-reference-query.ts";
+import { POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY, POSTGRES_SOURCE_RETIREMENT_ARCHIVE_BLOCKER_QUERY, POSTGRES_SOURCE_RETIREMENT_ARCHIVE_REFS_PAGE_QUERY } from "../../adapters/storage/source-archive-reference-query.ts";
 import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../workspaces/financial-source.ts";
 /**
  * SQL-backed OpenTofu deployment-control-plane ledger (core-spec.md §27).
@@ -7007,7 +7007,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       }
       // Exact replay above is an observation-only read even if the Source was
       // later removed or another Capsule now references its historical id.
-      if (!source || source.workspaceId !== capsule.workspaceId) {
+      if (!source || source.workspaceId !== capsule.workspaceId ||
+        source.status !== "active" || source.retiringAt !== undefined) {
         assertWorkspaceManagementAdmission(
           management,
           capsule.workspaceId,
@@ -7050,6 +7051,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               set source_json = jsonb_set(source_json, '{ownerCapsuleId}', to_jsonb($1::text), true)
             where id = $2 and space_id = $3 and source_json = $4::jsonb
               and source_json ->> 'ownerCapsuleId' is null
+              and status = 'active' and source_json ->> 'retiringAt' is null
               and not exists (
                 select 1 from takosumi_capsules as other
                  where other.space_id = $3 and other.id <> $1
@@ -10121,6 +10123,31 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY, [archiveRef, sourceId],
     );
     return rows.rows.length !== 0;
+  }
+
+  async sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined> {
+    const rows = await this.#client.query<{ blocker: "outside_scope" | "foreign_reference" }>(
+      POSTGRES_SOURCE_RETIREMENT_ARCHIVE_BLOCKER_QUERY, [sourceId, prefix]);
+    return rows.rows[0]?.blocker;
+  }
+
+  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
+    readonly snapshotCount: number; readonly sourceSyncRunCount: number;
+  }> {
+    const bounded = Math.max(1, Math.min(32, Math.floor(limit)));
+    const [counts, refs] = await Promise.all([
+      this.#client.query<{ snapshots: string; runs: string }>(
+        `select (select count(*) from takosumi_source_snapshots where source_id = $1) as snapshots,
+                (select count(*) from takosumi_runs where kind = 'source_sync' and source_id = $1) as runs`, [sourceId]),
+      this.#client.query<{ ref: string }>(
+        POSTGRES_SOURCE_RETIREMENT_ARCHIVE_REFS_PAGE_QUERY,
+        [sourceId, after ?? null, bounded + 1]),
+    ]);
+    return { archiveRefs: refs.rows.slice(0, bounded).map((row) => row.ref),
+      hasMore: refs.rows.length > bounded,
+      snapshotCount: Number(counts.rows[0]?.snapshots ?? 0),
+      sourceSyncRunCount: Number(counts.rows[0]?.runs ?? 0) };
   }
 
   async listSourceSnapshots(

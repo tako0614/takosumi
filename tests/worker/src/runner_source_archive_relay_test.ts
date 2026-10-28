@@ -143,6 +143,48 @@ test("Source retirement refuses live owners, active sync and unreferenced keys",
   expect(bucket.body(ARCHIVE_KEY)).toBeDefined();
 });
 
+test("Source retirement batch checks the whole prefix and resumes when objects are missing", async () => {
+  const db = new SqliteFakeD1();
+  await db.exec(`create table sources (id text, space_id text, status text, record_json text);
+    create table capsules (id text, space_id text, source_id text, status text);
+    create table runs (id text, space_id text, source_id text, type text, status text, lease_token text, run_json text);
+    create table source_snapshots (id text, source_id text, record_json text)`);
+  await db.prepare("insert into sources values (?, ?, ?, ?)")
+    .bind("src_1", "spc_1", "disabled", JSON.stringify({ id: "src_1", workspaceId: "spc_1",
+      status: "disabled", autoSync: false, retiringAt: "2026-10-28T00:00:00.000Z" })).run();
+  const missing = "workspaces/spc_1/sources/src_1/snapshots/snap_missing/source.tar.zst";
+  const foreign = "workspaces/spc_1/sources/src_1/snapshots/snap_foreign/source.tar.zst";
+  const longRefs = Array.from({ length: 30 }, (_, i) => {
+    const id = `snap_long_${String(i).padStart(2, "0")}_${"x".repeat(110)}`;
+    return { id, archiveRef: `workspaces/spc_1/sources/src_1/snapshots/${id}/source.tar.zst` };
+  });
+  const records = [{ id: "snap_1", archiveRef: ARCHIVE_KEY },
+    { id: "snap_missing", archiveRef: missing }, ...longRefs];
+  for (const { id, archiveRef } of records) {
+    await db.prepare("insert into source_snapshots values (?, ?, ?)")
+      .bind(id, "src_1", JSON.stringify({ id, sourceId: "src_1", workspaceId: "spc_1", archiveRef })).run();
+  }
+  const bucket = new FakeR2Bucket();
+  await bucket.put(ARCHIVE_KEY, ARCHIVE_BYTES);
+  const runner = runnerWithContainer(new FakeR2Bucket(), bucket, {
+    async containerFetch() { throw new Error("retirement must not start container"); },
+  }, { TAKOSUMI_CONTROL_DB: db });
+  const retire = () => runner.fetch(new Request("https://runner/sources/src_1/archive/retire", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspaceId: "spc_1", sourceId: "src_1",
+      archiveRefs: records.map((record) => record.archiveRef) }),
+  }));
+  await db.prepare("insert into source_snapshots values (?, ?, ?)")
+    .bind("foreign", "src_other", JSON.stringify({ id: "foreign", sourceId: "src_other",
+      workspaceId: "spc_2", archiveRef: foreign })).run();
+  expect((await retire()).status).toBe(503);
+  expect(bucket.body(ARCHIVE_KEY)).toBeDefined();
+  await db.prepare("delete from source_snapshots where id = ?").bind("foreign").run();
+  expect((await retire()).status).toBe(204);
+  expect(bucket.body(ARCHIVE_KEY)).toBeUndefined();
+  expect((await retire()).status).toBe(204);
+});
+
 async function digestOf(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${Array.from(new Uint8Array(digest))
