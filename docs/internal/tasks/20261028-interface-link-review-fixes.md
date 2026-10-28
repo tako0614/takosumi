@@ -51,11 +51,11 @@
 
 ## Third review round
 
-- After a runtime provider error, automatically clean up the post-create run using
-  the `Superseded` state so the next sign-in can recover.
-- Retry frozen and draining install discards through the domain operation. Keep
-  cleanup idempotent for already-destroyed Capsules, whose cleanup may bypass
-  active management admission; active Capsules remain behind that admission fence.
+- Automatic post-create Binding cleanup uses the revocation reason `Superseded`
+  when its link becomes unavailable, so the next sign-in can retry after recovery.
+- Retry install discards through domain abandonment even for already-destroyed
+  Capsules. Their link cleanup remains idempotent after Workspace management stops;
+  active Capsule mutations remain behind the management admission fence.
 - Keep Store loading copy neutral. Correct copy and documentation to match the
   implementation, including automatic InterfaceLink selection.
 - Parent must run the final complete local `bun run check`. Confirm real
