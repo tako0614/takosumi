@@ -983,7 +983,7 @@ export class InterfaceService {
     }
     try {
       const binding = await this.createBinding(iface.metadata.id, { subjectRef: { kind: "Principal", id: principalId }, permissions, delivery }, undefined, { requiredInterfaceLinkId: link.id, requiredInterfaceCapsuleId: link.consumerCapsuleId, requiredInterfaceKey: link.requirementKey, requiredInterfaceType: link.interface.type, requiredInterfaceVersion: link.interface.version });
-      if (!preparing && !(await this.#bindingLinkActive(binding, iface))) await this.revokeBinding(iface.metadata.id, binding.metadata.id);
+      if (!preparing && !(await this.#bindingLinkActive(binding, iface))) await this.revokeBinding(iface.metadata.id, binding.metadata.id, undefined, "Superseded");
     } catch (error) {
       if (!(error instanceof InterfaceServiceError) || error.code !== "already_exists") throw error;
       if (preparing) throw new InterfaceServiceError("conflict", "selected provider Principal grant changed concurrently");
