@@ -247,6 +247,19 @@ export function appInstalledRef(
   return ref?.trim() ? ref.trim() : undefined;
 }
 
+/**
+ * Another change is under way or waiting for its review, so a new version
+ * change would race it to a duplicate Plan. (The server also refuses a second
+ * revision while one is still being prepared.) A revision whose preparation
+ * stalled does not block: it is continued or replaced.
+ */
+export function appVersionChangeBusy(
+  app: Pick<CapsuleAppView, "state" | "progress">,
+): boolean {
+  return app.state === "updating" || app.progress.revisionPreparing ||
+    app.progress.run !== undefined || app.progress.review !== undefined;
+}
+
 /** What the page does for the server's primary action. */
 export type AppPrimaryStep =
   | { readonly kind: "open" }

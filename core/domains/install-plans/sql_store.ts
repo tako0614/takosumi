@@ -164,15 +164,20 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     // Capsule was never applied.
     const result = await this.#client.query<{
       readonly id: string;
+      readonly phase: PreparingGitPlanCoordinator["phase"];
       readonly operation: string | null;
+      readonly actor_subject: string;
       readonly updated_at: string;
     }>(
-      `select id, record_json ->> 'operation' as operation, updated_at
+      `select id, phase, record_json ->> 'operation' as operation,
+              record_json ->> 'actorSubject' as actor_subject,
+              updated_at
          from ${TABLE}
         where workspace_id = $2
           and record_json ->> 'capsuleId' = $1
           and phase not in ('failed', 'reviewable', 'discarded')
           and record_json ->> 'planRunId' is null
+          and record_json -> 'workspaceManagementAuthority' is not null
           and ($3::boolean or record_json ->> 'operation' = 'revision')
         order by updated_at desc, id desc
         limit 1`,
@@ -183,6 +188,8 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
       ? {
           id: row.id,
           operation: row.operation === "revision" ? "revision" : "install",
+          phase: row.phase,
+          actorSubject: row.actor_subject,
           updatedAt: row.updated_at,
         }
       : undefined;

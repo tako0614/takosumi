@@ -324,7 +324,20 @@ supporting read could not load are named in `incomplete`.
 coordinator has not yet created its Plan Run (an install attempt only for a
 never-applied app, and not once it has stalled). `progress.installPlanId` names
 the install attempt that created the app; `continue_install` advances it with
-`POST /api/v1/install-plans/{installPlanId}/reconcile`.
+`POST /api/v1/install-plans/{installPlanId}/reconcile`. Attempts written before
+management authority was persisted can never advance and are not named. While
+the attempt waits for its creator's input, `progress.installPlanAwaitingInput`
+is `viewer` (the caller started it) or `other`, and reconciling does not
+advance it. A revision coordinator that stopped before creating its Plan Run is
+named in `progress.revisionPlanId` and continues with
+`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`. Any Workspace member
+may reconcile these; the Plan Run they create records the coordinator itself
+(`git-install-plan:<id>` / `git-revision-plan:<id>`) as its actor, not the
+member who advanced it. While a revision coordinator for the same Capsule is
+still preparing its Plan (and has not stalled), another
+`POST /api/v1/capsules/{capsuleId}/revision-plans` is refused with 409
+(`details.reason: "revision_in_progress"`, `details.revisionPlanId`); an exact
+Idempotency-Key replay is still answered.
 An uninstall record counts only while the Capsule is `uninstalled`, or while it
 is `error` after a provider-reached teardown failure and its newest Run is still
 a removal. A recorded `blockedReason` yields `uninstall_blocked` in either

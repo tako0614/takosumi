@@ -167,7 +167,12 @@ const SETTLED_PHASES = [
   "discarded",
 ] as const satisfies readonly StoredGitInstallPlan["phase"][];
 
-async function expectCoordinatorParity(label: string, store: GitInstallPlanStore): Promise<void> {
+async function expectCoordinatorParity(
+  label: string,
+  store: GitInstallPlanStore,
+  /** Rewrites a row as JSON written before management authority persisted. */
+  retainLegacy?: (plan: StoredGitInstallPlan) => Promise<void>,
+): Promise<void> {
   const rows = [
     ...OPEN_INSTALL_PHASES.map((phase) =>
       installPlan(`ip_${phase}`, "ws_one", `cap_install_${phase}`, phase)
@@ -176,6 +181,7 @@ async function expectCoordinatorParity(label: string, store: GitInstallPlanStore
       installPlan(`ip_${phase}`, "ws_one", `cap_install_${phase}`, phase)
     ),
     installPlan("ip_legacy_planning", "ws_one", "cap_legacy_planning", "planning", "legacy"),
+    installPlan("ip_authority_planning", "ws_one", "cap_authority_planning", "planning", "legacy"),
     installPlan("ip_legacy_failed", "ws_one", "cap_legacy_failed", "failed", "legacy"),
     // A row that already created its Plan Run but was never reconciled past
     // `planning` (closed tab, timed-out client, legacy authority): the Run
@@ -194,16 +200,30 @@ async function expectCoordinatorParity(label: string, store: GitInstallPlanStore
   for (const row of rows) {
     expect((await store.create(row)).status, `${label} ${row.id}`).toBe("created");
   }
+  const legacyRow = rows.find((row) => row.id === "ip_legacy_planning")!;
+  if (retainLegacy) {
+    const { workspaceManagementAuthority: _authority, ...legacy } = legacyRow;
+    await retainLegacy(legacy as StoredGitInstallPlan);
+  }
   const preparing = (capsuleId: string, workspaceId = "ws_one", includeInstall = true) =>
     store.preparingCoordinatorForCapsule(capsuleId, workspaceId, { includeInstall });
 
   // Open install rows without a Plan Run hold a never-applied Capsule in
   // every non-terminal phase, including an attempt idling for input.
   for (const phase of OPEN_INSTALL_PHASES) {
-    expect(await preparing(`cap_install_${phase}`), `${label} ${phase}`)
-      .toEqual({ id: `ip_${phase}`, operation: "install", updatedAt: NOW });
+    expect(await preparing(`cap_install_${phase}`), `${label} ${phase}`).toEqual({
+      id: `ip_${phase}`,
+      operation: "install",
+      phase,
+      actorSubject: "user_one",
+      updatedAt: NOW,
+    });
   }
-  expect((await preparing("cap_legacy_planning"))?.id, label).toBe("ip_legacy_planning");
+  // A row written before management-authority persistence can never be
+  // reconciled again, so it is not preparing anything. (Only the durable
+  // stores can hold such historical rows.)
+  if (retainLegacy) expect(await preparing("cap_legacy_planning"), label).toBeUndefined();
+  expect((await preparing("cap_authority_planning"))?.id, label).toBe("ip_authority_planning");
   // An applied Capsule is never held by an install row.
   for (const phase of OPEN_INSTALL_PHASES) {
     expect(await preparing(`cap_install_${phase}`, "ws_one", false), `${label} applied ${phase}`)
@@ -220,7 +240,7 @@ async function expectCoordinatorParity(label: string, store: GitInstallPlanStore
   }
   // Revision rows count whether or not the Capsule was applied.
   expect(await preparing("cap_revision_open", "ws_one", false), label)
-    .toEqual({ id: "rp_open", operation: "revision", updatedAt: NOW });
+    .toEqual({ id: "rp_open", operation: "revision", phase: "syncing_source", actorSubject: "user_one", updatedAt: NOW });
   expect(await preparing("cap_revision_reviewable"), label).toBeUndefined();
   expect(await preparing("cap_revision_failed"), label).toBeUndefined();
   // The newest of several open rows is reported.
@@ -246,8 +266,16 @@ test("the preparing coordinator lookup agrees across stores", async () => {
   }
   try {
     await expectCoordinatorParity("memory", new InMemoryGitInstallPlanStore(memoryControl));
-    await expectCoordinatorParity("postgres", new SqlGitInstallPlanStore(postgres));
-    await expectCoordinatorParity("d1", new D1GitInstallPlanStore(d1));
+    await expectCoordinatorParity("postgres", new SqlGitInstallPlanStore(postgres), async (value) => {
+      await postgres.query(
+        "update takosumi_git_install_plans set record_json = $1::jsonb where id = $2",
+        [JSON.stringify(value), value.id],
+      );
+    });
+    await expectCoordinatorParity("d1", new D1GitInstallPlanStore(d1), async (value) => {
+      await d1.prepare("update git_install_plans set record_json = ? where id = ?")
+        .bind(JSON.stringify(value), value.id).run();
+    });
   } finally {
     await postgres.close();
   }

@@ -281,6 +281,51 @@ test("Git revision POST replays an exact idempotency key while draining", async 
   expect((await replay.json()).revisionPlan.id).toBe(planId);
 });
 
+test("a second version change waits while one is being prepared, and is admitted once that one planned", async () => {
+  const fixture = revisionFixture();
+  const first = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-first" },
+  );
+  expect(first.status).toBe(201);
+  const planId = (await first.json()).revisionPlan.id as string;
+  // Another request with its own key would race the first to a second Plan.
+  const second = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v3" },
+    { "idempotency-key": "revision-second" },
+  );
+  expect(second.status).toBe(409);
+  expect(await second.json()).toMatchObject({
+    error: { details: { reason: "revision_in_progress", revisionPlanId: planId } },
+  });
+  // The first request's own replay is still answered.
+  const replay = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-first" },
+  );
+  expect(replay.status).toBe(200);
+  // Once the first one created its Plan Run, a new version change is admitted.
+  await fixture.reconcile(planId);
+  fixture.succeedSourceSync();
+  for (let step = 0; step < 6; step += 1) {
+    const response = await fixture.reconcile(planId);
+    if ((await response.json()).revisionPlan.phase === "reviewable") break;
+  }
+  const later = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v3" },
+    { "idempotency-key": "revision-second" },
+  );
+  expect(later.status).toBe(201);
+});
+
 test("Git revision reconciliation uses the original private management authority", async () => {
   const fixture = revisionFixture();
   const created = await fixture.request(

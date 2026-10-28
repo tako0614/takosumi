@@ -49,6 +49,7 @@ import {
   createReviewableGitRevisionPlan,
   createStateVersionRollbackPlan,
   advanceGitInstallPlan,
+  advanceGitRevisionPlan,
   deleteCapsule,
   extractRunId,
   getCapsule,
@@ -92,6 +93,7 @@ import {
   appPrimaryActionLabel,
   appPrimaryStep,
   appInstalledRef,
+  appVersionChangeBusy,
   appRunHistory,
   type AppOlderHistory,
   appStateSentence,
@@ -424,7 +426,7 @@ export default function AppManagePage(props: {
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
   const [starting, setStarting] = createSignal<
-    { readonly section: ReviewSection; readonly action?: CapsuleAppAction }
+    { readonly section: ReviewSection; readonly action?: CapsuleAppAction | "continue_revision" }
   >();
   const [sectionError, setSectionError] = createSignal<
     { readonly section: ReviewSection; readonly message: string }
@@ -478,7 +480,7 @@ export default function AppManagePage(props: {
     section: ReviewSection,
     purpose: ReviewPurpose,
     create: () => Promise<string | undefined>,
-    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction } = {},
+    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision" } = {},
   ) => {
     if (reviewBusy()) return;
     // A result that arrives after the page moved to another app is dropped.
@@ -725,10 +727,20 @@ export default function AppManagePage(props: {
         const attempt = app()?.progress.installPlanId;
         if (!attempt) return extractRunId(await planCapsule(capsuleId()));
         const advanced = await advanceGitInstallPlan(attempt);
+        // An attempt that now waits for input is answered by whoever started it.
         if (!advanced.installPlan.planRunId) throw new Error(t("app.problem.installNeedsInput"));
         return advanced.installPlan.planRunId;
       },
       { action: "continue_install" },
+    );
+  // A version change whose preparation stopped is continued through its own
+  // coordinator, then reviewed in place like any update.
+  const continueRevision = (revisionPlanId: string) =>
+    void startReview(
+      "attention",
+      "update",
+      async () => (await advanceGitRevisionPlan(revisionPlanId)).revisionPlan.planRunId,
+      { action: "continue_revision", restartable: false },
     );
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
   const [screenRetryMessage, setScreenRetryMessage] = createSignal<string>();
@@ -910,9 +922,10 @@ export default function AppManagePage(props: {
   const secondaryScreens = (view: CapsuleAppView) =>
     view.primaryAction !== "open" && screens().length > 0 &&
     view.state !== "uninstalling" && view.state !== "uninstalled";
+  const versionChangeBusy = appVersionChangeBusy;
   const showUpdate = (view: CapsuleAppView) =>
     managed() && revisionReady() && (view.version.updateAvailable || view.version.stale) &&
-    view.state === "installed";
+    view.state === "installed" && !versionChangeBusy(view);
 
   return (
     <Switch>
@@ -1096,6 +1109,7 @@ export default function AppManagePage(props: {
                   cancelUninstall: () => void cancelUninstall(),
                   uninstallNow,
                   openReview: openRunReview,
+                  continueRevision,
                 }}
               />
 
@@ -1109,7 +1123,7 @@ export default function AppManagePage(props: {
                   stateVersionsFailed={Boolean(stateVersions.error)}
                   versionLabels={versionLabels()}
                   revisionReady={revisionReady()}
-                  reviewBusy={reviewBusy()}
+                  reviewBusy={reviewBusy() || versionChangeBusy(view())}
                   starting={startingIn("version")}
                   error={errorFor("version")}
                   notice={noticeFor("version")}
