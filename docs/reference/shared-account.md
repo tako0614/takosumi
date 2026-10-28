@@ -32,6 +32,11 @@ suspended・demoted・missing membership を修復しません。共有 login �
 変更も現在の role と保存時の authority を検証します。
 課金は Workspace に対応する Organization の単一 ledger へ接続します。
 
+Phase 3 では Workspace 作成と member 変更を既定で凍結します。Accounts Worker の
+`TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN` は未設定時 `true` で、凍結中の作成・変更は
+HTTP 409 / `workspace_frozen` を返します。`false`、`off`、`0` は明示的な rollback 用です。
+既存の personal Workspace は引き続き bootstrap・一覧から利用でき、新規作成はされません。
+
 ## Provider login の統合
 
 同じ verified email は候補の照合に使います。既存 account を email だけで統合

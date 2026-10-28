@@ -175,6 +175,7 @@ export * from "./passkey.ts";
 export * from "./identity.ts";
 export * from "./mobile-oidc-client.ts";
 export * from "./shared-account-workspace.ts";
+export * from "./workspace-mutations-freeze.ts";
 export * from "./workspace-billing-bootstrap.ts";
 export type { IdentityMergeReconciler } from "./identity-merge.ts";
 export type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
@@ -199,6 +200,8 @@ export const TAKOSUMI_PRIVACY_OPERATIONS_TOKEN_HEADER =
 export interface AccountsHandlerOptions {
   /** Explicit opt-in: shared first-party identity and hardened issuer sessions. */
   hostedSessionPolicy?: boolean;
+  /** Defaults to true: legacy Workspace creation/member mutations return 409. */
+  workspaceMutationsFrozen?: boolean;
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   /** Explicit owner reconciliation; absence never activates account aliases. */
   identityMergeReconciler?: IdentityMergeReconciler;
@@ -731,7 +734,7 @@ export function createAccountsHandler(
     }
 
     if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
-      return (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
+      return (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
         const token = directoryRequest.headers.get("authorization");
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));
@@ -981,6 +984,9 @@ export function createAccountsHandler(
             diagnostics,
             ...(assertActive ? { assertActive } : {}),
             ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
+            ...(options.workspaceMutationsFrozen !== undefined
+              ? { workspaceMutationsFrozen: options.workspaceMutationsFrozen }
+              : {}),
           }),
       );
       if (controlResponse) return appendServerTiming(controlResponse, timings);

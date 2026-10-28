@@ -98,6 +98,26 @@ Origin. RP Bearer requests use no ambient cookie authority.
 | POST `/{workspaceId}/select` | `{}` | authorized choice |
 | GET `/{workspaceId}/billing-organization` | no account/Org input | `{workspaceId, workspaceRef, organizationId}` |
 
+## Phase 3 Workspace mutation freeze
+
+The Accounts Worker defaults `TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN` to
+`true`. While frozen, `POST /api/v1/workspaces`, legacy Workspace member
+add/role-change/remove routes, and shared-account additional Workspace creation
+return HTTP 409 with the standard `workspace_frozen` error envelope. Set the
+flag to `false`, `off`, or `0` only to explicitly restore those legacy writes;
+`true`, `on`, and `1` keep them frozen. An unrecognized value prevents handler
+composition rather than silently changing the default.
+
+The internal Core API also freezes `POST /internal/v1/workspaces` by default.
+Core compositions can set `CreateTakosumiServiceOptions.workspaceMutationsFrozen`
+to `false` only for an explicit rollback; its default is `true`.
+
+Personal Workspace bootstrap does not create a Workspace while frozen. It can
+still return the caller's existing owned personal Workspace, and Workspace
+inventory reads continue to show existing memberships. A new account with no
+personal Workspace receives `workspace_frozen` from the bootstrap route; sign-in
+itself remains independent of Workspace membership.
+
 Each choice contains `id`, `handle`, `displayName`, `type`, current `roles` and
 `owner`. Exact active membership is re-read from canonical Control. A stored
 owner field cannot override suspended/deleted membership. Menu reads do not

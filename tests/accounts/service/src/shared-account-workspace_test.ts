@@ -17,7 +17,7 @@ const subject: TakosumiSubject = "tsub_shared";
 const other: TakosumiSubject = "tsub_other";
 const session = { subject };
 
-function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver) {
+function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver, workspaceMutationsFrozen = false) {
   const store = new InMemoryAccountsStore();
   store.saveAccount({ subject, email: "shared@example.test", displayName: "Shared", createdAt: 1, updatedAt: 1 });
   store.saveAccount({ subject: other, createdAt: 1, updatedAt: 1 });
@@ -47,7 +47,7 @@ function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver) {
       upsertMember: async () => { throw new Error("Directory cannot reconcile membership."); },
     },
   };
-  return { store, control, service, operations, directory: createSharedAccountWorkspaceDirectory({ store, operations, resolveWorkspaceBilling }) };
+  return { store, control, service, operations, directory: createSharedAccountWorkspaceDirectory({ store, operations, resolveWorkspaceBilling, workspaceMutationsFrozen }) };
 }
 
 async function member(f: ReturnType<typeof fixture>, workspace: Workspace, patch: Partial<WorkspaceMember> = {}) {
@@ -89,12 +89,52 @@ test("missing canonical account and bootstrap capabilities refuse instead of cre
   await expect(f.directory.menu(session)).rejects.toMatchObject({ status: 503 });
   const noBootstrap = createSharedAccountWorkspaceDirectory({
     store: new InMemoryAccountsStore(), operations: { ...f.operations, workspaces: { ...f.operations.workspaces, ensurePersonalWorkspaceForSharedAccount: undefined } },
+    workspaceMutationsFrozen: false,
   });
   const store = new InMemoryAccountsStore();
   store.saveAccount({ subject, createdAt: 1, updatedAt: 1 });
-  const bootstrap = createSharedAccountWorkspaceDirectory({ store, operations: { ...f.operations, workspaces: { ...f.operations.workspaces, ensurePersonalWorkspaceForSharedAccount: undefined } } });
+  const bootstrap = createSharedAccountWorkspaceDirectory({ store, operations: { ...f.operations, workspaces: { ...f.operations.workspaces, ensurePersonalWorkspaceForSharedAccount: undefined } }, workspaceMutationsFrozen: false });
   await expect(bootstrap.bootstrap(session)).rejects.toMatchObject({ status: 503 });
   await expect(noBootstrap.bootstrap(session)).rejects.toMatchObject({ status: 401 });
+});
+
+test("frozen bootstrap preserves an existing personal Workspace and refuses implicit creation", async () => {
+  const existing = fixture();
+  const workspace = await existing.directory.bootstrap(session);
+  const frozen = createSharedAccountWorkspaceDirectory({
+    store: existing.store,
+    operations: existing.operations,
+    workspaceMutationsFrozen: true,
+  });
+  expect(await frozen.bootstrap(session)).toEqual(workspace);
+  await expect(frozen.create(session, {
+    handle: "frozen-team", displayName: "Frozen team", type: "organization",
+  })).rejects.toMatchObject({ code: "workspace_frozen", status: 409 });
+
+  const fresh = fixture(undefined, true);
+  await expect(fresh.directory.bootstrap(session)).rejects.toMatchObject({ code: "workspace_frozen", status: 409 });
+  expect(await fresh.control.listWorkspaces()).toEqual([]);
+});
+
+test("shared Workspace HTTP routes default to frozen while preserving existing personal bootstrap", async () => {
+  const f = fixture();
+  const workspace = await f.directory.bootstrap(session);
+  f.store.saveAccountSession({ sessionId: "sess_frozen_directory", subject, createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
+  const call = async (path: string, method: string, body: Record<string, unknown>) => {
+    const request = new Request(`https://issuer.example.test${SHARED_ACCOUNT_WORKSPACES_PATH}${path}`, {
+      method,
+      headers: { authorization: "Bearer sess_frozen_directory", origin: "https://issuer.example.test", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return await handleSharedAccountWorkspaceRoute({ request, url: new URL(request.url), store: f.store, directory: f.directory });
+  };
+  const bootstrap = await call("/bootstrap", "POST", {});
+  expect(bootstrap?.status).toBe(200);
+  expect(await bootstrap?.json()).toMatchObject({ workspace: { id: workspace.id } });
+  const create = await call("", "POST", { handle: "blocked-team", displayName: "Blocked", type: "organization" });
+  expect(create?.status).toBe(409);
+  expect(await create?.json()).toMatchObject({ error: { code: "workspace_frozen", requestId: expect.any(String) } });
+  expect(await f.control.listWorkspaces()).toEqual([workspace]);
 });
 
 test("directory reads current membership and never repairs suspended owner rows", async () => {
@@ -222,7 +262,7 @@ test("HTTP route accepts actual Accounts session, no caller account/Org scope, a
   f.store.saveAccountSession({ sessionId: "sess_directory", subject, createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
   const call = async (path: string, init: RequestInit = {}) => {
     const request = new Request(`https://issuer.example.test${SHARED_ACCOUNT_WORKSPACES_PATH}${path}`, init);
-    return await handleSharedAccountWorkspaceRoute({ request, url: new URL(request.url), store: f.store, directory: f.directory });
+    return await handleSharedAccountWorkspaceRoute({ request, url: new URL(request.url), store: f.store, directory: f.directory, workspaceMutationsFrozen: false });
   };
   expect((await call("", { headers: { authorization: "Bearer id_token_not_session" } }))?.status).toBe(401);
   const headers = { authorization: "Bearer sess_directory", origin: "https://issuer.example.test", "content-type": "application/json" };
@@ -250,6 +290,7 @@ test("protocol-owned directory bearer callback creates trusted local context wit
   // the directory still independently checks grant health and common account.
   const response = await handleSharedAccountWorkspaceRoute({
     request, url: new URL(request.url), store: f.store, directory: f.directory,
+    workspaceMutationsFrozen: false,
     authenticate: async () => ({ ok: true, session: context }),
   });
   expect(response?.status).toBe(200);
@@ -260,6 +301,7 @@ test("protocol-owned directory bearer callback creates trusted local context wit
   });
   const revoked = await handleSharedAccountWorkspaceRoute({
     request: revokedRequest, url: new URL(revokedRequest.url), store: f.store, directory: f.directory,
+    workspaceMutationsFrozen: false,
     authenticate: async () => ({ ok: true, session: context }),
   });
   expect(revoked?.status).toBe(401);

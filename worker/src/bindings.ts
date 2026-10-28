@@ -25,6 +25,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: import("@takosjp/takosumi-accounts-service").D1AccountsSchemaMode;
   /** Bare operator origin used as the exact Interface OAuth resource base. */
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
+  /** Explicit rollback switch for the Phase 3 legacy Workspace mutation freeze. */
+  readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
   /**
    * Host key for the private runtime-binding derivation. When a composition
    * materializes a Capsule's `runtimeBindingMaterialization` profile through

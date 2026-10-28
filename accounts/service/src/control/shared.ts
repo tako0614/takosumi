@@ -155,6 +155,8 @@ export interface ControlDispatchContext {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly session: ControlSession;
+  /** True when the legacy Workspace create/member compatibility surfaces are frozen. */
+  readonly workspaceMutationsFrozen?: boolean;
   /** Injectable request-local clock for deterministic stream tests. */
   readonly runStreamTiming?: RunStreamTiming;
   /** Stops new work after the enclosing ordinary Run GET read budget expires. */

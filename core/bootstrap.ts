@@ -387,6 +387,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   };
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
+  /** Defaults to frozen for the legacy Workspace creation API. */
+  readonly workspaceMutationsFrozen?: boolean;
   readonly context?: AppContext;
   /**
    * Host/provider extension dispatcher for opaque ProviderConnection setup ids.
@@ -1745,6 +1747,7 @@ export async function createTakosumiService(
     registerMetricsRoutes:
       role === "takosumi-api" && Boolean(metricsScrapeToken),
     registerInterfaceRoutes: role === "takosumi-api",
+    workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,
     adapterCapabilities: {
       ...(hasConfiguredOpenTofuRunner(options) ? {} : { opentofu: false }),
       ...(options.adapterCapabilities ?? {}),
@@ -1772,7 +1775,8 @@ export async function createTakosumiService(
         }
       : undefined,
     deployControlInternalRouteOptions: {
-        controller: opentofuController,
+      workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,
+      controller: opentofuController,
       ...(options.buildConnectionSetupRequest
         ? { buildConnectionSetupRequest: options.buildConnectionSetupRequest }
         : {}),
@@ -1823,8 +1827,14 @@ export async function createTakosumiService(
       workspacesService.getWorkspaceMember(workspaceId, accountId),
     listMembers: (workspaceId) =>
       workspacesService.listWorkspaceMembers(workspaceId),
-    upsertMember: (input) =>
-      workspacesService.upsertWorkspaceMember({
+    upsertMember: (input) => {
+      if (options.workspaceMutationsFrozen ?? true) {
+        throw new OpenTofuControllerError(
+          "workspace_frozen",
+          "Workspace membership changes are temporarily frozen.",
+        );
+      }
+      return workspacesService.upsertWorkspaceMember({
         expectedWorkspaceManagementAuthority: input.expectedWorkspaceManagementAuthority,
         requiredActorRole: input.requiredActorRole,
         requireCurrentMembership: input.requireCurrentMembership,
@@ -1833,7 +1843,8 @@ export async function createTakosumiService(
         ...(input.roles ? { roles: input.roles } : {}),
         ...(input.status ? { status: input.status } : {}),
         actorAccountId: input.actor.actorAccountId,
-      }),
+      });
+    },
   };
   const operations: TakosumiOperations = {
     appAccess: appOwnershipStore,
