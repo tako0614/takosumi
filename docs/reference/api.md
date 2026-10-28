@@ -479,6 +479,12 @@ route はありません。
 すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
 Source は削除しません。その試行自身が有効にした polling だけを止めます。
 
+表示した自動選択を確認するときは、`continue: true` と一緒に
+`observedInterfaces: [{requirementKey,interfaceId}]` を返します。明示した `interfaceLinks` が
+ある requirement はそちらを優先し、それ以外で表示した ID が唯一の候補でなくなっていれば
+409 `interface_candidate_unavailable` を返します。最新の sheet を GET して確認し直してください。
+この観測情報は ID だけで、`options` への保存や権限の付与は行いません。
+
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の
 管理 epoch の変更（`workspace_management_changed`）は `invalidated` と `userAction: retry`
