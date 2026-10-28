@@ -612,24 +612,29 @@ export class SourcesService {
       ...runs.map((run) => run.archiveRef),
     ])];
     const scope = `workspaces/${source.workspaceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/sources/${sourceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/snapshots/`;
-    // Historical SourceSyncs can point to another Source's archive. Custody
-    // belongs to that other Source; only remove keys in this Source's prefix.
-    const ownedArchiveRefs = archiveRefs.filter((ref) => ref.startsWith(scope));
-    if ((await Promise.all(ownedArchiveRefs.map((ref) =>
+    // Historical SourceSyncs can point to another Source's archive. Keep this
+    // Source's rows as the migration work list until those refs are normalized.
+    // Otherwise the surviving Run would indefinitely block the other Source.
+    if (archiveRefs.some((ref) => !ref.startsWith(scope))) {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${sourceId} has an archive outside its custody scope`,
+        { reason: "source_archive_outside_custody_scope" });
+    }
+    if ((await Promise.all(archiveRefs.map((ref) =>
       this.#store.hasForeignSourceArchiveReference(ref, sourceId)
     ))).some(Boolean)) {
       throw new OpenTofuControllerError("failed_precondition",
         `Source ${sourceId} shares an archive with another Source`,
         { reason: "source_archive_shared_by_another_source" });
     }
-    if (ownedArchiveRefs.length > 0) {
+    if (archiveRefs.length > 0) {
       if (!this.#deleteRetiredSourceArchives) {
         throw new OpenTofuControllerError("failed_precondition",
           "Source archive custody is unavailable",
           { reason: "source_archive_custody_unavailable" });
       }
       await this.#deleteRetiredSourceArchives({
-        workspaceId: source.workspaceId, sourceId, archiveRefs: ownedArchiveRefs,
+        workspaceId: source.workspaceId, sourceId, archiveRefs,
       });
     }
     const result = await this.#store.retireSource({
