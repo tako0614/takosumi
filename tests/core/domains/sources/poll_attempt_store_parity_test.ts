@@ -41,6 +41,21 @@ test("all stores advance failed polls without a Run and quarantine broken applie
       expect((await service.getSource(first.id)).source, label).not.toHaveProperty("lastAutoSyncAttemptAt");
       expect(await store.listSourceSyncRuns(first.id), label).toEqual([]);
 
+      const initialCapsule = {
+        id: "cap_broken_poll", workspaceId: first.workspaceId, projectId: "project_poll",
+        name: "broken", slug: "broken", sourceId: first.id, installConfigId: "config_poll",
+        environment: "production", status: "pending" as const, currentStateGeneration: 0,
+        createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+      expect((await store.createCapsuleInitialAuthority({
+        capsule: initialCapsule,
+        installConfig: { id: "config_poll", workspaceId: first.workspaceId, name: "broken",
+          variableMapping: {}, outputAllowlist: {}, policy: {},
+          createdAt: initialCapsule.createdAt, updatedAt: initialCapsule.updatedAt },
+        providerBindingSet: { id: "bindings_poll", workspaceId: first.workspaceId,
+          capsuleId: initialCapsule.id, environment: "production", bindings: [],
+          createdAt: initialCapsule.createdAt, updatedAt: initialCapsule.updatedAt },
+      })).status, label).toBe("created");
       await store.putCapsule({
         id: "cap_broken_poll", workspaceId: first.workspaceId, projectId: "project_poll",
         name: "broken", slug: "broken", sourceId: first.id, installConfigId: "config_poll",
