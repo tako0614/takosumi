@@ -777,6 +777,7 @@ export interface ControlPlaneOperations {
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse>;
+  convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
     options?: { readonly scheduled?: boolean },

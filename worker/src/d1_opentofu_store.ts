@@ -314,7 +314,6 @@ import {
   type CommittedPostApplyRecoveryRows,
 } from "../../core/domains/deploy-control/committed_post_apply_recovery.ts";
 import {
-  MAX_SOURCE_RECONCILIATION_CAPSULES,
   observeSourceSyncSettlement,
   SOURCE_SYNC_SETTLEMENT_READ_PATHS,
   SourceSyncSettlementConflictError,
@@ -3514,6 +3513,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(schema.capsules.workspaceId, input.terminalRun.workspaceId),
+          sql`${schema.capsules.id} = (select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId})`,
           not(
             sql.raw(
               d1SourceSyncSettlementCoherentDestroyedCapsuleSql("capsules"),
@@ -3522,7 +3522,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ),
       )
       .orderBy(asc(schema.capsules.createdAt), asc(schema.capsules.id))
-      .limit(MAX_SOURCE_RECONCILIATION_CAPSULES + 1);
+      .limit(1);
     const observedCapsules = capsuleRows.map(({ recordJson }) => {
       const parsed = typeof recordJson === "string"
         ? parseD1JsonColumn(recordJson)
@@ -9367,6 +9367,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
 
     const source = input.source;
+    const ownerMatches = input.expectedOwnerCapsule ? exists(this.#orm.select({ id: schema.capsules.id })
+      .from(schema.capsules).where(and(
+        eq(schema.capsules.id, input.expectedOwnerCapsule.id),
+        eq(schema.capsules.workspaceId, source.workspaceId),
+        eq(schema.capsules.sourceId, source.id),
+        eq(schema.capsules.recordJson, input.expectedOwnerCapsule),
+      ))) : undefined;
+    if (input.expectedOwnerCapsule && stableStringify(await this.getCapsule(input.expectedOwnerCapsule.id)) !==
+      stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" };
     const currentRow = await this.#readD1StoredSourceRow(source.id);
     const current = currentRow ? sourceFromD1Row(currentRow) : undefined;
     if (currentRow !== undefined && current === undefined) {
@@ -9416,6 +9425,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             // Workspace authority for this mutation.
             eq(schema.sources.workspaceId, source.workspaceId),
             eq(schema.sources.recordJson, input.expectedSource),
+            ownerMatches,
             d1WorkspaceManagementAdmissionExists(
               this.#orm,
               source.workspaceId,
@@ -11599,7 +11609,7 @@ function d1SourceSyncSettlementEnvelope(
   latestLaneRecordJson: string | undefined,
 ): D1SourceSyncSettlementEnvelope {
   if (
-    observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
+    observation.capsules.length > 1 ||
     new Set(observation.capsules.map((capsule) => capsule.id)).size !==
       observation.capsules.length
   ) {
@@ -11783,7 +11793,7 @@ function d1SourceSyncSettlementSourceMatches(
   return `(
     CASE WHEN json_valid(${actualAlias}.record_json) = 1
       AND json_valid(${expected}) = 1
-      THEN json(${actualAlias}.record_json) = json(${expected})
+      THEN json_remove(${actualAlias}.record_json, '$.lastAutoSyncAttemptAt') = json(${expected})
       ELSE 0 END
     AND ${actualAlias}.id IS json_extract(${expected}, '$.id')
     AND ${actualAlias}.space_id IS json_extract(${expected}, '$.workspaceId')
@@ -11960,6 +11970,7 @@ function d1SourceSyncSettlementGuardSql(): string {
   const censusMismatch = `(
     (SELECT count(*) FROM capsules c
       WHERE c.space_id = json_extract(e.payload, '$.workspaceId')
+        AND c.id = (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
         AND NOT ${coherentDestroyed})
       <> (SELECT count(*) FROM observed_capsules)
     OR (SELECT count(*) FROM observed_capsules)
@@ -11970,6 +11981,7 @@ function d1SourceSyncSettlementGuardSql(): string {
         OR json_extract(o.capsule_json, '$.id') IS NOT o.id
         OR json_extract(o.capsule_json, '$.workspaceId') IS NOT
           json_extract(e.payload, '$.workspaceId')
+        OR o.id IS NOT (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
         OR json_extract(o.capsule_json, '$.status') IS 'destroyed'
         OR NOT EXISTS (
         SELECT 1 FROM capsules c

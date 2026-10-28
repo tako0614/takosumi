@@ -663,7 +663,7 @@ async function newestSnapshotForRef(
   for (let page = 0; page < APP_SNAPSHOT_PAGE_LIMIT; page += 1) {
     const result = await operations.listSourceSnapshots(sourceId, { limit: 100, cursor });
     for (const snapshot of result.snapshots) {
-      if (snapshot.ref !== current.ref) continue;
+      if (snapshot.ref !== current.ref || snapshot.path !== current.path) continue;
       if (
         !newest ||
         snapshot.fetchedAt > newest.fetchedAt ||

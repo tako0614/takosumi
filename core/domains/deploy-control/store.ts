@@ -50,7 +50,6 @@ import {
   type CommitRecoveredStateResult,
 } from "./operator_state_recovery.ts";
 import {
-  MAX_SOURCE_RECONCILIATION_CAPSULES,
   observeSourceSyncSettlement,
   sourceSyncSettlementCensusMatches,
   sourceSyncSettlementReadMatches,
@@ -1528,6 +1527,8 @@ export type ProjectCreationResult =
 
 /** Create-only when expectedSource is absent; otherwise an exact-record configuration CAS. */
 export interface SourceConfigurationWriteInput {
+  /** Internal lane convergence: the owner and applied state must still match. */
+  readonly expectedOwnerCapsule?: Capsule;
   readonly source: StoredSource;
   readonly expectedSource?: StoredSource;
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
@@ -1568,6 +1569,12 @@ export function assertSourceHookSecretRotationInput(input: SourceHookSecretRotat
 }
 
 export function assertSourceConfigurationWriteInput(input: SourceConfigurationWriteInput): void {
+  if (input.expectedOwnerCapsule && (
+    !input.expectedSource || input.source.ownerCapsuleId !== input.expectedOwnerCapsule.id ||
+    input.expectedOwnerCapsule.sourceId !== input.source.id ||
+    input.expectedOwnerCapsule.workspaceId !== input.source.workspaceId ||
+    input.expectedOwnerCapsule.status === "destroyed"
+  )) throw new TypeError("Source lane write must be fenced by its owning app");
   if (input.expectedWorkspaceManagementAuthority !== undefined) {
     assertWorkspaceManagementAuthorityInput(input.expectedWorkspaceManagementAuthority, input.source.workspaceId);
   }
@@ -4978,14 +4985,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           resolvedCommit: reusableSnapshot.resolvedCommit }
       : input.terminalRun;
     const readCapsules = (): readonly Capsule[] => {
-      const capsules: Capsule[] = [];
-      for (const capsule of this.#capsules.values()) {
-        if (capsule.workspaceId !== input.terminalRun.workspaceId ||
-          capsule.status === "destroyed") continue;
-        capsules.push(capsule);
-        if (capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES) break;
-      }
-      return capsules;
+      const source = this.#sources.get(input.terminalRun.sourceId);
+      const owner = source?.ownerCapsuleId ? this.#capsules.get(source.ownerCapsuleId) : undefined;
+      return owner && owner.workspaceId === input.terminalRun.workspaceId &&
+        owner.status !== "destroyed" ? [owner] : [];
     };
     const observation = await observeSourceSyncSettlement(
       this, committedSnapshot, terminalRun, readCapsules(),
@@ -5005,6 +5008,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           ? publicStoredRun(coerceRunRowStatus(run)!) : undefined; break;
         case "plan": record = run && isPlanRunRecord(run)
           ? publicStoredRun(coerceRunRowStatus(run)!) : undefined; break;
+        case "recovery": record = run && isPublicRunRecord(run) && run.type === "state_recovery"
+          ? publicStoredRun(run) : undefined; break;
         case "restore": record = run && isPublicRunRecord(run) &&
             (run.type === "backup" || run.type === "restore")
           ? publicStoredRun(run) : undefined; break;
@@ -7775,6 +7780,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<SourceConfigurationWriteResult> {
     assertSourceConfigurationWriteInput(input);
     const current = this.#sources.get(input.source.id);
+    if (input.expectedOwnerCapsule && stableStringify(this.#capsules.get(input.expectedOwnerCapsule.id)) !==
+      stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" };
+
     if (current && stableStringify(current) === stableStringify(input.source)) {
       return { status: "replayed", source: current };
     }

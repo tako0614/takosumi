@@ -974,6 +974,7 @@ export interface TakosumiOperations {
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse>;
+  convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
     options?: { readonly scheduled?: boolean },
@@ -2118,8 +2119,9 @@ export async function createTakosumiService(
         opts ?? {},
         expectedWorkspaceManagementAuthority,
       ),
-    createSourceReconciliationSyncs: (sourceId, reconciliationOptions) =>
-      opentofuController.createSourceReconciliationSyncs(sourceId, reconciliationOptions),
+    convergeOwnedSourceLane: (sourceId) => opentofuController.convergeOwnedSourceLane(sourceId),
+    createSourceReconciliationSyncs: (sourceId, options) =>
+      opentofuController.createSourceReconciliationSyncs(sourceId, options),
     createSourceCompatibilityCheck: (sourceId, request, context) =>
       opentofuController.createSourceCompatibilityCheck(
         sourceId,
