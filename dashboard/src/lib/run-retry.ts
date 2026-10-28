@@ -7,10 +7,13 @@
  * - A first install keeps its exact reviewed snapshot/report pair.
  * - An installed app's failed change repeats the flow the plan records as its
  *   origin: a version change plans that ref again, a rollback goes back to the
- *   same StateVersion. A configuration change, or a plan that records no
- *   origin, is planned again on the installed version with the app's current
- *   configuration (the configuration flow already made it current). An
- *   installed app is never re-planned from the Source's default ref.
+ *   same StateVersion, a Workspace update plans the tracked ref again. A
+ *   configuration change is planned again on the installed version with the
+ *   current configuration (the configuration flow already made it current).
+ *   A plan that records no origin gets the same re-plan of the installed
+ *   version, which the page labels as such rather than as a retry of the
+ *   failed change. An installed app is never re-planned from the Source's
+ *   default ref.
  */
 import {
   type Capsule,
@@ -33,8 +36,14 @@ export type RetryChange =
   | { readonly kind: "initial"; readonly compatibilityReportId: string }
   | { readonly kind: "revision"; readonly ref: string }
   | { readonly kind: "rollback"; readonly stateVersionId: string }
-  /** Plan the installed version again with the current configuration. */
-  | { readonly kind: "installed"; readonly stateVersionId: string };
+  /** Plan the tracked ref again as configured (a Workspace update). */
+  | { readonly kind: "update" }
+  /**
+   * Plan the installed version again with the current configuration.
+   * `recorded` is false when the failed plan recorded no origin, so this is
+   * not a retry of that change.
+   */
+  | { readonly kind: "installed"; readonly stateVersionId: string; readonly recorded: boolean };
 
 export interface RetryPlanApi {
   readonly getRun: (id: string) => Promise<Run>;
@@ -46,6 +55,8 @@ export interface RetryPlanApi {
   /** Plans a version change to `ref`; resolves to the new Plan's id. */
   readonly planRevision: (capsuleId: string, ref: string) => Promise<string | undefined>;
   readonly planRollback: (stateVersionId: string) => Promise<unknown>;
+  /** Plans the app's tracked ref as configured. */
+  readonly planTracked: (capsuleId: string) => Promise<unknown>;
 }
 
 const DEFAULT_API: RetryPlanApi = {
@@ -56,6 +67,7 @@ const DEFAULT_API: RetryPlanApi = {
     (await createReviewableGitRevisionPlan(capsuleId, { ref }, { idempotencyKey: randomUuid() }))
       .revisionPlan.planRunId,
   planRollback: createStateVersionRollbackPlan,
+  planTracked: (capsuleId) => planCapsule(capsuleId),
 };
 
 function isRemoval(type: Run["type"]): boolean {
@@ -93,11 +105,22 @@ export function retryChangeForRun(input: {
   const origin = (plan ?? (run.type === "plan" ? run : undefined))?.origin;
   if (origin?.kind === "revision") return { kind: "revision", ref: origin.ref };
   if (origin?.kind === "rollback") return { kind: "rollback", stateVersionId: origin.stateVersionId };
+  if (origin?.kind === "update") return { kind: "update" };
   const installed = capsule.currentStateVersionId;
   if (!installed) {
     throw new ControlApiError(409, "retry_plan_unavailable", t("app.review.notStarted"));
   }
-  return { kind: "installed", stateVersionId: installed };
+  return { kind: "installed", stateVersionId: installed, recorded: origin?.kind === "configuration" };
+}
+
+/** Reads what "try again" would plan for a failed run, without planning. */
+export async function previewRetryChange(
+  run: Run,
+  capsule: Capsule,
+  api: Pick<RetryPlanApi, "getRun"> = DEFAULT_API,
+): Promise<RetryChange> {
+  const plan = run.type === "apply" && run.planRunId ? await api.getRun(run.planRunId) : undefined;
+  return retryChangeForRun({ run, ...(plan ? { plan } : {}), capsule });
 }
 
 /** Plans the failed run's change again; resolves to the new Plan's id. */
@@ -106,8 +129,7 @@ export async function retryPlanForRun(
   capsule: Capsule,
   api: RetryPlanApi = DEFAULT_API,
 ): Promise<string | undefined> {
-  const plan = run.type === "apply" && run.planRunId ? await api.getRun(run.planRunId) : undefined;
-  const change = retryChangeForRun({ run, ...(plan ? { plan } : {}), capsule });
+  const change = await previewRetryChange(run, capsule, api);
   const capsuleId = capsule.id;
   switch (change.kind) {
     case "removal":
@@ -116,6 +138,8 @@ export async function retryPlanForRun(
       return extractRunId(await api.planCapsule(capsuleId, { compatibilityReportId: change.compatibilityReportId }));
     case "revision":
       return await api.planRevision(capsuleId, change.ref);
+    case "update":
+      return extractRunId(await api.planTracked(capsuleId));
     case "rollback":
     case "installed":
       return extractRunId(await api.planRollback(change.stateVersionId));

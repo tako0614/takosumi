@@ -20,6 +20,7 @@ import {
   type GitInstallPlanScope,
   type GitInstallPlanStore,
   type ListOpenGitInstallAttemptsInput,
+  type PreparingGitPlanCoordinator,
   type StoredGitInstallPlan,
   type TransitionGitInstallPlanInput,
   type TransitionGitInstallPlanResult,
@@ -154,22 +155,37 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return result.rows[0]?.present === true;
   }
 
-  async hasInFlightCoordinatorForCapsule(
+  async preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,
-  ): Promise<boolean> {
-    // Install (legacy or attempt) and revision rows alike; only the terminal
-    // phases release the Capsule.
-    const result = await this.#client.query<{ readonly present: boolean }>(
-      `select exists (
-         select 1 from ${TABLE}
-          where workspace_id = $2
-            and record_json ->> 'capsuleId' = $1
-            and phase not in ('failed', 'reviewable', 'discarded')
-       ) as present`,
-      [capsuleId, workspaceId],
+    options: { readonly includeInstall: boolean },
+  ): Promise<PreparingGitPlanCoordinator | undefined> {
+    // A row counts until it creates its Plan Run; install rows only while the
+    // Capsule was never applied.
+    const result = await this.#client.query<{
+      readonly id: string;
+      readonly operation: string | null;
+      readonly updated_at: string;
+    }>(
+      `select id, record_json ->> 'operation' as operation, updated_at
+         from ${TABLE}
+        where workspace_id = $2
+          and record_json ->> 'capsuleId' = $1
+          and phase not in ('failed', 'reviewable', 'discarded')
+          and record_json ->> 'planRunId' is null
+          and ($3::boolean or record_json ->> 'operation' = 'revision')
+        order by updated_at desc, id desc
+        limit 1`,
+      [capsuleId, workspaceId, options.includeInstall],
     );
-    return result.rows[0]?.present === true;
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          operation: row.operation === "revision" ? "revision" : "install",
+          updatedAt: row.updated_at,
+        }
+      : undefined;
   }
 
   async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {

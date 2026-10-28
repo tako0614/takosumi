@@ -693,11 +693,19 @@ export interface CapsuleAppVersion {
 
 export interface CapsuleAppProgress {
   /**
-   * An install or revision coordinator is still working on this app (including
-   * an install attempt waiting for the person's input) and owns its next plan.
-   * The name predates install coordinators and is kept for compatibility.
+   * An install or revision coordinator is still preparing this app's next
+   * Plan (it has not created the Plan Run yet; an install attempt counts only
+   * for a never-applied app and only until it stalls). Once the Plan Run
+   * exists, `run`/`review` and `latestRun` describe the work. The name
+   * predates install coordinators and is kept for compatibility.
    */
   readonly revisionPreparing: boolean;
+  /**
+   * An install attempt bound to this never-applied app that has not created
+   * its Plan yet. `continue_install` advances it through
+   * `POST /api/v1/install-plans/:id/reconcile` instead of planning directly.
+   */
+  readonly installPlanId?: string;
   /** The newest lifecycle Run, while it is queued or running. */
   readonly run?: CapsuleAppRunSummary;
   /** The newest lifecycle Run, while it is a plan waiting for review. */

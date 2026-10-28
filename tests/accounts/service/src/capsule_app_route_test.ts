@@ -666,32 +666,18 @@ test("a Capsule restored to active after a failed teardown is not stuck uninstal
   expect(app).toMatchObject({ state: "installed", primaryAction: "view_resources" });
 });
 
-test("a stalled first install still owned by its install attempt is installing, not incomplete", async () => {
-  const h = await fixture();
-  const seeded = await h.ledger.getCapsule(CAPSULE);
-  const { currentStateVersionId: _currentStateVersionId, ...unapplied } = seeded!;
-  await h.ledger.putCapsule({
-    ...unapplied,
-    status: "pending",
-    currentStateGeneration: 0,
-    updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-  });
-  // With no coordinator working on it, the person is asked to continue.
-  expect(await h.app()).toMatchObject({
-    applied: false,
-    state: "needs_attention",
-    primaryAction: "continue_install",
-    problems: [{ code: "install_incomplete" }],
-    progress: { revisionPreparing: false },
-  });
-  // The install attempt that created this Capsule is waiting for input: it
-  // owns the next plan, so the app must not offer one of its own.
-  const at = new Date().toISOString();
+/** An install coordinator row bound to the fixture Capsule. */
+async function putInstallAttempt(
+  h: Awaited<ReturnType<typeof fixture>>,
+  over: { readonly phase?: "awaiting_input" | "planning"; readonly planRunId?: string; readonly updatedAt?: string } = {},
+): Promise<void> {
+  const at = over.updatedAt ?? new Date().toISOString();
   const authority = {
     workspaceId: WORKSPACE,
     managementState: "active" as const,
     managementEpoch: 1,
   };
+  const phase = over.phase ?? "awaiting_input";
   const created = await h.core.gitInstallPlans.create(
     {
       id: "ip_app_route",
@@ -706,13 +692,14 @@ test("a stalled first install still owned by its install attempt is installing, 
       options: {},
       operation: "install",
       mode: "attempt",
-      phase: "awaiting_input",
-      awaitingInput: "inputs",
+      phase,
+      ...(phase === "awaiting_input" ? { awaitingInput: "inputs" as const } : {}),
       generation: 0,
       sourceId: "src_app_route",
       installConfigId: "cfg_app_route",
       capsuleId: CAPSULE,
       creationAttempted: true,
+      ...(over.planRunId ? { planRunId: over.planRunId } : {}),
       expiresAt: at,
       createdAt: at,
       updatedAt: at,
@@ -720,14 +707,91 @@ test("a stalled first install still owned by its install attempt is installing, 
     authority,
   );
   expect(created.status).toBe("created");
+}
+
+/** Makes the fixture Capsule a first install that never applied. */
+async function makeUnapplied(h: Awaited<ReturnType<typeof fixture>>, updatedAgoMs: number): Promise<void> {
+  const seeded = await h.ledger.getCapsule(CAPSULE);
+  const { currentStateVersionId: _currentStateVersionId, ...unapplied } = seeded!;
+  await h.ledger.putCapsule({
+    ...unapplied,
+    status: "pending",
+    currentStateGeneration: 0,
+    updatedAt: new Date(Date.now() - updatedAgoMs).toISOString(),
+  });
+}
+
+test("a first install whose attempt is still preparing is installing, and a stalled attempt is continued through it", async () => {
+  const h = await fixture();
+  await makeUnapplied(h, 2 * 60 * 60 * 1000);
+  // With no coordinator working on it, the person is asked to continue.
+  expect(await h.app()).toMatchObject({
+    applied: false,
+    state: "needs_attention",
+    primaryAction: "continue_install",
+    problems: [{ code: "install_incomplete" }],
+    progress: { revisionPreparing: false },
+  });
+  expect((await h.app()).progress.installPlanId).toBeUndefined();
+  // The install attempt that created this Capsule is waiting for input: it
+  // owns the next plan, so the app must not offer one of its own.
+  await putInstallAttempt(h);
   const app = await h.app();
   expect(app).toMatchObject({
     applied: false,
     state: "installing",
     primaryAction: "none",
-    progress: { revisionPreparing: true },
+    progress: { revisionPreparing: true, installPlanId: "ip_app_route" },
   });
   expect(app.problems.map((problem) => problem.code)).not.toContain("install_incomplete");
+});
+
+test("an install attempt that stopped moving offers continue_install through that attempt", async () => {
+  const h = await fixture();
+  await makeUnapplied(h, 3 * 60 * 60 * 1000);
+  await putInstallAttempt(h, { updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() });
+  expect(await h.app()).toMatchObject({
+    state: "needs_attention",
+    primaryAction: "continue_install",
+    problems: [{ code: "install_incomplete" }],
+    progress: { revisionPreparing: false, installPlanId: "ip_app_route" },
+  });
+});
+
+test("an install attempt left in planning after its Plan Run exists does not hold the app", async () => {
+  const h = await fixture();
+  await makeUnapplied(h, 2 * 60 * 60 * 1000);
+  // The client stopped reconciling once the Plan Run existed (deadline,
+  // closed tab): the row stays `planning` with its Plan Run id.
+  await putInstallAttempt(h, { phase: "planning", planRunId: "plan_first" });
+  await h.ledger.putPlanRun(planRun("plan_first", Date.now() - 60_000, { status: "succeeded" }));
+  // The Run's real state: a first install waiting for review.
+  expect(await h.app()).toMatchObject({
+    state: "installing",
+    primaryAction: "review",
+    progress: { revisionPreparing: false, review: { runId: "plan_first", runType: "plan" } },
+  });
+  // A failed plan with the stale row needs attention.
+  await h.ledger.putPlanRun(planRun("plan_first", Date.now() - 60_000, {
+    status: "failed",
+    diagnostics: [{ severity: "error", code: "plan_failed", message: "boom" }],
+  }));
+  expect(await h.app()).toMatchObject({
+    state: "needs_attention",
+    primaryAction: "retry",
+    problems: [{ code: "run_failed", runId: "plan_first" }],
+    progress: { revisionPreparing: false },
+  });
+});
+
+test("an applied app is never held by an install row", async () => {
+  const h = await fixture();
+  // The fixture Capsule is applied; an install attempt that never got past
+  // `awaiting_input` (or a stale row) is not this app's work any more.
+  await putInstallAttempt(h);
+  const app = await h.app();
+  expect(app).toMatchObject({ applied: true, state: "installed", progress: { revisionPreparing: false } });
+  expect(app.progress.installPlanId).toBeUndefined();
 });
 
 test("a disabled app is not offered a scheduled uninstall the command would refuse", async () => {

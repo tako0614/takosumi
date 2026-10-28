@@ -201,7 +201,8 @@ export default function AppAttentionSection(props: {
             disabled={props.busy}
             onClick={() => props.actions.retry(problem)}
           >
-            {t("app.problem.retry")}
+            {/* Without a run to repeat, an installed app's version is planned again. */}
+            {t(!problem.runId && app().applied ? "app.problem.retryInstalled" : "app.problem.retry")}
           </Button>
         );
     }

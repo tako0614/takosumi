@@ -24,6 +24,7 @@ function recorder(runs: Readonly<Record<string, Run>> = {}) {
     planCapsule: async (id, options) => { calls.push(`plan ${id} ${options.compatibilityReportId}`); return { run: { id: "run_plan" } }; },
     planRevision: async (id, ref) => { calls.push(`revision ${id} ${ref}`); return "run_revision"; },
     planRollback: async (stateVersionId) => { calls.push(`rollback ${stateVersionId}`); return { run: { id: "run_rollback" } }; },
+    planTracked: async (id) => { calls.push(`tracked ${id}`); return { run: { id: "run_tracked" } }; },
   };
   return { api, calls };
 }
@@ -62,6 +63,12 @@ describe("retryPlanForRun", () => {
     expect(calls).toEqual(["read run_plan_failed", "rollback sv_1"]);
   });
 
+  test("a failed Workspace update plans the tracked ref again", async () => {
+    const { api, calls } = recorder({ run_plan_failed: plan({ kind: "update" }) });
+    expect(await retryPlanForRun(run({ planRunId: "run_plan_failed" }), capsule(), api)).toBe("run_tracked");
+    expect(calls).toEqual(["read run_plan_failed", "tracked cap_a"]);
+  });
+
   test("a policy-blocked plan repeats its own change", async () => {
     const { api, calls } = recorder();
     await retryPlanForRun(run({ type: "plan", status: "succeeded", origin: { kind: "revision", ref: "release/v3" } }), capsule(), api);
@@ -77,6 +84,12 @@ describe("retryPlanForRun", () => {
     await retryPlanForRun(run({ planRunId: "run_legacy" }), capsule(), api);
     await retryPlanForRun(run({}), capsule(), api);
     expect(calls).toEqual(["read run_settings", "rollback sv_2", "read run_legacy", "rollback sv_2", "rollback sv_2"]);
+    // Only a recorded configuration change is a retry of that change; a plan
+    // without an origin is a re-plan of the installed version, labelled so.
+    expect(retryChangeForRun({ run: run({}), plan: { ...plan({ kind: "configuration" }) }, capsule: capsule() }))
+      .toEqual({ kind: "installed", stateVersionId: "sv_2", recorded: true });
+    expect(retryChangeForRun({ run: run({}), plan: plan(undefined), capsule: capsule() }))
+      .toEqual({ kind: "installed", stateVersionId: "sv_2", recorded: false });
   });
 
   test("a first install keeps its exact reviewed report", async () => {

@@ -589,7 +589,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(problem).toContainText("The last change couldn't be applied");
       await expect(problem.getByRole("link", { name: "See reason and logs" })).toHaveAttribute("href", `/runs/${applyId}`);
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
-      await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
+      // The failed first-install plan recorded no change origin, so the
+      // action says what it does: plan the installed version again.
+      await page.getByTestId("app-header").getByRole("button", { name: "Review the installed version again", exact: true }).click();
       const replan = "POST /api/v1/state-versions/sv_inline/rollback-plan";
       await expect.poll(() => f.mutations.filter((m) => m === replan).length).toBe(1);
       const review = page.getByTestId("app-review");
@@ -655,7 +657,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // stays manageable.
       f.problem("error"); await page.reload();
       await expect(page.getByTestId("app-problems").locator('[data-problem="capsule_error"]')).toContainText("This app has a problem");
-      await expect(header.getByRole("button", { name: "Review again", exact: true })).toBeVisible();
+      await expect(header.getByRole("button", { name: "Review the installed version again", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
       f.problem("disabled"); await page.reload();
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Stopped.");

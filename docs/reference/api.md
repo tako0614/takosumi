@@ -344,6 +344,10 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 (`uninstall.mode` と、予約前でも分かる `graceDays`、予約後の `scheduled.deleteAfter`)
 が入ります。秘密の値、Output の値、画面の起動 URL 以外の Interface 入力は含みません。
 補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
+`progress.revisionPreparing` は、インストールまたは版の更新処理がまだ計画の Run を作っていない
+間だけ true です（インストールの試みは一度も適用していないアプリに限り、止まった試みは除きます）。
+`progress.installPlanId` はそのアプリを作ったインストールの試みで、`continue_install` は
+`POST /api/v1/install-plans/{installPlanId}/reconcile` でその試みを進めます。
 削除の予約記録は、Capsule が `uninstalled` の間と、provider に届いた破棄が失敗して
 `error` になり、最新の Run がまだ破棄である間だけ有効と見なします。予約が猶予中でも
 破棄中でも、`blockedReason` が記録されていれば `uninstall_blocked` になります。
@@ -651,8 +655,9 @@ Apply が新しい InstallConfig を認可することはありません。
 （例: `provider_not_allowed` / `provider`、`approval_required_change` / `action`）。
 英文の理由そのものは返しません。分類できない理由は `unclassified` として残ります。
 
-版の変更・以前の版への巻き戻し・設定の変更から作られた計画の Run には `origin` が付きます
-（`{ kind: "revision", ref }` / `{ kind: "rollback", stateVersionId }` / `{ kind: "configuration" }`）。
+版の変更（自動更新を含む）・以前の版への巻き戻し・設定の変更・Workspace の一括更新から
+作られた計画の Run には `origin` が付きます（`{ kind: "revision", ref }` /
+`{ kind: "rollback", stateVersionId }` / `{ kind: "configuration" }` / `{ kind: "update" }`）。
 失敗した変更をやり直すクライアントは、Source の既定 ref ではなく同じ変更をもう一度計画します。
 
 ### 認証情報と Output の共有

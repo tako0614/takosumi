@@ -613,6 +613,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.problem.policyBlocked": "A policy stopped the last change",
   "app.problem.policyBlockedHint": "Check the reasons below, adjust settings or connections, then review again.",
   "app.problem.reasonsLoadFailed": "Couldn't load the reasons. Open the details to see them.",
+  "app.problem.retryInstalled": "Review the installed version again",
+  "app.problem.installNeedsInput": "This install is waiting for your input. Continue it from the install page.",
   "app.progress.title": "In progress",
   "app.progress.reviewWaiting": "A change is waiting for your review",
   "app.progress.reviewWaitingHint": "Review it and allow it if it looks right. Nothing changes before that.",

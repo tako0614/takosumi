@@ -4329,6 +4329,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
           maxItems: RUN_POLICY_REASON_LIMIT,
           items: ref("RunPolicyReason"),
         },
+        origin: ref("RunPlanOrigin"),
         providerResolutions: {
           type: "array",
           items: ref("ProviderResolution"),
@@ -4418,6 +4419,30 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         resourceType: { type: "string" },
       },
       additionalProperties: false,
+    },
+    RunPlanOrigin: {
+      description:
+        "The change flow that created a plan: a version change to a ref, a rollback to an earlier StateVersion, a configuration change, or an update of the tracked ref. A retry repeats the same flow.",
+      oneOf: [
+        {
+          type: "object",
+          required: ["kind", "ref"],
+          properties: { kind: { const: "revision" }, ref: { type: "string" } },
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          required: ["kind", "stateVersionId"],
+          properties: { kind: { const: "rollback" }, stateVersionId: { type: "string" } },
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          required: ["kind"],
+          properties: { kind: { enum: ["configuration", "update"] } },
+          additionalProperties: false,
+        },
+      ],
     },
     RunChangeSummary: {
       type: "object",

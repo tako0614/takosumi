@@ -5,7 +5,7 @@
  * newest 100 Runs and Activity events). This pure function computes it from
  * per-Capsule facts the control plane reads exactly: the Capsule row, its
  * newest lifecycle Run, whether an install or revision coordinator is still
- * working on it, the health of the ProviderConnections its bindings use, the
+ * preparing its Plan, the health of the ProviderConnections its bindings use, the
  * current generation's screen materialization ledger, and whether the uninstall
  * commands would admit a cancel right now.
  *
@@ -63,8 +63,9 @@ export interface CapsuleAppFacts {
   /** The newest lifecycle Run ({@link CAPSULE_APP_LIFECYCLE_RUN_TYPES}). */
   readonly latestRun?: CapsuleAppLatestRun;
   /**
-   * An install (legacy or attempt, `awaiting_input` included) or revision
-   * coordinator bound to this Capsule is not yet terminal, so it owns the next
+   * An install or revision coordinator bound to this Capsule is still
+   * preparing its Plan (no Plan Run yet; an install attempt only for a
+   * never-applied Capsule and only until it stalls), so it owns the next
    * plan: the app reads as in progress and offers no action that would plan.
    */
   readonly revisionPreparing: boolean;

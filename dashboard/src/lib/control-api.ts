@@ -2485,6 +2485,36 @@ export async function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> 
   return app;
 }
 
+/**
+ * Advances an install attempt bound to a never-applied app through its own
+ * reconciliation until it asks for a review (`continue_install`), so the app
+ * page never plans the Capsule beside the attempt. Resolves to the attempt's
+ * last response; the caller reads `installPlan.planRunId`.
+ */
+export async function advanceGitInstallPlan(
+  installPlanId: string,
+  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence } = {},
+): Promise<GitInstallPlanResponse> {
+  const cadence = resolveGitPlanPollCadence(options.pollCadence);
+  return await withGitPlanDeadline("install", options.timeoutMs, async (signal) => {
+    const first = await reconcileGitInstallPlan(installPlanId, { signal });
+    throwIfAborted(signal);
+    return await driveGitPlanReconcile<GitInstallPlanResponse>({
+      kind: "install",
+      maxReconciles: 120,
+      signal,
+      cadence,
+      initial: first,
+      nextAction: (current) => current.nextAction,
+      observe: (current) => ({
+        phase: current.installPlan.phase,
+        generation: current.installPlan.generation,
+      }),
+      reconcile: () => reconcileGitInstallPlan(installPlanId, { signal }),
+    });
+  });
+}
+
 /** Upper bound the per-app Run listing accepts for one page. */
 export const CAPSULE_RUN_PAGE_MAX = 100;
 

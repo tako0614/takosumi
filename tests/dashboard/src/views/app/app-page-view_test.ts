@@ -255,6 +255,19 @@ describe("installed app page", () => {
     expect(settings).toContain("[() => props.installConfig, () => props.seed]");
   });
 
+  test("continuing an install advances the attempt that owns the app instead of planning beside it", () => {
+    const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
+    expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
+    expect(continueInstall).toContain("await advanceGitInstallPlan(attempt)");
+    expect(continueInstall).toContain("if (!attempt) return extractRunId(await planCapsule(capsuleId()));");
+  });
+
+  test("a re-plan of the installed version is labelled as such, not as a retry of the failed change", () => {
+    expect(page).toContain('return preview?.kind === "installed" && !preview.recorded');
+    expect(page).toContain('if (!primaryProblem(view)?.runId) return "app.problem.retryInstalled";');
+    expect(attention).toContain('!problem.runId && app().applied ? "app.problem.retryInstalled" : "app.problem.retry"');
+  });
+
   test("try again repeats the failed change the way the run page does, or the installed version as configured", () => {
     expect(page).toContain("const fresh = await getCapsule(run.capsuleId ?? capsuleId());");
     expect(page).toContain("return await retryPlanForRun(run, fresh, retryApi);");

@@ -48,6 +48,7 @@ import {
   ControlApiError,
   createReviewableGitRevisionPlan,
   createStateVersionRollbackPlan,
+  advanceGitInstallPlan,
   deleteCapsule,
   extractRunId,
   getCapsule,
@@ -99,6 +100,7 @@ import {
   linkedApps,
   mergeAppHistoryPages,
   openableScreens,
+  primaryProblem,
   reviewPurposeForRun,
   settledValue,
   stateVersionLabels,
@@ -110,7 +112,12 @@ import {
   reinstallHref,
 } from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
-import { defaultRetryPlanApi, retryPlanForRun, type RetryPlanApi } from "../../lib/run-retry.ts";
+import {
+  defaultRetryPlanApi,
+  previewRetryChange,
+  retryPlanForRun,
+  type RetryPlanApi,
+} from "../../lib/run-retry.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppSection, OpenAppButton } from "./app-ui.tsx";
@@ -685,11 +692,42 @@ export default function AppManagePage(props: {
       return await retryPlanForRun(run, fresh, retryApi);
     }, { action: "retry" });
   };
+  // Continuing an install advances the install attempt that owns this app
+  // (its own reconciliation), never a plan beside it; only an app with no
+  // attempt left is planned from its saved settings.
+  // What "Review again" would plan for the server's primary problem, so a
+  // re-plan of the installed version is labelled as such, not as a retry of
+  // a change the failed plan never recorded.
+  const [retryPreview] = createResource(
+    () => {
+      const view = app();
+      const problem = view && primaryProblem(view);
+      const inst = capsule();
+      return view?.applied && view.primaryAction === "retry" && problem?.runId && inst
+        ? { runId: problem.runId, inst }
+        : null;
+    },
+    async ({ runId, inst }) => previewRetryChange(await getRun(runId), inst),
+  );
+  const retryLabel = (view: CapsuleAppView): MessageKey => {
+    if (view.primaryAction !== "retry" || !view.applied) return "app.problem.retry";
+    if (!primaryProblem(view)?.runId) return "app.problem.retryInstalled";
+    const preview = retryPreview.state === "ready" ? retryPreview() : undefined;
+    return preview?.kind === "installed" && !preview.recorded
+      ? "app.problem.retryInstalled"
+      : "app.problem.retry";
+  };
   const continueInstall = () =>
     void startReview(
       "attention",
       "install",
-      async () => extractRunId(await planCapsule(capsuleId())),
+      async () => {
+        const attempt = app()?.progress.installPlanId;
+        if (!attempt) return extractRunId(await planCapsule(capsuleId()));
+        const advanced = await advanceGitInstallPlan(attempt);
+        if (!advanced.installPlan.planRunId) throw new Error(t("app.problem.installNeedsInput"));
+        return advanced.installPlan.planRunId;
+      },
       { action: "continue_install" },
     );
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
@@ -919,7 +957,8 @@ export default function AppManagePage(props: {
         {(loaded) => {
           const inst = () => loaded().inst;
           const view = () => loaded().view;
-          const primaryLabel = () => appPrimaryActionLabel(view().primaryAction);
+          const primaryLabel = () =>
+            view().primaryAction === "retry" ? retryLabel(view()) : appPrimaryActionLabel(view().primaryAction);
           return (
             <div class="ap-page" data-testid="app-page" data-app-state={view().state} data-primary-action={view().primaryAction}>
               <Show when={context.error || appView.error}>

@@ -66,6 +66,9 @@ describe("app page links", () => {
     expect(new URL(reinstallHref({ repositoryUrl: "https://github.com/example/office.git", path: "../escape" }), "https://d.test").searchParams.has("path")).toBe(false);
     // No known ref: none is invented.
     expect(new URL(reinstallHref({ repositoryUrl: "https://github.com/example/office.git" }), "https://d.test").searchParams.has("ref")).toBe(false);
+    // A stored URL never carries credentials into the link.
+    const scrubbed = new URL(reinstallHref({ repositoryUrl: "https://user:secret@github.com/example/office.git?access_token=abc#frag" }), "https://d.test");
+    expect(scrubbed.searchParams.get("git")).toBe("https://github.com/example/office.git");
     expect(reinstallHref({})).toBe("/new");
     expect(reinstallHref({ repositoryUrl: "http://insecure.test/repo.git" })).toBe("/new");
   });

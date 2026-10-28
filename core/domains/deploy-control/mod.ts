@@ -2352,6 +2352,8 @@ export class OpenTofuController {
           autoApplyRequested: true,
           sourceSnapshotId: input.snapshot.id,
           expectedWorkspaceManagementAuthority,
+          // An automatic update moves the app to its tracked ref's new commit.
+          origin: { kind: "revision", ref: input.snapshot.ref },
         },
       );
     } catch (error) {

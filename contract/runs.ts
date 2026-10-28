@@ -248,15 +248,18 @@ export interface RunPolicyReason {
 
 /**
  * The change flow that created a plan, when one did: a version change to a
- * ref (the revision coordinator), a rollback to an earlier StateVersion, or a
- * configuration change. A client retries a failed change by running the same
- * flow again instead of planning whatever the Source's default ref holds.
- * Value-free: a Git ref and a StateVersion id only.
+ * ref (the revision coordinator or an automatic update), a rollback to an
+ * earlier StateVersion, a configuration change, or an update of the app's
+ * tracked ref as configured (a Workspace update). A client retries a failed
+ * change by running the same flow again instead of planning whatever the
+ * Source's default ref holds. Value-free: a Git ref and a StateVersion id
+ * only.
  */
 export type RunPlanOrigin =
   | { readonly kind: "revision"; readonly ref: string }
   | { readonly kind: "rollback"; readonly stateVersionId: string }
-  | { readonly kind: "configuration" };
+  | { readonly kind: "configuration" }
+  | { readonly kind: "update" };
 
 export interface RunChangeSummary {
   readonly add?: number;

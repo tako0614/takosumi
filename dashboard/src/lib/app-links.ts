@@ -123,8 +123,8 @@ export function reinstallHref(input: {
   readonly path?: string;
   readonly name?: string;
 }): string {
-  const url = input.repositoryUrl?.trim();
-  if (!url || !/^https:\/\//u.test(url)) return "/new";
+  const url = credentialFreeHttpsUrl(input.repositoryUrl);
+  if (!url) return "/new";
   const params = new URLSearchParams({ git: url });
   const ref = input.ref?.trim();
   if (ref && ref.length <= 512) params.set("ref", ref);
@@ -135,4 +135,25 @@ export function reinstallHref(input: {
   const name = input.name?.trim();
   if (name && name.length <= 96) params.set("name", name);
   return `/new?${params.toString()}`;
+}
+
+/**
+ * An https Git URL with any user info, query and fragment removed, so no
+ * credential embedded in a stored URL (`user:token@`, `?access_token=`) can
+ * reach a link.
+ */
+function credentialFreeHttpsUrl(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return undefined;
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }

@@ -128,8 +128,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         lifecycleRun("run_install_apply", "apply", "succeeded", "2026-10-01T00:04:00.000Z", { sourceSnapshotId: "snap_main_1" }),
         lifecycleRun("run_settings_apply", "apply", "succeeded", "2026-10-10T00:04:00.000Z", { sourceSnapshotId: "snap_main_1" }),
         ...(updateApplied ? [lifecycleRun(UPDATE_APPLY, "apply", "succeeded", new Date().toISOString(), { planRunId: UPDATE_PLAN, sourceSnapshotId: "snap_main_new" })] : []),
-        ...(failedLatest ? [lifecycleRun("run_failed_apply", "apply", "failed", "2099-01-01T00:00:00.000Z", { errorCode: "apply_failed" })] : []),
+        ...(failedLatest ? [failedApply] : []),
       ];
+      // A settings change whose apply failed: its plan records that origin.
+      const failedApply = lifecycleRun("run_failed_apply", "apply", "failed", "2099-01-01T00:00:00.000Z", { errorCode: "apply_failed", planRunId: "run_failed_settings_plan" });
+      const failedSettingsPlan = lifecycleRun("run_failed_settings_plan", "plan", "succeeded", "2098-12-31T23:59:00.000Z", { policyStatus: "pass", origin: { kind: "configuration" } });
       const updatePlan = {
         ...lifecycleRun(UPDATE_PLAN, "plan", "succeeded", "2026-10-20T00:00:00.000Z", { sourceSnapshotId: "snap_main_new" }),
         summary: { add: 1, change: 1, destroy: 0 }, policyStatus: "pass",
@@ -258,7 +261,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           updateApplied = true;
           return route.fulfill({ status: 201, json: { run: updateApply } });
         }
-        for (const run of [updatePlan, updateApply, configPlan]) {
+        for (const run of [updatePlan, updateApply, configPlan, failedApply, failedSettingsPlan]) {
           if (path === `/api/v1/runs/${run.id}`) return route.fulfill({ json: { run } });
           if (path === `/api/v1/runs/${run.id}/cost`) return route.fulfill({ json: notApplicableCost(run.id) });
           if (path === `/api/v1/runs/${run.id}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
@@ -810,14 +813,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const ID = "cap_states_e";
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
-      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "incomplete" | "uninstalled";
+      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
       let viewUnavailable = false;
       const capsule = () => ({
         id: ID, workspaceId: "ws_alpha", name: NAME, slug: "state-echo", sourceId: "src_states_e", installConfigId: "cfg_states_e",
         environment: "production",
-        ...(scene === "installing" || scene === "uninstalled" ? { currentStateGeneration: 0 } : { currentStateVersionId: "sv_states_e", currentStateGeneration: 1 }),
-        status: scene === "uninstall_scheduled" ? "uninstalled" : scene === "uninstalled" ? "destroyed" : scene === "installing" ? "pending" : "active",
+        ...(scene === "installing" || scene === "install_stalled" || scene === "uninstalled" ? { currentStateGeneration: 0 } : { currentStateVersionId: "sv_states_e", currentStateGeneration: 1 }),
+        status: scene === "uninstall_scheduled" ? "uninstalled" : scene === "uninstalled" ? "destroyed" : scene === "installing" || scene === "install_stalled" ? "pending" : "active",
         // The version it last ran, kept on the record after uninstalling.
         ...(scene === "uninstalled"
           ? { adoptedSourceRevision: { sourceSnapshotId: "snap_states_e", ref: "v1.4.2", path: ".", resolvedCommit: PORTABLE_SOURCE_COMMIT } }
@@ -871,6 +874,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               progress: { revisionPreparing: false, review: { runId: installPlan.id, runType: "plan" } },
               uninstall: { mode: "discard" },
             });
+          case "install_stalled":
+            // The install attempt that owns this app stopped moving.
+            return appView(ID, NAME, {
+              status: "pending", applied: false, state: "needs_attention", primaryAction: "continue_install",
+              problems: [{ code: "install_incomplete", severity: "error" }],
+              progress: { revisionPreparing: false, installPlanId: "gip_states_e" },
+              uninstall: { mode: "discard" },
+            });
           case "incomplete":
             return appView(ID, NAME, { incomplete: ["screens", "version"] });
           case "uninstalled":
@@ -903,6 +914,17 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           const limit = Number(url.searchParams.get("limit") ?? "50");
           const end = start + limit;
           return route.fulfill({ json: { runs: all.slice(start, end), ...(end < all.length ? { nextCursor: String(end) } : {}) } });
+        }
+        if (path === "/api/v1/install-plans/gip_states_e/reconcile" && request.method() === "POST") {
+          return route.fulfill({ json: {
+            installPlan: {
+              id: "gip_states_e", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
+              capsuleId: ID, planRunId: installPlan.id, createdAt: now, updatedAt: now,
+            },
+            nextAction: "review_run",
+            userAction: { kind: "review_run", planRunId: installPlan.id },
+            links: { self: "/api/v1/install-plans/gip_states_e", run: `/api/v1/runs/${installPlan.id}` },
+          } });
         }
         if (path === `${base}/cancel-uninstall` && request.method() === "POST") {
           scene = "incomplete";
@@ -1019,6 +1041,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app.getByTestId("app-uninstall")).toContainText("hasn't created anything in your cloud yet");
       await page.waitForTimeout(3_500);
 
+      // A stalled install is continued through the attempt that owns it, not
+      // by planning beside it.
+      scene = "install_stalled";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+      await header.getByRole("button", { name: "Continue installing", exact: true }).click();
+      await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+
       // An uninstalled app offers to install it again from its repository.
       scene = "uninstalled";
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -1033,7 +1063,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(target.searchParams.get("sourcePath")).toBe(".");
       expect(target.searchParams.get("path")).toBe("deploy/opentofu");
 
-      expect(seenMutations).toEqual([`POST /api/v1/capsules/${ID}/cancel-uninstall`]);
+      expect(seenMutations).toEqual([
+        `POST /api/v1/capsules/${ID}/cancel-uninstall`,
+        "POST /api/v1/install-plans/gip_states_e/reconcile",
+      ]);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
 
