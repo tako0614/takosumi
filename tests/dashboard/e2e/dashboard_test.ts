@@ -1767,7 +1767,7 @@ test.describe("Takosumi dashboard browser surface", () => {
   }) => {
     test.skip(mode !== "portable", "synthetic service failures are portable-only");
     const errors = pageErrors(page);
-    await gotoDashboardDocument(page, "/workloads/cap_missing_e2e");
+    await gotoDashboardDocument(page, "/workloads/cap_missing_e2e", "/apps/cap_missing_e2e");
     await expect(
       page.getByRole("heading", {
         name: /App not found|アプリが見つかりません/u,
