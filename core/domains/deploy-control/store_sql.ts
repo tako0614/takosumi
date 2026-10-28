@@ -6990,7 +6990,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         },
       });
     await this.#initializeCapsulePhysicalOwner(capsule);
-    return normalizeCapsuleRecord(capsule);
+    return (await this.#withCapsuleOwnership(normalizeCapsuleRecord(capsule))) ?? normalizeCapsuleRecord(capsule);
   }
 
   async createCapsuleInitialAuthority(
