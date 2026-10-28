@@ -513,7 +513,7 @@ async function advanceRevisionSource(
   const snapshot = await sourceSnapshotById(
     operations,
     plan.sourceId,
-    evidence.snapshotId,
+    sync.snapshotId!,
   );
   assertRevisionSnapshotMatches(snapshot, plan, sync);
   const compatibility = await revisionCompatibilityEvidence(plan, snapshot);
@@ -537,10 +537,9 @@ async function analyzeRevisionCompatibility(
     plan.sourceId,
     plan.sourceSnapshotId!,
   );
-  assertRevisionSnapshotMatches(snapshot, plan, {
-    id: plan.sourceSyncRunId!,
-    sourceId: plan.sourceId,
-  });
+  const sync = await operations.getSourceSyncRun(plan.sourceSyncRunId!);
+  assertSourceSyncMatches(sync, plan, identity.source, await revisionSourceEvidence(plan));
+  assertRevisionSnapshotMatches(snapshot, plan, sync);
   const evidence = await revisionCompatibilityEvidence(plan, snapshot);
   if (
     plan.compatibilityRequestDigest !== evidence.requestDigest ||
@@ -810,7 +809,7 @@ function assertSourceSyncMatches(
 ): void {
   if (
     sync.id !== evidence.runId ||
-    sync.snapshotId !== evidence.snapshotId ||
+    (sync.requestedSnapshotId ?? sync.snapshotId) !== evidence.snapshotId ||
     sync.workspaceId !== plan.workspaceId ||
     sync.sourceId !== plan.sourceId ||
     sync.url !== source.url ||
@@ -828,7 +827,7 @@ function assertSourceSyncMatches(
 function assertRevisionSnapshotMatches(
   snapshot: SourceSnapshot,
   plan: StoredGitRevisionPlan,
-  sync: Pick<SourceSyncRun, "id" | "sourceId">,
+  sync: SourceSyncRun,
 ): void {
   if (
     snapshot.id !== plan.sourceSnapshotId &&
@@ -843,7 +842,11 @@ function assertRevisionSnapshotMatches(
     snapshot.workspaceId !== plan.workspaceId ||
     snapshot.sourceId !== plan.sourceId ||
     snapshot.sourceId !== sync.sourceId ||
-    snapshot.fetchedByRunId !== sync.id ||
+    sync.status !== "succeeded" ||
+    snapshot.id !== sync.snapshotId ||
+    snapshot.resolvedCommit !== sync.resolvedCommit ||
+    snapshot.archiveDigest !== sync.archiveDigest ||
+    snapshot.archiveSizeBytes !== sync.archiveSizeBytes ||
     normalizeInstallConfigSourceUrl(snapshot.url) !== plan.source.url ||
     snapshot.ref !== plan.revision.targetRef ||
     snapshot.path !== plan.source.path

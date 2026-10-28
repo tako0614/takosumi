@@ -237,10 +237,7 @@ export class SourceLifecycleService {
     }
 
     try {
-      const reuseSnapshot = await this.#latestReusableSourceSnapshot(
-        running,
-        stored,
-      );
+      const reuseSnapshot = await this.#latestReusableSourceSnapshot(running);
       const result = await this.#withSourceSyncRenewal(
         running,
         leaseToken,
@@ -416,12 +413,21 @@ export class SourceLifecycleService {
       // A vanished/lost Run is not a successfully committed observation.
       return terminal.run;
     }
+    const terminalRun = terminal.run ?? succeeded;
+    const canonicalSnapshot =
+      terminal.snapshot ??
+      (terminalRun.snapshotId === snapshot.id
+        ? snapshot
+        : terminalRun.snapshotId
+          ? await this.#store.getSourceSnapshot(terminalRun.snapshotId)
+          : undefined);
+    if (!canonicalSnapshot) return terminalRun;
     await this.#notifySourceCapsulesStaleForNewSnapshot({
       running,
-      snapshot,
+      snapshot: canonicalSnapshot,
       capsules: terminal.staleCapsules ?? [],
     });
-    return succeeded;
+    return terminalRun;
   }
 
   async #notifySourceCapsulesStaleForNewSnapshot(input: {
@@ -495,6 +501,7 @@ export class SourceLifecycleService {
     if (archiveRef === running.archiveRef) return archiveRef;
     if (
       reuseSnapshot &&
+      reuseSnapshot.sourceId === running.sourceId &&
       archiveRef === reuseSnapshot.archiveRef &&
       result.resolvedCommit === reuseSnapshot.resolvedCommit &&
       result.archiveDigest === reuseSnapshot.archiveDigest &&
@@ -510,7 +517,6 @@ export class SourceLifecycleService {
 
   async #latestReusableSourceSnapshot(
     running: SourceSyncRun,
-    stored: StoredSource,
   ): Promise<SourceSnapshot | undefined> {
     const snapshots = await this.#store.listSourceSnapshots(running.sourceId);
     for (let index = snapshots.length - 1; index >= 0; index -= 1) {
@@ -524,31 +530,7 @@ export class SourceLifecycleService {
         return snapshot;
       }
     }
-    if (stored.authConnectionId) return undefined;
-    const siblingSources = (await this.#store.listSources(running.workspaceId))
-      .filter((source) => source.id !== running.sourceId)
-      .filter((source) => !source.authConnectionId)
-      .filter(
-        (source) =>
-          source.status === "active" &&
-          source.url === running.url &&
-          source.defaultRef === running.ref &&
-          source.defaultPath === running.path,
-      );
-    if (siblingSources.length === 0) return undefined;
-    const siblingSnapshots = await this.#store.listSourceSnapshotsBySourceIds(
-      siblingSources.map((source) => source.id),
-    );
-    const reusable = siblingSnapshots
-      .filter(
-        (snapshot) =>
-          sourceSnapshotMatchesRun(snapshot, running) &&
-          snapshot.repositoryInstallMetadata !== undefined &&
-          snapshot.repositoryManifest !== undefined &&
-          snapshot.repositoryModules !== undefined,
-      )
-      .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
-    return reusable.at(-1);
+    return undefined;
   }
 
   async #failSourceSyncRun(
@@ -663,6 +645,7 @@ function sourceSnapshotMatchesRun(
 ): boolean {
   return (
     snapshot.origin === "git" &&
+    snapshot.sourceId === running.sourceId &&
     snapshot.workspaceId === running.workspaceId &&
     snapshot.url === running.url &&
     snapshot.ref === running.ref &&
@@ -676,10 +659,4 @@ function isExactImmutableGitCommit(value: string): boolean {
 
 function normalizeGitObjectId(value: string): string {
   return value.toLowerCase();
-}
-
-function compareIso(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
 }

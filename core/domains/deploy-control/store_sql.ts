@@ -268,6 +268,7 @@ import {
   sourceSyncRunSuccessIdentityMatches,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
+  mergeReusableSourceSnapshotObservations,
   validateCommitRestoredStateInterfaceMaterialization,
   validateCommitRunStateInterfaceMaterializationIntent,
 } from "./store.ts";
@@ -3066,10 +3067,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
 
         const reader = new SqlOpenTofuControlStore({ client: transaction });
+        const laneSnapshots = await reader.listSourceSnapshots(snapshot.sourceId);
+        const latestLaneSnapshot = [...laneSnapshots].filter((candidate) =>
+          candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
+          candidate.ref === snapshot.ref && candidate.path === snapshot.path)
+          .sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))
+          .at(-1);
+        const reusableSnapshot = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
+          ? latestLaneSnapshot : undefined;
+        const committedSnapshot: SourceSnapshot = reusableSnapshot
+          ? mergeReusableSourceSnapshotObservations(reusableSnapshot, snapshot)
+          : snapshot;
+        const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
+          ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
+              snapshotId: reusableSnapshot.id, archiveDigest: reusableSnapshot.archiveDigest,
+              archiveSizeBytes: reusableSnapshot.archiveSizeBytes,
+              resolvedCommit: reusableSnapshot.resolvedCommit }
+          : input.terminalRun;
         const observation = await observeSourceSyncSettlement(
           reader,
-          snapshot,
-          input.terminalRun,
+          committedSnapshot,
+          terminalRun,
           lockedCapsules,
         );
 
@@ -3114,17 +3132,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
         if (!readsMatch) throw new SourceSyncSettlementConflictError();
 
-        const terminalRun = publicStoredRun(input.terminalRun);
+        const committedRun = publicStoredRun(terminalRun);
         const terminalCommitted = await pgUpdateTerminalRunWithLease(
           db,
           RUN_KIND_SOURCE_SYNC,
           [RUN_KIND_SOURCE_SYNC],
-          terminalRun,
+          committedRun,
           input.leaseToken,
         );
         if (!terminalCommitted) return { won: false as const };
-        await pgInsertOrAdoptSourceSnapshot(db, snapshot);
-        await pgMergeSourceSyncCursor(db, terminalRun, snapshot);
+        if (reusableSnapshot) {
+          const updated = await db.update(pgSchema.sourceSnapshots)
+            .set({ snapshotJson: committedSnapshot })
+            .where(and(
+              eq(pgSchema.sourceSnapshots.id, reusableSnapshot.id),
+              eq(pgSchema.sourceSnapshots.sourceId, reusableSnapshot.sourceId),
+              eq(pgSchema.sourceSnapshots.snapshotJson, reusableSnapshot),
+            )).returning({ id: pgSchema.sourceSnapshots.id });
+          if (!updated.length) throw new SourceSyncSettlementConflictError();
+        } else {
+          await pgInsertOrAdoptSourceSnapshot(db, snapshot);
+        }
+        await pgMergeSourceSyncCursor(db, committedRun, committedSnapshot);
 
         // Stale Capsules and their matching Activity rows are part of the
         // same authority unit. Every update remains exact-record guarded even
@@ -3163,6 +3192,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
         return {
           won: true as const,
+          run: committedRun,
+          snapshot: committedSnapshot,
           staleCapsules: observation.changes.map(({ capsule }) => capsule),
         };
       },
@@ -3170,7 +3201,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     if (outcome.won) {
       return {
         won: true,
-        run: publicStoredRun(input.terminalRun),
+        run: outcome.run,
+        snapshot: outcome.snapshot,
         staleCapsules: outcome.staleCapsules,
       };
     }
@@ -9713,6 +9745,26 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly StoredSource[]> {
+    if (!Number.isFinite(limit) || limit <= 0) return [];
+    const sources = pgSchema.sources;
+    const latestRunAt = sql<string | null>`(
+      select max(r.created_at) from takosumi_runs r
+      where r.source_id = ${sources.id} and r.kind = ${RUN_KIND_SOURCE_SYNC}
+    )`;
+    const rows = await this.#db.select({ sourceJson: sources.sourceJson })
+      .from(sources)
+      .where(sql`${sources.sourceJson} ->> 'status' = 'active'
+        and ${sources.sourceJson} ->> 'autoSync' = 'true'
+        and not (
+          ${sources.sourceJson} ->> 'defaultRef' ~* '^[0-9a-f]{40}$'
+          and lower(${sources.sourceJson} ->> 'defaultRef') = lower(coalesce(${sources.sourceJson} ->> 'lastSeenCommit', ''))
+        )`)
+      .orderBy(sql`${latestRunAt} asc nulls first`, asc(sources.createdAt), asc(sources.id))
+      .limit(Math.floor(limit));
+    return rows.map(({ sourceJson }) => parseJson(sourceJson) as StoredSource);
+  }
+
   async listSourcesPage(
     workspaceId: string,
     params: PageParams,
@@ -11908,6 +11960,7 @@ async function pgMergeSourceSyncCursor(
   snapshot: SourceSnapshot,
 ): Promise<void> {
   if (snapshot.resolvedCommit === undefined) return;
+  const observedAt = run.finishedAt ?? snapshot.fetchedAt;
   await db
     .update(pgSchema.sources)
     .set({
@@ -11919,10 +11972,10 @@ async function pgMergeSourceSyncCursor(
           true
         ),
         '{updatedAt}',
-        to_jsonb(${snapshot.fetchedAt}::text),
+        to_jsonb(${observedAt}::text),
         true
       )`,
-      updatedAt: snapshot.fetchedAt,
+      updatedAt: observedAt,
     })
     .where(
       and(

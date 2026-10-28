@@ -1494,7 +1494,7 @@ test("verifyHookSecret accepts the right bearer and rejects others", async () =>
   expect(await service.verifyHookSecret(source.id, "")).toBe(false);
 });
 
-test("listAutoSyncSources returns only active autoSync sources, capped", async () => {
+test("listAutoSyncSourcesDue returns only active autoSync sources, capped", async () => {
   const { store, service } = makeService();
   // Seed three sources: one active+autoSync, one active without autoSync, one
   // disabled+autoSync.
@@ -1527,58 +1527,67 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   await seed("src_e", "active", true, "b".repeat(40), "b".repeat(40));
   await seed("src_f", "active", true, "C".repeat(40), "c".repeat(40));
   await seed("src_g", "active", true, "d".repeat(40), "e".repeat(40));
-  const scanned = await service.listAutoSyncSources(50);
+  const scanned = await service.listAutoSyncSourcesDue(50);
   expect(scanned.map((s) => s.id)).toEqual(["src_a", "src_d", "src_g"]);
-  expect((await service.listAutoSyncSources(0)).length).toBe(0);
+  expect((await service.listAutoSyncSourcesDue(0)).length).toBe(0);
 });
 
-test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows", async () => {
+test("permanent reconciliation preparation failure quarantines a Source", async () => {
   const { store, service } = makeService();
-  const seed = async (
-    id: string,
-    workspaceId: string,
-    status: StoredSource["status"],
-    autoSync: boolean,
-    defaultRef = "main",
-    lastSeenCommit?: string,
-  ) => {
-    await store.putSource({
-      id,
-      workspaceId,
-      name: id,
-      url: "https://github.com/a/b",
-      defaultRef,
-      defaultPath: ".",
-      status,
-      createdAt: `2026-06-06T00:00:00.00${id.at(-1)}Z`,
-      updatedAt: "2026-06-06T00:00:00.000Z",
-      hookSecretHash: "deadbeef",
-      autoSync,
-      ...(lastSeenCommit ? { lastSeenCommit } : {}),
-    });
-  };
-  await seed(
-    "src_a1",
-    "workspace_1",
-    "active",
-    true,
-    "b".repeat(40),
-    "b".repeat(40),
-  );
-  await seed("src_a2", "workspace_1", "active", true);
-  await seed("src_b3", "workspace_2", "disabled", true);
-  await seed("src_b4", "workspace_2", "active", true);
-
-  const first = await service.listAutoSyncSourcesPage({ limit: 2 });
-  const second = await service.listAutoSyncSourcesPage({
-    limit: 2,
-    cursor: first.nextCursor,
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1", name: "bad", url: "https://github.com/a/b", autoSync: true,
+    defaultPath: "../escape",
   });
+  await expect(service.createReconciliationSyncs(source.id)).rejects.toMatchObject({
+    code: "invalid_argument", details: { reason: "invalid_source_revision" },
+  });
+  expect((await store.getSource(source.id))?.status).toBe("error");
+  expect(await service.listAutoSyncSourcesDue(25)).toEqual([]);
+});
 
-  expect(first.items.map((source) => source.id)).toEqual(["src_a2"]);
-  expect(first.nextCursor).toBeDefined();
-  expect(second.items.map((source) => source.id)).toEqual(["src_b4"]);
-  expect(second.nextCursor).toBeUndefined();
+test("a permanently unenumerable Source leaves the due queue instead of starving later Sources", async () => {
+  const { store, service } = makeService();
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1", name: "over-limit", url: "https://github.com/a/b", autoSync: true,
+  });
+  for (let index = 0; index < 1_001; index += 1) {
+    await store.putCapsule({
+      id: `cap_limit_${index}`, workspaceId: "workspace_1", projectId: "prj_default_workspace_1",
+      name: `limit-${index}`, slug: `limit-${index}`, sourceId: source.id,
+      installConfigId: "cfg_unused", environment: "production", currentStateGeneration: 0,
+      status: "active", createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+    });
+  }
+  await expect(service.createReconciliationSyncs(source.id)).rejects.toMatchObject({
+    code: "resource_exhausted", details: { reason: "source_reconciliation_capsule_limit" },
+  });
+  expect((await store.getSource(source.id))?.status).toBe("error");
+  expect(await service.listAutoSyncSourcesDue(1)).toEqual([]);
+});
+
+test("missing platform archive allocator keeps a Source eligible after platform repair", async () => {
+  const { store } = makeService();
+  const service = new SourcesService({ store });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1", name: "retry", url: "https://github.com/a/b", autoSync: true,
+  });
+  await expect(service.createReconciliationSyncs(source.id)).rejects.toMatchObject({ code: "not_implemented" });
+  expect((await store.getSource(source.id))?.status).toBe("active");
+  expect((await service.listAutoSyncSourcesDue(25)).map((s) => s.id)).toEqual([source.id]);
+});
+
+test("transient enqueue failure keeps a Source eligible for retry", async () => {
+  const { store } = makeService();
+  const service = new SourcesService({
+    store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    enqueueSourceSync: async () => { throw new Error("temporarily unavailable"); },
+  });
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1", name: "retry", url: "https://github.com/a/b", autoSync: true,
+  });
+  await expect(service.createReconciliationSyncs(source.id)).rejects.toThrow("temporarily unavailable");
+  expect((await store.getSource(source.id))?.status).toBe("active");
+  expect((await service.listAutoSyncSourcesDue(25)).map((s) => s.id)).toEqual([source.id]);
 });
 
 test("createCompatibilityCheck rejects a drain raced during snapshot preparation without evidence", async () => {

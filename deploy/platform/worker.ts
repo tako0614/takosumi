@@ -4168,7 +4168,7 @@ export interface SourceWebhookOperations {
 
 export interface SourcePollOperations extends SourceWebhookOperations {
   readonly controller: {
-    listAutoSyncSources(
+    listAutoSyncSourcesDue(
       limit: number,
     ): Promise<readonly { readonly id: string }[]>;
   };
@@ -4296,7 +4296,7 @@ function bearerFromAuthorization(header: string): string | undefined {
 }
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
-const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 5;
+const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 25;
 const SCHEDULED_SOURCE_POLL_CRONS = new Set([
   "0 * * * *",
   "5 * * * *",
@@ -4331,7 +4331,7 @@ export async function pollAutoSyncSources(
   operations: SourcePollOperations,
   batch: number,
 ): Promise<void> {
-  const sources = await operations.controller.listAutoSyncSources(batch);
+  const sources = await operations.controller.listAutoSyncSourcesDue(batch);
   for (const source of sources) {
     try {
       await operations.createSourceReconciliationSyncs(source.id);

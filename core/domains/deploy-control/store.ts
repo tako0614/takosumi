@@ -2900,6 +2900,8 @@ export interface CommitSourceSyncSuccessResult {
   readonly won: boolean;
   /** Current SourceSyncRun on a lost lease race, when the row still exists. */
   readonly run?: SourceSyncRun;
+  /** Canonical snapshot row committed with the successful Run. */
+  readonly snapshot?: SourceSnapshot;
   /** Exact projections committed with the successful Run, never a later census. */
   readonly staleCapsules?: readonly Capsule[];
 }
@@ -2912,6 +2914,37 @@ export class SourceSnapshotConflictError extends Error {
       `SourceSnapshot ${snapshotId} already exists with different canonical content`,
     );
   }
+}
+
+/** Merge refreshable observations without changing valid evidence under an immutable archive identity. */
+export function mergeReusableSourceSnapshotObservations(
+  existing: SourceSnapshot,
+  observed: SourceSnapshot,
+): SourceSnapshot {
+  const preserveOrRefresh = <T extends { readonly status: string; readonly digest?: string }>(
+    previous: T | undefined,
+    next: T | undefined,
+  ): T | undefined => {
+    if (previous === undefined) return next;
+    if (previous.status !== "invalid") {
+      if (next === undefined || next.status === "invalid") return previous;
+      if (stableStringify(previous) !== stableStringify(next)) {
+        throw new SourceSnapshotConflictError(existing.id);
+      }
+      return previous;
+    }
+    if (next === undefined || next.status === "invalid") return previous;
+    if (previous.digest !== undefined && previous.digest !== next?.digest) {
+      throw new SourceSnapshotConflictError(existing.id);
+    }
+    return next ?? previous;
+  };
+  return {
+    ...existing,
+    repositoryInstallMetadata: preserveOrRefresh(existing.repositoryInstallMetadata, observed.repositoryInstallMetadata),
+    repositoryManifest: preserveOrRefresh(existing.repositoryManifest, observed.repositoryManifest),
+    repositoryModules: preserveOrRefresh(existing.repositoryModules, observed.repositoryModules),
+  };
 }
 
 export function sourceSnapshotsExactlyMatch(
@@ -2939,7 +2972,8 @@ export function sourceSyncRunImmutableIdentityMatches(
     left.ref === right.ref &&
     left.path === right.path &&
     left.archiveRef === right.archiveRef &&
-    left.snapshotId === right.snapshotId &&
+    (left.requestedSnapshotId ?? left.snapshotId) ===
+      (right.requestedSnapshotId ?? right.snapshotId) &&
     (left.intent ?? "observe") === (right.intent ?? "observe");
 }
 
@@ -4002,6 +4036,8 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   rotateSourceHookSecret(input: SourceHookSecretRotationInput): Promise<SourceHookSecretRotationResult>;
   getSource(id: string): Promise<StoredSource | undefined>;
   listSources(workspaceId?: string): Promise<readonly StoredSource[]>;
+  /** Fair scheduler batch: least recently attempted active autoSync sources first. */
+  listAutoSyncSourcesDue(limit: number): Promise<readonly StoredSource[]>;
   /** Keyset-paged Source listing for a Workspace (spec §30 source list route). */
   listSourcesPage(
     workspaceId: string,
@@ -4951,6 +4987,22 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           : {}),
       });
     }
+    const latestLaneSnapshot = [...this.#sourceSnapshots.values()]
+      .filter((candidate) => candidate.sourceId === snapshot.sourceId &&
+        candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
+        candidate.ref === snapshot.ref && candidate.path === snapshot.path)
+      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt) || b.id.localeCompare(a.id))[0];
+    const reusableSnapshot = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
+      ? latestLaneSnapshot : undefined;
+    const committedSnapshot = reusableSnapshot
+      ? mergeReusableSourceSnapshotObservations(reusableSnapshot, snapshot)
+      : snapshot;
+    const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
+      ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
+          snapshotId: reusableSnapshot.id, archiveDigest: reusableSnapshot.archiveDigest,
+          archiveSizeBytes: reusableSnapshot.archiveSizeBytes,
+          resolvedCommit: reusableSnapshot.resolvedCommit }
+      : input.terminalRun;
     const readCapsules = (): readonly Capsule[] => {
       const capsules: Capsule[] = [];
       for (const capsule of this.#capsules.values()) {
@@ -4962,7 +5014,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       return capsules;
     };
     const observation = await observeSourceSyncSettlement(
-      this, snapshot, input.terminalRun, readCapsules(),
+      this, committedSnapshot, terminalRun, readCapsules(),
     );
     // No await may follow this revalidation before all dependent Map writes.
     current = this.#runs.get(input.terminalRun.id);
@@ -5000,6 +5052,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       // a lease loser: the service must terminally fail this observation.
       throw new SourceSyncSettlementConflictError();
     }
+    const currentLatestLaneSnapshot = [...this.#sourceSnapshots.values()]
+      .filter((candidate) => candidate.sourceId === snapshot.sourceId &&
+        candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
+        candidate.ref === snapshot.ref && candidate.path === snapshot.path)
+      .sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))
+      .at(-1);
+    if ((currentLatestLaneSnapshot?.id ?? undefined) !== (latestLaneSnapshot?.id ?? undefined) ||
+      (currentLatestLaneSnapshot !== undefined && latestLaneSnapshot !== undefined &&
+        !sourceSnapshotsExactlyMatch(currentLatestLaneSnapshot, latestLaneSnapshot))) {
+      throw new SourceSyncSettlementConflictError();
+    }
     const existingSnapshot = this.#sourceSnapshots.get(snapshot.id);
     if (
       existingSnapshot &&
@@ -5018,9 +5081,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // point.
     this.#runs.set(
       input.terminalRun.id,
-      preserveStoredRunManagementAuthority(input.terminalRun, current),
+      preserveStoredRunManagementAuthority(terminalRun, current),
     );
-    if (!existingSnapshot) this.#sourceSnapshots.set(snapshot.id, snapshot);
+    if (!reusableSnapshot && !existingSnapshot) this.#sourceSnapshots.set(snapshot.id, snapshot);
+    else if (reusableSnapshot) this.#sourceSnapshots.set(reusableSnapshot.id, committedSnapshot);
     for (const { capsule, activity } of observation.changes) {
       this.#setCapsule(capsule);
       this.#activityEvents.set(activity.id, activity);
@@ -5029,19 +5093,20 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const source = this.#sources.get(input.terminalRun.sourceId);
     if (source &&
       source.workspaceId === input.terminalRun.workspaceId &&
-      source.url === input.terminalRun.url &&
-      source.defaultRef === input.terminalRun.ref &&
-      source.defaultPath === input.terminalRun.path
+      source.url === terminalRun.url &&
+      source.defaultRef === terminalRun.ref &&
+      source.defaultPath === terminalRun.path
     ) {
       this.#sources.set(source.id, {
         ...source,
-        lastSeenCommit: snapshot.resolvedCommit,
-        updatedAt: snapshot.fetchedAt,
+        lastSeenCommit: committedSnapshot.resolvedCommit,
+        updatedAt: terminalRun.finishedAt ?? committedSnapshot.fetchedAt,
       });
     }
     return {
       won: true,
-      run: publicStoredRun(input.terminalRun),
+      run: publicStoredRun(terminalRun),
+      snapshot: committedSnapshot,
       staleCapsules: observation.changes.map(({ capsule }) => capsule),
     };
   }
@@ -7762,6 +7827,31 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
       ),
     );
+  }
+
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly StoredSource[]> {
+    if (!Number.isFinite(limit) || limit <= 0) return [];
+    const latestSync = new Map<string, string>();
+    for (const run of this.#runs.values()) {
+      if (!isSourceSyncRunRecord(run)) continue;
+      const current = latestSync.get(run.sourceId);
+      if (current === undefined || run.createdAt > current) {
+        latestSync.set(run.sourceId, run.createdAt);
+      }
+    }
+    return [...this.#sources.values()]
+      .filter((source) => source.status === "active" && source.autoSync &&
+        !( /^[0-9a-f]{40}$/iu.test(source.defaultRef) &&
+          source.lastSeenCommit?.toLowerCase() === source.defaultRef.toLowerCase()))
+      .sort((a, b) => {
+        const aSync = latestSync.get(a.id);
+        const bSync = latestSync.get(b.id);
+        if (aSync === undefined && bSync !== undefined) return -1;
+        if (aSync !== undefined && bSync === undefined) return 1;
+        return (aSync ?? "").localeCompare(bSync ?? "") ||
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+      })
+      .slice(0, Math.floor(limit));
   }
 
   async listSourcesPage(

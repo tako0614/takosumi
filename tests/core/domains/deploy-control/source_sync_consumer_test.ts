@@ -1129,11 +1129,11 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
   const finished = await store.getSourceSyncRun(run.id);
   expect(finished?.status).toBe("succeeded");
   expect(finished?.archiveDigest).toBe(previousDigest);
+  expect(finished?.snapshotId).toBe("snap_prev");
   const snapshots = await store.listSourceSnapshots(source.id);
-  expect(snapshots).toHaveLength(2);
-  const reused = snapshots.find(
-    (snapshot) => snapshot.fetchedByRunId === run.id,
-  );
+  expect(snapshots).toHaveLength(1);
+  const reused = snapshots[0];
+  expect(reused?.id).toBe("snap_prev");
   expect(reused?.archiveRef).toBe(previousArchiveKey);
   expect(reused?.archiveDigest).toBe(previousDigest);
   expect(reused?.archiveSizeBytes).toBe(2048);
@@ -1172,14 +1172,15 @@ test("source_sync consumer does not reuse a snapshot that predates repository me
 
   expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
   const snapshots = await store.listSourceSnapshots(source.id);
-  expect(snapshots).toHaveLength(2);
-  expect(snapshots.at(-1)?.repositoryInstallMetadata).toEqual({
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.id).toBe("snap_without_repository_metadata");
+  expect(snapshots[0]?.repositoryInstallMetadata).toEqual({
     status: "absent",
   });
-  expect(snapshots.at(-1)?.repositoryManifest).toEqual({
+  expect(snapshots[0]?.repositoryManifest).toEqual({
     status: "absent",
   });
-  expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
+  expect(snapshots[0]?.archiveRef).not.toBe(run.archiveRef);
 });
 
 test("source_sync consumer does not reuse a snapshot that predates repository manifest observation", async () => {
@@ -1216,11 +1217,12 @@ test("source_sync consumer does not reuse a snapshot that predates repository ma
 
   expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
   const snapshots = await store.listSourceSnapshots(source.id);
-  expect(snapshots).toHaveLength(2);
-  expect(snapshots.at(-1)?.repositoryManifest).toEqual({
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.id).toBe("snap_without_repository_install_ux");
+  expect(snapshots[0]?.repositoryManifest).toEqual({
     status: "absent",
   });
-  expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
+  expect(snapshots[0]?.archiveRef).not.toBe(run.archiveRef);
 });
 
 test("source_sync consumer does not reuse a snapshot that predates repository module discovery", async () => {
@@ -1258,16 +1260,17 @@ test("source_sync consumer does not reuse a snapshot that predates repository mo
 
   expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
   const snapshots = await store.listSourceSnapshots(source.id);
-  expect(snapshots).toHaveLength(2);
-  expect(snapshots.at(-1)?.repositoryModules).toEqual({
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.id).toBe("snap_without_repository_modules");
+  expect(snapshots[0]?.repositoryModules).toEqual({
     status: "ready",
     scopePath: ".",
     modules: [],
   });
-  expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
+  expect(snapshots[0]?.archiveRef).not.toBe(run.archiveRef);
 });
 
-test("source_sync consumer reuses an unchanged public Git archive from a sibling Source in the same Workspace", async () => {
+test("source_sync consumer does not reuse an archive from a sibling Source in the same Workspace", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source: firstSource } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -1304,19 +1307,7 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
   runner.onSourceSync = async (job) => {
-    expect(job.reuseSnapshot).toEqual({
-      id: "snap_prev",
-      resolvedCommit: "abc123def456",
-      archiveRef: previousArchiveKey,
-      archiveDigest: previousDigest,
-      archiveSizeBytes: 2048,
-    });
-    runner.result = {
-      resolvedCommit: job.reuseSnapshot!.resolvedCommit,
-      archiveDigest: job.reuseSnapshot!.archiveDigest,
-      archiveSizeBytes: job.reuseSnapshot!.archiveSizeBytes,
-      archiveRef: job.reuseSnapshot!.archiveRef,
-    };
+    expect(job.reuseSnapshot).toBeUndefined();
   };
   const { run } = await controller.createSourceSync(secondSource.id);
 
@@ -1326,21 +1317,17 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
     workspaceId: "workspace_1",
   });
 
+  expect(runner.calls).toHaveLength(1);
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
   const snapshots = await store.listSourceSnapshots(secondSource.id);
   expect(snapshots).toHaveLength(1);
-  expect(snapshots[0]?.archiveRef).toBe(previousArchiveKey);
-  expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
+  expect(snapshots[0]?.archiveRef).toBe(run.archiveRef);
+  expect(snapshots[0]?.archiveDigest).toBe(runner.result.archiveDigest);
 });
 
-test("source_sync consumer recomputes modules before reusing a pinned commit archive", async () => {
+test("source_sync consumer recomputes modules before reusing a same-Source pinned commit archive", async () => {
   const { store, sourcesService, runner, controller } = build();
   const pinnedCommit = "ccee6dea39e0797148ec0061fc738a693073890d";
-  const { source: firstSource } = await sourcesService.createSource({
-    workspaceId: "workspace_1",
-    name: "repo-a",
-    url: "https://github.com/acme/repo.git",
-    defaultRef: pinnedCommit,
-  });
   const { source: secondSource } = await sourcesService.createSource({
     workspaceId: "workspace_1",
     name: "repo-b",
@@ -1354,7 +1341,7 @@ test("source_sync consumer recomputes modules before reusing a pinned commit arc
     id: "snap_prev",
     origin: "git",
     workspaceId: "workspace_1",
-    sourceId: firstSource.id,
+    sourceId: secondSource.id,
     url: "https://github.com/acme/repo.git",
     defaultRef: pinnedCommit,
     ref: pinnedCommit,
@@ -1414,10 +1401,12 @@ test("source_sync consumer recomputes modules before reusing a pinned commit arc
   expect(finished?.archiveDigest).toBe(previousDigest);
   const snapshots = await store.listSourceSnapshots(secondSource.id);
   expect(snapshots).toHaveLength(1);
-  expect(snapshots[0]?.archiveRef).toBe(previousArchiveKey);
-  expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
-  expect(snapshots[0]?.resolvedCommit).toBe(pinnedCommit);
-  expect(snapshots[0]?.repositoryModules).toEqual({
+  const refreshed = snapshots[0];
+  expect(refreshed?.id).toBe("snap_prev");
+  expect(refreshed?.archiveRef).toBe(previousArchiveKey);
+  expect(refreshed?.archiveDigest).toBe(previousDigest);
+  expect(refreshed?.resolvedCommit).toBe(pinnedCommit);
+  expect(refreshed?.repositoryModules).toEqual({
     status: "ready",
     scopePath: ".",
     modules: [
@@ -1430,15 +1419,9 @@ test("source_sync consumer recomputes modules before reusing a pinned commit arc
   });
 });
 
-test("source_sync consumer refreshes invalid manifest metadata before pinned archive reuse", async () => {
+test("source_sync consumer refreshes invalid manifest metadata before same-Source pinned archive reuse", async () => {
   const { store, sourcesService, runner, controller } = build();
   const pinnedCommit = "ccee6dea39e0797148ec0061fc738a693073890d";
-  const { source: firstSource } = await sourcesService.createSource({
-    workspaceId: "workspace_1",
-    name: "repo-a",
-    url: "https://github.com/acme/repo.git",
-    defaultRef: pinnedCommit,
-  });
   const { source: secondSource } = await sourcesService.createSource({
     workspaceId: "workspace_1",
     name: "repo-b",
@@ -1452,8 +1435,8 @@ test("source_sync consumer refreshes invalid manifest metadata before pinned arc
     id: "snap_prev",
     origin: "git",
     workspaceId: "workspace_1",
-    sourceId: firstSource.id,
-    url: firstSource.url,
+    sourceId: secondSource.id,
+    url: secondSource.url,
     defaultRef: pinnedCommit,
     ref: pinnedCommit,
     resolvedCommit: pinnedCommit,
@@ -1465,7 +1448,7 @@ test("source_sync consumer refreshes invalid manifest metadata before pinned arc
     repositoryManifest: {
       status: "invalid",
       reason: "invalid_document",
-      digest: "sha256:" + "c".repeat(64),
+      digest: "sha256:" + "d".repeat(64),
     },
     repositoryModules: { status: "ready", scopePath: ".", modules: [] },
     fetchedByRunId: "ssr_prev",
@@ -1519,12 +1502,14 @@ test("source_sync consumer refreshes invalid manifest metadata before pinned arc
   expect(finished?.status).toBe("succeeded");
   const snapshots = await store.listSourceSnapshots(secondSource.id);
   expect(snapshots).toHaveLength(1);
-  expect(snapshots[0]?.archiveRef).toBe(previousArchiveKey);
-  expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
-  expect(snapshots[0]?.repositoryInstallMetadata).toEqual({
+  const refreshed = snapshots[0];
+  expect(refreshed?.id).toBe("snap_prev");
+  expect(refreshed?.archiveRef).toBe(previousArchiveKey);
+  expect(refreshed?.archiveDigest).toBe(previousDigest);
+  expect(refreshed?.repositoryInstallMetadata).toEqual({
     status: "absent",
   });
-  expect(snapshots[0]?.repositoryManifest).toEqual(freshManifest);
+  expect(refreshed?.repositoryManifest).toEqual(freshManifest);
 });
 
 test("source_sync consumer does not reuse sibling Git archives across credential or Workspace boundaries", async () => {

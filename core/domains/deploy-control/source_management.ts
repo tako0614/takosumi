@@ -30,7 +30,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
-import type { Page, PageParams } from "takosumi-contract/pagination";
+import type { PageParams } from "takosumi-contract/pagination";
 import { OpenTofuControllerError } from "./errors.ts";
 import type { WorkspaceManagementAuthority } from "./store.ts";
 
@@ -133,12 +133,8 @@ export class SourceManagement {
     return await this.#require().getSyncRun(id);
   }
 
-  async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
-    return await this.#require().listAutoSyncSources(limit);
-  }
-
-  async listAutoSyncSourcesPage(params: PageParams): Promise<Page<Source>> {
-    return await this.#require().listAutoSyncSourcesPage(params);
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly Source[]> {
+    return await this.#require().listAutoSyncSourcesDue(limit);
   }
 
   async verifySourceHookSecret(

@@ -120,7 +120,7 @@ import type {
   SourceSyncPhaseTiming,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import type { Page, PageParams } from "takosumi-contract/pagination";
+import type { PageParams } from "takosumi-contract/pagination";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import {
@@ -2597,14 +2597,8 @@ export class OpenTofuController {
     return await this.#runQuery.getRunCost(id);
   }
 
-  async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
-    return await this.#sources.listAutoSyncSources(limit);
-  }
-
-  async listAutoSyncSourcesPage(
-    params: PageParams,
-  ): Promise<Page<Source>> {
-    return await this.#sources.listAutoSyncSourcesPage(params);
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly Source[]> {
+    return await this.#sources.listAutoSyncSourcesDue(limit);
   }
 
   async verifySourceHookSecret(

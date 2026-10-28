@@ -404,7 +404,7 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
       return Promise.resolve([{ run: { id: `ssr_${sourceId}` } }]);
     },
     controller: {
-      listAutoSyncSources: (limit) =>
+      listAutoSyncSourcesDue: (limit) =>
         Promise.resolve([{ id: "src_a" }, { id: "src_b" }].slice(0, limit)),
     },
   };
@@ -412,8 +412,8 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
   expect(syncCalls).toEqual(["src_a", "src_b"]);
 });
 
-test("scheduled source poll batch is operator configurable with a small default", () => {
-  expect(scheduledSourcePollBatch({} as never)).toBe(5);
+test("scheduled source poll batch is operator configurable with a bounded default", () => {
+  expect(scheduledSourcePollBatch({} as never)).toBe(25);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "2",
@@ -423,12 +423,12 @@ test("scheduled source poll batch is operator configurable with a small default"
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "0",
     } as never),
-  ).toBe(5);
+  ).toBe(25);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "not-a-number",
     } as never),
-  ).toBe(5);
+  ).toBe(25);
 });
 
 test("scheduled source polling runs only on the hourly source-poll cron", () => {
@@ -3777,7 +3777,7 @@ test("scheduled poll continues past a failing source", async () => {
       return Promise.resolve([{ run: { id: "ssr" } }]);
     },
     controller: {
-      listAutoSyncSources: () =>
+      listAutoSyncSourcesDue: () =>
         Promise.resolve([{ id: "src_a" }, { id: "src_b" }]),
     },
   };

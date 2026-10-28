@@ -742,7 +742,10 @@ export interface SourceSyncRun {
   readonly resolvedCommit?: string;
   readonly archiveDigest?: string;
   readonly archiveSizeBytes?: number;
+  /** Canonical snapshot adopted by the successful sync (may be an earlier row). */
   readonly snapshotId?: string;
+  /** Original allocation when success reuses an existing same-lane snapshot. */
+  readonly requestedSnapshotId?: string;
   /**
    * Public-safe runner phase timings. These are operational metadata only:
    * phase names and durations, never source contents or credential values.

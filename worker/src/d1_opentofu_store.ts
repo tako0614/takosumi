@@ -279,6 +279,7 @@ import {
   workspaceAccountAuthorityAllowed,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
+  mergeReusableSourceSnapshotObservations,
   assertWorkspaceManagementAuthorityInput,
   assertWorkspaceFreezeExpectation,
   normalizeWorkspaceManagement,
@@ -3486,6 +3487,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const current = d1SourceSyncSettlementPublicRun(heldRow);
       return { won: false, ...(current ? { run: current } : {}) };
     }
+    const laneSnapshots = await this.listSourceSnapshots(snapshot.sourceId);
+    const latestLaneSnapshot = [...laneSnapshots].filter((candidate) =>
+      candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
+      candidate.ref === snapshot.ref && candidate.path === snapshot.path)
+      .sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))
+      .at(-1);
+    const reusableSnapshot = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
+      ? latestLaneSnapshot : undefined;
+    const committedSnapshot: SourceSnapshot = reusableSnapshot
+      ? mergeReusableSourceSnapshotObservations(reusableSnapshot, snapshot)
+      : snapshot;
+    const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
+      ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
+          snapshotId: reusableSnapshot.id, archiveDigest: reusableSnapshot.archiveDigest,
+          archiveSizeBytes: reusableSnapshot.archiveSizeBytes,
+          resolvedCommit: reusableSnapshot.resolvedCommit }
+      : input.terminalRun;
+    const settlementInput = { ...input, terminalRun };
     // Fetch at most one row beyond the public reconciliation ceiling. Only a
     // coherent destroyed tombstone is excluded here. A physical/JSON mismatch
     // remains a candidate and is rejected by the atomic census guard below.
@@ -3517,19 +3536,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }).filter((capsule) => capsule.status !== "destroyed");
     const observation = await observeSourceSyncSettlement(
       this,
-      snapshot,
-      input.terminalRun,
+      committedSnapshot,
+      terminalRun,
       observedCapsules,
     );
     const settlement = d1SourceSyncSettlementEnvelope(
-      input,
-      snapshot,
+      settlementInput,
+      committedSnapshot,
       observation,
+      latestLaneSnapshot,
     );
-    const observedSnapshot = await this.getSourceSnapshot(snapshot.id);
+    const observedSnapshot = reusableSnapshot ?? await this.getSourceSnapshot(snapshot.id);
     const exactGuardSnapshot =
       observedSnapshot &&
-      sourceSnapshotsExactlyMatch(observedSnapshot, snapshot)
+      sourceSnapshotsExactlyMatch(observedSnapshot, reusableSnapshot ?? snapshot)
         ? observedSnapshot
         : snapshot;
     const statements = [
@@ -3557,24 +3577,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         d1UpsertRunStmt(
           this.#orm,
           RUN_KIND_SOURCE_SYNC,
-          input.terminalRun,
+          terminalRun,
         ),
       ),
       d1PreparedStatementFromDrizzle(
         this.db,
         d1UpdateSourceSyncCursorStmt(
           this.#orm,
-          input.terminalRun,
-          snapshot,
+          terminalRun,
+          committedSnapshot,
         ),
       ),
       d1PreparedStatementFromDrizzle(
         this.db,
-        d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
+        reusableSnapshot
+          ? d1UpdateSourceSnapshotObservationStmt(this.#orm, reusableSnapshot, committedSnapshot)
+          : d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
       ),
       d1PreparedStatementFromDrizzle(
         this.db,
-        d1SourceSnapshotExactGuardStmt(this.#orm, exactGuardSnapshot),
+        d1SourceSnapshotExactGuardStmt(this.#orm, reusableSnapshot ? committedSnapshot : exactGuardSnapshot),
       ),
       ...(settlement.changes.length === 0
         ? []
@@ -3587,7 +3609,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       await this.db.batch(statements);
       return {
         won: true,
-        run: publicStoredRun(input.terminalRun),
+        run: publicStoredRun(terminalRun),
+        snapshot: committedSnapshot,
         staleCapsules: settlement.changes.map(({ capsule }) => capsule),
       };
     } catch (error) {
@@ -9498,6 +9521,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly StoredSource[]> {
+    if (!Number.isFinite(limit) || limit <= 0) return [];
+    const latestRunAt = sql<string | null>`(
+      select max(r.created_at) from ${schema.runs} r
+      where r.source_id = ${schema.sources.id} and r.type = ${RUN_KIND_SOURCE_SYNC}
+    )`;
+    const rows = await this.#orm.select({ recordJson: sql<string>`CAST(${schema.sources.recordJson} AS TEXT)` })
+      .from(schema.sources)
+      .where(sql`json_extract(${schema.sources.recordJson}, '$.status') = 'active'
+        and json_extract(${schema.sources.recordJson}, '$.autoSync') = 1
+        and not (
+          length(json_extract(${schema.sources.recordJson}, '$.defaultRef')) = 40
+          and lower(json_extract(${schema.sources.recordJson}, '$.defaultRef')) not glob '*[^0-9a-f]*'
+          and lower(json_extract(${schema.sources.recordJson}, '$.defaultRef')) = lower(coalesce(json_extract(${schema.sources.recordJson}, '$.lastSeenCommit'), ''))
+        )`)
+      .orderBy(sql`${latestRunAt} asc`, asc(schema.sources.createdAt), asc(schema.sources.id))
+      .limit(Math.floor(limit));
+    return rows.map(({ recordJson }) => parseD1JsonColumn(recordJson) as StoredSource);
+  }
+
   async listSourcesPage(
     workspaceId: string,
     params: PageParams,
@@ -11445,6 +11488,7 @@ function d1SourceSyncSettlementEnvelope(
   input: CommitSourceSyncSuccessInput,
   snapshot: SourceSnapshot,
   observation: SourceSyncSettlementObservation,
+  latestLaneSnapshot: SourceSnapshot | undefined,
 ): D1SourceSyncSettlementEnvelope {
   if (
     observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
@@ -11471,6 +11515,15 @@ function d1SourceSyncSettlementEnvelope(
     terminalRun: publicStoredRun(input.terminalRun),
     leaseToken: input.leaseToken,
     snapshot,
+    snapshotLane: {
+      workspaceId: snapshot.workspaceId,
+      sourceId: snapshot.sourceId,
+      url: snapshot.url,
+      ref: snapshot.ref,
+      path: snapshot.path,
+      latestId: latestLaneSnapshot?.id ?? null,
+      latestFetchedAt: latestLaneSnapshot?.fetchedAt ?? null,
+    },
     capsules: observation.capsules.map((capsule) => ({
       id: capsule.id,
       capsule,
@@ -11908,11 +11961,48 @@ function d1SourceSyncSettlementGuardSql(): string {
         OR (
           json_type(r.normalized_json, '$.snapshotId') = 'text'
           AND json_extract(r.normalized_json, '$.snapshotId') IS
-            json_extract(e.payload, '$.terminalRun.snapshotId')
+            coalesce(
+              json_extract(e.payload, '$.terminalRun.requestedSnapshotId'),
+              json_extract(e.payload, '$.terminalRun.snapshotId')
+            )
         )
       )
       AND coalesce(json_extract(r.normalized_json, '$.intent'), 'observe') IS
         coalesce(json_extract(e.payload, '$.terminalRun.intent'), 'observe')
+  )`;
+  const laneMismatch = `(
+    CASE
+      WHEN json_type(e.payload, '$.snapshotLane.latestId') IS NULL
+        OR json_type(e.payload, '$.snapshotLane.latestId') = 'null'
+      THEN EXISTS (
+        SELECT 1 FROM source_snapshots s
+        WHERE s.source_id IS json_extract(e.payload, '$.snapshotLane.sourceId')
+          AND json_extract(s.record_json, '$.workspaceId') IS json_extract(e.payload, '$.snapshotLane.workspaceId')
+          AND json_extract(s.record_json, '$.url') IS json_extract(e.payload, '$.snapshotLane.url')
+          AND json_extract(s.record_json, '$.ref') IS json_extract(e.payload, '$.snapshotLane.ref')
+          AND json_extract(s.record_json, '$.path') IS json_extract(e.payload, '$.snapshotLane.path')
+      )
+      ELSE NOT EXISTS (
+        SELECT 1 FROM source_snapshots s
+        WHERE s.id IS json_extract(e.payload, '$.snapshotLane.latestId')
+          AND s.source_id IS json_extract(e.payload, '$.snapshotLane.sourceId')
+          AND s.fetched_at IS json_extract(e.payload, '$.snapshotLane.latestFetchedAt')
+          AND json_extract(s.record_json, '$.workspaceId') IS json_extract(e.payload, '$.snapshotLane.workspaceId')
+          AND json_extract(s.record_json, '$.url') IS json_extract(e.payload, '$.snapshotLane.url')
+          AND json_extract(s.record_json, '$.ref') IS json_extract(e.payload, '$.snapshotLane.ref')
+          AND json_extract(s.record_json, '$.path') IS json_extract(e.payload, '$.snapshotLane.path')
+      ) OR EXISTS (
+        SELECT 1 FROM source_snapshots s
+        WHERE s.source_id IS json_extract(e.payload, '$.snapshotLane.sourceId')
+          AND json_extract(s.record_json, '$.workspaceId') IS json_extract(e.payload, '$.snapshotLane.workspaceId')
+          AND json_extract(s.record_json, '$.url') IS json_extract(e.payload, '$.snapshotLane.url')
+          AND json_extract(s.record_json, '$.ref') IS json_extract(e.payload, '$.snapshotLane.ref')
+          AND json_extract(s.record_json, '$.path') IS json_extract(e.payload, '$.snapshotLane.path')
+          AND (s.fetched_at > json_extract(e.payload, '$.snapshotLane.latestFetchedAt')
+            OR (s.fetched_at = json_extract(e.payload, '$.snapshotLane.latestFetchedAt')
+              AND s.id > json_extract(e.payload, '$.snapshotLane.latestId')))
+      )
+    END
   )`;
   return `
 WITH
@@ -11978,6 +12068,7 @@ WHERE NOT (
       AND w.management_state IN ('active', 'draining')
   )
   AND ${candidateRun}
+  AND NOT ${laneMismatch}
   AND NOT ${censusMismatch}
   AND NOT ${readMismatch}
   AND NOT ${changesMismatch}
@@ -12124,15 +12215,16 @@ function d1UpdateSourceSyncCursorStmt(
   run: SourceSyncRun,
   snapshot: SourceSnapshot,
 ) {
+  const observedAt = run.finishedAt ?? snapshot.fetchedAt;
   return orm
     .update(schema.sources)
     .set({
       recordJson: sql<StoredSource>`json_set(
         ${schema.sources.recordJson},
         '$.lastSeenCommit', ${snapshot.resolvedCommit},
-        '$.updatedAt', ${snapshot.fetchedAt}
+        '$.updatedAt', ${observedAt}
       )`,
-      updatedAt: snapshot.fetchedAt,
+      updatedAt: observedAt,
     })
     .where(
       and(
@@ -12143,6 +12235,21 @@ function d1UpdateSourceSyncCursorStmt(
         sql`json_extract(${schema.sources.recordJson}, '$.defaultPath') = ${run.path}`,
       ),
     );
+}
+
+function d1UpdateSourceSnapshotObservationStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  previous: SourceSnapshot,
+  replacement: SourceSnapshot,
+) {
+  return orm.update(schema.sourceSnapshots)
+    .set({ recordJson: replacement })
+    .where(and(
+      eq(schema.sourceSnapshots.id, previous.id),
+      eq(schema.sourceSnapshots.sourceId, previous.sourceId),
+      eq(schema.sourceSnapshots.recordJson, previous),
+      eq(schema.sourceSnapshots.fetchedAt, previous.fetchedAt),
+    ));
 }
 
 function d1InsertSourceSnapshotIfAbsentStmt(
