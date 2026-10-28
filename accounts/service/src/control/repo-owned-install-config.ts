@@ -393,6 +393,7 @@ export async function adoptRepoOwnedInstallConfig(
     base: input.baseConfig.installContextVariableMapping,
     variableMapping: input.baseConfig.variableMapping,
     variablePresentation: input.baseConfig.variablePresentation,
+    installExperience: input.baseConfig.installExperience,
   });
   if (!installContextVariableMapping.ok) {
     return {
@@ -1041,6 +1042,7 @@ function mergeInstallContextVariableMapping(input: {
   readonly base: InstallConfig["installContextVariableMapping"];
   readonly variableMapping: InstallConfig["variableMapping"];
   readonly variablePresentation: InstallConfig["variablePresentation"];
+  readonly installExperience: InstallConfig["installExperience"];
 }):
   | {
       readonly ok: true;
@@ -1066,8 +1068,26 @@ function mergeInstallContextVariableMapping(input: {
     ...Object.keys(input.variableMapping),
     ...(input.variablePresentation ?? []).map((entry) => entry.name),
   ];
+  const runtimeProjectionTargets = (
+    input.installExperience?.projections ?? []
+  ).flatMap((projection) => {
+    switch (projection.kind) {
+      case "service_name":
+      case "initial_secret":
+        return [projection.variable];
+      case "public_endpoint":
+      case "artifact":
+        return Object.values(projection.variables).filter(
+          (target): target is string => target !== undefined,
+        );
+      case "oidc_client":
+        // mergeInstallExperience never carries an operator OIDC projection;
+        // any reviewed repository OIDC replacement is compiled separately.
+        return [];
+    }
+  });
   if (
-    existingValueTargets.some((target) =>
+    [...existingValueTargets, ...runtimeProjectionTargets].some((target) =>
       proposedEntries.some(([name]) => variablePathsOverlap(name, target)),
     )
   ) {

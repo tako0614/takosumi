@@ -313,4 +313,72 @@ describe("repository-owned install context mappings", () => {
       expect(JSON.stringify(result)).not.toContain("private-static-value");
     }
   });
+
+  test("refuses retained runtime projection targets that overlap context inputs", async () => {
+    const cases: readonly [
+      string,
+      NonNullable<InstallConfig["installExperience"]>,
+    ][] = [
+      [
+        "service_name exact target",
+        { projections: [{ kind: "service_name", variable: "workspace_id" }] },
+      ],
+      [
+        "initial_secret nested target",
+        { projections: [{ kind: "initial_secret", variable: "context.child" }] },
+      ],
+      [
+        "public_endpoint exact target",
+        { projections: [{ kind: "public_endpoint", variables: { url: "capsule_id" } }] },
+      ],
+      [
+        "artifact nested target",
+        { projections: [{ kind: "artifact", variables: { sha256: "context.child" } }] },
+      ],
+    ];
+
+    for (const [label, installExperience] of cases) {
+      const result = await adoptRepoOwnedInstallConfig(
+        input(baseConfig({ installExperience })),
+      );
+      expect(result.status, label).toBe("invalid");
+      if (result.status !== "invalid") continue;
+      expect(result.diagnostic.code).toBe(
+        "repository_install_ux_context_mapping_conflict",
+      );
+    }
+  });
+
+  test("keeps unrelated retained projections and does not reject discarded base OIDC", async () => {
+    const installExperience: NonNullable<InstallConfig["installExperience"]> = {
+      projections: [
+        { kind: "service_name", variable: "operator_service_name" },
+        { kind: "initial_secret", variable: "operator_initial_secret" },
+        {
+          kind: "public_endpoint",
+          variables: { subdomain: "operator_subdomain", url: "operator_url" },
+        },
+        {
+          kind: "artifact",
+          variables: { url: "artifact_url", sha256: "artifact_sha256" },
+        },
+        {
+          kind: "oidc_client",
+          variables: { clientId: "workspace_id" },
+          callbackPath: "/auth/callback",
+        },
+      ],
+    };
+    const result = await adoptRepoOwnedInstallConfig(
+      input(baseConfig({ installExperience })),
+    );
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.installExperience.projections).toEqual(
+      installExperience.projections?.filter(
+        (projection) => projection.kind !== "oidc_client",
+      ),
+    );
+  });
 });
