@@ -35,6 +35,19 @@ export interface RequestPhaseObserver {
     phase: RequestDiagnosticPhase,
     operation: () => T | Promise<T>,
   ): Promise<T>;
+  /** Emits value-free per-app shadow comparison data; no account or Capsule ids. */
+  observeAppAccessShadow?(input: AppAccessShadowDiagnostic): void | Promise<void>;
+}
+
+export interface AppAccessShadowDiagnostic {
+  readonly resolverAvailable: boolean;
+  readonly resolverSucceeded: boolean;
+  readonly bearerWorkspaceAllowed: boolean;
+  readonly workspaceAllowed: boolean;
+  readonly appAllowed: boolean;
+  readonly workspaceRole: "owner" | "member" | null;
+  readonly appRole: "owner" | "member" | null;
+  readonly roleDiff: "same" | "workspace_only" | "app_only" | "role_mismatch" | "unavailable";
 }
 
 const PHASES = new Set<RequestDiagnosticPhase>([
@@ -163,6 +176,16 @@ export function createRequestPhaseDiagnostics(
         ...(probe && /^[a-f0-9]{16}$/u.test(probe) ? { probeId: probe } : {}),
       };
       return {
+        observeAppAccessShadow(input: AppAccessShadowDiagnostic): void {
+          try {
+            console.info(JSON.stringify({
+              event: "app_access_shadow",
+              ...input,
+            }));
+          } catch {
+            // Diagnostic output must never affect request execution.
+          }
+        },
         async measure<T>(
           phase: RequestDiagnosticPhase,
           operation: () => T | Promise<T>,
