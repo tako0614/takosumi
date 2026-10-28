@@ -378,11 +378,12 @@ describe("install attempt controller", () => {
   test("an unconfirmed confirmation keeps the values to send the same ones again", async () => {
     let generation = 5;
     let continues = 0;
+    const interfaces = [{ ...linkedRequirement, candidates: [linkedRequirement.candidates[0]!], choice: { kind: "interface" as const, interfaceId: "if_a" }, autoSelected: true }];
     reset({
       getGitInstallPlan: async () =>
         continues === 0
-          ? respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_a", autoSelected: true }], missing: [] }), generation)
-          : respond(inputs({ connections: [], missing: [], resubmitVariables: ["api_token"] }), generation),
+          ? respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_a", autoSelected: true }], interfaces, missing: [] }), generation)
+          : respond(inputs({ connections: [], interfaces, missing: [], resubmitVariables: ["api_token"] }), generation),
       answerGitInstallAttempt: async () => {
         continues += 1;
         if (continues === 1) throw new api.ControlApiError(503, "unavailable", "unavailable");
@@ -400,7 +401,7 @@ describe("install attempt controller", () => {
     await page.attempt.confirm();
     const sent = calls.filter(({ name }) => name === "answerGitInstallAttempt").map(({ args }) => args[1]);
     expect(sent).toEqual([
-      { expectedGeneration: 5, continue: true, variables: { api_token: SECRET } },
+      { expectedGeneration: 5, continue: true, observedInterfaces: [{ requirementKey: "chat", interfaceId: "if_a" }], variables: { api_token: SECRET } },
       { expectedGeneration: 5, continue: true, variables: { api_token: SECRET } },
     ]);
     await page.attempt.discard().catch(() => false);
@@ -1316,8 +1317,67 @@ describe("install attempt controller", () => {
     const page = mount(undefined, { settleMs: 5 });
     await page.attempt.start(candidate, { fromStore: false });
     await until(() => page.attempt.view().stage === "review", "the automatic Plan");
-    expect(answerBodies()).toEqual([{ expectedGeneration: 1, continue: true }]);
+    expect(answerBodies()).toEqual([{ expectedGeneration: 1, continue: true, observedInterfaces: [{ requirementKey: "chat", interfaceId: "if_a" }] }]);
     page.dispose();
+  });
+
+  test("an auto choice observed after reload is fenced on continue and a fresh sheet permits explicit later", async () => {
+    let available = false;
+    let explicitLater = false;
+    let generation = 1;
+    const currentSheet = () => {
+      const row: GitInstallPlanInterfaceRequirement = available && !explicitLater
+        ? { ...linkedRequirement, candidates: [linkedRequirement.candidates[0]!], choice: { kind: "interface", interfaceId: "if_a" }, autoSelected: true }
+        : { ...linkedRequirement, candidates: [], choice: { kind: "later" }, autoSelected: false };
+      const response = respond(inputs({ connections: [], interfaces: [row], missing: [] }), generation);
+      return { ...response, installPlan: { ...response.installPlan, options: explicitLater ? { interfaceLinks: [{ requirementKey: "chat", choice: { kind: "later" as const } }] } : {} } };
+    };
+    reset({
+      getGitInstallPlan: async () => currentSheet(),
+      answerGitInstallAttempt: async (_id: never, body: never) => {
+        const patch = body as { continue?: boolean; observedInterfaces?: readonly { requirementKey: string; interfaceId: string }[]; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] };
+        generation += 1;
+        if (patch.continue) {
+          if (!explicitLater) throw new api.ControlApiError(409, "interface_candidate_unavailable", "The observed candidate changed");
+          return respond({ kind: "wait", phase: "planning" }, generation);
+        }
+        explicitLater = patch.interfaceLinks?.[0]?.choice.kind === "later";
+        return currentSheet();
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, ++generation),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "provide_inputs", "the initially empty candidates");
+      expect(page.attempt.interfaceRows()[0]?.choice).toEqual({ kind: "later" });
+      available = true;
+      await page.attempt.reload();
+      expect(page.attempt.interfaceRows()[0]).toMatchObject({ autoSelected: true, choice: { kind: "interface", interfaceId: "if_a" } });
+      available = false;
+      page.attempt.setDraft("api_token", SECRET);
+      await page.attempt.confirm();
+      expect(answerBodies()).toEqual([{
+        expectedGeneration: 1, continue: true,
+        observedInterfaces: [{ requirementKey: "chat", interfaceId: "if_a" }],
+        variables: { api_token: SECRET },
+      }]);
+      expect(page.attempt.response()?.installPlan.generation).toBe(2);
+      expect(page.attempt.interfaceRows()[0]).toMatchObject({ autoSelected: false, choice: { kind: "later" } });
+      expect(page.attempt.drafts().api_token?.value).toBe(SECRET);
+      expect(page.attempt.error()).toBeTruthy();
+      await pause(20);
+      expect(answerBodies()).toHaveLength(1);
+      expect(await page.attempt.chooseInterface(page.attempt.interfaceRows()[0]!, { kind: "later" })).toBe(true);
+      await until(() => page.attempt.view().stage === "review", "the Plan with explicit later");
+      expect(answerBodies().slice(1)).toEqual([
+        { expectedGeneration: 2, interfaceLinks: [{ requirementKey: "chat", choice: { kind: "later" } }] },
+        { expectedGeneration: 3, continue: true, variables: { api_token: SECRET } },
+      ]);
+      expect(calls.filter(({ name }) => name === "getGitInstallPlan")).toHaveLength(3);
+      expect(calls.some(({ name }) => /apply|approve/u.test(name))).toBe(false);
+    } finally {
+      page.dispose();
+    }
   });
 
   test("a replayed start that already reached its sheet adopts the app rows immediately", async () => {

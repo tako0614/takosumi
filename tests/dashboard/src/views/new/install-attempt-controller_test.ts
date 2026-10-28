@@ -25,6 +25,6 @@ test("the install attempt controller follows the coordinator without extra reque
     new Response(child.stderr).text(),
   ]);
   expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
-  expect(stderr).toContain("49 pass");
+  expect(stderr).toContain("50 pass");
   expect(stderr).toContain("0 fail");
 }, 90_000);
