@@ -168,8 +168,16 @@ Run は認証済みの現在の Capsule とその Workspace の値を既存の�
 同じ渡し先への同じ context source だけを再採用できます。無関係な mapping は保持され、採用した
 mapping は元の SourceSnapshot・module に結ばれた派生 config の digest に含まれます。
 
-この二つの ID source は v2.5 限定の互換経路です。旧版や未知の将来版には自動で追加されません。
-将来 Workspace 依存を退役させる場合、既に保存された v2.5 config の扱いは別途決める必要があります。
+`workspace_id` は、既存アプリとの互換のために v2.5 へ導入した時点から非推奨です。Workspace 依存は
+退役する方針で、後続の契約版ではこの source を削除します。旧版や未知の将来版へ自動追加しません。
+保存済み v2.5 config の mapping も、明示的な移行・退役の対象です。将来の parser が新規宣言を
+拒否するだけでは保存済み mapping は移行されず、無期限に実行できることも保証しません。
+
+新しい連携で Capsule 自体の識別子が必要なら `capsule_id` を使います。これは Workspace ID の別名では
+ありません。Workspace 固有の認証・権限に依存する既存アプリは、アプリ所有者がその実契約を移行してから
+`workspace_id` 入力を除く必要があります。ID の置換だけでは、現行の Workspace guard を満たしません。
+v2.5 の parser は依然として有効な `workspace_id` 宣言を受理するため、非推奨を新規利用の技術的な拒否とは
+扱いません。値と権限の源流は現在の認証済み Capsule／membership のままです。
 
 ## `requires`
 

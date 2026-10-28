@@ -13,8 +13,10 @@ import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
  * provider-neutral requests to consume a host Interface.
  * Version 2.3 adds an optional credential-free sourceBuild proposal per
  * module. Earlier versions remain closed and reject that field. Version 2.5
- * adds explicit root-string current-context data sources for compatible apps;
- * future versions must deliberately choose whether to retain them.
+ * adds explicit root-string current-context data sources. Its workspace_id
+ * source is deprecated at introduction for existing-app compatibility and is
+ * scheduled for removal in a later contract. Persisted mappings need explicit
+ * migration or retirement; capsule_id is not a Workspace identity alias.
  * Every declaration is still only a proposal until Takosumi validates and
  * compiles it into its DB-owned InstallConfig before a reviewed Plan can use it.
  */
@@ -61,7 +63,11 @@ export type RepositoryLegacyInstallUxInputSource =
   | { readonly kind: "workspace_scoped_capsule_name" }
   | { readonly kind: "module_default" };
 
-/** Explicit v2.5 compatibility data sources, not grants or identity values. */
+/**
+ * Explicit v2.5 data sources, not grants or identity values. workspace_id is
+ * deprecated at introduction; apps needing Workspace semantics must migrate
+ * those semantics before removing it. capsule_id is not an equivalent value.
+ */
 export type RepositoryInstallContextInputSource =
   | { readonly kind: "workspace_id" }
   | { readonly kind: "capsule_id" };
