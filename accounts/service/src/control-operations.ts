@@ -438,6 +438,10 @@ export interface ControlPlaneOperations {
     ): Promise<Capsule>;
     /** Whole days the scheduled uninstall waits before it destroys. */
     readonly uninstallGraceDays?: number;
+    /** Read-only schedule/cancel state admission, matching the commands. */
+    uninstallAdmission?(
+      capsule: Capsule,
+    ): Promise<{ readonly schedule: boolean; readonly cancel: boolean }>;
     getCapsuleExecutionAuthorityEpoch(capsuleId: string): Promise<number>;
     getInstallConfigReAdoptionRecoveryProof?(
       capsuleId: string,

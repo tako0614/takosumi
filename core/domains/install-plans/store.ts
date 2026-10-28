@@ -138,7 +138,11 @@ export interface GitInstallPlanStore {
   get(id: string): Promise<StoredGitInstallPlan | undefined>;
   /** Observation only: an exact replay must not require new admission. */
   getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined>;
-  hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean>;
+  /** Scoped to the Capsule's Workspace so the read stays on its index. */
+  hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean>;
   /**
    * Private Workspace-wide quiescence observation. A terminal plan is settled
    * only after both reconciliation lease columns have been cleared.
@@ -239,10 +243,14 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     return id === undefined ? undefined : await this.get(id);
   }
 
-  hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+  hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
     return Promise.resolve(
       Array.from(this.#entries.values()).some(
         ({ plan }) =>
+          plan.workspaceId === workspaceId &&
           plan.operation === "revision" &&
           plan.capsuleId === capsuleId &&
           plan.phase !== "failed" && plan.phase !== "reviewable",

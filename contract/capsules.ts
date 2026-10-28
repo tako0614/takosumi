@@ -511,8 +511,13 @@ export const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1" as const;
  *   progress that could resolve it.
  * - `stopped`: the operator disabled the app.
  * - `uninstall_scheduled`: inside the uninstall grace period.
- * - `uninstalling`: the teardown is running.
+ * - `uninstalling`: the teardown is running or starting, or a teardown plan
+ *   the person requested waits for their review.
  * - `uninstalled`: destroyed.
+ *
+ * An uninstall record counts only while the Capsule is `uninstalled`, or
+ * while it is `error` after a teardown failure and its newest lifecycle Run is
+ * still a removal; older records are kept only as evidence.
  */
 export const CAPSULE_APP_STATES = [
   "installing",
@@ -539,7 +544,11 @@ export type CapsuleAppState = (typeof CAPSULE_APP_STATES)[number];
  *   first problem.
  * - `fix_connection`: repair the ProviderConnection named by the first problem.
  * - `continue_install`: resume an install that stopped before a plan.
- * - `cancel_uninstall`: cancel the scheduled uninstall.
+ * - `cancel_uninstall`: cancel the scheduled uninstall (the cancel command
+ *   would admit it now).
+ * - `uninstall_now`: the stalled scheduled uninstall can no longer be
+ *   cancelled; create the immediate teardown plan
+ *   (`DELETE /api/v1/capsules/:id?immediate=true`) and review it.
  * - `reinstall`: install the app again.
  * - `none`: nothing for the person to do now (work is in progress).
  */
@@ -552,6 +561,7 @@ export const CAPSULE_APP_ACTIONS = [
   "fix_connection",
   "continue_install",
   "cancel_uninstall",
+  "uninstall_now",
   "reinstall",
   "none",
 ] as const;
@@ -563,9 +573,11 @@ export type CapsuleAppAction = (typeof CAPSULE_APP_ACTIONS)[number];
  *
  * - `connection_unavailable`: a ProviderBinding points at a connection that is
  *   missing, revoked, expired or in error.
- * - `uninstall_failed`: the scheduled teardown failed.
- * - `uninstall_blocked`: the scheduled teardown stopped and waits for the
- *   person (cancel, or uninstall now).
+ * - `uninstall_failed`: a teardown that reached the provider failed; the
+ *   problem names the failed removal Run.
+ * - `uninstall_blocked`: the scheduled uninstall stopped (in either phase) and
+ *   waits for the person while the resources keep running; `reason` is the
+ *   finalizer's stable `blockedReason` token.
  * - `policy_blocked`: the newest plan was denied by policy; see the Run's
  *   `policyReasons`.
  * - `run_failed`: the newest lifecycle Run failed.
@@ -612,6 +624,8 @@ export interface CapsuleAppProblem {
   readonly runId?: string;
   readonly runType?: RunType;
   readonly errorCode?: string;
+  /** `uninstall_blocked`: the finalizer's stable `blockedReason` token. */
+  readonly reason?: string;
   /** `connection_unavailable`: the provider source the binding serves. */
   readonly provider?: string;
   readonly connectionId?: string;

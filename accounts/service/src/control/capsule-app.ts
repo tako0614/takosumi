@@ -55,6 +55,7 @@ import {
   CAPSULE_APP_LIFECYCLE_RUN_TYPES,
   capsuleIsApplied,
   deriveCapsuleAppStatus,
+  liveCapsuleUninstall,
   reviewablePlan,
   type CapsuleAppConnectionIssue,
   type CapsuleAppLatestRun,
@@ -157,12 +158,16 @@ async function readCapsuleAppView(
 
   // Facts that decide the state are required: a failed read fails the request
   // instead of answering with a state the control plane did not establish.
-  const [latestRun, revisionPreparing, connectionIssues] = destroyed
-    ? [undefined, false, []] as const
+  const [latestRun, revisionPreparing, connectionIssues, admission] = destroyed
+    ? [undefined, false, [], { schedule: false, cancel: false }] as const
     : await Promise.all([
         readLatestLifecycleRun(operations, capsule),
-        operations.gitInstallPlans.hasInFlightRevisionForCapsule(capsule.id),
+        operations.gitInstallPlans.hasInFlightRevisionForCapsule(
+          capsule.id,
+          capsule.workspaceId,
+        ),
         readConnectionIssues(operations, capsule),
+        readUninstallAdmission(operations, capsule, applied),
       ]);
 
   const [installConfig, source, adopted, screens, screenFailure] = await Promise.all([
@@ -184,13 +189,16 @@ async function readCapsuleAppView(
         }),
     managed
       ? optional(() => readScreenFailure(operations, capsule))
-      : Promise.resolve<Optional<CapsuleAppScreenFailure | undefined>>({
+      : Promise.resolve<Optional<ScreenFailureRead>>({
+          value: { complete: true },
           failed: false,
         }),
   ]);
   if (installConfig.failed) incomplete.add("display");
   if (screens.failed) incomplete.add("screens");
-  if (screenFailure.failed) incomplete.add("screen_problems");
+  if (screenFailure.failed || screenFailure.value?.complete === false) {
+    incomplete.add("screen_problems");
+  }
 
   const version = await readVersion(operations, capsule, {
     source: source.value,
@@ -200,13 +208,15 @@ async function readCapsuleAppView(
   if (source.failed || adopted.failed) incomplete.add("version");
 
   const screenList = screens.value ?? [];
+  const failure = screenFailure.value?.failure;
   const derived = deriveCapsuleAppStatus({
     capsule,
     ...(latestRun ? { latestRun } : {}),
     revisionPreparing,
     connectionIssues,
-    ...(screenFailure.value ? { screenFailure: screenFailure.value } : {}),
-    screenCount: screenList.length,
+    ...(failure ? { screenFailure: failure } : {}),
+    ...(screens.failed ? {} : { screenCount: screenList.length }),
+    uninstallCancellable: admission.cancel,
     now,
   });
   const inFlightRun = latestRun &&
@@ -239,7 +249,11 @@ async function readCapsuleAppView(
       ...(review ? { review: { runId: review.id, runType: review.type } } : {}),
     },
     ...(latestRun ? { latestRun: runSummary(latestRun) } : {}),
-    uninstall: uninstallTerms(operations, capsule, applied),
+    uninstall: uninstallTerms(operations, capsule, {
+      applied,
+      admission,
+      ...(latestRun ? { latestRun } : {}),
+    }),
     ...(incomplete.size > 0 ? { incomplete: [...incomplete].sort() } : {}),
     observedAt: new Date(now).toISOString(),
   };
@@ -317,11 +331,22 @@ async function readConnectionIssues(
   return issues;
 }
 
-/** The current generation's dead-lettered screen materialization, if any. */
+interface ScreenFailureRead {
+  readonly failure?: CapsuleAppScreenFailure;
+  /** False when the Workspace window was full, so a miss proves nothing. */
+  readonly complete: boolean;
+}
+
+/**
+ * The current generation's dead-lettered screen materialization, if any. The
+ * ledger lists dead letters per Workspace, newest first, in a bounded window;
+ * when the window is full and this app's entry is not in it, the answer is
+ * reported as incomplete rather than as "no failure".
+ */
 async function readScreenFailure(
   operations: ControlPlaneOperations,
   capsule: Capsule,
-): Promise<CapsuleAppScreenFailure | undefined> {
+): Promise<ScreenFailureRead> {
   const failures = await operations.listInterfaceMaterializationFailures(
     capsule.workspaceId,
     { limit: APP_SCREEN_FAILURE_LIMIT },
@@ -331,15 +356,17 @@ async function readScreenFailure(
       candidate.capsuleId === capsule.id &&
       candidate.stateGeneration === capsule.currentStateGeneration,
   );
-  return failure
-    ? {
-        id: failure.id,
-        failureDigest: failure.failureDigest,
-        stateVersionId: failure.stateVersionId,
-        stateGeneration: failure.stateGeneration,
-        errorCode: failure.error.code,
-      }
-    : undefined;
+  if (!failure) return { complete: failures.length < APP_SCREEN_FAILURE_LIMIT };
+  return {
+    complete: true,
+    failure: {
+      id: failure.id,
+      failureDigest: failure.failureDigest,
+      stateVersionId: failure.stateVersionId,
+      stateGeneration: failure.stateGeneration,
+      errorCode: failure.error.code,
+    },
+  };
 }
 
 // --- screens --------------------------------------------------------------------
@@ -588,35 +615,69 @@ async function newestSnapshotForRef(
 
 // --- uninstall --------------------------------------------------------------------
 
-function uninstallTerms(
+interface UninstallAdmission {
+  readonly schedule: boolean;
+  readonly cancel: boolean;
+}
+
+/**
+ * Whether the schedule and cancel commands would admit a request now. Hosts
+ * wire the Capsule service's own rules (including the runtime safety
+ * projection); a host without that read falls back to the state-only part.
+ */
+async function readUninstallAdmission(
   operations: ControlPlaneOperations,
   capsule: Capsule,
   applied: boolean,
-): CapsuleAppUninstall {
+): Promise<UninstallAdmission> {
+  if (capsule.status === "destroyed") return { schedule: false, cancel: false };
   const scheduling = typeof operations.capsules.scheduleCapsuleUninstall === "function";
+  const admission = typeof operations.capsules.uninstallAdmission === "function"
+    ? await operations.capsules.uninstallAdmission.call(operations.capsules, capsule)
+    : {
+        schedule: capsule.status === "uninstalled" ||
+          (applied &&
+            (capsule.status === "active" ||
+              capsule.status === "stale" ||
+              capsule.status === "error")),
+        cancel: capsule.status === "uninstalled" &&
+          capsule.uninstall?.phase === "scheduled",
+      };
+  return {
+    schedule: scheduling && admission.schedule,
+    cancel: typeof operations.capsules.cancelCapsuleUninstall === "function" &&
+      admission.cancel,
+  };
+}
+
+function uninstallTerms(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+  input: {
+    readonly applied: boolean;
+    readonly admission: UninstallAdmission;
+    readonly latestRun?: CapsuleAppRunSummary;
+  },
+): CapsuleAppUninstall {
   const graceDays = operations.capsules.uninstallGraceDays;
   const mode: CapsuleAppUninstall["mode"] = capsule.status === "destroyed"
     ? "none"
-    : !applied
+    : !input.applied
       ? "discard"
-      : scheduling
+      : input.admission.schedule
         ? "scheduled"
         : "none";
-  const uninstall = capsule.uninstall;
-  const pending = uninstall &&
-    capsule.status !== "destroyed" &&
-    (uninstall.phase === "scheduled" || uninstall.phase === "destroying") &&
-    (capsule.status === "uninstalled" || capsule.status === "error")
-    ? uninstall
+  const live = liveCapsuleUninstall(capsule, input.latestRun);
+  const pending = live &&
+    (live.phase === "scheduled" || live.phase === "destroying")
+    ? live
     : undefined;
   const scheduled: CapsuleAppUninstall["scheduled"] = pending
     ? {
         phase: pending.phase === "destroying" ? "destroying" : "scheduled",
         requestedAt: pending.requestedAt,
         deleteAfter: pending.scheduledDestroyAt,
-        cancellable: capsule.status === "uninstalled" &&
-          (pending.phase === "scheduled" ||
-            (pending.phase === "destroying" && pending.blockedReason !== undefined)),
+        cancellable: input.admission.cancel,
         blocked: pending.blockedReason !== undefined,
         ...(pending.preDestroyExport
           ? {

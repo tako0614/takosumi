@@ -178,6 +178,7 @@ export async function handleCapsuleConfigurationPlans(
     authority.capsule.status === "disabled" ||
     (await ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
       authority.capsule.id,
+      authority.capsule.workspaceId,
     ))
   ) {
     return errorJson(
@@ -588,6 +589,7 @@ async function finishConfigurationPlan(input: {
       authority.capsule.status === "disabled" ||
       (await input.ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
         authority.capsule.id,
+        authority.capsule.workspaceId,
       ))
     ) {
       throw new OpenTofuControllerError(
@@ -679,6 +681,7 @@ async function finishConfigurationPlan(input: {
       authority.capsule.status === "disabled" ||
       (await input.ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
         authority.capsule.id,
+        authority.capsule.workspaceId,
       ))
     ) {
       throw new OpenTofuControllerError(

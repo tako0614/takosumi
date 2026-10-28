@@ -333,7 +333,7 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 - `state`: `installing` / `installed` / `updating` / `needs_attention` / `stopped` /
   `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` / `retry_screen` /
-  `fix_connection` / `continue_install` / `cancel_uninstall` / `reinstall` / `none`
+  `fix_connection` / `continue_install` / `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
 - `problems[].code`（優先順）: `connection_unavailable` / `uninstall_failed` /
   `uninstall_blocked` / `policy_blocked` / `run_failed` / `capsule_error` /
   `install_incomplete` / `screen_unavailable` / `uninstall_scheduled`（警告）
@@ -344,6 +344,11 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 (`uninstall.mode` と、予約前でも分かる `graceDays`、予約後の `scheduled.deleteAfter`)
 が入ります。秘密の値、Output の値、画面の起動 URL 以外の Interface 入力は含みません。
 補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
+削除の予約記録は、Capsule が `uninstalled` の間と、provider に届いた破棄が失敗して
+`error` になり、最新の Run がまだ破棄である間だけ有効と見なします。予約が猶予中でも
+破棄中でも、`blockedReason` が記録されていれば `uninstall_blocked` になります。
+`cancel_uninstall` と `uninstall.mode` / `scheduled.cancellable` は、取り消しと予約の
+コマンド自身の受付条件で判定します。
 
 `GET /api/v1/capsules/{capsuleId}/runs` は `limit`（既定 50、上限 100）と
 `cursor` で新しい順にページングします。`type` を繰り返すと Run の種類で絞れます。

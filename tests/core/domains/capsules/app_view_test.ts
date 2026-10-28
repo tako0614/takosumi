@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { CapsuleUninstall } from "takosumi-contract/capsules";
 import {
   CAPSULE_APP_ACTIONS,
   CAPSULE_APP_PROBLEM_CODES,
@@ -7,9 +8,17 @@ import {
 import {
   CAPSULE_APP_INSTALL_STALL_AFTER_MS,
   deriveCapsuleAppStatus,
+  liveCapsuleUninstall,
   type CapsuleAppFacts,
   type CapsuleAppLatestRun,
 } from "../../../../core/domains/capsules/app_view.ts";
+import {
+  advancedUninstallRecord,
+  scheduledUninstallRecord,
+  uninstallGraceMs,
+} from "../../../../core/domains/capsules/uninstall.ts";
+import { SCHEDULED_DESTROY_BLOCKED_REASONS } from "../../../../core/domains/capsules/uninstall_finalize.ts";
+import { UNINSTALL_AUTHORIZATION_REASONS } from "../../../../core/domains/capsules/uninstall_authorization.ts";
 
 const NOW = Date.parse("2026-10-27T12:00:00.000Z");
 const RECENT = new Date(NOW - 60_000).toISOString();
@@ -29,6 +38,30 @@ const UNAPPLIED: CapsuleFacts = {
   updatedAt: RECENT,
 };
 
+/** A record exactly as the schedule command writes it. */
+const SCHEDULED: CapsuleUninstall = scheduledUninstallRecord({
+  id: "uninstall_1",
+  previous: undefined,
+  previousStatus: "active",
+  now: new Date(NOW - 8 * 24 * 60 * 60 * 1000),
+  graceMs: uninstallGraceMs(7),
+  requester: { subject: "user_test" },
+});
+/** The finalizer's own transitions on that record. */
+const advance = (
+  record: CapsuleUninstall,
+  changes: Parameters<typeof advancedUninstallRecord>[1],
+) => advancedUninstallRecord(record, changes);
+const WITH_PLAN = advance(advance(SCHEDULED, {
+  preDestroyExportStartedAt: RECENT,
+}), {
+  preDestroyExport: { status: "skipped", reason: "backups_unavailable", at: RECENT },
+  destroyPlanRunId: "plan_finalizer",
+  destroyPlanRequestedAt: RECENT,
+  destroyAttempts: 1,
+});
+const DESTROYING = advance(WITH_PLAN, { phase: "destroying", destroyStartedAt: RECENT });
+
 function run(over: Partial<CapsuleAppLatestRun>): CapsuleAppLatestRun {
   return {
     id: "run_1",
@@ -45,23 +78,23 @@ function facts(over: Partial<CapsuleAppFacts>): CapsuleAppFacts {
     revisionPreparing: false,
     connectionIssues: [],
     screenCount: 0,
+    uninstallCancellable: false,
     now: NOW,
     ...over,
   };
 }
 
-const uninstall = (
-  phase: "scheduled" | "destroying" | "cancelled",
-  over: Record<string, unknown> = {},
-) => ({
-  id: "uninst_1",
-  revision: 1,
-  phase,
-  requestedAt: RECENT,
-  scheduledDestroyAt: "2026-11-03T12:00:00.000Z",
-  previousStatus: "active" as const,
-  ...over,
+const uninstalled = (record: CapsuleUninstall): CapsuleFacts => ({
+  ...APPLIED,
+  status: "uninstalled",
+  uninstall: record,
 });
+/** The row after a teardown that reached the provider failed (run engine). */
+const TEARDOWN_FAILED: CapsuleFacts = {
+  ...APPLIED,
+  status: "error",
+  uninstall: DESTROYING,
+};
 
 interface Row {
   readonly name: string;
@@ -94,6 +127,24 @@ const ROWS: readonly Row[] = [
     action: "none",
     problems: [],
   },
+  {
+    name: "a never-applied app being prepared stays installing past the stall threshold",
+    facts: facts({ capsule: { ...UNAPPLIED, updatedAt: OLD }, revisionPreparing: true }),
+    state: "installing",
+    action: "none",
+    problems: [],
+  },
+  {
+    name: "a failed first plan being prepared again does not offer a racing retry",
+    facts: facts({
+      capsule: UNAPPLIED,
+      revisionPreparing: true,
+      latestRun: run({ type: "plan", status: "failed", errorCode: "plan_failed" }),
+    }),
+    state: "installing",
+    action: "none",
+    problems: ["run_failed"],
+  },
   // installed
   {
     name: "applied with screens",
@@ -110,6 +161,13 @@ const ROWS: readonly Row[] = [
     problems: [],
   },
   {
+    name: "an unread screen list does not downgrade Open",
+    facts: facts({ latestRun: run({}), screenCount: undefined }),
+    state: "installed",
+    action: "open",
+    problems: [],
+  },
+  {
     name: "an applied app whose later plan was left unreviewed stays installed",
     facts: facts({ latestRun: run({ type: "plan", status: "succeeded" }), screenCount: 1 }),
     state: "installed",
@@ -119,6 +177,17 @@ const ROWS: readonly Row[] = [
   {
     name: "a stale app is still installed (update is a version fact)",
     facts: facts({ capsule: { ...APPLIED, status: "stale" }, screenCount: 1 }),
+    state: "installed",
+    action: "open",
+    problems: [],
+  },
+  {
+    name: "an old uninstall record no longer counts after the status was restored",
+    facts: facts({
+      capsule: { ...APPLIED, status: "active", uninstall: DESTROYING },
+      latestRun: run({ type: "apply", status: "succeeded" }),
+      screenCount: 1,
+    }),
     state: "installed",
     action: "open",
     problems: [],
@@ -232,43 +301,143 @@ const ROWS: readonly Row[] = [
     action: "none",
     problems: [],
   },
-  // uninstall
+  {
+    name: "operator-disabled with an old teardown record is still stopped",
+    facts: facts({
+      capsule: { ...APPLIED, status: "disabled", uninstall: DESTROYING },
+      latestRun: run({ type: "destroy_apply", status: "failed" }),
+    }),
+    state: "stopped",
+    action: "none",
+    problems: [],
+  },
+  // two-stage uninstall: grace period
   {
     name: "inside the grace period",
-    facts: facts({ capsule: { ...APPLIED, status: "uninstalled", uninstall: uninstall("scheduled") } }),
+    facts: facts({ capsule: uninstalled(SCHEDULED), uninstallCancellable: true }),
     state: "uninstall_scheduled",
     action: "cancel_uninstall",
     problems: ["uninstall_scheduled"],
   },
   {
+    name: "the finalizer's teardown plan is waiting for the finalizer, not the person",
+    facts: facts({
+      capsule: uninstalled(WITH_PLAN),
+      latestRun: run({ id: "plan_finalizer", type: "destroy_plan", status: "waiting_approval" }),
+      uninstallCancellable: true,
+    }),
+    state: "uninstalling",
+    action: "none",
+    problems: [],
+  },
+  // two-stage uninstall: the finalizer stopped while still `scheduled`
+  ...[
+    SCHEDULED_DESTROY_BLOCKED_REASONS.exportIncomplete,
+    SCHEDULED_DESTROY_BLOCKED_REASONS.planCancelled,
+    SCHEDULED_DESTROY_BLOCKED_REASONS.planNotDeleteOnly,
+    SCHEDULED_DESTROY_BLOCKED_REASONS.finalizeFailed,
+    UNINSTALL_AUTHORIZATION_REASONS.denied,
+  ].map((blockedReason): Row => ({
+    name: `a scheduled uninstall blocked by ${blockedReason}`,
+    facts: facts({
+      capsule: uninstalled(advance(WITH_PLAN, { blockedReason })),
+      latestRun: run({ id: "plan_finalizer", type: "destroy_plan", status: "waiting_approval" }),
+      uninstallCancellable: true,
+    }),
+    state: "needs_attention",
+    action: "cancel_uninstall",
+    problems: ["uninstall_blocked"],
+  })),
+  // two-stage uninstall: teardown
+  {
     name: "teardown running",
-    facts: facts({ capsule: { ...APPLIED, status: "uninstalled", uninstall: uninstall("destroying") } }),
+    facts: facts({
+      capsule: uninstalled(DESTROYING),
+      latestRun: run({ type: "destroy_apply", status: "running" }),
+    }),
     state: "uninstalling",
     action: "none",
     problems: [],
   },
   {
-    name: "teardown blocked before dispatch",
+    name: "teardown approved, apply not yet created",
+    facts: facts({ capsule: uninstalled(DESTROYING) }),
+    state: "uninstalling",
+    action: "none",
+    problems: [],
+  },
+  {
+    name: "teardown blocked before dispatch can still be cancelled",
     facts: facts({
-      capsule: {
-        ...APPLIED,
-        status: "uninstalled",
-        uninstall: uninstall("destroying", { blockedReason: "teardown_plan_not_delete_only" }),
-      },
+      capsule: uninstalled(advance(DESTROYING, { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused })),
+      uninstallCancellable: true,
     }),
     state: "needs_attention",
     action: "cancel_uninstall",
     problems: ["uninstall_blocked"],
   },
   {
+    name: "teardown blocked after the runtime became unsafe can only be uninstalled now",
+    facts: facts({
+      capsule: uninstalled(advance(DESTROYING, { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused })),
+      latestRun: run({ type: "apply", status: "failed", errorCode: "provider_apply_failed" }),
+      uninstallCancellable: false,
+    }),
+    state: "needs_attention",
+    action: "uninstall_now",
+    problems: ["uninstall_blocked"],
+  },
+  {
+    name: "the person's own teardown plan during a blocked uninstall waits for their review",
+    facts: facts({
+      capsule: uninstalled(advance(WITH_PLAN, { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.planNotDeleteOnly })),
+      latestRun: run({ id: "plan_now", type: "destroy_plan", status: "waiting_approval" }),
+      uninstallCancellable: true,
+    }),
+    state: "uninstalling",
+    action: "review",
+    problems: [],
+  },
+  // a teardown that reached the provider failed (`error` + `destroying`)
+  {
     name: "teardown failed",
     facts: facts({
-      capsule: { ...APPLIED, status: "error", uninstall: uninstall("destroying") },
-      latestRun: run({ type: "destroy_apply", status: "failed", errorCode: "apply_failed" }),
+      capsule: TEARDOWN_FAILED,
+      latestRun: run({ type: "destroy_apply", status: "failed", errorCode: "provider_destroy_failed" }),
     }),
     state: "needs_attention",
     action: "retry",
     problems: ["uninstall_failed"],
+  },
+  {
+    name: "a retried teardown apply is running",
+    facts: facts({
+      capsule: TEARDOWN_FAILED,
+      latestRun: run({ type: "destroy_apply", status: "running" }),
+    }),
+    state: "uninstalling",
+    action: "none",
+    problems: [],
+  },
+  {
+    name: "a retried teardown plan waits for approval",
+    facts: facts({
+      capsule: TEARDOWN_FAILED,
+      latestRun: run({ type: "destroy_plan", status: "waiting_approval" }),
+    }),
+    state: "uninstalling",
+    action: "review",
+    problems: [],
+  },
+  {
+    name: "a later ordinary plan failure is a run failure, not an uninstall failure",
+    facts: facts({
+      capsule: TEARDOWN_FAILED,
+      latestRun: run({ type: "plan", status: "failed", errorCode: "plan_failed" }),
+    }),
+    state: "needs_attention",
+    action: "retry",
+    problems: ["run_failed"],
   },
   {
     name: "an immediate destroy apply running",
@@ -303,7 +472,7 @@ test("every state and every primary action is reachable from the table", () => {
   );
 });
 
-test("problems carry the exact Run, connection and screen failure they are about", () => {
+test("problems carry the exact Run, connection, blocked reason and teardown Run", () => {
   const failed = deriveCapsuleAppStatus(facts({
     latestRun: run({ id: "run_failed_1", type: "apply", status: "failed", errorCode: "credential_mint_failed" }),
     connectionIssues: [
@@ -327,7 +496,7 @@ test("problems carry the exact Run, connection and screen failure they are about
     },
   ]);
   const teardown = deriveCapsuleAppStatus(facts({
-    capsule: { ...APPLIED, status: "error", uninstall: uninstall("destroying") },
+    capsule: TEARDOWN_FAILED,
     latestRun: run({ id: "run_destroy", type: "destroy_apply", status: "failed" }),
   }));
   expect(teardown.problems[0]).toEqual({
@@ -336,4 +505,38 @@ test("problems carry the exact Run, connection and screen failure they are about
     runId: "run_destroy",
     runType: "destroy_apply",
   });
+  const blocked = deriveCapsuleAppStatus(facts({
+    capsule: uninstalled(
+      advance(WITH_PLAN, { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.planNotDeleteOnly }),
+    ),
+    uninstallCancellable: true,
+  }));
+  expect(blocked.problems).toEqual([
+    {
+      code: "uninstall_blocked",
+      severity: "error",
+      reason: "destroy_plan_not_delete_only",
+      runId: "plan_finalizer",
+      runType: "destroy_plan",
+    },
+  ]);
+});
+
+test("an uninstall record is live only while uninstalled or right after a failed teardown", () => {
+  expect(liveCapsuleUninstall({ status: "uninstalled", uninstall: SCHEDULED }, undefined)).toBe(SCHEDULED);
+  expect(
+    liveCapsuleUninstall({ status: "error", uninstall: DESTROYING }, { type: "destroy_apply" }),
+  ).toBe(DESTROYING);
+  expect(
+    liveCapsuleUninstall({ status: "error", uninstall: DESTROYING }, { type: "plan" }),
+  ).toBeUndefined();
+  expect(
+    liveCapsuleUninstall({ status: "active", uninstall: DESTROYING }, { type: "destroy_apply" }),
+  ).toBeUndefined();
+  expect(
+    liveCapsuleUninstall(
+      { status: "active", uninstall: advance(SCHEDULED, { phase: "destroying" }) },
+      undefined,
+    ),
+  ).toBeUndefined();
 });

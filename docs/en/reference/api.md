@@ -306,7 +306,7 @@ a window of Workspace-wide Runs.
   `stopped` / `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` /
   `retry_screen` / `fix_connection` / `continue_install` / `cancel_uninstall` /
-  `reinstall` / `none`
+  `uninstall_now` / `reinstall` / `none`
 - `problems[].code`, in priority order: `connection_unavailable` /
   `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
   `capsule_error` / `install_incomplete` / `screen_unavailable` /
@@ -320,6 +320,11 @@ newest Run (`latestRun`) and the uninstall terms (`uninstall.mode`, the
 `scheduled.deleteAfter` once scheduled). It carries no secret, no Output value
 and no Interface input other than a screen's checked launch URL. Parts that a
 supporting read could not load are named in `incomplete`.
+An uninstall record counts only while the Capsule is `uninstalled`, or while it
+is `error` after a provider-reached teardown failure and its newest Run is still
+a removal. A recorded `blockedReason` yields `uninstall_blocked` in either
+phase. `cancel_uninstall`, `uninstall.mode` and `scheduled.cancellable` follow
+the cancel and schedule commands' own admission rules.
 
 `GET /api/v1/capsules/{capsuleId}/runs` pages newest first with `limit`
 (default 50, at most 100) and `cursor`; repeat `type` to filter by Run type.

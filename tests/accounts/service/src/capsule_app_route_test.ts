@@ -8,6 +8,9 @@ import type { ControlPlaneOperations } from "../../../../accounts/service/src/co
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type { CapsuleInterfaceMaterializationFailure } from "../../../../core/domains/interfaces/materialization_intent_failures.ts";
+import type { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import { SCHEDULED_DESTROY_BLOCKED_REASONS } from "../../../../core/domains/capsules/uninstall_finalize.ts";
 import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_PROVIDER,
@@ -72,10 +75,22 @@ async function fixture(options: {
     ...(core as unknown as ControlPlaneOperations),
     ...options.overrides,
   } as ControlPlaneOperations;
-  async function request(path: string, cookie = owner, method = "GET") {
+  async function request(
+    path: string,
+    cookie = owner,
+    method = "GET",
+    body?: unknown,
+  ) {
     const url = new URL(`${ORIGIN}/api/v1/capsules/${CAPSULE}${path}`);
     const response = await handleControlRoute({
-      request: new Request(url, { method, headers: { cookie } }),
+      request: new Request(url, {
+        method,
+        headers: {
+          cookie,
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
       url,
       store: accounts,
       operations,
@@ -474,6 +489,223 @@ test("a supporting read that fails is reported as incomplete instead of silently
   });
   const app = await h.app();
   expect(app.state).toBe("installed");
+  // An unread screen list must not downgrade Open to "view resources".
+  expect(app.primaryAction).toBe("open");
   expect(app.screens).toEqual([]);
   expect(app.incomplete).toEqual(["screen_problems", "screens"]);
+});
+
+// --- review fixes: real uninstall records, real admission, real run shapes ----
+
+/** The finalizer's own record transition (same call `block()` makes). */
+async function advanceUninstall(
+  h: Awaited<ReturnType<typeof fixture>>,
+  changes: Parameters<CapsulesService["advanceCapsuleUninstall"]>[2],
+) {
+  const capsules = (h.core as unknown as { capsules: CapsulesService }).capsules;
+  const current = await h.ledger.getCapsule(CAPSULE);
+  const record = current!.uninstall!;
+  return await capsules.advanceCapsuleUninstall(
+    CAPSULE,
+    { uninstallId: record.id, revision: record.revision },
+    changes,
+  );
+}
+
+/** An ApplyRun exactly as the run engine records a provider-reached failure. */
+function providerFailedApply(
+  id: string,
+  planRunId: string,
+  createdAt: number,
+  operation: "update" | "destroy",
+): ApplyRun {
+  const action = operation === "destroy" ? "destroy" : "apply";
+  return applyRun(id, planRunId, createdAt, {
+    operation,
+    status: "failed",
+    diagnostics: [
+      {
+        severity: "error",
+        code: "apply_failed",
+        message: "OpenTofu provider execution failed after dispatch",
+      },
+    ],
+    auditEvents: [
+      {
+        id: `${id}_failed`,
+        type: `${action}.failed`,
+        at: createdAt,
+        data: {
+          message: "OpenTofu provider execution failed after dispatch",
+          providerDispatched: true,
+          ...(operation === "destroy"
+            ? { providerDestroySucceeded: false }
+            : { providerApplySucceeded: false }),
+          statePersistence: "unavailable",
+        },
+      },
+    ],
+    finishedAt: createdAt,
+  });
+}
+
+test("a scheduled uninstall the finalizer blocked before teardown needs the person and can be cancelled", async () => {
+  const h = await fixture();
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+  await advanceUninstall(h, { preDestroyExportStartedAt: new Date().toISOString() });
+  await advanceUninstall(h, {
+    blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.exportIncomplete,
+  });
+  const app = await h.app();
+  expect(app).toMatchObject({
+    status: "uninstalled",
+    state: "needs_attention",
+    primaryAction: "cancel_uninstall",
+    problems: [
+      { code: "uninstall_blocked", severity: "error", reason: "pre_destroy_export_incomplete" },
+    ],
+    uninstall: {
+      scheduled: { phase: "scheduled", blocked: true, cancellable: true },
+    },
+  });
+  // The view's "cancellable" is the cancel command's own answer.
+  expect((await h.request("/cancel-uninstall", h.owner, "POST")).status).toBe(200);
+  expect((await h.app()).state).toBe("installed");
+});
+
+test("a teardown blocked after the runtime became unsafe offers uninstall now, and cancel is refused", async () => {
+  const h = await fixture();
+  const base = Date.now() - 10_000;
+  await h.ledger.putPlanRun(planRun("plan_changed", base));
+  await h.ledger.putApplyRun(providerFailedApply("apply_unsafe", "plan_changed", base + 1, "update"));
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+  await advanceUninstall(h, { phase: "destroying", destroyStartedAt: new Date().toISOString() });
+  await advanceUninstall(h, { blockedReason: SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused });
+  const app = await h.app();
+  expect(app).toMatchObject({
+    state: "needs_attention",
+    primaryAction: "uninstall_now",
+    problems: [{ code: "uninstall_blocked", reason: "destroy_apply_refused" }],
+    uninstall: { scheduled: { phase: "destroying", blocked: true, cancellable: false } },
+  });
+  const cancel = await h.request("/cancel-uninstall", h.owner, "POST");
+  expect(cancel.status).toBe(409);
+  expect(JSON.stringify(await cancel.json())).toContain("capsule_uninstall_destroy_started");
+});
+
+test("a failed provider teardown follows its retries and stops counting once a normal change happens", async () => {
+  const h = await fixture();
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+  await advanceUninstall(h, { phase: "destroying", destroyStartedAt: new Date().toISOString() });
+  const base = Date.now() - 60_000;
+  // The run engine's commit after a provider-reached destroy failure.
+  const capsule = await h.ledger.getCapsule(CAPSULE);
+  await h.ledger.putCapsule({ ...capsule!, status: "error" });
+  await h.ledger.putPlanRun(planRun("destroy_plan_1", base, { operation: "destroy" }));
+  await h.ledger.putApplyRun(providerFailedApply("destroy_apply_1", "destroy_plan_1", base + 1, "destroy"));
+
+  let app = await h.app();
+  expect(app).toMatchObject({
+    status: "error",
+    state: "needs_attention",
+    primaryAction: "retry",
+    problems: [{ code: "uninstall_failed", runId: "destroy_apply_1", runType: "destroy_apply" }],
+    uninstall: { mode: "scheduled", scheduled: { phase: "destroying", cancellable: false } },
+  });
+
+  // "Uninstall now" created a destroy plan that waits for approval.
+  await h.ledger.putPlanRun(
+    planRun("destroy_plan_2", base + 2, { operation: "destroy", status: "waiting_approval" }),
+  );
+  app = await h.app();
+  expect(app).toMatchObject({
+    state: "uninstalling",
+    primaryAction: "review",
+    progress: { review: { runId: "destroy_plan_2", runType: "destroy_plan" } },
+  });
+
+  // Its approved apply is running.
+  await h.ledger.putApplyRun(
+    applyRun("destroy_apply_2", "destroy_plan_2", base + 3, { operation: "destroy", status: "running" }),
+  );
+  expect(await h.app()).toMatchObject({ state: "uninstalling", primaryAction: "none" });
+
+  // A later ordinary plan failure is not an uninstall failure.
+  await h.ledger.putPlanRun(planRun("plan_after", base + 4, { status: "failed" }));
+  app = await h.app();
+  expect(app.problems.map((problem) => problem.code)).toEqual(["run_failed"]);
+  expect(app.uninstall.scheduled).toBeUndefined();
+});
+
+test("a Capsule restored to active after a failed teardown is not stuck uninstalling", async () => {
+  const h = await fixture();
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(202);
+  await advanceUninstall(h, { phase: "destroying", destroyStartedAt: new Date().toISOString() });
+  const base = Date.now() - 60_000;
+  const capsule = await h.ledger.getCapsule(CAPSULE);
+  await h.ledger.putCapsule({ ...capsule!, status: "error" });
+  await h.ledger.putPlanRun(planRun("destroy_plan_1", base, { operation: "destroy" }));
+  await h.ledger.putApplyRun(providerFailedApply("destroy_apply_1", "destroy_plan_1", base + 1, "destroy"));
+  // The public PATCH accepts `active` from `error`; the record stays as evidence.
+  const patched = await h.request("", h.owner, "PATCH", { status: "active" });
+  expect(patched.status).toBe(200);
+  expect((await h.ledger.getCapsule(CAPSULE))?.uninstall?.phase).toBe("destroying");
+  let app = await h.app();
+  // Not "uninstalling": the newest Run is the failed removal, reported as such.
+  expect(app).toMatchObject({
+    status: "active",
+    state: "needs_attention",
+    primaryAction: "retry",
+    problems: [{ code: "run_failed", runId: "destroy_apply_1", runType: "destroy_apply" }],
+  });
+  expect(app.uninstall.scheduled).toBeUndefined();
+  // A later successful change returns the app to installed.
+  await h.ledger.putPlanRun(planRun("plan_fix", base + 2));
+  await h.ledger.putApplyRun(applyRun("apply_fix", "plan_fix", base + 3));
+  app = await h.app();
+  expect(app).toMatchObject({ state: "installed", primaryAction: "view_resources" });
+});
+
+test("a disabled app is not offered a scheduled uninstall the command would refuse", async () => {
+  const h = await fixture();
+  const capsule = await h.ledger.getCapsule(CAPSULE);
+  await h.ledger.putCapsule({ ...capsule!, status: "disabled" });
+  const app = await h.app();
+  expect(app).toMatchObject({ state: "stopped", uninstall: { mode: "none" } });
+  expect(app.uninstall.graceDays).toBeUndefined();
+  expect((await h.request("", h.owner, "DELETE")).status).toBe(409);
+});
+
+test("a full Workspace failure window without this app's entry is reported as incomplete", async () => {
+  const failure = (index: number): CapsuleInterfaceMaterializationFailure => ({
+    id: `intent_other_${index}`,
+    capsuleId: `cap_other_${index}`,
+    stateVersionId: `sv_other_${index}`,
+    outputId: `out_other_${index}`,
+    stateGeneration: 1,
+    blueprintsDigest: `sha256:${"b".repeat(64)}`,
+    totalItems: 1,
+    nextItemIndex: 0,
+    attempts: 5,
+    error: {
+      code: "interface_materialization_failed",
+      detailDigest: `sha256:${"c".repeat(64)}`,
+      recordedAt: "2026-10-27T00:00:00.000Z",
+    },
+    deadLetteredAt: "2026-10-27T00:00:00.000Z",
+    failureDigest: `sha256:${"d".repeat(64)}`,
+  });
+  const full = await fixture({
+    overrides: {
+      listInterfaceMaterializationFailures: async (_workspaceId, options) =>
+        Array.from({ length: options?.limit ?? 100 }, (_, index) => failure(index)),
+    },
+  });
+  expect((await full.app()).incomplete).toEqual(["screen_problems"]);
+  const partial = await fixture({
+    overrides: {
+      listInterfaceMaterializationFailures: async () => [failure(1), failure(2)],
+    },
+  });
+  expect((await partial.app()).incomplete).toBeUndefined();
 });
