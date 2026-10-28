@@ -162,6 +162,7 @@ export interface StoreBrowserProps {
   readonly locale: TcsLocale;
   readonly onConfigure: (listing: TcsListing) => void;
   readonly installedApps?: readonly InstalledAppSummary[];
+  readonly installedAppsLoading?: boolean;
   readonly installedAppsComplete?: boolean;
   /** Hosts with their own persistent detail view can skip this component's drawer. */
   readonly onSelectListing?: (listing: TcsListing) => void;
@@ -319,6 +320,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const installButton = (listing: TcsListing, prominent = false) => {
     const installed = () => installedFor(listing);
     return (
+      <Show when={props.installedAppsLoading} fallback={
       <Show when={installed().length > 0} fallback={
         <Show when={props.installedAppsComplete === false} fallback={
         <button
@@ -367,6 +369,11 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             {s("installAnother", props.locale)}
           </button>
           <p class="tcs-installed-hint">{s("installAnotherHint", props.locale)}</p>
+        </div>
+      </Show>
+      }>
+        <div class="tcs-installed-choice" data-testid="store-installed-loading" role="status">
+          <span class="tcs-installed-label">{s("loadingAnnounce", props.locale)}</span>
         </div>
       </Show>
     );
