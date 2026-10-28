@@ -110,10 +110,13 @@ stored InstallConfig. The manifest contains no provider ID or credentials. See t
 
 When installing, choose a matching `Resolved` provider from another app in the same
 Workspace. Only Capsule-owned Interfaces can provide app-to-app links; Workspace-owned
-and operator-owned Interfaces are not link providers. With no candidates, choose later.
-A single candidate is selected automatically only when it is not private and does not
-duplicate a candidate for another requirement. Private providers, duplicate candidates,
-and multiple candidates require an explicit provider or later choice.
+and operator-owned Interfaces are not link providers. With no candidates, the choice is
+set to later. Each requirement with exactly one non-private candidate is initially
+auto-selected. If multiple requirements auto-select the same sole candidate, the first
+requirement keeps it and later requirements return to provider-or-later choice. Explicitly
+selected providers are reserved before auto-selection, so a later auto-selection of that
+Interface also returns to choice. A private sole candidate or multiple candidates require
+an explicit provider or later choice.
 An InterfaceLink stores the selected provider Interface and Capsule.
 Adding another provider, or losing access to the current one, never switches to another
 candidate automatically.

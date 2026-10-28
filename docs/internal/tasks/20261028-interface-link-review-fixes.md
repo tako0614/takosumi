@@ -28,8 +28,6 @@
 - Test process: each portable test file uses Bun's fresh global isolation to
   keep native host fixtures independent in the full sweep. File inventory,
   six-shard partitioning and test deadlines remain unchanged.
-- Report: `/root/dev/tmp/tk0118/phase4-fix-report.md`, with exact heads, checks,
-  finding dispositions and any unresolved limits.
 - Reversal: revert the code changes without deleting retained link history.
   Operator backfill must record its dry-run and applied IDs; revocation repairs
   mistaken consent forward without restoring secret values or historical grants.
@@ -45,6 +43,20 @@
   with current candidates, and revoke links in the domain abandon operation.
 - Preserve connection/Capsule errors ahead of review, report unknown installed
   summaries, and correct API shapes and automatic-selection exceptions in docs.
-- Validate focused regressions, the complete local `bun run check`, and real
-  `check and test` success at all six final heads. Durable report:
-  `/root/dev/tmp/tk0118/phase4-fix2-report.md`.
+- Validation requested: focused regressions, the complete local `bun run check`,
+  and real `check and test` success at all six final heads. Existing CI successes
+  are evidence; the previous local full-gate run had unrelated fixture timeouts
+  and was interrupted, so it is not a passing result.
+
+## Third review round
+
+- Clean up runtime Superseded state when retrying.
+- Retry install discard through the domain operation. Keep discard idempotent for
+  frozen and draining installs, and for destroyed Capsules.
+- Keep Store loading copy neutral. Correct copy and documentation to match the
+  implementation, including automatic InterfaceLink selection.
+- Parent must run the final complete local `bun run check`. Confirm real
+  `check and test` CI on every exact final PR head; do not treat an earlier head
+  as evidence for a later one.
+- Delivery remains normal predecessor merges and pushes only: no PR merge,
+  deploy, operator backfill, or live database/schema/data mutation.
