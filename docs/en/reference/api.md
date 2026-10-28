@@ -362,7 +362,7 @@ the cancel and schedule commands' own admission rules.
 | POST | `/api/v1/sources` | Create a Source |
 | GET | `/api/v1/sources/{sourceId}` | Read a Source |
 | PATCH | `/api/v1/sources/{sourceId}` | Update Source metadata |
-| DELETE | `/api/v1/sources/{sourceId}` | Delete an unreferenced Source and invalidate its webhook bearer. Returns 409 while it is tracked or has a Run in flight |
+| DELETE | `/api/v1/sources/{sourceId}` | Retire an unreferenced Source and its owned archives, then invalidate its webhook bearer. Returns 409 while tracked, in flight, or awaiting safe cleanup |
 | POST | `/api/v1/sources/{sourceId}/hook-secret/rotate` | Rotate the webhook bearer and return the new one once; the old bearer stops working immediately |
 | POST | `/api/v1/sources/{sourceId}/sync` | Create a Source sync Run (observe by default; manual_plan for an explicit reviewed update) |
 | GET | `/api/v1/sources/{sourceId}/snapshots` | List SourceSnapshots |
@@ -370,6 +370,10 @@ the cancel and schedule commands' own admission rules.
 | POST | `/api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | Resolve the highest public stable SemVer Git tag |
 | POST | `/api/v1/sources/{sourceId}/compatibility-check` | Create a Compatibility Report |
 | GET | `/api/v1/compatibility-reports/{reportId}` | Read a Compatibility Report |
+
+Source deletion uses archive custody when the Source is owned, retiring, or has snapshot/sync history.
+It deletes archives first, then atomically removes snapshots and the Source with `source.retired`
+Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources use `source.deleted`.
 
 ### Git install plans
 
