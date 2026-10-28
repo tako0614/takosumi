@@ -63,6 +63,10 @@ Content-Type: application/json
 owner を読む compatibility code が残る endpoint でも、それは migration internal であり
 新しい Interface authoring の入口ではありません。
 
+アプリ間の連携で提供元にできるのは、同じ Workspace にインストールされた別の Capsule が所有する
+Interface だけです。Workspace や operator が所有する Interface は Interface API で扱えても、
+`interface.consume` の提供元候補にはなりません。
+
 ## 公開する値を対応付ける
 
 `inputs` は、名前ごとにどこから値を取るかを書きます。`source` は 2 通りです。
@@ -105,7 +109,7 @@ permissions を宣言します。確認後に保存する InstallConfig では�
 `interfaceBlueprints` と `requiredInterfaces` になります。manifest に提供元の ID や認証情報を
 埋め込みません。宣言の形は[Repository manifest](../reference/repository-manifest.md#requires)を参照してください。
 
-追加時には、宣言に合う `Resolved` の提供元のうち、自分が開けるものを選びます。
+インストール時には、宣言に合う `Resolved` の提供元を、同じ Workspace のアプリから選びます。
 候補がなければ「あとで」を選べます。1 件なら自動で選ばれ、複数なら提供元か「あとで」を選びます。
 選択は InterfaceLink に保存され、提供元の Interface と Capsule に固定されます。後から
 2 つ目の提供元を追加しても、現在の提供元が使えなくなっても、別の候補へ自動で切り替えません。
@@ -144,7 +148,7 @@ provider を直接使う経路を置き換えません。
 連携の状態を勝手に書き換えたりせず、現在の提供元から利用可能性を計算します。
 
 ストアは、Git URL と module の一致から「インストール済み」と「開く」を表示します。
-同じアプリを追加したいときは「もう1つ入れる」を選べます。新しいインストールは独立したアプリで、
+同じアプリをもう一度インストールしたいときは「もう1つ入れる」を選べます。新しいインストールは独立したアプリで、
 データや設定は共有しません。
 
 ## 状態と認可を読む

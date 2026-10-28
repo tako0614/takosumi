@@ -208,12 +208,14 @@ or lifecycle authority.
 
 `interface.consume` never declares a provider, product name, Interface ID,
 endpoint, or credential. The provider declares `interfaces`; the consumer declares
-`requires[].kind: "interface.consume"`. During installation, the user selects a
-`Resolved` provider they can open that matches the stored InstallConfig's exact
-type, version, and permissions. With no candidates, the user can read the guidance
+`requires[].kind: "interface.consume"`. When installing, the user selects a
+`Resolved` provider from another app in the same Workspace that matches the stored
+InstallConfig's exact type, version, and permissions. With no candidates, the user can read the guidance
 and choose later. A single candidate is selected automatically. With several,
 the user chooses a provider or later. The install plan accepts these value-free
 choices as `interfaceLinks`.
+Only Capsule-owned Interfaces can provide these app-to-app links. Workspace-owned
+and operator-owned Interfaces are not candidates.
 
 After the Capsule is created, an `InterfaceLink` pins the selected Interface and
 provider Capsule. Adding another provider or losing a candidate never selects a

@@ -108,8 +108,10 @@ it **uses**. After review, these become `interfaceBlueprints` and `requiredInter
 stored InstallConfig. The manifest contains no provider ID or credentials. See the
 [Repository manifest](../reference/repository-manifest.md#requires) for the declaration format.
 
-During installation, choose a matching `Resolved` provider that you can open. With no
-candidates, choose later. A single candidate is selected automatically. With several, choose
+When installing, choose a matching `Resolved` provider from another app in the same
+Workspace. Only Capsule-owned Interfaces can provide app-to-app links; Workspace-owned
+and operator-owned Interfaces are not link providers. With no candidates, choose later.
+A single eligible candidate is selected automatically. With several, choose
 a provider or later. An InterfaceLink stores the selected provider Interface and Capsule.
 Adding another provider, or losing access to the current one, never switches to another
 candidate automatically.
@@ -150,8 +152,8 @@ The uninstall confirmation shows incoming consumers in `uninstall.impact.usedBy`
 Uninstalling a provider leaves consumer apps in place. It neither selects a replacement nor
 rewrites the link's state: availability is computed from the current provider.
 
-The store matches Git URL and module to show an installed badge and Open. Choose Add another
-to install the same app again. Each new installation is an independent app; data and settings
+The store matches Git URL and module to show an installed badge and Open. Choose Install another
+to install the same app again. Installing another copy creates an independent app; data and settings
 are not shared.
 
 ## Reading state and authorization

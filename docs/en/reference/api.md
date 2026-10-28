@@ -265,14 +265,16 @@ Add, role change, and remove responses carry neither field.
 
 `GET /api/v1/workspaces/{workspaceId}/installed-apps` has no query parameters. With
 Workspace read access, it returns `{ installedApps: [...] }`, excluding destroyed apps.
-Each row has `capsuleId`, `name`, optional `displayName` (`{ja,en}`) and `iconUrl`, `state`,
-`primaryAction`, and `installedFrom: {url,path,matchable?}`. The display URL contains no
+Each row has `capsuleId`, `name`, optional `displayName` (`{ja,en}`) and `iconUrl`, a light
+Capsule-derived `state`, and `installedFrom: {url,path,matchable?}`. The display URL contains no
 credentials, query, or fragment; `path` is the executable module's repository-relative directory.
 When removing a query or other content prevents exact comparison, the row includes
 `matchable: false` and is excluded from installed-app matching. Its app ID and summary are
-still returned. Matching ignores ref but preserves query as part of executable source identity. The store
-uses normalized Git URL and module to show the installed count, Open, and Add another.
-Each additional installation is an independent app with separate data and settings.
+still returned. Never-applied apps do not match. If one app's config or source cannot be read,
+that row is omitted while the others remain. Matching ignores ref but preserves query as part
+of executable source identity. The store uses normalized Git URL and module to show the installed
+count, Open, and Install another. Installing another copy creates an independent app with separate
+data and settings.
 
 ### Projects and Capsules
 
@@ -379,6 +381,8 @@ the cancel and schedule commands' own admission rules.
 The candidate response is `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`.
 `generation` is the latest record for this consumer and requirement key, or 0 when none
 exists. PUT takes `{ interfaceId, expectedGeneration }`; DELETE takes `{ expectedGeneration }`.
+Candidates are `Resolved` Interfaces owned by another Capsule in the same Workspace.
+Workspace-owned and operator-owned Interfaces are not link providers.
 Both return `{ link: InterfaceLink }` on success. Selecting a provider needs no Plan. It
 prepares the new provider's Binding before revoking the old provider's Binding.
 

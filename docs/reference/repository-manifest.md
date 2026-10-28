@@ -20,8 +20,8 @@ manifest は次のように扱われます。
 - Source を同期するとき、同じ commit の manifest を読み、128 KiB までの UTF-8 JSON として確かめます。
   結果と digest は、後から変わらない `SourceSnapshot.repositoryManifest` に保存します。文書そのものは
   公開 API では返しません。
-- 追加するとき、固定したその SourceSnapshot の宣言を、同じ snapshot の互換性の確認結果と突き合わせ、
-  運用している人の policy の範囲で、データベースに保存する追加時の設定（`InstallConfig`）に変換します。変更の確認と
+- インストールするとき、固定したその SourceSnapshot の宣言を、同じ snapshot の互換性の確認結果と突き合わせ、
+  運用している人の policy の範囲で、データベースに保存するインストール時の設定（`InstallConfig`）に変換します。変更の確認と
   デプロイ（Plan / Run）が読むのはこの保存した設定で、manifest を読み直しません。
 
 ## 版と書ける項目
@@ -183,8 +183,9 @@ lifecycle の権限が増えることもありません。
 
 `interface.consume` には、provider、製品名、Interface の ID、endpoint、認証情報を書きません。
 提供側は `interfaces`、利用側は `requires[].kind: "interface.consume"` を宣言します。保存した
-InstallConfig の正確な type、version、permissions に合い、利用者が開ける `Resolved` の提供元を、
-追加時に選びます。候補が 0 件なら案内を読み「あとで」を選べます。1 件なら自動で選ばれ、複数なら
+InstallConfig の正確な type、version、permissions に合い、同じ Workspace の別の Capsule が所有する
+`Resolved` の提供元を、インストール時に選びます。Workspace / operator 所有の Interface は候補に入りません。
+候補が 0 件なら案内を読み「あとで」を選べます。1 件なら自動で選ばれ、複数なら
 提供元か「あとで」を選びます。選択は値を含まない `interfaceLinks` として install plan に答えます。
 
 Capsule の作成後、選んだ提供元の Interface と Capsule は `InterfaceLink` に固定されます。

@@ -253,13 +253,14 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 
 `GET /api/v1/workspaces/{workspaceId}/installed-apps` に query parameter はありません。その Workspace を
 読める利用者に、destroyed を除くアプリを `{ installedApps: [...] }` で返します。各行は
-`capsuleId`、`name`、任意の `displayName`（`{ja,en}`）と `iconUrl`、`state`、`primaryAction`、
+`capsuleId`、`name`、任意の `displayName`（`{ja,en}`）と `iconUrl`、Capsule から作る簡易な `state`、
 `installedFrom: {url,path,matchable?}` を持ちます。URL は認証情報・query・fragment を含まず、`path` はリポジトリから見た
 実行する module のフォルダです。元の URL が query を含むなど、表示用 URL から正確に照合できない行には
-`matchable: false` を付け、導入済みの照合から除外します。アプリの ID や要約は引き続き返します。
+`matchable: false` を付け、インストール済みの照合から除外します。アプリの ID や要約は引き続き返します。
+未適用のアプリも照合から除外します。設定や取得元を読めないアプリの行は省き、他のアプリの一覧を返します。
 ref は照合に使いませんが、query は実行元の identity の一部として保持します。ストアは正規化した Git URL と module
 で照合し、「インストール済み」の件数と「開く」、副操作の「もう1つ入れる」を表示します。
-追加したものは独立したアプリで、データや設定は共有しません。
+もう一度インストールしたものは独立したアプリで、データや設定は共有しません。
 
 メンバー一覧の各行は、membership の field に加えて、アカウントに表示名があれば
 `displayName` を返します。`email` は呼び出し元がその Workspace の active な owner または
@@ -408,6 +409,8 @@ Run は必ず計画の作成から始まります。
 
 候補取得の応答は `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`
 です。`generation` はその consumer と requirement key の最新記録の値で、履歴がなければ 0 です。
+候補は同じ Workspace にある別の Capsule が所有する `Resolved` Interface に限られます。
+Workspace / operator 所有の Interface は提供元になりません。
 PUT の本文は `{ interfaceId, expectedGeneration }`、DELETE は `{ expectedGeneration }` です。
 どちらも成功時は `{ link: InterfaceLink }` を返します。選び直しに Plan は不要です。
 新しい提供元への Binding を用意してから、旧提供元への Binding を取り消します。
