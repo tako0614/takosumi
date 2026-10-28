@@ -5,31 +5,27 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dir, "../../../../../");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
-test("reload resumes an acknowledged coordinator by read-only GET", () => {
-  const view = read("dashboard/src/views/new/InstallView.tsx");
-  const load = view.slice(view.indexOf("const loadRecovery ="), view.indexOf("const continueRecovery ="));
-  expect(load).toContain("getGitInstallPlan(id, { signal })");
-  expect(load).toContain("const epoch = recoveryFence.begin();");
-  expect(load).toContain("recoveryFence.isCurrent(epoch)");
-  expect(load).toContain("installRecoveryMatches(response, id, workspace, props.installingPrincipalId)");
-  expect(load).toContain("const search = location.search;");
-  expect(load).toContain("const workspace = currentWorkspaceId();");
-  expect(load).toContain("onCleanup(() => controller.abort());");
+test("reopening an attempt from its URL is a read-only GET", () => {
+  const controller = read("dashboard/src/views/new/use-install-attempt.ts");
+  const load = controller.slice(
+    controller.indexOf("// The URL names the attempt; reading it never advances or answers it."),
+    controller.indexOf("/** A pause between reconcile commands"),
+  );
+  expect(load).toContain("getGitInstallPlan(attemptId)");
+  expect(load).toContain("expected !== epoch");
   expect(load).not.toContain("reconcileGitInstallPlan(");
-  expect(load).not.toContain("createApplyRun(");
-
-  const resume = view.slice(view.indexOf("const continueRecovery ="), view.indexOf("const clearRecovery ="));
-  expect(resume).toContain('state.response.nextAction !== "reconcile"');
-  expect(resume).toContain("await reconcileGitInstallPlan(id)");
-  expect(resume).not.toContain("createApplyRun(");
-  expect(view).toContain('data-testid="install-plan-recovery"');
-  expect(view).toContain('presentation === "failed" ? t("installStore.recoveryFailed")');
-  expect(view).toContain('presentation === "failed_run" ? t("installStore.recoveryFailedRun")');
-  expect(view).toContain('presentation === "review" ? t("installStore.recoveryReview")');
-  const recoveryView = view.slice(view.indexOf('data-testid="install-plan-recovery"'), view.indexOf('<Show when={!hasInstallRecoveryLocator'));
-  expect(recoveryView).not.toContain('<h2>{t("installStore.preparing")}</h2>');
-  expect(recoveryView).toContain('<Show when={presentation === "failed_run"}>');
-  expect(recoveryView).toContain('href={`/runs/${encodeURIComponent(response.installPlan.planRunId!)}`}');
+  expect(load).not.toContain("answerGitInstallAttempt(");
+  expect(load).not.toContain("discardGitInstallAttempt(");
+  expect(load).not.toContain("createGitInstallAttempt(");
+  expect(load).not.toContain("drive()");
+  // Advancing an attempt is the person's explicit Continue or a request made
+  // in this page view, never a side effect of reading it.
+  const resume = controller.slice(
+    controller.indexOf("const resume = () =>"),
+    controller.indexOf("/** One PATCH;"),
+  );
+  expect(resume).toContain("drive();");
+  expect(read("dashboard/src/views/new/InstallView.tsx")).toContain("onClick={() => props.attempt.resume()}");
 });
 
 test("an unfinished install continues in place from its saved settings, never through a revision Plan", () => {

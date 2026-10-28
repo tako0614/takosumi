@@ -23,8 +23,11 @@ apply, state, outputs, audit, usage, and prepaid credit together.
    list) and a cost estimate. When the cost can't be estimated, it says so. Nothing is applied until
    you press **Allow and install**; changes that delete or replace something need an extra
    confirmation. Nothing applies automatically, and reloading or opening a URL never grants consent.
-   **Stop installing** discards the unapplied app this attempt created.
-6. When the install finishes, the same page becomes the app's page. **Open** starts the app if it has
+   **Stop installing** throws the whole install attempt away, including the unapplied app it created.
+   An install you leave without stopping is listed under **Unfinished installs** in the Store, where
+   you can continue or stop it; reopening it moves nothing forward. Secret settings are never saved:
+   they are sent only when you confirm.
+6. When the install finishes, the app's page opens. **Open** starts the app if it has
    an authorized screen. Failures appear under **Needs attention** with the reason and the next step,
    and can be retried with a new review without discarding partially created state.
 7. **Uninstall** asks for confirmation before scheduling it. The app and its data remain during the

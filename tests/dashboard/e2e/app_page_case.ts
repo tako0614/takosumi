@@ -813,14 +813,15 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const ID = "cap_states_e";
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
-      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "revision_stalled" | "review_pending" | "incomplete" | "uninstalled";
+      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "awaiting_your_input" | "revision_stalled" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
+      let attemptAwaitsInput = false;
       let viewUnavailable = false;
       const capsule = () => ({
         id: ID, workspaceId: "ws_alpha", name: NAME, slug: "state-echo", sourceId: "src_states_e", installConfigId: "cfg_states_e",
         environment: "production",
-        ...(scene === "installing" || scene === "install_stalled" || scene === "awaiting_input" || scene === "uninstalled" ? { currentStateGeneration: 0 } : { currentStateVersionId: "sv_states_e", currentStateGeneration: 1 }),
-        status: scene === "uninstall_scheduled" ? "uninstalled" : scene === "uninstalled" ? "destroyed" : scene === "installing" || scene === "install_stalled" || scene === "awaiting_input" ? "pending" : "active",
+        ...(scene === "installing" || scene === "install_stalled" || scene === "awaiting_input" || scene === "awaiting_your_input" || scene === "uninstalled" ? { currentStateGeneration: 0 } : { currentStateVersionId: "sv_states_e", currentStateGeneration: 1 }),
+        status: scene === "uninstall_scheduled" ? "uninstalled" : scene === "uninstalled" ? "destroyed" : scene === "installing" || scene === "install_stalled" || scene === "awaiting_input" || scene === "awaiting_your_input" ? "pending" : "active",
         // The version it last ran, kept on the record after uninstalling.
         ...(scene === "uninstalled"
           ? { adoptedSourceRevision: { sourceSnapshotId: "snap_states_e", ref: "v1.4.2", path: ".", resolvedCommit: PORTABLE_SOURCE_COMMIT } }
@@ -885,7 +886,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, {
               status: "pending", applied: false, state: "needs_attention", primaryAction: "continue_install",
               problems: [{ code: "install_incomplete", severity: "error" }],
-              progress: { revisionPreparing: false, installPlanId: "gip_states_e" },
+              progress: { revisionPreparing: false, installPlanId: "gip_00000000005ea7e5" },
               uninstall: { mode: "discard" },
             });
           case "awaiting_input":
@@ -893,6 +894,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, {
               status: "pending", applied: false, state: "installing", primaryAction: "none",
               progress: { revisionPreparing: true, installPlanId: "gip_states_e", installPlanAwaitingInput: "other" },
+              uninstall: { mode: "discard" },
+            });
+          case "awaiting_your_input":
+            // The viewer's own install attempt waits for their input.
+            return appView(ID, NAME, {
+              status: "pending", applied: false, state: "installing", primaryAction: "none",
+              progress: { revisionPreparing: true, installPlanId: "gip_00000000005ea7e5", installPlanAwaitingInput: "viewer" },
               uninstall: { mode: "discard" },
             });
           case "revision_stalled":
@@ -940,15 +948,33 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           const end = start + limit;
           return route.fulfill({ json: { runs: all.slice(start, end), ...(end < all.length ? { nextCursor: String(end) } : {}) } });
         }
-        if (path === "/api/v1/install-plans/gip_states_e/reconcile" && request.method() === "POST") {
+        if (attemptAwaitsInput && path.startsWith("/api/v1/install-plans/gip_00000000005ea7e5")) {
+          // The attempt waits for the person: it answers the same way to the
+          // app page's reconcile and to the install page's read.
           return route.fulfill({ json: {
             installPlan: {
-              id: "gip_states_e", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
+              id: "gip_00000000005ea7e5", workspaceId: "ws_alpha", createdBy: "sub_portable_e2e", operation: "install", mode: "attempt",
+              requestDigest: "sha256:states", source: { name: "state-echo", url: "https://github.com/example/state-echo.git", ref: "v1.4.2", path: "." },
+              capsule: { name: "state-echo", environment: "production" }, options: {}, phase: "awaiting_input", awaitingInput: "inputs",
+              generation: 4, createdAt: now, updatedAt: now,
+            },
+            nextAction: "none",
+            userAction: {
+              kind: "provide_inputs", modulePath: ".", resources: [], connections: [], variables: [],
+              name: { current: "state-echo", proposed: "state-echo", conflict: false }, missing: [],
+            },
+            links: { self: "/api/v1/install-plans/gip_00000000005ea7e5" },
+          } });
+        }
+        if (path === "/api/v1/install-plans/gip_00000000005ea7e5/reconcile" && request.method() === "POST") {
+          return route.fulfill({ json: {
+            installPlan: {
+              id: "gip_00000000005ea7e5", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
               capsuleId: ID, planRunId: installPlan.id, createdAt: now, updatedAt: now,
             },
             nextAction: "review_run",
             userAction: { kind: "review_run", planRunId: installPlan.id },
-            links: { self: "/api/v1/install-plans/gip_states_e", run: `/api/v1/runs/${installPlan.id}` },
+            links: { self: "/api/v1/install-plans/gip_00000000005ea7e5", run: `/api/v1/runs/${installPlan.id}` },
           } });
         }
         if (path === "/api/v1/revision-plans/grp_states_e/reconcile" && request.method() === "POST") {
@@ -1081,6 +1107,29 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await header.getByRole("button", { name: "Continue installing", exact: true }).click();
       await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
 
+      // An install that waits for the person continues on its own install
+      // page, where its sheet asks for what is missing.
+      attemptAwaitsInput = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await header.getByRole("button", { name: "Continue installing", exact: true }).click();
+      await expect(page).toHaveURL(/\/new\?installPlan=gip_00000000005ea7e5$/u);
+      await expect(page.getByTestId("install-configuration")).toBeVisible();
+      attemptAwaitsInput = false;
+      await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+
+      // The person who started an install waiting for input continues it on
+      // its install page; the notice links there.
+      scene = "awaiting_your_input";
+      attemptAwaitsInput = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(problems.locator('[data-progress="awaiting-input"]')).toHaveText("This install still needs your input. Continue it from the install page.");
+      await expect(header.getByRole("button")).toHaveCount(0);
+      await problems.getByRole("link", { name: "Continue installing", exact: true }).click();
+      await expect(page).toHaveURL(/\/new\?installPlan=gip_00000000005ea7e5$/u);
+      await expect(page.getByTestId("install-configuration")).toBeVisible();
+      attemptAwaitsInput = false;
+      await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+
       // Someone else's install waiting for input says whose input it needs,
       // and offers nothing that cannot advance it.
       scene = "awaiting_input";
@@ -1088,6 +1137,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(app).toHaveAttribute("data-app-state", "installing");
       await expect(problems.locator('[data-progress="awaiting-input"]')).toHaveText("This install is waiting for input from the person who started it.");
       await expect(header.getByRole("button")).toHaveCount(0);
+      await expect(problems.getByRole("link", { name: "Continue installing", exact: true })).toHaveCount(0);
 
       // A version change whose preparation stopped is continued through its
       // own coordinator and reviewed in place.
@@ -1122,7 +1172,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       expect(seenMutations).toEqual([
         `POST /api/v1/capsules/${ID}/cancel-uninstall`,
-        "POST /api/v1/install-plans/gip_states_e/reconcile",
+        "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
+        "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
         "POST /api/v1/revision-plans/grp_states_e/reconcile",
       ]);
       expect(errors).toEqual([]);

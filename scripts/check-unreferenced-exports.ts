@@ -12,13 +12,15 @@ export interface UnreferencedExportReport {
 }
 
 /**
- * A focused ratchet for the install helper module that previously accumulated
- * exported helpers which were tested but never used by production code. This
- * is intentionally not a repository-wide dead-code linter: the single budget
- * tracks that module and only counts actual TypeScript symbol references.
+ * A focused ratchet for the install page's state module. Its predecessor (the
+ * client-orchestrated install helpers, removed with TASK-0115 Phase 3b) had
+ * accumulated exported helpers that were tested but never used by production
+ * code; the attempt-driven replacement starts at zero. This is intentionally
+ * not a repository-wide dead-code linter: the single budget tracks that module
+ * and only counts actual TypeScript symbol references.
  */
 export const UNREFERENCED_EXPORT_BUDGETS: readonly UnreferencedExportBudget[] = [
-  { file: "dashboard/src/views/new/install-helpers.ts", maximum: 19 },
+  { file: "dashboard/src/views/new/install-attempt.ts", maximum: 0 },
 ];
 
 const EXCLUDED_DIRECTORIES = [

@@ -7,11 +7,19 @@ import {
   APP_PAGE_SECTIONS,
   appPageHref,
   appPageSectionFromHash,
+  installAttemptHref,
   legacyAppTabSection,
   legacyInstallLocatorCapsuleId,
   reinstallHref,
 } from "../../../../dashboard/src/lib/app-links.ts";
 import { parseInstallPrefill } from "../../../../dashboard/src/lib/install-link.ts";
+
+describe("install attempt links", () => {
+  test("an unfinished install opens its install page by its id alone", () => {
+    expect(installAttemptHref("gip_0123456789abcdef")).toBe("/new?installPlan=gip_0123456789abcdef");
+    expect(() => installAttemptHref("gip_../x")).toThrow();
+  });
+});
 
 describe("app page links", () => {
   test("an app's page is /apps/:id, its sections are fragments", () => {
