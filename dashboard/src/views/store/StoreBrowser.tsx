@@ -105,7 +105,7 @@ const STR = {
   installAnother: { ja: "もう1つ入れる", en: "Install another" },
   installAnotherHint: {
     ja: "別のアプリとして新しくインストールします。データや設定は共有されません。",
-    en: "This adds a separate app. Its data and settings are not shared.",
+    en: "This installs a separate app. Its data and settings are not shared.",
   },
 } as const;
 

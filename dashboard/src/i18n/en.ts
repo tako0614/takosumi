@@ -9,7 +9,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.installed": "Installed",
   "installStore.installedCount": "{count} installed",
   "installStore.installAnother": "Install another",
-  "installStore.installAnotherHint": "This adds a separate app. Its data and settings are not shared.",
+  "installStore.installAnotherHint": "This installs a separate app. Its data and settings are not shared.",
   "installStore.installedReadFailed": "Installed apps could not be checked.",
   "installStore.applyWait.interfaces": "Choose an app to link, or choose to link later.",
   "installStore.interfaces.title": "Linked apps",
