@@ -4994,8 +4994,11 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   });
   const reviewedSourceId = `src_source_build_pin_${crypto.randomUUID().replaceAll("-", "")}`;
   const reviewedSnapshotId = `snap_source_build_pin_${crypto.randomUUID().replaceAll("-", "")}`;
+  const reviewedSource = { ...seeded.source };
+  delete reviewedSource.ownerCapsuleId;
+  delete reviewedSource.createdByInstallPlanId;
   await deployStore.putSource({
-    ...seeded.source,
+    ...reviewedSource,
     id: reviewedSourceId,
     name: "source-build-pin-reviewed-source",
   });
@@ -5601,8 +5604,11 @@ test("authenticated repository Interface review persists exact proposals and app
   const repositoryManifestDigest = `sha256:${"e".repeat(64)}`;
   const reviewedSourceId = `src_repo_interface_${crypto.randomUUID().replaceAll("-", "")}`;
   const reviewedSnapshotId = `snap_repo_interface_${crypto.randomUUID().replaceAll("-", "")}`;
+  const reviewedSource = { ...seeded.source };
+  delete reviewedSource.ownerCapsuleId;
+  delete reviewedSource.createdByInstallPlanId;
   await deployStore.putSource({
-    ...seeded.source,
+    ...reviewedSource,
     id: reviewedSourceId,
     name: "repo-interface-reviewed-source",
   });
