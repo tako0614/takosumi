@@ -124,6 +124,8 @@ export interface InterfaceLinkReplacement {
 }
 
 export interface InterfaceLinkStore {
+  /** Whether link persistence is installed on this backing store. */
+  available?(): Promise<boolean>;
   /** First selection only; subsequent selections use the atomic replacement. */
   create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean>;
   get(id: string): Promise<InterfaceLink | undefined>;

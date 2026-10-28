@@ -261,6 +261,8 @@ export interface CapsulesServiceDependencies {
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly projects?: ProjectsService;
+  /** Revoke Interface links as part of the canonical no-state abandonment. */
+  readonly revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>;
   /** Optional host-owned lease shared by every Capsule lifecycle transition. */
   readonly capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
   /**
@@ -287,6 +289,7 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly #projects: ProjectsService;
+  readonly #revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>;
   readonly #uninstallGraceDays: number;
   readonly #validateUninstallRequesterAt?: UninstallRequesterAtValidator;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
@@ -299,6 +302,7 @@ export class CapsulesService {
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
+    this.#revokeCapsuleInterfaceLinks = deps.revokeCapsuleInterfaceLinks;
     this.#capsuleLifecycleAdmission = deps.capsuleLifecycleAdmission;
     this.#uninstallGraceDays =
       deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
@@ -1208,7 +1212,6 @@ export class CapsulesService {
           prepared.expectedWorkspaceManagementAuthority,
         updatedAt: this.#now().toISOString(),
       });
-      if (result.kind === "unchanged") return result.capsule;
       if (result.kind === "not-found") {
         throw new OpenTofuControllerError(
           "not_found",
@@ -1223,6 +1226,8 @@ export class CapsulesService {
         );
       }
       const updated = result.capsule;
+      await this.#revokeCapsuleInterfaceLinks?.(updated.workspaceId, updated.id);
+      if (result.kind === "unchanged") return updated;
       await this.#activity.record({
         workspaceId: updated.workspaceId,
         action: "capsule.abandoned",

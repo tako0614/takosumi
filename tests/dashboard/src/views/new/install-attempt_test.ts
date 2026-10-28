@@ -461,6 +461,8 @@ describe("words", () => {
   test("problems and statuses are localized by code with a generic fallback", () => {
     expect(attemptProblemKey("install_attempt_expired")).toBe("installStore.problem.expired");
     expect(attemptProblemKey("source_sync_failed")).toBe("installStore.problem.sourceSync");
+    expect(attemptProblemKey("interface_link_unavailable")).toBe("installStore.problem.interfaceUnavailable");
+    expect(attemptProblemKey("interface_choice_conflict")).toBe("installStore.problem.interfaceConflict");
     expect(attemptProblemKey("something_new")).toBe("installStore.problem.generic");
     expect(attemptProblemKey(undefined)).toBe("installStore.problem.generic");
     expect(openAttemptStatusKey(respond({ kind: "wait", phase: "syncing_source" }))).toBe("installStore.open.statusReading");

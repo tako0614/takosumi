@@ -706,6 +706,7 @@ export class InterfaceService {
     readonly requirement: CapsuleRequiredInterface;
   }): Promise<readonly Interface[]> {
     validateCapsuleRequiredInterfaces([input.requirement]);
+    if (this.#stores.links.available && !await this.#stores.links.available()) return [];
     const candidates = await this.list({ workspaceId: input.workspaceId, type: input.requirement.interface.type, phase: "Resolved", ownerKind: "Capsule", limit: 1000 });
     if (candidates.length === 1000) throw new InterfaceServiceError("failed_precondition", "Interface candidate inventory exceeds bounded resolution");
     const accepted: Interface[] = [];

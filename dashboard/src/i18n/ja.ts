@@ -179,6 +179,8 @@ export const ja = {
   "installStore.problem.retryable": "途中の処理を確認できませんでした。もう一度試すと続きから進みます。",
   "installStore.problem.nameTaken": "このスペースには同じ名前のアプリがあります。別の名前にしてください。",
   "installStore.problem.connection": "選んだ接続はこのアプリでは使えません。別の接続を選んでください。",
+  "installStore.problem.interfaceUnavailable": "選んだインターフェースを利用できなくなりました。別の候補を選ぶか、後で設定してください。",
+  "installStore.problem.interfaceConflict": "同じインターフェースは複数の要件に選べません。別の候補を選んでください。",
   "installStore.problem.resubmit": "同じ設定をもう一度送ってください。ほかの内容を変えるときは、やめてから最初からやり直してください。",
   "installStore.problem.generic": "インストールの準備を完了できませんでした。最初からやり直してください。",
   "installStore.error.changed": "内容が更新されていました。最新の状態を表示しています。",

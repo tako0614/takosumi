@@ -2396,6 +2396,22 @@ test("matching observed Interfaces remain automatic and explicit choices overrid
   }
 });
 
+test("observed Interface candidates are compared with the current sheet on submission", async () => {
+  const fixture = interfaceAttemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  const provider = addInterfaceProvider(fixture, "appeared-after-sheet");
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    observedInterfaces: [{ requirementKey: "storage", candidateIds: [provider.metadata.id] }],
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(confirmed.status).toBe(200);
+  expect((await confirmed.json()).installPlan.phase).toBe("planning");
+  expect(fixture.interfaceLinks.size).toBe(1);
+});
+
 test("observed Interface input is bounded, unique, ids-only, and accepted only with continue", async () => {
   const fixture = interfaceAttemptFixture();
   const planId = await startAttempt(fixture);
@@ -2484,6 +2500,7 @@ test("loss of the paused sheet's sole Interface provider returns 409 once and re
     expect(freshRead.installPlan.generation).toBe(paused.installPlan.generation);
     const refused = await answer(fixture, planId, {
       expectedGeneration: paused.installPlan.generation,
+      observedInterfaces: [{ requirementKey: "storage", candidateIds: ["if_providerone"] }],
       continue: true,
       variables: { region: "eu" },
     });
@@ -4145,6 +4162,7 @@ function installFixture(
         }
         abandonedCapsules.push(id);
         capsules[index] = { ...capsules[index]!, status: "destroyed" };
+        await operations.interfaces?.revokeCapsuleInterfaceLinks?.(WORKSPACE.id, id);
         return capsules[index]!;
       },
       getCapsule: async (id: string) => {

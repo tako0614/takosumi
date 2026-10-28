@@ -437,12 +437,17 @@ the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
 for plans that are not attempts. The Source is never deleted; only polling
 that the attempt itself turned on is turned off.
 
-To confirm displayed automatic choices, send
-`observedInterfaces: [{requirementKey,interfaceId}]` together with `continue: true`.
-An explicit `interfaceLinks` answer takes precedence for that requirement; otherwise,
-if the displayed ID is no longer the sole eligible candidate, the response is
-409 `interface_candidate_unavailable`. GET the fresh sheet and confirm it again.
-These observations contain IDs only, are never stored in `options`, and grant no authority.
+To confirm displayed choices, send
+`observedInterfaces: [{requirementKey,candidateIds}]` together with `continue: true`.
+An explicit `interfaceLinks` answer takes precedence for that requirement. The server
+compares the echoed candidate IDs with the current candidate set, so a set that changed
+after the sheet opened is accepted when it still matches at submission time.
+`implicitInterfaceKeys` identifies requirements with an implicit selection in the sheet,
+including a sole-candidate auto-selection or “configure later”. These observations contain
+IDs only, are never stored in `options`, and grant no authority.
+When Control D1 has not installed the Interface link store (schema before v76),
+the install sheet offers no candidates and saves no selection. Choosing “configure
+later” proceeds without attempting to create a link.
 
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired

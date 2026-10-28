@@ -168,6 +168,8 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.problem.retryable": "A step couldn't be confirmed. Try again to continue from there.",
   "installStore.problem.nameTaken": "Another app here uses this name. Choose a different one.",
   "installStore.problem.connection": "The chosen connection can't be used by this app. Choose another one.",
+  "installStore.problem.interfaceUnavailable": "The chosen interface is no longer available. Choose another candidate or configure it later.",
+  "installStore.problem.interfaceConflict": "The same interface can't serve multiple requirements. Choose another candidate.",
   "installStore.problem.resubmit": "Send the same settings again. To change anything else, stop and start over.",
   "installStore.problem.generic": "The install couldn't be prepared. Start over to try again.",
   "installStore.error.changed": "This install changed in the meantime; showing its current state.",
