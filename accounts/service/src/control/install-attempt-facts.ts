@@ -542,6 +542,9 @@ export async function userActionFor(
     };
   }
   const facts = plan.attemptFacts?.inputs;
+  // After a started creation only a resubmission is accepted, even when the
+  // confirming request carried no variables.
+  const resubmitting = plan.creationAttempted === true;
   const resubmit = plan.transientVariableNames ?? [];
   const [connections, name] = await Promise.all([
     connectionRequirements(operations, plan),
@@ -566,7 +569,7 @@ export async function userActionFor(
       ...(connectionsReady(connections) ? [] : ["connections" as const]),
       ...(name.conflict ? ["name" as const] : []),
     ],
-    ...(resubmit.length > 0 ? { resubmitVariables: [...resubmit] } : {}),
+    ...(resubmitting ? { resubmitVariables: [...resubmit] } : {}),
   };
 }
 
@@ -578,18 +581,19 @@ const PHASES_BEFORE_CAPSULE: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Only an attempt whose Capsule cannot exist yet may expire. A pause waiting
- * for re-sent values may already have a committed Capsule, so it never does.
+ * Only an attempt whose Capsule cannot exist yet may expire. Once a
+ * confirming request started creation a Capsule may exist, so it never does.
  */
 export function attemptCanExpire(
   plan: Pick<
     StoredGitInstallPlan,
-    "mode" | "phase" | "capsuleId" | "transientVariableNames"
+    "mode" | "phase" | "capsuleId" | "transientVariableNames" | "creationAttempted"
   >,
 ): boolean {
   return plan.mode === "attempt" &&
     PHASES_BEFORE_CAPSULE.has(plan.phase) &&
     plan.capsuleId === undefined &&
+    plan.creationAttempted !== true &&
     (plan.transientVariableNames?.length ?? 0) === 0;
 }
 
@@ -597,7 +601,12 @@ export function attemptCanExpire(
 export function attemptIsExpired(
   plan: Pick<
     StoredGitInstallPlan,
-    "mode" | "phase" | "capsuleId" | "transientVariableNames" | "expiresAt"
+    | "mode"
+    | "phase"
+    | "capsuleId"
+    | "transientVariableNames"
+    | "creationAttempted"
+    | "expiresAt"
   >,
   now: number,
 ): boolean {

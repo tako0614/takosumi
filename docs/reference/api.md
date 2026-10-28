@@ -423,18 +423,22 @@ route はありません。
 （`wait`・`choose_module`・`provide_inputs`・`review_run`・`retry`・`none`）。候補が一つだけの
 接続は自動で選びます。`PATCH` と `DELETE` は試行を始めた本人だけが使え、`PATCH` は
 `expectedGeneration` で CAS します。variable 値は `continue: true` で確定する request だけが
-受け取り、coordinator には保存しません。確定の結果を確認できなかったときは、同じ値の再送
-だけを受け付けます。`DELETE` は試行が作った未適用の Capsule を abandon して、終端の
-`discarded` にします。適用中・適用済みの試行と、試行ではない install plan は拒否します。
-Source は削除しません。試行が有効にした polling だけを止めます。
+受け取り、coordinator には保存しません。確定の request が作成を始めた後は（variable が
+なくても）Capsule が存在しうるので、結果を確認できなかったときは同じ値の再送だけを受け付け、
+作成済みの Capsule を先に採用します。`DELETE` は、lease を持つ処理がないことを確かめてから
+試行が作った未適用の Capsule を abandon し、終端の `discarded` にします。abandon が途中で
+止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
+すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
+Source は削除しません。その試行自身が有効にした polling だけを止めます。
 
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の
 管理 epoch の変更（`workspace_management_changed`）は `invalidated` と `userAction: retry`
 で示すだけで、片付けは本人の `DELETE` か、無効な試行に届いた本人の `PATCH`（409
 `install_attempt_invalid`）で行います。`awaiting_input` は lease も実行権限も持たないため、
-Workspace 管理の blocker になりません。そこから先へ進む書き込みは、作成時の管理 admission
-を同じ statement で確かめます。
+Workspace 管理の blocker になりません。Capsule ができる前に期限切れになり lease を持たない
+試行も、進められないので blocker になりません。そこから先へ進む書き込みは、作成時の管理
+admission を同じ statement で確かめます。
 
 `configuration-plans` は、現在の private InstallConfig に closed な
 `variablePatch`（`set` / `remove`）、value-free ProviderBinding 選択、Interface

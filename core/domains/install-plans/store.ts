@@ -81,6 +81,16 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
    * creating authority without them.
    */
   readonly transientVariableNames?: readonly string[];
+  /**
+   * Set when a confirming request started atomic initial creation, with or
+   * without variables. From then on a Capsule may exist: the attempt adopts
+   * it by its deterministic id before any create, never expires, and accepts
+   * only a resubmission until a definitive pre-commit failure proves no
+   * Capsule was created.
+   */
+  readonly creationAttempted?: true;
+  /** Set only when this attempt itself turned on polling for its Source. */
+  readonly sourcePollingEnabledByAttempt?: true;
   /** Private attempt facts; projected only through `userAction`. */
   readonly attemptFacts?: GitInstallAttemptFacts;
   /** Private create-only configuration retained until atomic initial creation. */
@@ -294,6 +304,30 @@ export function gitInstallPlanPhaseBlocksWorkspaceManagement(
   return !isTerminalGitInstallPlanPhase(phase) && phase !== "awaiting_input";
 }
 
+/** Pre-Capsule coordinator phases an unleased expired attempt may idle in. */
+const EXPIRABLE_COORDINATOR_PHASES: ReadonlySet<string> = new Set([
+  "syncing_source",
+  "compiling_install",
+  "analyzing_compatibility",
+]);
+
+/**
+ * An unleased attempt past `expiresAt` before its Capsule exists can never
+ * advance (reconcile refuses it and any claim re-checks the original
+ * admission), so it stops blocking Workspace management instead of waiting
+ * for its creator's discard. The SQL predicates encode the same rule with
+ * ISO-8601 UTC string comparison against the database clock.
+ */
+export function isExpiredIdleGitInstallAttempt(
+  plan: Pick<StoredGitInstallPlan, "mode" | "phase" | "expiresAt">,
+  nowIso: string,
+): boolean {
+  return plan.mode === "attempt" &&
+    EXPIRABLE_COORDINATOR_PHASES.has(plan.phase) &&
+    typeof plan.expiresAt === "string" &&
+    plan.expiresAt <= nowIso;
+}
+
 /** Attempts the actor may still resume (`reviewable` is filtered further). */
 export function isOpenGitInstallAttemptPhase(phase: unknown): boolean {
   return phase !== "failed" && phase !== "discarded";
@@ -442,8 +476,13 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   hasWorkspaceManagementBlockersNow(workspaceId: string): boolean {
     for (const entry of this.#entries.values()) {
       if (entry.plan.workspaceId !== workspaceId) continue;
-      if (gitInstallPlanPhaseBlocksWorkspaceManagement(entry.plan.phase)) return true;
-      if (entry.leaseToken !== undefined || entry.leaseExpiresAt !== undefined) {
+      const leased = entry.leaseToken !== undefined ||
+        entry.leaseExpiresAt !== undefined;
+      if (leased) return true;
+      if (
+        gitInstallPlanPhaseBlocksWorkspaceManagement(entry.plan.phase) &&
+        !isExpiredIdleGitInstallAttempt(entry.plan, new Date().toISOString())
+      ) {
         return true;
       }
     }
@@ -644,6 +683,8 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     initialConfiguration: _initialConfiguration,
     preflightInstallConfigDigest: _preflightInstallConfigDigest,
     transientVariableNames: _transientVariableNames,
+    creationAttempted: _creationAttempted,
+    sourcePollingEnabledByAttempt: _sourcePollingEnabledByAttempt,
     attemptFacts: _attemptFacts,
     ...publicPlan
   } = plan;
