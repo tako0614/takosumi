@@ -103,6 +103,7 @@ export type RepoOwnedInstallConfigAdoptionDiagnostic =
         | "repository_install_ux_interface_blueprint_conflict"
         | "repository_install_ux_output_allowlist_conflict"
         | "repository_install_ux_runtime_binding_profile_conflict"
+        | "repository_install_ux_context_mapping_conflict"
         | "repository_install_ux_installing_principal_invalid"
         | "repository_install_ux_manifest_api_version_required";
       readonly message: string;
@@ -119,6 +120,8 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly variablePresentation: InstallConfig["variablePresentation"];
       readonly installExperience: InstallConfig["installExperience"];
       readonly variableMapping: InstallConfig["variableMapping"];
+      /** Value-free context selectors compiled from the exact repository module. */
+      readonly installContextVariableMapping?: InstallConfig["installContextVariableMapping"];
       readonly interfaceBlueprints: InstallConfig["interfaceBlueprints"];
       readonly requiredInterfaces?: InstallConfig["requiredInterfaces"];
       readonly outputAllowlist: InstallConfig["outputAllowlist"];
@@ -385,6 +388,23 @@ export async function adoptRepoOwnedInstallConfig(
     return { status: "invalid", diagnostic: compiled.diagnostic };
   }
 
+  const installContextVariableMapping = mergeInstallContextVariableMapping({
+    proposed: compiled.compiled.installContextVariableMapping,
+    base: input.baseConfig.installContextVariableMapping,
+    variableMapping: input.baseConfig.variableMapping,
+    variablePresentation: input.baseConfig.variablePresentation,
+  });
+  if (!installContextVariableMapping.ok) {
+    return {
+      status: "invalid",
+      diagnostic: {
+        code: "repository_install_ux_context_mapping_conflict",
+        message:
+          "Repository install context inputs conflict with the base configuration.",
+      },
+    };
+  }
+
   const repositoryManifestApiVersion = observation.document.apiVersion;
   const proposedInterfaceBlueprints =
     resolveInterfaceInstallingPrincipalBlueprints(
@@ -452,6 +472,9 @@ export async function adoptRepoOwnedInstallConfig(
       compiled.compiled.variableMapping,
       input.baseConfig.variableMapping,
     ),
+    ...(installContextVariableMapping.value
+      ? { installContextVariableMapping: installContextVariableMapping.value }
+      : {}),
     interfaceBlueprints: interfaceBlueprints.value,
     ...(compiled.compiled.requiredInterfaces.length > 0
       ? { requiredInterfaces: compiled.compiled.requiredInterfaces }
@@ -548,6 +571,12 @@ export async function previewRepoOwnedInstallConfig(
     variablePresentation: adoption.variablePresentation,
     installExperience: adoption.installExperience,
     variableMapping: adoption.variableMapping,
+    ...(adoption.installContextVariableMapping
+      ? {
+          installContextVariableMapping:
+            adoption.installContextVariableMapping,
+        }
+      : {}),
     ...(adoption.sourceBuild ? { sourceBuild: adoption.sourceBuild } : {}),
     outputAllowlist: adoption.outputAllowlist,
     ...(adoption.interfaceBlueprints !== undefined
@@ -1005,6 +1034,60 @@ function mergeVariablePresentation(
   const merged = new Map(proposed.map((entry) => [entry.name, entry]));
   for (const entry of operator ?? []) merged.set(entry.name, entry);
   return [...merged.values()];
+}
+
+function mergeInstallContextVariableMapping(input: {
+  readonly proposed: InstallConfig["installContextVariableMapping"];
+  readonly base: InstallConfig["installContextVariableMapping"];
+  readonly variableMapping: InstallConfig["variableMapping"];
+  readonly variablePresentation: InstallConfig["variablePresentation"];
+}):
+  | {
+      readonly ok: true;
+      readonly value?: InstallConfig["installContextVariableMapping"];
+    }
+  | { readonly ok: false } {
+  const proposed = input.proposed;
+  if (!proposed || Object.keys(proposed).length === 0) {
+    return { ok: true, ...(input.base ? { value: input.base } : {}) };
+  }
+
+  const proposedEntries = Object.entries(proposed);
+  for (const [name, source] of proposedEntries) {
+    for (const [baseName, baseSource] of Object.entries(input.base ?? {})) {
+      if (!variablePathsOverlap(name, baseName)) continue;
+      if (name !== baseName || source !== baseSource) {
+        return { ok: false };
+      }
+    }
+  }
+
+  const existingValueTargets = [
+    ...Object.keys(input.variableMapping),
+    ...(input.variablePresentation ?? []).map((entry) => entry.name),
+  ];
+  if (
+    existingValueTargets.some((target) =>
+      proposedEntries.some(([name]) => variablePathsOverlap(name, target)),
+    )
+  ) {
+    return { ok: false };
+  }
+
+  return {
+    ok: true,
+    value: { ...(input.base ?? {}), ...proposed },
+  };
+}
+
+function variablePathsOverlap(left: string, right: string): boolean {
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  const sharedLength = Math.min(leftParts.length, rightParts.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return false;
+  }
+  return true;
 }
 
 function mergeInstallExperience(

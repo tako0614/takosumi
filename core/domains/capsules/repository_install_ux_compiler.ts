@@ -12,6 +12,7 @@ import type {
 import type {
   InstallConfig,
   InstallConfigInstallExperience,
+  InstallContextVariableMapping,
   InstallConfigInstallProjection,
   InstallConfigRuntimeBindingMaterialization,
   OutputAllowlistEntry,
@@ -35,6 +36,7 @@ import {
   parseRepositorySourceBuild,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
 
@@ -43,6 +45,8 @@ const SUPPORTED_SOURCE_KINDS = [
   "capsule_name",
   "workspace_scoped_capsule_name",
   "module_default",
+  "workspace_id",
+  "capsule_id",
 ] as const;
 
 export const DEFAULT_REPOSITORY_INSTALL_UX_ALLOWED_REQUIREMENT_KINDS = [
@@ -68,6 +72,12 @@ const RESERVED_RUNTIME_BINDINGS: ReadonlySet<string> = new Set([
 
 const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 240;
 const PLAIN_ENV_VARIABLE = "env";
+const RESERVED_CONTEXT_INPUT_NAMES: ReadonlySet<string> = new Set([
+  "env",
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 const DEFAULT_INTERFACE_DELIVERY_TYPES = ["none"] as const;
 const MAX_INTERFACE_PERMISSION_LENGTH = 256;
 const MAX_INTERFACE_PERMISSIONS = 16;
@@ -88,6 +98,7 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_variable_value_unsupported"
   | "repository_install_ux_plain_env_unsupported"
   | "repository_install_ux_source_disallowed"
+  | "repository_install_ux_context_input_invalid"
   | "repository_install_ux_requirement_disallowed"
   | "repository_install_ux_requirement_version_unsupported"
   | "repository_install_ux_requirement_target_invalid"
@@ -149,6 +160,8 @@ export interface CompiledRepositoryInstallUx {
   readonly variablePresentation: readonly InstallConfigVariablePresentation[];
   readonly installExperience: InstallConfigInstallExperience;
   readonly variableMapping: Readonly<Record<string, JsonValue>>;
+  /** Value-free current Capsule/Workspace selectors for Run preparation. */
+  readonly installContextVariableMapping?: InstallContextVariableMapping;
   /** User-owned names accepted from the reviewed request. */
   readonly userVariableNames: readonly string[];
   /** Normalized Capsule-owned Interface proposals for later InstallConfig merge. */
@@ -196,7 +209,7 @@ export function compileRepositoryInstallUx(
     );
   }
 
-  // `sourceBuild` is a v2.3+ field. Keep this runtime check in addition to
+  // `sourceBuild` is admitted by v2.3, v2.4, and v2.5. Keep this runtime check in addition to
   // the closed parser so manually constructed documents cannot smuggle it into
   // an older API version and accidentally widen the execution contract.
   const moduleWithSourceBuild = module as typeof module & {
@@ -205,17 +218,19 @@ export function compileRepositoryInstallUx(
   if (
     input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 &&
     input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
+    input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 &&
     moduleWithSourceBuild.sourceBuild !== undefined
   ) {
     return invalid(
       "repository_install_ux_source_build_version_unsupported",
-      "Repository-owned sourceBuild requires takosumi.com/v2.3 or v2.4.",
+      "Repository-owned sourceBuild requires takosumi.com/v2.3, v2.4, or v2.5.",
     );
   }
   let sourceBuild: InstallConfig["sourceBuild"];
   if (
     input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
-    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
   ) {
     const parsedSourceBuild = parseRepositorySourceBuild(
       moduleWithSourceBuild.sourceBuild,
@@ -280,13 +295,44 @@ export function compileRepositoryInstallUx(
     input.policy?.allowedRequirementKinds ?? [],
   );
 
+  const contextInputNames = new Set(
+    module.inputs
+      .filter((declaration) => isContextSourceKind(declaration.source.kind))
+      .map((declaration) => declaration.name),
+  );
+  for (const name of contextInputNames) {
+    if (
+      module.inputs.filter((declaration) => declaration.name === name).length !== 1
+    ) {
+      return invalid(
+        "repository_install_ux_context_input_invalid",
+        `The current-context input ${boundedIdentifier(name)} cannot share a name with another input.`,
+      );
+    }
+  }
   for (const declaration of module.inputs) {
     const validation = validateInputDeclaration(
       declaration,
       declarationByName.get(declaration.name),
       sourceKinds,
+      input.document.apiVersion,
     );
     if (validation) return validation;
+  }
+
+  for (const requirement of requirements) {
+    if (
+      requirement.kind !== "interface.consume" &&
+      deliversToVariables(requirement.deliver) &&
+      Object.values(deliveryTargets(requirement.deliver)).some((name) =>
+        contextInputNames.has(name),
+      )
+    ) {
+      return invalid(
+        "repository_install_ux_context_input_invalid",
+        "A runtime requirement cannot deliver to a current-context input.",
+      );
+    }
   }
 
   for (const requirement of requirements) {
@@ -382,7 +428,12 @@ export function compileRepositoryInstallUx(
   }
 
   const variablePresentation = module.inputs.flatMap((declaration) => {
-    if (declaration.source.kind === "module_default") return [];
+    if (
+      declaration.source.kind === "module_default" ||
+      isContextSourceKind(declaration.source.kind)
+    ) {
+      return [];
+    }
     const moduleDeclaration = declarationByName.get(declaration.name)!;
     return [
       compileVariablePresentation(declaration, moduleDeclaration),
@@ -396,6 +447,12 @@ export function compileRepositoryInstallUx(
   };
   for (const [name, value] of Object.entries(reviewedVariables)) {
     variableMapping[name] = value;
+  }
+  const installContextVariableMapping: Record<string, "workspace_id" | "capsule_id"> = {};
+  for (const declaration of module.inputs) {
+    if (isContextSourceKind(declaration.source.kind)) {
+      installContextVariableMapping[declaration.name] = declaration.source.kind;
+    }
   }
 
   const projections = compileVariableProjections(requirements, module.inputs);
@@ -424,6 +481,9 @@ export function compileRepositoryInstallUx(
         repositoryInstallUx: { status: "accepted" },
       },
       variableMapping,
+      ...(Object.keys(installContextVariableMapping).length > 0
+        ? { installContextVariableMapping }
+        : {}),
       ...(sourceBuild ? { sourceBuild } : {}),
       ...(runtimeBindingMaterialization
         ? { runtimeBindingMaterialization }
@@ -475,7 +535,7 @@ function compileInterfaceDeclarations(
   if (!isRepositoryManifestInterfaceCapableApiVersion(input.apiVersion)) {
     return invalid(
       "repository_install_ux_interface_version_unsupported",
-      "Repository-owned Interface declarations require takosumi.com/v2, v2.1, v2.2, v2.3, or v2.4.",
+      "Repository-owned Interface declarations require takosumi.com/v2 through v2.5.",
     );
   }
 
@@ -846,7 +906,41 @@ function validateInputDeclaration(
   input: RepositoryInstallUxInput,
   moduleDeclaration: CapsuleRootModuleVariableDeclaration | undefined,
   allowedSourceKinds: ReadonlySet<RepositoryInstallUxInputSource["kind"]>,
+  apiVersion: RepositoryManifestDocument["apiVersion"],
 ): CompileRepositoryInstallUxResult | undefined {
+  if (
+    input.source.kind === "workspace_scoped_capsule_name" &&
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+  ) {
+    return invalid(
+      "repository_install_ux_context_input_invalid",
+      "workspace_scoped_capsule_name is not admitted by takosumi.com/v2.5.",
+    );
+  }
+  if (isContextSourceKind(input.source.kind)) {
+    if (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5) {
+      return invalid(
+        "repository_install_ux_context_input_invalid",
+        "Current-context input sources require takosumi.com/v2.5.",
+      );
+    }
+    if (
+      !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(input.name) ||
+      RESERVED_CONTEXT_INPUT_NAMES.has(input.name) ||
+      Object.keys(input).some(
+        (key) => !["name", "source", "type", "label"].includes(key),
+      ) ||
+      Object.keys(input.source).some((key) => key !== "kind") ||
+      (input.type !== undefined && input.type !== "string") ||
+      !moduleDeclaration ||
+      moduleDeclaration.type !== "string"
+    ) {
+      return invalid(
+        "repository_install_ux_context_input_invalid",
+        `The current-context input ${boundedIdentifier(input.name)} must be a plain root string variable with no editable, role, or secret fields.`,
+      );
+    }
+  }
   if (!allowedSourceKinds.has(input.source.kind)) {
     return invalid(
       "repository_install_ux_source_disallowed",
@@ -904,6 +998,12 @@ function validateInputDeclaration(
   return undefined;
 }
 
+function isContextSourceKind(
+  kind: RepositoryInstallUxInputSource["kind"],
+): kind is "workspace_id" | "capsule_id" {
+  return kind === "workspace_id" || kind === "capsule_id";
+}
+
 function validateRequirement(
   requirement: RepositoryRuntimeRequirement,
   declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
@@ -925,7 +1025,8 @@ function validateRequirement(
   if (requirement.kind === "secret.generated") {
     const targets = deliveryTargets(requirement.deliver);
     if (
-      apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+      (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
+        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5) ||
       deliversToVariables(requirement.deliver) ||
       Object.keys(targets).length !== 1 ||
       !Object.prototype.hasOwnProperty.call(targets, "value") ||
@@ -935,7 +1036,7 @@ function validateRequirement(
     ) {
       return invalid(
         "repository_install_ux_requirement_disallowed",
-        "Generated runtime secrets require takosumi.com/v2.4 binding delivery with exactly 32 bytes and hex encoding.",
+        "Generated runtime secrets require takosumi.com/v2.4 or v2.5 binding delivery with exactly 32 bytes and hex encoding.",
       );
     }
   }
@@ -961,7 +1062,8 @@ function validateRequirement(
         );
       }
     } else if (
-      apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+      (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
+        apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5) ||
       targetNames.length !== 4 ||
       !sameStrings(targetNames, [
         "clientId",
@@ -973,7 +1075,7 @@ function validateRequirement(
     ) {
       return invalid(
         "repository_install_ux_requirement_version_unsupported",
-        "Binding-delivered identity.oidc requires takosumi.com/v2.4 and exact issuerUrl, clientId, ownerSubject, and redirectUri slots.",
+        "Binding-delivered identity.oidc requires takosumi.com/v2.4 or v2.5 and exact issuerUrl, clientId, ownerSubject, and redirectUri slots.",
       );
     }
     if (
@@ -1340,9 +1442,12 @@ function compileRuntimeBindingMaterialization(
 
   if (generatedSecrets.length === 0 && !oidcClient) return undefined;
   // All currently supported private materialization declarations are closed
-  // under v2.4. Keep this guard for manually constructed documents that bypass
-  // the parser and to prevent a future API version from silently reusing v2.
-  if (apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4) {
+  // under v2.4 and v2.5. Keep this guard for manually constructed documents
+  // and prevent a future API version from silently inheriting this profile.
+  if (
+    apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 &&
+    apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
+  ) {
     return undefined;
   }
   return {
