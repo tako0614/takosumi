@@ -345,7 +345,7 @@ export default function AppSettingsSection(props: {
 
   return (
     <AppSection
-      id="app-settings"
+      id="settings"
       title={t("app.settings.title")}
       subtitle={t("app.settings.subtitle")}
       testId="app-settings"
@@ -383,7 +383,7 @@ export default function AppSettingsSection(props: {
           </Match>
         </Switch>
 
-        <div class="ap-subsection" data-testid="app-connections">
+        <div class="ap-subsection" id="connections" data-testid="app-connections">
           <h3>{t("app.settings.connectionsTitle")}</h3>
           <Switch>
             <Match when={props.bindingsFailed}>

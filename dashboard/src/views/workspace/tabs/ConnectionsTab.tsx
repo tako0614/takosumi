@@ -74,6 +74,7 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 import ConnectionCreateForm from "../connections/ConnectionCreateForm.tsx";
+import { appPageHref } from "../../../lib/app-links.ts";
 
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
 
@@ -405,7 +406,7 @@ export default function ConnectionsTab(props: {
                   <For each={apps()}>
                     {(app) => (
                       <li>
-                        <A href={`/workloads/${encodeURIComponent(app.capsuleId)}`}>
+                        <A href={appPageHref(app.capsuleId)}>
                           {app.name}
                         </A>
                       </li>

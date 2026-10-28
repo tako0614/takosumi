@@ -246,6 +246,21 @@ export interface RunPolicyReason {
   readonly resourceType?: string;
 }
 
+/**
+ * The change flow that created a plan, when one did: a version change to a
+ * ref (the revision coordinator or an automatic update), a rollback to an
+ * earlier StateVersion, a configuration change, or an update of the app's
+ * tracked ref as configured (a Workspace update). A client retries a failed
+ * change by running the same flow again instead of planning whatever the
+ * Source's default ref holds. Value-free: a Git ref and a StateVersion id
+ * only.
+ */
+export type RunPlanOrigin =
+  | { readonly kind: "revision"; readonly ref: string }
+  | { readonly kind: "rollback"; readonly stateVersionId: string }
+  | { readonly kind: "configuration" }
+  | { readonly kind: "update" };
+
 export interface RunChangeSummary {
   readonly add?: number;
   readonly change?: number;
@@ -632,6 +647,8 @@ export interface Run {
    * approval. Present only on plan rows where that happened.
    */
   readonly policyReasons?: readonly RunPolicyReason[];
+  /** The change flow that created this plan; present on plan rows only. */
+  readonly origin?: RunPlanOrigin;
   /** Exact non-secret provider identities pinned by current Plan creation. */
   readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];

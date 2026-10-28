@@ -2510,6 +2510,7 @@ export class RunEngine {
       ...(capsuleContext ? { capsuleContext } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+      ...(internal.origin ? { origin: internal.origin } : {}),
       ...(internal.refreshOnly ? { refreshOnly: true as const } : {}),
       ...(internal.autoApplyRequested
         ? { autoApplyRequested: true as const }
@@ -3210,6 +3211,7 @@ export class RunEngine {
           : {}),
         ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
         ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+        ...(internal.origin ? { origin: internal.origin } : {}),
         ...(internal.autoApplyRequested
           ? { autoApplyRequested: true as const }
           : {}),

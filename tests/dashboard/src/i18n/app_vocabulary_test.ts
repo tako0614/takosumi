@@ -23,7 +23,7 @@ import { ja } from "../../../../dashboard/src/i18n/ja.ts";
 type Key = keyof typeof ja;
 
 const NAMESPACES =
-  /^(app|apps|installStore|run|runError|runGroup|op|new|controlError|error|status\.run|status\.capsule|workloads?|services?|capsules?)\./u;
+  /^(app|apps|installStore|run|runError|runGroup|op|new|controlError|error|policy|status\.run|status\.capsule|workloads?|services?|capsules?)\./u;
 
 // 非公開 (private) and 公開リポジトリ (public repository) are ordinary words.
 const BANNED_JA = /サービス|ワークロード|デプロイ|(?<!非)公開(?!リポジトリ)|反映|ワークスペース/u;
@@ -37,7 +37,6 @@ const SURFACE_FILES = [
     .filter((file) => /\.tsx?$/u.test(file))
     .map((file) => `views/app/${file}`),
   "views/apps/AppListView.tsx",
-  "views/apps/WorkloadDetailView.tsx",
   "views/new/InstallView.tsx",
   "views/new/InstallExecution.tsx",
   "views/new/InstallLifecycle.tsx",
@@ -46,6 +45,7 @@ const SURFACE_FILES = [
   "views/runs/RunGroupView.tsx",
   "components/run/PlanResourceList.tsx",
   "components/run/CostSummary.tsx",
+  "components/run/PolicyReasonList.tsx",
   // Helpers whose sentences these surfaces show.
   "lib/run-errors.ts",
   "lib/labels.ts",
@@ -54,6 +54,7 @@ const SURFACE_FILES = [
   "lib/run-plan-resources.ts",
   "lib/capsules-ui.ts",
   "lib/app-page.ts",
+  "lib/policy-reasons.ts",
 ];
 const surfaceSource = SURFACE_FILES.map((file) => readFileSync(resolve(root, file), "utf8")).join("\n");
 

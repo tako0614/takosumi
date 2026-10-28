@@ -498,7 +498,7 @@ export const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1" as const;
 
 /**
  * One state per installed app, computed by the control plane from the Capsule
- * row, its newest lifecycle Run, the revision coordinator, its
+ * row, its newest lifecycle Run, its install or revision coordinator, its
  * ProviderConnections and its screen materialization ledger.
  *
  * - `installing`: never applied; the first install is preparing, running, or
@@ -692,8 +692,20 @@ export interface CapsuleAppVersion {
 }
 
 export interface CapsuleAppProgress {
-  /** The revision coordinator is preparing a reviewable plan. */
+  /**
+   * An install or revision coordinator is still preparing this app's next
+   * Plan (it has not created the Plan Run yet; an install attempt counts only
+   * for a never-applied app and only until it stalls). Once the Plan Run
+   * exists, `run`/`review` and `latestRun` describe the work. The name
+   * predates install coordinators and is kept for compatibility.
+   */
   readonly revisionPreparing: boolean;
+  /**
+   * An install attempt bound to this never-applied app that has not created
+   * its Plan yet. `continue_install` advances it through
+   * `POST /api/v1/install-plans/:id/reconcile` instead of planning directly.
+   */
+  readonly installPlanId?: string;
   /** The newest lifecycle Run, while it is queued or running. */
   readonly run?: CapsuleAppRunSummary;
   /** The newest lifecycle Run, while it is a plan waiting for review. */

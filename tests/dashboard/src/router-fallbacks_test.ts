@@ -14,6 +14,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { resolveLegacyAppUrl } from "../../../dashboard/src/lib/app-links.ts";
 
 const source = readFileSync(
   new URL("../../../dashboard/src/index.tsx", import.meta.url),
@@ -86,7 +87,11 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
 
   test("the four behaviors are first-class routes", () => {
     expect(source).toContain('<Route path="/" component={AppListView} />');
-    expect(source).toContain('<Route path="/new" component={InstallView} />');
+    // `/new` is the store and install page; an old `?capsule=` locator alone
+    // opens that app's page instead.
+    expect(source).toContain('<Route path="/new" component={NewRoute} />');
+    expect(source).toContain('resolveLegacyAppUrl("/new", untrack(() => location.search))');
+    expect(source).toContain("appPage ? <Navigate href={appPage} /> : <InstallView />");
     expect(source).toContain(
       '<Route path="/connections" component={ConnectionsView} />',
     );
@@ -94,13 +99,9 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain(
       '<Route path="/account/:section" component={AccountView} />',
     );
-    // An app's page and the details opened from its history stay routable.
-    expect(source).toContain(
-      '<Route path="/workloads/:id" component={WorkloadDetailView} />',
-    );
-    expect(source).toContain(
-      '<Route path="/workloads/:id/:tab" component={WorkloadDetailView} />',
-    );
+    // An app's page (canonical `/apps/:id`) and the details opened from its
+    // history stay routable.
+    expect(source).toContain('<Route path="/apps/:id" component={AppPage} />');
     expect(source).toContain('<Route path="/runs/:id" component={RunView} />');
     expect(source).toContain(
       '<Route path="/run-groups/:id" component={RunGroupView} />',
@@ -155,8 +156,23 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain('case "billing":\n      return "/account/billing";');
     expect(source).toContain('case "interface-recovery":\n      return "/";');
     expect(source).toContain('default:\n      return "/account/workspace";');
+    // Older app-page URLs land on the canonical page, their tab as a section.
+    for (const from of [
+      "/apps/:id/:tab",
+      "/workloads/:id",
+      "/workloads/:id/:tab",
+      "/services/:id",
+      "/services/:id/:tab",
+      "/capsules/:id",
+      "/capsules/:id/:tab",
+    ]) {
+      expect(source).toContain(`<Route path="${from}" component={RedirectLegacyAppPage} />`);
+    }
+    expect(source).toContain('<Navigate href={resolveLegacyAppUrl(location.pathname) ?? "/"} />');
+    expect(source).toContain('<Route path="/apps" component={() => <Navigate href="/" />} />');
     // No removed screen is still mounted.
     for (const removed of [
+      "WorkloadDetailView",
       "RunsListView",
       "ActivityView",
       "GraphView",
@@ -175,5 +191,41 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toMatch(
       /import\s*\{[^}]*\bNavigate\b[^}]*\}\s*from\s*"@solidjs\/router"/,
     );
+  });
+});
+
+describe("older app URLs resolve to the canonical app page", () => {
+  test("app detail paths keep the app and turn the old tab into a section", () => {
+    const cases: readonly (readonly [string, string, string | undefined])[] = [
+      ["/workloads/cap_a", "", "/apps/cap_a"],
+      ["/workloads/cap_a/danger", "", "/apps/cap_a#danger"],
+      ["/workloads/cap_a/settings", "", "/apps/cap_a#settings"],
+      ["/workloads/cap_a/deploys", "", "/apps/cap_a#version"],
+      ["/services/cap_a/history", "", "/apps/cap_a#history"],
+      ["/capsules/cap_a", "", "/apps/cap_a"],
+      ["/apps/cap_a/connections", "", "/apps/cap_a#connections"],
+      ["/apps/cap_a/overview", "", "/apps/cap_a"],
+      ["/workloads/cap%20a", "", "/apps/cap%20a"],
+      // The canonical page and non-app paths are not redirected.
+      ["/apps/cap_a", "", undefined],
+      ["/runs/run_a", "", undefined],
+      ["/workloads", "", undefined],
+    ];
+    for (const [pathname, search, expected] of cases) {
+      expect({ pathname, target: resolveLegacyAppUrl(pathname, search) }).toEqual({ pathname, target: expected });
+    }
+  });
+
+  test("only a bare /new?capsule= locator leaves the install page", () => {
+    expect(resolveLegacyAppUrl("/new", "?capsule=cap_a")).toBe("/apps/cap_a");
+    expect(resolveLegacyAppUrl("/new", "")).toBeUndefined();
+    expect(resolveLegacyAppUrl("/new", "?capsule=cap_a&git=https%3A%2F%2Fgithub.com%2Fo%2Fr")).toBeUndefined();
+    expect(resolveLegacyAppUrl("/new", "?capsule=javascript:alert(1)")).toBeUndefined();
+    // A resolved target never leaves the dashboard origin.
+    for (const path of ["/workloads/%2F%2Fevil.test", "/workloads/..%2F..%2Fx"]) {
+      const target = resolveLegacyAppUrl(path) ?? "";
+      expect(target.startsWith("/apps/")).toBe(true);
+      expect(new URL(target, "https://dashboard.test").origin).toBe("https://dashboard.test");
+    }
   });
 });

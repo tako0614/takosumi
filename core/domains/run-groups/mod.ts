@@ -162,7 +162,9 @@ export class RunGroupsService {
         const response = await this.#controller.createCapsulePlan(
           capsuleId,
           this.#actor ? { actor: this.#actor } : {},
-          { runGroupId },
+          // A Workspace update re-plans each app's tracked ref as configured;
+          // a retry of one member repeats exactly that.
+          { runGroupId, origin: { kind: "update" } },
         );
         runs[capsuleId] = response.planRun.id;
         memberRuns.push(await this.#controller.getRun(response.planRun.id));

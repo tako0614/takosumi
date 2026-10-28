@@ -153,7 +153,8 @@ describe("single-screen install surface", () => {
     expect(router).toContain(
       'const InstallView = lazy(() => import("./views/new/InstallView.tsx"))',
     );
-    expect(router).toContain('<Route path="/new" component={InstallView} />');
+    expect(router).toContain('<Route path="/new" component={NewRoute} />');
+    expect(router).toContain("<InstallView />");
     expect(router).not.toContain("NewAppView");
     expect(router).not.toContain("CapsuleSourceOptionsInstallView");
     expect(router).not.toContain('path="/composition/install"');

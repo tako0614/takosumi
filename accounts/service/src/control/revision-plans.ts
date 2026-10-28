@@ -591,6 +591,7 @@ async function createOrObserveRevisionPlanRun(
       expectedWorkspaceManagementAuthority:
         plan.workspaceManagementAuthority,
       actor: revisionPlanRunActor(plan.id),
+      origin: { kind: "revision", ref: plan.revision.targetRef },
     });
     run = await operations.getRun(created.planRun.id);
   }

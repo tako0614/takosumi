@@ -39,7 +39,7 @@ describe("Home", () => {
     expect(home).not.toContain("installConfigs");
     expect(home).not.toContain("window.open");
     // Each card's name opens its app page; the card has one primary action.
-    expect(home).toContain("`/workloads/${encodeURIComponent(props.app.inst.id)}`");
+    expect(home).toContain("const pageHref = () => appPageHref(props.app.inst.id);");
     expect(home).toContain('t("apps.manageAria", { name: name() })');
   });
 
@@ -57,11 +57,13 @@ describe("Home", () => {
     expect(home).toContain("refetchUiSurfaces()");
   });
 
-  test("Home is the all-apps list: /workloads redirects there, the app page stays", () => {
+  test("Home is the all-apps list: /apps and /workloads redirect there; an app's page is /apps/:id", () => {
     expect(router).not.toContain("WorkloadListView");
     expect(router).toContain('path="/" component={AppListView}');
+    expect(router).toContain('path="/apps" component={() => <Navigate href="/" />}');
     expect(router).toContain('path="/workloads" component={() => <Navigate href="/" />}');
-    expect(router).toContain('path="/workloads/:id" component={WorkloadDetailView}');
-    expect(router).toContain('path="/workloads/:id/:tab" component={WorkloadDetailView}');
+    expect(router).toContain('path="/apps/:id" component={AppPage}');
+    expect(router).toContain('path="/workloads/:id" component={RedirectLegacyAppPage}');
+    expect(router).toContain('path="/workloads/:id/:tab" component={RedirectLegacyAppPage}');
   });
 });

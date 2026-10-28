@@ -488,9 +488,11 @@ test("workspace_update e2e: stale -> plan-update group (topo layers) -> approve 
   expect(Object.keys(graph.runs).sort()).toEqual(["inst_files", "inst_talk"]);
   // Production members land waiting_approval -> group is waiting_approval.
   expect(created.runGroup.status).toEqual("waiting_approval");
-  // Each member Run carries the runGroupId (spec §19).
+  // Each member Run carries the runGroupId (spec §19), and records that a
+  // Workspace update of its tracked ref made it, so a retry repeats that.
   for (const run of created.runs) {
     expect(run.runGroupId).toEqual(created.runGroup.id);
+    expect(run.origin).toEqual({ kind: "update" });
   }
 
   // Approve the whole group: every waiting member is approved, which clears the
