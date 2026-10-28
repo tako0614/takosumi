@@ -623,7 +623,6 @@ export const ja = {
   "app.problem.policyBlockedHint": "下の理由を確認し、設定や接続を見直してから、もう一度確認してください。",
   "app.problem.reasonsLoadFailed": "理由を読み込めませんでした。詳細から確認できます。",
   "app.problem.retryInstalled": "今の版で確認し直す",
-  "app.problem.installNeedsInput": "このインストールは入力を待っています。インストールの画面から続けてください。",
   "app.progress.title": "進行中",
   "app.progress.reviewWaiting": "確認待ちの変更があります",
   "app.progress.reviewWaitingHint": "内容を確認し、問題なければ許可してください。許可するまで何も変わりません。",

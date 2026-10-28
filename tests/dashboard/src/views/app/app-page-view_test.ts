@@ -258,6 +258,8 @@ describe("installed app page", () => {
     const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
     expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
     expect(continueInstall).toContain("await advanceGitInstallPlan(attempt)");
+    // An install that waits for the person continues on its own install page.
+    expect(continueInstall).toContain("navigate(installAttemptHref(attempt));");
     expect(continueInstall).toContain("if (!attempt) return extractRunId(await planCapsule(capsuleId()));");
   });
 

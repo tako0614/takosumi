@@ -624,7 +624,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
     if (view().nameProblem === "invalid") return;
     const next = await answer({ capsuleName: typed }, "answer");
-    if (next) setNameDraft(undefined);
+    // A name typed while this rename was in flight is kept for the next one.
+    if (next && nameDraft()?.trim() === typed) setNameDraft(undefined);
   };
 
   /**
@@ -657,7 +658,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         "continue",
       );
       if (!next) return;
-      if (rename && next.userAction.kind === "provide_inputs") setNameDraft(undefined);
+      if (rename && next.userAction.kind === "provide_inputs" && nameDraft()?.trim() === typed) {
+        setNameDraft(undefined);
+      }
       drive();
     } finally {
       if (!disposed) setConfirming(false);

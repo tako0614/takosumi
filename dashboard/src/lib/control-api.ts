@@ -1503,24 +1503,6 @@ export async function listOpenGitInstallAttempts(
   );
 }
 
-/**
- * The Apply started for one reviewed Plan, read from the app's own Runs
- * (`GET /capsules/:id/runs`, newest first), so a reopened review follows it
- * instead of offering the apply again.
- */
-export async function findPlanApplyRun(
-  capsuleId: string,
-  planRunId: string,
-): Promise<Run | undefined> {
-  const body = await controlFetch<{ runs?: unknown }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs?limit=10&type=apply`,
-  );
-  const runs = Array.isArray(body?.runs) ? (body.runs as readonly Run[]) : [];
-  return runs.find((run) =>
-    run.capsuleId === capsuleId && run.type === "apply" && run.planRunId === planRunId
-  );
-}
-
 /** Advances exactly one durable install coordinator phase. */
 export async function reconcileGitInstallPlan(
   installPlanId: string,

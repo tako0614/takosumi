@@ -540,6 +540,47 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("a name typed while a rename is in flight is the one Review sends", async () => {
+    const first = deferred<GitInstallPlanResponse>();
+    let generation = 2;
+    const sheet = (name: string) => respond(inputs({
+      connections: [{ ...requirement, selectedConnectionId: "conn_a", autoSelected: true }],
+      missing: [],
+      variables: [],
+      name: { current: name, proposed: name, conflict: false },
+    }), generation);
+    reset({
+      getGitInstallPlan: async () => sheet("office"),
+      answerGitInstallAttempt: async (_id: never, body: never) => {
+        const answer = body as Record<string, unknown>;
+        if (answer.continue) {
+          generation += 1;
+          return respond({ kind: "wait", phase: "planning" }, generation, "planning");
+        }
+        const next = await first.promise;
+        generation = next.installPlan.generation;
+        return next;
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, generation + 1),
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setNameDraft("office-2");
+    const renaming = page.attempt.saveName();
+    await settle();
+    page.attempt.setNameDraft("office-final");
+    const reviewing = page.attempt.confirm();
+    generation = 3;
+    first.resolve(sheet("office-2"));
+    await renaming;
+    await reviewing;
+    expect(calls.filter(({ name }) => name === "answerGitInstallAttempt").map(({ args }) => args[1])).toEqual([
+      { expectedGeneration: 2, capsuleName: "office-2" },
+      { expectedGeneration: 3, continue: true, capsuleName: "office-final" },
+    ]);
+    page.dispose();
+  });
+
   test("a Store listing installs the newest released version unless one was chosen", async () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
     reset({

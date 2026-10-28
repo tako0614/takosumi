@@ -31,6 +31,15 @@ export function appPageHref(capsuleId: string, section?: AppPageSection): string
   return section ? `${path}#${APP_PAGE_SECTIONS[section]}` : path;
 }
 
+/**
+ * The install page of one unfinished install attempt. It shows that attempt
+ * as it stands (reading, the sheet, the review) and continues from there.
+ */
+export function installAttemptHref(installPlanId: string): string {
+  if (!/^gip_[a-f0-9]{16}$/u.test(installPlanId)) throw new TypeError("Invalid install attempt id");
+  return `/new?installPlan=${installPlanId}`;
+}
+
 /** The section a location fragment names, if it names one. */
 export function appPageSectionFromHash(hash: string): AppPageSection | undefined {
   const name = hash.replace(/^#/u, "");

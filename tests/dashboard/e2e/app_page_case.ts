@@ -815,6 +815,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const now = "2026-10-20T00:00:00.000Z";
       type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
+      let attemptAwaitsInput = false;
       let viewUnavailable = false;
       const capsule = () => ({
         id: ID, workspaceId: "ws_alpha", name: NAME, slug: "state-echo", sourceId: "src_states_e", installConfigId: "cfg_states_e",
@@ -879,7 +880,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, {
               status: "pending", applied: false, state: "needs_attention", primaryAction: "continue_install",
               problems: [{ code: "install_incomplete", severity: "error" }],
-              progress: { revisionPreparing: false, installPlanId: "gip_states_e" },
+              progress: { revisionPreparing: false, installPlanId: "gip_00000000005ea7e5" },
               uninstall: { mode: "discard" },
             });
           case "incomplete":
@@ -915,15 +916,33 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           const end = start + limit;
           return route.fulfill({ json: { runs: all.slice(start, end), ...(end < all.length ? { nextCursor: String(end) } : {}) } });
         }
-        if (path === "/api/v1/install-plans/gip_states_e/reconcile" && request.method() === "POST") {
+        if (attemptAwaitsInput && path.startsWith("/api/v1/install-plans/gip_00000000005ea7e5")) {
+          // The attempt waits for the person: it answers the same way to the
+          // app page's reconcile and to the install page's read.
           return route.fulfill({ json: {
             installPlan: {
-              id: "gip_states_e", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
+              id: "gip_00000000005ea7e5", workspaceId: "ws_alpha", createdBy: "sub_portable_e2e", operation: "install", mode: "attempt",
+              requestDigest: "sha256:states", source: { name: "state-echo", url: "https://github.com/example/state-echo.git", ref: "v1.4.2", path: "." },
+              capsule: { name: "state-echo", environment: "production" }, options: {}, phase: "awaiting_input", awaitingInput: "inputs",
+              generation: 4, createdAt: now, updatedAt: now,
+            },
+            nextAction: "none",
+            userAction: {
+              kind: "provide_inputs", modulePath: ".", resources: [], connections: [], variables: [],
+              name: { current: "state-echo", proposed: "state-echo", conflict: false }, missing: [],
+            },
+            links: { self: "/api/v1/install-plans/gip_00000000005ea7e5" },
+          } });
+        }
+        if (path === "/api/v1/install-plans/gip_00000000005ea7e5/reconcile" && request.method() === "POST") {
+          return route.fulfill({ json: {
+            installPlan: {
+              id: "gip_00000000005ea7e5", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
               capsuleId: ID, planRunId: installPlan.id, createdAt: now, updatedAt: now,
             },
             nextAction: "review_run",
             userAction: { kind: "review_run", planRunId: installPlan.id },
-            links: { self: "/api/v1/install-plans/gip_states_e", run: `/api/v1/runs/${installPlan.id}` },
+            links: { self: "/api/v1/install-plans/gip_00000000005ea7e5", run: `/api/v1/runs/${installPlan.id}` },
           } });
         }
         if (path === `${base}/cancel-uninstall` && request.method() === "POST") {
@@ -1049,6 +1068,16 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await header.getByRole("button", { name: "Continue installing", exact: true }).click();
       await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
 
+      // An install that waits for the person continues on its own install
+      // page, where its sheet asks for what is missing.
+      attemptAwaitsInput = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await header.getByRole("button", { name: "Continue installing", exact: true }).click();
+      await expect(page).toHaveURL(/\/new\?installPlan=gip_00000000005ea7e5$/u);
+      await expect(page.getByTestId("install-configuration")).toBeVisible();
+      attemptAwaitsInput = false;
+      await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+
       // An uninstalled app offers to install it again from its repository.
       scene = "uninstalled";
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -1065,7 +1094,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
 
       expect(seenMutations).toEqual([
         `POST /api/v1/capsules/${ID}/cancel-uninstall`,
-        "POST /api/v1/install-plans/gip_states_e/reconcile",
+        "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
+        "POST /api/v1/install-plans/gip_00000000005ea7e5/reconcile",
       ]);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();

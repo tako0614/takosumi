@@ -92,6 +92,20 @@ describe("attempt-driven install page", () => {
     expect(sheet).toContain('autocomplete={variable().sensitive ? "new-password" : "off"}');
   });
 
+  test("a reopened review asks the app where it stands before offering the apply", () => {
+    const review = between(view, "function InstallReview(", "/** A stopped attempt:");
+    expect(review).toContain("getCapsuleApp(capsuleId)");
+    expect(review.indexOf("<Show\n        when={!app.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
+    expect(review).toContain("if (app()?.applied) props.onDone(props.action.capsuleId);");
+    expect(review).toContain("view?.progress.run ?? view?.latestRun");
+    expect(review).toContain("showPolicyReasons");
+  });
+
+  test("installed apps are linked at /apps/:id", () => {
+    for (const source of pageSources) expect(source).not.toContain("/workloads/");
+    expect(view).toContain("navigate(appPageHref(capsuleId), { replace: true });");
+  });
+
   test("discarding never runs alongside another request", () => {
     const discard = between(controller, "const discard = async", "/** Start over:");
     expect(discard).toContain("if (!current || mutating()) return false;");

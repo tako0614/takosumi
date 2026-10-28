@@ -23,7 +23,7 @@ import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import {
-  findPlanApplyRun,
+  getCapsuleApp,
   listConnections,
   listOpenGitInstallAttempts,
 } from "../../lib/control-api.ts";
@@ -37,6 +37,7 @@ import {
 } from "../../lib/app-handoff.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
+import { appPageHref, installAttemptHref } from "../../lib/app-links.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
@@ -62,11 +63,6 @@ import {
   type InstallAttempt,
 } from "./use-install-attempt.ts";
 import "./install-view.css";
-
-/** The installed app's own page. */
-function appPageHref(capsuleId: string): string {
-  return `/workloads/${encodeURIComponent(capsuleId)}`;
-}
 
 function storeBase(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -243,7 +239,7 @@ function OpenAttempts(props: { readonly principalId: string }) {
                   <Button
                     variant="secondary"
                     size="sm"
-                    href={`/new${withInstallAttempt("", entry.installPlan.id)}`}
+                    href={installAttemptHref(entry.installPlan.id)}
                   >
                     {t("installStore.continue")}
                   </Button>
@@ -322,8 +318,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const gitUrl = () => plan()?.source.url ?? listed()?.source.url ?? prefill()?.git ?? "";
 
   // Private repositories: an existing Git connection may read the source.
+  // Offered only before Install, so only read then.
   const [connections] = createResource(
-    () => (!fromStore() && currentWorkspaceId()) || false,
+    () => (attempt.view().stage === "candidate" && !fromStore() && currentWorkspaceId()) || false,
     (workspaceId) => listConnections(workspaceId),
   );
   const sourceConnections = () =>
@@ -622,15 +619,25 @@ function InstallReview(props: {
   readonly action: Extract<GitInstallPlanUserAction, { kind: "review_run" }>;
   readonly onDone: (capsuleId: string) => void;
 }) {
-  // A reopened review first looks for an Apply already started for this
-  // Plan and follows it, instead of offering Allow and install again. A
-  // failed read falls back to the review; the Run routes still refuse a
-  // second apply.
-  const [applyRun] = createResource(
-    () => [props.action.capsuleId, props.action.planRunId] as const,
-    ([capsuleId, planRunId]) =>
-      findPlanApplyRun(capsuleId, planRunId).then((run) => run ?? null, () => null),
+  // A reopened review first asks the app where it stands (GET
+  // /capsules/:id/app): an apply already running is followed instead of
+  // offering Allow and install again, and an app already installed opens its
+  // own page. A failed read falls back to the review; the Run routes still
+  // refuse a second apply.
+  const [app] = createResource(
+    () => props.action.capsuleId,
+    (capsuleId) => getCapsuleApp(capsuleId).catch(() => undefined),
   );
+  createEffect(() => {
+    if (app()?.applied) props.onDone(props.action.capsuleId);
+  });
+  const entryRunId = () => {
+    const view = app();
+    const run = view?.progress.run ?? view?.latestRun;
+    return run && (run.type === "apply" || run.type === "plan") && run.id !== props.action.planRunId
+      ? run.id
+      : undefined;
+  };
   return (
     <section
       class="iv-workbench iv-sheet"
@@ -641,24 +648,27 @@ function InstallReview(props: {
     >
       <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
       <Show
-        when={!applyRun.loading}
+        when={!app.loading}
         fallback={<div class="iv-status" role="status"><Spinner size={18} /><span>{t("common.loading")}</span></div>}
       >
-        <InstallExecution
-          planRunId={props.action.planRunId}
-          initialRunId={applyRun()?.id}
-          capsuleId={props.action.capsuleId}
-          onDone={() => props.onDone(props.action.capsuleId)}
-          restartLabel={t("installStore.problem.restart")}
-          onRestart={async () => {
-            if (!(await props.attempt.restart())) {
-              throw new Error(props.attempt.error() ?? t("installStore.error.unavailable"));
-            }
-          }}
-          onDiscard={async () => {
-            await props.attempt.discard();
-          }}
-        />
+        <Show when={!app()?.applied}>
+          <InstallExecution
+            showPolicyReasons
+            planRunId={props.action.planRunId}
+            initialRunId={entryRunId()}
+            capsuleId={props.action.capsuleId}
+            onDone={() => props.onDone(props.action.capsuleId)}
+            restartLabel={t("installStore.problem.restart")}
+            onRestart={async () => {
+              if (!(await props.attempt.restart())) {
+                throw new Error(props.attempt.error() ?? t("installStore.error.unavailable"));
+              }
+            }}
+            onDiscard={async () => {
+              await props.attempt.discard();
+            }}
+          />
+        </Show>
       </Show>
     </section>
   );
