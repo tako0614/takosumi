@@ -7,7 +7,7 @@
  * Every change is an answer to the coordinator. Setting values stay in the
  * attempt controller's memory and are sent only by 「内容を確認」.
  */
-import { createMemo, createSignal, For, Show, Suspense } from "solid-js";
+import { createMemo, createSignal, For, Match, Show, Suspense, Switch } from "solid-js";
 import { PlugZap } from "lucide-solid";
 import type {
   GitInstallPlanConnectionRequirement,
@@ -99,7 +99,7 @@ export function ModuleChooser(props: {
   return (
     <section class="iv-workbench iv-sheet" data-testid="install-module-chooser" aria-labelledby="iv-module-title">
       <div class="iv-section-head">
-        <h2 id="iv-module-title">{t("installStore.moduleTitle")}</h2>
+        <h2 id="iv-module-title" data-stage-heading tabindex="-1">{t("installStore.moduleTitle")}</h2>
         <p>{t("installStore.moduleHint")}</p>
       </div>
       <SheetError attempt={props.attempt} />
@@ -268,7 +268,14 @@ export function InstallSheet(props: {
             <Select
               value={selected()?.id ?? ""}
               disabled={attempt().mutating() !== undefined}
-              onChange={(event) => void attempt().chooseConnection(requirement(), event.currentTarget.value)}
+              onChange={async (event) => {
+                const element = event.currentTarget;
+                // A refused choice must not stay shown: return to the
+                // coordinator's own selection.
+                if (!(await attempt().chooseConnection(requirement(), element.value))) {
+                  element.value = selectedCandidate(requirement())?.id ?? "";
+                }
+              }}
             >
               <option value="">{t("installStore.chooseConnection")}</option>
               <For each={requirement().candidates}>
@@ -355,42 +362,45 @@ export function InstallSheet(props: {
         error={invalid() ? t("installStore.settingInvalid") : undefined}
         required={variable().required}
       >
-        <Show
-          when={variable().type === "boolean" && !variable().sensitive}
+        <Switch
           fallback={
-            <Show
-              when={variable().type === "json" && !variable().sensitive}
-              fallback={
-                <Input
-                  type={variable().sensitive ? "password" : variable().type === "number" ? "number" : "text"}
-                  autocomplete={variable().sensitive ? "new-password" : "off"}
-                  value={draftText(variable())}
-                  placeholder={variable().sensitive ? undefined : variable().placeholder}
-                  spellcheck={false}
-                  data-variable-name={variable().name}
-                  onInput={(event) => update(event.currentTarget.value)}
-                />
-              }
-            >
-              <Textarea
-                value={draftText(variable())}
-                spellcheck={false}
-                data-variable-name={variable().name}
-                onInput={(event) => update(event.currentTarget.value)}
-              />
-            </Show>
+            <Input
+              type={variable().sensitive ? "password" : variable().type === "number" ? "number" : "text"}
+              inputmode={variable().sensitive && variable().type === "number" ? "decimal" : undefined}
+              autocomplete={variable().sensitive ? "new-password" : "off"}
+              value={draftText(variable())}
+              placeholder={variable().sensitive ? undefined : variable().placeholder}
+              spellcheck={false}
+              data-variable-name={variable().name}
+              onInput={(event) => update(event.currentTarget.value)}
+            />
           }
         >
-          <Select
-            value={draftText(variable())}
-            data-variable-name={variable().name}
-            onChange={(event) => update(event.currentTarget.value)}
-          >
-            <option value="">{t("installStore.selectValue")}</option>
-            <option value="true">{t("installStore.yes")}</option>
-            <option value="false">{t("installStore.no")}</option>
-          </Select>
-        </Show>
+          {/* A yes/no setting is a choice even when it is write-only: the
+              value lives only in this page's memory either way. */}
+          <Match when={variable().type === "boolean"}>
+            <Select
+              value={draftText(variable())}
+              data-variable-name={variable().name}
+              onChange={(event) => update(event.currentTarget.value)}
+            >
+              <option value="">{t("installStore.selectValue")}</option>
+              <option value="true">{t("installStore.yes")}</option>
+              <option value="false">{t("installStore.no")}</option>
+            </Select>
+          </Match>
+          {/* A JSON value needs lines; a write-only one is masked as typed. */}
+          <Match when={variable().type === "json"}>
+            <Textarea
+              value={draftText(variable())}
+              spellcheck={false}
+              autocomplete="off"
+              classList={{ "iv-secret-text": variable().sensitive }}
+              data-variable-name={variable().name}
+              onInput={(event) => update(event.currentTarget.value)}
+            />
+          </Match>
+        </Switch>
       </FormField>
     );
   };
@@ -419,7 +429,7 @@ export function InstallSheet(props: {
       aria-labelledby="iv-sheet-title"
     >
       <div class="iv-section-head">
-        <h2 id="iv-sheet-title">{t("installStore.sheetTitle")}</h2>
+        <h2 id="iv-sheet-title" data-stage-heading tabindex="-1">{t("installStore.sheetTitle")}</h2>
         <p>{t("installStore.sheetHint")}</p>
       </div>
       <SheetError attempt={props.attempt} />
@@ -529,7 +539,7 @@ export function InstallSheet(props: {
           type="button"
           variant="primary"
           size="lg"
-          busy={attempt().mutating() === "continue"}
+          busy={attempt().confirming()}
           disabled={view().primaryBlocked}
           onClick={() => {
             if (view().primary === "connect") openFirstMissing();

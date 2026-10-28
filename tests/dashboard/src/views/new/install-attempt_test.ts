@@ -17,12 +17,14 @@ import {
   attemptCreateRequest,
   attemptProblemKey,
   bindingsWith,
+  canAdvance,
   continueVariables,
   deriveInstallView,
   installAttemptId,
   legacyCapsuleLocator,
   missingConnections,
   openAttemptStatusKey,
+  progressSignature,
   repositoryLabel,
   restartRequest,
   sheetVariables,
@@ -102,6 +104,7 @@ const candidate = { id: "conn_a", displayName: "My Cloudflare", status: "verifie
 describe("one primary action per state", () => {
   const cases: [string, GitInstallPlanResponse | undefined, Parameters<typeof deriveInstallView>[1], string, InstallPrimary][] = [
     ["not installed", undefined, {}, "candidate", "install"],
+    ["the URL's attempt is still loading", undefined, { loading: true }, "loading", "none"],
     ["starting", undefined, { starting: true, mutating: true }, "starting", "none"],
     ["reading while this page follows it", respond({ kind: "wait", phase: "syncing_source" }), { driving: true }, "reading", "none"],
     ["reopened while the coordinator has work left", respond({ kind: "wait", phase: "planning" }), {}, "paused", "continue"],
@@ -134,6 +137,21 @@ describe("one primary action per state", () => {
     expect(deriveInstallView(respond({ kind: "wait", phase: "planning" }), answering).primaryBlocked).toBe(true);
     // Following the coordinator is not a request the person made: stopping stays offered.
     expect(deriveInstallView(respond({ kind: "wait", phase: "planning" }), { driving: true }).canDiscard).toBe(true);
+  });
+
+  test("nothing starts while the URL's attempt loads", () => {
+    expect(deriveInstallView(undefined, { loading: true })).toMatchObject({ primaryBlocked: true, canDiscard: false });
+  });
+
+  test("a sheet answer in flight leaves Review pressable (it waits) but not Stop", () => {
+    const answering = deriveInstallView(respond(inputs()), { answering: true });
+    expect(answering).toMatchObject({ primary: "review", primaryBlocked: false, canDiscard: false });
+    expect(deriveInstallView(respond({ kind: "choose_module", modules: [{ path: ".", providers: [] }] }), { answering: true }).primaryBlocked).toBe(true);
+  });
+
+  test("a step to try again reads as reading while the page retries it", () => {
+    const retryable = respond({ kind: "retry", code: "install_plan_reconcile_retryable", restart: false }, { phase: "planning" });
+    expect(deriveInstallView(retryable, { driving: true })).toMatchObject({ stage: "reading", primary: "none" });
   });
 
   test("an attempt that is already discarded offers no discard", () => {
@@ -303,6 +321,26 @@ describe("starting and starting over", () => {
     expect(attemptBelongsHere(response, { ...here, principalId: "sub_other" })).toBe(false);
     expect(attemptBelongsHere(response, { ...here, attemptId: "gip_ffffffffffffffff" })).toBe(false);
     expect(attemptBelongsHere(respond(inputs(), { mode: undefined }), here)).toBe(false);
+  });
+});
+
+describe("following the coordinator", () => {
+  test("reconcile is sent for wait and for a retry without restart only", () => {
+    expect(canAdvance(respond({ kind: "wait", phase: "planning" }))).toBe(true);
+    expect(canAdvance(respond({ kind: "retry", code: "install_plan_reconcile_retryable", restart: false }))).toBe(true);
+    expect(canAdvance(respond({ kind: "retry", code: "source_sync_failed", restart: true }))).toBe(false);
+    expect(canAdvance(respond({ kind: "wait", phase: "planning" }, {}, "install_attempt_expired"))).toBe(false);
+    expect(canAdvance(respond(inputs()))).toBe(false);
+  });
+
+  test("progress ignores the generation every claim bumps", () => {
+    const waiting = respond({ kind: "wait", phase: "planning" }, { phase: "planning", generation: 4 });
+    const claimed = respond({ kind: "wait", phase: "planning" }, { phase: "planning", generation: 5 });
+    expect(progressSignature(claimed)).toBe(progressSignature(waiting));
+    const planned = respond({ kind: "wait", phase: "planning" }, { phase: "planning", generation: 6, planRunId: "run_plan" });
+    expect(progressSignature(planned)).not.toBe(progressSignature(waiting));
+    const reviewable = respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_a" }, { phase: "reviewable" });
+    expect(progressSignature(reviewable)).not.toBe(progressSignature(planned));
   });
 });
 

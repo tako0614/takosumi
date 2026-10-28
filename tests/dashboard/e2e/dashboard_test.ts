@@ -440,6 +440,7 @@ async function stubProviderDestinationFixture(
     if (path === "/api/v1/provider-connections") {
       return route.fulfill({ json: { providerConnections } });
     }
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e/runs") return route.fulfill({ json: { runs: [] } });
     if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
       return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
     }

@@ -370,11 +370,50 @@ export function missingConnections(
   return connections.filter((requirement) => !selectedCandidate(requirement));
 }
 
+// --- Following the coordinator -----------------------------------------------------
+
+/**
+ * Whether the page may send the reconcile command now: the coordinator is
+ * working on its own (`wait`), or a step could not be confirmed and the
+ * contract says to call reconcile again (`retry` without `restart`).
+ */
+export function canAdvance(response: GitInstallPlanResponse): boolean {
+  if (response.invalidated) return false;
+  const action = response.userAction;
+  return action.kind === "wait" || (action.kind === "retry" && !action.restart);
+}
+
+/**
+ * What counts as progress while following the coordinator. The generation is
+ * left out on purpose: every successful reconcile claim bumps it, so it
+ * changes even while the coordinator only waits on a sync or Plan Run.
+ */
+export function progressSignature(response: GitInstallPlanResponse): string {
+  const plan = response.installPlan;
+  const action = response.userAction;
+  return JSON.stringify([
+    plan.phase,
+    plan.awaitingInput ?? "",
+    action.kind,
+    action.kind === "wait" ? action.phase : "",
+    plan.sourceSyncRunId ?? "",
+    plan.sourceSnapshotId ?? "",
+    plan.compatibilityCheckRunId ?? "",
+    plan.installConfigId ?? "",
+    plan.capsuleId ?? "",
+    plan.planRunId ?? "",
+    plan.diagnostic?.code ?? "",
+    response.invalidated ?? "",
+  ]);
+}
+
 // --- The view -------------------------------------------------------------------
 
 export type InstallStage =
   /** Nothing started; opening the page created nothing. */
   | "candidate"
+  /** The attempt the URL names is being read; nothing can start meanwhile. */
+  | "loading"
   /** The starting request is in flight. */
   | "starting"
   /** The coordinator is reading the repository and this page follows it. */
@@ -413,8 +452,15 @@ export interface InstallLocalState {
   readonly starting?: boolean;
   /** This page view is advancing the coordinator. */
   readonly driving?: boolean;
-  /** A starting, answering or discarding request is in flight. */
+  /** A starting, confirming, discarding or restarting request is in flight. */
   readonly mutating?: boolean;
+  /**
+   * A sheet answer (a connection, the name, a module) is in flight. The
+   * sheet's own Review may still be pressed: it waits for the answer.
+   */
+  readonly answering?: boolean;
+  /** The URL names an attempt that is still being read. */
+  readonly loading?: boolean;
   /** The attempt named by the URL could not be read. */
   readonly loadFailed?: boolean;
   readonly drafts?: VariableDrafts;
@@ -449,6 +495,7 @@ export function deriveInstallView(
   local: InstallLocalState = {},
 ): InstallView {
   const mutating = local.mutating === true;
+  const busy = mutating || local.answering === true;
   if (!response) {
     if (local.starting) {
       return { ...NOTHING, stage: "starting", primary: "none", primaryBlocked: true, canDiscard: false };
@@ -456,15 +503,19 @@ export function deriveInstallView(
     if (local.loadFailed) {
       return { ...NOTHING, stage: "unavailable", primary: "reload", primaryBlocked: false, canDiscard: false };
     }
-    return { ...NOTHING, stage: "candidate", primary: "install", primaryBlocked: mutating, canDiscard: false };
+    if (local.loading) {
+      // A second attempt must never start while the URL's own one loads.
+      return { ...NOTHING, stage: "loading", primary: "none", primaryBlocked: true, canDiscard: false };
+    }
+    return { ...NOTHING, stage: "candidate", primary: "install", primaryBlocked: busy, canDiscard: false };
   }
-  const discardable = response.installPlan.phase !== "discarded" && !mutating;
+  const discardable = response.installPlan.phase !== "discarded" && !busy;
   if (response.invalidated) {
     return {
       ...NOTHING,
       stage: "invalidated",
       primary: "restart",
-      primaryBlocked: mutating,
+      primaryBlocked: busy,
       canDiscard: discardable,
       invalidated: response.invalidated,
     };
@@ -474,13 +525,13 @@ export function deriveInstallView(
     case "wait":
       return local.driving
         ? { ...NOTHING, stage: "reading", primary: "none", primaryBlocked: true, canDiscard: discardable }
-        : { ...NOTHING, stage: "paused", primary: "continue", primaryBlocked: mutating, canDiscard: discardable };
+        : { ...NOTHING, stage: "paused", primary: "continue", primaryBlocked: busy, canDiscard: discardable };
     case "choose_module":
       return {
         ...NOTHING,
         stage: "choose_module",
         primary: "choose_module",
-        primaryBlocked: mutating || action.modules.length === 0,
+        primaryBlocked: busy || action.modules.length === 0,
         canDiscard: discardable,
       };
     case "provide_inputs": {
@@ -509,9 +560,14 @@ export function deriveInstallView(
     case "review_run":
       return { ...NOTHING, stage: "review", primary: "none", primaryBlocked: true, canDiscard: discardable };
     case "retry":
-      return action.restart
-        ? { ...NOTHING, stage: "failed", primary: "restart", primaryBlocked: mutating, canDiscard: discardable, retryCode: action.code }
-        : { ...NOTHING, stage: "retry", primary: "retry", primaryBlocked: mutating, canDiscard: discardable, retryCode: action.code };
+      if (action.restart) {
+        return { ...NOTHING, stage: "failed", primary: "restart", primaryBlocked: busy, canDiscard: discardable, retryCode: action.code };
+      }
+      // Trying again is one more reconcile; while this page retries on its
+      // own it reads as reading.
+      return local.driving
+        ? { ...NOTHING, stage: "reading", primary: "none", primaryBlocked: true, canDiscard: discardable }
+        : { ...NOTHING, stage: "retry", primary: "retry", primaryBlocked: busy, canDiscard: discardable, retryCode: action.code };
     case "none":
       return response.installPlan.phase === "discarded"
         ? { ...NOTHING, stage: "discarded", primary: "reinstall", primaryBlocked: false, canDiscard: false }

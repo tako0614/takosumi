@@ -23,7 +23,7 @@ import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
 import {
-  discardGitInstallAttempt,
+  findPlanApplyRun,
   listConnections,
   listOpenGitInstallAttempts,
 } from "../../lib/control-api.ts";
@@ -55,7 +55,12 @@ import {
   withInstallAttempt,
   withoutInstallContext,
 } from "./install-attempt.ts";
-import { installErrorMessage, useInstallAttempt, type InstallAttempt } from "./use-install-attempt.ts";
+import {
+  discardInstallAttempt,
+  installErrorMessage,
+  useInstallAttempt,
+  type InstallAttempt,
+} from "./use-install-attempt.ts";
 import "./install-view.css";
 
 /** The installed app's own page. */
@@ -187,7 +192,7 @@ function StorePage(props: { readonly principalId: string }) {
 
 /** This person's unfinished installs here: each can continue or be thrown away. */
 function OpenAttempts(props: { readonly principalId: string }) {
-  const [attempts, { mutate }] = createResource(
+  const [attempts, { mutate, refetch }] = createResource(
     () => currentWorkspaceId() || false,
     (workspaceId) => listOpenGitInstallAttempts(workspaceId),
   );
@@ -203,13 +208,16 @@ function OpenAttempts(props: { readonly principalId: string }) {
     setBusy(plan.id);
     setRowError(undefined);
     try {
-      await discardGitInstallAttempt(plan.id, plan.generation);
+      // A newer generation than the list's is read again before discarding.
+      await discardInstallAttempt(plan.id, plan.generation);
       clearCapsuleListCache(plan.workspaceId);
       clearCurrentStateVersionCache(plan.workspaceId);
       clearDashboardOverviewCache(plan.workspaceId);
       mutate((current) => current?.filter((item) => item.installPlan.id !== plan.id));
     } catch (cause) {
       setRowError({ id: plan.id, message: installErrorMessage(cause) });
+      // Show the list as it is now.
+      void refetch();
     } finally {
       setBusy(undefined);
     }
@@ -389,6 +397,15 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
 
   const stage = () => attempt.view().stage;
+  // Each new stage moves focus to its own heading, so keyboard and screen
+  // reader users land where the page changed.
+  createEffect(on(stage, (current, previous) => {
+    if (previous === undefined || current === previous) return;
+    queueMicrotask(() => {
+      if (disposed) return;
+      document.querySelector<HTMLElement>("main [data-stage-heading]")?.focus({ preventScroll: true });
+    });
+  }, { defer: true }));
 
   return (
     <main class="iv-page iv-configure-page" data-install-state={stage()}>
@@ -475,6 +492,12 @@ function AppInstallPage(props: { readonly principalId: string }) {
               </form>
             </section>
           </Match>
+          <Match when={stage() === "loading"}>
+            <section class="iv-workbench iv-centered" role="status" aria-live="polite" data-testid="install-loading">
+              <Spinner size={24} />
+              <h2 data-stage-heading tabindex="-1">{t("common.loading")}</h2>
+            </section>
+          </Match>
           <Match when={stage() === "starting" || stage() === "reading" || stage() === "paused"}>
             <ReadingCard attempt={attempt} />
           </Match>
@@ -520,7 +543,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
       }>
         {(done) => (
           <section class="iv-workbench iv-centered" role="status" data-testid="install-complete">
-            <h2>{t("installStore.completeTitle")}</h2>
+            <h2 data-stage-heading tabindex="-1">{t("installStore.completeTitle")}</h2>
             <p>{t("installStore.completeHint")}</p>
             <div class="iv-action-row">
               <Show when={handoff() && createAppHandoffConnectHref(handoff(), done().url)} fallback={
@@ -566,7 +589,9 @@ function ReadingCard(props: { readonly attempt: InstallAttempt }) {
       data-install-phase={phase()}
     >
       <Show when={view().stage !== "paused"}><Spinner size={24} /></Show>
-      <h2>{view().stage === "paused" ? t("installStore.reading.pausedTitle") : t("installStore.reading.title")}</h2>
+      <h2 data-stage-heading tabindex="-1">
+        {view().stage === "paused" ? t("installStore.reading.pausedTitle") : t("installStore.reading.title")}
+      </h2>
       <p>{view().stage === "paused" ? t("installStore.reading.pausedHint") : hint()}</p>
       <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
       <div class="iv-action-row">
@@ -597,23 +622,44 @@ function InstallReview(props: {
   readonly action: Extract<GitInstallPlanUserAction, { kind: "review_run" }>;
   readonly onDone: (capsuleId: string) => void;
 }) {
+  // A reopened review first looks for an Apply already started for this
+  // Plan and follows it, instead of offering Allow and install again. A
+  // failed read falls back to the review; the Run routes still refuse a
+  // second apply.
+  const [applyRun] = createResource(
+    () => [props.action.capsuleId, props.action.planRunId] as const,
+    ([capsuleId, planRunId]) =>
+      findPlanApplyRun(capsuleId, planRunId).then((run) => run ?? null, () => null),
+  );
   return (
-    <section class="iv-workbench iv-sheet" data-testid="install-review">
+    <section
+      class="iv-workbench iv-sheet"
+      data-testid="install-review"
+      data-stage-heading
+      tabindex="-1"
+      aria-label={t("installStore.reviewTitle")}
+    >
       <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
-      <InstallExecution
-        planRunId={props.action.planRunId}
-        capsuleId={props.action.capsuleId}
-        onDone={() => props.onDone(props.action.capsuleId)}
-        restartLabel={t("installStore.problem.restart")}
-        onRestart={async () => {
-          if (!(await props.attempt.restart())) {
-            throw new Error(props.attempt.error() ?? t("installStore.error.unavailable"));
-          }
-        }}
-        onDiscard={async () => {
-          await props.attempt.discard();
-        }}
-      />
+      <Show
+        when={!applyRun.loading}
+        fallback={<div class="iv-status" role="status"><Spinner size={18} /><span>{t("common.loading")}</span></div>}
+      >
+        <InstallExecution
+          planRunId={props.action.planRunId}
+          initialRunId={applyRun()?.id}
+          capsuleId={props.action.capsuleId}
+          onDone={() => props.onDone(props.action.capsuleId)}
+          restartLabel={t("installStore.problem.restart")}
+          onRestart={async () => {
+            if (!(await props.attempt.restart())) {
+              throw new Error(props.attempt.error() ?? t("installStore.error.unavailable"));
+            }
+          }}
+          onDiscard={async () => {
+            await props.attempt.discard();
+          }}
+        />
+      </Show>
     </section>
   );
 }
@@ -645,8 +691,8 @@ function AttemptProblem(props: { readonly attempt: InstallAttempt; readonly onRe
         : t(attemptProblemKey(code()));
   return (
     <section class="iv-workbench" data-testid="install-attempt-problem" data-install-stage={view().stage}>
-      <div class="iv-section-head">
-        <h2>{title()}</h2>
+      <div class="iv-section-head" role="alert">
+        <h2 data-stage-heading tabindex="-1">{title()}</h2>
         <p>{text()}</p>
         <Show when={attemptProblemKey(code()) === "installStore.problem.generic" && diagnostic()?.message}>
           {(message) => <p class="iv-muted">{message()}</p>}

@@ -9,7 +9,7 @@ test("reopening an attempt from its URL is a read-only GET", () => {
   const controller = read("dashboard/src/views/new/use-install-attempt.ts");
   const load = controller.slice(
     controller.indexOf("// The URL names the attempt; reading it never advances or answers it."),
-    controller.indexOf("const sleep = (milliseconds: number)"),
+    controller.indexOf("/** A pause between reconcile commands"),
   );
   expect(load).toContain("getGitInstallPlan(attemptId)");
   expect(load).toContain("expected !== epoch");

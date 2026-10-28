@@ -103,6 +103,11 @@ async function detailFixture(
       // A capsule read always carries the configuration authority guard.
       return route.fulfill({ json: { capsule: capsule(), graceDays: 7, installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
     }
+    if (path === `/api/v1/capsules/${capId}/runs`) {
+      const runs = applied ? [apply(), plan()] : [plan()];
+      const types = url.searchParams.getAll("type");
+      return route.fulfill({ json: { runs: runs.filter((run) => types.length === 0 || types.includes(run.type)) } });
+    }
     if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
     if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: cloudflare })) } } });
     if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
@@ -452,6 +457,11 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
       await expect(page.locator(".iv-execution")).toContainText("Installing");
+      // A reload follows the Apply already started for this Plan; it never
+      // offers Allow and install again.
+      await page.reload();
+      await expect(page.locator(".iv-execution")).toContainText("Installing");
+      await expect(page.getByRole("button", { name: "Allow and install", exact: true })).toHaveCount(0);
       await page.getByText("Progress and logs", { exact: true }).click();
       await expect(page.getByTestId("install-run-logs")).toContainText("Installing fixture resources");
       f.finish();
@@ -586,10 +596,13 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(name).toHaveValue("cloudflare-service-2");
       await expect(review).toBeEnabled();
       expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), capsuleName: "cloudflare-service-2" });
+      // Typing a name and pressing Review at once is one click: leaving the
+      // field renames first and Review waits for it.
+      await name.fill("renamed-app");
       await reviewPlan(page);
-      expect(f.attempts.latest()?.capsule.name).toBe("cloudflare-service-2");
+      expect(f.attempts.latest()?.capsule.name).toBe("renamed-app");
       expect(f.mutations).not.toContain(applyMutation);
-      await expectNothingStored(page, "cloudflare-service-2");
+      await expectNothingStored(page, "renamed-app");
     });
     test("a repository with several modules asks which one before the sheet", async ({ page }) => {
       const f = await detailFixture(page, base, false, false, "not_applicable", {

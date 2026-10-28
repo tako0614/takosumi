@@ -81,7 +81,7 @@ describe("attempt-driven install page", () => {
 
   test("setting values leave memory only inside the confirming answer", () => {
     // `variables` is sent by exactly one request: the continue answer.
-    const confirm = between(controller, "const confirm = async", "const discardOnce = async");
+    const confirm = between(controller, "const confirm = async", "/** 「やめる」");
     expect(confirm).toContain("continue: true,");
     expect(confirm).toContain("variables: values.variables");
     const outsideConfirm = controller.replace(confirm, "");
@@ -94,7 +94,10 @@ describe("attempt-driven install page", () => {
   test("discarding never runs alongside another request", () => {
     const discard = between(controller, "const discard = async", "/** Start over:");
     expect(discard).toContain("if (!current || mutating()) return false;");
-    expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardOnce("));
+    expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardInstallAttempt("));
+    // Stopping aborts the reconcile in flight instead of waiting it out.
+    expect(between(controller, "const halt = () =>", "onCleanup(")).toContain("driveAbort?.abort();");
+    expect(controller).toContain("reconcileGitInstallPlan(before.installPlan.id, { signal: controller.signal })");
   });
 
   test("the legacy client orchestration is gone", () => {

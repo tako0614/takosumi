@@ -1257,7 +1257,7 @@ describe("generalization boundary scanner", () => {
         content: "if (mapped.message.startsWith('credential_')) throw mapped;",
       },
       {
-        path: "dashboard/src/views/new/install-helpers.ts",
+        path: "dashboard/src/views/new/use-install-attempt.ts",
         content:
           "if (/provider connection/.test(apiError?.message)) return friendly;",
       },
@@ -1359,7 +1359,7 @@ describe("generalization boundary scanner", () => {
         content: 'type OperatorConfigSource = "env" | "local";',
       },
       {
-        path: "dashboard/src/views/new/install-helpers.ts",
+        path: "dashboard/src/views/new/use-install-attempt.ts",
         content: 'if (diagnostic.message === "Provider aws failed") return;',
       },
       {

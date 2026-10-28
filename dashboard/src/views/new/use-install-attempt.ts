@@ -47,8 +47,10 @@ import {
   attemptProblemKey,
   awaitingResubmission,
   bindingsWith,
+  canAdvance,
   continueVariables,
   deriveInstallView,
+  progressSignature,
   restartRequest,
   type InstallCandidate,
   type InstallView,
@@ -57,11 +59,16 @@ import {
 
 /** Delay bounds between reconcile commands; see gitPlanReconcileDelayMs. */
 const RECONCILE_FLOOR_MS = 250;
-const RECONCILE_CEILING_MS = 2_000;
-/** About ten minutes without progress: stop following and offer Continue. */
-const MAX_STALLED_ROUNDS = 300;
-/** Consecutive failed reconcile commands before the page stops and says so. */
+const RECONCILE_CEILING_MS = 3_000;
+/** Two minutes without visible progress: stop following and offer Continue. */
+const STALL_LIMIT_MS = 120_000;
+/** A hard bound on reconcile commands per following session. */
+const MAX_FOLLOW_ROUNDS = 240;
+/** Consecutive failed or retryable reconciles before the page stops and says so. */
 const MAX_RECONCILE_FAILURES = 3;
+/** How often a discard waits out a reconcile lease before giving up. */
+const DISCARD_ATTEMPTS = 5;
+const DISCARD_LEASE_WAIT_MS = 1_000;
 
 export type InstallMutation =
   | "start"
@@ -73,6 +80,12 @@ export type InstallMutation =
 export interface ResolvedStoreVersion {
   readonly tag: string;
   readonly commit: string;
+}
+
+/** How the page spends time between reconcile commands (replaceable in tests). */
+export interface InstallAttemptPacing {
+  readonly wait?: (milliseconds: number) => Promise<void>;
+  readonly now?: () => number;
 }
 
 function defaultWorkspaceHandle(): string {
@@ -88,6 +101,39 @@ function outcomeUnknown(cause: unknown): boolean {
 
 function errorCode(cause: unknown): string | undefined {
   return cause instanceof ControlApiError ? cause.code : undefined;
+}
+
+function isAbort(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "AbortError";
+}
+
+/**
+ * Discard one attempt. A newer generation (it moved on while the person
+ * decided) is read again; a reconcile lease still held by an abandoned
+ * command is waited out briefly. Anything else is refused as it came.
+ */
+export async function discardInstallAttempt(
+  planId: string,
+  generation: number,
+  pause: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+): Promise<GitInstallPlanResponse> {
+  let expected = generation;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await discardGitInstallAttempt(planId, expected);
+    } catch (cause) {
+      const code = errorCode(cause);
+      if (
+        attempt >= DISCARD_ATTEMPTS ||
+        (code !== "install_plan_generation_conflict" && code !== "reconcile_in_progress")
+      ) {
+        throw cause;
+      }
+      if (code === "reconcile_in_progress") await pause(DISCARD_LEASE_WAIT_MS);
+      expected = (await getGitInstallPlan(planId)).installPlan.generation;
+    }
+  }
 }
 
 /** Localized words for a failed install request. */
@@ -135,6 +181,7 @@ export interface InstallAttemptOptions {
   readonly onStarted: (attemptId: string) => void;
   /** Take the attempt out of the URL; the page shows the same app again. */
   readonly onLeft: (plan: GitInstallPlan) => void;
+  readonly pacing?: InstallAttemptPacing;
 }
 
 export function useInstallAttempt(options: InstallAttemptOptions) {
@@ -143,38 +190,59 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [loadFailed, setLoadFailed] = createSignal(false);
   const [driving, setDriving] = createSignal(false);
   const [mutating, setMutating] = createSignal<InstallMutation>();
+  const [confirming, setConfirming] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const [drafts, setDrafts] = createSignal<VariableDrafts>({});
   const [nameDraft, setNameDraft] = createSignal<string>();
   const [resolvedVersion, setResolvedVersion] = createSignal<ResolvedStoreVersion>();
 
+  const now = options.pacing?.now ?? (() => Date.now());
+  const wait = options.pacing?.wait ??
+    ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+
   let disposed = false;
   /** Bumped whenever the attempt or workspace this page follows changes. */
   let epoch = 0;
   let driveRun: Promise<void> | undefined;
+  let driveAbort: AbortController | undefined;
   let stopRequested = false;
   let wake: (() => void) | undefined;
+  /** The sheet answer in flight, so Review can wait for it instead of failing. */
+  let answerRun: Promise<unknown> | undefined;
   /** An unconfirmed start keeps its key so resending it cannot start twice. */
   let pendingStart:
     | { readonly workspaceId: string; readonly body: string; readonly key: string }
     | undefined;
 
+  /** Stop following now: wake the pause and abort the reconcile in flight. */
+  const halt = () => {
+    stopRequested = true;
+    driveAbort?.abort();
+    wake?.();
+  };
+
   onCleanup(() => {
     disposed = true;
-    stopRequested = true;
-    wake?.();
+    halt();
   });
 
-  const view = createMemo<InstallView>(() =>
-    deriveInstallView(response(), {
-      starting: mutating() === "start",
+  /** The URL names an attempt that has not been read (or refused) yet. */
+  const awaitingLoad = () =>
+    Boolean(options.attemptId()) && !response() && !loadFailed();
+
+  const view = createMemo<InstallView>(() => {
+    const current = mutating();
+    return deriveInstallView(response(), {
+      starting: current === "start",
       driving: driving(),
-      mutating: mutating() !== undefined,
+      mutating: current !== undefined && current !== "answer",
+      answering: current === "answer",
+      loading: awaitingLoad(),
       loadFailed: loadFailed(),
       drafts: drafts(),
       name: nameDraft(),
-    }),
-  );
+    });
+  });
 
   const clearCaches = (workspaceId: string) => {
     clearCapsuleListCache(workspaceId);
@@ -187,9 +255,16 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setNameDraft(undefined);
   };
 
-  /** Accept a coordinator answer only for the attempt this page follows. */
-  const accept = (next: GitInstallPlanResponse, expectedEpoch: number): boolean => {
-    if (disposed || expectedEpoch !== epoch) return false;
+  /**
+   * Accept a coordinator answer only for the attempt this page follows.
+   * Returns the response the page now holds: an answer older than the one
+   * held (a slow read overtaken by a newer answer) is ignored.
+   */
+  const accept = (
+    next: GitInstallPlanResponse,
+    expectedEpoch: number,
+  ): GitInstallPlanResponse | undefined => {
+    if (disposed || expectedEpoch !== epoch) return undefined;
     const held = response();
     const attemptId = held?.installPlan.id ?? untrack(options.attemptId);
     if (
@@ -200,14 +275,18 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         principalId: options.principalId,
       })
     ) {
-      return false;
+      return undefined;
     }
+    if (held && next.installPlan.generation < held.installPlan.generation) return held;
     if (next.installPlan.capsuleId && !held?.installPlan.capsuleId) {
       clearCaches(next.installPlan.workspaceId);
     }
+    // Once the sheet is behind it (confirmed, even when the confirmation's
+    // own answer was lost), typed values have no reason to stay in memory.
+    if (next.userAction.kind !== "provide_inputs") forgetInputs();
     setResponse(next);
     setLoadFailed(false);
-    return true;
+    return next;
   };
 
   // The URL names the attempt; reading it never advances or answers it.
@@ -217,8 +296,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       if (held && held.installPlan.workspaceId !== workspaceId) {
         // Never let an attempt keep writing under a workspace the person left.
         epoch += 1;
-        stopRequested = true;
-        wake?.();
+        halt();
         setResponse(undefined);
         forgetInputs();
         setError(undefined);
@@ -227,8 +305,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       }
       if (attemptId && held?.installPlan.id === attemptId) return;
       epoch += 1;
-      stopRequested = true;
-      wake?.();
+      halt();
       setResponse(undefined);
       setLoadFailed(false);
       setError(undefined);
@@ -250,70 +327,77 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }),
   );
 
-  const sleep = (milliseconds: number) =>
+  /** A pause between reconcile commands that Stop can cut short. */
+  const pause = (milliseconds: number) =>
     new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        wake = undefined;
-        resolve();
-      }, milliseconds);
-      wake = () => {
-        clearTimeout(timer);
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
         wake = undefined;
         resolve();
       };
+      wake = finish;
+      void wait(milliseconds).then(finish, finish);
     });
 
-  /** Follow the coordinator while it works on its own (`wait`). */
+  /**
+   * Follow the coordinator while it works on its own (`wait`), or try a step
+   * again (`retry` without `restart`). Progress is a visible change of phase,
+   * action or evidence — never the generation alone, which every claim
+   * bumps. Without progress the pause grows to the ceiling, and after the
+   * stall limit (or the round bound) the page stops and offers Continue.
+   */
   const drive = () => {
     const current = response();
-    if (
-      driveRun || disposed || !current || current.invalidated ||
-      current.userAction.kind !== "wait"
-    ) {
-      return;
-    }
+    if (driveRun || disposed || !current || !canAdvance(current)) return;
     stopRequested = false;
     const expected = epoch;
+    const controller = new AbortController();
+    driveAbort = controller;
     setDriving(true);
     setError(undefined);
     driveRun = (async () => {
       let stalled = 0;
       let failures = 0;
+      let rounds = 0;
+      let lastProgressAt = now();
       try {
         while (!disposed && !stopRequested && expected === epoch) {
           const before = response();
-          if (!before || before.invalidated || before.userAction.kind !== "wait") break;
+          if (!before || !canAdvance(before)) break;
+          if (rounds >= MAX_FOLLOW_ROUNDS || now() - lastProgressAt >= STALL_LIMIT_MS) break;
+          rounds += 1;
           let next: GitInstallPlanResponse | undefined;
+          let failed: unknown;
           try {
-            next = await reconcileGitInstallPlan(before.installPlan.id);
-            failures = 0;
+            next = await reconcileGitInstallPlan(before.installPlan.id, { signal: controller.signal });
           } catch (cause) {
-            failures += 1;
+            if (controller.signal.aborted || isAbort(cause)) break;
+            failed = cause;
             next = await getGitInstallPlan(before.installPlan.id).catch(() => undefined);
-            if (
-              failures >= MAX_RECONCILE_FAILURES &&
-              (!next || next.userAction.kind === "wait")
-            ) {
-              if (next) accept(next, expected);
-              if (!disposed && expected === epoch) setError(installErrorMessage(cause));
-              break;
-            }
           }
           if (disposed || expected !== epoch) break;
-          if (next) {
-            const progressed =
-              next.installPlan.phase !== before.installPlan.phase ||
-              next.installPlan.generation !== before.installPlan.generation;
-            stalled = progressed ? 0 : stalled + 1;
-            if (!accept(next, expected)) break;
-            if (next.invalidated || next.userAction.kind !== "wait") break;
+          const held = next ? accept(next, expected) : response();
+          if (next && !held) break;
+          const after = held ?? before;
+          const progressed = progressSignature(after) !== progressSignature(before);
+          if (progressed) {
+            stalled = 0;
+            lastProgressAt = now();
           } else {
             stalled += 1;
           }
-          if (stalled >= MAX_STALLED_ROUNDS || stopRequested) break;
-          await sleep(
+          const retryable = after.userAction.kind === "retry" && !after.userAction.restart;
+          failures = failed !== undefined || retryable ? failures + 1 : 0;
+          if (failures >= MAX_RECONCILE_FAILURES) {
+            if (failed !== undefined) setError(installErrorMessage(failed));
+            break;
+          }
+          if (stopRequested || !canAdvance(after)) break;
+          await pause(
             gitPlanReconcileDelayMs({
-              stalledRounds: stalled,
+              stalledRounds: Math.max(stalled, failures),
               minDelayMs: RECONCILE_FLOOR_MS,
               maxDelayMs: RECONCILE_CEILING_MS,
               jitter: Math.random(),
@@ -322,6 +406,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         }
       } finally {
         driveRun = undefined;
+        if (driveAbort === controller) driveAbort = undefined;
         wake = undefined;
         if (!disposed) setDriving(false);
       }
@@ -330,8 +415,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   /** Stop following and wait until no reconcile command is in flight. */
   const stopDriving = async () => {
-    stopRequested = true;
-    wake?.();
+    halt();
     await driveRun?.catch(() => undefined);
   };
 
@@ -339,8 +423,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const current = response();
     if (!current) return undefined;
     try {
-      const next = await getGitInstallPlan(current.installPlan.id);
-      return accept(next, expected) ? next : undefined;
+      return accept(await getGitInstallPlan(current.installPlan.id), expected);
     } catch {
       return undefined;
     }
@@ -408,7 +491,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     candidate: InstallCandidate,
     startOptions: { readonly fromStore: boolean },
   ): Promise<void> => {
-    if (mutating() || response()) return;
+    // An attempt the URL already names (even one still loading) is the one
+    // this page follows; Install never starts a second beside it.
+    if (mutating() || response() || untrack(options.attemptId)) return;
     setMutating("start");
     setError(undefined);
     try {
@@ -439,7 +524,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
-  /** Continue a paused or retryable attempt: follow the coordinator again. */
+  /** Continue a paused attempt or try a step again: follow the coordinator. */
   const resume = () => {
     if (mutating()) return;
     drive();
@@ -455,24 +540,32 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const expected = epoch;
     setMutating(kind);
     setError(undefined);
+    const run = (async () => {
+      try {
+        const next = await answerGitInstallAttempt(current.installPlan.id, {
+          expectedGeneration: current.installPlan.generation,
+          ...patch,
+        });
+        return accept(next, expected);
+      } catch (cause) {
+        if (disposed || expected !== epoch) return undefined;
+        // Whatever happened, show the attempt as the server holds it now.
+        await refresh(expected);
+        setError(
+          outcomeUnknown(cause) && kind === "continue"
+            ? t("installStore.error.continueUnconfirmed")
+            : installErrorMessage(cause),
+        );
+        return undefined;
+      } finally {
+        if (!disposed) setMutating(undefined);
+      }
+    })();
+    if (kind === "answer") answerRun = run;
     try {
-      const next = await answerGitInstallAttempt(current.installPlan.id, {
-        expectedGeneration: current.installPlan.generation,
-        ...patch,
-      });
-      return accept(next, expected) ? next : undefined;
-    } catch (cause) {
-      if (disposed || expected !== epoch) return undefined;
-      // Whatever happened, show the attempt as the server holds it now.
-      await refresh(expected);
-      setError(
-        outcomeUnknown(cause) && kind === "continue"
-          ? t("installStore.error.continueUnconfirmed")
-          : installErrorMessage(cause),
-      );
-      return undefined;
+      return await run;
     } finally {
-      if (!disposed) setMutating(undefined);
+      if (answerRun === run) answerRun = undefined;
     }
   };
 
@@ -534,43 +627,40 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     if (next) setNameDraft(undefined);
   };
 
-  /** 「内容を確認」: confirm the sheet; setting values leave memory only here. */
+  /**
+   * 「内容を確認」: confirm the sheet; setting values leave memory only here.
+   * A sheet answer still in flight (leaving the name field starts one) is
+   * waited for first, so the click is never lost.
+   */
   const confirm = async (): Promise<void> => {
-    const current = response();
-    if (current?.userAction.kind !== "provide_inputs") return;
-    const action = current.userAction;
-    const values = continueVariables(action, drafts());
-    if (!values.ok) {
-      setError(t("installStore.error.settingsInvalid"));
-      return;
-    }
-    const typed = nameDraft()?.trim();
-    const rename = typed !== undefined && typed !== action.name.current &&
-      !awaitingResubmission(action);
-    const next = await answer(
-      {
-        continue: true,
-        ...(Object.keys(values.variables).length > 0 ? { variables: values.variables } : {}),
-        ...(rename ? { capsuleName: typed } : {}),
-      },
-      "continue",
-    );
-    if (!next) return;
-    if (next.userAction.kind !== "provide_inputs") forgetInputs();
-    else if (rename) setNameDraft(undefined);
-    drive();
-  };
-
-  const discardOnce = async (
-    plan: GitInstallPlan,
-  ): Promise<GitInstallPlanResponse> => {
+    if (confirming()) return;
+    setConfirming(true);
     try {
-      return await discardGitInstallAttempt(plan.id, plan.generation);
-    } catch (cause) {
-      if (errorCode(cause) !== "install_plan_generation_conflict") throw cause;
-      // It moved on while the person decided; discard what it is now.
-      const latest = await getGitInstallPlan(plan.id);
-      return await discardGitInstallAttempt(plan.id, latest.installPlan.generation);
+      while (answerRun) await answerRun.catch(() => undefined);
+      const current = response();
+      if (current?.userAction.kind !== "provide_inputs") return;
+      const action = current.userAction;
+      const values = continueVariables(action, drafts());
+      if (!values.ok) {
+        setError(t("installStore.error.settingsInvalid"));
+        return;
+      }
+      const typed = nameDraft()?.trim();
+      const rename = typed !== undefined && typed !== action.name.current &&
+        !awaitingResubmission(action);
+      const next = await answer(
+        {
+          continue: true,
+          ...(Object.keys(values.variables).length > 0 ? { variables: values.variables } : {}),
+          ...(rename ? { capsuleName: typed } : {}),
+        },
+        "continue",
+      );
+      if (!next) return;
+      if (rename && next.userAction.kind === "provide_inputs") setNameDraft(undefined);
+      drive();
+    } finally {
+      if (!disposed) setConfirming(false);
     }
   };
 
@@ -581,11 +671,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setMutating("discard");
     setError(undefined);
     try {
+      // A reconcile in flight is aborted rather than awaited; the discard then
+      // reads the generation it left behind (and waits out its lease).
       await stopDriving();
       const latest = response() ?? current;
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
-        : await discardOnce(latest.installPlan);
+        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation);
       if (disposed) return false;
       clearCaches(latest.installPlan.workspaceId);
       epoch += 1;
@@ -616,7 +708,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const latest = response() ?? current;
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
-        : await discardOnce(latest.installPlan);
+        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation);
       const workspaceId = discarded.installPlan.workspaceId;
       if (disposed || currentWorkspaceId() !== workspaceId) return false;
       clearCaches(workspaceId);
@@ -656,6 +748,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     loading,
     driving,
     mutating,
+    confirming,
     error,
     setError,
     drafts,

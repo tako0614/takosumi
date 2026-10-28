@@ -44,7 +44,7 @@ mock.module(apiPath, () => ({
   discardGitInstallAttempt: scripted("discardGitInstallAttempt"),
   resolveStableSourceTag: scripted("resolveStableSourceTag"),
   createWorkspace: scripted("createWorkspace"),
-  gitPlanReconcileDelayMs: () => 1,
+  // The real delay schedule is kept; the pause itself is virtual (see mount).
 }));
 
 const workspaceListPath = resolve(dashboard, "src/lib/workspace-list.ts");
@@ -129,10 +129,16 @@ async function until(condition: () => boolean, label: string): Promise<void> {
   throw new Error(`timed out waiting for ${label}`);
 }
 
+/**
+ * A page with a virtual clock: each pause between reconcile commands is
+ * recorded and advances the clock at once (yielding to the event loop).
+ */
 function mount(initialAttemptId?: string) {
   let dispose!: () => void;
   const [attemptId, setAttemptId] = solid.createSignal<string | undefined>(initialAttemptId);
   const left: string[] = [];
+  const pauses: number[] = [];
+  const clock = { now: 0 };
   const attempt = solid.createRoot((disposeRoot: () => void) => {
     dispose = disposeRoot;
     return useInstallAttempt({
@@ -143,9 +149,28 @@ function mount(initialAttemptId?: string) {
         left.push(plan.id);
         setAttemptId(undefined);
       },
+      pacing: {
+        now: () => clock.now,
+        wait: (milliseconds: number) => {
+          pauses.push(milliseconds);
+          clock.now += milliseconds;
+          return new Promise<void>((resolve) => setTimeout(resolve, 0));
+        },
+      },
     });
   });
-  return { attempt, dispose, attemptId, left };
+  return { attempt, dispose, attemptId, left, pauses, clock };
+}
+
+/** A reconcile that only ends when the page aborts it. */
+function abortable(signals: AbortSignal[]) {
+  return (_id: never, init: never) => {
+    const signal = (init as { signal?: AbortSignal } | undefined)?.signal;
+    if (signal) signals.push(signal);
+    return new Promise<never>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
+  };
 }
 
 function deferred<T>() {
@@ -293,31 +318,225 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
-  test("Stop installing waits for the in-flight reconcile and never overlaps it", async () => {
-    const reconcile = deferred<GitInstallPlanResponse>();
-    let reconciles = 0;
+  test("Stop installing aborts the reconcile in flight, then discards with the latest generation", async () => {
+    const signals: AbortSignal[] = [];
     reset({
       createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
-      reconcileGitInstallPlan: async () => {
-        reconciles += 1;
-        return reconciles === 1 ? reconcile.promise : respond({ kind: "wait", phase: "syncing_source" }, 9);
+      reconcileGitInstallPlan: abortable(signals),
+      getGitInstallPlan: async () => respond({ kind: "wait", phase: "compiling_install" }, 2),
+      discardGitInstallAttempt: async (_id: never, generation: never) => {
+        if ((generation as number) !== 2) {
+          throw new api.ControlApiError(409, "install_plan_generation_conflict", "changed");
+        }
+        return respond({ kind: "none" }, 3, "discarded");
       },
-      discardGitInstallAttempt: async (_id: never, generation: never) =>
-        respond({ kind: "none" }, (generation as number) + 1, "discarded"),
     });
     const page = mount();
     await page.attempt.start(candidate, { fromStore: false });
-    await until(() => reconciles === 1, "the first reconcile");
-    const stopping = page.attempt.discard();
-    await new Promise((done) => setTimeout(done, 10));
-    expect(calls.some(({ name }) => name === "discardGitInstallAttempt")).toBe(false);
-    reconcile.resolve(respond({ kind: "wait", phase: "compiling_install" }, 1));
-    expect(await stopping).toBe(true);
-    const discards = calls.filter(({ name }) => name === "discardGitInstallAttempt");
-    expect(discards.map(({ args }) => args)).toEqual([[ID, 1]]);
+    await until(() => signals.length === 1, "the first reconcile");
+    expect(await page.attempt.discard()).toBe(true);
+    expect(signals[0]!.aborted).toBe(true);
+    // The aborted command may have moved the attempt on: the stale
+    // generation is read again before the discard that succeeds.
+    expect(calls.filter(({ name }) => name === "discardGitInstallAttempt").map(({ args }) => args)).toEqual([[ID, 0], [ID, 2]]);
     expect(maxInFlight).toBe(1);
     expect(page.left).toEqual([ID]);
     expect(page.attempt.view().stage).toBe("candidate");
+    page.dispose();
+  });
+
+  test("Try again on a retryable step sends reconcile and keeps following", async () => {
+    let reconciles = 0;
+    reset({
+      getGitInstallPlan: async () =>
+        respond({ kind: "retry", code: "install_plan_reconcile_retryable", restart: false }, 4, "planning"),
+      reconcileGitInstallPlan: async () => {
+        reconciles += 1;
+        return reconciles === 1
+          ? respond({ kind: "wait", phase: "planning" }, 5, "planning")
+          : respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 6);
+      },
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "retry", "the retry stage");
+    expect(page.attempt.view()).toMatchObject({ primary: "retry", primaryBlocked: false });
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "review", "the review");
+    expect(reconciles).toBe(2);
+    page.dispose();
+  });
+
+  test("a step that stays retryable stops after a few tries and offers Try again", async () => {
+    reset({
+      getGitInstallPlan: async () =>
+        respond({ kind: "retry", code: "install_plan_reconcile_retryable", restart: false }, 4, "planning"),
+      reconcileGitInstallPlan: async () =>
+        respond({ kind: "retry", code: "install_plan_reconcile_retryable", restart: false }, 4, "planning"),
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "retry", "the retry stage");
+    page.attempt.resume();
+    await until(() => !page.attempt.driving() && calls.some(({ name }) => name === "reconcileGitInstallPlan"), "the page to stop");
+    expect(calls.filter(({ name }) => name === "reconcileGitInstallPlan")).toHaveLength(3);
+    expect(page.attempt.view().stage).toBe("retry");
+    page.dispose();
+  });
+
+  test("a coordinator that only waits is followed with a growing pause and then left to Continue", async () => {
+    const random = Math.random;
+    Math.random = () => 1;
+    try {
+      let generation = 1;
+      reset({
+        getGitInstallPlan: async () => respond({ kind: "wait", phase: "planning" }, generation, "planning"),
+        // Every successful claim bumps the generation, with nothing else new.
+        reconcileGitInstallPlan: async () => {
+          generation += 1;
+          return respond({ kind: "wait", phase: "planning" }, generation, "planning");
+        },
+      });
+      const page = mount(ID);
+      await until(() => page.attempt.view().stage === "paused", "the paused stage");
+      page.attempt.resume();
+      await until(() => page.attempt.driving(), "following");
+      await until(() => !page.attempt.driving(), "the stall limit");
+      const reconciles = calls.filter(({ name }) => name === "reconcileGitInstallPlan").length;
+      // 250 + 500 + 1000 + 2000 ms, then the 3 s ceiling until two quiet
+      // minutes have passed: 43 commands, not four a second forever.
+      expect(page.pauses.slice(0, 6)).toEqual([250, 500, 1000, 2000, 3000, 3000]);
+      expect(Math.max(...page.pauses)).toBe(3000);
+      expect(reconciles).toBe(43);
+      expect(page.clock.now).toBeGreaterThanOrEqual(120_000);
+      expect(page.attempt.view()).toMatchObject({ stage: "paused", primary: "continue" });
+      page.dispose();
+    } finally {
+      Math.random = random;
+    }
+  });
+
+  test("a coordinator that keeps moving is followed at the shortest pause", async () => {
+    const random = Math.random;
+    Math.random = () => 1;
+    try {
+      const phases = ["compiling_install", "analyzing_compatibility", "creating_capsule", "planning"] as const;
+      let round = 0;
+      reset({
+        createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0),
+        reconcileGitInstallPlan: async () => {
+          round += 1;
+          const phase = phases[round - 1];
+          return phase
+            ? respond({ kind: "wait", phase }, round, phase)
+            : respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, round);
+        },
+      });
+      const page = mount();
+      await page.attempt.start(candidate, { fromStore: false });
+      await until(() => page.attempt.view().stage === "review", "the review");
+      expect(page.pauses).toEqual([250, 250, 250, 250]);
+      page.dispose();
+    } finally {
+      Math.random = random;
+    }
+  });
+
+  test("while the URL's attempt loads, Install starts nothing", async () => {
+    const gate = deferred<GitInstallPlanResponse>();
+    reset({ getGitInstallPlan: () => gate.promise });
+    const page = mount(ID);
+    await settle();
+    expect(page.attempt.view()).toMatchObject({ stage: "loading", primary: "none" });
+    await page.attempt.start(candidate, { fromStore: false });
+    expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
+    gate.resolve(respond({ kind: "wait", phase: "syncing_source" }, 3));
+    await until(() => page.attempt.view().stage === "paused", "the reopened attempt");
+    expect(page.attempt.response()?.installPlan.id).toBe(ID);
+    page.dispose();
+  });
+
+  test("a slow read never overwrites a newer answer", async () => {
+    let reads = 0;
+    const slow = deferred<GitInstallPlanResponse>();
+    reset({
+      getGitInstallPlan: async () => {
+        reads += 1;
+        return reads === 1 ? respond(inputs(), 2) : slow.promise;
+      },
+      answerGitInstallAttempt: async () =>
+        respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_a" }], missing: [] }), 3),
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    const reading = page.attempt.reload();
+    await page.attempt.chooseConnection(requirement, "conn_a");
+    expect(page.attempt.response()?.installPlan.generation).toBe(3);
+    slow.resolve(respond(inputs(), 2));
+    await reading;
+    expect(page.attempt.response()?.installPlan.generation).toBe(3);
+    page.dispose();
+  });
+
+  test("values typed for a confirmation whose answer was lost are dropped once it went through", async () => {
+    let confirmed = false;
+    reset({
+      getGitInstallPlan: async () =>
+        confirmed
+          ? respond({ kind: "wait", phase: "planning" }, 7, "planning")
+          : respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_a", autoSelected: true }], missing: [] }), 5),
+      answerGitInstallAttempt: async () => {
+        confirmed = true;
+        throw new api.ControlApiError(503, "unavailable", "unavailable");
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 8),
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setDraft("api_token", SECRET);
+    await page.attempt.confirm();
+    expect(page.attempt.view().stage).not.toBe("provide_inputs");
+    expect(page.attempt.drafts()).toEqual({});
+    page.dispose();
+  });
+
+  test("Review right after editing the name waits for the rename instead of losing the click", async () => {
+    const rename = deferred<GitInstallPlanResponse>();
+    let generation = 2;
+    reset({
+      getGitInstallPlan: async () =>
+        respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_a", autoSelected: true }], missing: [] }), generation),
+      answerGitInstallAttempt: async (_id: never, body: never) => {
+        const answer = body as Record<string, unknown>;
+        if (answer.capsuleName) {
+          const next = await rename.promise;
+          generation = next.installPlan.generation;
+          return next;
+        }
+        generation += 1;
+        return respond({ kind: "wait", phase: "planning" }, generation, "planning");
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, generation + 1),
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setDraft("api_token", SECRET);
+    page.attempt.setNameDraft("office-two");
+    const leaving = page.attempt.saveName();
+    await settle();
+    // The Review button stays pressable while the rename is in flight.
+    expect(page.attempt.view()).toMatchObject({ primary: "review", primaryBlocked: false });
+    const reviewing = page.attempt.confirm();
+    rename.resolve(respond(inputs({
+      connections: [{ ...requirement, selectedConnectionId: "conn_a", autoSelected: true }],
+      missing: [],
+      name: { current: "office-two", proposed: "office-two", conflict: false },
+    }), 3));
+    await leaving;
+    await reviewing;
+    await until(() => page.attempt.view().stage === "review", "the review");
+    expect(calls.filter(({ name }) => name === "answerGitInstallAttempt").map(({ args }) => args[1])).toEqual([
+      { expectedGeneration: 2, capsuleName: "office-two" },
+      { expectedGeneration: 3, continue: true, variables: { api_token: SECRET } },
+    ]);
     page.dispose();
   });
 
