@@ -45,6 +45,10 @@ import {
 } from "takosumi-contract";
 import { encodeCursor } from "takosumi-contract/pagination";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import {
+  GIT_REVISION_PREPARATION_STALL_AFTER_MS,
+  type PreparingGitPlanCoordinator,
+} from "../../../../core/domains/install-plans/store.ts";
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
@@ -174,13 +178,8 @@ async function readCapsuleAppView(
         readConnectionIssues(operations, capsule),
         readUninstallAdmission(operations, capsule, applied),
       ]);
-  // An install attempt that has not moved for the stall window no longer
-  // holds the app: the person is offered continue_install, which advances
-  // that attempt through its own reconciliation.
-  const installAttempt = coordinator?.operation === "install" ? coordinator : undefined;
-  const installStalled = installAttempt !== undefined &&
-    now - Date.parse(installAttempt.updatedAt) >= CAPSULE_APP_INSTALL_STALL_AFTER_MS;
-  const revisionPreparing = coordinator !== undefined && !installStalled;
+  const preparation = coordinatorPreparation(coordinator, ctx.session.subject, now);
+  const revisionPreparing = preparation.preparing;
 
   const [installConfig, source, adopted, screens, screenFailure] = await Promise.all([
     optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)),
@@ -257,7 +256,11 @@ async function readCapsuleAppView(
     version,
     progress: {
       revisionPreparing: !destroyed && revisionPreparing,
-      ...(installAttempt ? { installPlanId: installAttempt.id } : {}),
+      ...(preparation.installPlanId ? { installPlanId: preparation.installPlanId } : {}),
+      ...(preparation.installPlanAwaitingInput
+        ? { installPlanAwaitingInput: preparation.installPlanAwaitingInput }
+        : {}),
+      ...(preparation.revisionPlanId ? { revisionPlanId: preparation.revisionPlanId } : {}),
       ...(inFlightRun ? { run: runSummary(inFlightRun) } : {}),
       ...(review ? { review: { runId: review.id, runType: review.type } } : {}),
     },
@@ -269,6 +272,48 @@ async function readCapsuleAppView(
     }),
     ...(incomplete.size > 0 ? { incomplete: [...incomplete].sort() } : {}),
     observedAt: new Date(now).toISOString(),
+  };
+}
+
+/**
+ * What the coordinator still preparing this app means for it:
+ *
+ * - An install attempt waiting for its creator's answer holds the app (only
+ *   the creator answers it); the view says whether that is the caller.
+ * - Any other install attempt holds it until it stops moving for the stall
+ *   window; after that `continue_install` advances it through its own
+ *   reconciliation (`installPlanId`). (An attempt bound to a Capsule never
+ *   expires.)
+ * - A revision row holds the app until it stops moving; after that the app
+ *   reads as it is and the page offers to continue it (`revisionPlanId`).
+ */
+export function coordinatorPreparation(
+  coordinator: PreparingGitPlanCoordinator | undefined,
+  viewer: string,
+  now: number,
+): {
+  readonly preparing: boolean;
+  readonly installPlanId?: string;
+  readonly installPlanAwaitingInput?: "viewer" | "other";
+  readonly revisionPlanId?: string;
+} {
+  if (!coordinator) return { preparing: false };
+  const idleMs = now - Date.parse(coordinator.updatedAt);
+  if (coordinator.operation === "revision") {
+    return idleMs >= GIT_REVISION_PREPARATION_STALL_AFTER_MS
+      ? { preparing: false, revisionPlanId: coordinator.id }
+      : { preparing: true };
+  }
+  if (coordinator.phase === "awaiting_input") {
+    return {
+      preparing: true,
+      installPlanId: coordinator.id,
+      installPlanAwaitingInput: coordinator.actorSubject === viewer ? "viewer" : "other",
+    };
+  }
+  return {
+    preparing: idleMs < CAPSULE_APP_INSTALL_STALL_AFTER_MS,
+    installPlanId: coordinator.id,
   };
 }
 

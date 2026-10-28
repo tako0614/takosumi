@@ -29,6 +29,7 @@ import {
 import { evaluateCompatibilityReportAgainstPolicy } from "../../../../core/domains/deploy-control/provider_policy.ts";
 import {
   GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
+  GIT_REVISION_PREPARATION_STALL_AFTER_MS,
   publicGitInstallPlan,
   type StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
@@ -121,6 +122,28 @@ export async function handleCapsuleRevisionPlans(
       "This Idempotency-Key was already used for a different Git lifecycle request in the same Workspace and actor scope.",
       409,
       ctx.request,
+    );
+  }
+  // One version change at a time per Capsule: while another revision
+  // coordinator is still preparing its Plan (and has not stalled), a second
+  // one would race it to a duplicate Plan. Its id is returned so the caller
+  // can follow it instead. An exact idempotent replay was answered above.
+  const preparing = await ctx.operations.gitInstallPlans.preparingCoordinatorForCapsule(
+    capsule.id,
+    capsule.workspaceId,
+    { includeInstall: false },
+  );
+  if (
+    preparing?.operation === "revision" &&
+    Date.now() - Date.parse(preparing.updatedAt) < GIT_REVISION_PREPARATION_STALL_AFTER_MS
+  ) {
+    return errorJson(
+      "failed_precondition",
+      "Another version change for this app is still being prepared.",
+      409,
+      ctx.request,
+      {},
+      { reason: "revision_in_progress", revisionPlanId: preparing.id },
     );
   }
   // Retain this exact active authority through all asynchronous Source,

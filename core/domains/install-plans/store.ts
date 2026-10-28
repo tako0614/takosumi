@@ -337,8 +337,19 @@ export function isOpenGitInstallAttemptPhase(phase: unknown): boolean {
 export interface PreparingGitPlanCoordinator {
   readonly id: string;
   readonly operation: "install" | "revision";
+  readonly phase: GitInstallPlanPhase;
+  /** Who started it; only they answer an attempt that awaits input. */
+  readonly actorSubject: string;
   readonly updatedAt: string;
 }
+
+/**
+ * A revision coordinator that has not created its Plan Run after this long
+ * has lost its client (the client's own deadline is two minutes): it no
+ * longer holds the app as updating, a second revision is admitted, and the
+ * app page offers to continue it.
+ */
+export const GIT_REVISION_PREPARATION_STALL_AFTER_MS = 10 * 60 * 1000;
 
 export interface GitInstallPlanStore {
   readonly durable: boolean;
@@ -359,9 +370,11 @@ export interface GitInstallPlanStore {
    * non-terminal row (not `failed`, `reviewable` or `discarded`) that has not
    * created its Plan Run yet. Once a Plan Run exists the Run itself says what
    * is happening, so a row a client never reconciled past `planning` does not
-   * keep the Capsule busy. Install rows count only with `includeInstall`
-   * (a never-applied Capsule); an applied Capsule is never held by an install
-   * row. Scoped to the Capsule's Workspace so the read stays on its index.
+   * keep the Capsule busy. Rows written before management-authority
+   * persistence can never be reconciled again and are not returned. Install
+   * rows count only with `includeInstall` (a never-applied Capsule); an
+   * applied Capsule is never held by an install row. Scoped to the Capsule's
+   * Workspace so the read stays on its index.
    */
   preparingCoordinatorForCapsule(
     capsuleId: string,
@@ -506,6 +519,7 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
         plan.capsuleId === capsuleId &&
         !isTerminalGitInstallPlanPhase(plan.phase) &&
         plan.planRunId === undefined &&
+        plan.workspaceManagementAuthority !== undefined &&
         (plan.operation === "revision" || options.includeInstall)
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
@@ -515,6 +529,8 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
         ? {
             id: newest.id,
             operation: newest.operation === "revision" ? "revision" : "install",
+            phase: newest.phase,
+            actorSubject: newest.actorSubject,
             updatedAt: newest.updatedAt,
           }
         : undefined,

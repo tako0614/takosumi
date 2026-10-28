@@ -12,6 +12,7 @@ import {
   appInstalledRef,
   appPrimaryActionLabel,
   appPrimaryStep,
+  appVersionChangeBusy,
   appRunHistory,
   appState,
   appStateRank,
@@ -260,6 +261,16 @@ describe("what the page does with the server's view", () => {
     for (const [patch, step] of cases) {
       expect({ action: patch.primaryAction, step: appPrimaryStep(appView(patch)) }).toEqual({ action: patch.primaryAction, step });
     }
+  });
+
+  test("a version change waits while another change is under way or waiting for review", () => {
+    expect(appVersionChangeBusy(appView())).toBe(false);
+    expect(appVersionChangeBusy(appView({ state: "updating" }))).toBe(true);
+    expect(appVersionChangeBusy(appView({ progress: { revisionPreparing: true } }))).toBe(true);
+    expect(appVersionChangeBusy(appView({ progress: { revisionPreparing: false, review: { runId: "run_p", runType: "plan" } } }))).toBe(true);
+    expect(appVersionChangeBusy(appView({ progress: { revisionPreparing: false, run: { id: "run_a", type: "apply", status: "running", createdAt: "2026-10-28T00:00:00.000Z" } } }))).toBe(true);
+    // A preparation that stalled is continued or replaced, not waited on.
+    expect(appVersionChangeBusy(appView({ progress: { revisionPreparing: false, revisionPlanId: "grp_stalled" } }))).toBe(false);
   });
 
   test("an installed app updates its own ref, never the Source's default ref", () => {

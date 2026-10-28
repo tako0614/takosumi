@@ -704,8 +704,25 @@ export interface CapsuleAppProgress {
    * An install attempt bound to this never-applied app that has not created
    * its Plan yet. `continue_install` advances it through
    * `POST /api/v1/install-plans/:id/reconcile` instead of planning directly.
+   * Any Workspace member may reconcile it; the Plan Run it creates records
+   * the coordinator (`git-install-plan:<id>`) as its actor, not the member
+   * who advanced it. Attempts written before management-authority
+   * persistence can never advance and are not named here.
    */
   readonly installPlanId?: string;
+  /**
+   * The install attempt waits for its creator's answer before it can plan:
+   * `viewer` when the caller started it (they continue it on the install
+   * page), `other` when someone else did. Reconciling does not advance it.
+   */
+  readonly installPlanAwaitingInput?: "viewer" | "other";
+  /**
+   * A revision coordinator for this app that has not created its Plan and
+   * stopped moving (its client went away). It no longer holds the app as
+   * updating; `POST /api/v1/revision-plans/:id/reconcile` continues it, and
+   * its Plan Run records the coordinator (`git-revision-plan:<id>`) as actor.
+   */
+  readonly revisionPlanId?: string;
   /** The newest lifecycle Run, while it is queued or running. */
   readonly run?: CapsuleAppRunSummary;
   /** The newest lifecycle Run, while it is a plan waiting for review. */

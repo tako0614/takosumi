@@ -2205,6 +2205,36 @@ export async function advanceGitInstallPlan(
   });
 }
 
+/**
+ * Continues a revision coordinator for an installed app that stopped moving
+ * (its client went away), through its own reconciliation, until it asks for
+ * a review. Resolves to its last response; the caller reads
+ * `revisionPlan.planRunId`.
+ */
+export async function advanceGitRevisionPlan(
+  revisionPlanId: string,
+  options: { readonly timeoutMs?: number; readonly pollCadence?: GitPlanPollCadence } = {},
+): Promise<GitRevisionPlanResponse> {
+  const cadence = resolveGitPlanPollCadence(options.pollCadence);
+  return await withGitPlanDeadline("revision", options.timeoutMs, async (signal) => {
+    const first = await reconcileGitRevisionPlan(revisionPlanId, { signal });
+    throwIfAborted(signal);
+    return await driveGitPlanReconcile<GitRevisionPlanResponse>({
+      kind: "revision",
+      maxReconciles: 120,
+      signal,
+      cadence,
+      initial: first,
+      nextAction: (current) => current.nextAction,
+      observe: (current) => ({
+        phase: current.revisionPlan.phase,
+        generation: current.revisionPlan.generation,
+      }),
+      reconcile: () => reconcileGitRevisionPlan(revisionPlanId, { signal }),
+    });
+  });
+}
+
 /** Upper bound the per-app Run listing accepts for one page. */
 export const CAPSULE_RUN_PAGE_MAX = 100;
 

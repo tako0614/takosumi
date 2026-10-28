@@ -158,22 +158,33 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     // Capsule was never applied.
     const row = await this.#db
       .prepare(
-        `select id, json_extract(record_json, '$.operation') as operation, updated_at
+        `select id, phase, json_extract(record_json, '$.operation') as operation,
+                json_extract(record_json, '$.actorSubject') as actor_subject,
+                updated_at
            from git_install_plans
           where workspace_id = ?
             and json_extract(record_json, '$.capsuleId') = ?
             and phase not in ('failed', 'reviewable', 'discarded')
             and json_extract(record_json, '$.planRunId') is null
+            and json_extract(record_json, '$.workspaceManagementAuthority') is not null
             and (? = 1 or json_extract(record_json, '$.operation') = 'revision')
           order by updated_at desc, id desc
           limit 1`,
       )
       .bind(workspaceId, capsuleId, options.includeInstall ? 1 : 0)
-      .first<{ readonly id: string; readonly operation: string | null; readonly updated_at: string }>();
+      .first<{
+        readonly id: string;
+        readonly phase: PreparingGitPlanCoordinator["phase"];
+        readonly operation: string | null;
+        readonly actor_subject: string;
+          readonly updated_at: string;
+      }>();
     return row
       ? {
           id: row.id,
           operation: row.operation === "revision" ? "revision" : "install",
+          phase: row.phase,
+          actorSubject: row.actor_subject,
           updatedAt: row.updated_at,
         }
       : undefined;
