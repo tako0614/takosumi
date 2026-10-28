@@ -266,8 +266,11 @@ Add, role change, and remove responses carry neither field.
 `GET /api/v1/workspaces/{workspaceId}/installed-apps` has no query parameters. With
 Workspace read access, it returns `{ installedApps: [...] }`, excluding destroyed apps.
 Each row has `capsuleId`, `name`, optional `displayName` (`{ja,en}`) and `iconUrl`, `state`,
-`primaryAction`, and `installedFrom: {url,path}`. The URL contains no credentials; `path`
-is the executable module's repository-relative directory. Matching ignores ref. The store
+`primaryAction`, and `installedFrom: {url,path,matchable?}`. The display URL contains no
+credentials, query, or fragment; `path` is the executable module's repository-relative directory.
+When removing a query or other content prevents exact comparison, the row includes
+`matchable: false` and is excluded from installed-app matching. Its app ID and summary are
+still returned. Matching ignores ref but preserves query as part of executable source identity. The store
 uses normalized Git URL and module to show the installed count, Open, and Add another.
 Each additional installation is an independent app with separate data and settings.
 

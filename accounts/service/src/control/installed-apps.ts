@@ -1,5 +1,5 @@
 /** Workspace-authorized, value-free app identities for Store discovery. */
-import { installedAppSourceUrl, type InstalledAppSummary, type ListInstalledAppsResponse } from "takosumi-contract";
+import { installedAppSourceIsMatchable, installedAppSourceUrl, type InstalledAppSummary, type ListInstalledAppsResponse } from "takosumi-contract";
 import { normalizeInstallConfigSourcePath } from "takosumi-contract/install-configs";
 import { json, methodNotAllowed } from "../http-helpers.ts";
 import { type ControlDispatchContext, controlPlaneUnavailable } from "./shared.ts";
@@ -28,6 +28,7 @@ export async function handleWorkspaceInstalledApps(
     const sourcePath = normalizeInstallConfigSourcePath(config.sourceSelector?.path ?? source.defaultPath);
     const modulePath = normalizeInstallConfigSourcePath(config.modulePath ?? ".");
     const path = [sourcePath, modulePath].filter((part) => part !== ".").join("/") || ".";
+    const sourceUrl = config.sourceSelector?.url ?? source.url;
     installedApps.push({
       capsuleId: app.capsuleId,
       name: app.name,
@@ -36,8 +37,9 @@ export async function handleWorkspaceInstalledApps(
       state: app.state,
       primaryAction: app.primaryAction,
       installedFrom: {
-        url: installedAppSourceUrl(config.sourceSelector?.url ?? source.url),
+        url: installedAppSourceUrl(sourceUrl),
         path,
+        ...(installedAppSourceIsMatchable(sourceUrl) ? {} : { matchable: false as const }),
       },
     });
   }
