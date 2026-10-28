@@ -6262,27 +6262,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       providerBindingSet.environment === capsule.environment;
     if (!exact) return Promise.resolve({ status: "conflict" });
 
-    const source = this.#sources.get(capsule.sourceId);
-    if (!source || source.workspaceId !== capsule.workspaceId) {
-      try {
-        assertWorkspaceManagementAdmission(
-          this.#workspaces.has(capsule.workspaceId)
-            ? this.#workspaceManagement.get(capsule.workspaceId)
-            : undefined,
-          capsule.workspaceId,
-          input.expectedWorkspaceManagementAuthority,
-        );
-      } catch (error) {
-        return Promise.reject(error);
-      }
-      return Promise.resolve({ status: "conflict" });
-    }
-    if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id ||
-      [...this.#capsules.values()].some((other) =>
-        other.id !== capsule.id && other.sourceId === capsule.sourceId)) {
-      return Promise.resolve({ status: "source_owned_by_another_app" });
-    }
-
     const existingConfig = this.#installConfigs.get(installConfig.id);
     const existingCapsule = this.#capsules.get(capsule.id);
     const existingBinding = this.#providerBindingSets.get(providerBindingSet.id);
@@ -6310,6 +6289,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           ? { status: "replayed", capsule: existingCapsule }
           : { status: "conflict" },
       );
+    }
+    const source = this.#sources.get(capsule.sourceId);
+    if (!source || source.workspaceId !== capsule.workspaceId) {
+      try {
+        assertWorkspaceManagementAdmission(
+          this.#workspaces.has(capsule.workspaceId)
+            ? this.#workspaceManagement.get(capsule.workspaceId)
+            : undefined,
+          capsule.workspaceId,
+          input.expectedWorkspaceManagementAuthority,
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return Promise.resolve({ status: "conflict" });
+    }
+    if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id ||
+      [...this.#capsules.values()].some((other) =>
+        other.id !== capsule.id && other.workspaceId === capsule.workspaceId &&
+        other.sourceId === capsule.sourceId)) {
+      return Promise.resolve({ status: "source_owned_by_another_app" });
     }
     const duplicate = Array.from(this.#capsules.values()).some(
       (candidate) =>
@@ -7832,6 +7832,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       .filter((source) => source.status === "active" && source.autoSync &&
         this.#workspaces.has(source.workspaceId) &&
         this.#workspaceManagement.get(source.workspaceId)?.managementState === "active" &&
+        (source.ownerCapsuleId === undefined || (() => {
+          const owner = this.#capsules.get(source.ownerCapsuleId);
+          return owner !== undefined && owner.workspaceId === source.workspaceId &&
+            owner.sourceId === source.id && owner.status !== "destroyed" &&
+            owner.status !== "disabled" && owner.status !== "uninstalled" &&
+            owner.currentStateVersionId != null;
+        })()) &&
         !( /^[0-9a-f]{40}$/iu.test(source.defaultRef) &&
           source.lastSeenCommit?.toLowerCase() === source.defaultRef.toLowerCase()))
       .sort((a, b) => {

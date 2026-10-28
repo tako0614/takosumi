@@ -6905,14 +6905,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       );
       const sourceRow = sourceRows.rows[0];
       const source = sourceRow ? sourceFromPgRow(sourceRow) : undefined;
-      if (!source || source.workspaceId !== capsule.workspaceId) {
-        assertWorkspaceManagementAdmission(
-          management,
-          capsule.workspaceId,
-          input.expectedWorkspaceManagementAuthority,
-        );
-        return { status: "conflict" as const };
-      }
       // Initial authority is rare and must be one exact create-or-replay CAS.
       // Serialize every candidate across the three tables so two concurrent
       // first-install requests cannot both observe absence and turn a unique
@@ -6923,16 +6915,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
                     takosumi_provider_env_binding_sets
            in share row exclusive mode`,
       );
-      const otherReference = await transaction.query<{ readonly id: string }>(
-        `select id from takosumi_capsules
-          where id <> $1 and (source_id = $2 or installation_json ->> 'sourceId' = $2)
-          limit 1`,
-        [capsule.id, capsule.sourceId],
-      );
-      if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id ||
-        otherReference.rows.length > 0) {
-        return { status: "source_owned_by_another_app" as const };
-      }
       const [configRows, capsuleRows, bindingRows] = await Promise.all([
         db
           .select({ json: pgSchema.installConfigs.configJson })
@@ -7008,6 +6990,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           ? { status: "replayed" as const, capsule }
           : { status: "conflict" as const };
       }
+      // Exact replay above is an observation-only read even if the Source was
+      // later removed or another Capsule now references its historical id.
+      if (!source || source.workspaceId !== capsule.workspaceId) {
+        assertWorkspaceManagementAdmission(
+          management,
+          capsule.workspaceId,
+          input.expectedWorkspaceManagementAuthority,
+        );
+        return { status: "conflict" as const };
+      }
+      const otherReference = await transaction.query<{ readonly id: string }>(
+        `select id from takosumi_capsules
+          where space_id = $3 and id <> $1
+            and (source_id = $2 or installation_json ->> 'sourceId' = $2)
+          limit 1`,
+        [capsule.id, capsule.sourceId, capsule.workspaceId],
+      );
+      if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id ||
+        otherReference.rows.length > 0) {
+        return { status: "source_owned_by_another_app" as const };
+      }
       const duplicate = await db
         .select({ id: pgSchema.capsules.id })
         .from(pgSchema.capsules)
@@ -7034,7 +7037,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
               and source_json ->> 'ownerCapsuleId' is null
               and not exists (
                 select 1 from takosumi_capsules as other
-                 where other.id <> $1
+                 where other.space_id = $3 and other.id <> $1
                    and (other.source_id = $2 or other.installation_json ->> 'sourceId' = $2)
               )
           returning id`,
@@ -9806,6 +9809,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           select 1 from takosumi_workspaces workspace
           where workspace.id = ${sources.workspaceId}
             and workspace.management_state = 'active'
+        )
+        and (
+          ${sources.sourceJson} ->> 'ownerCapsuleId' is null
+          or exists (
+            select 1 from takosumi_capsules owner
+            where owner.id = ${sources.sourceJson} ->> 'ownerCapsuleId'
+              and owner.space_id = ${sources.workspaceId}
+              and owner.source_id = ${sources.id}
+              and owner.status not in ('disabled', 'uninstalled', 'destroyed')
+              and owner.current_state_version_id is not null
+          )
         )
         and not (
           ${sources.sourceJson} ->> 'defaultRef' ~* '^[0-9a-f]{40}$'

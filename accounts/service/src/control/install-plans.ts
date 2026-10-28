@@ -1527,9 +1527,24 @@ async function sourceSyncProgress(
   const sourceId = plan.sourceId!;
   const evidence = await installSourceSyncEvidence(plan, sourceId);
   const source = (await operations.getSource(sourceId)).source;
+  if (!sourceMatchesPlan(source, plan) || source.status !== "active") {
+    throw permanent(
+      "source_identity_changed",
+      "The canonical Source no longer matches this immutable install plan.",
+    );
+  }
+  // Before app-owned Sources, an in-flight coordinator could persist the
+  // random Source sync id returned by Core. Only that exact recorded id may
+  // resume; an unrecorded sync still uses the plan's deterministic identity.
+  const recordedLegacySync = isRecordedLegacySource(plan) &&
+    plan.sourceSyncRunId !== undefined &&
+    plan.sourceSyncRunId !== evidence.runId &&
+    sync.id === plan.sourceSyncRunId;
   if (
-    sync.id !== evidence.runId ||
-    (sync.requestedSnapshotId ?? sync.snapshotId) !== evidence.snapshotId ||
+    (!recordedLegacySync &&
+      (sync.id !== evidence.runId ||
+        (sync.requestedSnapshotId ?? sync.snapshotId) !== evidence.snapshotId)) ||
+    sync.kind !== "source_sync" ||
     sync.workspaceId !== plan.workspaceId ||
     sync.sourceId !== sourceId ||
     sync.url !== source.url ||
@@ -3177,11 +3192,15 @@ function sourceMatchesPlan(
   plan: StoredGitInstallPlan,
   allowUnclaimedPreflight = false,
 ): boolean {
+  const recordedLegacySource = isRecordedLegacySource(plan);
   return (
     source.id === plan.sourceId &&
     source.workspaceId === plan.workspaceId &&
+    (!recordedLegacySource || source.name === plan.source.name) &&
     (source.ownerCapsuleId === deterministicInitialCapsuleId(plan.id) ||
       (allowUnclaimedPreflight && plan.preflight !== undefined &&
+        source.ownerCapsuleId === undefined) ||
+      (recordedLegacySource && plan.capsuleId === undefined &&
         source.ownerCapsuleId === undefined)) &&
     normalizeInstallConfigSourceUrl(source.url) === plan.source.url &&
     source.defaultRef === plan.source.ref &&
@@ -3189,6 +3208,14 @@ function sourceMatchesPlan(
     (source.authConnectionId ?? undefined) ===
       (plan.source.authConnectionId ?? undefined)
   );
+}
+
+/** A prior coordinator already persisted this random, name-scoped Source id. */
+function isRecordedLegacySource(plan: StoredGitInstallPlan): boolean {
+  return (plan.operation ?? "install") === "install" &&
+    plan.preflight === undefined &&
+    plan.sourceId !== undefined &&
+    plan.sourceId !== deterministicInstallSourceId(plan.id);
 }
 
 function assertInstallSourceMatchesPlan(

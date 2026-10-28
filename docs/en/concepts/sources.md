@@ -129,6 +129,9 @@ including attempts that fail before creating a Run. Never-attempted Sources come
 a default batch of 25. Sources outside active Workspaces and already observed commit pins are
 excluded. Permanently invalid Git coordinates or applied lineage mark the Source `error`; repair its configuration
 and restore `active` to resume automatic polling.
+An app-owned Source is eligible only while its owner in the same Workspace has applied
+state and remains enabled. Missing, uninstalled, destroyed, disabled, and never-applied owners are
+excluded. Existing ownerless Sources retain their polling behavior.
 
 The dashboard reads that scan result and lets the user select a real module. A matching
 entry in `.well-known/takosumi.json` may add input presentation hints and requests for
@@ -140,9 +143,10 @@ Connections, Plans, or Runs.
 A Capsule is one deployed unit. Where a Source says where the code comes from, a Capsule
 says what is running right now.
 
-One Source can back several Capsules. Modules carry no credentials and no notion of
-environment, so development and production are expressed by giving separate Capsules
-separate Connections (see [Credentials](./credentials.md)).
+Each new app owns a separate Source, including apps added from the same repository.
+Existing shared Sources are retained. Modules carry no credentials and no notion of
+environment, so development and production use separate Capsules with their own Sources
+and Connections (see [Credentials](./credentials.md)).
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \

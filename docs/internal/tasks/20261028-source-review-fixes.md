@@ -12,6 +12,12 @@
   source archives may be released only by their host storage owner.
 - Persistence: optional internal Source JSON polling attempt timestamp; no DDL
   or data migration. Existing ownerless records keep polling behavior.
+- Owned Source polling requires an enabled, installed owner with applied state
+  in the same Workspace. Legacy coordinator recovery adopts only Source/sync
+  identities already recorded by that plan and revalidates Git and ownership.
+- Exact initial-unit replay precedes new ownership checks; new claims consider
+  Capsule references within their Workspace. D1 Source guard failures have a
+  separate classification from Workspace management admission.
 - Validation: focused regression tests in all three stores and real install-plan
   coordination, every static portable phase, complete `bun run check`, then
   GitHub Actions `check and test` on both pushed PR heads.

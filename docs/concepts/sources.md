@@ -127,6 +127,9 @@ Run が返した ID を使い、独自に古い snapshot を選び直さない�
 Run 作成前の失敗も試行として記録します。未試行が先で、既定では 1 回 25 件です。
 Workspace が active でない Source と、すでに観測済みの固定 commit は除外します。恒久的に不正な取得座標や適用履歴の
 Source は `error` となり、設定を修復して `active` に戻すまで自動同期の対象から外れます。
+アプリが所有する Source は、同じ Workspace の所有アプリに適用済み state がある間だけ
+自動同期の対象です。未適用、アンインストール済み、削除済みの所有アプリは対象外です。
+所有アプリが記録されていない既存 Source の扱いは維持します。
 
 dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の
 `.well-known/takosumi.json` entry は input の表示 hint と generic Host API/service request
@@ -137,8 +140,9 @@ dashboard はこの scan 結果を読み、利用者が実在する module を�
 Capsule はデプロイされた 1 つのまとまりです。Source が「どこから」なら、Capsule は
 「何が動いているか」です。
 
-同じ Source から複数の Capsule を作れます。module は認証情報も環境の区別も持たない
-ので、開発用と本番用は「別の Capsule に別の Connection を割り当てる」ことで表します
+新しいアプリはそれぞれ専用の Source を持ち、同じリポジトリから追加しても共有しません。
+既存の共有 Source は維持します。module は認証情報も環境の区別も持たないので、
+開発用と本番用は「別の Capsule に別の Source と Connection を割り当てる」ことで表します
 ([認証情報](./credentials.md))。
 
 ```bash

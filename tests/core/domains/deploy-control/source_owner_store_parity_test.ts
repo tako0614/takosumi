@@ -137,6 +137,37 @@ test("initial authority atomically claims an unowned Source and replays the matc
   }
 });
 
+test("exact initial authority replay survives later conflicting references and Source deletion", async () => {
+  for (const [label, store] of await stores()) {
+    await store.putWorkspace(workspace());
+    await store.putSource(source());
+    const original = authority(`cap_original_${label}`);
+    expect((await store.createCapsuleInitialAuthority(original)).status, label).toBe("created");
+    const later = authority(`cap_later_reference_${label}`);
+    await store.putCapsule({ ...later.capsule, status: "destroyed" });
+    expect((await store.createCapsuleInitialAuthority(original)).status, label).toBe("replayed");
+    expect(await store.deleteSource(SOURCE), label).toBe(true);
+    expect((await store.createCapsuleInitialAuthority(original)).status, label).toBe("replayed");
+    expect(await store.getSource(SOURCE), label).toBeUndefined();
+  }
+});
+
+test("a foreign Workspace Capsule reference cannot block a rightful Source claim", async () => {
+  for (const [label, store] of await stores()) {
+    await store.putWorkspace(workspace());
+    const foreignWorkspaceId = `${WORKSPACE}_foreign`;
+    await store.putWorkspace({ ...workspace(), id: foreignWorkspaceId,
+      handle: "source-owner-foreign", ownerUserId: "owner_source_owner_foreign" });
+    await store.putSource(source());
+    const foreign = authority(`cap_foreign_tenant_${label}`);
+    await store.putCapsule({ ...foreign.capsule, workspaceId: foreignWorkspaceId,
+      status: "destroyed" });
+    const rightful = authority(`cap_rightful_${label}`);
+    expect((await store.createCapsuleInitialAuthority(rightful)).status, label).toBe("created");
+    expect((await store.getSource(SOURCE))?.ownerCapsuleId, label).toBe(rightful.capsule.id);
+  }
+});
+
 test("another owner or any other Capsule reference refuses initial authority without partial writes", async () => {
   for (const [label, store] of await stores()) {
     await store.putWorkspace(workspace());
@@ -217,7 +248,9 @@ test("owner cannot be removed or changed by direct Source upsert or configuratio
   }
 });
 
-test("concurrent different Capsule claims have exactly one winner", async () => {
+test("competing Capsule claims have exactly one Source owner", async () => {
+  // PGlite uses one SQL client, so its Promise concurrency is serialized by
+  // that connection; this proves the transaction result, not server-session overlap.
   for (const [label, store] of await stores()) {
     await store.putWorkspace(workspace());
     await store.putSource(source());
@@ -258,7 +291,7 @@ test("Postgres and D1 roll back the Source claim with the entire initial unit on
   }
 });
 
-test("D1 refuses a Source deleted between its read and atomic claim", async () => {
+test("D1 classifies a Source deleted between its read and atomic claim as lost ownership", async () => {
   const db = new FailFinalBatchD1();
   const store = new CloudflareD1OpenTofuControlStore(db);
   await store.putWorkspace(workspace());
@@ -267,7 +300,7 @@ test("D1 refuses a Source deleted between its read and atomic claim", async () =
   db.beforeNextBatch = async () => {
     expect(await store.deleteSource(SOURCE)).toBe(true);
   };
-  expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "conflict" });
+  expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "source_owned_by_another_app" });
   expect(await store.getSource(SOURCE)).toBeUndefined();
   expect(await store.getInstallConfig(input.installConfig.id)).toBeUndefined();
   expect(await store.getCapsule(input.capsule.id)).toBeUndefined();

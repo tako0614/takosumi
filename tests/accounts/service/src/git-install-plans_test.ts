@@ -1265,6 +1265,209 @@ test("a deterministic Source id collision with another owner fails permanently",
   expect(fixture.counts.source).toBe(0);
 });
 
+test("an ownerless deterministic Source collision is never treated as legacy", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "ownerless-deterministic-collision" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  fixture.sources.push({
+    id: sourceIdForPlanId(planId),
+    workspaceId: WORKSPACE.id,
+    name: "example",
+    url: "https://github.com/takos/example",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    autoSync: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "source_identity_conflict" },
+  });
+  expect(fixture.counts.source).toBe(0);
+});
+
+test("a recorded legacy Source and sync resume an awaiting-input attempt and claim app ownership", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const source = await seedRecordedLegacySource(fixture, planId);
+  const recordedSyncId = "ssr_recorded_legacy_attempt";
+  const recordedSnapshotId = "snap_recorded_legacy_attempt";
+  const plan = (await fixture.planStore.get(planId))!;
+  const olderSyncAt = new Date(Date.parse(plan.createdAt) - 1_000).toISOString();
+  fixture.syncRuns.set(recordedSyncId, {
+    id: recordedSyncId,
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: plan.source.ref,
+    path: plan.source.path,
+    archiveRef: `source-archive/${recordedSnapshotId}`,
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: recordedSnapshotId,
+    // The old dedupe path could return a matching sync started before the
+    // coordinator row itself was created.
+    createdAt: olderSyncAt,
+    updatedAt: olderSyncAt,
+  });
+  const seeded = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: plan.generation,
+    expectedPhase: plan.phase,
+    plan: {
+      ...plan,
+      generation: plan.generation + 1,
+      sourceSyncRunId: recordedSyncId,
+    },
+    at: new Date().toISOString(),
+  });
+  expect(seeded.status).toBe("updated");
+
+  const pending = await fixture.reconcile(planId);
+  expect((await pending.json()).installPlan).toMatchObject({
+    phase: "syncing_source",
+    sourceId: source.id,
+    sourceSyncRunId: recordedSyncId,
+  });
+  expect(fixture.counts).toMatchObject({ source: 0, sync: 0 });
+  fixture.succeedSourceSync();
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    sourceSnapshotId: recordedSnapshotId,
+  });
+  expect(fixture.sources[0]?.ownerCapsuleId).toBeUndefined();
+
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect((await confirmed.json()).installPlan.phase).toBe("planning");
+  expect(fixture.sources[0]?.ownerCapsuleId)
+    .toBe(deterministicCapsuleIdForPlan(planId));
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan).toMatchObject({
+    phase: "reviewable",
+    sourceId: source.id,
+    sourceSyncRunId: recordedSyncId,
+    sourceSnapshotId: recordedSnapshotId,
+  });
+  expect(fixture.counts).toMatchObject({ source: 0, sync: 0, capsule: 1, plan: 1 });
+});
+
+test("a recorded legacy Source without a recorded sync starts a deterministic sync", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "recorded-source-only" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  const source = await seedRecordedLegacySource(fixture, planId);
+  fixture.syncRuns.set("ssr_unrecorded_legacy", {
+    id: "ssr_unrecorded_legacy",
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    path: source.defaultPath,
+    archiveRef: "source-archive/snap_unrecorded_legacy",
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: "snap_unrecorded_legacy",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const response = await fixture.reconcile(planId);
+  const resumed = (await response.json()).installPlan;
+  expect(resumed.phase).toBe("syncing_source");
+  expect(resumed.sourceSyncRunId).not.toBe("ssr_unrecorded_legacy");
+  expect(fixture.counts).toMatchObject({ source: 0, sync: 1 });
+});
+
+test("recorded legacy Source recovery refuses changed Git, name, or foreign ownership", async () => {
+  const changes: readonly [string, Partial<Source>][] = [
+    ["name", { name: "another-app" }],
+    ["Git address", { defaultRef: "other-ref" }],
+    ["Workspace", { workspaceId: "ws_other" }],
+    ["owner", { ownerCapsuleId: "cap_other_owner" }],
+  ];
+  for (const [label, change] of changes) {
+    const fixture = installFixture();
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans",
+      "POST",
+      createBody(),
+      { "idempotency-key": `recorded-source-${label}` },
+    );
+    const planId = (await created.json()).installPlan.id as string;
+    const source = await seedRecordedLegacySource(fixture, planId);
+    fixture.sources[0] = { ...source, ...change };
+    const response = await fixture.reconcile(planId);
+    expect((await response.json()).installPlan).toMatchObject({
+      phase: "failed",
+      diagnostic: { code: "source_identity_changed" },
+    });
+    expect(fixture.counts.sync).toBe(0);
+  }
+});
+
+test("recorded legacy sync recovery rejects foreign evidence", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "recorded-sync-foreign" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  const source = await seedRecordedLegacySource(fixture, planId);
+  const plan = (await fixture.planStore.get(planId))!;
+  const recordedSyncId = "ssr_recorded_foreign";
+  fixture.syncRuns.set(recordedSyncId, {
+    id: recordedSyncId,
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: "other-ref",
+    path: plan.source.path,
+    archiveRef: "source-archive/snap_recorded_foreign",
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: "snap_recorded_foreign",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const seeded = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: plan.generation,
+    expectedPhase: plan.phase,
+    plan: { ...plan, generation: plan.generation + 1, sourceSyncRunId: recordedSyncId },
+    at: new Date().toISOString(),
+  });
+  expect(seeded.status).toBe("updated");
+  const response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "source_sync_identity_conflict" },
+  });
+  expect(fixture.counts.sync).toBe(0);
+});
+
 test("a deterministic sync id collision fails permanently instead of retrying forever", async () => {
   const fixture = installFixture();
   const created = await fixture.request(
@@ -1455,6 +1658,43 @@ async function sourceSyncIds(plan: {
   });
   const suffix = digest.replace(/^sha256:/u, "").slice(0, 16);
   return { runId: `ssr_${suffix}`, snapshotId: `snap_${suffix}` };
+}
+
+async function seedRecordedLegacySource(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+): Promise<Source> {
+  const plan = (await fixture.planStore.get(planId))!;
+  const source: Source = {
+    id: "src_recorded_legacy",
+    workspaceId: plan.workspaceId,
+    name: plan.source.name,
+    url: plan.source.url,
+    defaultRef: plan.source.ref,
+    defaultPath: plan.source.path,
+    ...(plan.source.authConnectionId
+      ? { authConnectionId: plan.source.authConnectionId }
+      : {}),
+    status: "active",
+    autoSync: false,
+    createdAt: plan.createdAt,
+    updatedAt: plan.createdAt,
+  };
+  fixture.sources.push(source);
+  const seeded = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: plan.generation,
+    expectedPhase: plan.phase,
+    plan: {
+      ...plan,
+      generation: plan.generation + 1,
+      sourceId: source.id,
+      ...(plan.mode === "attempt" ? { sourceCreatedByAttempt: true } : {}),
+    },
+    at: new Date().toISOString(),
+  });
+  expect(seeded.status).toBe("updated");
+  return source;
 }
 
 function attemptBody(
