@@ -9090,6 +9090,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<boolean> {
     if (replacement.id !== expected.id) return false;
     await this.#ensureSchema();
+    const ownerColumnAvailable = await this.#v77Column("connections", "owner_account_id");
     const result = await this.#orm
       .update(schema.connections)
       .set({
@@ -9103,7 +9104,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(schema.connections.id, expected.id),
-          d1ConnectionSnapshotJsonWhere(expected),
+          d1ConnectionSnapshotJsonWhere(expected, ownerColumnAvailable),
         ),
       )
       .run();
@@ -9134,6 +9135,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     } = prepareConnectionRevocation(input);
     assertD1AtomicCommitBatch(this.db, "revokeConnectionIfUnchanged");
     await this.#ensureSchema();
+    const ownerColumnAvailable = await this.#v77Column("connections", "owner_account_id");
 
     // Match the other durable adapters' classification order: a missing or
     // stale row is an observation-only false result, while a Workspace that
@@ -9177,7 +9179,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               expectedWorkspaceManagementAuthority,
             ),
           ]),
-      d1ConnectionRevocationSnapshotGuardStmt(this.#orm, expectedConnection),
+      d1ConnectionRevocationSnapshotGuardStmt(this.#orm, expectedConnection, ownerColumnAvailable),
       // Delete whatever material is currently attached to this exact
       // Connection. Its blob id may have rotated since the caller observed
       // the Connection; a blob-id CAS would incorrectly preserve the secret.
@@ -9186,7 +9188,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         .where(eq(schema.secretBlobs.connectionId, expectedConnection.id)),
       this.#orm
         .delete(schema.connections)
-        .where(d1ConnectionRevocationSnapshotWhere(expectedConnection)),
+        .where(d1ConnectionRevocationSnapshotWhere(expectedConnection, ownerColumnAvailable)),
     ];
 
     try {
@@ -9227,6 +9229,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     } = prepareConnectionTestResult(input);
     assertD1AtomicCommitBatch(this.db, "commitConnectionTestResult");
     await this.#ensureSchema();
+    const ownerColumnAvailable = await this.#v77Column("connections", "owner_account_id");
 
     // Keep classification consistent with the other durable adapters: a
     // stopped or epoch-advanced Workspace is an admission conflict, while a
@@ -9277,6 +9280,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         this.#orm,
         expectedConnection,
         expectedSecretBlob,
+        ownerColumnAvailable,
       ),
       ...(replacementSecretBlob ? [this.#orm.update(schema.secretBlobs).set({
         ciphertext: replacementSecretBlob.ciphertext, encryptedDek: replacementSecretBlob.encryptedDek,
@@ -9294,7 +9298,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           createdAt: replacement.createdAt,
           updatedAt: replacement.updatedAt,
         })
-        .where(d1ConnectionRevocationSnapshotWhere(expectedConnection)),
+        .where(d1ConnectionRevocationSnapshotWhere(expectedConnection, ownerColumnAvailable)),
     ];
 
     try {
@@ -13517,6 +13521,7 @@ function d1InvalidConnectionRegistrationGuardRow(
  */
 function d1ConnectionRevocationSnapshotWhere(
   expectedConnection: ProviderConnection,
+  ownerColumnAvailable: boolean,
 ): SQL {
   return and(
     eq(schema.connections.id, expectedConnection.id),
@@ -13525,14 +13530,20 @@ function d1ConnectionRevocationSnapshotWhere(
       : eq(schema.connections.workspaceId, expectedConnection.workspaceId),
     eq(schema.connections.provider, expectedConnection.provider),
     eq(schema.connections.status, expectedConnection.status),
-    d1ConnectionSnapshotJsonWhere(expectedConnection),
+    d1ConnectionSnapshotJsonWhere(expectedConnection, ownerColumnAvailable),
     eq(schema.connections.createdAt, expectedConnection.createdAt),
     eq(schema.connections.updatedAt, expectedConnection.updatedAt),
   )!;
 }
 
-function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
-  if (!expected.ownerAccountId) return eq(schema.connections.connectionJson, expected);
+function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumnAvailable: boolean): SQL {
+  if (!ownerColumnAvailable) return eq(schema.connections.connectionJson, expected);
+  if (!expected.ownerAccountId) return and(
+    eq(schema.connections.connectionJson, expected),
+    expected.workspaceId
+      ? sql`${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId})`
+      : isNull(schema.connections.ownerAccountId),
+  )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
     sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
@@ -13576,11 +13587,12 @@ function d1ConnectionRevocationWorkspaceGuardStmt(
 function d1ConnectionRevocationSnapshotGuardStmt(
   orm: DrizzleD1Database<typeof schema>,
   expectedConnection: ProviderConnection,
+  ownerColumnAvailable: boolean,
 ) {
   const expected = orm
     .select({ one: sql`1` })
     .from(schema.connections)
-    .where(d1ConnectionRevocationSnapshotWhere(expectedConnection));
+    .where(d1ConnectionRevocationSnapshotWhere(expectedConnection, ownerColumnAvailable));
   return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionRevocationGuardRow("snapshot"))
@@ -13641,11 +13653,12 @@ function d1ConnectionTestResultSnapshotGuardStmt(
   orm: DrizzleD1Database<typeof schema>,
   expectedConnection: ProviderConnection,
   expectedSecretBlob: StoredSecretBlob | null,
+  ownerColumnAvailable: boolean,
 ) {
   const connection = orm
     .select({ one: sql`1` })
     .from(schema.connections)
-    .where(d1ConnectionRevocationSnapshotWhere(expectedConnection));
+    .where(d1ConnectionRevocationSnapshotWhere(expectedConnection, ownerColumnAvailable));
   const blob = orm
     .select({ one: sql`1` })
     .from(schema.secretBlobs)
