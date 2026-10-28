@@ -74,3 +74,19 @@ describe("friendlyError for dashboard-raised 4xx errors", () => {
     }
   });
 });
+
+describe("friendlyError for a version change refused while another is prepared", () => {
+  test("revision_in_progress reads in the UI language, not the server's English", () => {
+    const message = "Another version change for this app is still being prepared.";
+    const error = new ControlApiError(409, "failed_precondition", message, {
+      error: {
+        code: "failed_precondition",
+        message,
+        details: { reason: "revision_in_progress", revisionPlanId: "rp_1" },
+      },
+    });
+    expect(friendlyError(error, (k) => ja[k]).message).toBe(ja["controlError.revisionInProgress"]);
+    expect(friendlyError(error, (k) => en[k]).message).toBe(en["controlError.revisionInProgress"]);
+    expect(friendlyError(error, (k) => en[k]).message).not.toBe(message);
+  });
+});

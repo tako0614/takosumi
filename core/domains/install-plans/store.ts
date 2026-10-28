@@ -351,6 +351,45 @@ export interface PreparingGitPlanCoordinator {
  */
 export const GIT_REVISION_PREPARATION_STALL_AFTER_MS = 10 * 60 * 1000;
 
+/** Whether a preparing coordinator last moved at least the stall window ago. */
+export function gitRevisionPreparationStalled(
+  coordinator: Pick<PreparingGitPlanCoordinator, "updatedAt">,
+  now: number,
+): boolean {
+  return now - Date.parse(coordinator.updatedAt) >= GIT_REVISION_PREPARATION_STALL_AFTER_MS;
+}
+
+/** The Capsule facts a preparing-coordinator lookup is pinned to. */
+export interface PreparingCoordinatorCapsule {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly currentStateGeneration: number;
+}
+
+/**
+ * The revision coordinator that holds this Capsule's version and
+ * configuration changes, if any: still preparing its Plan, still moving (not
+ * stalled), reconcilable, and pinned to the Capsule's current state
+ * generation. The app view, a second revision and configuration changes use
+ * this one definition, so a row the app page no longer shows as updating
+ * never blocks a change either.
+ */
+export async function activeGitRevisionPreparation(
+  store: Pick<GitInstallPlanStore, "preparingCoordinatorForCapsule">,
+  capsule: PreparingCoordinatorCapsule,
+  now: number,
+): Promise<PreparingGitPlanCoordinator | undefined> {
+  const coordinator = await store.preparingCoordinatorForCapsule(
+    capsule.id,
+    capsule.workspaceId,
+    { includeInstall: false, currentStateGeneration: capsule.currentStateGeneration },
+  );
+  return coordinator?.operation === "revision" &&
+      !gitRevisionPreparationStalled(coordinator, now)
+    ? coordinator
+    : undefined;
+}
+
 export interface GitInstallPlanStore {
   readonly durable: boolean;
   create(
@@ -360,26 +399,27 @@ export interface GitInstallPlanStore {
   get(id: string): Promise<StoredGitInstallPlan | undefined>;
   /** Observation only: an exact replay must not require new admission. */
   getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined>;
-  /** Scoped to the Capsule's Workspace so the read stays on its index. */
-  hasInFlightRevisionForCapsule(
-    capsuleId: string,
-    workspaceId: string,
-  ): Promise<boolean>;
   /**
    * The newest coordinator row still preparing a Plan for this Capsule: a
    * non-terminal row (not `failed`, `reviewable` or `discarded`) that has not
    * created its Plan Run yet. Once a Plan Run exists the Run itself says what
    * is happening, so a row a client never reconciled past `planning` does not
    * keep the Capsule busy. Rows written before management-authority
-   * persistence can never be reconciled again and are not returned. Install
-   * rows count only with `includeInstall` (a never-applied Capsule); an
-   * applied Capsule is never held by an install row. Scoped to the Capsule's
-   * Workspace so the read stays on its index.
+   * persistence (no authority, or JSON null) can never be reconciled again
+   * and are not returned. A revision row counts only while its base state
+   * generation is `currentStateGeneration`: once another change was applied
+   * its reconcile fails on the moved base. Install rows count only with
+   * `includeInstall` (a never-applied Capsule); an applied Capsule is never
+   * held by an install row. Scoped to the Capsule's Workspace so the read
+   * stays on its index.
    */
   preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,
-    options: { readonly includeInstall: boolean },
+    options: {
+      readonly includeInstall: boolean;
+      readonly currentStateGeneration: number;
+    },
   ): Promise<PreparingGitPlanCoordinator | undefined>;
   /**
    * Private Workspace-wide quiescence observation. A terminal plan is settled
@@ -492,25 +532,13 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     return id === undefined ? undefined : await this.get(id);
   }
 
-  hasInFlightRevisionForCapsule(
-    capsuleId: string,
-    workspaceId: string,
-  ): Promise<boolean> {
-    return Promise.resolve(
-      Array.from(this.#entries.values()).some(
-        ({ plan }) =>
-          plan.workspaceId === workspaceId &&
-          plan.operation === "revision" &&
-          plan.capsuleId === capsuleId &&
-          plan.phase !== "failed" && plan.phase !== "reviewable",
-      ),
-    );
-  }
-
   preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,
-    options: { readonly includeInstall: boolean },
+    options: {
+      readonly includeInstall: boolean;
+      readonly currentStateGeneration: number;
+    },
   ): Promise<PreparingGitPlanCoordinator | undefined> {
     const candidates = Array.from(this.#entries.values())
       .map(({ plan }) => plan)
@@ -519,8 +547,11 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
         plan.capsuleId === capsuleId &&
         !isTerminalGitInstallPlanPhase(plan.phase) &&
         plan.planRunId === undefined &&
-        plan.workspaceManagementAuthority !== undefined &&
-        (plan.operation === "revision" || options.includeInstall)
+        // `!= null`: JSON null reads as absent, as in the SQL stores.
+        plan.workspaceManagementAuthority != null &&
+        (plan.operation === "revision"
+          ? plan.revision?.base?.capsuleStateGeneration === options.currentStateGeneration
+          : options.includeInstall)
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
     const newest = candidates[0];

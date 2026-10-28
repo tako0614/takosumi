@@ -647,6 +647,7 @@ export const ja = {
   "app.progress.awaitingStarterInput": "このインストールは、始めた人の入力を待っています。",
   "app.progress.revisionStalled": "更新の準備が途中で止まっています",
   "app.progress.revisionStalledHint": "準備を続けると、変わる内容を確認できます。許可するまで何も変わりません。",
+  "app.progress.revisionStalledWaits": "ほかの変更が進んでいるか確認を待っています。それが終わってから続けられます。",
   "app.progress.continueRevision": "準備を続ける",
   "app.incomplete.display": "ストアの表示名を読み取れませんでした。",
   "app.incomplete.screens": "画面を読み取れませんでした。",
@@ -772,6 +773,8 @@ export const ja = {
   "controlError.configNotFound":
     "このアプリの設定が見つかりません。インストールし直してください。",
   "controlError.shareRevoked": "この共有は無効になっています。",
+  "controlError.revisionInProgress":
+    "このアプリでは別の更新を準備しています。終わってからもう一度お試しください。",
   "runError.sourceSyncFailed":
     "アプリの内容を取得できませんでした。リンクと版を確認して、もう一度お試しください。",
   "runError.sourceRefNotFound":

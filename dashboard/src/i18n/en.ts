@@ -639,6 +639,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.progress.awaitingStarterInput": "This install is waiting for input from the person who started it.",
   "app.progress.revisionStalled": "Getting an update ready stopped partway",
   "app.progress.revisionStalledHint": "Continue to review what it changes. Nothing changes until you allow it.",
+  "app.progress.revisionStalledWaits": "Another change is under way or waiting for review. You can continue after it finishes.",
   "app.progress.continueRevision": "Continue",
   "app.incomplete.display": "Couldn't read its store name.",
   "app.incomplete.screens": "Couldn't read its screens.",
@@ -763,6 +764,8 @@ export const en: Record<keyof typeof ja, string> = {
   "controlError.configNotFound":
     "Setup for this app couldn't be found. Install it again.",
   "controlError.shareRevoked": "This share has been revoked.",
+  "controlError.revisionInProgress":
+    "Another update for this app is being prepared. Try again after it finishes.",
   "runError.sourceSyncFailed":
     "The app's contents couldn't be fetched. Check the link and version, then try again.",
   "runError.sourceRefNotFound":
