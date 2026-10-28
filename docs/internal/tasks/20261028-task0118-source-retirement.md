@@ -9,11 +9,11 @@
 - Validation: focused lifecycle/custody and memory/PostgreSQL/D1 parity tests for each change; `bun run check` for the final candidate. Operator migration fixtures include shared adopted snapshots and interrupted retries.
 - External report: `/root/dev/tmp/tk0118/phase2-report.md`.
 
-Implementation and verification are in progress.
+Implementation and focused regression coverage are complete. Complete-gate and CI evidence are recorded in `/root/dev/tmp/tk0118/phase2-report.md`.
 
 ## Delivery
 
 - Retirement core: PR #646. New sync admission fences active Source state in the same storage boundary; historical cross-Source archive references defer retirement until operator normalization.
 - Lifecycle callers: PR #647. Discard, committed destroy and abandonment invoke retirement; the daily sweep bounds mutations and rotates candidates. Composed lifecycle and destroyed GET/list regressions pass.
 - Adopted lane: PR #648. Owner/state CAS and owner-only reconciliation, adopted backups and path-aware update facts are covered by focused parity tests.
-- Existing-data operator migration and final complete gate are still in progress. No production mutation has been executed.
+- Existing-data operator migration: PR #649. The tool uses exact dry-run digests, resumable verified archive copies and one atomic commit per Source group. No production mutation has been executed.
