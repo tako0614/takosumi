@@ -3443,6 +3443,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async commitSourceSyncSuccess(
     input: CommitSourceSyncSuccessInput,
   ): Promise<CommitSourceSyncSuccessResult> {
+    return await this.#commitSourceSyncSuccess(input, false);
+  }
+
+  async #commitSourceSyncSuccess(
+    input: CommitSourceSyncSuccessInput,
+    retriedLaneRace: boolean,
+  ): Promise<CommitSourceSyncSuccessResult> {
     input = structuredClone(input);
     assertD1AtomicCommitBatch(this.db, "commitSourceSyncSuccess");
     await this.#ensureSchema();
@@ -3465,17 +3472,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const current = d1SourceSyncSettlementPublicRun(heldRow);
       return { won: false, ...(current ? { run: current } : {}) };
     }
-    const laneSnapshots = await this.listSourceSnapshots(snapshot.sourceId);
-    const latestLaneSnapshot = [...laneSnapshots].filter((candidate) =>
-      candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
-      candidate.ref === snapshot.ref && candidate.path === snapshot.path)
-      .sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))
-      .at(-1);
-    const reusableSnapshot = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
+    const snapshotLane = {
+      sourceId: snapshot.sourceId,
+      workspaceId: snapshot.workspaceId,
+      url: snapshot.url,
+      ref: snapshot.ref,
+      path: snapshot.path,
+    };
+    const latestLane = await this.#readLatestSourceSnapshotForLane(snapshotLane);
+    const latestLaneSnapshot = latestLane?.snapshot;
+    const mergeCandidate = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
       ? latestLaneSnapshot : undefined;
-    const committedSnapshot: SourceSnapshot = reusableSnapshot
-      ? mergeReusableSourceSnapshotObservations(reusableSnapshot, snapshot)
-      : snapshot;
+    const mergedSnapshot = mergeCandidate
+      ? mergeReusableSourceSnapshotObservations(mergeCandidate, snapshot)
+      : undefined;
+    const reusableSnapshot = mergedSnapshot ? mergeCandidate : undefined;
+    const committedSnapshot: SourceSnapshot = mergedSnapshot ?? snapshot;
     const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
       ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
           snapshotId: reusableSnapshot.id, archiveDigest: reusableSnapshot.archiveDigest,
@@ -3523,6 +3535,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       committedSnapshot,
       observation,
       latestLaneSnapshot,
+      latestLane?.recordJson,
     );
     const observedSnapshot = reusableSnapshot ?? await this.getSourceSnapshot(snapshot.id);
     const exactGuardSnapshot =
@@ -3569,7 +3582,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       d1PreparedStatementFromDrizzle(
         this.db,
         reusableSnapshot
-          ? d1UpdateSourceSnapshotObservationStmt(this.#orm, reusableSnapshot, committedSnapshot)
+          ? d1UpdateSourceSnapshotObservationStmt(this.#orm, reusableSnapshot, latestLane!.recordJson, committedSnapshot)
           : d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
       ),
       d1PreparedStatementFromDrizzle(
@@ -3605,6 +3618,16 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           input.terminalRun,
           input.leaseToken,
         ) !== undefined) {
+          if (!retriedLaneRace) {
+            const currentLane = await this.#readLatestSourceSnapshotForLane(snapshotLane);
+            if (
+              currentLane?.recordJson !== latestLane?.recordJson ||
+              currentLane?.snapshot.id !== latestLaneSnapshot?.id ||
+              currentLane?.snapshot.fetchedAt !== latestLaneSnapshot?.fetchedAt
+            ) {
+              return await this.#commitSourceSyncSuccess(input, true);
+            }
+          }
           throw new SourceSyncSettlementConflictError();
         }
         const current = d1SourceSyncSettlementPublicRun(currentRow);
@@ -9553,19 +9576,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listAutoSyncSourcesDue(limit: number): Promise<readonly StoredSource[]> {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const latestRunAt = sql<string | null>`(
-      select max(r.created_at) from ${schema.runs} r
+      select r.created_at from ${schema.runs} r
       where r.source_id = ${schema.sources.id} and r.type = ${RUN_KIND_SOURCE_SYNC}
+      order by r.created_at desc, r.id desc limit 1
+    )`;
+    const latestAttemptAt = sql<string>`max(
+      coalesce(json_extract(${schema.sources.recordJson}, '$.lastAutoSyncAttemptAt'), ''),
+      coalesce(${latestRunAt}, '')
     )`;
     const rows = await this.#orm.select({ recordJson: sql<string>`CAST(${schema.sources.recordJson} AS TEXT)` })
       .from(schema.sources)
       .where(sql`json_extract(${schema.sources.recordJson}, '$.status') = 'active'
         and json_extract(${schema.sources.recordJson}, '$.autoSync') = 1
+        and exists (
+          select 1 from ${schema.workspaces} w
+          where w.id = ${schema.sources.workspaceId}
+            and w.management_state = 'active'
+        )
         and not (
           length(json_extract(${schema.sources.recordJson}, '$.defaultRef')) = 40
           and lower(json_extract(${schema.sources.recordJson}, '$.defaultRef')) not glob '*[^0-9a-f]*'
           and lower(json_extract(${schema.sources.recordJson}, '$.defaultRef')) = lower(coalesce(json_extract(${schema.sources.recordJson}, '$.lastSeenCommit'), ''))
         )`)
-      .orderBy(sql`${latestRunAt} asc`, asc(schema.sources.createdAt), asc(schema.sources.id))
+      .orderBy(asc(latestAttemptAt), asc(schema.sources.createdAt), asc(schema.sources.id))
       .limit(Math.floor(limit));
     return rows.map(({ recordJson }) => parseD1JsonColumn(recordJson) as StoredSource);
   }
@@ -9739,6 +9772,53 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         eq(schema.sourceSnapshots.id, id),
       ),
     );
+  }
+
+  async hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean> {
+    const row = await this.#orm
+      .select({ id: schema.sourceSnapshots.id })
+      .from(schema.sourceSnapshots)
+      .where(sql`json_extract(${schema.sourceSnapshots.recordJson}, '$.archiveRef') = ${archiveRef}`)
+      .limit(1)
+      .get();
+    return row !== undefined;
+  }
+
+  async getLatestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<SourceSnapshot | undefined> {
+    return (await this.#readLatestSourceSnapshotForLane(input))?.snapshot;
+  }
+
+  async #readLatestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<{ snapshot: SourceSnapshot; recordJson: string } | undefined> {
+    const row = await this.#orm
+      .select({ recordJson: sql<string>`CAST(${schema.sourceSnapshots.recordJson} AS TEXT)` })
+      .from(schema.sourceSnapshots)
+      .where(and(
+        eq(schema.sourceSnapshots.sourceId, input.sourceId),
+        sql`json_extract(${schema.sourceSnapshots.recordJson}, '$.workspaceId') = ${input.workspaceId}`,
+        sql`json_extract(${schema.sourceSnapshots.recordJson}, '$.url') = ${input.url}`,
+        sql`json_extract(${schema.sourceSnapshots.recordJson}, '$.ref') = ${input.ref}`,
+        sql`json_extract(${schema.sourceSnapshots.recordJson}, '$.path') = ${input.path}`,
+      ))
+      .orderBy(desc(schema.sourceSnapshots.fetchedAt), desc(schema.sourceSnapshots.id))
+      .limit(1)
+      .get();
+    if (row === undefined) return undefined;
+    return {
+      snapshot: normalizeSourceSnapshotRecord(parseD1JsonColumn(row.recordJson) as SourceSnapshot),
+      recordJson: row.recordJson,
+    };
   }
 
   async listSourceSnapshots(
@@ -11377,6 +11457,7 @@ function d1SourceSyncSettlementEnvelope(
   snapshot: SourceSnapshot,
   observation: SourceSyncSettlementObservation,
   latestLaneSnapshot: SourceSnapshot | undefined,
+  latestLaneRecordJson: string | undefined,
 ): D1SourceSyncSettlementEnvelope {
   if (
     observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
@@ -11411,6 +11492,7 @@ function d1SourceSyncSettlementEnvelope(
       path: snapshot.path,
       latestId: latestLaneSnapshot?.id ?? null,
       latestFetchedAt: latestLaneSnapshot?.fetchedAt ?? null,
+      latestRecordJson: latestLaneRecordJson ?? null,
     },
     capsules: observation.capsules.map((capsule) => ({
       id: capsule.id,
@@ -11875,6 +11957,7 @@ function d1SourceSyncSettlementGuardSql(): string {
         WHERE s.id IS json_extract(e.payload, '$.snapshotLane.latestId')
           AND s.source_id IS json_extract(e.payload, '$.snapshotLane.sourceId')
           AND s.fetched_at IS json_extract(e.payload, '$.snapshotLane.latestFetchedAt')
+          AND s.record_json IS json_extract(e.payload, '$.snapshotLane.latestRecordJson')
           AND json_extract(s.record_json, '$.workspaceId') IS json_extract(e.payload, '$.snapshotLane.workspaceId')
           AND json_extract(s.record_json, '$.url') IS json_extract(e.payload, '$.snapshotLane.url')
           AND json_extract(s.record_json, '$.ref') IS json_extract(e.payload, '$.snapshotLane.ref')
@@ -12128,6 +12211,7 @@ function d1UpdateSourceSyncCursorStmt(
 function d1UpdateSourceSnapshotObservationStmt(
   orm: DrizzleD1Database<typeof schema>,
   previous: SourceSnapshot,
+  previousRecordJson: string,
   replacement: SourceSnapshot,
 ) {
   return orm.update(schema.sourceSnapshots)
@@ -12135,7 +12219,7 @@ function d1UpdateSourceSnapshotObservationStmt(
     .where(and(
       eq(schema.sourceSnapshots.id, previous.id),
       eq(schema.sourceSnapshots.sourceId, previous.sourceId),
-      eq(schema.sourceSnapshots.recordJson, previous),
+      sql`${schema.sourceSnapshots.recordJson} = ${previousRecordJson}`,
       eq(schema.sourceSnapshots.fetchedAt, previous.fetchedAt),
     ));
 }

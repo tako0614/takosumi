@@ -1128,12 +1128,12 @@ export interface BundleOutput {
 /** A Source with private hook-secret / sync bookkeeping fields removed. */
 export type PublicSource = Omit<
   StoredSource,
-  "hookSecretHash" | "lastSeenCommit"
+  "hookSecretHash" | "lastSeenCommit" | "lastAutoSyncAttemptAt"
 >;
 
 /** Strips the internal {@link StoredSource} fields, keeping the public Source. */
 function stripSource(source: StoredSource): PublicSource {
-  const { hookSecretHash: _h, lastSeenCommit: _l, ...rest } = source;
+  const { hookSecretHash: _h, lastSeenCommit: _l, lastAutoSyncAttemptAt: _a, ...rest } = source;
   return rest;
 }
 

@@ -3040,17 +3040,24 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
 
         const reader = new SqlOpenTofuControlStore({ client: transaction });
-        const laneSnapshots = await reader.listSourceSnapshots(snapshot.sourceId);
-        const latestLaneSnapshot = [...laneSnapshots].filter((candidate) =>
-          candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
-          candidate.ref === snapshot.ref && candidate.path === snapshot.path)
-          .sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))
-          .at(-1);
-        const reusableSnapshot = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
+        const latestLane = await reader.#pgLatestSourceSnapshotLaneRow({
+          sourceId: snapshot.sourceId,
+          workspaceId: snapshot.workspaceId,
+          url: snapshot.url,
+          ref: snapshot.ref,
+          path: snapshot.path,
+        });
+        const latestLaneSnapshot = latestLane?.snapshot;
+        const candidate = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
           ? latestLaneSnapshot : undefined;
-        const committedSnapshot: SourceSnapshot = reusableSnapshot
-          ? mergeReusableSourceSnapshotObservations(reusableSnapshot, snapshot)
-          : snapshot;
+        const mergedSnapshot = candidate
+          ? mergeReusableSourceSnapshotObservations(candidate, snapshot)
+          : undefined;
+        // Distinct ready observations of the same commit belong to distinct
+        // snapshots. The merge helper returns undefined in that case.
+        const reusableRow = mergedSnapshot ? latestLane : undefined;
+        const reusableSnapshot = reusableRow?.snapshot;
+        const committedSnapshot: SourceSnapshot = mergedSnapshot ?? snapshot;
         const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
           ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
               snapshotId: reusableSnapshot.id, archiveDigest: reusableSnapshot.archiveDigest,
@@ -3114,13 +3121,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           input.leaseToken,
         );
         if (!terminalCommitted) return { won: false as const };
-        if (reusableSnapshot) {
+        if (reusableRow) {
           const updated = await db.update(pgSchema.sourceSnapshots)
             .set({ snapshotJson: committedSnapshot })
             .where(and(
-              eq(pgSchema.sourceSnapshots.id, reusableSnapshot.id),
-              eq(pgSchema.sourceSnapshots.sourceId, reusableSnapshot.sourceId),
-              eq(pgSchema.sourceSnapshots.snapshotJson, reusableSnapshot),
+              eq(pgSchema.sourceSnapshots.id, reusableRow.snapshot.id),
+              eq(pgSchema.sourceSnapshots.sourceId, reusableRow.snapshot.sourceId),
+              // The public snapshot is normalized on read. Match the exact
+              // persisted JSON, including legacy archive-reference aliases.
+              eq(pgSchema.sourceSnapshots.snapshotJson, reusableRow.rawJson),
             )).returning({ id: pgSchema.sourceSnapshots.id });
           if (!updated.length) throw new SourceSyncSettlementConflictError();
         } else {
@@ -9784,18 +9793,29 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const sources = pgSchema.sources;
     const latestRunAt = sql<string | null>`(
-      select max(r.created_at) from takosumi_runs r
+      select r.created_at from takosumi_runs r
       where r.source_id = ${sources.id} and r.kind = ${RUN_KIND_SOURCE_SYNC}
+      order by r.created_at desc, r.id desc
+      limit 1
     )`;
     const rows = await this.#db.select({ sourceJson: sources.sourceJson })
       .from(sources)
       .where(sql`${sources.sourceJson} ->> 'status' = 'active'
         and ${sources.sourceJson} ->> 'autoSync' = 'true'
+        and exists (
+          select 1 from takosumi_workspaces workspace
+          where workspace.id = ${sources.workspaceId}
+            and workspace.management_state = 'active'
+        )
         and not (
           ${sources.sourceJson} ->> 'defaultRef' ~* '^[0-9a-f]{40}$'
           and lower(${sources.sourceJson} ->> 'defaultRef') = lower(coalesce(${sources.sourceJson} ->> 'lastSeenCommit', ''))
         )`)
-      .orderBy(sql`${latestRunAt} asc nulls first`, asc(sources.createdAt), asc(sources.id))
+      .orderBy(
+        sql`greatest(${sources.sourceJson} ->> 'lastAutoSyncAttemptAt', ${latestRunAt}) asc nulls first`,
+        asc(sources.createdAt),
+        asc(sources.id),
+      )
       .limit(Math.floor(limit));
     return rows.map(({ sourceJson }) => parseJson(sourceJson) as StoredSource);
   }
@@ -9947,6 +9967,49 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         eq(pgSchema.sourceSnapshots.id, id),
       ),
     );
+  }
+
+  async getLatestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<SourceSnapshot | undefined> {
+    return (await this.#pgLatestSourceSnapshotLaneRow(input))?.snapshot;
+  }
+
+  async #pgLatestSourceSnapshotLaneRow(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<{ readonly snapshot: SourceSnapshot; readonly rawJson: SourceSnapshot } | undefined> {
+    const snapshots = pgSchema.sourceSnapshots;
+    const rows = await this.#db.select({ snapshotJson: snapshots.snapshotJson })
+      .from(snapshots)
+      .where(and(
+        eq(snapshots.sourceId, input.sourceId),
+        sql`${snapshots.snapshotJson} ->> 'workspaceId' = ${input.workspaceId}`,
+        sql`${snapshots.snapshotJson} ->> 'url' = ${input.url}`,
+        sql`${snapshots.snapshotJson} ->> 'ref' = ${input.ref}`,
+        sql`${snapshots.snapshotJson} ->> 'path' = ${input.path}`,
+      ))
+      .orderBy(desc(snapshots.fetchedAt), desc(snapshots.id))
+      .limit(1);
+    if (!rows[0]) return undefined;
+    const rawJson = parseJson(rows[0].snapshotJson) as SourceSnapshot;
+    return { snapshot: normalizeSourceSnapshotRecord(rawJson), rawJson };
+  }
+
+  async hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean> {
+    const snapshots = pgSchema.sourceSnapshots;
+    const rows = await this.#db.select({ id: snapshots.id })
+      .from(snapshots)
+      .where(sql`${snapshots.snapshotJson} ->> 'archiveRef' = ${archiveRef}`)
+      .limit(1);
+    return rows.length !== 0;
   }
 
   async listSourceSnapshots(

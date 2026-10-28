@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createFileOpenTofuStateArtifactStore,
+  createFileSourceArchiveStore,
   createHttpOpenTofuRunner,
   createLocalOpenTofuRunner,
   createLocalOpenTofuRunnerProfile,
@@ -33,6 +34,29 @@ import {
 
 const TEST_STATE_CRYPTO = new PartitionedSecretBoundaryCrypto({
   globalPassphrase: "local-opentofu-state-test-passphrase-32-bytes-minimum",
+});
+
+test("local source archive cleanup removes only the noncanonical allocated key", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-source-cleanup-"));
+  try {
+    const archiveStore = createFileSourceArchiveStore(join(directory, "archives"));
+    const runner = createLocalOpenTofuRunner({ archiveStore,
+      stateStore: createFileOpenTofuStateArtifactStore(join(directory, "state"), TEST_STATE_CRYPTO) });
+    const prefix = "workspaces/workspace_1/sources/src_1/snapshots/";
+    const unused = `${prefix}snap_new/source.tar.zst`;
+    const canonical = `${prefix}snap_old/source.tar.zst`;
+    await archiveStore.write(unused, new Uint8Array([1]));
+    await archiveStore.write(canonical, new Uint8Array([2]));
+    const cleanup = { runId: "sync_1", workspaceId: "workspace_1", sourceId: "src_1",
+      archiveRef: unused, canonicalSnapshotId: "snap_old" };
+    await expect(runner.cleanupUnusedSourceArchive!({ ...cleanup, archiveRef: canonical })).rejects.toThrow();
+    await runner.cleanupUnusedSourceArchive!(cleanup);
+    await expect(archiveStore.read(unused)).rejects.toThrow();
+    expect(Array.from(await archiveStore.read(canonical))).toEqual([2]);
+    await runner.cleanupUnusedSourceArchive!(cleanup);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("local OpenTofu runner executes generic release commands in restored source", async () => {

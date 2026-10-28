@@ -9,6 +9,7 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 import type { D1PreparedStatement, D1Result } from "../../../../worker/src/bindings.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Workspace } from "takosumi-contract/workspaces";
+import type { Capsule } from "takosumi-contract/capsules";
 
 const WORKSPACE = "workspace_snapshot_reuse";
 const SOURCE = "src_snapshot_reuse";
@@ -22,6 +23,17 @@ class SnapshotLaneRaceD1 extends SqliteFakeD1 {
     this.beforeNextBatch = undefined;
     if (hook) await hook();
     return await super.batch<T>(statements);
+  }
+}
+
+class SnapshotLaneRaceMemory extends InMemoryOpenTofuControlStore {
+  onNextSourceRead?: () => Promise<void>;
+  override async getSource(id: string): Promise<StoredSource | undefined> {
+    const source = await super.getSource(id);
+    const hook = this.onNextSourceRead;
+    this.onNextSourceRead = undefined;
+    if (hook) await hook();
+    return source;
   }
 }
 
@@ -126,6 +138,27 @@ test("all stores reuse only the newest matching lane snapshot and preserve/repai
       expect((await store.listSourceSnapshots(SOURCE)).length, label).toBe(4);
       await commit(store, 6, a, "develop", "modules/app");
       expect((await store.listSourceSnapshots(SOURCE)).length, label).toBe(5);
+      const changedReady = await commit(store, 7, a, "develop", "modules/app", {
+        repositoryModules: { status: "ready", scopePath: "modules/app", modules: [
+          { path: "modules/app", providerPackages: [], rootProviderRequirements: [] },
+        ] },
+      });
+      expect(changedReady.won, label).toBe(true);
+      expect(changedReady.run?.snapshotId, label).toBe("snap_reuse_7");
+      expect((await store.listSourceSnapshots(SOURCE)).length, label).toBe(6);
+      expect((await store.getLatestSourceSnapshotForLane({
+        sourceId: SOURCE, workspaceId: WORKSPACE, url: URL, ref: "develop", path: "modules/app",
+      }))?.id, label).toBe("snap_reuse_7");
+      expect(await store.getLatestSourceSnapshotForLane({
+        sourceId: SOURCE, workspaceId: WORKSPACE, url: URL, ref: "develop", path: "other",
+      }), label).toBeUndefined();
+      expect(await store.hasSourceSnapshotArchiveReference("archive-7"), label).toBe(true);
+      expect(await store.hasSourceSnapshotArchiveReference("archive-unused"), label).toBe(false);
+      await store.putSource({ ...source(), id: `${SOURCE}_other` });
+      await store.putSourceSnapshot({ ...snapshot(8, a), sourceId: `${SOURCE}_other`,
+        archiveRef: "archive-other-source" });
+      expect(await store.hasSourceSnapshotArchiveReference("archive-other-source"), label).toBe(true);
+      expect((await store.listSourceSnapshots(SOURCE)).length, label).toBe(6);
     }
   } finally {
     await postgres.close();
@@ -146,18 +179,23 @@ test("snapshot observation merge preserves valid evidence, fills missing, repair
     repositoryModules: { status: "invalid", scopePath: ".", reason: "scan_failed" },
   });
   const preserved = mergeReusableSourceSnapshotObservations(existing, observed);
-  expect(preserved.repositoryInstallMetadata).toEqual(existing.repositoryInstallMetadata);
-  expect(preserved.repositoryManifest).toEqual(existing.repositoryManifest);
-  expect(preserved.repositoryModules).toEqual(existing.repositoryModules);
-  expect(() => mergeReusableSourceSnapshotObservations(existing, {
+  expect(preserved?.repositoryInstallMetadata).toEqual(existing.repositoryInstallMetadata);
+  expect(preserved?.repositoryManifest).toEqual(existing.repositoryManifest);
+  expect(preserved?.repositoryModules).toEqual(existing.repositoryModules);
+  expect(mergeReusableSourceSnapshotObservations(existing, {
     ...observed,
     repositoryManifest: { status: "present", digest: `sha256:${"f".repeat(64)}`, document: {
       apiVersion: "takosumi.com/v2.2", kind: "Repository", install: { modules: { ".": { inputs: [] } } },
     } as never },
-  })).toThrow(SourceSnapshotConflictError);
-  expect(() => mergeReusableSourceSnapshotObservations(existing, {
+  })).toBeUndefined();
+  expect(mergeReusableSourceSnapshotObservations(existing, {
     ...observed,
     repositoryManifest: { status: "absent" },
+  })).toBeUndefined();
+  expect(() => mergeReusableSourceSnapshotObservations(existing, {
+    ...existing, repositoryModules: { status: "ready", scopePath: ".", modules: [
+      { path: ".", providerPackages: [], rootProviderRequirements: [] },
+    ] },
   })).toThrow(SourceSnapshotConflictError);
 
   const digest = `sha256:${"d".repeat(64)}`;
@@ -167,15 +205,15 @@ test("snapshot observation merge preserves valid evidence, fills missing, repair
       apiVersion: "takosumi.com/v2.2", kind: "Repository", install: { modules: { ".": { inputs: [] } } },
     } as never },
   });
-  expect(repaired.repositoryManifest?.status).toBe("present");
-  expect(() => mergeReusableSourceSnapshotObservations(invalid, {
+  expect(repaired?.repositoryManifest?.status).toBe("present");
+  expect(mergeReusableSourceSnapshotObservations(invalid, {
     ...observed, repositoryManifest: { status: "present", digest: `sha256:${"e".repeat(64)}`, document: {
       apiVersion: "takosumi.com/v2.2", kind: "Repository", install: { modules: { ".": { inputs: [] } } },
     } as never },
-  })).toThrow(SourceSnapshotConflictError);
+  })).toBeUndefined();
 });
 
-test("D1 fences a newer same-lane snapshot inserted after reuse selection", async () => {
+test("D1 retries a newer same-lane snapshot inserted after reuse selection", async () => {
   const db = new SnapshotLaneRaceD1();
   const store = new CloudflareD1OpenTofuControlStore(db);
   await store.putWorkspace(workspace());
@@ -186,14 +224,16 @@ test("D1 fences a newer same-lane snapshot inserted after reuse selection", asyn
   db.beforeNextBatch = async () => {
     await store.putSourceSnapshot(snapshot(3, "b".repeat(40)));
   };
-  await expect(store.commitSourceSyncSuccess(input)).rejects.toThrow("SourceSync settlement observations changed");
-  expect((await store.getSourceSyncRun("ssr_reuse_2"))?.status).toBe("running");
+  const result = await store.commitSourceSyncSuccess(input);
+  expect(result.won).toBe(true);
+  expect(result.run?.snapshotId).toBe("snap_reuse_2");
+  expect((await store.getSourceSyncRun("ssr_reuse_2"))?.status).toBe("succeeded");
   expect((await store.listSourceSnapshots(SOURCE)).map((row) => row.id).sort()).toEqual([
-    "snap_reuse_1", "snap_reuse_3",
+    "snap_reuse_1", "snap_reuse_2", "snap_reuse_3",
   ]);
 });
 
-test("in-memory concurrent same-lane settlements cannot both publish the absent lane", async () => {
+test("in-memory concurrent same-lane settlements retry observation and reuse the winner", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await store.putWorkspace(workspace());
   await store.putSource(source());
@@ -203,13 +243,47 @@ test("in-memory concurrent same-lane settlements cannot both publish the absent 
     store.commitSourceSyncSuccess(first),
     store.commitSourceSyncSuccess(second),
   ]);
-  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-  expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
   expect((await store.listSourceSnapshots(SOURCE)).length).toBe(1);
   const runs = await Promise.all([
     store.getSourceSyncRun(first.terminalRun.id),
     store.getSourceSyncRun(second.terminalRun.id),
   ]);
-  expect(runs.filter((run) => run?.status === "succeeded")).toHaveLength(1);
-  expect(runs.filter((run) => run?.status === "running")).toHaveLength(1);
+  expect(runs.filter((run) => run?.status === "succeeded")).toHaveLength(2);
+  expect(runs[0]?.snapshotId).toBe(runs[1]?.snapshotId);
+});
+
+test("in-memory lane retry also refreshes a changed Capsule census, while unrelated census drift fails", async () => {
+  const store = new SnapshotLaneRaceMemory();
+  await store.putWorkspace(workspace());
+  await store.putSource(source());
+  const a = "a".repeat(40);
+  const b = "b".repeat(40);
+  await commit(store, 1, a);
+  const capsule: Capsule = {
+    id: "cap_reuse_race", workspaceId: WORKSPACE, projectId: "project_reuse_race",
+    name: "race", slug: "race", sourceId: SOURCE, installConfigId: "config_reuse_race",
+    installingPrincipalId: "principal_reuse_race", environment: "production",
+    currentStateGeneration: 0, status: "active", createdAt: T0, updatedAt: T0,
+  };
+  await store.putCapsule(capsule);
+  const input = await prepare(store, 2, a);
+  store.onNextSourceRead = async () => {
+    expect((await commit(store, 3, b)).won).toBe(true);
+    await store.putCapsule({ ...capsule, status: "stale" });
+  };
+  expect((await store.commitSourceSyncSuccess(input)).won).toBe(true);
+  expect((await store.getSourceSyncRun("ssr_reuse_2"))?.status).toBe("succeeded");
+  expect((await store.listSourceSnapshots(SOURCE)).map((row) => row.id).sort()).toEqual([
+    "snap_reuse_1", "snap_reuse_2", "snap_reuse_3",
+  ]);
+
+  const unrelated = await prepare(store, 4, a);
+  store.onNextSourceRead = async () => {
+    await store.putCapsule(capsule);
+  };
+  await expect(store.commitSourceSyncSuccess(unrelated)).rejects.toThrow(
+    "SourceSync settlement observations changed",
+  );
+  expect((await store.getSourceSyncRun("ssr_reuse_4"))?.status).toBe("running");
 });

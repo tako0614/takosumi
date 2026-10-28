@@ -1478,10 +1478,13 @@ function finiteConnectionTimestamp(value: unknown): number | undefined {
  *   - `lastSeenCommit` — last commit the scheduler/webhook observed via a
  *     `source_sync`; used to skip re-syncing when the ref has not moved.
  *   - `autoSync` — whether the scheduler should poll this source.
+ *   - `lastAutoSyncAttemptAt` — latest scheduled poll admission, including
+ *     failures that never created a SourceSyncRun.
  */
 export interface StoredSource extends Source {
   readonly hookSecretHash: string;
   readonly lastSeenCommit?: string;
+  readonly lastAutoSyncAttemptAt?: string;
   readonly autoSync: boolean;
   /** Private deterministic creator identity for app-owned Source admission. */
   readonly createdByInstallPlanId?: string;
@@ -1570,6 +1573,19 @@ export function assertSourceConfigurationWriteInput(input: SourceConfigurationWr
   }
   if (input.expectedSource === undefined && input.source.lastSeenCommit !== undefined) {
     throw new TypeError("Source creation cannot provide a synchronization observation");
+  }
+  if (input.expectedSource === undefined && input.source.lastAutoSyncAttemptAt !== undefined) {
+    throw new TypeError("Source creation cannot provide an auto-sync attempt marker");
+  }
+  if (input.source.lastAutoSyncAttemptAt !== undefined &&
+    (!Number.isFinite(Date.parse(input.source.lastAutoSyncAttemptAt)) ||
+      (input.expectedSource?.lastAutoSyncAttemptAt !== undefined &&
+        input.source.lastAutoSyncAttemptAt < input.expectedSource.lastAutoSyncAttemptAt))) {
+    throw new TypeError("Source auto-sync attempt marker must be a nondecreasing timestamp");
+  }
+  if (input.expectedSource?.lastAutoSyncAttemptAt !== undefined &&
+    input.source.lastAutoSyncAttemptAt === undefined) {
+    throw new TypeError("Source auto-sync attempt marker cannot be cleared");
   }
 }
 
@@ -2882,11 +2898,12 @@ export class SourceSnapshotConflictError extends Error {
   }
 }
 
-/** Merge refreshable observations without changing valid evidence under an immutable archive identity. */
+/** Merge refreshable observations, or decline reuse when distinct snapshots have different valid evidence. */
 export function mergeReusableSourceSnapshotObservations(
   existing: SourceSnapshot,
   observed: SourceSnapshot,
-): SourceSnapshot {
+): SourceSnapshot | undefined {
+  let incompatible = false;
   const preserveOrRefresh = <T extends { readonly status: string; readonly digest?: string }>(
     previous: T | undefined,
     next: T | undefined,
@@ -2895,22 +2912,27 @@ export function mergeReusableSourceSnapshotObservations(
     if (previous.status !== "invalid") {
       if (next === undefined || next.status === "invalid") return previous;
       if (stableStringify(previous) !== stableStringify(next)) {
-        throw new SourceSnapshotConflictError(existing.id);
+        incompatible = true;
+        return previous;
       }
       return previous;
     }
     if (next === undefined || next.status === "invalid") return previous;
     if (previous.digest !== undefined && previous.digest !== next?.digest) {
-      throw new SourceSnapshotConflictError(existing.id);
+      incompatible = true;
+      return previous;
     }
     return next ?? previous;
   };
-  return {
+  const merged = {
     ...existing,
     repositoryInstallMetadata: preserveOrRefresh(existing.repositoryInstallMetadata, observed.repositoryInstallMetadata),
     repositoryManifest: preserveOrRefresh(existing.repositoryManifest, observed.repositoryManifest),
     repositoryModules: preserveOrRefresh(existing.repositoryModules, observed.repositoryModules),
   };
+  if (!incompatible) return merged;
+  if (existing.id === observed.id) throw new SourceSnapshotConflictError(existing.id);
+  return undefined;
 }
 
 export function sourceSnapshotsExactlyMatch(
@@ -4025,6 +4047,16 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
+  /** True when any retained SourceSnapshot still references these archive bytes. */
+  hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean>;
+  /** Latest immutable observation for one exact Source lane, bounded to one row. */
+  getLatestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<SourceSnapshot | undefined>;
   /**
    * Lists SourceSnapshots for a batch of Source ids in ONE query (used by the
    * control-backup bundle to replace a per-Source round-trip). SourceSnapshots
@@ -4889,6 +4921,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   async commitSourceSyncSuccess(
     input: CommitSourceSyncSuccessInput,
   ): Promise<CommitSourceSyncSuccessResult> {
+    return this.#commitSourceSyncSuccessAttempt(input, false);
+  }
+
+  async #commitSourceSyncSuccessAttempt(
+    input: CommitSourceSyncSuccessInput,
+    retriedLaneObservation: boolean,
+  ): Promise<CommitSourceSyncSuccessResult> {
     input = structuredClone(input);
     assertSourceSyncSuccessCommit(input);
     const snapshot = normalizeSourceSnapshot(input.snapshot);
@@ -4907,16 +4946,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           : {}),
       });
     }
-    const latestLaneSnapshot = [...this.#sourceSnapshots.values()]
-      .filter((candidate) => candidate.sourceId === snapshot.sourceId &&
-        candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
-        candidate.ref === snapshot.ref && candidate.path === snapshot.path)
-      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt) || b.id.localeCompare(a.id))[0];
-    const reusableSnapshot = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
+    const existingRequestedSnapshot = this.#sourceSnapshots.get(snapshot.id);
+    if (existingRequestedSnapshot && !sourceSnapshotsExactlyMatch(existingRequestedSnapshot, snapshot)) {
+      throw new SourceSnapshotConflictError(snapshot.id);
+    }
+    const latestLaneSnapshot = this.#latestSourceSnapshotForLane(snapshot);
+    const candidateReusable = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
       ? latestLaneSnapshot : undefined;
-    const committedSnapshot = reusableSnapshot
-      ? mergeReusableSourceSnapshotObservations(reusableSnapshot, snapshot)
-      : snapshot;
+    const merged = candidateReusable
+      ? mergeReusableSourceSnapshotObservations(candidateReusable, snapshot)
+      : undefined;
+    const reusableSnapshot = merged ? candidateReusable : undefined;
+    const committedSnapshot = merged ?? snapshot;
     const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
       ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
           snapshotId: reusableSnapshot.id, archiveDigest: reusableSnapshot.archiveDigest,
@@ -4966,23 +5007,20 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       };
     }
     if (!this.#workspaces.has(input.terminalRun.workspaceId) || !management ||
-      (management.managementState !== "active" && management.managementState !== "draining") ||
-      !sourceSyncSettlementCensusMatches(observation.capsules, currentCapsules) || !readsMatch) {
+      (management.managementState !== "active" && management.managementState !== "draining")) {
       // This consumer still owns the Run. Do not acknowledge a running Run as
       // a lease loser: the service must terminally fail this observation.
       throw new SourceSyncSettlementConflictError();
     }
-    const currentLatestLaneSnapshot = [...this.#sourceSnapshots.values()]
-      .filter((candidate) => candidate.sourceId === snapshot.sourceId &&
-        candidate.workspaceId === snapshot.workspaceId && candidate.url === snapshot.url &&
-        candidate.ref === snapshot.ref && candidate.path === snapshot.path)
-      .sort((a, b) => a.fetchedAt.localeCompare(b.fetchedAt) || a.id.localeCompare(b.id))
-      .at(-1);
+    const currentLatestLaneSnapshot = this.#latestSourceSnapshotForLane(snapshot);
     if ((currentLatestLaneSnapshot?.id ?? undefined) !== (latestLaneSnapshot?.id ?? undefined) ||
       (currentLatestLaneSnapshot !== undefined && latestLaneSnapshot !== undefined &&
         !sourceSnapshotsExactlyMatch(currentLatestLaneSnapshot, latestLaneSnapshot))) {
+      if (!retriedLaneObservation) return this.#commitSourceSyncSuccessAttempt(input, true);
       throw new SourceSyncSettlementConflictError();
     }
+    if (!sourceSyncSettlementCensusMatches(observation.capsules, currentCapsules) ||
+      !readsMatch) throw new SourceSyncSettlementConflictError();
     const existingSnapshot = this.#sourceSnapshots.get(snapshot.id);
     if (
       existingSnapshot &&
@@ -7792,11 +7830,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     return [...this.#sources.values()]
       .filter((source) => source.status === "active" && source.autoSync &&
+        this.#workspaces.has(source.workspaceId) &&
+        this.#workspaceManagement.get(source.workspaceId)?.managementState === "active" &&
         !( /^[0-9a-f]{40}$/iu.test(source.defaultRef) &&
           source.lastSeenCommit?.toLowerCase() === source.defaultRef.toLowerCase()))
       .sort((a, b) => {
-        const aSync = latestSync.get(a.id);
-        const bSync = latestSync.get(b.id);
+        const aSync = [latestSync.get(a.id), a.lastAutoSyncAttemptAt]
+          .filter((value): value is string => value !== undefined).sort().at(-1);
+        const bSync = [latestSync.get(b.id), b.lastAutoSyncAttemptAt]
+          .filter((value): value is string => value !== undefined).sort().at(-1);
         if (aSync === undefined && bSync !== undefined) return -1;
         if (aSync !== undefined && bSync === undefined) return 1;
         return (aSync ?? "").localeCompare(bSync ?? "") ||
@@ -7885,6 +7927,40 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined> {
     return Promise.resolve(this.#sourceSnapshots.get(id));
+  }
+
+  hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean> {
+    for (const snapshot of this.#sourceSnapshots.values()) {
+      if (snapshot.archiveRef === archiveRef) return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
+  }
+
+  getLatestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<SourceSnapshot | undefined> {
+    return Promise.resolve(this.#latestSourceSnapshotForLane(input));
+  }
+
+  #latestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): SourceSnapshot | undefined {
+    let latest: SourceSnapshot | undefined;
+    for (const candidate of this.#sourceSnapshots.values()) {
+      if (candidate.sourceId !== input.sourceId || candidate.workspaceId !== input.workspaceId ||
+        candidate.url !== input.url || candidate.ref !== input.ref || candidate.path !== input.path) continue;
+      if (!latest || candidate.fetchedAt > latest.fetchedAt ||
+        (candidate.fetchedAt === latest.fetchedAt && candidate.id > latest.id)) latest = candidate;
+    }
+    return latest;
   }
 
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]> {
