@@ -18,9 +18,9 @@
  */
 export const ja = {
   "installStore.installed": "インストール済み",
-  "installStore.installedCount": "{count}つインストール済み",
+  "installStore.installedCount": "{count}件インストール済み",
   "installStore.installAnother": "もう1つ入れる",
-  "installStore.installAnotherHint": "別のアプリとして新しく追加します。データや設定は共有されません。",
+  "installStore.installAnotherHint": "別のアプリとして新しくインストールします。データや設定は共有されません。",
   "installStore.installedReadFailed": "インストール済みのアプリを確認できませんでした。",
   "installStore.applyWait.interfaces": "連携するアプリを選ぶか、あとで連携することを選んでください。",
   "installStore.interfaces.title": "連携するアプリ",

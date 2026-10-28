@@ -2,13 +2,14 @@ import { expect, test } from "bun:test";
 import { matchingInstalledApps, type ListInstalledAppsResponse } from "takosumi-contract";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import { handleWorkspaceInstalledApps } from "../../../../accounts/service/src/control/installed-apps.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
-async function fixture(withSelector = true, sourceUrl = "https://reader:private-password@git.example.test/team/app.git?token=private-token#private-fragment") {
+async function fixture(withSelector = true, sourceUrl = "https://reader:private-password@git.example.test/team/app.git?token=private-token#private-fragment", missingConfigFor?: string) {
   const ledger = new InMemoryOpenTofuControlStore();
   for (const [id, modulePath, status] of [
     ["cap_first", "deploy/app", "active"],
@@ -26,7 +27,9 @@ async function fixture(withSelector = true, sourceUrl = "https://reader:private-
       },
       requiredProviders: [],
     });
-    await ledger.putCapsule({ ...seeded.capsule, status, currentStateGeneration: 1 });
+    await ledger.putCapsule({ ...seeded.capsule, status, currentStateGeneration: 1,
+      ...(id === missingConfigFor ? { installConfigId: "cfg_missing" } : {}),
+    });
   }
   const { operations } = await createTakosumiService({
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
@@ -58,7 +61,7 @@ test("installed-apps summarizes each live install by executable module without v
   const body = await response.json() as ListInstalledAppsResponse;
   expect(body.installedApps).toHaveLength(3);
   expect(body.installedApps.find((app) => app.capsuleId === "cap_first")).toEqual({
-    capsuleId: "cap_first", name: "cap_first", state: "installed", primaryAction: "view_resources",
+    capsuleId: "cap_first", name: "cap_first", state: "installed",
     installedFrom: { url: "https://git.example.test/team/app.git", path: "subtree/deploy/app", matchable: false },
   });
   expect(body.installedApps.find((app) => app.capsuleId === "cap_second")?.installedFrom.path).toBe("subtree/deploy/app");
@@ -67,6 +70,12 @@ test("installed-apps summarizes each live install by executable module without v
   for (const value of ["private-password", "private-token", "private-fragment", "outputs", "resolvedInputs", "installingPrincipalId", "screens", "links"]) {
     expect(encoded).not.toContain(value);
   }
+});
+
+test("one unavailable app config does not hide the other installed apps", async () => {
+  const h = await fixture(true, "https://git.example.test/team/app.git", "cap_other_module");
+  const body = await (await h.request()).json() as ListInstalledAppsResponse;
+  expect(body.installedApps.map((app) => app.capsuleId).sort()).toEqual(["cap_first", "cap_second"]);
 });
 
 test("installed-apps derives old configs from the Source and selected module", async () => {
@@ -115,4 +124,38 @@ test("installed-apps uses the normal Workspace membership and read-only method b
   expect((await h.request("stranger")).status).toBe(403);
   expect((await h.request("")).status).toBe(401);
   expect((await h.request("user_test", "POST")).status).toBe(405);
+});
+
+test("a large Store list uses one config batch and no per-app or Interface candidate reads", async () => {
+  const capsules = Array.from({ length: 150 }, (_, index) => ({
+    id: `cap_${index}`, workspaceId: "ws_installed", installConfigId: `cfg_${index}`,
+    sourceId: `src_${index}`, name: `App ${index}`, status: "active",
+    currentStateVersionId: `sv_${index}`, currentStateGeneration: 1,
+  }));
+  let batchCalls = 0;
+  let exactReads = 0;
+  let sourceReads = 0;
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => capsules,
+      getInstallConfigsByIds: async (ids: readonly string[]) => {
+        batchCalls += 1;
+        return ids.slice(1).map((id) => ({ id, workspaceId: "ws_installed",
+          sourceSelector: { kind: "git", url: "https://git.example.test/team/app.git", path: "." },
+        }));
+      },
+      getInstallConfig: async () => { exactReads += 1; throw new Error("unexpected config read"); },
+    },
+    listSources: async () => { sourceReads += 1; throw new Error("unexpected source list"); },
+    getSource: async () => { sourceReads += 1; throw new Error("unexpected source read"); },
+    interfaces: { listInterfaceLinkCandidates: async () => { throw new Error("unexpected candidate read"); } },
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(response.status).toBe(200);
+  expect(body.installedApps).toHaveLength(149);
+  expect(body.installedApps.some((app) => app.capsuleId === "cap_0")).toBe(false);
+  expect(batchCalls).toBe(1);
+  expect(exactReads).toBe(0);
+  expect(sourceReads).toBe(0);
 });
