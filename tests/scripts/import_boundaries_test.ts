@@ -75,7 +75,7 @@ describe("TypeScript import boundary scanner", () => {
           'import { Controller } from "../../../core/domains/deploy-control/mod.ts";',
       },
       {
-        path: "lib/graph/src/providers.ts",
+        path: "lib/policy/src/providers.ts",
         content: 'import type { Driver } from "@takosumi/providers/types";',
       },
       {
@@ -107,7 +107,7 @@ describe("TypeScript import boundary scanner", () => {
       },
       {
         ruleId: "lib-upper-layer-import",
-        path: "lib/graph/src/providers.ts",
+        path: "lib/policy/src/providers.ts",
         specifier: "@takosumi/providers/types",
       },
       {
@@ -136,7 +136,7 @@ describe("TypeScript import boundary scanner", () => {
           content: [
             'import type { DispatchGeneratedRoot } from "@takosumi/internal/deploy-control-api";',
             'import type { JsonValue } from "takosumi-contract";',
-            'import { graph } from "../../graph/src/mod.ts";',
+            'import { policy } from "../../policy/src/mod.ts";',
           ].join("\n"),
         },
       ]),

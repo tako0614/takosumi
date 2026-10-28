@@ -17,8 +17,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  quality:
-    name: check and test
+  static:
+    name: static and build
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -30,7 +30,6 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # pinned: v2.0.2
         with:
-          # Keep the portable gate on the same runtime as runner-image-proof.yml.
           bun-version: "1.4.0"
 
       - name: Setup Node
@@ -52,8 +51,146 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install locked docs dependencies
-        working-directory: docs
-        run: npm ci --no-audit --no-fund
+        run: npm ci --prefix docs --no-audit --no-fund
 
-      - name: Run canonical Takosumi checks
-        run: bun run check
+      - name: Run static and build phases
+        run: bun run check --except tests,dashboard-browser,docs-browser
+
+      - name: Upload dashboard build for browser checks
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pinned: v7.0.1
+        with:
+          name: dashboard-dist-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dashboard/dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: false
+
+  tests:
+    name: tests (${{ matrix.shard }}/6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # pinned: v2.0.2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned: v4.4.0 (2026)
+        with:
+          node-version: "22"
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # pinned: v2
+        with:
+          tofu_version: 1.12.1
+          tofu_wrapper: false
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      # Keep the test environment equivalent to the local gate: dashboard
+      # unit tests import Solid directly, even though this job does no build.
+      - name: Install locked dashboard dependencies
+        working-directory: dashboard
+        run: bun install --frozen-lockfile
+
+      - name: Install locked docs dependencies
+        run: npm ci --prefix docs --no-audit --no-fund
+
+      - name: Run test phase shard
+        env:
+          TAKOSUMI_TEST_SHARD: ${{ matrix.shard }}/6
+        run: bun run check --only tests
+
+  dashboard-browser:
+    name: dashboard browser
+    needs: [static]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # pinned: v2.0.2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned: v4.4.0 (2026)
+        with:
+          node-version: "22"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download dashboard build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # pinned: v7.0.0
+        with:
+          name: dashboard-dist-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dashboard/dist
+
+      - name: Run dashboard browser phase
+        run: bun run check --only dashboard-browser
+
+  docs-browser:
+    name: docs browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # pinned: v6.0.2 (2026)
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # pinned: v2.0.2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned: v4.4.0 (2026)
+        with:
+          node-version: "22"
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install locked docs dependencies
+        run: npm ci --prefix docs --no-audit --no-fund
+
+      - name: Run docs browser phase
+        run: bun run check --only docs-browser
+
+  check:
+    name: check and test
+    if: always()
+    needs: [static, tests, dashboard-browser, docs-browser]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all quality jobs to succeed
+        env:
+          STATIC_RESULT: ${{ needs.static.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+          DASHBOARD_BROWSER_RESULT: ${{ needs.dashboard-browser.result }}
+          DOCS_BROWSER_RESULT: ${{ needs.docs-browser.result }}
+        run: |
+          for result in "$STATIC_RESULT" "$TESTS_RESULT" "$DASHBOARD_BROWSER_RESULT" "$DOCS_BROWSER_RESULT"; do
+            if [[ "$result" != success ]]; then
+              printf 'quality job did not succeed: %s\n' "$result" >&2
+              exit 1
+            fi
+          done

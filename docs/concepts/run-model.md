@@ -141,6 +141,11 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-upd
 承認は `/api/v1/run-groups/{runGroupId}/approve` でまとめて行えます。個々の Run の
 記録は失われません。
 
+旧 Dependency の設定が残る Capsule は `dependency_retired` で拒否されます。
+Workspace の更新や差分確認では、その Capsule の失敗を RunGroup に記録し、
+他の Capsule の処理を続けます。拒否された Capsule の Run は作成されません。
+database operator に残存設定の保守を依頼し、完了後に新しい plan を作成してください。
+
 ## 失敗したとき
 
 Run の失敗だけでは、provider 側の変更が戻ったかどうかは分かりません。provider の実行失敗時に

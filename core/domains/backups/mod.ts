@@ -628,7 +628,7 @@ export class BackupsService {
     }
 
     return {
-      bundleVersion: 2,
+      bundleVersion: 3,
       kind: "control",
       workspaceId,
       ...(capsuleId !== undefined
@@ -977,7 +977,7 @@ async function latestSourceSnapshot(
  * Every field is a public ledger projection; no secret material is present.
  */
 export interface ControlBackupBundle {
-  readonly bundleVersion: 2;
+  readonly bundleVersion: 3;
   readonly kind: "control";
   readonly workspaceId: string;
   /** Present only on a Capsule-scoped export; absent means the whole Workspace. */
