@@ -729,12 +729,11 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...sourceSchemas(),
     ...responseSchemas(),
     ...billingSchemas(),
-    ...dependencySchemas(),
     ...workspaceProjectAndCapsuleRequestSchemas(),
     ...runSchemas(),
+    ...approvalSchemas(),
     ...activitySchemas(),
     ...backupSchemas(),
-    ...outputShareSchemas(),
     ...errorSchemas(),
   };
 }
@@ -2826,7 +2825,7 @@ function outputSchemas(): Record<string, Record<string, unknown>> {
     Output: {
       type: "object",
       description:
-        "Public OpenTofu output projection. Raw output JSON remains an encrypted internal artifact; publicOutputs is the explicit InstallConfig projection and workspaceOutputs is a bounded non-secret Workspace-local capture for Dependency and Interface resolution.",
+        "Public OpenTofu output projection. Raw output JSON remains an encrypted internal artifact; publicOutputs is the explicit InstallConfig projection and workspaceOutputs is a bounded non-secret capture for the owning Capsule's Interface resolution.",
       required: [
         "id",
         "workspaceId",
@@ -3617,85 +3616,6 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
   };
 }
 
-/** Dependency DAG edge shapes and their request/response wrappers. */
-function dependencySchemas(): Record<string, Record<string, unknown>> {
-  return {
-    DependencyOutputMapping: {
-      type: "object",
-      required: ["from", "to", "required"],
-      properties: {
-        from: { type: "string" },
-        to: { type: "string" },
-        required: { type: "boolean" },
-        type: {
-          enum: ["string", "url", "hostname", "number", "boolean", "json"],
-        },
-      },
-      additionalProperties: false,
-    },
-    Dependency: {
-      type: "object",
-      required: [
-        "id",
-        "workspaceId",
-        "producerCapsuleId",
-        "consumerCapsuleId",
-        "mode",
-        "outputs",
-        "visibility",
-        "createdAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        workspaceId: { type: "string" },
-        producerCapsuleId: { type: "string" },
-        consumerCapsuleId: { type: "string" },
-        mode: {
-          enum: ["variable_injection", "remote_state", "published_output"],
-        },
-        outputs: {
-          type: "object",
-          additionalProperties: ref("DependencyOutputMapping"),
-        },
-        visibility: { enum: ["workspace", "cross_workspace"] },
-        createdAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    CreateDependencyRequest: {
-      type: "object",
-      required: ["producerCapsuleId", "mode", "outputs", "visibility"],
-      properties: {
-        producerCapsuleId: { type: "string" },
-        mode: {
-          enum: ["variable_injection", "remote_state", "published_output"],
-        },
-        outputs: {
-          type: "object",
-          additionalProperties: ref("DependencyOutputMapping"),
-        },
-        visibility: { enum: ["workspace", "cross_workspace"] },
-      },
-      additionalProperties: false,
-    },
-    DependencyResponse: {
-      type: "object",
-      required: ["dependency"],
-      properties: { dependency: ref("Dependency") },
-      additionalProperties: false,
-    },
-    CapsuleDependenciesResponse: {
-      type: "object",
-      required: ["asProducer", "asConsumer"],
-      properties: {
-        asProducer: { type: "array", items: ref("Dependency") },
-        asConsumer: { type: "array", items: ref("Dependency") },
-      },
-      additionalProperties: false,
-    },
-  };
-}
-
 /** Workspace, Project, Capsule request/response, and InstallConfig wrappers. */
 export function workspaceProjectAndCapsuleRequestSchemas(): Record<
   string,
@@ -4316,7 +4236,11 @@ function runSchemas(): Record<string, Record<string, unknown>> {
           ],
         },
         sourceSnapshotId: { type: "string" },
-        dependencySnapshotId: { type: "string" },
+        dependencySnapshotId: {
+          type: "string",
+          readOnly: true,
+          description: "Historical reference only; dependency-pinned plans must be re-planned.",
+        },
         compatibilityReportId: { type: "string" },
         baseStateGeneration: { type: "integer" },
         planDigest: { type: "string" },
@@ -4736,94 +4660,9 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
   };
 }
 
-/** Cross-Workspace OutputShare shapes plus the ApproveRun request body. */
-function outputShareSchemas(): Record<string, Record<string, unknown>> {
+/** ApproveRun request body. */
+function approvalSchemas(): Record<string, Record<string, unknown>> {
   return {
-    OutputShareEntry: {
-      type: "object",
-      required: ["name", "sensitive"],
-      properties: {
-        name: { type: "string" },
-        alias: { type: "string" },
-        type: { type: "string" },
-        sensitive: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    CreateOutputShareEntry: {
-      type: "object",
-      required: ["name"],
-      properties: {
-        name: { type: "string" },
-        alias: { type: "string" },
-        sensitive: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    SensitiveOutputSharePolicy: {
-      type: "object",
-      required: ["allow"],
-      properties: {
-        allow: { type: "boolean" },
-        reason: { type: "string" },
-      },
-      additionalProperties: false,
-    },
-    OutputShare: {
-      type: "object",
-      required: [
-        "id",
-        "fromWorkspaceId",
-        "toWorkspaceId",
-        "producerCapsuleId",
-        "outputs",
-        "status",
-        "createdAt",
-      ],
-      properties: {
-        id: { type: "string" },
-        fromWorkspaceId: { type: "string" },
-        toWorkspaceId: { type: "string" },
-        producerCapsuleId: { type: "string" },
-        outputs: { type: "array", items: ref("OutputShareEntry") },
-        status: { enum: ["pending", "active", "revoked"] },
-        createdAt: { type: "string", format: "date-time" },
-        acceptedAt: { type: "string", format: "date-time" },
-        revokedAt: { type: "string", format: "date-time" },
-      },
-      additionalProperties: false,
-    },
-    CreateOutputShareRequest: {
-      type: "object",
-      required: [
-        "fromWorkspaceId",
-        "toWorkspaceId",
-        "producerCapsuleId",
-        "outputs",
-      ],
-      properties: {
-        fromWorkspaceId: { type: "string" },
-        toWorkspaceId: { type: "string" },
-        producerCapsuleId: { type: "string" },
-        outputs: { type: "array", items: ref("CreateOutputShareEntry") },
-        sensitivePolicy: ref("SensitiveOutputSharePolicy"),
-      },
-      additionalProperties: false,
-    },
-    OutputShareResponse: {
-      type: "object",
-      required: ["share"],
-      properties: { share: ref("OutputShare") },
-      additionalProperties: false,
-    },
-    ListOutputSharesResponse: {
-      type: "object",
-      required: ["shares"],
-      properties: {
-        shares: { type: "array", items: ref("OutputShare") },
-      },
-      additionalProperties: false,
-    },
     ApproveRunRequest: {
       type: "object",
       properties: {

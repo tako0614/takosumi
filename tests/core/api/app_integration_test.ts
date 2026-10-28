@@ -241,8 +241,6 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   for (const schemaName of [
     "Output",
     "Deployment",
-    "Dependency",
-    "DependencyResponse",
     "ListActivityResponse",
     "CreateBackupResponse",
     "ListBackupsResponse",
@@ -252,9 +250,6 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     "SpaceResponse",
     "ListSpacesResponse",
     "DeploymentResponse",
-    "CreateOutputShareRequest",
-    "OutputShareResponse",
-    "ListOutputSharesResponse",
   ] as const) {
     assert.equal(
       openapi.components.schemas[schemaName],

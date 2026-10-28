@@ -102,7 +102,6 @@ function workspace(): RunWorkspace {
     generatedRootDir: "/tmp/renewable-test-workspace/generated",
     childModuleDir: "/tmp/renewable-test-workspace/child",
     artifactDir: "/tmp/renewable-test-workspace/artifacts",
-    depsDir: "/tmp/renewable-test-workspace/deps",
   };
 }
 
@@ -651,6 +650,5 @@ test("refresh received during blocked source-build is promoted into the later Pl
     const ownedDirs = (await readdir("/tmp")).filter((name) => name.startsWith(ownedPrefix));
     await Promise.all(ownedDirs.map((name) => rm(join("/tmp", name), { recursive: true, force: true })));
     await rm(runWorkspace.root, { recursive: true, force: true });
-    await rm(runWorkspace.depsDir, { recursive: true, force: true });
   }
 }, 120_000);

@@ -31,7 +31,7 @@ async function candidate(kind: Kind, id: string, workspaceId: string): Promise<S
     id, workspaceId, source: { kind: "git", url: "https://example.test/repo.git", commit: "0123456789abcdef0123456789abcdef01234567" },
     sourceDigest: "sha256:source", operation: "update", runnerProfileId: "runner", status: "queued",
     variablesDigest: await stableJsonDigest({}),
-    executionInputsDigest: await stableJsonDigest(planRunExecutionInputsDigestMaterial({ planRunId: id, variables: {} }, undefined)),
+    executionInputsDigest: await stableJsonDigest(planRunExecutionInputsDigestMaterial({ planRunId: id, variables: {} })),
     requiredProviders: [], requiredProviderRequirements: [], policy: { status: "passed", reasons: [], checkedAt: 1 },
     policyDecisionDigest: "sha256:policy", auditEvents: [], createdAt: 1, updatedAt: 1,
   } satisfies PlanRun;

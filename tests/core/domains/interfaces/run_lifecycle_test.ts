@@ -1413,11 +1413,11 @@ output "endpoint" {
   ).toBe("NotReady");
 
   // The durable Run ledger fences records created after the observer event as
-  // well, including a Workspace-owned Interface that references the Capsule.
+  // well, including an Interface owned by the same Capsule as its output input.
   const createdAfterFailure = await operations.interfaces.create({
     workspaceId: capsule.workspaceId,
     name: "runtime-after-failed-restore",
-    ownerRef: { kind: "Workspace", id: capsule.workspaceId },
+    ownerRef: { kind: "Capsule", id: capsule.id },
     spec: {
       type: "mcp.server",
       version: "2025-11-25",

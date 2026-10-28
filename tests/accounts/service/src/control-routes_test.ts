@@ -11,8 +11,6 @@ import { handleCapsules } from "../../../../accounts/service/src/control/capsule
 import {
   controllerErrorResponse,
   canAccessWorkspace,
-  publicDependency,
-  publicOutputShare,
   type ControlDispatchContext,
 } from "../../../../accounts/service/src/control/shared.ts";
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
@@ -969,40 +967,52 @@ test("an active namespace owner can bootstrap the first member, while a stopped 
   }
 });
 
-test("account-plane relationship views expose only Workspace and Capsule ids", () => {
-  const dependency = publicDependency({
-    id: "dep_1",
-    workspaceId: "ws_owner",
-    producerCapsuleId: "cap_producer",
-    consumerCapsuleId: "cap_consumer",
-    mode: "variable_injection",
-    outputs: {},
-    visibility: "workspace",
-    createdAt: "2026-01-01T00:00:00.000Z",
-  });
-  const share = publicOutputShare({
-    id: "share_1",
-    fromWorkspaceId: "ws_owner",
-    toWorkspaceId: "ws_consumer",
-    producerCapsuleId: "cap_producer",
-    outputs: [],
-    status: "active",
-    createdAt: "2026-01-01T00:00:00.000Z",
-  });
+test("retired relationship roots return 404", async () => {
+  for (const [method, path] of [
+    ["DELETE", "/dependencies/dep_old"],
+    ["GET", "/output-shares?workspaceId=ws_owner"],
+    ["POST", "/output-shares"],
+    ["POST", "/output-shares/share_old/approve"],
+    ["POST", "/output-shares/share_old/revoke"],
+  ]) {
+    const url = new URL(`https://app.example.test/api/v1${path}`);
+    const response = await handleAuthenticatedControlRoute({
+      request: new Request(url, { method }),
+      url,
+      store: new InMemoryAccountsStore(),
+      subject: "tsub_owner",
+      operations: workspaceAuthorizationOperations(),
+    });
+    expect(response?.status).toBe(404);
+  }
+});
 
-  expect(dependency).toMatchObject({
-    workspaceId: "ws_owner",
-    producerCapsuleId: "cap_producer",
-    consumerCapsuleId: "cap_consumer",
-  });
-  expect(share).toMatchObject({
-    fromWorkspaceId: "ws_owner",
-    toWorkspaceId: "ws_consumer",
-    producerCapsuleId: "cap_producer",
-  });
-  expect(JSON.stringify({ dependency, share })).not.toMatch(
-    /"(?:spaceId|installationId)"/u,
+test("Capsule dependency reads and writes are retired and graph edges are empty", async () => {
+  const fixture = operationsFixture();
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      listCapsules: async () => [await fixture.operations.capsules.getCapsule("cap_1")],
+    },
+    // A legacy facade must not be consulted by any current projection.
+    listDependenciesByWorkspace: () => { throw new Error("retired read"); },
+  } as ControlPlaneOperations;
+  for (const method of ["GET", "POST"]) {
+    const request = new Request("https://app.example.test/api/v1/capsules/cap_1/dependencies", { method });
+    const response = await handleAuthenticatedControlRoute({
+      ...context(operations, request), subject: "tsub_owner",
+    });
+    expect(response?.status).toBe(404);
+  }
+  const request = new Request("https://app.example.test/api/v1/workspaces/ws_owner/graph");
+  const response = await handleWorkspaces(
+    context(operations, request), ["workspaces", "ws_owner", "graph"], "GET",
   );
+  expect(response?.status).toBe(200);
+  const graph = await response!.json();
+  expect(graph.nodes.length).toBeGreaterThan(0);
+  expect(graph.edges).toEqual([]);
 });
 
 test("account-plane control errors preserve structured reason details", async () => {

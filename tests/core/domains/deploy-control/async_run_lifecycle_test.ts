@@ -2420,7 +2420,7 @@ test("state generation: a stale plan is rejected at apply (state_generation_mism
     status: "succeeded",
     variablesDigest: await stableJsonDigest(forgedInputs.variables),
     executionInputsDigest: await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(forgedInputs, undefined),
+      planRunExecutionInputsDigestMaterial(forgedInputs),
     ),
   } as const;
   const management = await store.getWorkspaceManagement(capsule!.workspaceId);

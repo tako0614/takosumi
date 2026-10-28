@@ -306,7 +306,7 @@ async function createCapsule(
   return initial.capsule.id;
 }
 
-test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () => {
+test("model e2e: retired Dependency routes return 404 without mutating Capsules", async () => {
   const { app, operations } = await service();
   const workspaceId = await createWorkspace(app, "deps");
   const sourceId = await createSource(app, workspaceId);
@@ -326,139 +326,38 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
     "consumer",
   );
 
-  // Create a producer -> consumer edge (consumer is the path capsule).
-  const createRes = await app.request(
-    `/internal/v1/capsules/${consumer}/dependencies`,
+  const before = await operations.capsules.listCapsules(workspaceId);
+  const retiredEndpoints: Array<{
+    method: string;
+    path: string;
+    body?: string;
+  }> = [
     {
       method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        producerCapsuleId: producer,
-        mode: "variable_injection",
-        visibility: "workspace",
-        outputs: {
-          base_domain: {
-            from: "base_domain",
-            to: "base_domain",
-            required: true,
-          },
-        },
-      }),
+      path: `/internal/v1/capsules/${consumer}/dependencies`,
+      body: JSON.stringify({ producerCapsuleId: producer }),
     },
-  );
-  expect(createRes.status).toBe(201);
-  const dependency = (await createRes.json()).dependency;
-  expect(dependency.producerCapsuleId).toBe(producer);
-  expect(dependency.consumerCapsuleId).toBe(consumer);
-  const dependencyId = dependency.id as string;
-
-  // List from the consumer: it appears as a consumer-side edge.
-  const listRes = await app.request(
-    `/internal/v1/capsules/${consumer}/dependencies`,
-    { headers: headers() },
-  );
-  expect(listRes.status).toBe(200);
-  const list = await listRes.json();
-  expect(list.asConsumer).toHaveLength(1);
-  expect(list.asProducer).toHaveLength(0);
-
-  // The reverse edge (producer depends on consumer) would close a cycle: 409.
-  const cycleRes = await app.request(
-    `/internal/v1/capsules/${producer}/dependencies`,
+    {
+      method: "GET",
+      path: `/internal/v1/capsules/${consumer}/dependencies`,
+    },
     {
       method: "POST",
+      path: `/internal/v1/capsules/${producer}/dependencies`,
+      body: JSON.stringify({ producerCapsuleId: consumer }),
+    },
+    { method: "DELETE", path: "/internal/v1/dependencies/dep_retired0001" },
+  ];
+
+  for (const endpoint of retiredEndpoints) {
+    const response = await app.request(endpoint.path, {
+      method: endpoint.method,
       headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        producerCapsuleId: consumer,
-        mode: "variable_injection",
-        visibility: "workspace",
-        outputs: {
-          x: { from: "x", to: "x", required: true },
-        },
-      }),
-    },
-  );
-  expect(cycleRes.status).toBe(409);
-  expect((await cycleRes.json()).error.code).toBe("failed_precondition");
-
-  // Delete the edge.
-  const deleteRes = await app.request(
-    `/internal/v1/dependencies/${dependencyId}`,
-    {
-      method: "DELETE",
-      headers: headers(),
-    },
-  );
-  expect(deleteRes.status).toBe(204);
-
-  // After deletion the consumer has no edges.
-  const afterRes = await app.request(
-    `/internal/v1/capsules/${consumer}/dependencies`,
-    { headers: headers() },
-  );
-  const after = await afterRes.json();
-  expect(after.asConsumer).toHaveLength(0);
-});
-
-test("model e2e: a dependency to a producer in another workspace is rejected", async () => {
-  const { app, operations } = await service();
-  const workspaceA = await createWorkspace(app, "depsa");
-  const sourceA = await createSource(app, workspaceA);
-  const configA = await seedInstallConfig(operations, workspaceA);
-  const consumer = await createCapsule(
-    operations,
-    workspaceA,
-    sourceA,
-    configA,
-    "consumer",
-  );
-
-  const workspaceB = await createWorkspace(app, "depsb");
-  const sourceB = await createSource(app, workspaceB);
-  // A second Workspace-scoped config under workspaceB (distinct id from configA).
-  const nowIso = new Date(0).toISOString();
-  await operations.capsules.putInstallConfig({
-    id: "cfg_test00000002",
-    workspaceId: workspaceB,
-    name: "test-module-b",
-    installType: "opentofu_module",
-    variableMapping: {},
-    outputAllowlist: {},
-    policy: {},
-    createdAt: nowIso,
-    updatedAt: nowIso,
-  });
-  const foreignProducer = await createCapsule(
-    operations,
-    workspaceB,
-    sourceB,
-    "cfg_test00000002",
-    "producer",
-  );
-
-  // consumer is in workspaceA; producer is in workspaceB. The consumer-path
-  // edge is gated by workspaceA, but the producer belongs to workspaceB.
-  const res = await app.request(
-    `/internal/v1/capsules/${consumer}/dependencies`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        producerCapsuleId: foreignProducer,
-        mode: "variable_injection",
-        visibility: "workspace",
-        outputs: {
-          base_domain: {
-            from: "base_domain",
-            to: "base_domain",
-            required: true,
-          },
-        },
-      }),
-    },
-  );
-  expect(res.status).toBe(409);
-  expect((await res.json()).error.code).toBe("failed_precondition");
+      ...(endpoint.body ? { body: endpoint.body } : {}),
+    });
+    expect(response.status).toBe(404);
+  }
+  expect(await operations.capsules.listCapsules(workspaceId)).toEqual(before);
 });
 
 test("model e2e: unauthorized without the deploy-control bearer", async () => {

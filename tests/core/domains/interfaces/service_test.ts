@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import type {
+  Interface,
+  InterfaceBinding,
+  InterfaceProjectionSnapshot,
+} from "takosumi-contract";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
   createInMemoryInterfaceStores,
@@ -120,6 +125,307 @@ test("Interface keeps arbitrary JSON separate from resolved ordinary Outputs", a
     outputId: "out_mcp_1",
     outputName: "endpoint",
   });
+});
+
+test("capsule_output inputs must belong to the owning Capsule even in the same Workspace", async () => {
+  const service = await outputBackedService();
+  const foreignInput = {
+    source: "capsule_output" as const,
+    capsuleId: "capsule_other",
+    outputName: "endpoint",
+  };
+
+  await expect(
+    service.create({
+      workspaceId: "workspace_1",
+      name: "foreign-output-create",
+      ownerRef: { kind: "Capsule", id: "capsule_mcp" },
+      spec: {
+        type: "custom.protocol",
+        version: "v1",
+        document: {},
+        inputs: { endpoint: foreignInput },
+        access: { visibility: "workspace" },
+      },
+    }),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "foreign-output-update",
+    ownerRef: { kind: "Capsule", id: "capsule_mcp" },
+    spec: {
+      type: "custom.protocol",
+      version: "v1",
+      document: {},
+      inputs: { endpoint: { source: "literal", value: "ready" } },
+      access: { visibility: "workspace" },
+    },
+  });
+
+  await expect(
+    service.update(
+      iface.metadata.id,
+      { spec: { ...iface.spec, inputs: { endpoint: foreignInput } } },
+      iface.metadata.generation,
+    ),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
+test("legacy persisted foreign capsule_output refs fail before resolving outputs", async () => {
+  const stores = createInMemoryInterfaceStores();
+  let resolverCalls = 0;
+  const service = new InterfaceService({
+    stores,
+    resolver: {
+      async resolve() {
+        resolverCalls += 1;
+        return { ok: true, resolvedInputs: {}, provenance: {} };
+      },
+    },
+    now: () => NOW,
+  });
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "legacy-foreign-output",
+    ownerRef: { kind: "Capsule", id: "capsule_owner" },
+    spec: {
+      type: "custom.protocol",
+      version: "v1",
+      document: {},
+      inputs: { enabled: { source: "literal", value: true } },
+      access: { visibility: "workspace" },
+    },
+  });
+  resolverCalls = 0;
+  const legacy = {
+    ...iface,
+    spec: {
+      ...iface.spec,
+      inputs: {
+        endpoint: {
+          source: "capsule_output" as const,
+          capsuleId: "capsule_other",
+          outputName: "endpoint",
+        },
+      },
+    },
+  };
+  expect(
+    await stores.interfaces.compareAndSet(legacy, {
+      generation: iface.metadata.generation,
+      resolvedRevision: iface.status.resolvedRevision,
+      record: iface,
+    }),
+  ).toBe(true);
+
+  const reconciled = await service.reconcile(iface.metadata.id);
+  expect(resolverCalls).toBe(0);
+  expect(reconciled.status.phase).toBe("NotReady");
+  expect(reconciled.status.conditions).toContainEqual(
+    expect.objectContaining({
+      reason: "InvalidCapsuleOutputOwner",
+      message: expect.stringContaining("owning Capsule"),
+    }),
+  );
+});
+
+test("authorized Interface reads hide cached foreign outputs before paging", async () => {
+  const stores = createInMemoryInterfaceStores();
+  const projections: InterfaceProjectionSnapshot[] = [];
+  const persistedInterfacesDuringProjection: Array<Interface | undefined> = [];
+  const persistedBindingsDuringProjection: Array<readonly InterfaceBinding[]> =
+    [];
+  let id = 0;
+  let resolverCalls = 0;
+  const service = new InterfaceService({
+    stores,
+    resolver: {
+      async resolve({ inputs }) {
+        resolverCalls += 1;
+        const resolvedInputs = Object.fromEntries(
+          Object.entries(inputs).map(([name, input]) => [
+            name,
+            input.source === "literal" ? input.value : "unexpected-value",
+          ]),
+        );
+        return { ok: true, resolvedInputs, provenance: {} };
+      },
+    },
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++id}`,
+    projectionSink: {
+      async project(snapshot) {
+        projections.push(snapshot);
+        persistedInterfacesDuringProjection.push(
+          await stores.interfaces.get(snapshot.interface.metadata.id),
+        );
+        persistedBindingsDuringProjection.push(
+          await stores.bindings.listByInterface(snapshot.interface.metadata.id),
+        );
+      },
+    },
+  });
+  const createSurface = (name: string, endpoint: string) =>
+    service.create({
+      workspaceId: "workspace_1",
+      name,
+      ownerRef: { kind: "Capsule", id: "capsule_owner" },
+      spec: {
+        type: "interface.ui.surface",
+        version: "1",
+        document: { launcher: true },
+        inputs: { endpoint: { source: "literal", value: endpoint } },
+        access: { visibility: "workspace" },
+      },
+    });
+
+  const legacy = await createSurface("a-legacy", "cached-foreign-output");
+  const valid = await createSurface("b-valid", "safe-output");
+  for (const iface of [legacy, valid]) {
+    const binding = await service.createBinding(iface.metadata.id, {
+      subjectRef: { kind: "Principal", id: "principal_runtime" },
+      permissions: ["runtime.invoke"],
+      delivery: { type: "none" },
+    });
+    expect(binding.status.phase).toBe("Ready");
+  }
+
+  const stored = (await stores.interfaces.get(legacy.metadata.id))!;
+  const legacyForeign = {
+    ...stored,
+    spec: {
+      ...stored.spec,
+      inputs: {
+        endpoint: {
+          source: "capsule_output" as const,
+          capsuleId: "capsule_other",
+          outputName: "endpoint",
+        },
+      },
+    },
+  };
+  expect(
+    await stores.interfaces.compareAndSet(legacyForeign, {
+      generation: stored.metadata.generation,
+      resolvedRevision: stored.status.resolvedRevision,
+      record: stored,
+    }),
+  ).toBe(true);
+  projections.length = 0;
+  persistedInterfacesDuringProjection.length = 0;
+  persistedBindingsDuringProjection.length = 0;
+  const persistedBeforeListing = await stores.interfaces.get(legacy.metadata.id);
+  const bindingsBeforeListing = await stores.bindings.listByInterface(
+    legacy.metadata.id,
+  );
+  const callsBeforeListing = resolverCalls;
+
+  const principalFirst = await service.listAuthorizedForPrincipalPage(
+    { workspaceId: "workspace_1" },
+    "principal_runtime",
+    "runtime.invoke",
+    { limit: 1 },
+  );
+  expect(principalFirst.items.map((iface) => iface.metadata.id)).toEqual([
+    valid.metadata.id,
+  ]);
+  expect(principalFirst.nextCursor).toBeUndefined();
+  expect(JSON.stringify(principalFirst)).not.toContain("cached-foreign-output");
+  expect(
+    (
+      await service.listAuthorizedForPrincipal(
+        { workspaceId: "workspace_1" },
+        "principal_runtime",
+        "runtime.invoke",
+      )
+    ).map((iface) => iface.metadata.id),
+  ).toEqual([
+    valid.metadata.id,
+  ]);
+
+  const uiFirst = await service.listAuthorizedUiSurfaceCandidatesForPrincipalPage(
+    { workspaceId: "workspace_1" },
+    "principal_runtime",
+    "runtime.invoke",
+    { limit: 1 },
+    "capsule_owner",
+  );
+  expect(uiFirst.items.map((iface) => iface.metadata.id)).toEqual([
+    valid.metadata.id,
+  ]);
+  expect(uiFirst.nextCursor).toBeUndefined();
+  expect(JSON.stringify(uiFirst)).not.toContain("cached-foreign-output");
+
+  const defensiveService = new InterfaceService({
+    stores: {
+      ...stores,
+      authorized: {
+        async listPage() {
+          return { items: [legacyForeign], nextCursor: "continue-after-filter" };
+        },
+      },
+    },
+  });
+  const filtered = await defensiveService.listAuthorizedForPrincipalPage(
+    { workspaceId: "workspace_1" },
+    "principal_runtime",
+    "runtime.invoke",
+    { limit: 1 },
+  );
+  expect(filtered.items).toEqual([]);
+  expect(filtered.nextCursor).toBe("continue-after-filter");
+
+  expect(await service.capsuleOutputNames("workspace_1", "capsule_other"))
+    .toEqual([]);
+  expect(await service.capsuleOutputNames("workspace_1", "capsule_owner"))
+    .toEqual([]);
+  expect(resolverCalls).toBe(callsBeforeListing);
+  expect(await stores.interfaces.get(legacy.metadata.id)).toEqual(
+    persistedBeforeListing,
+  );
+  expect(await stores.bindings.listByInterface(legacy.metadata.id)).toEqual(
+    bindingsBeforeListing,
+  );
+  expect(projections).toEqual([]);
+
+  await service.reportStatusConditions(legacy.metadata.id, [
+    { type: "Probe", status: "true" },
+  ]);
+  expect(projections).toEqual([]);
+
+  const repaired = await service.repairProjections({ limit: 10 });
+  expect(repaired).toMatchObject({ scanned: 2, projected: 2, failed: 0 });
+  expect(projections.length).toBeGreaterThanOrEqual(2);
+  for (let index = 0; index < projections.length; index += 1) {
+    expect(projections[index]!.interface).toEqual(
+      persistedInterfacesDuringProjection[index],
+    );
+    expect(projections[index]!.bindings).toEqual(
+      persistedBindingsDuringProjection[index],
+    );
+  }
+  const legacyProjections = projections.filter(
+    (snapshot) => snapshot.interface.metadata.id === legacy.metadata.id,
+  );
+  expect(legacyProjections.length).toBeGreaterThan(0);
+  for (const snapshot of legacyProjections) {
+    expect(snapshot.interface.status.phase).toBe("NotReady");
+    expect(snapshot.interface.status.resolvedInputs).toBeUndefined();
+    expect(snapshot.interface.status.resourceUri).toBeUndefined();
+    expect(snapshot.bindings.every((binding) => binding.status.phase !== "Ready"))
+      .toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain("cached-foreign-output");
+  }
+  const persistedAfterRepair = await stores.interfaces.get(legacy.metadata.id);
+  expect(persistedAfterRepair?.status.phase).toBe("NotReady");
+  expect(persistedAfterRepair?.status.resolvedInputs).toBeUndefined();
+  expect(persistedAfterRepair?.status.resourceUri).toBeUndefined();
+  expect(
+    (await stores.bindings.listByInterface(legacy.metadata.id)).every(
+      (binding) => binding.status.phase !== "Ready",
+    ),
+  ).toBe(true);
 });
 
 test("missing or sensitive Outputs fail closed without exposing a stale value", async () => {

@@ -47,7 +47,7 @@ export const CRITICAL_JOURNEYS: readonly CriticalJourney[] = [
     tests: [
       "tests/core/domains/deploy-control/approve_run_test.ts",
       "tests/core/domains/deploy-control/apply_create_once_test.ts",
-      "tests/core/domains/deploy-control/stale_propagation_test.ts",
+      "tests/core/domains/deploy-control/dependency_run_test.ts",
     ],
     negativeControls: [
       {

@@ -31,6 +31,7 @@ describe("app page links", () => {
       expect(appPageSectionFromHash(`#${section}`)).toBe(section);
     }
     expect(appPageSectionFromHash("")).toBeUndefined();
+    expect(appPageSectionFromHash("#linked")).toBeUndefined();
     expect(appPageSectionFromHash("#constructor")).toBeUndefined();
     expect(appPageSectionFromHash("#app-settings")).toBeUndefined();
   });

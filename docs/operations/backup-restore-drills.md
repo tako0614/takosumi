@@ -19,8 +19,14 @@ route は、選択された control-ledger record の **部分的な export** �
 state archive や artifact manifest が存在するだけで restore evidence を
 `passed` にしてはいけません。
 
+Restore は control export を再生しません。state と任意の service-data はそれぞれの
+対応する restore 経路で扱われます。成功した Restore Run の Activity には毎回
+`warningReason=retired_backup_sections_ignored` と
+`Control export is not replayed; legacy Dependency/OutputShare sections are ignored` を記録します。
+これは full control importer ではなく、control record の復元を示す証跡でもありません。
+
 現在の export が含むのは、Workspace、Source / SourceSnapshot、Workspace-owned
-InstallConfig、Capsule、ProviderBindingSet、dependency / OutputShare、
+InstallConfig、Capsule、ProviderBindingSet、
 StateVersion metadata、Output projection、RunGroup、Activity tail、public
 ProviderConnection metadata、security / usage / prior-backup ledger、および
 redacted Resource exact-Form pinです。
@@ -59,15 +65,15 @@ operator-owned **Backup/Restore layers**:
    posts、profiles など Capsule が作成した service 固有データ。現時点では generic restore は未実装で、対応 provider
    adapter または Capsule-defined export がある Capsule だけを対象にする。
 
-合格する operator restore は Project / Capsule graph と StateVersion / Output
+合格する operator restore は Project / 独立した Capsule と StateVersion / Output
 世代を復元します。現在の OSS control export はこの要件を満たしません。
 service-data backup は各 Capsule の backup/export 設定に従い、operator
 control restore 後に必要な Capsule だけ restore / reattach します。
 
 対象データ:
 
-- Workspace / Project / Capsule / Source metadata / ProviderConnection metadata /
-  CredentialRecipe / ProviderBinding / provider policy / Capsule graph
+- Workspace / Project / independent Capsule / Source metadata / ProviderConnection metadata /
+  CredentialRecipe / ProviderBinding / provider policy
 - Run / StateVersion / Output / AuditEvent ledger
 - captured Output metadata and current StateVersion ids
 - Capsule service-data export / provider snapshot / custom command archive

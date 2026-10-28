@@ -16,9 +16,8 @@ check or the Source webhook; the standard Bun and PostgreSQL build has neither),
 **Update available** and **Update** appears at the top of its page. A service added with a
 commit never shows **Update available** because of Git changes. A service added with a tag does
 not either, unless the tag is moved to another commit. Switch either one to a new version with
-**Change version** below. Any service shows **Update available** when an Output of another
-service it depends on changes
-([Passing values to another Capsule](../concepts/state-and-outputs.md#passing-values-to-another-capsule)).
+**Change version** below. **Update available** means a newer commit was found on the tracked
+Source ref.
 
 - **Update** creates the review. If the change needs no approval, does not delete or replace an
   existing resource, and is not stopped by a policy or billing check, it continues to the

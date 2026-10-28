@@ -1,3 +1,6 @@
+// Dependency and OutputShare tables are retired pending a later contract schema
+// version. Keep their historical CREATE TABLE statements byte-identical so the
+// boot-time schema fingerprint and existing migration history remain unchanged.
 type StorageDomain =
   | "space"
   | "deploy"

@@ -60,7 +60,7 @@ deploy-control store が管理状態を所有します。内部操作は開始�
 CAS に限定し、HTTP route ごとの事前確認を authority にしません。
 
 - Postgres は Workspace 行を最初に lock し、同じ transaction で admission と
-  Run、入力、dependency 等の書き込みを行います。凍結判定と blocker を増やす操作も
+  Run、入力等の書き込みを行います。凍結判定と blocker を増やす操作も
   同じ lock 順序を使います。別 statement の事前 SELECT だけでは競合を防げません。
 - D1 は既存の atomic batch guard を使います。状態・epoch 条件に負けたら batch
   全体を abort し、Run だけ、入力だけといった部分行を残しません。単一 mutation
@@ -646,7 +646,7 @@ D1 の最初の読取りと batch の間に同じ ID が登録された場合も
 これは新規登録時の競合を閉じる変更であり、公開停止・移管機能の完成、live D1、
 実アプリの WfP journey の実証を示しません。
 
-`markCapsuleStale` は SourceSync と dependency-output の観測結果を、同じ Workspace が
+`markCapsuleStale` は SourceSync の観測結果を、同じ Workspace が
 active または draining の間だけ保存します。frozen、released、Workspace 不在では
 Capsule を変更せず conflict を返し、呼出元は stale Activity や自動後続を生成しません。
 Memory は同期判定、PostgreSQL は Workspace lock と Capsule の exact-record UPDATE を

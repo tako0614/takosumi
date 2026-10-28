@@ -154,8 +154,8 @@ export interface CreateBackupRequest {
   /**
    * `workspace` (default) exports the whole Workspace ledger even when a
    * Capsule labels the Run. `capsule` narrows the Capsule-owned collections
-   * (Capsule, its InstallConfig, Source and snapshots, bindings, dependencies,
-   * StateVersions with their sealed state, Outputs, and service data) to
+   * (Capsule, its InstallConfig, Source and snapshots, bindings, StateVersions
+   * with their sealed state, Outputs, and service data) to
    * `capsuleId`; Workspace-level metadata is kept. The pre-destroy export of a
    * scheduled uninstall uses this.
    */
@@ -505,19 +505,7 @@ export class BackupsService {
       (config) =>
         capsuleId === undefined || scopedInstallConfigIds.has(config.id),
     );
-    const dependencies = (
-      await this.#store.listDependenciesByWorkspace(workspaceId)
-    ).filter(
-      (dependency) =>
-        capsuleId === undefined ||
-        dependency.producerCapsuleId === capsuleId ||
-        dependency.consumerCapsuleId === capsuleId,
-    );
     const connections = await this.#store.listConnections(workspaceId);
-    const outputSharesGranted =
-      await this.#store.listOutputSharesFromWorkspace(workspaceId);
-    const outputSharesReceived =
-      await this.#store.listOutputSharesToWorkspace(workspaceId);
     const runGroups = await this.#store.listRunGroups(workspaceId);
     const activity = await this.#store.listActivityEvents(workspaceId, {
       limit: this.#activityLimit,
@@ -653,9 +641,6 @@ export class BackupsService {
       installConfigs: [...installConfigs],
       capsules: [...capsules],
       providerBindingSets,
-      dependencies: [...dependencies],
-      outputSharesGranted: [...outputSharesGranted],
-      outputSharesReceived: [...outputSharesReceived],
       stateVersions,
       outputs,
       runGroups: [...runGroups],
@@ -1004,9 +989,6 @@ export interface ControlBackupBundle {
   readonly installConfigs: readonly unknown[];
   readonly capsules: readonly unknown[];
   readonly providerBindingSets: readonly unknown[];
-  readonly dependencies: readonly unknown[];
-  readonly outputSharesGranted: readonly unknown[];
-  readonly outputSharesReceived: readonly unknown[];
   readonly stateVersions: readonly BundleStateVersion[];
   readonly outputs: readonly BundleOutput[];
   readonly runGroups: readonly unknown[];

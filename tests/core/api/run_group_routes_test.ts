@@ -5,10 +5,9 @@
  *   GET  /internal/v1/run-groups/:runGroupId        -> read group + member Runs + status
  *   POST /internal/v1/run-groups/:runGroupId/approve -> approve waiting members
  *
- * Drives the full surface over the internal routes against an in-memory store +
- * a fake runner whose producer apply emits a `base_domain` output a downstream
- * consumer injects. A producer re-apply with a CHANGED output cascades stale,
- * then plan-update builds the group.
+ * Drives the full surface over the internal routes against an in-memory store
+ * and a fake runner. Plan-update covers independent source-stale Capsules;
+ * drift-check covers active Capsules.
  */
 
 import { expect, test } from "bun:test";
@@ -45,15 +44,7 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, ...extra };
 }
 
-/**
- * Runner whose producer apply emits a `base_domain` from a mutable holder so a
- * re-apply can emit a changed value. `producerId` is the producer Capsule id;
- * other Capsules emit a stable value.
- */
-function runner(value: {
-  producer: string;
-  producerId?: string;
-}): OpenTofuRunner {
+function runner(): OpenTofuRunner {
   return {
     plan: () =>
       Promise.resolve({
@@ -71,13 +62,7 @@ function runner(value: {
       Promise.resolve({
         ...fixtureStateCommit({
         outputs: {
-          base_domain: {
-            sensitive: false,
-            value:
-              job.planRun.capsuleId === value.producerId
-                ? value.producer
-                : "consumer.example.com",
-          },
+          base_domain: { sensitive: false, value: "example.com" },
         } as never,
         rawOutputRef: job.rawOutputRef,
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
@@ -249,9 +234,8 @@ async function applyCapsule(
   if (apply.status === "queued") await controller.runQueuedApply(apply.id);
 }
 
-test("plan-update creates a RunGroup over stale consumers; GET reads members; approve is gated", async () => {
+test("plan-update groups independent source-stale Capsules; GET, approve, and drift-check remain", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const producerValue = { producer: "v1.example.com" };
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
@@ -260,7 +244,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     },
     mountInternalLedgerRoutes: true,
     opentofuControlStore: store,
-    opentofuRunner: runner(producerValue),
+    opentofuRunner: runner(),
     opentofuConnectionVault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
@@ -286,7 +270,6 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     workspaceId,
     "producer",
   );
-  producerValue.producerId = producer;
   const consumer = await seedCapsule(
     store,
     operations,
@@ -295,29 +278,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     "consumer",
   );
 
-  // Dependency: consumer injects producer's base_domain.
-  const depRes = await app.request(
-    `/internal/v1/capsules/${consumer}/dependencies`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        producerCapsuleId: producer,
-        mode: "variable_injection",
-        visibility: "workspace",
-        outputs: {
-          base_domain: {
-            from: "base_domain",
-            to: "base_domain",
-            required: true,
-          },
-        },
-      }),
-    },
-  );
-  expect(depRes.status).toBe(201);
-
-  // Bring both up.
+  // Bring both Capsules up independently.
   await applyCapsule(app, operations.controller, producer);
   await applyCapsule(app, operations.controller, consumer);
 
@@ -353,15 +314,15 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     driftGroup.runs.every((run) => run.runGroupId === driftGroup.runGroup.id),
   ).toBe(true);
 
-  // Producer re-applies with a CHANGED output -> consumer goes stale.
-  producerValue.producer = "v2.example.com";
-  await applyCapsule(app, operations.controller, producer);
-  const consumerRow = await app.request(`/internal/v1/capsules/${consumer}`, {
-    headers: headers(),
-  });
-  expect((await consumerRow.json()).capsule.status).toBe("stale");
+  // A source update marks each affected Capsule stale independently.
+  for (const capsuleId of [producer, consumer]) {
+    await store.patchCapsule(capsuleId, {
+      status: "stale",
+      updatedAt: new Date(0).toISOString(),
+    });
+  }
 
-  // plan-update: builds the group with the consumer as the sole member.
+  // plan-update: both independent stale Capsules become group members.
   const updateRes = await app.request(
     `/internal/v1/workspaces/${workspaceId}/plan-update`,
     {
@@ -375,11 +336,14 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     runs: Run[];
   };
   expect(group.runGroup.type).toBe("workspace_update");
-  expect(group.runs).toHaveLength(1);
-  expect(group.runs[0]!.capsuleId).toBe(consumer);
-  expect(group.runs[0]!.runGroupId).toBe(group.runGroup.id);
+  expect(group.runs.map((run) => run.capsuleId).sort()).toEqual(
+    [producer, consumer].sort(),
+  );
+  expect(group.runs.every((run) => run.runGroupId === group.runGroup.id)).toBe(
+    true,
+  );
 
-  // GET the group: same member, computed status. Preview members auto-succeed
+  // GET the group: same members, computed status. Preview members auto-succeed
   // (no approval gate), so the group reads succeeded.
   const getRes = await app.request(
     `/internal/v1/run-groups/${group.runGroup.id}`,
@@ -392,7 +356,9 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     runGroup: { status: string };
     runs: Run[];
   };
-  expect(fetched.runs).toHaveLength(1);
+  expect(fetched.runs.map((run) => run.capsuleId).sort()).toEqual(
+    [producer, consumer].sort(),
+  );
   expect(fetched.runGroup.status).toBe("succeeded");
 
   // Approve is a no-op here (no waiting members) but must still return the group.
@@ -423,7 +389,7 @@ test("plan-update rejects a malformed workspaceId and run-group rejects a malfor
     },
     mountInternalLedgerRoutes: true,
     opentofuControlStore: store,
-    opentofuRunner: runner({ producer: "v1" }),
+    opentofuRunner: runner(),
   });
 
   const badSpace = await app.request(

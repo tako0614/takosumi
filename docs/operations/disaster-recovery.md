@@ -38,7 +38,7 @@ blockerとして扱います。無関係なroutine artifact releaseは一律に�
 本 runbook で「account」は文脈ごとに以下を区別します:
 
 - **Workspace**: Takosumi の個人の用途・リソース・セキュリティ境界。メンバーシップと共有は
-  必要に応じて追加し、Project / Capsule graph、ProviderConnection、Secret、StateVersion、
+  必要に応じて追加し、Project / independent Capsule、ProviderConnection、Secret、StateVersion、
   Output、AuditEvent の isolation scope とする。
 - **Quota/showback ledger**: Takosumi platform worker が持つ operator-selected disabled/showback records。
   official billing / payment processor records are Takosumi hosted service-only commercial records.
@@ -48,7 +48,7 @@ blockerとして扱います。無関係なroutine artifact releaseは一律に�
   provider account as hidden operator-owned infrastructure.
 
 DR では Takosumi platform worker の identity / quota/showback / OIDC records、Workspace
-直下の Project / Capsule graph、StateVersion / Output、operator infrastructure
+直下の Project / independent Capsule、StateVersion / Output、operator infrastructure
 の recovery を分けて扱います。raw secret と payment processor credential は repo
 外の operator vault から復旧します。
 
@@ -112,7 +112,7 @@ failover 前:
    - write を有効化する前に audit chain を verify する。
    - secret 値を露出させずに secret partition の availability を確認する。
 3. Capsule service-data を reattach / restore する。
-   - critical Workspace の Project / Capsule graph を確認する。
+   - critical Workspace の Project / independent Capsule inventory を確認する。
    - 必要な Capsule だけ service-data backup を restore する。
    - generated root / StateVersion / Output の整合性を確認する。
    - CredentialRecipe resolution、ProviderConnection status、

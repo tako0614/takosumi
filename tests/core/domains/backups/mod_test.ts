@@ -654,24 +654,6 @@ test("control bundle carries StateVersion metadata + output projection only", as
     createdAt: TS,
     updatedAt: TS,
   });
-  await store.putOutputShare({
-    id: "share_from",
-    fromWorkspaceId: "ws_backup1",
-    toWorkspaceId: "ws_backup2",
-    producerCapsuleId: seeded.capsule.id,
-    outputs: [{ name: "url", sensitive: false }],
-    status: "active",
-    createdAt: TS,
-  });
-  await store.putOutputShare({
-    id: "share_to",
-    fromWorkspaceId: "ws_backup2",
-    toWorkspaceId: "ws_backup1",
-    producerCapsuleId: "cap_other01",
-    outputs: [{ name: "shared", sensitive: false }],
-    status: "pending",
-    createdAt: TS,
-  });
   await store.putSecurityFinding({
     id: "finding_1",
     workspaceId: "ws_backup1",
@@ -746,12 +728,9 @@ test("control bundle carries StateVersion metadata + output projection only", as
   expect(bundle.providerBindingSets.map((profile: any) => profile.id)).toEqual([
     "dp_1",
   ]);
-  expect(bundle.outputSharesGranted.map((share: any) => share.id)).toEqual([
-    "share_from",
-  ]);
-  expect(bundle.outputSharesReceived.map((share: any) => share.id)).toEqual([
-    "share_to",
-  ]);
+  expect(Object.keys(bundle)).not.toContain("dependencies");
+  expect(Object.keys(bundle)).not.toContain("outputSharesGranted");
+  expect(Object.keys(bundle)).not.toContain("outputSharesReceived");
   expect(bundle.securityFindings.map((finding: any) => finding.id)).toEqual([
     "finding_1",
   ]);

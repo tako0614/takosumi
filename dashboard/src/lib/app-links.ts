@@ -18,7 +18,6 @@ export const APP_PAGE_SECTIONS = {
   settings: "settings",
   connections: "connections",
   created: "created",
-  linked: "linked",
   history: "history",
   danger: "danger",
 } as const;

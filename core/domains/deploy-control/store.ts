@@ -112,11 +112,6 @@ import type {
   OutputAllowlistEntry,
   SourceBuildConfig,
 } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencySnapshot,
-  SealedDependencyValues,
-} from "takosumi-contract/dependencies";
 import {
   ACTIVITY_DEFAULT_LIMIT,
   ACTIVITY_MAX_LIMIT,
@@ -132,7 +127,7 @@ import {
   pageSortedBy,
   pageSortedDesc,
 } from "takosumi-contract/pagination";
-import type { OutputShare, Output } from "takosumi-contract/outputs";
+import type { Output } from "takosumi-contract/outputs";
 import {
   RUN_LIST_DEFAULT_LIMIT,
   RUN_LIST_MAX_LIMIT,
@@ -444,18 +439,18 @@ export interface PlanRunInputs {
   readonly runtimeInputs?: readonly DispatchRuntimeInputs[];
   /** Exact value-free service declaration; grants are minted per winning Run. */
   readonly privateRunFileSlots?: readonly { readonly slot: string }[];
-  /**
-   * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
-   * sensitive `published_output` value injected into a plan flows into
-   * `variables` AND is baked as a literal into the generic Capsule's generated
-   * `main.tf`; either would persist as a cleartext ledger value here. When a
-   * sensitive value was injected, the controller seals the complete sidecar
-   * payload into this blob with the SAME AES-GCM envelope used for state / plan /
-   * dependency-value artifacts and leaves the cleartext fields empty/absent on
-   * the row; it unseals transparently at plan/apply dispatch. The store only ever
-   * sees the ciphertext.
-   */
-  readonly sealed?: SealedDependencyValues;
+  /** Read-only legacy envelope retained for historical PlanRun rows. */
+  readonly sealed?: LegacySealedPlanRunInputs;
+}
+
+/**
+ * Historical encrypted PlanRunInputs envelope. New preparation no longer
+ * writes it, but persisted rows remain readable during retirement.
+ */
+export interface LegacySealedPlanRunInputs {
+  readonly ciphertext: string;
+  readonly contentDigest: string;
+  readonly names: readonly string[];
 }
 
 /**
@@ -843,14 +838,13 @@ export type DeleteSourceWithActivityResult =
 
 /**
  * One immutable Plan preparation unit. The Run must not become queue-visible
- * unless its exact private inputs and optional DependencySnapshot commit with
- * it. `inputs` is the at-rest representation (possibly sealed); the Run's
- * `executionInputsDigest` pins the canonical plaintext bundle.
+ * unless its exact private inputs commit with it. `inputs` is the at-rest
+ * representation (possibly sealed); the Run's `executionInputsDigest` pins
+ * the canonical plaintext bundle.
  */
 export interface PreparePlanRunInput {
   readonly run: PlanRun;
   readonly inputs: PlanRunInputs;
-  readonly dependencySnapshot?: DependencySnapshot;
   /**
    * Optional exact Capsule authority fence for a configuration Plan.  The
    * store validates this in the same transaction that publishes the Run row;
@@ -1129,23 +1123,25 @@ export function assertPlanRunPreparation(input: PreparePlanRunInput): void {
   if (input.inputs.planRunId !== input.run.id) {
     throw new TypeError("PlanRunInputs must reference the prepared PlanRun");
   }
-  const snapshotId = input.run.dependencySnapshotId;
-  if (
-    (snapshotId === undefined) !== (input.dependencySnapshot === undefined) ||
-    (input.dependencySnapshot !== undefined &&
-      (input.dependencySnapshot.id !== snapshotId ||
-        input.dependencySnapshot.runId !== input.run.id))
-  ) {
+  if (input.run.dependencySnapshotId !== undefined) {
     throw new TypeError(
-      "DependencySnapshot must exactly match the prepared PlanRun link",
+      "new PlanRun preparation cannot carry a legacy dependencySnapshotId",
     );
   }
+}
+
+/**
+ * Canonical digest frame for an independent Plan. Keep the historical
+ * dependencySnapshot:null field so queued Plans prepared before dependency
+ * retirement retain their exact execution-input digest.
+ */
+export function planRunExecutionInputsDigestMaterial(inputs: PlanRunInputs) {
+  return { planRunInputs: inputs, dependencySnapshot: null };
 }
 
 export function planRunPreparationExactlyMatches(
   existingRun: PlanRun | undefined,
   existingInputs: PlanRunInputs | undefined,
-  existingSnapshot: DependencySnapshot | undefined,
   candidate: PreparePlanRunInput,
 ): existingRun is PlanRun {
   if (!existingRun) return false;
@@ -1161,8 +1157,7 @@ export function planRunPreparationExactlyMatches(
   // A failed create is intentionally committed without its private inputs.
   // The immutable Run identity/digest still makes an exact retry
   // idempotent, while a missing sidecar on any other terminal row remains a
-  // conflict that must not be repaired from mutable state. Continue below to
-  // compare any linked DependencySnapshot as well.
+  // conflict that must not be repaired from mutable state.
   if (
     existingInputs === undefined &&
     !(
@@ -1176,22 +1171,7 @@ export function planRunPreparationExactlyMatches(
   ) {
     return false;
   }
-  if (candidate.dependencySnapshot === undefined) {
-    return (
-      existingRun.dependencySnapshotId === undefined &&
-      existingSnapshot === undefined
-    );
-  }
-  return (
-    existingRun.dependencySnapshotId !== undefined &&
-    existingSnapshot !== undefined &&
-    existingSnapshot.id === existingRun.dependencySnapshotId &&
-    existingSnapshot.runId === existingRun.id &&
-    stableStringify(dependencySnapshotPreparationContent(existingSnapshot)) ===
-      stableStringify(
-        dependencySnapshotPreparationContent(candidate.dependencySnapshot),
-      )
-  );
+  return true;
 }
 
 function planRunInputsPreparationExactlyMatches(
@@ -1218,40 +1198,6 @@ function planRunInputsPreparationExactlyMatches(
   );
 }
 
-function dependencySnapshotPreparationContent(snapshot: DependencySnapshot) {
-  return {
-    mode: snapshot.mode,
-    dependencies: snapshot.dependencies.map((entry) => ({
-      ...entry,
-      ...(entry.sealedValues
-        ? {
-            sealedValues: {
-              contentDigest: entry.sealedValues.contentDigest,
-              names: entry.sealedValues.names,
-            },
-          }
-        : {}),
-    })),
-  };
-}
-
-/**
- * Canonical plaintext execution material pinned by a Plan. Snapshot row ids,
- * timestamps, and randomized ciphertext are storage metadata; the semantic
- * dependency pins and sealed plaintext digests are execution authority.
- */
-export function planRunExecutionInputsDigestMaterial(
-  inputs: PlanRunInputs,
-  dependencySnapshot: DependencySnapshot | undefined,
-) {
-  return {
-    planRunInputs: inputs,
-    dependencySnapshot: dependencySnapshot
-      ? dependencySnapshotPreparationContent(dependencySnapshot)
-      : null,
-  };
-}
-
 function planRunPreparationIdentity(run: PlanRun) {
   return {
     id: run.id,
@@ -1263,6 +1209,7 @@ function planRunPreparationIdentity(run: PlanRun) {
     source: run.source,
     sourceDigest: run.sourceDigest,
     operation: run.operation,
+    dependencySnapshotId: run.dependencySnapshotId,
     runnerProfileId: run.runnerProfileId,
     variablesDigest: run.variablesDigest,
     executionInputsDigest: run.executionInputsDigest,
@@ -1721,7 +1668,7 @@ export interface MarkCapsuleStaleCommand {
   /** Exact canonical Capsule record observed by the lifecycle caller. */
   readonly expected: Capsule;
   /** Causal observations may settle while draining, but never after freeze. */
-  readonly reason: "source-revision" | "dependency-output";
+  readonly reason: "source-revision";
   readonly updatedAt: string;
 }
 
@@ -4138,28 +4085,8 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     workspaceId: string,
   ): Promise<readonly StateVersion[]>;
 
-  // Dependency DAG edges. A Dependency connects a producer Capsule's outputs
-  // to a consumer Capsule's inputs within the same Workspace.
-  putDependency(dependency: Dependency): Promise<Dependency>;
-  getDependency(id: string): Promise<Dependency | undefined>;
-  listDependenciesByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]>;
-  listDependenciesForConsumer(
-    consumerCapsuleId: string,
-  ): Promise<readonly Dependency[]>;
-  listDependenciesForProducer(
-    producerCapsuleId: string,
-  ): Promise<readonly Dependency[]>;
-  deleteDependency(id: string): Promise<boolean>;
-
-  // DependencySnapshot records (spec §17 / §27 dependency_snapshots). The plan
-  // path pins one per run; the apply path re-reads it to verify producer state
-  // generations / pinned values before applying (invariant 9).
-  putDependencySnapshot(
-    snapshot: DependencySnapshot,
-  ): Promise<DependencySnapshot>;
-  getDependencySnapshot(id: string): Promise<DependencySnapshot | undefined>;
+  /** Read-only compatibility check for legacy installation_dependencies rows. */
+  hasRetiredDependenciesForConsumer(consumerCapsuleId: string): Promise<boolean>;
 
   // Output records (spec §16 / §27 output_snapshots). Recorded after a
   // successful apply: bounded Workspace-local outputs + the separately
@@ -4176,24 +4103,8 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
    */
   listOutputsByWorkspace(workspaceId: string): Promise<readonly Output[]>;
 
-  // OutputShare records. A cross-Workspace grant from a producer Capsule's
-  // projected outputs to a consumer Workspace. The grant carries names and
-  // optional aliases only (sensitive
-  // sharing is not supported, invariant 12); resolved output VALUES are never
-  // stored on the share.
-  putOutputShare(share: OutputShare): Promise<OutputShare>;
-  getOutputShare(id: string): Promise<OutputShare | undefined>;
-  /** Shares granted by a Workspace (the producer side). */
-  listOutputSharesFromWorkspace(
-    fromWorkspaceId: string,
-  ): Promise<readonly OutputShare[]>;
-  /** Shares granted to a Workspace (the consumer side). */
-  listOutputSharesToWorkspace(
-    toWorkspaceId: string,
-  ): Promise<readonly OutputShare[]>;
-
-  // RunGroup records (spec §19 / §24 / §27 run_groups). Orders multiple Runs
-  // across the dependency DAG (e.g. a Workspace update after stale propagation).
+  // RunGroup records (spec §19 / §24 / §27 run_groups). Groups independent Runs
+  // for a Workspace update or drift check.
   putRunGroup(group: RunGroup): Promise<RunGroup>;
   getRunGroup(id: string): Promise<RunGroup | undefined>;
   listRunGroups(workspaceId: string): Promise<readonly RunGroup[]>;
@@ -4380,14 +4291,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   >();
   readonly #providerBindingSets = new Map<string, ProviderBindingSet>();
   readonly #stateVersions = new Map<string, StateVersion>();
-  readonly #dependencies = new Map<string, Dependency>();
-  readonly #dependencySnapshots = new Map<string, DependencySnapshot>();
+  readonly #legacyDependencyConsumers = new Set<string>();
   readonly #outputs = new Map<string, Output>();
   readonly #capsuleInterfaceMaterializationIntents = new Map<
     string,
     CapsuleInterfaceMaterializationIntent
   >();
-  readonly #outputShares = new Map<string, OutputShare>();
   readonly #runGroups = new Map<string, RunGroup>();
   readonly #activityEvents = new Map<string, ActivityEvent>();
   readonly #credentialMintEvents = new Map<string, CredentialMintEvent>();
@@ -4396,8 +4305,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #backupRecords = new Map<string, BackupRecord>();
   readonly #artifactRecords = new Map<string, ArtifactRecord>();
 
-  constructor() {
+  /** Test fixture input for retained legacy rows; this is not a store write port. */
+  constructor(options: {
+    readonly legacyDependencyConsumerCapsuleIds?: readonly string[];
+  } = {}) {
     maybeWarnInMemoryStore("InMemoryOpenTofuControlStore");
+    for (const capsuleId of options.legacyDependencyConsumerCapsuleIds ?? []) {
+      this.#legacyDependencyConsumers.add(capsuleId);
+    }
   }
 
   #financialDetach<T>(value:T):T {
@@ -4632,14 +4547,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         ? coerceRunRowStatus(current)
         : undefined;
       const currentInputs = this.#planRunInputs.get(input.run.id);
-      const currentSnapshot = currentRun?.dependencySnapshotId
-        ? this.#dependencySnapshots.get(currentRun.dependencySnapshotId)
-        : undefined;
       if (
         planRunPreparationExactlyMatches(
           currentRun,
           currentInputs,
-          currentSnapshot,
           input,
         )
       ) {
@@ -4655,11 +4566,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       input.run.workspaceId,
       input.expectedWorkspaceManagementAuthority,
     );
-    if (
-      this.#planRunInputs.has(input.run.id) ||
-      (input.dependencySnapshot !== undefined &&
-        this.#dependencySnapshots.has(input.dependencySnapshot.id))
-    ) {
+    if (this.#planRunInputs.has(input.run.id)) {
       throw new PlanRunPreparationConflictError(input.run.id);
     }
     if (input.expectedCapsulePlanAuthority !== undefined) {
@@ -4678,12 +4585,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     // see it before the exact private inputs are present.
     if (planRunPreparationPersistsInputs(input.run)) {
       this.#planRunInputs.set(input.run.id, input.inputs);
-    }
-    if (input.dependencySnapshot) {
-      this.#dependencySnapshots.set(
-        input.dependencySnapshot.id,
-        input.dependencySnapshot,
-      );
     }
     this.#runs.set(input.run.id, storeRunManagementAuthority(input.run, input.expectedWorkspaceManagementAuthority));
     return { status: "created", run: publicStoredRun(input.run) };
@@ -8089,67 +7990,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(latest);
   }
 
-  putDependency(dependency: Dependency): Promise<Dependency> {
-    this.#dependencies.set(dependency.id, dependency);
-    return Promise.resolve(dependency);
-  }
-
-  getDependency(id: string): Promise<Dependency | undefined> {
-    return Promise.resolve(this.#dependencies.get(id));
-  }
-
-  listDependenciesByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]> {
+  hasRetiredDependenciesForConsumer(consumerCapsuleId: string): Promise<boolean> {
     return Promise.resolve(
-      Array.from(this.#dependencies.values())
-        .filter((row) => row.workspaceId === workspaceId)
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
+      this.#legacyDependencyConsumers.has(consumerCapsuleId),
     );
-  }
-
-  listDependenciesForConsumer(
-    consumerCapsuleId: string,
-  ): Promise<readonly Dependency[]> {
-    return Promise.resolve(
-      Array.from(this.#dependencies.values())
-        .filter((row) => row.consumerCapsuleId === consumerCapsuleId)
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
-    );
-  }
-
-  listDependenciesForProducer(
-    producerCapsuleId: string,
-  ): Promise<readonly Dependency[]> {
-    return Promise.resolve(
-      Array.from(this.#dependencies.values())
-        .filter((row) => row.producerCapsuleId === producerCapsuleId)
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
-    );
-  }
-
-  deleteDependency(id: string): Promise<boolean> {
-    return Promise.resolve(this.#dependencies.delete(id));
-  }
-
-  putDependencySnapshot(
-    snapshot: DependencySnapshot,
-  ): Promise<DependencySnapshot> {
-    this.#dependencySnapshots.set(snapshot.id, snapshot);
-    return Promise.resolve(snapshot);
-  }
-
-  getDependencySnapshot(id: string): Promise<DependencySnapshot | undefined> {
-    return Promise.resolve(this.#dependencySnapshots.get(id));
   }
 
   putOutput(snapshot: Output): Promise<Output> {
@@ -8197,41 +8041,6 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       Array.from(this.#outputs.values()).filter(
         (row) => row.workspaceId === workspaceId,
       ),
-    );
-  }
-
-  putOutputShare(share: OutputShare): Promise<OutputShare> {
-    this.#outputShares.set(share.id, share);
-    return Promise.resolve(share);
-  }
-
-  getOutputShare(id: string): Promise<OutputShare | undefined> {
-    return Promise.resolve(this.#outputShares.get(id));
-  }
-
-  listOutputSharesFromWorkspace(
-    fromWorkspaceId: string,
-  ): Promise<readonly OutputShare[]> {
-    return Promise.resolve(
-      Array.from(this.#outputShares.values())
-        .filter((row) => row.fromWorkspaceId === fromWorkspaceId)
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
-    );
-  }
-
-  listOutputSharesToWorkspace(
-    toWorkspaceId: string,
-  ): Promise<readonly OutputShare[]> {
-    return Promise.resolve(
-      Array.from(this.#outputShares.values())
-        .filter((row) => row.toWorkspaceId === toWorkspaceId)
-        .sort(
-          (a, b) =>
-            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
-        ),
     );
   }
 

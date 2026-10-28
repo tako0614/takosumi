@@ -13,6 +13,7 @@ import {
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
 import { DEPLOY_CONTROL_CAPSULE_ENDPOINTS } from "../../../core/api/deploy_control_capsule_routes.ts";
+import { DEPLOY_CONTROL_RUN_ENDPOINTS } from "../../../core/api/deploy_control_run_routes.ts";
 import { TAKOSUMI_WORKSPACE_CAPSULES_ROUTE } from "../../../core/api/deploy_control_route_paths.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
@@ -519,9 +520,6 @@ test("customer-safe process openapi schemas are concrete", () => {
     "SpaceResponse",
     "ListSpacesResponse",
     "DeploymentResponse",
-    "CreateOutputShareRequest",
-    "OutputShareResponse",
-    "ListOutputSharesResponse",
     "ProviderRequirement",
     "ProviderResolution",
     "ProviderResolutionStatus",
@@ -546,6 +544,29 @@ test("customer-safe process openapi schemas are concrete", () => {
     undefined,
     "RunEnvironment is an internal dispatch object and must not become a public OpenAPI component until a redacted API shape exists",
   );
+});
+
+test("retired wiring schemas stay absent while Run approval remains", () => {
+  const schemas = createTakosumiOpenApiDocument(ALL_MOUNTED).components.schemas;
+  for (const schemaName of [
+    "Dependency",
+    "DependencyResponse",
+    "CreateOutputShareRequest",
+    "OutputShare",
+    "OutputShareResponse",
+    "ListOutputSharesResponse",
+  ] as const) {
+    assert.equal(schemas[schemaName], undefined, `${schemaName} is retired`);
+  }
+  const approveRoute = DEPLOY_CONTROL_RUN_ENDPOINTS.find(
+    (endpoint) => endpoint.operationId === "approveRun",
+  );
+  assert.equal(approveRoute?.openapi?.requestSchema, "ApproveRunRequest");
+  const openapiSource = readFileSync(
+    join(import.meta.dir, "../../../core/api/openapi.ts"),
+    "utf8",
+  );
+  assert.match(openapiSource, /ApproveRunRequest:\s*\{\s*type:\s*"object"/u);
 });
 
 test("openapi request and response components are not generic placeholders", () => {

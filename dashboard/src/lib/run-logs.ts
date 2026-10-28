@@ -40,7 +40,7 @@ export function isTerminalRunStatus(status: Run["status"]): boolean {
   );
 }
 
-/** Dependency-injected input names from audit events. */
+/** Recorded input names from audit events. */
 export function inputNamesFromLogs(
   auditEvents: readonly AuditEventRecord[],
 ): readonly string[] {

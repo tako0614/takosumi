@@ -31,6 +31,7 @@ export interface InterfaceLiteralInput {
   readonly value: JsonValue;
 }
 
+/** Resolves only an Output of the Interface's owning Capsule. */
 export interface InterfaceCapsuleOutputInput {
   readonly source: "capsule_output";
   readonly capsuleId: string;

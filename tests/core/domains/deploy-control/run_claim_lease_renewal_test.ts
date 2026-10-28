@@ -161,7 +161,7 @@ async function seedApply(
     runnerProfileId: "opentofu-default",
     variablesDigest: await stableJsonDigest(inputs.variables),
     executionInputsDigest: await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(inputs, undefined),
+      planRunExecutionInputsDigestMaterial(inputs),
     ),
     requiredProviders: ids.requiredProviders ?? [],
     ...(ids.requiredProviders?.length
@@ -3005,7 +3005,7 @@ test("the plan heartbeat is re-stamped while a long plan blocks in the runner", 
     sourceDigest: "sha256:src",
     variablesDigest: await stableJsonDigest(inputs.variables),
     executionInputsDigest: await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(inputs, undefined),
+      planRunExecutionInputsDigestMaterial(inputs),
     ),
     operation: "update",
     runnerProfileId: "provider-free",

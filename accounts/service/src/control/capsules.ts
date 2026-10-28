@@ -46,12 +46,6 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencyMode,
-  DependencyOutputMapping,
-  DependencyVisibility,
-} from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
@@ -68,8 +62,6 @@ import {
   CURRENT_OUTPUT_INCONSISTENT_REASON,
   type Output,
   type OutputResponse,
-  type OutputShare,
-  type OutputShareEntry,
   type PublicOutput,
 } from "takosumi-contract/outputs";
 import type {
@@ -115,7 +107,6 @@ import {
   parseControlPageParams,
   publicApplyActionResponse,
   publicCompatibilityReportResponse,
-  publicDependency,
   publicStateVersion,
   publicCapsule,
   publicPlanActionResponse,
@@ -126,16 +117,11 @@ import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  dependencyModeValue,
-  dependencyVisibilityValue,
   isJsonValue,
-  isOutputsMapping,
   isPlainJsonObject,
   jsonRecordValue,
   modulePathValue,
   outputAllowlistValue,
-  outputShareEntries,
-  outputShareSensitivePolicy,
   parseProviderBinding,
   parseLimit,
   workspaceTypeValue,
@@ -425,24 +411,6 @@ export async function handleCapsules(
       if (method !== "GET") return methodNotAllowed("GET");
       return json(await operations.getCurrentResourceInventory(capsuleId));
     }
-    if (leaf === "dependencies" && segments.length === 3) {
-      if (method === "GET") {
-        const dependencies =
-          await operations.dependencies.listForCapsule(capsuleId);
-        return json({
-          asProducer: dependencies.asProducer.map(publicDependency),
-          asConsumer: dependencies.asConsumer.map(publicDependency),
-        });
-      }
-      if (method !== "POST") return methodNotAllowed("GET, POST");
-      return await createDependency(
-        request,
-        operations,
-        store,
-        ctx.session,
-        capsuleId,
-      );
-    }
     if (leaf === "provider-bindings" && segments.length === 3) {
       if (method === "GET") {
         return await getCapsuleProviderBindingSet(operations, capsule);
@@ -720,48 +688,4 @@ function publicProviderBindingSet(
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   };
-}
-
-// --- Dependencies ----------------------------------------------------------
-
-async function createDependency(
-  request: Request,
-  operations: ControlPlaneOperations,
-  store: AccountsStore,
-  session: ControlSession,
-  consumerCapsuleId: string,
-): Promise<Response> {
-  const body = await readJsonObject(request);
-  if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const producerCapsuleId = stringValue(body.producerCapsuleId);
-  if (!producerCapsuleId) {
-    return errorJson("invalid_request", "producerCapsuleId is required", 400);
-  }
-  // The consumer is the path Capsule; resolve its Workspace so the edge is
-  // created in the right Workspace (mirrors the §30 dependency-create handler).
-  const consumer = await operations.capsules.getCapsule(consumerCapsuleId);
-  const consumerAuth = await requireWorkspaceAccess({
-    operations,
-    store,
-    workspaceId: consumer.workspaceId,
-    session,
-  });
-  if (!consumerAuth.ok) return consumerAuth.response;
-  const producer = await operations.capsules.getCapsule(producerCapsuleId);
-  const producerAuth = await requireWorkspaceAccess({
-    operations,
-    store,
-    workspaceId: producer.workspaceId,
-    session,
-  });
-  if (!producerAuth.ok) return producerAuth.response;
-  const dependency = await operations.dependencies.createDependency({
-    workspaceId: consumer.workspaceId,
-    producerCapsuleId,
-    consumerCapsuleId,
-    mode: dependencyModeValue(body.mode) ?? "variable_injection",
-    outputs: isOutputsMapping(body.outputs) ? body.outputs : {},
-    visibility: dependencyVisibilityValue(body.visibility) ?? "workspace",
-  });
-  return jsonStatus({ dependency: publicDependency(dependency) }, 201);
 }

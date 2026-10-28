@@ -8,7 +8,7 @@
  *
  * The bundle contains a compressed JSON projection of selected Workspace
  * records (Workspace / Source / SourceSnapshot / InstallConfig / Capsule /
- * dependency / StateVersion metadata / Output projection / run-group /
+ * StateVersion metadata / Output projection / run-group /
  * activity / public ProviderConnection records). The bundle NEVER contains
  * secret material:
  * no connection blobs, no hook secret hashes, no raw state bytes, no raw output

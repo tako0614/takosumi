@@ -37,10 +37,9 @@ docs use a different name, read it back through this table.
 | SourceSnapshot       | The commit a Source resolved its ref to. This is always what gets executed.                                                                                     |
 | Capsule              | One deployed unit. It runs a single OpenTofu root module and owns concrete execution environments such as `production` and `preview`.                           |
 | Environment          | A concrete execution lane owned by a Capsule, such as `production` or `preview`; it is not another name for Workspace.                                         |
-| stale                | The state of a deployed Capsule whose tracked Source has a newer commit, or whose dependency's Output changed. Shown as **Update available**. |
+| stale                | The state of a deployed Capsule whose tracked Source has a newer commit. Shown as **Update available**. |
 | Stack flow           | The path that runs a module you wrote yourself from Git.                                                                   |
 | Compatibility report | The result of analyzing a registered module read-only, showing the variables and providers it needs.                       |
-| Dependency           | A relation that connects Capsules so one can read another's Output. Across Workspaces it goes through an OutputShare.      |
 | InstallConfig        | The settings Takosumi keeps for how a Capsule runs, such as variable mapping and which Outputs are published.              |
 | Git revision plan    | The record of changing an existing Capsule's source version: it pins a commit, checks compatibility, and creates the review (Plan Run). The dashboard's **Update** (shown when an update is available), **Review changes**, and **Review this version** under **Change version** create it. |
 | Adopted Source revision | The SourceSnapshot ref/path/commit derived from the Capsule's current StateVersion and its applied Plan Run; it is distinct from the Source default. |
@@ -57,11 +56,10 @@ docs use a different name, read it back through this table.
 | destroy      | The operation that removes the resources a Capsule created. A plan is produced first, then applied.                                                              |
 | drift check  | The read-only operation that looks for gaps between saved state and reality.                                                                                     |
 | drift        | The gap that has appeared between saved state and reality.                                                                                                       |
-| RunGroup     | The record grouping several Runs in dependency order. It is created by a Workspace-wide update or drift check. |
+| RunGroup     | The record grouping Runs created by a Workspace-wide update or drift check. |
 | Runner       | The isolated execution environment that actually runs OpenTofu. Credentials are handed over only inside it.                                                      |
 | StateVersion | The state recorded as the result of an apply, sometimes even when the apply fails. These accumulate rather than overwrite.                                                                               |
 | Output       | A non-secret value a Capsule publishes outward.                                                                                                                  |
-| OutputShare  | The record that passes an Output across Workspaces. The receiving side approves it before it takes effect.                                                       |
 | AuditEvent   | A record, one per entry, of who acted on what, how, and with what result.                                                                                        |
 | ledger       | The store that Run, StateVersion, Output, and audit records accumulate in. The entry point differs, but the destination is the same.                                                 |
 

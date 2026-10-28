@@ -79,34 +79,6 @@
 
 /* --- Capsule table cell helpers -------------------------------------------- */
 
-/* --- Dependency / depends-on lists inside cards ---------------------------- */
-.wa-dep-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--tg-s-5);
-}
-/* Retagged h4 → h2 for heading order; keep the old h4 UA size. */
-.wa-dep-columns h2 {
-  margin: 1.33em 0;
-  font-size: 1em;
-}
-.wa-dep-list {
-  list-style: none;
-  margin: var(--tg-s-2) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-1);
-}
-.wa-dep-list li {
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-sm);
-}
-.wa-dep-list .wa-dep-edge {
-  color: var(--tg-fg-muted);
-  font-family: var(--tg-font-body);
-}
-
 /* --- Run change summary ----------------------------------------------------- */
 .wa-change-strip {
   display: flex;

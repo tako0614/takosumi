@@ -466,7 +466,6 @@ export const ja = {
   "app.version.source": "取得元",
   "app.version.appliedAt": "適用",
   "app.version.updateAvailable": "新しい版があります",
-  "app.version.dependencyChanged": "このアプリが使うアプリが変わったため、更新が必要です",
   "app.version.newVersion": "新しい版:",
   "app.version.checkTitle": "新しい版の確認",
   "app.version.checkHint": "同じブランチやタグの最新の版を読み、変わる内容を表示します。まだ何も適用しません。",
@@ -527,9 +526,6 @@ export const ja = {
   "app.created.costNotRecorded": "Takosumi はこのアプリの料金を記録していません。",
   "app.created.costUnavailable": "料金を取得できませんでした。料金は不明として扱ってください。",
   "app.created.costCloudNote": "作られたリソースには、それぞれのクラウドの料金もかかります。",
-  "app.linked.title": "連携しているアプリ",
-  "app.linked.uses": "このアプリが使うアプリ",
-  "app.linked.usedBy": "このアプリを使うアプリ",
   "app.history.title": "履歴",
   "app.history.empty": "まだ出来事はありません。",
   "app.history.install": "インストール",
@@ -575,7 +571,6 @@ export const ja = {
   "app.review.doneUninstall": "アンインストールしました。",
   "app.uninstall.bodyUnapplied": "{name} はまだあなたのクラウドに何も作っていません。アンインストールすると、すぐに取り除きます。",
   "app.uninstall.confirmUnapplied": "{name} はまだあなたのクラウドに何も作っていないため、すぐに取り除きます。",
-  "app.uninstall.impactTitle": "次のアプリがこのアプリを使っています。アンインストールすると影響します。",
   "app.uninstall.now": "今すぐアンインストール",
   "app.surfaces.activationFailed": "画面の準備に失敗しました。理由はこのページのログで確認できます。",
   "app.config.enabled": "有効にする",
@@ -603,9 +598,6 @@ export const ja = {
   "app.uninstall.cta": "アンインストール",
   "app.uninstall.confirmTitle": "このアプリをアンインストールしますか？",
   "app.uninstall.confirmMessage": "{name} は猶予期間が終わるまで動き続け、データも残ります。期限が来るとデータの書き出しを試みてから取り除きます。それまでは取り消せます。",
-  "app.uninstall.dependencyWarning": "{name} は次のアプリから使われています（{apps}）。アンインストールすると、これらのアプリに影響する可能性があります。",
-  "app.uninstall.dependencyCheckLoading": "アンインストールの前に、連携しているアプリを確認しています…",
-  "app.uninstall.dependencyCheckFailed": "連携しているアプリを確認できませんでした。ほかのアプリがこのアプリを使っていないか確かめてからアンインストールしてください。",
   "app.uninstall.banner": "{name} は {date} にアンインストールされます。それまではデータが残り、取り消せます。",
   "app.uninstall.bannerDue": "{name} の猶予期間が終わりました。まもなくアンインストールします。",
   "app.uninstall.bannerDestroying": "{name} をアンインストールしています。",
@@ -749,10 +741,8 @@ export const ja = {
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
   "controlError.stateGenerationMismatch":
     "別の変更が先に適用されました。もう一度内容を確認してから適用してください。",
-  "controlError.dependencySnapshotStale":
-    "連携しているアプリが先に更新されました。もう一度内容を確認してください。",
-  "controlError.dependencyUnavailable":
-    "連携しているアプリの値をいま取得できません。時間をおいてもう一度お試しください。",
+  "controlError.dependencyRetired":
+    "このアプリには廃止済みのアプリ連携が残っています。必要な値をこのアプリ自身の設定または Git 設定へ移し、operator に旧 record の削除を依頼してから変更を確認してください。",
   "controlError.sourceChanged":
     "取得元の内容が変わりました。もう一度変更を確認してください。",
   "controlError.sourceRevisionMismatch":
@@ -773,7 +763,6 @@ export const ja = {
     "対象のアプリが見つかりません。アンインストールされた可能性があります。",
   "controlError.configNotFound":
     "このアプリの設定が見つかりません。インストールし直してください。",
-  "controlError.shareRevoked": "この共有は無効になっています。",
   "controlError.revisionInProgress":
     "このアプリでは別の更新を準備しています。終わってからもう一度お試しください。",
   "runError.sourceSyncFailed":
@@ -871,7 +860,7 @@ export const ja = {
   "run.details.policy": "安全確認",
   "run.details.capsule": "アプリ",
   "run.details.sourceSnapshot": "取得元のバージョン",
-  "run.details.dependencySnapshot": "連携入力の固定情報",
+  "run.details.dependencySnapshot": "廃止された入力 snapshot",
   "run.details.baseGeneration": "元の状態",
   "run.details.planDigest": "変更内容の検証 ID",
   "run.details.created": "作成",
@@ -879,8 +868,8 @@ export const ja = {
   "run.details.finished": "終了",
   "run.details.error": "エラー",
   "run.details.debug": "識別情報",
-  "run.inputs.title": "連携しているアプリからの値",
-  "run.inputs.empty": "連携しているアプリから受け取った値はありません。",
+  "run.inputs.title": "この Run に記録された入力",
+  "run.inputs.empty": "記録された入力名はありません。",
   "run.connections.setupCta": "接続を設定する",
   "run.connections.title": "接続済みアカウント",
   "run.connections.reviewTitle": "接続済みアカウントの確認が必要です",
