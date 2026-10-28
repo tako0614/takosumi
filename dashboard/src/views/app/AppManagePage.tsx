@@ -116,6 +116,7 @@ import AppVersionSection from "./AppVersionSection.tsx";
 import AppSettingsSection from "./AppSettingsSection.tsx";
 import AppCreatedSection from "./AppCreatedSection.tsx";
 import AppHistorySection from "./AppHistorySection.tsx";
+import AppLinkedSection from "./AppLinkedSection.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
 /** Runs read per history page (the server accepts at most 100). */
@@ -779,6 +780,13 @@ export default function AppManagePage(props: {
           : days !== undefined
             ? t("app.uninstall.confirmGrace", { name: displayName(), days })
             : t("app.uninstall.confirmMessage", { name: displayName() }),
+        app()?.uninstall.impact?.usedBy.length
+          ? t("app.links.uninstallImpact", {
+              apps: app()!.uninstall.impact.usedBy.map((row) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.consumerCapsuleId).join(locale() === "ja" ? "、" : ", "),
+              name: displayName(),
+            })
+          : undefined,
+        app()?.incomplete?.includes("links") ? t("app.links.unreadable") : undefined,
       ].filter(Boolean).join("\n\n"),
       confirmText: t("app.uninstall.cta"),
       cancelText: t("common.cancel"),
@@ -843,6 +851,9 @@ export default function AppManagePage(props: {
         return;
       case "fix_connection":
         fixConnection();
+        return;
+      case "fix_interface_link":
+        scrollToSection("links");
         return;
       case "continue_install":
         continueInstall();
@@ -1040,6 +1051,7 @@ export default function AppManagePage(props: {
                 <nav class="ap-jump" aria-label={t("app.jump.label")}>
                   <a href="#version">{t("app.version.title")}</a>
                   <a href="#settings">{t("app.settings.title")}</a>
+                  <a href="#links">{t("app.links.title")}</a>
                   <a href="#created">{t("app.created.title")}</a>
                   <a href="#history">{t("app.history.title")}</a>
                   <Show when={!view().uninstall.scheduled}>
@@ -1077,6 +1089,7 @@ export default function AppManagePage(props: {
                   retry,
                   retryScreen: (problem) => void retryScreen(problem),
                   fixConnection,
+                  fixInterfaceLink: () => scrollToSection("links"),
                   continueInstall,
                   cancelUninstall: () => void cancelUninstall(),
                   uninstallNow,
@@ -1129,6 +1142,7 @@ export default function AppManagePage(props: {
                   onReview={(create) => void startReview("settings", "apply", create, { restartable: false })}
                   review={reviewPanel("settings")}
                 />
+                <AppLinkedSection app={view()} onChanged={async () => { await refetchApp(); }} />
                 <AppCreatedSection
                   inventory={settledValue(inventory)}
                   inventoryLoading={inventory.loading}

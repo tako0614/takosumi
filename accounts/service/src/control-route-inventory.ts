@@ -16,6 +16,9 @@ export interface PublicSessionControlEndpoint {
  */
 export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndpoint[] =
   [
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates", summary: "List manageable providers for one app requirement", auth: "account-session" },
+    { method: "PUT", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Select one provider with generation CAS", auth: "account-session" },
+    { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Revoke a link as consumer or provider manager", auth: "account-session" },
     {
       method: "GET",
       path: "/api/v1/dashboard/bootstrap",
@@ -174,6 +177,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/installed-apps",
+      summary: "List value-free installed app identities for Store discovery",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/capsules",
       summary: "List Workspace Capsules",
       auth: "account-session",
@@ -182,12 +191,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/current-state-versions",
       summary: "List current StateVersions for Workspace Capsules",
-      auth: "account-session",
-    },
-    {
-      method: "GET",
-      path: "/api/v1/workspaces/{workspaceId}/graph",
-      summary: "Read Workspace Capsule nodes (no dependency edges)",
       auth: "account-session",
     },
     {

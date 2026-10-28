@@ -18,6 +18,7 @@ export * from "./interface-types.ts";
 export * from "./interface-display.ts";
 export * from "./sources.ts";
 export * from "./install-plans.ts";
+export * from "./installed-apps.ts";
 export * from "./repository-manifest.ts";
 export * from "./redaction.ts";
 export * from "./provider-configurations.ts";
@@ -103,6 +104,10 @@ export type {
   CreateSourceCompatibilityCheckRequest,
   CapsuleAppAction,
   CapsuleAppIncompleteSection,
+  CapsuleAppLink,
+  CapsuleAppLinkedApp,
+  CapsuleAppLinkHealth,
+  CapsuleAppLinks,
   CapsuleAppProblem,
   CapsuleAppProblemCode,
   CapsuleAppProgress,

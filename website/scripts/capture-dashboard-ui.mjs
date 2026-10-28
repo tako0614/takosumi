@@ -287,7 +287,12 @@ async function stubWorkloadUpdates(page, flow) {
       }] });
     }
     if (path === "/api/v1/provider-connections") return json({ providerConnections: [] });
-    if (path === "/api/v1/workspaces/ws_alpha/graph") return json({ nodes: [], edges: [] });
+    if (path === "/api/v1/workspaces/ws_alpha/installed-apps") {
+      return json({ installedApps: [{
+        capsuleId: id, name: flow.name, state: "installed",
+        installedFrom: { url: flow.git, path: flow.modulePath },
+      }] });
+    }
     return route.fallback();
   });
 }

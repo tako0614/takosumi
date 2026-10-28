@@ -65,6 +65,10 @@
 .ap-list { display: grid; gap: var(--tg-s-2); margin: 0; padding: 0; list-style: none; }
 .ap-list-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--tg-s-2) var(--tg-s-3); padding: var(--tg-s-3); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); min-width: 0; }
 .ap-list-main { display: grid; gap: var(--tg-s-1); min-width: 0; flex: 1 1 12rem; }
+.ap-linked-face { width: 2.5rem; height: 2.5rem; display: grid; place-items: center; flex: 0 0 2.5rem; overflow: hidden; border-radius: var(--tg-r-md); background: var(--tg-bg-soft); }
+.ap-linked-face img { width: 100%; height: 100%; object-fit: cover; }
+.ap-linked-choice { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); }
+.ap-linked-choice select { flex: 1 1 12rem; min-width: 0; }
 .ap-version-form .tg-form-field, .ap-version-form label { max-width: 28rem; }
 
 /* Settings. */

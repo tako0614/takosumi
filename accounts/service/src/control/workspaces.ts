@@ -136,6 +136,7 @@ import { base64UrlEncodeBytes } from "../encoding.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
 import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
 import { handleWorkspaceInstallPlans } from "./install-plans.ts";
+import { handleWorkspaceInstalledApps } from "./installed-apps.ts";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string }>,
@@ -370,6 +371,9 @@ export async function handleWorkspaces(
       }
       return json(await operations.resolveStableSourceTag(url));
     }
+    if (leaf === "installed-apps" && segments.length === 3) {
+      return await handleWorkspaceInstalledApps(ctx, workspaceId, method);
+    }
     if (leaf === "capsules" && segments.length === 3) {
       if (method === "GET")
         return await listWorkspaceCapsules(operations, workspaceId, url);
@@ -382,10 +386,6 @@ export async function handleWorkspaces(
         workspaceId,
         url,
       );
-    }
-    if (leaf === "graph" && segments.length === 3) {
-      if (method !== "GET") return methodNotAllowed("GET");
-      return await workspaceGraph(operations, workspaceId);
     }
     if (leaf === "runs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -1498,22 +1498,6 @@ async function createRestoreRun(
     },
   );
   return jsonStatus({ run: await publicRun(operations, run) }, 201);
-}
-
-// --- Graph -----------------------------------------------------------------
-
-async function workspaceGraph(
-  operations: ControlPlaneOperations,
-  workspaceId: string,
-): Promise<Response> {
-  const capsules = await operations.capsules.listCapsules(workspaceId);
-  const nodes = capsules.map((capsule) => ({
-    capsuleId: capsule.id,
-    name: capsule.name,
-    environment: capsule.environment,
-    status: capsule.status,
-  }));
-  return json({ nodes, edges: [] });
 }
 
 // --- Activity --------------------------------------------------------------

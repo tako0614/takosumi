@@ -16,6 +16,7 @@ import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import {
   InterfaceService,
   InterfaceServiceError,
+  type InterfaceLinkWriteFence,
 } from "../domains/interfaces/mod.ts";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
@@ -113,12 +114,71 @@ export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
       pathParams: ["id", "bindingId"],
     },
   ),
+  endpoint("GET", "/api/v1/capsules/:id/interface-links/:requirementKey/candidates", "listInterfaceLinkCandidates", { okSchema: "ListInterfaceLinkCandidatesResponse", pathParams: ["id", "requirementKey"] }),
+  endpoint("PUT", "/api/v1/capsules/:id/interface-links/:requirementKey", "putCapsuleInterfaceLink", { requestSchema: "PutCapsuleInterfaceLinkRequest", okSchema: "InterfaceLinkResponse", pathParams: ["id", "requirementKey"] }),
+  endpoint("DELETE", "/api/v1/capsules/:id/interface-links/:requirementKey", "revokeCapsuleInterfaceLink", { requestSchema: "RevokeCapsuleInterfaceLinkRequest", okSchema: "InterfaceLinkResponse", pathParams: ["id", "requirementKey"] }),
 ] as const;
 
 export function registerInterfaceRoutes(
   app: Hono,
   options: RegisterInterfaceRoutesOptions,
 ): void {
+  const linkPath = "/api/v1/capsules/:id/interface-links/:requirementKey";
+  app.get(`${linkPath}/candidates`, async (c) => {
+    const auth = await authorize(c, options);
+    if (!auth.ok) return auth.response;
+    const denied = enforceControlActor(c, auth.actor);
+    if (denied) return denied;
+    return respond(c, async () => {
+      const { capsule, requirement } = await options.service.getInterfaceLinkRequirement(c.req.param("id"), c.req.param("requirementKey"));
+      const scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      if (!scoped.ok) return scoped.response;
+      return c.json(await options.service.listInterfaceLinkCandidateView({ workspaceId: capsule.workspaceId, capsuleId: capsule.id, requirement }), 200);
+    });
+  });
+  app.put(linkPath, async (c) => {
+    const auth = await authorize(c, options);
+    if (!auth.ok) return auth.response;
+    const denied = enforceControlActor(c, auth.actor);
+    if (denied) return denied;
+    return respond(c, async () => {
+      const capsuleId = c.req.param("id");
+      const requirementKey = c.req.param("requirementKey");
+      const { capsule } = await options.service.getInterfaceLinkRequirement(capsuleId, requirementKey);
+      const scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      if (!scoped.ok) return scoped.response;
+      const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
+      const interfaceId = string(body.interfaceId);
+      if (!interfaceId) throw invalid("interfaceId is required");
+      const expectedRequirementFingerprint = body.expectedRequirementFingerprint;
+      if (expectedRequirementFingerprint !== undefined && (typeof expectedRequirementFingerprint !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(expectedRequirementFingerprint))) throw invalid("expectedRequirementFingerprint must be a SHA-256 digest");
+      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration), ...(expectedRequirementFingerprint ? { expectedRequirementFingerprint } : {}) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, capsule.workspaceId)) }, 200);
+    });
+  });
+  app.delete(linkPath, async (c) => {
+    const auth = await authorize(c, options);
+    if (!auth.ok) return auth.response;
+    const denied = enforceControlActor(c, auth.actor);
+    if (denied) return denied;
+    return respond(c, async () => {
+      const capsuleId = c.req.param("id");
+      const requirementKey = c.req.param("requirementKey");
+      const capsule = await options.service.getInterfaceLinkConsumer(capsuleId);
+      let scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      let authorizedProvider: { linkId: string; providerInterfaceId: string; providerCapsuleId: string } | undefined;
+      if (!scoped.ok) {
+        const link = await options.service.getLatestCapsuleInterfaceLink(capsuleId, requirementKey);
+        if (!link) return scoped.response;
+        const provider = await options.service.get(link.providerInterfaceId);
+        scoped = await scopeInterfaceWorkspace(c, options, auth.actor, provider.metadata.workspaceId);
+        if (scoped.ok) authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
+      }
+      if (!scoped.ok) return scoped.response;
+      const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
+      return c.json({ link: await options.service.revokeCapsuleInterfaceLink(capsuleId, requirementKey, expectedLinkGeneration(body.expectedGeneration), scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, scoped.actor?.workspaceId ?? capsule.workspaceId), authorizedProvider) }, 200);
+    });
+  });
+
   app.post("/api/v1/interfaces", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
@@ -630,8 +690,11 @@ async function respond(
   }
 }
 
-function status(error: InterfaceServiceError): 400 | 404 | 409 | 412 {
+function status(error: InterfaceServiceError): 400 | 403 | 404 | 409 | 412 {
+
   switch (error.code) {
+    case "permission_denied":
+      return 403;
     case "invalid_argument":
       return 400;
     case "not_found":
@@ -692,4 +755,22 @@ function endpoint(
     tag: "interfaces",
     openapi,
   };
+}
+
+function expectedLinkGeneration(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw invalid("expectedGeneration must be a non-negative integer");
+  return value;
+}
+
+async function interfaceLinkWriteFence(c: Context, options: RegisterInterfaceRoutesOptions, actor: ActorContext | undefined, workspaceId: string): Promise<InterfaceLinkWriteFence> {
+  const initial = await options.service.captureInterfaceLinkWriteAuthority(workspaceId);
+  return { assertCurrent: async () => {
+    const auth = await authorize(c, options);
+    if (!auth.ok || auth.actor?.roles.includes("runtime-principal") === true || auth.actor?.actorAccountId !== actor?.actorAccountId) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
+    const scoped = await scopeInterfaceWorkspace(c, options, auth.actor, workspaceId);
+    if (!scoped.ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
+    const current = await options.service.captureInterfaceLinkWriteAuthority(workspaceId);
+    if (initial && (!current || current.managementEpoch !== initial.managementEpoch)) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
+    return initial;
+  } };
 }

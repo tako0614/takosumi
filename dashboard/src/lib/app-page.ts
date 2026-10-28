@@ -200,6 +200,8 @@ export function appPrimaryActionLabel(action: CapsuleAppAction): MessageKey | un
       return "app.problem.screenRetry";
     case "fix_connection":
       return "app.action.fixConnection";
+    case "fix_interface_link":
+      return "app.action.fixInterfaceLink";
     case "continue_install":
       return "app.problem.continueInstall";
     case "cancel_uninstall":
@@ -267,6 +269,7 @@ export type AppPrimaryStep =
   | { readonly kind: "retry"; readonly problem?: CapsuleAppProblem }
   | { readonly kind: "retry_screen"; readonly problem?: CapsuleAppProblem }
   | { readonly kind: "fix_connection" }
+  | { readonly kind: "fix_interface_link" }
   | { readonly kind: "continue_install" }
   | { readonly kind: "cancel_uninstall" }
   | { readonly kind: "uninstall_now" }
@@ -300,6 +303,8 @@ export function appPrimaryStep(app: CapsuleAppView): AppPrimaryStep {
       return problem ? { kind: "retry_screen", problem } : { kind: "retry_screen" };
     case "fix_connection":
       return { kind: "fix_connection" };
+    case "fix_interface_link":
+      return { kind: "fix_interface_link" };
     case "continue_install":
       return { kind: "continue_install" };
     case "cancel_uninstall":
