@@ -199,7 +199,7 @@ test("composed Capsule abandonment retires its owned Source after the ledger com
   expect(await store.getCapsule(capsuleId)).toMatchObject({ status: "destroyed" });
 });
 
-test("composed daily sweep retires an old orphan Source", async () => {
+test("composed daily sweep requires an explicit retirement mark for a legacy orphan Source", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
   await store.putWorkspace({
@@ -216,6 +216,11 @@ test("composed daily sweep retires an old orphan Source", async () => {
     role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     context: localContext(), opentofuControlStore: store,
   });
+  expect(await service.operations.sweepRetiredSources({ limit: 1 })).toMatchObject({
+    attempted: 0, retired: 0, failures: 0,
+  });
+  const source = (await store.getSource("src_orphan0001"))!;
+  await store.putSource({ ...source, status: "disabled", retiringAt: new Date().toISOString() });
   expect(await service.operations.sweepRetiredSources({ limit: 1 })).toMatchObject({
     attempted: 1, retired: 1, failures: 0,
   });
