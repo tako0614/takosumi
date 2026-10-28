@@ -140,6 +140,7 @@ import {
   type Run,
   type RunAuditEvent,
   type RunGroup,
+  type RunType,
 } from "takosumi-contract/runs";
 import { runIsInFlight } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
@@ -3482,6 +3483,14 @@ export interface StoredRunListPage {
   readonly hasMore: boolean;
 }
 
+export interface CapsuleRunListOptions {
+  readonly workspaceId: string;
+  readonly limit?: number;
+  readonly after?: RunListPosition;
+  /** Exact persisted run kinds (the public Run `type`); absent means all. */
+  readonly kinds?: readonly RunType[];
+}
+
 export interface RuntimeSecretRetirementDispatchClaimInput {
   readonly runId: string;
   /** The row must still be pending and no newer than this retry fence. */
@@ -3603,6 +3612,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listRunsByWorkspacePage(
     workspaceId: string,
     options?: { readonly limit?: number; readonly after?: RunListPosition },
+  ): Promise<StoredRunListPage>;
+  /**
+   * One Capsule's run rows in the Workspace listing's newest-first keyset
+   * order. The owning Workspace is matched as well as the Capsule, and
+   * `kinds` optionally narrows the rows to exact persisted run kinds.
+   */
+  listRunsByCapsulePage(
+    capsuleId: string,
+    options: CapsuleRunListOptions,
   ): Promise<StoredRunListPage>;
   /** Latest decisive mutation for runtime Interface safety, if one exists. */
   getCapsuleRuntimeSafety(
@@ -5247,6 +5265,36 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       .filter((row) => row.workspaceId === workspaceId)
       .filter((row) => {
         const after = options.after;
+        if (!after) return true;
+        const timestamp = storedRunRecordTimestamp(row);
+        return timestamp < after.createdAtMillis ||
+          (timestamp === after.createdAtMillis && compareRunIdsBinary(row.id, after.id) < 0);
+      })
+      .sort((a, b) =>
+        storedRunRecordTimestamp(b) - storedRunRecordTimestamp(a) ||
+        compareRunIdsBinary(b.id, a.id)
+      )
+      .slice(0, limit + 1);
+    return Promise.resolve({
+      rows: rows.slice(0, limit).map(publicStoredRun),
+      hasMore: rows.length > limit,
+    });
+  }
+
+  listRunsByCapsulePage(
+    capsuleId: string,
+    options: CapsuleRunListOptions,
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    const kinds = options.kinds === undefined ? undefined : new Set<string>(options.kinds);
+    const after = options.after;
+    const rows = Array.from(this.#runs.values())
+      .filter((row) =>
+        row.workspaceId === options.workspaceId &&
+        storedRunRecordCapsuleId(row) === capsuleId &&
+        (kinds === undefined || kinds.has(storedRunRecordKind(row)))
+      )
+      .filter((row) => {
         if (!after) return true;
         const timestamp = storedRunRecordTimestamp(row);
         return timestamp < after.createdAtMillis ||
@@ -8780,6 +8828,30 @@ function isPublicRunRecord(row: StoredRunRecord): row is Run {
     !isApplyRunRecord(row) &&
     !isSourceSyncRunRecord(row)
   );
+}
+
+/**
+ * The persisted run kind of a ledger row: the SQL stores' `type`/`kind`
+ * column, which equals the public Run `type`.
+ */
+function storedRunRecordKind(row: StoredRunRecord): string {
+  if (isPlanRunRecord(row)) {
+    return row.driftCheck === true
+      ? "drift_check"
+      : row.operation === "destroy"
+        ? "destroy_plan"
+        : "plan";
+  }
+  if (isApplyRunRecord(row)) {
+    return row.operation === "destroy" ? "destroy_apply" : "apply";
+  }
+  if (isSourceSyncRunRecord(row)) return "source_sync";
+  return row.type;
+}
+
+/** The Capsule column the SQL stores persist for a ledger row. */
+function storedRunRecordCapsuleId(row: StoredRunRecord): string | undefined {
+  return isSourceSyncRunRecord(row) ? undefined : row.capsuleId;
 }
 
 export function isRestoreRunRecord(row: StoredRunRecord): row is Run {

@@ -278,6 +278,18 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/app",
+      summary: "Read the server-computed installed-app view: state, primary action, problems, screens, version and uninstall terms",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/runs",
+      summary: "List the Capsule's Runs newest first with a keyset cursor",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/capsules/{capsuleId}/usage-summary",
       summary: "Read the Capsule's showback usage aggregate",
       auth: "account-session",

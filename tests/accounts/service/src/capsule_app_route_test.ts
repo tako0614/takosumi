@@ -1,0 +1,479 @@
+import { expect, test } from "bun:test";
+import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
+import type { CapsuleAppView } from "takosumi-contract/capsules";
+import type { ListRunsResponse } from "takosumi-contract/runs";
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
+import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
+import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import {
+  FIXTURE_CLOUDFLARE_PROVIDER,
+  seedCapsuleModel,
+} from "../../../helpers/deploy-control/model_fixture.ts";
+
+const ORIGIN = "https://app.takosumi.test";
+const OWNER = "user_test";
+const STRANGER = "user_stranger";
+const WORKSPACE = "ws_app_route";
+const CAPSULE = "cap_app_route";
+
+function session(store: InMemoryAccountsStore, subject: string): string {
+  const now = Date.now();
+  store.saveAccount({ subject, createdAt: now, updatedAt: now });
+  const sessionId = `sess_${subject}`;
+  store.saveAccountSession({
+    sessionId,
+    subject,
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  return `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`;
+}
+
+async function fixture(options: {
+  readonly requiredProviders?: readonly string[];
+  readonly sourceUrl?: string;
+  readonly overrides?: Partial<ControlPlaneOperations>;
+  readonly currentStateVersionId?: string;
+} = {}) {
+  const ledger = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(ledger, {
+    workspaceId: WORKSPACE,
+    capsuleId: CAPSULE,
+    sourceId: "src_app_route",
+    snapshotId: "snap_app_route",
+    installConfigId: "cfg_app_route",
+    ...(options.requiredProviders ? { requiredProviders: options.requiredProviders } : {}),
+    ...(options.sourceUrl ? { sourceUrl: options.sourceUrl } : {}),
+  });
+  await ledger.putCapsule({
+    ...seeded.capsule,
+    status: "active",
+    currentStateGeneration: 1,
+    ...(options.currentStateVersionId
+      ? { currentStateVersionId: options.currentStateVersionId }
+      : {}),
+    updatedAt: new Date().toISOString(),
+  });
+  const interfaceStores = createInMemoryInterfaceStores();
+  const { operations: core } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: ledger,
+    interfaceStores,
+  });
+  const accounts = new InMemoryAccountsStore();
+  const owner = session(accounts, OWNER);
+  const stranger = session(accounts, STRANGER);
+  const operations = {
+    ...(core as unknown as ControlPlaneOperations),
+    ...options.overrides,
+  } as ControlPlaneOperations;
+  async function request(path: string, cookie = owner, method = "GET") {
+    const url = new URL(`${ORIGIN}/api/v1/capsules/${CAPSULE}${path}`);
+    const response = await handleControlRoute({
+      request: new Request(url, { method, headers: { cookie } }),
+      url,
+      store: accounts,
+      operations,
+    });
+    expect(response).toBeDefined();
+    return response!;
+  }
+  async function app(cookie = owner): Promise<CapsuleAppView> {
+    const response = await request("/app", cookie);
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { app: CapsuleAppView }).app;
+  }
+  return { ledger, core, seeded, request, app, owner, stranger };
+}
+
+function planRun(id: string, createdAt: number, over: Partial<PlanRun> = {}): PlanRun {
+  return {
+    id,
+    workspaceId: WORKSPACE,
+    capsuleId: CAPSULE,
+    source: { kind: "git", url: "https://git.example.com/example/app.git", ref: "main", path: "." },
+    sourceDigest: "sha256:source",
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    variablesDigest: "sha256:variables",
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: createdAt },
+    policyDecisionDigest: "sha256:policy",
+    capsuleContext: { workspaceId: WORKSPACE, capsuleId: CAPSULE, environment: "production" },
+    auditEvents: [],
+    createdAt,
+    updatedAt: createdAt,
+    ...over,
+  };
+}
+
+function applyRun(id: string, planRunId: string, createdAt: number, over: Partial<ApplyRun> = {}): ApplyRun {
+  return {
+    id,
+    planRunId,
+    workspaceId: WORKSPACE,
+    capsuleId: CAPSULE,
+    operation: "update",
+    runnerProfileId: "opentofu-default",
+    status: "succeeded",
+    expected: {
+      planRunId,
+      runnerProfileId: "opentofu-default",
+      sourceDigest: "sha256:source",
+      variablesDigest: "sha256:variables",
+      policyDecisionDigest: "sha256:policy",
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:artifact",
+    },
+    stateBackend: { kind: "managed", ref: "state" } as never,
+    stateLock: { status: "recorded", backendRef: "state" },
+    auditEvents: [],
+    createdAt,
+    updatedAt: createdAt,
+    ...over,
+  };
+}
+
+test("an installed app reports its state, uninstall grace before scheduling and its repository", async () => {
+  const h = await fixture({
+    sourceUrl: "https://reader:hunter2@git.example.com/example/app.git?token=abc#frag",
+  });
+  const response = await h.request("/app");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const app = ((await response.json()) as { app: CapsuleAppView }).app;
+  expect(app).toMatchObject({
+    kind: "takosumi.capsule-app@v1",
+    capsuleId: CAPSULE,
+    workspaceId: WORKSPACE,
+    name: "app",
+    status: "active",
+    applied: true,
+    state: "installed",
+    primaryAction: "view_resources",
+    problems: [],
+    screens: [],
+    progress: { revisionPreparing: false },
+    uninstall: { mode: "scheduled", graceDays: 7 },
+    version: {
+      repository: { url: "https://git.example.com/example/app.git", defaultRef: "main" },
+      updateAvailable: false,
+      stale: false,
+      autoUpdate: false,
+    },
+  });
+  expect(app.uninstall.scheduled).toBeUndefined();
+  expect(app.incomplete).toBeUndefined();
+  const text = JSON.stringify(app);
+  expect(text).not.toContain("hunter2");
+  expect(text).not.toContain("token=abc");
+  expect(text).not.toContain("test-hook-hash");
+  expect(text).not.toContain("installingPrincipalId");
+});
+
+test("scheduling an uninstall turns the app into a cancellable grace period with its deadline", async () => {
+  const h = await fixture();
+  const scheduled = await h.request("", h.owner, "DELETE");
+  expect(scheduled.status).toBe(202);
+  const capsule = (await scheduled.json()).capsule;
+  const app = await h.app();
+  expect(app).toMatchObject({
+    status: "uninstalled",
+    state: "uninstall_scheduled",
+    primaryAction: "cancel_uninstall",
+    problems: [{ code: "uninstall_scheduled", severity: "warning" }],
+    uninstall: {
+      mode: "scheduled",
+      graceDays: 7,
+      scheduled: {
+        phase: "scheduled",
+        requestedAt: capsule.uninstall.requestedAt,
+        deleteAfter: capsule.uninstall.scheduledDestroyAt,
+        cancellable: true,
+        blocked: false,
+      },
+    },
+  });
+  expect(JSON.stringify(app)).not.toContain("requester");
+});
+
+test("a failed newest lifecycle Run needs attention and names the Run to retry", async () => {
+  const h = await fixture();
+  await h.ledger.putPlanRun(planRun("plan_ok", Date.now() - 3_000));
+  await h.ledger.putApplyRun(
+    applyRun("apply_failed", "plan_ok", Date.now() - 2_000, {
+      status: "failed",
+      diagnostics: [{ severity: "error", code: "provider_apply_failed", message: "boom" }],
+    }),
+  );
+  // A newer drift check is not a lifecycle Run and must not hide the failure.
+  await h.ledger.putPlanRun(planRun("drift_later", Date.now() - 1_000, { driftCheck: true }));
+  const app = await h.app();
+  expect(app.state).toBe("needs_attention");
+  expect(app.primaryAction).toBe("retry");
+  expect(app.problems).toEqual([
+    {
+      code: "run_failed",
+      severity: "error",
+      runId: "apply_failed",
+      runType: "apply",
+      errorCode: "provider_apply_failed",
+    },
+  ]);
+  expect(app.latestRun).toMatchObject({ id: "apply_failed", type: "apply", status: "failed" });
+  expect(JSON.stringify(app)).not.toContain("boom");
+});
+
+test("a policy-denied plan asks for review and the Run list projects structured reasons", async () => {
+  const h = await fixture();
+  await h.ledger.putPlanRun(
+    planRun("plan_denied", Date.now() - 1_000, {
+      status: "failed",
+      policy: {
+        status: "blocked",
+        reasons: [
+          `provider ${FIXTURE_CLOUDFLARE_PROVIDER} is not allowed by policy`,
+          "resource type cloudflare_r2_bucket is not allowed by policy",
+        ],
+        checkedAt: 1,
+      },
+    }),
+  );
+  const app = await h.app();
+  expect(app).toMatchObject({
+    state: "needs_attention",
+    primaryAction: "review",
+    problems: [{ code: "policy_blocked", runId: "plan_denied", runType: "plan" }],
+  });
+  const runs = (await (await h.request("/runs")).json()) as ListRunsResponse;
+  expect(runs.runs[0]).toMatchObject({
+    id: "plan_denied",
+    policyStatus: "deny",
+    policyReasons: [
+      { code: "provider_not_allowed", layer: "provider", provider: FIXTURE_CLOUDFLARE_PROVIDER },
+      { code: "resource_type_not_allowed", layer: "resource", resourceType: "cloudflare_r2_bucket" },
+    ],
+  });
+});
+
+test("a binding without a usable connection asks the person to fix it", async () => {
+  const h = await fixture({ requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER] });
+  const missing = await h.app();
+  expect(missing).toMatchObject({
+    state: "needs_attention",
+    primaryAction: "fix_connection",
+    problems: [
+      {
+        code: "connection_unavailable",
+        provider: FIXTURE_CLOUDFLARE_PROVIDER,
+        connectionStatus: "missing",
+      },
+    ],
+  });
+  const connectionId = missing.problems[0]!.connectionId!;
+  await h.ledger.putConnection({
+    id: connectionId,
+    workspaceId: WORKSPACE,
+    scope: "workspace",
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    providerSource: FIXTURE_CLOUDFLARE_PROVIDER,
+    status: "revoked",
+    materialization: "secret",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-10-27T00:00:00.000Z",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  } as never);
+  expect((await h.app()).problems[0]).toMatchObject({
+    code: "connection_unavailable",
+    connectionId,
+    connectionStatus: "revoked",
+  });
+});
+
+test("every authorized screen is listed in display order with only display data and a safe URL", async () => {
+  const h = await fixture();
+  const interfaces = (h.core as unknown as {
+    interfaces: {
+      create(input: unknown): Promise<{ metadata: { id: string } }>;
+      createBinding(id: string, input: unknown): Promise<unknown>;
+    };
+  }).interfaces;
+  const surface = async (name: string, url: string, display: Record<string, unknown>) => {
+    const created = await interfaces.create({
+      workspaceId: WORKSPACE,
+      name,
+      ownerRef: { kind: "Capsule", id: CAPSULE },
+      spec: {
+        type: "interface.ui.surface",
+        version: "1",
+        document: { launcher: true, display },
+        inputs: { url: { source: "literal", value: url } },
+        access: { visibility: "workspace" },
+      },
+    });
+    await interfaces.createBinding(created.metadata.id, {
+      subjectRef: { kind: "Principal", id: OWNER },
+      permissions: ["ui.open"],
+      delivery: { type: "none" },
+    });
+    return created.metadata.id;
+  };
+  const admin = await surface("admin", "https://admin.example.test/", { title: "Admin", sortOrder: 2 });
+  const home = await surface("home", "https://home.example.test/app", { title: "Home", sortOrder: 1, icon: "🏠" });
+  await surface("leaky", "https://leaky.example.test/?access_token=secret-value", { title: "Leaky" });
+
+  const app = await h.app();
+  expect(app.state).toBe("installed");
+  expect(app.primaryAction).toBe("open");
+  expect(app.screens).toEqual([
+    {
+      interfaceId: home,
+      name: "home",
+      title: "Home",
+      icon: { kind: "glyph", glyph: "🏠" },
+      sortOrder: 1,
+      url: "https://home.example.test/app",
+    },
+    {
+      interfaceId: admin,
+      name: "admin",
+      title: "Admin",
+      sortOrder: 2,
+      url: "https://admin.example.test/",
+    },
+  ]);
+  expect(JSON.stringify(app)).not.toContain("secret-value");
+  // The stranger is refused before any screen is read.
+  expect((await h.request("/app", h.stranger)).status).toBe(403);
+});
+
+test("another account cannot read the app view or the Run list of this Workspace", async () => {
+  const h = await fixture();
+  await h.ledger.putPlanRun(planRun("plan_private", Date.now()));
+  for (const path of ["/app", "/runs"]) {
+    const response = await h.request(path, h.stranger);
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("plan_private");
+  }
+  expect((await h.request("/app", "")).status).toBe(401);
+  expect((await h.request("/app", h.owner, "POST")).status).toBe(405);
+  expect((await h.request("/runs", h.owner, "POST")).status).toBe(405);
+});
+
+test("the Run list pages newest first with a bounded limit, type filter and strict parameters", async () => {
+  const h = await fixture();
+  const base = Date.now() - 10_000;
+  await h.ledger.putPlanRun(planRun("plan_1", base + 1));
+  await h.ledger.putApplyRun(applyRun("apply_1", "plan_1", base + 2));
+  await h.ledger.putPlanRun(planRun("drift_1", base + 3, { driftCheck: true }));
+  await h.ledger.putPlanRun(planRun("plan_2", base + 4));
+  await h.ledger.putPlanRun(
+    planRun("plan_other_capsule", base + 5, {
+      capsuleId: "cap_someone_else",
+      capsuleContext: { workspaceId: WORKSPACE, capsuleId: "cap_someone_else", environment: "production" },
+    }),
+  );
+
+  const first = (await (await h.request("/runs?limit=2")).json()) as ListRunsResponse;
+  expect(first.runs.map((run) => run.id)).toEqual(["plan_2", "drift_1"]);
+  expect(first.nextCursor).toBeString();
+  const second = (await (
+    await h.request(`/runs?limit=2&cursor=${encodeURIComponent(first.nextCursor!)}`)
+  ).json()) as ListRunsResponse;
+  expect(second.runs.map((run) => run.id)).toEqual(["apply_1", "plan_1"]);
+  expect(second.nextCursor).toBeUndefined();
+  expect(second.runs[0]).toMatchObject({ capsuleId: CAPSULE, planRunId: "plan_1" });
+
+  const lifecycle = (await (
+    await h.request("/runs?type=plan&type=apply")
+  ).json()) as ListRunsResponse;
+  expect(lifecycle.runs.map((run) => run.id)).toEqual(["plan_2", "apply_1", "plan_1"]);
+
+  const clamped = await h.request("/runs?limit=100000");
+  expect(clamped.status).toBe(200);
+  expect(((await clamped.json()) as ListRunsResponse).runs).toHaveLength(4);
+  for (const query of ["limit=0", "limit=-1", "limit=two", "type=bogus", "cursor=not-a-cursor"]) {
+    expect((await h.request(`/runs?${query}`)).status, query).toBe(400);
+  }
+});
+
+test("version facts compare the adopted commit with the newest snapshot of the same ref", async () => {
+  const commit = "abcdef0123456789abcdef0123456789abcdef01";
+  const h = await fixture({
+    currentStateVersionId: "sv_app_route",
+    overrides: {
+      getCapsuleAdoptedSourceRevision: async () => ({
+        sourceSnapshotId: "snap_app_route",
+        ref: "main",
+        path: ".",
+        resolvedCommit: commit,
+      }),
+    },
+  });
+  const current = await h.ledger.getSourceSnapshot("snap_app_route");
+  const snapshot = (id: string, ref: string, resolvedCommit: string, fetchedAt: string) => ({
+    ...current!,
+    id,
+    ref,
+    resolvedCommit,
+    fetchedAt,
+  });
+  await h.ledger.putSourceSnapshot(
+    snapshot("snap_older_main", "main", "0".repeat(40), "2026-06-01T00:00:00.000Z"),
+  );
+  const unchanged = await h.app();
+  expect(unchanged.version).toMatchObject({
+    current: { sourceSnapshotId: "snap_app_route", ref: "main", path: ".", commit },
+    latest: { sourceSnapshotId: "snap_app_route", commit },
+    updateAvailable: false,
+  });
+
+  await h.ledger.putSourceSnapshot(
+    snapshot("snap_newer_main", "main", "1".repeat(40), "2026-06-07T00:00:00.000Z"),
+  );
+  await h.ledger.putSourceSnapshot(
+    snapshot("snap_newest_dev", "dev", "2".repeat(40), "2026-06-08T00:00:00.000Z"),
+  );
+  const capsule = await h.ledger.getCapsule(CAPSULE);
+  await h.ledger.putCapsule({ ...capsule!, status: "stale", autoUpdate: true });
+  const app = await h.app();
+  expect(app.state).toBe("installed");
+  expect(app.version).toEqual({
+    repository: { url: "https://git.example.com/example/app.git", defaultRef: "main" },
+    current: { sourceSnapshotId: "snap_app_route", ref: "main", path: ".", commit },
+    latest: {
+      sourceSnapshotId: "snap_newer_main",
+      ref: "main",
+      commit: "1".repeat(40),
+      fetchedAt: "2026-06-07T00:00:00.000Z",
+    },
+    updateAvailable: true,
+    stale: true,
+    autoUpdate: true,
+  });
+  expect(app.incomplete).toBeUndefined();
+});
+
+test("a supporting read that fails is reported as incomplete instead of silently empty", async () => {
+  const h = await fixture({
+    overrides: {
+      interfaces: {
+        listAuthorizedUiSurfaceCandidatesForPrincipalPage: async () => {
+          throw new Error("interface store unavailable");
+        },
+      } as unknown as ControlPlaneOperations["interfaces"],
+      listInterfaceMaterializationFailures: async () => {
+        throw new Error("intent ledger unavailable");
+      },
+    },
+  });
+  const app = await h.app();
+  expect(app.state).toBe("installed");
+  expect(app.screens).toEqual([]);
+  expect(app.incomplete).toEqual(["screen_problems", "screens"]);
+});

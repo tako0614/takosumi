@@ -121,6 +121,7 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunType,
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
@@ -675,6 +676,16 @@ export interface ControlPlaneOperations {
   listRunsPage?(
     workspaceId: string,
     options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
+  /** Keyset page of one Capsule's Runs; absent on hosts without the seam. */
+  listCapsuleRunsPage?(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      readonly types?: readonly RunType[];
+    },
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   createCapsulePlan(
     capsuleId: string,

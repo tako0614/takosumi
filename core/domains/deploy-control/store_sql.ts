@@ -136,6 +136,7 @@ import type {
   RecoverableOpenTofuRunListOptions,
   RunListPosition,
   StoredRunListPage,
+  CapsuleRunListOptions,
   RenewCapsuleInterfaceMaterializationIntentLeaseInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
   RetryCapsuleInterfaceMaterializationIntentInput,
@@ -4136,6 +4137,49 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       {
         where: and(
           eq(pgSchema.runs.workspaceId, workspaceId),
+          after
+            ? or(
+                lt(createdAtMillis, after.createdAtMillis),
+                and(
+                  eq(createdAtMillis, after.createdAtMillis),
+                  lt(idOrder, after.id),
+                ),
+              )
+            : undefined,
+        ),
+        orderBy: [desc(createdAtMillis), desc(idOrder)],
+        limit: limit + 1,
+      },
+    );
+    return {
+      rows: rows.slice(0, limit).map(publicStoredRun),
+      hasMore: rows.length > limit,
+    };
+  }
+
+  async listRunsByCapsulePage(
+    capsuleId: string,
+    options: CapsuleRunListOptions,
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    if (options.kinds !== undefined && options.kinds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+    const createdAtMillis = pgRunCreatedAtMillisOrder();
+    const idOrder = sql`${pgSchema.runs.id} COLLATE "C"`;
+    const after = options.after;
+    // Served by takosumi_runs_installation_idx; the newest-first sort only
+    // spans this one Capsule's rows.
+    const rows = await this.#pgManyJson<StoredRunRecord>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: and(
+          eq(pgSchema.runs.capsuleId, capsuleId),
+          eq(pgSchema.runs.workspaceId, options.workspaceId),
+          options.kinds !== undefined
+            ? inArray(pgSchema.runs.kind, [...options.kinds])
+            : undefined,
           after
             ? or(
                 lt(createdAtMillis, after.createdAtMillis),

@@ -169,6 +169,7 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunType,
 } from "takosumi-contract/runs";
 import type { Output } from "takosumi-contract/outputs";
 import type { PageParams } from "takosumi-contract/pagination";
@@ -877,6 +878,16 @@ export interface TakosumiOperations {
   listRunsPage(
     workspaceId: string,
     options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
+  /** Keyset page of one Capsule's Runs; the caller authorizes the Capsule. */
+  listCapsuleRunsPage(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      readonly types?: readonly RunType[];
+    },
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
   getRunLogs(id: string): Promise<RunLogsResponse>;
@@ -2003,6 +2014,8 @@ export async function createTakosumiService(
       opentofuController.listRuns(workspaceId, options),
     listRunsPage: (workspaceId, options) =>
       opentofuController.listRunsPage(workspaceId, options),
+    listCapsuleRunsPage: (capsuleId, options) =>
+      opentofuController.listCapsuleRunsPage(capsuleId, options),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
     getRunEvents: (id) => opentofuController.getRunEvents(id),
     getRunCost: (id) => opentofuController.getRunCost(id),
