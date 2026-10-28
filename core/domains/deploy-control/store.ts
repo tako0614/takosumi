@@ -7587,8 +7587,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putConnection(connection: ProviderConnection): Promise<ProviderConnection> {
-    this.#connections.set(connection.id, connection);
-    return Promise.resolve(connection);
+    const owned = this.#ownedConnection(connection);
+    this.#connections.set(connection.id, owned);
+    return Promise.resolve(owned);
+  }
+
+  #ownedConnection(connection: ProviderConnection): ProviderConnection {
+    if (connection.scope !== "workspace" || !connection.workspaceId) return connection;
+    const ownerAccountId = this.#connections.get(connection.id)?.ownerAccountId ??
+      connection.ownerAccountId ?? this.#workspaces.get(connection.workspaceId)?.ownerUserId;
+    return ownerAccountId ? { ...connection, ownerAccountId } : connection;
+  }
+
+  #connectionSnapshotMatches(current: ProviderConnection | undefined, expected: ProviderConnection): boolean {
+    if (!current) return false;
+    if (JSON.stringify(current) === JSON.stringify(expected)) return true;
+    if (!current.ownerAccountId || expected.ownerAccountId || !current.workspaceId ||
+      current.workspaceId !== expected.workspaceId ||
+      this.#workspaces.get(current.workspaceId)?.ownerUserId !== current.ownerAccountId) return false;
+    const { ownerAccountId: _owner, ...legacy } = current;
+    void _owner;
+    return JSON.stringify(legacy) === JSON.stringify(expected);
   }
 
   async createConnectionRegistration(input: CreateConnectionRegistrationInput): Promise<boolean> {
@@ -7604,7 +7623,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     // No await between the authority/collision checks and publishing either row.
     if (secretBlob) this.#secretBlobs.set(connection.id, secretBlob);
-    this.#connections.set(connection.id, connection);
+    this.#connections.set(connection.id, this.#ownedConnection(connection));
     return true;
   }
 
@@ -7616,7 +7635,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
     const current = this.#connections.get(expectedConnection.id);
-    if (!current || JSON.stringify(current) !== JSON.stringify(expectedConnection)) return false;
+    if (!this.#connectionSnapshotMatches(current, expectedConnection)) return false;
     this.#secretBlobs.delete(expectedConnection.id);
     this.#connections.delete(expectedConnection.id);
     return true;
@@ -7632,10 +7651,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
     const current = this.#connections.get(expectedConnection.id);
     const blob = this.#secretBlobs.get(expectedConnection.id) ?? null;
-    if (!current || JSON.stringify(current) !== JSON.stringify(expectedConnection) ||
+    if (!this.#connectionSnapshotMatches(current, expectedConnection) ||
       JSON.stringify(blob) !== JSON.stringify(expectedSecretBlob)) return false;
     // No await between the management, row and material predicates and write.
-    this.#connections.set(replacement.id, replacement);
+    this.#connections.set(replacement.id, this.#ownedConnection(replacement));
     if (replacementSecretBlob) this.#secretBlobs.set(replacement.id, replacementSecretBlob);
     return true;
   }
@@ -7652,7 +7671,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   createConnectionIfAbsent(connection: ProviderConnection): Promise<boolean> {
     if (this.#connections.has(connection.id)) return Promise.resolve(false);
-    this.#connections.set(connection.id, connection);
+    this.#connections.set(connection.id, this.#ownedConnection(connection));
     return Promise.resolve(true);
   }
 
@@ -7664,11 +7683,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (
       !current ||
       replacement.id !== expected.id ||
-      JSON.stringify(current) !== JSON.stringify(expected)
+      !this.#connectionSnapshotMatches(current, expected)
     ) {
       return Promise.resolve(false);
     }
-    this.#connections.set(replacement.id, replacement);
+    this.#connections.set(replacement.id, this.#ownedConnection(replacement));
     return Promise.resolve(true);
   }
 
