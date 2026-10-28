@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { setImmediate as realSetImmediate } from "node:timers";
 import {
-  createReviewableGitInstallPlan,
   createReviewableGitRevisionPlan,
   type GitPlanPollCadence,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -39,7 +38,7 @@ function flushContinuations(): Promise<void> {
 
 async function expectDeadline(
   outcome: () => unknown,
-  kind: "install" | "revision",
+  kind: "revision",
 ) {
   expect(jest.getTimerCount()).toBe(1);
   jest.advanceTimersByTime(24);
@@ -53,7 +52,7 @@ async function expectDeadline(
   expect(jest.getTimerCount()).toBe(0);
 }
 
-function response(kind: "install" | "revision", nextAction: "reconcile" | "review_run") {
+function response(kind: "revision", nextAction: "reconcile" | "review_run") {
   return new Response(JSON.stringify({
     [`${kind}Plan`]: {
       id: `${kind}_1`,
@@ -63,19 +62,11 @@ function response(kind: "install" | "revision", nextAction: "reconcile" | "revie
   }), { headers: { "content-type": "application/json" } });
 }
 
-const request = {
-  source: { name: "Test", url: "https://example.com/repo.git", ref: "main" },
-  capsule: { name: "Test", environment: "production" },
-};
-
-for (const kind of ["install", "revision"] as const) {
-  const start = (timeoutMs: number, pollCadence?: GitPlanPollCadence) => kind === "install"
-    ? createReviewableGitInstallPlan("ws_1", request, {
-      idempotencyKey: "stable_attempt",
-      timeoutMs,
-      pollCadence,
-    })
-    : createReviewableGitRevisionPlan("cap_1", { ref: "main" }, {
+// The install coordinator is followed by the install page itself (TASK-0115
+// Phase 3b); only the revision coordinator keeps the bounded client loop.
+for (const kind of ["revision"] as const) {
+  const start = (timeoutMs: number, pollCadence?: GitPlanPollCadence) =>
+    createReviewableGitRevisionPlan("cap_1", { ref: "main" }, {
       idempotencyKey: "stable_attempt",
       timeoutMs,
       pollCadence,

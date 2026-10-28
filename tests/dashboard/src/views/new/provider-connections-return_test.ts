@@ -4,19 +4,24 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../../../../../");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
-const install = read("dashboard/src/views/new/InstallView.tsx");
+const sheet = read("dashboard/src/views/new/InstallSheet.tsx");
+const view = read("dashboard/src/views/new/InstallView.tsx");
+const controller = read("dashboard/src/views/new/use-install-attempt.ts");
 const connections = read(
   "dashboard/src/views/workspace/tabs/ConnectionsTab.tsx",
 );
 
 describe("/new Provider Connections return context", () => {
-  test("the single install view embeds connection setup without serializing configuration", () => {
-    expect(install).not.toContain("<ConnectionsTab");
-    expect(install).toContain("<ConnectionCreateForm");
-    expect(install).toContain("initialProviderSource={row.provider}");
-    expect(install).toContain("refreshProviderChoices()");
-    expect(install).not.toContain("providerConnectionsHrefForInstallReturn");
-    expect(install).not.toContain("sessionStorage");
+  test("the install sheet embeds connection setup without serializing configuration", () => {
+    expect(sheet).not.toContain("<ConnectionsTab");
+    expect(sheet).toContain("<ConnectionCreateForm");
+    expect(sheet).toContain("initialProviderSource={requirement().provider}");
+    expect(sheet).toContain("attempt().adoptConnection(requirement, connectionId)");
+    for (const source of [sheet, view, controller]) {
+      expect(source).not.toContain("providerConnectionsHrefForInstallReturn");
+      expect(source).not.toContain("sessionStorage");
+      expect(source).not.toContain("localStorage");
+    }
   });
 
   test("the Connections screen restores and validates that return target", () => {
@@ -28,34 +33,34 @@ describe("/new Provider Connections return context", () => {
     expect(connections).toContain('t("conn.saved.returnCta")');
   });
 
-  test("Provider choices come only from the compatibility report", () => {
-    expect(install).toContain("rowsFromCompatibility(result)");
-    expect(install).toContain("result.rootProviderRequirements");
-    expect(install).not.toContain("result.providerPackages");
-    expect(install).toContain(
-      "provider.credentialRequired === true",
-    );
-    expect(install).not.toContain("rootModuleVariables.map");
-    expect(install).not.toContain("resources.map");
+  test("provider rows and their candidates come only from the coordinator", () => {
+    // The page does no compatibility analysis or connection matching itself.
+    expect(sheet).toContain("props.action.connections");
+    expect(sheet).toContain("requirement().candidates");
+    for (const source of [sheet, view, controller]) {
+      expect(source).not.toContain("listProviderConnections");
+      expect(source).not.toContain("isProviderConnectionCandidate");
+      expect(source).not.toContain("rootProviderRequirements");
+      expect(source).not.toContain("checkCapsuleCompatibility");
+    }
   });
 
-  test("candidate matching is verified and exact after registry qualification", () => {
-    expect(install).toContain("isProviderConnectionCandidate(connection)");
-    expect(install).toContain("sameProviderSource(");
-    expect(install).toContain("providerConnectionMatchesProviderSource,");
-    expect(install).toContain(
-      "providerConnectionMatchesProviderSource(required, {",
+  test("a chosen connection is answered as the exact provider tuple", () => {
+    expect(controller).toContain(
+      "providerBindings: bindingsWith(current.userAction.connections, requirement, connectionId)",
     );
+    // A connection made in the sheet is chosen only once the coordinator offers it.
+    const adopt = controller.slice(
+      controller.indexOf("const adoptConnection = async"),
+      controller.indexOf("/** Rename the app before it exists"),
+    );
+    expect(adopt).toContain("await refresh()");
+    expect(adopt).toContain('return "not_offered"');
   });
 
-  test("source credentials, bindings, and compatibility authority reach Plan", () => {
-    expect(install).toContain("sourceAuthConnectionId()");
-    expect(install).toContain("authConnectionId: sourceAuthConnectionId()");
-    expect(install).toContain("createReviewableGitInstallPlan(");
-    expect(install).toContain("providerBindings: rows.map");
-    expect(install).not.toContain("putCapsuleProviderBindingSet(");
-    expect(install).not.toContain("createCapsule(");
-    expect(install).toContain("checked.reportId");
-    expect(install).toContain("compatibilityReportId: checked.reportId");
+  test("source credentials reach the attempt by reference only", () => {
+    expect(view).toContain("authConnectionId: sourceAuth()");
+    expect(view).not.toContain("createSource(");
+    expect(view).not.toContain("putCapsuleProviderBindingSet(");
   });
 });

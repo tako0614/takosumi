@@ -1,716 +1,149 @@
+/**
+ * Structural invariants of the attempt-driven install page (TASK-0115 Phase
+ * 3b). The behavior of each state lives in install-attempt_test.ts and the
+ * controller's requests in install-attempt-controller_test.ts; these checks
+ * pin what must never come back into the page's sources.
+ */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { installModuleCatalogFromSnapshot } from "../../../../../dashboard/src/views/new/install-helpers.ts";
-import { en } from "../../../../../dashboard/src/i18n/en.ts";
-import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const root = resolve(import.meta.dir, "../../../../../");
 const read = (path: string): string =>
   readFileSync(resolve(root, path), "utf8");
+const view = read("dashboard/src/views/new/InstallView.tsx");
+const sheet = read("dashboard/src/views/new/InstallSheet.tsx");
+const controller = read("dashboard/src/views/new/use-install-attempt.ts");
+const state = read("dashboard/src/views/new/install-attempt.ts");
+const pageSources = [view, sheet, controller, state];
 
-describe("single-screen install surface", () => {
-  test("enables polling only after the compatible install Plan is created", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const planResponse = view.indexOf("const response = await createReviewableGitInstallPlan(");
-    const enableSourcePolling = view.indexOf(
-      "await enableInstallSourceAutoSync(workspace);",
-    );
-    expect(planResponse).toBeGreaterThanOrEqual(0);
-    expect(enableSourcePolling).toBeGreaterThan(planResponse);
-    expect(view).toContain("autoSyncSourceForInstall = undefined");
-    expect(view).toContain("pendingAutoSyncSource.workspaceId !== workspace");
-    expect(view).toContain("pendingAutoSyncSource.sourceId === sourceId()");
-    expect(view).toContain("resetPreparedSource = (options?: {");
-  });
+function between(source: string, start: string, end: string): string {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  expect(from, start).toBeGreaterThanOrEqual(0);
+  expect(to, end).toBeGreaterThan(from);
+  return source.slice(from, to);
+}
 
-  test("explains a slow initial repository fetch after five seconds", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("const SOURCE_FETCH_SLOW_HINT_MS = 5_000");
-    expect(view).toContain('preparationStage() !== "source"');
-    expect(view).toContain('t("installStore.preparingFetching")');
-    expect(en["installStore.preparingFetching"]).toContain("minute");
-    expect(ja["installStore.preparingFetching"]).toContain("1分");
-  });
-
-  test("normalizes the bounded module projection without exposing files", () => {
-    expect(
-      installModuleCatalogFromSnapshot({
-        status: "ready",
-        sourceSnapshotId: "snap_modules",
-        scopePath: ".",
-        modules: [
-          {
-            path: "deploy/takoform",
-            providerPackages: [
-              {
-                source: "registry.opentofu.org/cloudflare/cloudflare",
-                version: "4.0.0",
-              },
-            ],
-            rootProviderRequirements: [
-              {
-                source: "registry.opentofu.org/cloudflare/cloudflare",
-                moduleLocalName: "cloudflare",
-                childAlias: "default",
-                version: "4.0.0",
-              },
-            ],
-          },
-          {
-            path: ".",
-            providerPackages: [],
-            rootProviderRequirements: [],
-          },
-        ],
-      }),
-    ).toEqual({
-      status: "ready",
-      sourceSnapshotId: "snap_modules",
-      scopePath: ".",
-      modules: [
-        {
-          path: ".",
-          providerPackages: [],
-          rootProviderRequirements: [],
-        },
-        {
-          path: "deploy/takoform",
-          providerPackages: [
-            {
-              source: "registry.opentofu.org/cloudflare/cloudflare",
-              version: "4.0.0",
-            },
-          ],
-          rootProviderRequirements: [
-            {
-              source: "registry.opentofu.org/cloudflare/cloudflare",
-              moduleLocalName: "cloudflare",
-              childAlias: "default",
-              version: "4.0.0",
-            },
-          ],
-        },
-      ],
-    });
-    expect(
-      installModuleCatalogFromSnapshot({
-        status: "ready",
-        sourceSnapshotId: "snap_one",
-        scopePath: ".",
-        modules: [
-          {
-            path: "deploy/takoform",
-            providerPackages: [],
-            rootProviderRequirements: [],
-          },
-        ],
-      }),
-    ).toMatchObject({ status: "ready", modules: [{ path: "deploy/takoform" }] });
-    expect(
-      installModuleCatalogFromSnapshot({
-        status: "ready",
-        sourceSnapshotId: "snap_file",
-        scopePath: ".",
-        modules: [
-          {
-            path: "main.tf",
-            providerPackages: [],
-            rootProviderRequirements: [],
-          },
-        ],
-      }),
-    ).toEqual({ status: "invalid", modules: [] });
-  });
-
-  test("distinguishes an empty scan from an invalid scan", () => {
-    expect(
-      installModuleCatalogFromSnapshot({
-        status: "ready",
-        sourceSnapshotId: "snap_empty",
-        scopePath: ".",
-        modules: [],
-      }),
-    ).toEqual({
-      status: "ready",
-      sourceSnapshotId: "snap_empty",
-      scopePath: ".",
-      modules: [],
-    });
-    expect(
-      installModuleCatalogFromSnapshot({
-        status: "invalid",
-        sourceSnapshotId: "snap_invalid",
-        scopePath: ".",
-        reason: "scan_unavailable",
-        modules: [],
-      }),
-    ).toEqual({ status: "invalid", modules: [] });
-  });
-
+describe("attempt-driven install page", () => {
   test("routes every install entry to the one /new view", () => {
     const router = read("dashboard/src/index.tsx");
-    expect(router).toContain(
-      'const InstallView = lazy(() => import("./views/new/InstallView.tsx"))',
-    );
+    expect(router).toContain('const InstallView = lazy(() => import("./views/new/InstallView.tsx"))');
     expect(router).toContain('<Route path="/new" component={InstallView} />');
+    expect(router).toContain('<Route path="/install" component={InstallEntryRoute} />');
+    expect(router).toContain('<Route path="/store" component={() => <RedirectWithQuery to="/new" />} />');
     expect(router).not.toContain("NewAppView");
-    expect(router).not.toContain("CapsuleSourceOptionsInstallView");
-    expect(router).not.toContain('path="/composition/install"');
   });
 
-  test("keeps the browse page focused on search and the service list", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const styles = read("dashboard/src/views/new/install-simplification.css");
-
-    expect(view).toContain('class="iv-hero iv-page-heading"');
-    expect(view).not.toContain("TAKOSUMI STORE");
-    expect(view).not.toContain('t("installStore.subtitle")');
-    expect(view).not.toContain("t(\"installStore.browseHint\")");
-    expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
-    expect(view).toContain('aria-label={t("installStore.browseTitle")}');
-    expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
-    expect(view).toContain('class="iv-manual"');
-    expect(styles).toContain(".iv-catalogue.iv-catalogue-browse");
-    expect(styles).toContain("background: transparent");
+  test("opening a page creates nothing: an attempt starts only from Install or Start over", () => {
+    // The only POST that creates an attempt…
+    expect(controller.match(/createGitInstallAttempt\(/gu)).toHaveLength(1);
+    const post = between(controller, "const postAttempt = async", "const adoptNewAttempt =");
+    expect(post).toContain("createGitInstallAttempt(workspaceId, request, key)");
+    // …is reached from the Install action and from starting over, nowhere else.
+    const callers = controller.match(/await postAttempt\(/gu) ?? [];
+    expect(callers).toHaveLength(2);
+    expect(between(controller, "const start = async", "const resume = () =>")).toContain("await postAttempt(");
+    expect(between(controller, "const restart = async", "const reload = async")).toContain("await postAttempt(");
+    expect(view).toContain("void attempt.start(");
+    expect(view.match(/attempt\.start\(/gu)).toHaveLength(1);
+    // A workspace is created only on that same Install path.
+    expect(between(controller, "const ensureWorkspace = async", "/** POST one attempt")).toContain("createWorkspace(");
+    expect(controller.match(/ensureWorkspace\(\)/gu)).toHaveLength(1);
   });
 
-  test("the app page starts from one Install action and keeps the app identity", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const configure = view.slice(
-      view.indexOf('<Show when={phase() === "configure"}>'),
-      view.indexOf('<Show when={phase() === "preparing"}>'),
-    );
-
-    expect(view).toContain('"iv-configure-page": phase() === "configure"');
-    expect(view).toContain('data-testid="install-app-header"');
-    expect(view).toContain('data-testid="install-provenance"');
-    expect(view).toContain('phase() !== "browse"');
-    // One primary action; no second Install hidden behind an expansion.
-    expect(view).not.toContain("configurationExpanded");
-    expect(configure.match(/variant="primary"/gu)).toHaveLength(1);
-    expect(configure).toContain('t("installStore.install")');
-    expect(configure).toContain('t("installStore.startHint")');
-    expect(configure).not.toContain('class="iv-app-summary"');
-    // A Store install can still choose its version instead of a silent pick.
-    expect(configure).toContain('label={t("installStore.sourceRef")}');
-  });
-
-  test("the initial Install starts preparation without creating a Plan", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const configure = view.slice(
-      view.indexOf('<Show when={phase() === "configure"}>'),
-      view.indexOf('<Show when={phase() === "preparing"}>'),
-    );
-    expect(configure).toContain("void prepareInstall();");
-    expect(configure).not.toContain("preparePlan(");
-    const preparation = view.slice(view.indexOf("const prepareInstall ="), view.indexOf("const restartFailedInstall ="));
-    expect(preparation).toContain('setPhase("setup")');
-    expect(preparation).not.toContain("await preparePlan(");
-  });
-
-  test("Add starts preparation before compatibility or providers are known", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("StoreBrowser");
-    expect(view).toContain("const prepareInstall = async () =>");
-    expect(view).toContain("await checkCapsuleCompatibility(");
-    expect(view.indexOf("setPhase(\"preparing\")")).toBeLessThan(
-      view.indexOf("await checkCapsuleCompatibility("),
-    );
-    expect(view).toContain('t("installStore.install")');
-    expect(view).not.toContain("canContinue");
-    expect(view).not.toContain("checkingCompatibility() || !provider");
-  });
-
-  test("preparation is bounded, names its current stage, and can be cancelled", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("INSTALL_PREPARATION_TIMEOUT_MS");
-    expect(view).toContain("const preparationTimeout = setTimeout(");
-    expect(view).toContain("preparationTimedOut = true;");
-    expect(view).toContain("const preparationDeadlineAt =");
-    expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
-    expect(view).toContain("deadlineAt: preparationDeadlineAt");
-    expect(view).toContain("sourceAuthConnectionId().length > 0");
-    expect(view).toContain("includeSourceConnections");
-    expect(view).toContain("Promise.resolve([] as ProviderConnection[])");
-    expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
-    expect(view).toContain(
-      "listReleaseOwnedProviderConnectionsWithSignal(workspace, signal)",
-    );
-    expect(view).toContain("...all.filter(isProviderConnectionCandidate)");
-    expect(view).toContain("...releaseOwnedProviders");
-    expect(view).toContain("onSourceSyncProgress:");
-    expect(view).toContain("await prepareCapsuleSourceSnapshot({");
-    expect(view).toContain("onSourceCreated:");
-    expect(view).toContain("preparationStageHint()");
-    expect(view).toContain("activePreparationController?.abort()");
-    expect(view).toContain("clearTimeout(preparationTimeout)");
-    expect(view).toContain('t("common.cancel")');
-  });
-
-  test("does not claim no Source exists after an indeterminate Source create", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("SourceCreateIndeterminateError");
-    expect(view).toContain("ControlApiIndeterminateError");
-    expect(view).toContain('cause.operation === "source_create"');
-    expect(view).toContain("setSourceCreateReconciliationToken(cause.reconciliationToken)");
-    expect(view).toContain("sourceCreateReconciliationToken:");
-    expect(view).toContain('t("installStore.sourceRegistrationUnconfirmed")');
-    expect(view).toContain('t("installStore.sourceBaselineUnavailable")');
-  });
-
-  test("public Git discovery never waits for the optional source credential inventory", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain(
-      "sourceAuthConnectionId().length > 0",
-    );
-    expect(view).not.toContain(
-      "listing() === null,\n      );",
-    );
-  });
-
-  test("authoritative refs stay exact and prepared state is invalidated by edits", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).not.toContain("refInputValue(");
-    expect(view).toContain('createSignal(initial?.ref ?? "")');
-    expect(view).toContain("setGitRef(prepared.snapshot.resolvedCommit);");
-    expect(view).toContain("ref: gitRef().trim()");
-    expect(view).toContain("setCapsuleId(undefined)");
-    expect(view).toContain("setPlanRunId(undefined)");
-    expect(view).toContain("setSourceCreateReconciliationToken(undefined)");
-    expect(view).toContain("resetPreparedSource();");
-  });
-
-  test("a failed initial Plan can abandon the unapplied Capsule and start fresh", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const execution = read("dashboard/src/views/new/InstallExecution.tsx");
-    const restartStart = view.indexOf("const restartFailedInstall = async () =>");
-    const restartEnd = view.indexOf("const providerBindings =", restartStart);
-    const restart = view.slice(restartStart, restartEnd);
-
-    expect(restart).toContain("await abandonUnappliedCapsule(failedCapsuleId)");
-    expect(restart).toContain("capsuleAbandonmentCompleted(deleted, {");
-    expect(restart).toContain(
-      "resetPreparedSource({ preserveModuleSelection: true });",
-    );
-    expect(restart).toContain("await prepareInstall();");
-    expect(restart.indexOf("await abandonUnappliedCapsule")).toBeLessThan(
-      restart.indexOf("resetPreparedSource"),
-    );
-    expect(restart.indexOf("resetPreparedSource")).toBeLessThan(
-      restart.indexOf("await prepareInstall()"),
-    );
-    expect(execution).toContain("isReviewRun(current().type)");
-    expect(execution).toContain('t("installStore.restartWithLatestSource")');
-    expect(execution).toContain("await props.onRestart?.();");
-  });
-
-  test("workspace and provider discovery stay lazy until an explicit action", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("const workspace = currentWorkspaceId();");
-    expect(view).toContain("const workspace = await ensureWorkspace();");
-    expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
-    expect(view).toContain("const prepareInstall = async () =>");
-    expect(view).toContain("const providersResult = loadConnections(");
-    expect(view).toContain("const providerResult = await providersResult;");
-  });
-
-  test("validates persisted Workspace selection before scoped connection reads", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const ensureStart = view.indexOf("const ensureWorkspace = async");
-    const ensureEnd = view.indexOf("const loadConnections = async", ensureStart);
-    const ensureSource = view.slice(ensureStart, ensureEnd);
-    expect(ensureSource).toContain("const workspaces = await listWorkspacesCached()");
-    expect(ensureSource).toContain("selectAvailableWorkspaceId(");
-    expect(ensureSource).toContain("currentWorkspaceId(),");
-    expect(ensureSource).not.toContain("if (workspaceId()) {");
-  });
-
-  test("only ready compatibility can reach the create-only install coordinator", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('if (result.level !== "ready")');
-    expect(view).toContain('if (checked.level !== "ready")');
-    expect(view.indexOf('if (result.level !== "ready")')).toBeLessThan(
-      view.indexOf("const config = await getInstallConfig(configId"),
-    );
-    expect(view.indexOf('if (checked.level !== "ready")')).toBeLessThan(
-      view.indexOf("const response = await createReviewableGitInstallPlan"),
-    );
-    expect(view).not.toContain("const capsule = await createCapsule");
-    expect(view).not.toContain("putCapsuleProviderBindingSet");
-  });
-
-  test("aborted InstallConfig preparation returns to configure before mutations", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const configRead =
-      'const config = await getInstallConfig(configId, {\n        signal: controller.signal,\n      });';
-    expect(view).toContain(configRead);
-    expect(view).toContain(
-      'preparationTimedOut ? t("installStore.preparingTimeout") : undefined',
-    );
-    expect(view.indexOf(configRead)).toBeLessThan(
-      view.indexOf("const response = await createReviewableGitInstallPlan"),
-    );
-    expect(view.indexOf(configRead)).toBeLessThan(
-      view.indexOf("const response = await createReviewableGitInstallPlan"),
-    );
-  });
-
-  test("repository install compilation is independent from Store discovery", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("compileInstallUx: true");
-    expect(view).not.toContain("compileInstallUx: listing() !== null");
-    expect(view).not.toContain(
-      "!listing()\n          ? { installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID }",
-    );
-  });
-
-  test("validates a query module hint against the scan before using its path", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain(
-      "const initialModulePathExplicit = Boolean(initial?.path);",
-    );
-    expect(view).toContain(
-      "const [modulePathExplicit, setModulePathExplicit] = createSignal(",
-    );
-    expect(view).toContain("setModulePathExplicit(false);");
-    expect(view).toContain("setModulePathExplicit(true);");
-    expect(view).toContain(
-      "modulePathHint() &&",
-    );
-    expect(view).toContain("path: selectedModulePath,");
-    expect(view).toContain("modulePath: modulePath().trim(),");
-  });
-
-  test("keeps the Source subtree separate from the scanned module selection", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain(
-      'const [sourcePath, setSourcePath] = createSignal(initial?.sourcePath ?? ".")',
-    );
-    expect(view).toContain("sourcePath: sourcePath(),");
-    expect(view).toContain('setSourcePath(".");');
-    // A link may name the subtree; it is not a field a person needs to fill.
-    expect(view).not.toContain('t("installStore.sourcePath")');
-    expect(view).not.toContain('t("installStore.modulePath")');
-    expect(view).not.toContain("join(sourcePath(), modulePath())");
-    expect(view).not.toContain("`${sourcePath()}/${modulePath()}`");
-  });
-
-  test("uses the strict shared Git URL guard before Source creation", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("isSafeHttpsGitUrl,");
-    expect(view).toContain("if (!isSafeHttpsGitUrl(gitUrl().trim()))");
-  });
-
-  test("does not consult source-URL deployment profiles", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).not.toContain("listSourceSnapshotDeploymentProfiles");
-    expect(view).not.toContain("selectedDeploymentProfile");
-    expect(view).not.toContain("deploymentProfileConfirmed");
-  });
-
-  test("chooses scanned module directories before compatibility", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("listSourceSnapshotInstallModules(");
-    expect(view).toContain("installModuleCatalogFromSnapshot");
-    expect(view).toContain('phase() === "module-select"');
-    expect(view).toContain('data-testid="install-module-chooser"');
-    expect(view).toContain("confirmInstallModule");
-    expect(view).toContain("setModuleSelectionConfirmed(false)");
-    expect(view).toContain("setModulePathExplicit(true)");
-    expect(
-      view.indexOf("listSourceSnapshotInstallModules("),
-    ).toBeLessThan(view.indexOf("await checkCapsuleCompatibility("));
-    expect(view).not.toContain("moduleFiles");
-  });
-
-  test("preselects the module a listing reviewed without narrowing the scan", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    // The reviewed module arrives as an explicit hint, and only the immutable
-    // scan can promote it: a stale catalog entry falls back to the scan's own
-    // choice instead of stranding the install on a path the repository lacks.
-    expect(view).toContain("const [modulePathHint, setModulePathHint]");
-    expect(view).toContain('setModulePath(selected.source.path ?? ".")');
-    expect(view).toContain("setModulePathHint(Boolean(selected.source.path))");
-    expect(view).toContain("modulePathExplicit() &&");
-    expect(view).toContain("modulePathHint() &&");
-    expect(view).toContain("setModulePathHint(false);");
-    // A proven hint preselects one scanned directory. It is not the whole
-    // choice: every other root module the repository's OpenTofu files define
-    // stays selectable in the chooser.
-    expect(view).toContain("scannedModuleChoice({");
-    expect(view).toContain("requestedPathIsHint: modulePathHint(),");
-    expect(view).toContain('choice.kind === "adopt"');
-  });
-
-  test("labels every module candidate with the providers derived from it", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("moduleCandidateLabel");
-    expect(view).toContain("{moduleCandidateLabel(module)}");
-    const helperStart = view.indexOf("const moduleCandidateLabel =");
-    expect(helperStart).toBeGreaterThan(-1);
-    const helper = view.slice(helperStart, helperStart + 900);
-    // The label is read from the scanned candidate, never guessed from a
-    // manifest, Store listing, or provider allowlist.
-    expect(helper).toContain("module.providerPackages");
-    expect(helper).toContain("providerDisplayName(provider.source)");
-    expect(helper).toContain('t("installStore.moduleOption"');
-    expect(helper).toContain('t("installStore.moduleNoProviders")');
-  });
-
-  test("module changes clear every compiled and planned artifact", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const chooserStart = view.indexOf("const chooseInstallModule =");
-    const chooserEnd = view.indexOf("const confirmInstallModule =", chooserStart);
-    const chooser = view.slice(chooserStart, chooserEnd);
-    expect(chooser).toContain("resetCompiledPreparation();");
-    for (const reset of [
-      "setCompatibility(undefined)",
-      "setInstallConfig(undefined)",
-      "setProviderRows([])",
-      "setStoreEntry(undefined)",
-      "setCapsuleId(undefined)",
-      "setPlanRunId(undefined)",
-    ]) {
-      expect(view).toContain(reset);
+  test("nothing applies from the page: the review's explicit click is the only apply", () => {
+    for (const source of pageSources) {
+      expect(source).not.toContain("createApplyRun");
+      expect(source).not.toContain("approveRun");
+      expect(source).not.toMatch(/auto=|autoApply|auto-apply/u);
     }
-  });
-
-  test("keeps direct Git preparation independent of profile rows", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("listSourceSnapshotInstallModules(");
-    expect(view).toContain("setPreparationStage(\"compatibility\")");
-    expect(view).not.toContain("listSourceSnapshotDeploymentProfiles");
-  });
-
-  test("discloses persisted sourceBuild before the Plan starts", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("sourceBuildPreview(installConfig()?.sourceBuild)");
-    expect(view).toContain('t("installStore.sourceBuildTitle")');
-    expect(view).toContain('t("installStore.sourceBuildWorkingDirectory")');
-    expect(view).toContain('t("installStore.sourceBuildOutputs")');
-    expect(view).toContain("sourceBuild()");
-    // Shown plainly before the Plan: what will run is part of the review.
-    expect(view).toContain('<section class="iv-source-build" aria-labelledby="iv-source-build-title">');
-    expect(view).not.toContain('<details class="iv-source-build">');
-    expect(view).not.toContain("await preparePlan(workspace, result, config, rows, undefined)");
-    expect(view).not.toContain("sourceBuild.env");
-  });
-
-  test("retains typed Store setup and displays scanned provider requirements", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    for (const token of [
-      "storeInitialSecretField",
-      "storeInstallFeatures",
-      "storeFeatureSelections",
-      "setupProjectionInvalid",
-    ]) {
-      expect(view).toContain(token);
-    }
-    // The module requirement list and provider addresses are not something
-    // a person needs to install the app; the API keeps them.
-    expect(view).not.toContain('data-testid="install-module-requirements"');
-    expect(view).not.toContain("selectedModuleDetails");
-    expect(view).not.toContain('t("installStore.connectionTechnical")');
-    expect(view).not.toContain("CapsuleSourceOptions");
-    expect(view).not.toContain("readSnapshotDocument");
-    expect(view).not.toContain("entryEvidence");
-    expect(view).not.toContain("managedPublicHostname");
-    expect(view).not.toContain("storePublicEndpoint");
-    expect(view).not.toContain("storeSupportsOidc");
-    expect(view).not.toContain("disabled={field.secret}");
-  });
-
-  test("keeps app identity with inline states instead of a step wizard", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('data-testid="install-app-header"');
-    expect(view).toContain('data-install-state={uiState()}');
-    // Connections are made in place on each row; once installed, the app
-    // page's settings own them.
-    expect(view).not.toContain("<ConnectionsTab");
-    expect(view).toContain("<ConnectionCreateForm");
-    expect(view).not.toContain('data-testid="install-steps"');
-    expect(view).not.toContain("parseCapsuleSourceOptions");
-  });
-
-  test("shows optional settings and the version plainly, without disclosures", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('data-testid="install-optional-settings"');
-    expect(view).toContain('t("installStore.optionalSettings")');
-    expect(view).toContain('data-testid="install-source-fields"');
-    expect(view).toContain('t("installStore.sourceRef")');
-    expect(view).not.toContain('t("installStore.advancedSettings")');
-    expect(view).not.toContain('t("installStore.sourceDetails")');
-    // The module chooser stays, only for an ambiguous repository version.
-    expect(view).toContain('setPhase("module-select")');
-    expect(view).toContain('data-testid="install-module-chooser"');
-  });
-
-  test("an installed app shows the same app page sections", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const lifecycle = read("dashboard/src/views/new/InstallLifecycle.tsx");
-    expect(lifecycle).toContain("<AppManagePage");
-    expect(lifecycle).toContain('state() === "installed" || state() === "uninstalling"');
-    expect(view).toContain("justInstalled={completedHere()}");
-    // The install header gives way to the app page's own header.
-    expect(view).toContain('lifecycleState() === "installed" || lifecycleState() === "uninstalling"');
-  });
-
-  test("preserves app handoff and Interface-first completion", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("appHandoffFromSearch");
-    expect(view).toContain("appHandoffProductLabel");
-    expect(view).toContain("createAppHandoffConnectHref");
-    expect(view).toContain("appendAppHandoff");
-    expect(view).toContain("listAuthorizedUiSurfaces");
-    expect(view).toContain("interfaceUrl()");
-    expect(view).toContain('t("run.appHandoff.open", {');
-    expect(view).not.toContain("`Open in ");
-  });
-
-  test("does not declare a UI service complete before its launcher is readable", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('"finishing"');
-    expect(view).toContain("installConfigRequiresUiSurface");
-    expect(view).toContain("UI_SURFACE_READBACK_ATTEMPTS");
-    expect(view).toContain("await listAuthorizedUiSurfaces");
-    const finishing = view.slice(view.indexOf("const finishInstallation ="));
-    expect(finishing.indexOf('setPhase("finishing")')).toBeLessThan(finishing.indexOf('setPhase("done")'));
-    expect(view).toContain('t("installStore.launchNotReady")');
-    expect(view).toContain('t("common.retry")');
-  });
-
-  test("matches resolved repository launcher bindings to the authenticated Principal", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("installingPrincipalId={session.subject}");
-    expect(view).toContain("installingPrincipalId: props.installingPrincipalId");
-    expect(view).toContain("repositoryInstallUxAccepted:");
-    expect(view).toContain("config?.installExperience?.repositoryInstallUx");
-  });
-
-  test("the install sheet shows what the app creates and connects in place", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const sheet = view.slice(
-      view.indexOf('<Show when={phase() === "setup"}>'),
-      view.indexOf('<Show when={phase() === "review" && planRunId() && capsuleId()}>'),
-    );
-    // Planned resources come from the scanned module before any Plan exists.
-    expect(sheet).toContain('<PlannedResources resources={compatibility()?.resources ?? []} />');
-    expect(sheet).toContain("renderConnectionRow");
-    // A missing connection is fixed from the row itself, not a second panel.
-    const rows = view.slice(view.indexOf("const renderConnectionRow"), view.indexOf("const sectionError"));
-    expect(rows).toContain("toggleConnect(row)");
-    expect(rows).toContain('initialProviderSource={row.provider}');
-    // The name stays editable until the Plan, and Review is a separate label.
-    expect(sheet).toContain("updateName(event.currentTarget.value)");
-    expect(sheet).not.toContain("readOnly");
-    expect(sheet).toContain('t("installStore.reviewChanges")');
-    expect(sheet).toContain("void discardAttempt()");
-    expect(sheet).not.toContain('t("installStore.install")');
-  });
-
-  test("discarding an attempt only removes what that attempt created", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const discard = view.slice(view.indexOf("const discardAttempt"), view.indexOf("const confirmInstallModule"));
-    expect(discard).toContain("abandonUnappliedCapsule(pendingCapsuleId)");
-    expect(discard).toContain("capsuleAbandonmentCompleted(");
-    expect(discard).toContain("attemptCreatedSourceId");
-    expect(discard).toContain("deleteSource(createdSourceId).catch(");
-    // A Source the server keeps stops polling Git instead of lingering.
-    expect(discard).toContain("patchSource(createdSourceId, { autoSync: false })");
-    // A Plan request in flight is never discarded over.
-    expect(discard).toContain("busy() && !cancellingPreparation");
-    expect(discard).toContain('setPhase("configure")');
-    expect(view).toContain("attemptCreatedSourceId = createdSourceId;");
-  });
-
-  test("review and apply stay inside /new", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const execution = read("dashboard/src/views/new/InstallExecution.tsx");
     expect(view).toContain("<InstallExecution");
-    expect(execution).toContain("createApplyRun(");
-    expect(execution).toContain("openRunStream(");
-    expect(execution).toContain("stateVersionReadinessAfterApply(");
-    expect(execution).toContain('allow: "installStore.allowInstall"');
-    expect(execution).toContain("t(copy().allow)");
-    expect(execution).not.toContain('navigate(`/runs/');
-    expect(execution).not.toContain("auto=install");
+    const execution = read("dashboard/src/views/new/InstallExecution.tsx");
+    const install = between(execution, "const install = async", "// Apply starts only from");
+    expect(install).toContain("createApplyRun(runId()");
+    expect(execution.match(/void install\(\)/gu)).toHaveLength(1);
   });
 
-  test("shows the exact auto-selected destination as read-only review evidence", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("autoSelectedDestination");
-    expect(view).toContain('t("installStore.destinationSummary"');
-    expect(view).toContain('data-install-provider-destination="auto-selected"');
-    expect(view).toContain("data-provider-connection-id");
-    expect(view).toContain("providerConnectionDisplayName(destination())");
-    expect(view).toContain("setAutoSelectedProviderRows");
-    expect(view).toContain("setAutoSelectedProviderRows(new Set<string>());");
-    // The decided destination reads as text, not as a disabled select.
-    const summary = view.slice(
-      view.indexOf("const autoSelectedDestinationSummary"),
-      view.indexOf("const storeFeatureKey"),
-    );
-    expect(summary).toContain('class="iv-destination-name"');
-    expect(summary).not.toContain("<Select");
+  test("inputs and secrets never reach the URL or browser storage", () => {
+    for (const source of pageSources) {
+      expect(source).not.toContain("localStorage");
+      expect(source).not.toContain("sessionStorage");
+      expect(source).not.toContain("indexedDB");
+    }
+    // The URL changes only by adding or removing the attempt id.
+    expect(view.match(/navigate\(/gu)?.length).toBeGreaterThan(0);
+    for (const call of view.match(/navigate\([^;]*/gu) ?? []) {
+      expect(call).not.toMatch(/drafts|variables|value/u);
+    }
+    expect(between(state, "export function withInstallAttempt(", "/** The query without")).toContain("params.set(ATTEMPT_PARAM, attemptId)");
   });
 
-  test("makes the provider/module then Host/account boundary explicit", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('t("installStore.moduleTitle")');
-    expect(view).toContain('data-testid="install-module-chooser"');
-    expect(view).toContain("moduleCandidateLabel(module)");
-    expect(view).toContain("providerConnectionDisplayName(connection)");
-    expect(view).not.toContain("deploymentProfile");
+  test("setting values leave memory only inside the confirming answer", () => {
+    // `variables` is sent by exactly one request: the continue answer.
+    const confirm = between(controller, "const confirm = async", "const discardOnce = async");
+    expect(confirm).toContain("continue: true,");
+    expect(confirm).toContain("variables: values.variables");
+    const outsideConfirm = controller.replace(confirm, "");
+    expect(outsideConfirm).not.toMatch(/variables:/u);
+    // Secret fields are write-only and start empty.
+    expect(sheet).toContain('type={variable().sensitive ? "password"');
+    expect(sheet).toContain('autocomplete={variable().sensitive ? "new-password" : "off"}');
   });
 
-  test("only auto-selects exactly one eligible Host/account", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    const helper = read("dashboard/src/lib/provider-connections.ts");
-    expect(view).toContain("preferredProviderConnection(");
-    expect(helper).toContain("return candidates.length === 1 ? candidates[0] : undefined;");
-    expect(helper).not.toContain("const managed = candidates.filter");
+  test("discarding never runs alongside another request", () => {
+    const discard = between(controller, "const discard = async", "/** Start over:");
+    expect(discard).toContain("if (!current || mutating()) return false;");
+    expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardOnce("));
   });
 
-  test("keeps provider selection fail-closed until Workspace policy is merged", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("WorkspacePolicyState");
-    expect(view).toContain("mergeProviderConnectionPolicies");
-    expect(view).toContain(
-      'if (workspacePolicyState().status !== "ready") return [];',
-    );
-    expect(view).toContain(
-      'if (workspacePolicyState().status !== "ready") return false;',
-    );
-    expect(view).toContain("const matches = candidatesFor(row.provider, config.policy);");
-    expect(view).toContain(
-      "!candidatesFor(row.provider, config.policy).some(",
-    );
-  });
-
-  test("keeps TCS handoffs in the same install surface", () => {
-    const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("parseInitialTcsHandoff(location.search)");
-    expect(view).toContain("await fetchTcsListing(tcs.base, tcs.listingId)");
-    expect(view).toContain("chooseListing(selected)");
-    expect(view).toContain(
-      "resolveAbsentRefToStableSemver: listing() !== null",
-    );
-    expect(view).toContain("setGitRef(prepared.snapshot.resolvedCommit)");
-  });
-
-  test("legacy install screens and cross-route progress state are deleted", () => {
+  test("the legacy client orchestration is gone", () => {
     for (const path of [
-      "dashboard/src/views/new/NewAppView.tsx",
-      "dashboard/src/views/new/CapsuleSourceOptionsInstallView.tsx",
-      "dashboard/src/components/install/InstallProgress.tsx",
-      "dashboard/src/lib/install-steps.ts",
+      "dashboard/src/views/new/InstallLifecycle.tsx",
+      "dashboard/src/views/new/install-lifecycle.ts",
+      "dashboard/src/views/new/install-helpers.ts",
+      "dashboard/src/views/new/install-simplification.css",
+      "dashboard/src/lib/install-plan-attempt.ts",
+      "dashboard/src/lib/install-recovery.ts",
+      "dashboard/src/lib/accepted-initial-install-plan.ts",
+      "dashboard/src/lib/auto-apply-consent.ts",
     ]) {
       expect(existsSync(resolve(root, path)), path).toBe(false);
     }
-    const runView = read("dashboard/src/views/runs/RunView.tsx");
-    expect(runView).not.toContain("auto=install");
-    expect(runView).not.toContain("InstallProgressCard");
-    expect(runView).not.toContain("installScreen");
+    const api = read("dashboard/src/lib/control-api.ts");
+    for (const removed of [
+      "createReviewableGitInstallPlan",
+      "checkCapsuleCompatibility",
+      "prepareCapsuleSourceSnapshot",
+      "listSourceSnapshotInstallModules",
+      "export async function createSource(",
+      "export async function deleteSource(",
+    ]) {
+      expect(api).not.toContain(removed);
+    }
+    for (const source of pageSources) {
+      expect(source).not.toContain("patchSource");
+      expect(source).not.toContain("abandonUnappliedCapsule");
+      expect(source).not.toContain("autoSync");
+    }
+  });
+
+  test("the Store page keeps search, the Git form and the unfinished installs", () => {
+    expect(view).toContain('class="iv-hero iv-page-heading"');
+    expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
+    expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
+    expect(view).toContain("<OpenAttempts principalId={props.principalId} />");
+    expect(view).toContain("listOpenGitInstallAttempts(workspaceId)");
+    // Selecting a listing reflects it into the URL so back and share work.
+    expect(view).toContain("navigate(`/new?${buildNewQuery(listing)}`);");
+  });
+
+  test("the not-installed page has one Install and lets the person choose the version", () => {
+    const candidate = between(view, '<Match when={stage() === "candidate"}>', "</Match>");
+    expect(candidate.match(/variant="primary"/gu)).toHaveLength(1);
+    expect(candidate).toContain('t("installStore.install")');
+    expect(candidate).toContain('t("installStore.startHint")');
+    expect(candidate).toContain('label={t("installStore.sourceRef")}');
+    expect(view).toContain('data-testid="install-provenance"');
   });
 });

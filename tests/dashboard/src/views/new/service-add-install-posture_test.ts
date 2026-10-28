@@ -22,7 +22,7 @@ describe("app install posture", () => {
     expect(homeSource).not.toContain('href="/workloads/new"');
     expect(homeSource).not.toContain("createService(");
     expect(installViewSource).toContain("StoreBrowser");
-    expect(installViewSource).toContain("prepareInstall");
+    expect(installViewSource).toContain("attempt.start(");
     expect(en["installStore.browseTitle"]).toBe("Find apps");
     expect(ja["installStore.browseTitle"]).toBe("アプリを探す");
   });

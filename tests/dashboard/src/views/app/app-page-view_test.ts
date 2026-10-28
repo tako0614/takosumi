@@ -22,10 +22,9 @@ const execution = read("views/new/InstallExecution.tsx");
 const allAppSources = [page, version, settings, created, history, ui, route].join("\n");
 
 describe("installed app page", () => {
-  test("the route renders the one app page; the install page reuses it", () => {
+  test("the route renders the one app page", () => {
     expect(route).toContain("<AppManagePage");
     expect(route).toContain("tab={params.tab}");
-    expect(read("views/new/InstallLifecycle.tsx")).toContain("<AppManagePage");
   });
 
   test("sections follow the keep-an-app behaviors in order", () => {
@@ -163,9 +162,8 @@ describe("installed app page", () => {
   });
 
   test("another app never shows this app's review, notices or reads", () => {
-    // The route and the install page mount a fresh page per app.
+    // The route mounts a fresh page per app.
     expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
-    expect(read("views/new/InstallLifecycle.tsx")).toContain("<Show when={managed() ? props.capsuleId : undefined} keyed>");
     // Defense in depth inside the page.
     expect(page).toContain("const forCapsule = capsuleId();");
     expect(page).toContain("if (capsuleId() !== forCapsule) return;");

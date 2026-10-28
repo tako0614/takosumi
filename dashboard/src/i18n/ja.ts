@@ -41,7 +41,6 @@ export const ja = {
   "installStore.addConnection": "別のアカウントで接続",
   "installStore.reviewChanges": "内容を確認",
   "installStore.discard": "やめる",
-  "installStore.discardUnavailable": "途中のインストールを片付けられませんでした。アプリ一覧で状態を確認してください。",
   "installStore.allowInstall": "許可してインストール",
   "installStore.costTitle": "料金の目安",
   "installStore.costRatedZero": "見積もり額は {amount} です。",
@@ -54,11 +53,6 @@ export const ja = {
   "installStore.moduleNoProviders": "プロバイダー不要",
   "installStore.moduleChoose": "モジュールディレクトリ",
   "installStore.moduleConfirm": "このモジュールで続ける",
-  "installStore.moduleUnavailable":
-    "このリポジトリ版のモジュールを安全に特定できませんでした。",
-  "installStore.moduleMissing":
-    "このリポジトリの版には、インストールできるモジュールがありません。",
-  "installStore.stepReview": "確認",
   "installStore.name": "アプリ名",
   "installStore.sourceUrl": "Git URL",
   "installStore.sourceRef": "版（tag・branch・commit。省略可）",
@@ -67,60 +61,22 @@ export const ja = {
   "installStore.selectValue": "選択してください",
   "installStore.yes": "はい",
   "installStore.no": "いいえ",
-  "installStore.viewApps": "アプリ一覧",
-  "installStore.selectWorkspace": "スペースを選ぶと、このアプリの状態を確認できます。",
   "installStore.noLogs": "ログはまだありません。",
   "installStore.closePanel": "閉じる",
-  "installStore.uninstall": "アンインストール",
   "installStore.manageApp": "アプリを管理",
   "installStore.cloudConnection": "クラウド接続",
   "installStore.cloudConnected": "接続済み。インストールできます。",
   "installStore.appDescription": "必要な設定を選んで、このスペースにインストールします。",
-  "installStore.uninstalled": "アンインストール済み",
   "installStore.logs": "進捗とログ",
   "installStore.retryInstall": "インストールを再試行",
   "installStore.applyUnconfirmed": "実行結果を確認できませんでした。再実行せず、実行履歴で状態を確認してください。",
-  "installStore.preparing": "インストールの準備をしています",
-  "installStore.preparingFetching":
-    "リポジトリを取得しています。初回は1分ほどかかることがあります。",
-  "installStore.preparingWorkspace": "選択中のスペースを確認しています。",
-  "installStore.preparingConnections": "利用できる接続を確認しています。",
-  "installStore.preparingSource": "リポジトリの内容を取得しています。",
-  "installStore.preparingCompatibility":
-    "この環境でインストールできるか確認しています。",
-  "installStore.preparingConfig": "アプリの設定項目を準備しています。",
-  "installStore.preparingPlan": "確認用の変更内容を準備しています。",
-  "installStore.preparingTimeout":
-    "準備に時間がかかりすぎました。クラウドには何も作っていませんが、リポジトリの登録結果を確認できませんでした。登録状況を確認してから再試行してください。",
-  "installStore.sourceRegistrationUnconfirmed":
-    "クラウドには何も作っていません。リポジトリの登録結果を確認できませんでした。「インストール」をもう一度押すと同じ試行を確認します（リポジトリが重複して登録されることはありません）。",
-  "installStore.sourceBaselineUnavailable":
-    "クラウドには何も作っていません。一時的にリポジトリの一覧を確認できなかったため、登録を開始しませんでした。少し待ってから「インストール」をもう一度押してください。",
-  "installStore.sourceAutoSyncFailed":
-    "ソースの自動更新を有効にできませんでした。再試行すると、このアプリの自動更新を有効にします。",
   "installStore.providerHint":
     "選択したプロバイダー / モジュールに必要なホスト / アカウントだけを選びます。",
   "installStore.chooseConnection": "ホスト / アカウントを選択",
   "installStore.destination": "ホスト / アカウント",
-  "installStore.destinationSummary": "ホスト / アカウント: {destination}",
   "installStore.connect": "接続する",
   "installStore.continue": "続ける",
   "installStore.setupTitle": "設定",
-  "installStore.sourceBuildTitle": "リポジトリのビルド手順",
-  "installStore.sourceBuildHint":
-    "変更の確認を始める前に、認証情報を使わないコマンドと生成されるパスを確認してください。",
-  "installStore.sourceBuildCommand": "コマンド {index}",
-  "installStore.sourceBuildWorkingDirectory": "作業ディレクトリ",
-  "installStore.sourceBuildSourceRoot": "リポジトリのルート",
-  "installStore.sourceBuildOutputs": "生成されるパス",
-  "installStore.setupUnavailableTitle": "アプリの設定を表示できません",
-  "installStore.secretSetupUnavailableTitle": "シークレットを設定できません",
-  "installStore.optionalFeatures": "オプション機能",
-  "installStore.sourceBuildArguments": "コマンドの引数",
-  "installStore.setupInvalid": "アプリの設定定義が無効です。",
-  "installStore.setupRequired": "{label}を入力してください。",
-  "installStore.secretUnavailable":
-    "このシークレットは接続として設定してください。",
   "installStore.reviewing": "変更内容を確認しています",
   "installStore.reviewingHint": "インストールする前に変更内容を確認しています。",
   "installStore.reviewTitle": "このアプリがあなたのクラウドに作るもの",
@@ -149,15 +105,8 @@ export const ja = {
   "installStore.finalizing": "アプリを準備しています",
   "installStore.finalizingHint":
     "アプリを開くためのリンクが使えるようになるまで待っています。",
-  "installStore.launchNotReady":
-    "アプリは適用されましたが、起動リンクをまだ確認できません。再確認するか、アプリの管理画面を開いてください。",
   "installStore.runFailed": "インストールを完了できませんでした",
   "installStore.restartWithLatestSource": "最新のソースでやり直す",
-  "installStore.restartConfirmTitle": "最新のソースで最初からやり直しますか？",
-  "installStore.restartConfirmMessage":
-    "未適用のアプリを破棄し、同じ名前でリポジトリを取得し直します。失敗した変更の確認は履歴に残ります。",
-  "installStore.restartUnavailable":
-    "未適用のアプリを安全に破棄できなかったため、最初からやり直せませんでした。技術的な詳細を確認してください。",
   "installStore.open": "開く",
   "installStore.chooseAnother": "別のアプリを探す",
   "installStore.invalidSource": "有効なhttpsのGit URLを入力してください。",
@@ -166,6 +115,57 @@ export const ja = {
   "installStore.planMissing": "変更の確認を開始できたか確認できませんでした。",
   "installStore.listingUnavailable":
     "このアプリをストアから取得できませんでした。",
+  // --- install attempt (TASK-0115 Phase 3b) --------------------------------
+  "installStore.secretHint": "入力した値は保存されません。インストールを確定するときにだけ送ります。",
+  "installStore.derivedHint": "空欄のときは、アプリ名から決まります。",
+  "installStore.settingInvalid": "この形式では入力できません。",
+  "installStore.settingsRequired": "必須の設定を入力すると「内容を確認」に進めます。",
+  "installStore.resubmitTitle": "設定をもう一度入力してください",
+  "installStore.resubmitHint": "前回の確定がサーバーに届いたか確認できませんでした。同じ設定をもう一度送ると、続きから進みます。ほかの内容はいまは変えられません。",
+  "installStore.nameTaken": "このスペースには、同じ名前のアプリがすでにあります。",
+  "installStore.useProposedName": "「{name}」にする",
+  "installStore.open.title": "途中のインストール",
+  "installStore.open.hint": "続きから再開するか、やめて片付けられます。クラウドにはまだ何も作っていません。",
+  "installStore.open.statusReading": "リポジトリの読み取り中",
+  "installStore.open.statusInputs": "接続と設定の入力待ち",
+  "installStore.open.statusReview": "内容の確認待ち",
+  "installStore.open.statusExpired": "期限切れ",
+  "installStore.open.statusFailed": "止まっています",
+  "installStore.reading.title": "リポジトリを読んでいます",
+  "installStore.reading.source": "Gitから指定の版を取得しています。クラウドにはまだ何も作りません。",
+  "installStore.reading.analyzing": "このアプリが作るもの・必要な接続・設定を調べています。",
+  "installStore.reading.planning": "クラウドに作られるものと料金の目安を計算しています。まだ適用はしません。",
+  "installStore.reading.pausedTitle": "読み取りの途中です",
+  "installStore.reading.pausedHint": "「続ける」で読み取りを再開します。途中でやめることもできます。",
+  "installStore.completeTitle": "インストールしました",
+  "installStore.completeHint": "インストールを始めたアプリへ戻れます。",
+  "installStore.problem.retryTitle": "読み取りを完了できませんでした",
+  "installStore.problem.failedTitle": "インストールの準備に失敗しました",
+  "installStore.problem.expiredTitle": "このインストールは続けられません",
+  "installStore.problem.discardedTitle": "このインストールはやめました",
+  "installStore.problem.discarded": "クラウドには何も作っていません。もう一度インストールできます。",
+  "installStore.problem.retry": "もう一度試す",
+  "installStore.problem.restart": "最初からやり直す",
+  "installStore.problem.reinstall": "もう一度インストール",
+  "installStore.problem.expired": "しばらく操作がなかったため、このインストールは期限切れになりました。最初からやり直してください。",
+  "installStore.problem.workspaceChanged": "待っている間にスペースの管理状態が変わりました。最初からやり直してください。",
+  "installStore.problem.sourceSync": "Gitリポジトリを読めませんでした。URLと版、プライベートなリポジトリならGit接続を確認してください。",
+  "installStore.problem.module": "この版から、インストールできるモジュールを特定できませんでした。",
+  "installStore.problem.compatibility": "この版はそのままではインストールできません。アプリの提供元に確認してください。",
+  "installStore.problem.secretSetting": "このアプリには、インストール時にはまだ受け付けられない秘密の設定が必要です。",
+  "installStore.problem.plan": "作られるものを計算できませんでした。理由とログを確認してください。",
+  "installStore.problem.retryable": "途中の処理を確認できませんでした。もう一度試すと続きから進みます。",
+  "installStore.problem.nameTaken": "このスペースには同じ名前のアプリがあります。別の名前にしてください。",
+  "installStore.problem.connection": "選んだ接続はこのアプリでは使えません。別の接続を選んでください。",
+  "installStore.problem.resubmit": "同じ設定をもう一度送ってください。ほかの内容を変えるときは、やめてから最初からやり直してください。",
+  "installStore.problem.generic": "インストールの準備を完了できませんでした。最初からやり直してください。",
+  "installStore.error.changed": "内容が更新されていました。最新の状態を表示しています。",
+  "installStore.error.connectionsMissing": "必要な接続がまだそろっていません。",
+  "installStore.error.alreadyInstalled": "このアプリはすでにインストールされています。アプリのページから管理してください。",
+  "installStore.error.discardRefused": "いまは片付けられませんでした。インストールが進んでいる可能性があります。少し待ってからもう一度お試しください。",
+  "installStore.error.settingsInvalid": "設定の入力を確認してください。",
+  "installStore.error.unavailable": "このインストールを確認できませんでした。",
+  "installStore.error.continueUnconfirmed": "確定がサーバーに届いたか確認できませんでした。最新の状態を表示しています。",
   // --- common -------------------------------------------------------------
   "common.loading": "読み込み中…",
   "common.retry": "再試行",
@@ -610,14 +610,6 @@ export const ja = {
   "app.uninstall.cancel": "アンインストールを取り消す",
   "installStore.recoveryUnverified": "インストールの状況を確認できません",
   "installStore.recoveryUnverifiedHint": "元のインストールがまだ進行中の可能性があります。もう一度インストールする前に状況を再取得するか、履歴を確認してください。",
-  "installStore.recoveryContinue": "インストールの準備を続けられます",
-  "installStore.recoveryContinueHint": "続けると、確認用の変更内容を準備するだけです。まだ適用はしません。",
-  "installStore.recoveryReview": "最初の変更を確認できます",
-  "installStore.recoveryReviewHint": "最初の変更の確認を開いて内容を確かめてください。適用は別の操作で行います。",
-  "installStore.recoveryFailed": "インストールの準備は停止しました",
-  "installStore.recoveryFailedHint": "この記録から開ける変更の確認はありません。途中の準備が取り消されたとは限りません。もう一度インストールする前にアプリ一覧を確認するか、運営者に相談してください。",
-  "installStore.recoveryFailedRun": "インストールの準備は停止しました。変更の確認を開けます",
-  "installStore.recoveryFailedRunHint": "記録された変更の確認を開いて状況を確かめ、再試行する場合は明示的に選んでください。自動で再試行や適用はしません。",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "変更の確認",
@@ -830,47 +822,6 @@ export const ja = {
   "run.audit.detail": "記録の詳細",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.git.defaultRef": "Git の既定ブランチ",
-  "new.compat.ready": "このままインストールできます",
-  "new.compat.patch": "手直しが必要です",
-  "new.compat.unsupported": "今はインストールできません",
-  "new.compat.summary.checkFailed":
-    "インストールできるかの確認を完了できませんでした。アプリの問題とは限りません。もう一度お試しください。",
-  "new.compat.summary.providerCredentials":
-    "{provider} の非公開値を取得元から外す必要があります。",
-  "new.compat.summary.installUxInvalid":
-    "このバージョンの初期設定宣言は配布元による修正が必要です。",
-  "new.compat.summary.reviewRequired":
-    "インストールする前に確認が必要な項目があります。",
-  "new.compat.issue.providerCredentials.message":
-    "{provider} の非公開値が取得元の中に書かれています。",
-  "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、{provider} の接続から適用時だけ渡してください。値を外して接続すると続行できます。",
-  "new.compat.issue.installUxInvalid.message":
-    "アプリの初期設定宣言が選択したバージョンと一致していません。",
-  "new.compat.issue.installUxInvalid.detail":
-    "別のバージョンを選ぶか、配布元へ .well-known/takosumi.json の修正を依頼してください。Takosumi が設定項目を推測して置き換えることはありません。",
-  "new.compat.issue.providerPreserved.message":
-    "取得元にある {provider} の非秘密設定はそのまま維持されます。",
-  "new.compat.issue.backendIsolated.message":
-    "リポジトリ側の保存先の設定はそのまま残し、Takosumi がこのアプリの適用記録を別に管理します。",
-  "new.compat.issue.lockfile.message":
-    "利用する接続先の固定情報が含まれています。非公開値を外したあと、インストール時に固定内容を確認します。",
-  "new.compat.issue.reviewRequired.message":
-    "インストール前に確認が必要な項目があります。",
-  "new.error.sourceRefNotFound":
-    "指定されたバージョン「{ref}」が見つかりません。リンク先にこのバージョンがあるか確認してください。",
-  "new.error.sourceFetchFailed":
-    "アプリの内容を取得できませんでした。リンク、版、フォルダ、または非公開リポジトリの接続を確認してください。詳細: {message}",
-  "new.error.sourceFetchFailedUnknown": "原因を取得できませんでした。",
-  "new.error.generic":
-    "アプリをインストールできませんでした。内容を確認して、もう一度お試しください。",
-  "new.error.genericWithDetails":
-    "アプリをインストールできませんでした。詳細: {message}",
-  "new.error.connectionRequired":
-    "このアプリのインストールにはクラウドへの接続が必要です。接続を設定してから、もう一度お試しください。",
-  "new.error.alreadyExistsGeneric":
-    "この名前のアプリはすでにインストールされています。ホームから開くか、別の名前にしてください。",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "オーナー",

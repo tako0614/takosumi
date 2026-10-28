@@ -189,11 +189,11 @@ describe("StoreBrowser install UI", () => {
     );
   });
 
-  test("keeps provider readiness out of discovery and resolves it after Add", () => {
-    expect(storeHostSource).toContain('setPhase("preparing")');
-    expect(storeHostSource.indexOf('setPhase("preparing")')).toBeLessThan(
-      storeHostSource.indexOf("await checkCapsuleCompatibility({"),
-    );
+  test("keeps provider readiness out of discovery; the install attempt resolves it after Install", () => {
+    // Reading the repository, connections and settings is the coordinator's
+    // work, started only by the Install action.
+    expect(storeHostSource).not.toContain("checkCapsuleCompatibility");
+    expect(storeHostSource).toContain("void attempt.start(");
     expect(storeHostSource).not.toContain("deriveInstallReadiness");
     expect(storeHostSource).not.toContain("listingBadge");
     expect(storeBrowserSource).not.toContain("listingBadge");

@@ -30,7 +30,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.addConnection": "Connect another account",
   "installStore.reviewChanges": "Review",
   "installStore.discard": "Stop installing",
-  "installStore.discardUnavailable": "The unfinished install couldn't be cleaned up. Check its status in your apps.",
   "installStore.allowInstall": "Allow and install",
   "installStore.costTitle": "Cost estimate",
   "installStore.costRatedZero": "The estimate is {amount}.",
@@ -43,11 +42,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.moduleNoProviders": "No providers",
   "installStore.moduleChoose": "Module directory",
   "installStore.moduleConfirm": "Continue with this module",
-  "installStore.moduleUnavailable":
-    "Takosumi couldn't safely identify the modules in this repository version.",
-  "installStore.moduleMissing":
-    "No installable module was found in this repository version.",
-  "installStore.stepReview": "Review",
   "installStore.name": "App name",
   "installStore.sourceUrl": "Git URL",
   "installStore.sourceRef": "Version (tag, branch or commit; optional)",
@@ -56,59 +50,22 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.selectValue": "Choose…",
   "installStore.yes": "Yes",
   "installStore.no": "No",
-  "installStore.viewApps": "Browse apps",
-  "installStore.selectWorkspace": "Select a workspace to view this app.",
   "installStore.noLogs": "No logs yet.",
   "installStore.closePanel": "Close",
-  "installStore.uninstall": "Uninstall",
   "installStore.manageApp": "Manage app",
   "installStore.cloudConnection": "Cloud connection",
   "installStore.cloudConnected": "Connected. Ready to install.",
   "installStore.appDescription": "Install this app in your workspace with just the settings it needs.",
-  "installStore.uninstalled": "Uninstalled",
   "installStore.logs": "Progress and logs",
   "installStore.retryInstall": "Retry installation",
   "installStore.applyUnconfirmed": "The execution could not be confirmed. Check the existing run before starting another execution.",
-  "installStore.preparing": "Getting the install ready",
-  "installStore.preparingFetching":
-    "Fetching the repository. The first time can take about a minute.",
-  "installStore.preparingWorkspace": "Confirming the selected workspace.",
-  "installStore.preparingConnections": "Reading available connections.",
-  "installStore.preparingSource": "Fetching the repository contents.",
-  "installStore.preparingCompatibility":
-    "Checking that this app can be installed here.",
-  "installStore.preparingConfig": "Preparing the app's settings.",
-  "installStore.preparingPlan": "Preparing the changes for review.",
-  "installStore.preparingTimeout":
-    "Preparation took too long. Nothing was created in your cloud, but we couldn't confirm whether the repository was registered. Check it before trying again.",
-  "installStore.sourceRegistrationUnconfirmed":
-    "Nothing was created in your cloud. We couldn't confirm the repository was registered. Choose Install again to check this same attempt; it won't register the repository twice.",
-  "installStore.sourceBaselineUnavailable":
-    "Nothing was created in your cloud. The repository list was temporarily unavailable, so registration didn't start. Wait a moment, then choose Install again.",
-  "installStore.sourceAutoSyncFailed":
-    "Automatic source updates could not be enabled. Retry to enable them for this app.",
   "installStore.providerHint":
     "Connect the cloud this app needs before installing.",
   "installStore.chooseConnection": "Choose a Host / account",
   "installStore.destination": "Host / account",
-  "installStore.destinationSummary": "Host / account: {destination}",
   "installStore.connect": "Connect",
   "installStore.continue": "Continue",
   "installStore.setupTitle": "Settings",
-  "installStore.sourceBuildTitle": "Repository build steps",
-  "installStore.sourceBuildHint":
-    "Check these credential-free commands and produced paths before reviewing changes.",
-  "installStore.sourceBuildCommand": "Command {index}",
-  "installStore.sourceBuildWorkingDirectory": "Working directory",
-  "installStore.sourceBuildSourceRoot": "Repository root",
-  "installStore.sourceBuildOutputs": "Produced paths",
-  "installStore.setupUnavailableTitle": "Can't show this app's settings",
-  "installStore.secretSetupUnavailableTitle": "Secret setup is unavailable",
-  "installStore.optionalFeatures": "Optional features",
-  "installStore.sourceBuildArguments": "Command arguments",
-  "installStore.setupInvalid": "This app's settings definition is invalid.",
-  "installStore.setupRequired": "Enter {label}.",
-  "installStore.secretUnavailable": "Configure this secret as a connection.",
   "installStore.reviewing": "Reviewing changes",
   "installStore.reviewingHint": "Checking the changes before installing.",
   "installStore.reviewTitle": "What this app will create in your cloud",
@@ -137,15 +94,8 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.finalizing": "Getting the app ready",
   "installStore.finalizingHint":
     "Waiting for the app's launch link to become available.",
-  "installStore.launchNotReady":
-    "The app was applied, but its launch link is not ready yet. Retry the check or open the app's management page.",
   "installStore.runFailed": "The app could not be installed",
   "installStore.restartWithLatestSource": "Start again from the latest source",
-  "installStore.restartConfirmTitle": "Start again from the latest source?",
-  "installStore.restartConfirmMessage":
-    "Takosumi will discard the unapplied app and fetch the repository again with the same name. The failed review stays in the history.",
-  "installStore.restartUnavailable":
-    "Takosumi could not safely discard the unapplied app, so it did not start again. Open the technical details for more information.",
   "installStore.open": "Open",
   "installStore.chooseAnother": "Find another app",
   "installStore.invalidSource": "Enter a valid HTTPS Git URL.",
@@ -154,6 +104,57 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.planMissing": "We couldn't confirm that the review started.",
   "installStore.listingUnavailable":
     "This app is no longer available from the Store.",
+  // --- install attempt (TASK-0115 Phase 3b) --------------------------------
+  "installStore.secretHint": "Not saved. Sent only when you confirm the install.",
+  "installStore.derivedHint": "Left empty, it comes from the app name.",
+  "installStore.settingInvalid": "This value isn't in the expected format.",
+  "installStore.settingsRequired": "Fill in the required settings to review.",
+  "installStore.resubmitTitle": "Enter the settings again",
+  "installStore.resubmitHint": "We couldn't confirm that your last confirmation arrived. Send the same settings again to continue; nothing else can change now.",
+  "installStore.nameTaken": "Another app in this workspace already uses this name.",
+  "installStore.useProposedName": "Use “{name}”",
+  "installStore.open.title": "Unfinished installs",
+  "installStore.open.hint": "Continue where you left off, or stop and clean up. Nothing has been created in your cloud yet.",
+  "installStore.open.statusReading": "Reading the repository",
+  "installStore.open.statusInputs": "Waiting for connections and settings",
+  "installStore.open.statusReview": "Ready to review",
+  "installStore.open.statusExpired": "Expired",
+  "installStore.open.statusFailed": "Stopped",
+  "installStore.reading.title": "Reading the repository",
+  "installStore.reading.source": "Fetching the chosen version from Git. Nothing is created in your cloud yet.",
+  "installStore.reading.analyzing": "Finding what this app creates and which connections and settings it needs.",
+  "installStore.reading.planning": "Working out exactly what will be created in your cloud and what it costs. Nothing is applied yet.",
+  "installStore.reading.pausedTitle": "Reading paused",
+  "installStore.reading.pausedHint": "Continue to pick up where it stopped, or stop installing.",
+  "installStore.completeTitle": "Installed",
+  "installStore.completeHint": "You can go back to the app that sent you here.",
+  "installStore.problem.retryTitle": "Reading didn't finish",
+  "installStore.problem.failedTitle": "The install couldn't be prepared",
+  "installStore.problem.expiredTitle": "This install can't continue",
+  "installStore.problem.discardedTitle": "This install was stopped",
+  "installStore.problem.discarded": "Nothing was created in your cloud. You can install it again.",
+  "installStore.problem.retry": "Try again",
+  "installStore.problem.restart": "Start over",
+  "installStore.problem.reinstall": "Install again",
+  "installStore.problem.expired": "This install expired after a while without activity. Start over to install.",
+  "installStore.problem.workspaceChanged": "The workspace's management changed while this install waited. Start over to install.",
+  "installStore.problem.sourceSync": "The Git repository couldn't be read. Check the URL, the version and, for a private repository, its Git connection.",
+  "installStore.problem.module": "No installable module could be identified in this version.",
+  "installStore.problem.compatibility": "This version can't be installed as it is. Check with the app's publisher.",
+  "installStore.problem.secretSetting": "This app needs a secret setting that can't be accepted at install time yet.",
+  "installStore.problem.plan": "What this app would create couldn't be worked out. Check the reason and logs.",
+  "installStore.problem.retryable": "A step couldn't be confirmed. Try again to continue from there.",
+  "installStore.problem.nameTaken": "Another app here uses this name. Choose a different one.",
+  "installStore.problem.connection": "The chosen connection can't be used by this app. Choose another one.",
+  "installStore.problem.resubmit": "Send the same settings again. To change anything else, stop and start over.",
+  "installStore.problem.generic": "The install couldn't be prepared. Start over to try again.",
+  "installStore.error.changed": "This install changed in the meantime; showing its current state.",
+  "installStore.error.connectionsMissing": "Some connections this app needs are still missing.",
+  "installStore.error.alreadyInstalled": "This app is already installed. Manage it from its page.",
+  "installStore.error.discardRefused": "This install couldn't be stopped now; it may be installing. Wait a moment and try again.",
+  "installStore.error.settingsInvalid": "Check the settings you entered.",
+  "installStore.error.unavailable": "This install couldn't be verified.",
+  "installStore.error.continueUnconfirmed": "We couldn't confirm that the server received this; showing the current state.",
   // --- common -------------------------------------------------------------
   "common.loading": "Loading…",
   "common.retry": "Retry",
@@ -601,14 +602,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.cancel": "Cancel uninstall",
   "installStore.recoveryUnverified": "Couldn't check how the install is going",
   "installStore.recoveryUnverifiedHint": "The original install may still be running. Check again or look at the history before installing it again.",
-  "installStore.recoveryContinue": "You can continue this install",
-  "installStore.recoveryContinueHint": "One more step is needed. Continuing only prepares the changes for review; nothing is applied.",
-  "installStore.recoveryReview": "The first review is ready",
-  "installStore.recoveryReviewHint": "Open the first review to check it. Applying it is a separate step.",
-  "installStore.recoveryFailed": "The install stopped",
-  "installStore.recoveryFailedHint": "No review is available from this record. Partial setup may not have been undone; check your apps or ask your operator before installing it again.",
-  "installStore.recoveryFailedRun": "The install stopped; the review is available",
-  "installStore.recoveryFailedRunHint": "Open the recorded review to see what happened, and choose a retry yourself if one is offered. Nothing retries or applies automatically.",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "Review changes",
@@ -823,47 +816,6 @@ export const en: Record<keyof typeof ja, string> = {
   "run.audit.detail": "Record detail",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.git.defaultRef": "Git default branch",
-  "new.compat.ready": "Can be installed as is",
-  "new.compat.patch": "Needs manual changes",
-  "new.compat.unsupported": "Can't be installed right now",
-  "new.compat.summary.checkFailed":
-    "The pre-install check couldn't finish. This isn't necessarily a problem with the app — try again.",
-  "new.compat.summary.providerCredentials":
-    "Remove {provider} private values from the source before installing this.",
-  "new.compat.summary.installUxInvalid":
-    "This app version's setup declaration needs to be fixed by its publisher.",
-  "new.compat.summary.reviewRequired":
-    "An item needs review before this can be installed.",
-  "new.compat.issue.providerCredentials.message":
-    "{provider} private values are written in the source.",
-  "new.compat.issue.providerCredentials.detail":
-    "Do not keep API tokens or account IDs in code. Remove those values, then connect {provider} so Takosumi can pass them only while applying.",
-  "new.compat.issue.installUxInvalid.message":
-    "The app's setup declaration does not match the selected version.",
-  "new.compat.issue.installUxInvalid.detail":
-    "Choose another version or ask the app publisher to update .well-known/takosumi.json. Takosumi won't guess the setup fields for you.",
-  "new.compat.issue.providerPreserved.message":
-    "The repository's non-secret {provider} configuration will be preserved.",
-  "new.compat.issue.backendIsolated.message":
-    "The repository's own storage settings are kept; Takosumi keeps this app's apply records separately.",
-  "new.compat.issue.lockfile.message":
-    "Pinned connection target information is included. After private values are removed, the pinned targets are reviewed during install.",
-  "new.compat.issue.reviewRequired.message":
-    "An item needs review before installing.",
-  "new.error.sourceRefNotFound":
-    "The selected version “{ref}” was not found. Check that the link offers this version.",
-  "new.error.sourceFetchFailed":
-    "The app's contents couldn't be fetched. Check the link, version, folder, or private repository access. Details: {message}",
-  "new.error.sourceFetchFailedUnknown": "No detailed cause was returned.",
-  "new.error.generic":
-    "The app couldn't be installed. Check the details and try again.",
-  "new.error.genericWithDetails":
-    "The app couldn't be installed. Details: {message}",
-  "new.error.connectionRequired":
-    "Installing this app needs a cloud connection. Set up the connection, then try again.",
-  "new.error.alreadyExistsGeneric":
-    "An app with this name is already installed. Open it from Home, or choose another name.",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "Owner",

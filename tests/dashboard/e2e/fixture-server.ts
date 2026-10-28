@@ -1,6 +1,7 @@
 import { join, relative, resolve, sep } from "node:path";
 import { resolvePortablePort } from "./portable-origin.ts";
 import {
+  createInstallAttemptFixture,
   PORTABLE_CAPSULES,
   PORTABLE_SESSION_COOKIE,
   PORTABLE_UI_SURFACES,
@@ -50,6 +51,29 @@ function activityResponse() {
 
 function page(value: unknown, field: string): unknown {
   return { [field]: value };
+}
+
+// The install-plan coordinator's attempt routes for the signed-in Workspace.
+// Cases that need a particular app (connections, settings, failures) stub
+// these per test with their own fixture instance.
+const installAttempts = createInstallAttemptFixture({ workspaceId: "ws_alpha" });
+
+async function installAttemptResponse(request: Request, url: URL): Promise<Response | undefined> {
+  const text = request.method === "GET" || request.method === "HEAD" ? "" : await request.text();
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    return json({ error: { code: "invalid_request", message: "Invalid JSON." } }, 400);
+  }
+  const reply = installAttempts.handle({
+    method: request.method,
+    path: url.pathname,
+    search: url.search,
+    body,
+    idempotencyKey: request.headers.get("idempotency-key"),
+  });
+  return reply ? json(reply.json, reply.status) : undefined;
 }
 
 async function apiResponse(request: Request, url: URL): Promise<Response> {
@@ -104,6 +128,15 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     if (suffix === "activity") return json(activityResponse());
     if (suffix === "current-state-versions") return json({ stateVersions: [] });
     if (suffix === "install-configs") return json({ installConfigs: [] });
+    if (suffix === "install-plans") {
+      if (workspaceId !== "ws_alpha") return json({ installPlans: [] });
+      return (await installAttemptResponse(request, url))!;
+    }
+  }
+
+  if (path.startsWith("/api/v1/install-plans/")) {
+    const reply = await installAttemptResponse(request, url);
+    if (reply) return reply;
   }
 
   if (path === "/.well-known/takosumi") {

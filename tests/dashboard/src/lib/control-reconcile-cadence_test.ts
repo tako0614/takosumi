@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 import {
-  createReviewableGitInstallPlan,
   createReviewableGitRevisionPlan,
   gitPlanReconcileDelayMs,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -19,11 +18,6 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-const request = {
-  source: { name: "Test", url: "https://example.com/repo.git", ref: "main" },
-  capsule: { name: "Test", environment: "production" },
-};
-
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -31,39 +25,10 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function installPlanResponse(input: {
-  readonly phase: string;
-  readonly generation: number;
-  readonly nextAction: "reconcile" | "review_run";
-}) {
-  return {
-    installPlan: {
-      id: "install_1",
-      workspaceId: "ws_1",
-      createdBy: "user_1",
-      requestDigest: `sha256:${"d".repeat(64)}`,
-      source: {
-        name: "Test",
-        url: "https://example.com/repo.git",
-        ref: "main",
-        path: ".",
-      },
-      capsule: { name: "Test", environment: "production" },
-      options: {},
-      phase: input.phase,
-      generation: input.generation,
-      createdAt: "2026-09-29T00:00:00.000Z",
-      updatedAt: "2026-09-29T00:00:00.000Z",
-      ...(input.nextAction === "review_run" ? { planRunId: "plan_1" } : {}),
-    },
-    nextAction: input.nextAction,
-    links: { self: "/api/v1/install-plans/install_1" },
-  };
-}
-
 function revisionPlanResponse(input: {
   readonly generation: number;
   readonly nextAction: "reconcile" | "review_run";
+  readonly phase?: string;
 }) {
   return {
     revisionPlan: {
@@ -84,7 +49,8 @@ function revisionPlanResponse(input: {
       sourceId: "source_1",
       capsuleId: "capsule_1",
       installConfigId: "config_1",
-      phase: input.nextAction === "review_run" ? "reviewable" : "syncing_source",
+      phase: input.phase ??
+        (input.nextAction === "review_run" ? "reviewable" : "syncing_source"),
       generation: input.generation,
       createdAt: "2026-09-29T00:00:00.000Z",
       updatedAt: "2026-09-29T00:00:00.000Z",
@@ -96,14 +62,16 @@ function revisionPlanResponse(input: {
 }
 
 /**
- * Drives one install coordinator against a virtual clock.
+ * Drives one revision coordinator against a virtual clock. (The install
+ * coordinator is followed by the install page itself since TASK-0115 Phase 3b,
+ * with the same delay schedule.)
  *
  * The fetch double answers `reconcile` while the virtual clock is below
  * `budgetMs` and then reports a reviewable Plan, which is exactly a plan whose
  * preparation takes `budgetMs` of wall clock to finish. `progressPerRound`
  * models the other case: every round trip really advances the coordinator.
  */
-async function driveInstall(input: {
+async function driveRevision(input: {
   readonly budgetMs: number;
   readonly minDelayMs: number;
   readonly maxDelayMs: number;
@@ -120,9 +88,9 @@ async function driveInstall(input: {
   ) => {
     const url = String(fetchInput);
     const method = (init?.method ?? "GET").toUpperCase();
-    if (method === "POST" && url.endsWith("/install-plans")) {
+    if (method === "POST" && url.endsWith("/revision-plans")) {
       return json(
-        installPlanResponse({
+        revisionPlanResponse({
           phase: "syncing_source",
           generation,
           nextAction: "reconcile",
@@ -134,7 +102,7 @@ async function driveInstall(input: {
       if (virtualNowMs < input.budgetMs) {
         if (input.progressPerRound) generation += 1;
         return json(
-          installPlanResponse({
+          revisionPlanResponse({
             phase: "syncing_source",
             generation,
             nextAction: "reconcile",
@@ -142,7 +110,7 @@ async function driveInstall(input: {
         );
       }
       return json(
-        installPlanResponse({
+        revisionPlanResponse({
           phase: "reviewable",
           generation: generation + 1,
           nextAction: "review_run",
@@ -152,7 +120,7 @@ async function driveInstall(input: {
     return json({ error: "unexpected_request", url }, 500);
   }) as typeof fetch;
 
-  const response = await createReviewableGitInstallPlan("ws_1", request, {
+  const response = await createReviewableGitRevisionPlan("capsule_1", { ref: "main" }, {
     idempotencyKey: "key_1",
     timeoutMs: 600_000,
     ...(input.maxReconciles === undefined
@@ -173,14 +141,14 @@ async function driveInstall(input: {
 
 test("a stalled 30s preparation is polled far less often than the flat 4 Hz loop", async () => {
   // The pre-change cadence: a flat 250 ms sleep after every reconcile.
-  const legacy = await driveInstall({
+  const legacy = await driveRevision({
     budgetMs: 30_000,
     minDelayMs: 250,
     maxDelayMs: 250,
     progressPerRound: false,
     maxReconciles: 10_000,
   });
-  const bounded = await driveInstall({
+  const bounded = await driveRevision({
     budgetMs: 30_000,
     minDelayMs: 250,
     maxDelayMs: 2_000,
@@ -203,14 +171,14 @@ test("a stalled 30s preparation is polled far less often than the flat 4 Hz loop
 });
 
 test("a progressing coordinator keeps the 250 ms cadence", async () => {
-  const legacy = await driveInstall({
+  const legacy = await driveRevision({
     budgetMs: 30_000,
     minDelayMs: 250,
     maxDelayMs: 250,
     progressPerRound: true,
     maxReconciles: 10_000,
   });
-  const bounded = await driveInstall({
+  const bounded = await driveRevision({
     budgetMs: 30_000,
     minDelayMs: 250,
     maxDelayMs: 2_000,
@@ -294,7 +262,7 @@ test("the delay schedule doubles from the floor to the ceiling", () => {
 test("an invalid cadence is refused before any round trip", async () => {
   globalThis.fetch = (async () => json({ error: "must_not_be_called" })) as typeof fetch;
   await expect(
-    createReviewableGitInstallPlan("ws_1", request, {
+    createReviewableGitRevisionPlan("capsule_1", { ref: "main" }, {
       pollCadence: { minDelayMs: 500, maxDelayMs: 100 },
     }),
   ).rejects.toThrow(/maxDelayMs/);
