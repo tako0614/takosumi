@@ -1440,67 +1440,86 @@ test("a stalled materializer cannot write an Interface after both leases expire 
 });
 
 test("a stalled target cannot authority-write after the per-claim deadline", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  const { capsule } = await seedCapsuleModel(store, {
-    workspaceId: "workspace_intent_deadline_fence",
-    capsuleId: "capsule_intent_deadline_fence",
-  });
-  const intent = await commitPendingIntent(
-    store,
-    capsule,
-    "apply_intent_deadline_fence",
-  );
-  let monotonicNow = 0;
+  const { jest } = await import("bun:test");
+  jest.useFakeTimers();
   let releaseTarget!: () => void;
-  const targetBlocked = new Promise<void>((resolve) => {
-    releaseTarget = resolve;
-  });
-  let targetStarted!: () => void;
-  const targetDidStart = new Promise<void>((resolve) => {
-    targetStarted = resolve;
-  });
-  let authorityWrites = 0;
-  const drainer = new CapsuleInterfaceMaterializationIntentDrainer({
-    store,
-    coordination: new InMemoryCapsuleCoordination({
-      now: () => Date.parse(CLAIMED_AT),
-    }),
-    target: {
-      materializeItem: async (input) => {
-        targetStarted();
-        await targetBlocked;
-        await input.authorityFence.assertCurrent();
-        authorityWrites += 1;
-        return { kind: "materialized" };
+  let draining: ReturnType<CapsuleInterfaceMaterializationIntentDrainer["drain"]> | undefined;
+  try {
+    const store = new InMemoryOpenTofuControlStore();
+    const { capsule } = await seedCapsuleModel(store, {
+      workspaceId: "workspace_intent_deadline_fence",
+      capsuleId: "capsule_intent_deadline_fence",
+    });
+    const intent = await commitPendingIntent(
+      store,
+      capsule,
+      "apply_intent_deadline_fence",
+    );
+    let monotonicNow = 0;
+    const targetBlocked = new Promise<void>((resolve) => {
+      releaseTarget = resolve;
+    });
+    let targetStarted!: () => void;
+    const targetDidStart = new Promise<void>((resolve) => {
+      targetStarted = resolve;
+    });
+    let targetSignal: AbortSignal | undefined;
+    let authorityWrites = 0;
+    const drainer = new CapsuleInterfaceMaterializationIntentDrainer({
+      store,
+      coordination: new InMemoryCapsuleCoordination({
+        now: () => Date.parse(CLAIMED_AT),
+      }),
+      target: {
+        materializeItem: async (input) => {
+          targetSignal = input.authorityFence.signal;
+          targetStarted();
+          await targetBlocked;
+          await input.authorityFence.assertCurrent();
+          authorityWrites += 1;
+          return { kind: "materialized" };
+        },
       },
-    },
-    now: () => CLAIMED_AT,
-    monotonicNow: () => monotonicNow,
-    newLeaseToken: () => "lease_deadline_fence",
-  });
+      now: () => CLAIMED_AT,
+      monotonicNow: () => monotonicNow,
+      newLeaseToken: () => "lease_deadline_fence",
+    });
 
-  const draining = drainer.drain({
-    limit: 1,
-    maxWorkItems: 1,
-    timeBudgetMs: 10,
-  });
-  await targetDidStart;
-  monotonicNow = 11;
-  releaseTarget();
+    draining = drainer.drain({
+      limit: 1,
+      maxWorkItems: 1,
+      timeBudgetMs: 10,
+    });
+    await Promise.race([
+      targetDidStart,
+      draining.then(() => {
+        throw new Error("drain settled before the materialization target started");
+      }),
+    ]);
+    monotonicNow = 11;
+    jest.advanceTimersByTime(10);
+    expect(targetSignal?.aborted).toBe(true);
+    releaseTarget();
 
-  expect(await draining).toMatchObject({
-    claimed: 1,
-    completed: 0,
-    retried: 1,
-  });
-  expect(authorityWrites).toBe(0);
-  expect(
-    await store.getCapsuleInterfaceMaterializationIntent(intent.id),
-  ).toMatchObject({
-    status: "pending",
-    nextItemIndex: 0,
-    error: { code: "interface_materialization_budget_exhausted" },
-  });
+    expect(await draining).toMatchObject({
+      claimed: 1,
+      completed: 0,
+      retried: 1,
+    });
+    expect(authorityWrites).toBe(0);
+    expect(
+      await store.getCapsuleInterfaceMaterializationIntent(intent.id),
+    ).toMatchObject({
+      status: "pending",
+      nextItemIndex: 0,
+      error: { code: "interface_materialization_budget_exhausted" },
+    });
+  } finally {
+    releaseTarget?.();
+    if (draining) await draining.catch(() => undefined);
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
 });
 
 test("the InterfaceService target fences every Interface, Binding, and OAuth authority write", async () => {
