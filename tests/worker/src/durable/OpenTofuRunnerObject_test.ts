@@ -8574,3 +8574,38 @@ async function bytesFromR2PutValue(
   }
   return new Uint8Array(await new Response(value).arrayBuffer());
 }
+
+test("runner DO rejects retired dependency envelopes before container or artifact work", async () => {
+  let containerCalls = 0;
+  let startCalls = 0;
+  const bucket = new FakeR2Bucket();
+  const runner = runnerWithContainer(bucket, {
+    async containerFetch() {
+      containerCalls += 1;
+      return Response.json({ status: "succeeded" });
+    },
+  }, { startAndWaitForPorts: async () => { startCalls += 1; } });
+  const request = (action: "plan" | "apply" | "destroy", payload: Record<string, unknown>) =>
+    new Request(`https://runner/runs/legacy_${action}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, runId: `legacy_${action}`, request: payload }),
+    });
+  for (const action of ["plan", "apply", "destroy"] as const) {
+    for (const payload of [
+      { depStates: [] },
+      { depStates: null },
+      { depStates: "malformed" },
+      { planRun: { id: "old", dependencySnapshotId: "depsnap_old" } },
+      { planRun: { id: "old", dependencySnapshotId: null } },
+    ]) {
+      const response = await runner.fetch(request(action, payload));
+      assert.equal(response.status, 409);
+      assert.equal((await response.json() as { errorCode: string }).errorCode, "dependency_retired");
+      assert.equal(containerCalls, 0);
+      assert.equal(startCalls, 0);
+    }
+  }
+  const modern = await runner.fetch(request("plan", {}));
+  assert.equal(modern.status, 200);
+  assert.ok(containerCalls > 0);
+});

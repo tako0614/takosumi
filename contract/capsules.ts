@@ -138,8 +138,7 @@ export interface CapsuleUninstall {
  * 1 Capsule = generated root + tfstate + outputs; `currentStateGeneration` is
  * the generation guard cursor. The latest `currentOutputId` is an internal
  * ledger pointer to the encrypted raw output envelope and is projected out of
- * public Capsule reads; dashboard output reads go through Output projections or
- * OutputShare instead.
+ * public Capsule reads; dashboard output reads go through safe Output projections.
  */
 export interface Capsule {
   readonly id: string;

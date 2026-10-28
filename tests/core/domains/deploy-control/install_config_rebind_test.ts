@@ -1033,7 +1033,7 @@ test("markCapsuleStale returns typed exact-record CAS outcomes across every stor
       updatedAt: NOW,
     }))!;
     const conflict = await store.markCapsuleStale(
-      markStaleInput(conflictSeed.capsule, "dependency-output"),
+      markStaleInput(conflictSeed.capsule, "source-revision"),
     );
     expect(conflict, `${label}:conflict`).toEqual({
       kind: "conflict",

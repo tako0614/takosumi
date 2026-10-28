@@ -146,9 +146,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-When a new commit arrives on the Source a Capsule tracks, the Capsule becomes `stale`. The same
-happens when an Output of a Capsule it depends on changes
-([Passing values to another Capsule](./state-and-outputs.md#passing-values-to-another-capsule)).
+When a new commit arrives on the Source a Capsule tracks, the Capsule becomes `stale`.
 **`stale` is a state, not an action.** The default is to stop there; a person starts the
 next plan and apply.
 

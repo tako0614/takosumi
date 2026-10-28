@@ -902,7 +902,7 @@ describe("Capsule execution authority", () => {
             commit: "0123456789abcdef0123456789abcdef01234567" }, sourceDigest: "sha256:source",
             operation: "update", runnerProfileId: "runner", status: "queued", createdAt: 1, updatedAt: 1,
             variablesDigest: await stableJsonDigest({}), executionInputsDigest: await stableJsonDigest(
-              planRunExecutionInputsDigestMaterial({ planRunId: id, variables: {} }, undefined)),
+              planRunExecutionInputsDigestMaterial({ planRunId: id, variables: {} })),
             requiredProviders: [], requiredProviderRequirements: [], policy: { status: "passed", reasons: [], checkedAt: 1 },
             policyDecisionDigest: "sha256:policy", auditEvents: [] } satisfies PlanRun;
         }
@@ -959,7 +959,7 @@ describe("Capsule execution authority", () => {
           if (kind === "plan") {
             const inputs = { planRunId: approvalId, variables: {} };
             const initial: PlanRun = { ...queued as PlanRun, id: approvalId,
-              executionInputsDigest: await stableJsonDigest(planRunExecutionInputsDigestMaterial(inputs, undefined)) };
+              executionInputsDigest: await stableJsonDigest(planRunExecutionInputsDigestMaterial(inputs)) };
             await store.preparePlanRun({ run: initial, inputs,
               expectedWorkspaceManagementAuthority: approvalAuthority });
             approvalRun = { ...initial, status: "waiting_approval" };

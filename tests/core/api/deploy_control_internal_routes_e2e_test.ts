@@ -10,7 +10,6 @@ import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import type { OutputShare, Output as Output } from "takosumi-contract/outputs";
 import type { Workspace } from "takosumi-contract/workspaces";
 import type {
   OpenTofuRunner,
@@ -1106,156 +1105,25 @@ test("workspace PATCH updates displayName (§30 MVP)", async () => {
   expect(badRes.status).toEqual(400);
 });
 
-/**
- * Seeds a consumer Workspace and a latest Output for the producer
- * Capsule directly into the store, so the OutputShare routes can validate a
- * grant of `bucket_name` from the producer's `fromSpace` to a separate
- * consumer Workspace.
- */
-async function seedOutputShareScenario(): Promise<{
-  app: { request: (path: string, init?: RequestInit) => Promise<Response> };
-  fromWorkspaceId: string;
-  toWorkspaceId: string;
-  producerCapsuleId: string;
-}> {
-  const { app, store, workspaceId, capsuleId } =
-    await seedCapsuleViaRoutes(fakeRunner());
-  const toWorkspaceId = "ws_consumer0001";
-  const consumer: Workspace = {
-    id: toWorkspaceId,
-    handle: "consumer",
-    displayName: "Consumer",
-    type: "personal",
-    ownerUserId: "user_test00000002",
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-  };
-  await store.putWorkspace(consumer);
-  const snapshot: Output = {
-    id: "out_e2e000001",
-    workspaceId,
-    capsuleId,
-    stateGeneration: 1,
-    rawArtifactRef: `artifact://outputs/${capsuleId}/r1`,
-    publicOutputs: {},
-    workspaceOutputs: { bucket_name: "my-bucket", region: "auto" },
-    outputDigest: "sha256:oute2e",
-    createdAt: new Date(0).toISOString(),
-  };
-  await store.putOutput(snapshot);
-  return {
-    app,
-    fromWorkspaceId: workspaceId,
-    toWorkspaceId,
-    producerCapsuleId: capsuleId,
-  };
-}
+test("retired Dependency and OutputShare endpoints are unmounted", async () => {
+  const { app, capsuleId } = await seedCapsuleViaRoutes(fakeRunner());
+  const retiredEndpoints: Array<{ method: string; path: string }> = [
+    { method: "GET", path: `/internal/v1/capsules/${capsuleId}/dependencies` },
+    { method: "POST", path: `/internal/v1/capsules/${capsuleId}/dependencies` },
+    { method: "DELETE", path: "/internal/v1/dependencies/dep_retired0001" },
+    { method: "GET", path: "/internal/v1/output-shares?workspaceId=ws_retired" },
+    { method: "POST", path: "/internal/v1/output-shares" },
+    { method: "POST", path: "/internal/v1/output-shares/share_retired/approve" },
+    { method: "POST", path: "/internal/v1/output-shares/share_retired/revoke" },
+  ];
 
-test("output-shares create / approve / list / revoke happy path (§18)", async () => {
-  const { app, fromWorkspaceId, toWorkspaceId, producerCapsuleId } =
-    await seedOutputShareScenario();
-
-  // Create: a grant of bucket_name from the producer's Workspace to the consumer.
-  const createRes = await app.request("/internal/v1/output-shares", {
-    method: "POST",
-    headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      fromWorkspaceId,
-      toWorkspaceId,
-      producerCapsuleId,
-      outputs: [{ name: "bucket_name", alias: "bucket" }],
-    }),
-  });
-  expect(createRes.status).toEqual(201);
-  const created = (await createRes.json()).share as OutputShare;
-  expect(created.status).toEqual("pending");
-  expect(created.outputs).toEqual([
-    { name: "bucket_name", alias: "bucket", sensitive: false },
-  ]);
-
-  const approveRes = await app.request(
-    `/internal/v1/output-shares/${created.id}/approve`,
-    { method: "POST", headers: headers() },
-  );
-  expect(approveRes.status).toEqual(200);
-  const approved = (await approveRes.json()).share as OutputShare;
-  expect(approved.status).toEqual("active");
-  expect(approved.acceptedAt).toBeDefined();
-
-  // List from the granting Workspace surfaces the share.
-  const listFrom = await app.request(
-    `/internal/v1/output-shares?workspaceId=${fromWorkspaceId}`,
-    { headers: headers() },
-  );
-  expect(listFrom.status).toEqual(200);
-  expect(
-    ((await listFrom.json()).shares as OutputShare[]).map((s) => s.id),
-  ).toEqual([created.id]);
-
-  // List from the consumer Workspace surfaces the same share (received side).
-  const listTo = await app.request(
-    `/internal/v1/output-shares?workspaceId=${toWorkspaceId}`,
-    {
+  for (const endpoint of retiredEndpoints) {
+    const response = await app.request(endpoint.path, {
+      method: endpoint.method,
       headers: headers(),
-    },
-  );
-  expect(listTo.status).toEqual(200);
-  expect(
-    ((await listTo.json()).shares as OutputShare[]).map((s) => s.id),
-  ).toEqual([created.id]);
-
-  // Revoke moves it to revoked.
-  const revokeRes = await app.request(
-    `/internal/v1/output-shares/${created.id}/revoke`,
-    { method: "POST", headers: headers() },
-  );
-  expect(revokeRes.status).toEqual(200);
-  expect(((await revokeRes.json()).share as OutputShare).status).toEqual(
-    "revoked",
-  );
-});
-
-test("output-shares create 409 when a name is absent from the producer's outputs (§18)", async () => {
-  const { app, fromWorkspaceId, toWorkspaceId, producerCapsuleId } =
-    await seedOutputShareScenario();
-  const res = await app.request("/internal/v1/output-shares", {
-    method: "POST",
-    headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      fromWorkspaceId,
-      toWorkspaceId,
-      producerCapsuleId,
-      outputs: [{ name: "not_a_real_output" }],
-    }),
-  });
-  // failed_precondition maps to HTTP 409.
-  expect(res.status).toEqual(409);
-  expect((await res.json()).error.code).toEqual("failed_precondition");
-});
-
-test("output-shares create 404 when the consumer Workspace is missing (§18)", async () => {
-  const { app, fromWorkspaceId, producerCapsuleId } =
-    await seedOutputShareScenario();
-  const res = await app.request("/internal/v1/output-shares", {
-    method: "POST",
-    headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      fromWorkspaceId,
-      toWorkspaceId: "ws_missing00001",
-      producerCapsuleId,
-      outputs: [{ name: "bucket_name" }],
-    }),
-  });
-  expect(res.status).toEqual(404);
-});
-
-test("output-shares revoke 404 for a missing share (§18)", async () => {
-  const { app } = await seedOutputShareScenario();
-  const res = await app.request(
-    "/internal/v1/output-shares/oshare_missing00001/revoke",
-    { method: "POST", headers: headers() },
-  );
-  expect(res.status).toEqual(404);
+    });
+    expect(response.status).toBe(404);
+  }
 });
 
 test("Capsule PATCH safely updates status only (§30)", async () => {

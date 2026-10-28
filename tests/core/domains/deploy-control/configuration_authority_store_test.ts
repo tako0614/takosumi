@@ -152,7 +152,7 @@ async function configurationPlanPreparation(
       runnerProfileId: "opentofu-default",
       variablesDigest: await stableJsonDigest(inputs.variables),
       executionInputsDigest: await stableJsonDigest(
-        planRunExecutionInputsDigestMaterial(inputs, undefined),
+        planRunExecutionInputsDigestMaterial(inputs),
       ),
       requiredProviders: [],
       requiredProviderRequirements: [],

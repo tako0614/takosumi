@@ -261,7 +261,6 @@ resource "takoform_module_worker" "example" {
     if (originalMirror === undefined) delete Bun.env.OPENTOFU_PROVIDER_MIRROR;
     else Bun.env.OPENTOFU_PROVIDER_MIRROR = originalMirror;
     await rm(workspace.root, { recursive: true, force: true });
-    await rm(workspace.depsDir, { recursive: true, force: true });
     await rm(mirror, { recursive: true, force: true });
   }
 }, 30_000);

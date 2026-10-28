@@ -299,7 +299,6 @@ esac
       if (previousPath === undefined) delete Bun.env.PATH;
       else Bun.env.PATH = previousPath;
       await rm(workspace.root, { recursive: true, force: true });
-      await rm(workspace.depsDir, { recursive: true, force: true });
       for (const directory of await providerCredentialDirectories(runId)) {
         await rm(join(RUN_ROOT, directory), { recursive: true, force: true });
       }

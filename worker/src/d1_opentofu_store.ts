@@ -69,11 +69,7 @@ import { type WorkspaceBillingBinding, workspaceBillingBindingMatches } from "ta
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { InstallConfigCommittedPostApplyRecoveryProof } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencySnapshot,
-} from "takosumi-contract/dependencies";
-import type { OutputShare, Output as Output } from "takosumi-contract/outputs";
+import type { Output as Output } from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import {
   assertRecoveryCommitCandidate,
@@ -2816,14 +2812,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         isPlanRunRecord(rawExistingRun) ? rawExistingRun : undefined,
       );
       const existingInputs = await this.getPlanRunInputs(run.id);
-      const existingSnapshot = existingRun?.dependencySnapshotId
-        ? await this.getDependencySnapshot(existingRun.dependencySnapshotId)
-        : undefined;
       if (
         planRunPreparationExactlyMatches(
           existingRun,
           existingInputs,
-          existingSnapshot,
           input,
         )
       ) {
@@ -2870,16 +2862,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         runJson: persistedRun,
         createdAt: String(run.createdAt),
       }),
-      ...(input.dependencySnapshot
-        ? [
-            this.#orm.insert(schema.dependencySnapshots).values({
-              id: input.dependencySnapshot.id,
-              runId: input.dependencySnapshot.runId,
-              recordJson: input.dependencySnapshot,
-              createdAt: input.dependencySnapshot.createdAt,
-            }),
-          ]
-        : []),
       ...(planRunPreparationPersistsInputs(run)
         ? [
             this.#orm.insert(schema.planRunInputs).values({
@@ -2920,14 +2902,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           : undefined,
       );
       const currentInputs = await this.getPlanRunInputs(run.id);
-      const currentSnapshot = currentRun?.dependencySnapshotId
-        ? await this.getDependencySnapshot(currentRun.dependencySnapshotId)
-        : undefined;
       if (
         planRunPreparationExactlyMatches(
           currentRun,
           currentInputs,
-          currentSnapshot,
           input,
         )
       ) {
@@ -2935,8 +2913,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       }
       if (
         rawCurrentRun !== undefined ||
-        currentInputs !== undefined ||
-        currentSnapshot !== undefined
+        currentInputs !== undefined
       ) {
         throw new PlanRunPreparationConflictError(run.id);
       }
@@ -10126,105 +10103,19 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return rows.map(stateVersionFromDrizzleRow);
   }
 
-  // -- Dependency DAG (§14 / §15 / §27 installation_dependencies) --------------
-
-  async putDependency(dependency: Dependency): Promise<Dependency> {
-    await this.#drizzleUpsert(schema.dependencies, {
-      id: dependency.id,
-      workspaceId: dependency.workspaceId,
-      producerCapsuleId: dependency.producerCapsuleId,
-      consumerCapsuleId: dependency.consumerCapsuleId,
-      recordJson: dependency,
-      createdAt: dependency.createdAt,
-    });
-    return dependency;
-  }
-
-  async getDependency(id: string): Promise<Dependency | undefined> {
-    return await this.#drizzleFirstJson<Dependency>(
-      schema.dependencies,
-      schema.dependencies.recordJson,
-      eq(schema.dependencies.id, id),
-    );
-  }
-
-  async listDependenciesByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]> {
-    return await this.#drizzleManyJson<Dependency>(
-      schema.dependencies,
-      schema.dependencies.recordJson,
-      {
-        where: eq(schema.dependencies.workspaceId, workspaceId),
-        orderBy: [
-          asc(schema.dependencies.createdAt),
-          asc(schema.dependencies.id),
-        ],
-      },
-    );
-  }
-
-  async listDependenciesForConsumer(
+  // Retired installation_dependencies remain in the schema for a later
+  // contract version. This read-only probe only blocks unsafe legacy consumers.
+  async hasRetiredDependenciesForConsumer(
     consumerCapsuleId: string,
-  ): Promise<readonly Dependency[]> {
-    return await this.#drizzleManyJson<Dependency>(
-      schema.dependencies,
-      schema.dependencies.recordJson,
-      {
-        where: eq(schema.dependencies.consumerCapsuleId, consumerCapsuleId),
-        orderBy: [
-          asc(schema.dependencies.createdAt),
-          asc(schema.dependencies.id),
-        ],
-      },
-    );
-  }
-
-  async listDependenciesForProducer(
-    producerCapsuleId: string,
-  ): Promise<readonly Dependency[]> {
-    return await this.#drizzleManyJson<Dependency>(
-      schema.dependencies,
-      schema.dependencies.recordJson,
-      {
-        where: eq(schema.dependencies.producerCapsuleId, producerCapsuleId),
-        orderBy: [
-          asc(schema.dependencies.createdAt),
-          asc(schema.dependencies.id),
-        ],
-      },
-    );
-  }
-
-  async deleteDependency(id: string): Promise<boolean> {
-    return await this.#drizzleDelete(
-      schema.dependencies,
-      eq(schema.dependencies.id, id),
-    );
-  }
-
-  // -- DependencySnapshot (§17 / §27 dependency_snapshots) ---------------------
-
-  async putDependencySnapshot(
-    snapshot: DependencySnapshot,
-  ): Promise<DependencySnapshot> {
-    await this.#drizzleUpsert(schema.dependencySnapshots, {
-      id: snapshot.id,
-      runId: snapshot.runId,
-      recordJson: snapshot,
-      createdAt: snapshot.createdAt,
-    });
-    return snapshot;
-  }
-
-  async getDependencySnapshot(
-    id: string,
-  ): Promise<DependencySnapshot | undefined> {
-    return await this.#drizzleFirstJson<DependencySnapshot>(
-      schema.dependencySnapshots,
-      schema.dependencySnapshots.recordJson,
-      eq(schema.dependencySnapshots.id, id),
-    );
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select({ id: schema.dependencies.id })
+      .from(schema.dependencies)
+      .where(eq(schema.dependencies.consumerCapsuleId, consumerCapsuleId))
+      .limit(1)
+      .get();
+    return row !== undefined;
   }
 
   // -- Output (§16 / §27 output_snapshots) -----------------------------
@@ -10576,61 +10467,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           schema.outputs.stateGeneration,
           schema.outputs.createdAt,
           schema.outputs.id,
-        ],
-      },
-    );
-  }
-
-  // -- OutputShare (§18 / §27 output_shares) -----------------------------------
-
-  async putOutputShare(share: OutputShare): Promise<OutputShare> {
-    await this.#drizzleUpsert(schema.outputShares, {
-      id: share.id,
-      fromWorkspaceId: share.fromWorkspaceId,
-      toWorkspaceId: share.toWorkspaceId,
-      producerCapsuleId: share.producerCapsuleId,
-      status: share.status,
-      recordJson: share,
-      createdAt: share.createdAt,
-    });
-    return share;
-  }
-
-  async getOutputShare(id: string): Promise<OutputShare | undefined> {
-    return await this.#drizzleFirstJson<OutputShare>(
-      schema.outputShares,
-      schema.outputShares.recordJson,
-      eq(schema.outputShares.id, id),
-    );
-  }
-
-  async listOutputSharesFromWorkspace(
-    fromWorkspaceId: string,
-  ): Promise<readonly OutputShare[]> {
-    return await this.#drizzleManyJson<OutputShare>(
-      schema.outputShares,
-      schema.outputShares.recordJson,
-      {
-        where: eq(schema.outputShares.fromWorkspaceId, fromWorkspaceId),
-        orderBy: [
-          asc(schema.outputShares.createdAt),
-          asc(schema.outputShares.id),
-        ],
-      },
-    );
-  }
-
-  async listOutputSharesToWorkspace(
-    toWorkspaceId: string,
-  ): Promise<readonly OutputShare[]> {
-    return await this.#drizzleManyJson<OutputShare>(
-      schema.outputShares,
-      schema.outputShares.recordJson,
-      {
-        where: eq(schema.outputShares.toWorkspaceId, toWorkspaceId),
-        orderBy: [
-          asc(schema.outputShares.createdAt),
-          asc(schema.outputShares.id),
         ],
       },
     );

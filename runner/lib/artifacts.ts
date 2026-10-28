@@ -350,11 +350,6 @@ export function workspaceForRun(runId: string): RunWorkspace {
     generatedRootDir: join(root, "generated-root"),
     childModuleDir: join(root, "generated-root", "module"),
     artifactDir: join(root, "artifact"),
-    // The deps dir is a SIBLING of root (not under it) so the producer state
-    // files restored BEFORE the run POST survive the plan/apply workspace prep,
-    // which wipes `root`. The consumer's `terraform_remote_state` data sources
-    // reference these absolute paths; they are written read-only (one-way read).
-    depsDir: join(RUN_ROOT, `${safeRunId(runId)}-deps`),
   };
 }
 

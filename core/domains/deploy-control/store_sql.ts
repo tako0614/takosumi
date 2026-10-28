@@ -56,11 +56,7 @@ import { type WorkspaceBillingBinding, workspaceBillingBindingMatches } from "ta
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type { InstallConfigCommittedPostApplyRecoveryProof } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencySnapshot,
-} from "takosumi-contract/dependencies";
-import type { OutputShare, Output } from "takosumi-contract/outputs";
+import type { Output } from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import {
   assertRecoveryCommitCandidate,
@@ -2072,29 +2068,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             ? parsedCurrentRun
             : undefined,
         );
-        const currentSnapshotRows = currentRun?.dependencySnapshotId
-          ? await db
-            .select({ json: pgSchema.dependencySnapshots.snapshotJson })
-            .from(pgSchema.dependencySnapshots)
-            .where(
-              eq(
-                pgSchema.dependencySnapshots.id,
-                currentRun.dependencySnapshotId,
-              ),
-            )
-            .limit(1)
-          : [];
         const currentInputs = parseRow(currentInputRows[0]) as
           | PlanRunInputs
-          | undefined;
-        const currentSnapshot = parseRow(currentSnapshotRows[0]) as
-          | DependencySnapshot
           | undefined;
         if (
           planRunPreparationExactlyMatches(
             currentRun,
             currentInputs,
-            currentSnapshot,
             input,
           )
         ) {
@@ -2104,14 +2084,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           };
         }
         throw new PlanRunPreparationConflictError(run.id);
-      }
-      if (input.dependencySnapshot) {
-        await db.insert(pgSchema.dependencySnapshots).values({
-          id: input.dependencySnapshot.id,
-          runId: input.dependencySnapshot.runId,
-          snapshotJson: input.dependencySnapshot,
-          createdAt: input.dependencySnapshot.createdAt,
-        });
       }
       if (planRunPreparationPersistsInputs(run)) {
         await db.insert(pgSchema.planRunInputs).values({
@@ -10318,105 +10290,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  // --- installation_dependencies (§14 / §15) --------------------------------
-
-  async putDependency(dependency: Dependency): Promise<Dependency> {
-    await this.#pgUpsert(pgSchema.dependencies, {
-      id: dependency.id,
-      workspaceId: dependency.workspaceId,
-      producerCapsuleId: dependency.producerCapsuleId,
-      consumerCapsuleId: dependency.consumerCapsuleId,
-      dependencyJson: dependency,
-      createdAt: dependency.createdAt,
-    });
-    return dependency;
-  }
-
-  async getDependency(id: string): Promise<Dependency | undefined> {
-    return await this.#pgFirstJson<Dependency>(
-      pgSchema.dependencies,
-      pgSchema.dependencies.dependencyJson,
-      eq(pgSchema.dependencies.id, id),
-    );
-  }
-
-  async listDependenciesByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]> {
-    return await this.#pgManyJson<Dependency>(
-      pgSchema.dependencies,
-      pgSchema.dependencies.dependencyJson,
-      {
-        where: eq(pgSchema.dependencies.workspaceId, workspaceId),
-        orderBy: [
-          asc(pgSchema.dependencies.createdAt),
-          asc(pgSchema.dependencies.id),
-        ],
-      },
-    );
-  }
-
-  async listDependenciesForConsumer(
+  // Retired installation_dependencies remain in the schema for a later
+  // contract version. This read-only probe only blocks unsafe legacy consumers.
+  async hasRetiredDependenciesForConsumer(
     consumerCapsuleId: string,
-  ): Promise<readonly Dependency[]> {
-    return await this.#pgManyJson<Dependency>(
-      pgSchema.dependencies,
-      pgSchema.dependencies.dependencyJson,
-      {
-        where: eq(pgSchema.dependencies.consumerCapsuleId, consumerCapsuleId),
-        orderBy: [
-          asc(pgSchema.dependencies.createdAt),
-          asc(pgSchema.dependencies.id),
-        ],
-      },
-    );
-  }
-
-  async listDependenciesForProducer(
-    producerCapsuleId: string,
-  ): Promise<readonly Dependency[]> {
-    return await this.#pgManyJson<Dependency>(
-      pgSchema.dependencies,
-      pgSchema.dependencies.dependencyJson,
-      {
-        where: eq(pgSchema.dependencies.producerCapsuleId, producerCapsuleId),
-        orderBy: [
-          asc(pgSchema.dependencies.createdAt),
-          asc(pgSchema.dependencies.id),
-        ],
-      },
-    );
-  }
-
-  async deleteDependency(id: string): Promise<boolean> {
-    return await this.#pgDelete(
-      pgSchema.dependencies,
-      eq(pgSchema.dependencies.id, id),
-    );
-  }
-
-  // --- dependency_snapshots (§17) -------------------------------------------
-
-  async putDependencySnapshot(
-    snapshot: DependencySnapshot,
-  ): Promise<DependencySnapshot> {
-    await this.#pgUpsert(pgSchema.dependencySnapshots, {
-      id: snapshot.id,
-      runId: snapshot.runId,
-      snapshotJson: snapshot,
-      createdAt: snapshot.createdAt,
-    });
-    return snapshot;
-  }
-
-  async getDependencySnapshot(
-    id: string,
-  ): Promise<DependencySnapshot | undefined> {
-    return await this.#pgFirstJson<DependencySnapshot>(
-      pgSchema.dependencySnapshots,
-      pgSchema.dependencySnapshots.snapshotJson,
-      eq(pgSchema.dependencySnapshots.id, id),
-    );
+  ): Promise<boolean> {
+    const rows = await this.#db
+      .select({ id: pgSchema.dependencies.id })
+      .from(pgSchema.dependencies)
+      .where(eq(pgSchema.dependencies.consumerCapsuleId, consumerCapsuleId))
+      .limit(1);
+    return rows.length > 0;
   }
 
   // --- output_snapshots (§16) -----------------------------------------------
@@ -10755,59 +10639,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   // --- output_shares (§18) --------------------------------------------------
-
-  async putOutputShare(share: OutputShare): Promise<OutputShare> {
-    await this.#pgUpsert(pgSchema.outputShares, {
-      id: share.id,
-      fromWorkspaceId: share.fromWorkspaceId,
-      toWorkspaceId: share.toWorkspaceId,
-      producerCapsuleId: share.producerCapsuleId,
-      status: share.status,
-      shareJson: share,
-      createdAt: share.createdAt,
-    });
-    return share;
-  }
-
-  async getOutputShare(id: string): Promise<OutputShare | undefined> {
-    return await this.#pgFirstJson<OutputShare>(
-      pgSchema.outputShares,
-      pgSchema.outputShares.shareJson,
-      eq(pgSchema.outputShares.id, id),
-    );
-  }
-
-  async listOutputSharesFromWorkspace(
-    fromWorkspaceId: string,
-  ): Promise<readonly OutputShare[]> {
-    return await this.#pgManyJson<OutputShare>(
-      pgSchema.outputShares,
-      pgSchema.outputShares.shareJson,
-      {
-        where: eq(pgSchema.outputShares.fromWorkspaceId, fromWorkspaceId),
-        orderBy: [
-          asc(pgSchema.outputShares.createdAt),
-          asc(pgSchema.outputShares.id),
-        ],
-      },
-    );
-  }
-
-  async listOutputSharesToWorkspace(
-    toWorkspaceId: string,
-  ): Promise<readonly OutputShare[]> {
-    return await this.#pgManyJson<OutputShare>(
-      pgSchema.outputShares,
-      pgSchema.outputShares.shareJson,
-      {
-        where: eq(pgSchema.outputShares.toWorkspaceId, toWorkspaceId),
-        orderBy: [
-          asc(pgSchema.outputShares.createdAt),
-          asc(pgSchema.outputShares.id),
-        ],
-      },
-    );
-  }
 
   // --- run_groups (§19 / §24) -----------------------------------------------
 

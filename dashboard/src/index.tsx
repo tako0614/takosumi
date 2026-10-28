@@ -200,7 +200,7 @@ function App() {
       <Route path="/store" component={() => <RedirectWithQuery to="/new" />} />
 
       {/* Old paths → where that behavior lives now. Screens that were internal
-          concepts (run list, activity, dependency graph, the all-apps list)
+          concepts (run list, activity, the all-apps list)
           became parts of each app's page, which ホーム lists. Settings,
           management and Workspace tabs became 接続 and アカウント. /install is
           the external install link (client-handled): it forwards its query to

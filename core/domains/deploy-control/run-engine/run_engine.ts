@@ -74,10 +74,6 @@ import {
   isOpenTofuBuiltinProviderSource,
   sameProviderSource,
 } from "takosumi-contract/provider-env-rules";
-import type {
-  Dependency,
-  DependencySnapshot,
-} from "takosumi-contract/dependencies";
 import {
   CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
   normalizeInstallConfigPrivateRunFiles,
@@ -99,7 +95,6 @@ import {
   isSecretKey,
   redactString,
 } from "takosumi-contract/redaction";
-import { downstreamClosure } from "takosumi-graph";
 import {
   evaluateActionPolicy,
   evaluateQuotaPolicy,
@@ -223,9 +218,9 @@ import {
   type FreezeWorkspaceManagementExpectation,
   type WorkspaceManagementAuthority,
   type BeginApplyRunResult,
-  planRunExecutionInputsDigestMaterial,
   type OpenTofuControlStore,
   type PlanRunInputs,
+  planRunExecutionInputsDigestMaterial,
 } from "../store.ts";
 import {
   assertCapsuleAcceptsOperation,
@@ -243,8 +238,6 @@ import type {
   ResolvedRunEnvironment,
   RunEnvResolver,
 } from "../run_env_resolver.ts";
-import type { ResolvedDependencies } from "../dependency_resolution.ts";
-import type { DependencyResolutionService } from "../dependency_resolution.ts";
 import type { RunVerificationService } from "../run_verification.ts";
 import type { SourceLifecycleService } from "../source_lifecycle.ts";
 import type {
@@ -277,10 +270,8 @@ import { runtimeInputWiringFromResolved } from "../runtime_input_wiring.ts";
 import {
   assertStateGenerationMatches,
   auditEvent,
-  changedOutputNamesBetween,
   checkApplyExpected,
   defaultProviderMirrorRequiredForProfile,
-  directChangedDependencyOutputs,
   isTerminalStatus,
   jsonRecordFromPublicOutputs,
   mergeJsonVariableDefaults,
@@ -339,7 +330,6 @@ import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artif
 import type {
   CreateCapsulePlanInternal,
   ApplyRunInternalContext,
-  DependencyValueSealer,
   DeployControlActorContext,
   EnqueueRun,
   GenericRootDispatchContext,
@@ -1616,7 +1606,6 @@ export interface RunEngineDependencies {
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly runRenewalIntervalMs: number;
   readonly activity: ActivityRecorder;
-  readonly dependencyValueSealer?: DependencyValueSealer;
   readonly releaseActivator?: ReleaseActivator;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags: Record<string, string>;
@@ -1633,7 +1622,6 @@ export interface RunEngineDependencies {
   readonly billing: BillingService;
   readonly drift: DriftService;
   readonly runEnv: RunEnvResolver;
-  readonly dependencies: DependencyResolutionService;
   readonly verification: RunVerificationService;
   readonly planResolution: PlanResolutionService;
   readonly privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
@@ -1661,7 +1649,6 @@ export class RunEngine {
   readonly #capsuleCoordination?: CapsuleCoordination;
   readonly #runRenewalIntervalMs: number;
   readonly #activity: ActivityRecorder;
-  readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
@@ -1677,7 +1664,6 @@ export class RunEngine {
   readonly #billing: BillingService;
   readonly #drift: DriftService;
   readonly #runEnv: RunEnvResolver;
-  readonly #dependencies: DependencyResolutionService;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #privateRunFileGrantMinter?: PrivateRunFileGrantMinter;
@@ -1717,7 +1703,6 @@ export class RunEngine {
     this.#capsuleCoordination = deps.capsuleCoordination;
     this.#runRenewalIntervalMs = deps.runRenewalIntervalMs;
     this.#activity = deps.activity;
-    this.#dependencyValueSealer = deps.dependencyValueSealer;
     this.#releaseActivator = deps.releaseActivator;
     this.#observability = deps.observability;
     this.#metricTags = deps.metricTags;
@@ -1733,7 +1718,6 @@ export class RunEngine {
     this.#billing = deps.billing;
     this.#drift = deps.drift;
     this.#runEnv = deps.runEnv;
-    this.#dependencies = deps.dependencies;
     this.#verification = deps.verification;
     this.#planResolution = deps.planResolution;
     this.#privateRunFileGrantMinter = deps.privateRunFileGrantMinter;
@@ -2214,6 +2198,15 @@ export class RunEngine {
         "capsule is not available to this workspace",
       );
     }
+    // Retained dependency rows are historical execution authority. A new
+    // plan, including a destroy plan, must never silently drop those inputs.
+    if (await this.#store.hasRetiredDependenciesForConsumer(capsule.id)) {
+      throw new OpenTofuControllerError(
+        "dependency_retired",
+        `dependency_retired: Capsule ${capsule.id} has retired dependencies; remove them before re-planning`,
+        { reason: "dependency_retired" },
+      );
+    }
     if (
       legacySourcelessDestroyRecovery &&
       (!capsule || capsule.sourceId || capsule.currentStateGeneration <= 0)
@@ -2468,19 +2461,12 @@ export class RunEngine {
       ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
       ...(lifecycleActions ? { lifecycleActions } : {}),
     };
-    const dependencySnapshot = internal.resolvedDependencies?.entries.length
-      ? this.#dependencySnapshotForPlanRun(
-          planRunId,
-          internal.resolvedDependencies,
-        )
-      : undefined;
+    // Keep the original no-dependency digest frame so unapplied independent
+    // Plans created before retirement remain executable.
     const executionInputsDigest = await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(planRunInputs, dependencySnapshot),
+      planRunExecutionInputsDigestMaterial(planRunInputs),
     );
-    const storedPlanRunInputs = await this.#planRunInputsForStorage(
-      planRunInputs,
-      internal.resolvedDependencies?.hasSensitiveInjected === true,
-    );
+    const storedPlanRunInputs = planRunInputs;
     const dispatchDiagnostics = genericRootDispatch?.diagnostics ?? [];
     let planRun: PlanRun = {
       id: planRunId,
@@ -2503,9 +2489,6 @@ export class RunEngine {
       requiredProviderRequirements,
       baseStateGeneration,
       ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
-      ...(dependencySnapshot
-        ? { dependencySnapshotId: dependencySnapshot.id }
-        : {}),
       ...(compatibilityReportId ? { compatibilityReportId } : {}),
       ...(capsuleContext ? { capsuleContext } : {}),
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
@@ -2569,7 +2552,6 @@ export class RunEngine {
       prepared = await this.#store.preparePlanRun({
         run: planRun,
         inputs: storedPlanRunInputs,
-        ...(dependencySnapshot ? { dependencySnapshot } : {}),
         ...(expectedWorkspaceManagementAuthority
           ? { expectedWorkspaceManagementAuthority }
           : {}),
@@ -3149,28 +3131,18 @@ export class RunEngine {
       capsuleId: capsule.id,
       environment: capsule.environment,
     };
-    // Dependency variable_injection (spec §15 / §17). A destroy plan does NOT
-    // inject dependency values: there is nothing to wire into a teardown, and the
-    // pinned producer outputs would be irrelevant. For plan/update, resolve the
-    // consumer's Dependencies, read each producer's Output, build the
-    // injected values, and merge them into the generated-root module inputs
-    // BEFORE the run is created. The DependencySnapshot and exact private
-    // inputs are then committed atomically with the queue-visible PlanRun.
+    // Reject before generic-root preparation so no retired consumer Run is created.
+    if (await this.#store.hasRetiredDependenciesForConsumer(capsule.id)) {
+      throw new OpenTofuControllerError(
+        "dependency_retired",
+        `dependency_retired: Capsule ${capsule.id} has retired dependencies; remove them before re-planning`,
+        { reason: "dependency_retired" },
+      );
+    }
     const selectedPlanRequest = runnerProfileId
       ? { ...planRequest, runnerProfileId }
       : planRequest;
-    const resolvedDeps = destroy
-      ? undefined
-      : await planCreationStage(
-          "dependency_resolution",
-          this.#dependencies.resolveConsumerDependencies(capsule),
-        );
-    const injectedRequest = resolvedDeps
-      ? this.#injectDependencyValues(
-          selectedPlanRequest,
-          resolvedDeps.injectedValues,
-        )
-      : selectedPlanRequest;
+    const injectedRequest = selectedPlanRequest;
     const finalizedGenericRoot = genericRootPlan
       ? await planCreationStage(
           "generic_root_dispatch",
@@ -3206,9 +3178,6 @@ export class RunEngine {
         ...(finalizedGenericRoot
           ? { genericRootDispatch: finalizedGenericRoot }
           : {}),
-        ...(resolvedDeps && resolvedDeps.entries.length > 0
-          ? { resolvedDependencies: resolvedDeps }
-          : {}),
         ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
         ...(internal.driftCheck ? { driftCheck: true as const } : {}),
         ...(internal.origin ? { origin: internal.origin } : {}),
@@ -3218,32 +3187,6 @@ export class RunEngine {
       }),
     );
     return await this.#dispatchPreparedPlanRun(prepared);
-  }
-
-  /** Merges dependency-injected values into ordinary root-module variables. */
-  #injectDependencyValues(
-    request: CreatePlanRunRequest,
-    injectedValues: Readonly<Record<string, JsonValue>>,
-  ): CreatePlanRunRequest {
-    if (Object.keys(injectedValues).length === 0) return request;
-    return {
-      ...request,
-      variables: { ...(request.variables ?? {}), ...injectedValues },
-    };
-  }
-
-  /** Builds the immutable DependencySnapshot included in Plan preparation. */
-  #dependencySnapshotForPlanRun(
-    planRunId: string,
-    resolved: ResolvedDependencies,
-  ): DependencySnapshot {
-    return {
-      id: this.#newId("depsnap"),
-      runId: planRunId,
-      dependencies: resolved.entries,
-      mode: resolved.mode,
-      createdAt: new Date(this.#now()).toISOString(),
-    };
   }
 
   /**
@@ -3860,8 +3803,7 @@ export class RunEngine {
   /**
    * Generic Capsule plan request: the snapshot source stays as the child module
    * to be copied under the Takosumi generated root. The generated root itself is
-   * created after DependencySnapshot injection, because dependency values become
-   * root module inputs.
+   * created from the selected source and install configuration.
    */
   async #genericCapsulePlanRequest(
     input: {
@@ -4833,6 +4775,7 @@ export class RunEngine {
   ): Promise<ApplyRunResponse> {
     requireNonEmptyString(request.planRunId, "planRunId");
     const planRun = await this.#requirePlanRun(request.planRunId);
+    await this.#assertPlanHasNoRetiredDependencies(planRun);
     // A §19 drift_check is a read-only signal: it can NEVER be applied (Phase 8).
     // Rejected up front, independent of status, so a succeeded drift check cannot
     // be promoted into a write run.
@@ -5578,14 +5521,6 @@ export class RunEngine {
       );
     }
     await this.#notifyRestore({ phase: "succeeded", run: completed });
-    if (restoredOutput) {
-      await this.#markDownstreamCapsulesStale({
-        capsule,
-        previousOutput,
-        newOutput: restoredOutput,
-        now: nowMs,
-      });
-    }
     await this.#recordActivity({
       workspaceId: run.workspaceId,
       action: "restore.succeeded",
@@ -5600,6 +5535,11 @@ export class RunEngine {
         restoredFromStateVersionId: source.id,
         restoredFromGeneration: source.generation,
         currentStateGeneration: nextGeneration,
+        // Restore copies selected state and optional service data only. The
+        // control export is never replayed, including legacy dependency/share
+        // sections retained in older backup artifacts.
+        warningReason: "retired_backup_sections_ignored",
+        warning: "Control export is not replayed; legacy Dependency/OutputShare sections are ignored",
         ...(restoredServiceData
           ? {
               restoredServiceDataRef: restoredServiceData.ref,
@@ -5750,9 +5690,7 @@ export class RunEngine {
     } catch (error) {
       return (await this.#failUnclaimedPlanRun(planRun, error)).run;
     }
-    // The sidecar is sealed at rest when a sensitive dependency value was
-    // injected. Preparation verification above unseals it and checks the whole
-    // plaintext bundle against the digest committed with the queue-visible Run.
+    // Preparation verification checks the exact inputs committed with the Run.
     const variables = inputs.variables;
     const dispatch = moduleDispatchFromInputs(inputs);
     try {
@@ -6060,168 +5998,18 @@ export class RunEngine {
     return source;
   }
 
-  /**
-   * Builds the at-rest runs_inputs sidecar (spec §11 / §18). When `seal` is set, the
-   * sidecar carries at least one SENSITIVE dependency-injected value, so the
-   * complete sidecar payload (variables, generated root, output policy,
-   * source/lifecycle actions, OIDC/interface materialization, and runtime-input
-   * descriptors) is encrypted into {@link PlanRunInputs.sealed}
-   * with the SAME at-rest envelope used for state / plan / dependency-value
-   * artifacts, and the cleartext fields are dropped from the row. The store only
-   * ever sees ciphertext. A sealer is REQUIRED in that case: missing ⇒ fail closed
-   * (the dependency-snapshot seal would already have failed closed upstream, but
-   * this never persists a cleartext credential under any path). When `seal` is
-   * unset the sidecar is plain (no sensitive value to protect).
-   */
-  async #planRunInputsForStorage(
-    inputs: PlanRunInputs,
-    seal: boolean,
-  ): Promise<PlanRunInputs> {
-    if (!seal) {
-      return inputs;
-    }
-    if (!this.#dependencyValueSealer) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `dependency_value_sealer_unavailable: plan run ${inputs.planRunId} ` +
-          `carries a sensitive dependency-injected value but no at-rest value ` +
-          `sealer is configured to protect the runs_inputs sidecar`,
-        { reason: "dependency_value_sealer_unavailable" },
-      );
-    }
-    const payload: Record<string, JsonValue> = {
-      variables: inputs.variables as JsonValue,
-      ...(inputs.generatedRoot
-        ? { generatedRoot: inputs.generatedRoot as unknown as JsonValue }
-        : {}),
-      ...(inputs.operatorModule
-        ? { operatorModule: inputs.operatorModule as unknown as JsonValue }
-        : {}),
-      ...(inputs.workspaceOutputAllowlist
-        ? {
-            workspaceOutputAllowlist:
-              inputs.workspaceOutputAllowlist as unknown as JsonValue,
-          }
-        : {}),
-      ...(inputs.outputAllowlist
-        ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
-        : {}),
-      ...(inputs.sourceBuild
-        ? { sourceBuild: inputs.sourceBuild as unknown as JsonValue }
-        : {}),
-      ...(inputs.lifecycleActions
-        ? { lifecycleActions: inputs.lifecycleActions as unknown as JsonValue }
-        : {}),
-      ...(inputs.stateAdoption
-        ? { stateAdoption: inputs.stateAdoption as unknown as JsonValue }
-        : {}),
-      ...(inputs.priorState
-        ? { priorState: inputs.priorState as unknown as JsonValue }
-        : {}),
-      ...(inputs.moduleVariableMaterializationDigest
-        ? {
-            moduleVariableMaterializationDigest:
-              inputs.moduleVariableMaterializationDigest,
-          }
-        : {}),
-      ...(inputs.interfaceMaterialization
-        ? {
-            interfaceMaterialization:
-              inputs.interfaceMaterialization as unknown as JsonValue,
-          }
-        : {}),
-      ...(inputs.runtimeInputs
-        ? { runtimeInputs: inputs.runtimeInputs as unknown as JsonValue }
-        : {}),
-      ...(inputs.privateRunFileSlots
-        ? { privateRunFileSlots: inputs.privateRunFileSlots as unknown as JsonValue }
-        : {}),
-    };
-    const sealed = await this.#dependencyValueSealer.seal(payload);
-    // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
-    return {
-      planRunId: inputs.planRunId,
-      variables: {},
-      sealed,
-    };
-  }
-
-  /**
-   * Reads the runs_inputs sidecar, transparently unsealing a sensitive-bearing
-   * row (spec §11 / §18) back into the full {@link PlanRunInputs} shape so plan /
-   * apply dispatch sees the same inputs / generated root the plan was created
-   * with. A sealed row with no configured sealer fails closed; a tampered/wrong
-   * key blob fails closed at the AES-GCM auth tag + content digest inside the
-   * sealer. A plain row is returned unchanged.
-   */
-  async #getPlanRunInputs(
-    planRunId: string,
-  ): Promise<PlanRunInputs | undefined> {
-    const row = await this.#store.getPlanRunInputs(planRunId);
-    if (!row?.sealed) return row;
-    if (!this.#dependencyValueSealer) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `dependency_value_sealer_unavailable: plan run ${planRunId} sealed its ` +
-          `runs_inputs sidecar but no at-rest value sealer is configured to ` +
-          `open it`,
-        { reason: "dependency_value_sealer_unavailable" },
-      );
-    }
-    const payload = await this.#dependencyValueSealer.open(row.sealed);
-    if (!Object.prototype.hasOwnProperty.call(payload, "variables")) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `plan_run_inputs_corrupt: plan run ${planRunId} sealed inputs omit variables`,
-        { reason: "plan_run_inputs_corrupt" },
-      );
-    }
-    const variables = normalizeVariables(
-      payload.variables as Readonly<Record<string, unknown>>,
+  /** Refuses historical pins and retained dependency rows before execution. */
+  async #assertPlanHasNoRetiredDependencies(planRun: PlanRun): Promise<void> {
+    const capsuleId = planRun.capsuleId ?? planRun.capsuleContext?.capsuleId;
+    if (
+      planRun.dependencySnapshotId === undefined &&
+      (!capsuleId || !(await this.#store.hasRetiredDependenciesForConsumer(capsuleId)))
+    ) return;
+    throw new OpenTofuControllerError(
+      "dependency_retired",
+      `dependency_retired: plan run ${planRun.id} has retired dependency inputs; create a new plan`,
+      { reason: "dependency_retired" },
     );
-    const generatedRoot = payload.generatedRoot as unknown as
-      DispatchGeneratedRoot | undefined;
-    const operatorModule = payload.operatorModule as unknown as
-      PlanRunInputs["operatorModule"] | undefined;
-    const workspaceOutputAllowlist =
-      payload.workspaceOutputAllowlist as unknown as
-        Readonly<Record<string, OutputAllowlistEntry>> | undefined;
-    const outputAllowlist = payload.outputAllowlist as unknown as
-      Readonly<Record<string, OutputAllowlistEntry>> | undefined;
-    const sourceBuild = payload.sourceBuild as unknown as
-      InstallConfig["sourceBuild"] | undefined;
-    const lifecycleActions = payload.lifecycleActions as unknown as
-      InstallConfig["lifecycleActions"] | undefined;
-    const stateAdoption = payload.stateAdoption as unknown as
-      PlanRunInputs["stateAdoption"] | undefined;
-    const priorState = payload.priorState as unknown as
-      PlanRunInputs["priorState"] | undefined;
-    const moduleVariableMaterializationDigest =
-      payload.moduleVariableMaterializationDigest as string | undefined;
-    const interfaceMaterialization = payload.interfaceMaterialization as unknown as
-      PlanRunInputs["interfaceMaterialization"] | undefined;
-    const runtimeInputs = payload.runtimeInputs as unknown as
-      PlanRunInputs["runtimeInputs"] | undefined;
-    const privateRunFileSlots = payload.privateRunFileSlots as unknown as
-      PlanRunInputs["privateRunFileSlots"] | undefined;
-    return {
-      planRunId,
-      variables,
-      ...(generatedRoot ? { generatedRoot } : {}),
-      ...(operatorModule ? { operatorModule } : {}),
-      ...(workspaceOutputAllowlist ? { workspaceOutputAllowlist } : {}),
-      ...(outputAllowlist ? { outputAllowlist } : {}),
-      ...(sourceBuild ? { sourceBuild } : {}),
-      ...(lifecycleActions ? { lifecycleActions } : {}),
-      ...(stateAdoption ? { stateAdoption } : {}),
-      ...(priorState ? { priorState } : {}),
-      ...(moduleVariableMaterializationDigest
-        ? { moduleVariableMaterializationDigest }
-        : {}),
-      ...(interfaceMaterialization ? { interfaceMaterialization } : {}),
-      ...(runtimeInputs ? { runtimeInputs } : {}),
-      ...(privateRunFileSlots ? { privateRunFileSlots } : {}),
-    };
   }
 
   /**
@@ -6230,6 +6018,7 @@ export class RunEngine {
    * neither restart repair nor Apply may synthesize `{}` or a different root.
    */
   async #requirePreparedPlanRunInputs(planRun: PlanRun): Promise<PlanRunInputs> {
+    await this.#assertPlanHasNoRetiredDependencies(planRun);
     const executionInputsDigest = planRun.executionInputsDigest?.trim();
     if (!executionInputsDigest) {
       throw new OpenTofuControllerError(
@@ -6238,7 +6027,7 @@ export class RunEngine {
         { reason: "plan_run_inputs_unprepared" },
       );
     }
-    const inputs = await this.#getPlanRunInputs(planRun.id);
+    const inputs = await this.#store.getPlanRunInputs(planRun.id);
     if (!inputs) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -6274,28 +6063,8 @@ export class RunEngine {
         { reason: "plan_run_inputs_corrupt" },
       );
     }
-    let dependencySnapshot: DependencySnapshot | undefined;
-    if (planRun.dependencySnapshotId) {
-      dependencySnapshot = await this.#store.getDependencySnapshot(
-        planRun.dependencySnapshotId,
-      );
-      if (
-        !dependencySnapshot ||
-        dependencySnapshot.id !== planRun.dependencySnapshotId ||
-        dependencySnapshot.runId !== planRun.id
-      ) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `plan_run_inputs_missing: plan run ${planRun.id} has no exact dependency snapshot`,
-          { reason: "plan_run_inputs_missing" },
-        );
-      }
-    }
     const actualDigest = await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(
-        normalizedInputs,
-        dependencySnapshot,
-      ),
+      planRunExecutionInputsDigestMaterial(normalizedInputs),
     );
     if (actualDigest !== executionInputsDigest) {
       throw new OpenTofuControllerError(
@@ -6384,8 +6153,7 @@ export class RunEngine {
    *     on Output.
    *   - Sensitive-flagged outputs appear in NEITHER (invariants 11/12), and a
    *     required sensitive/missing/wrong-type output fails closed.
-   *   - `outputDigest` = stableJsonDigest over `{ workspaceOutputs, publicOutputs }`,
-   *     which drives stale propagation (§24).
+   *   - `outputDigest` = stableJsonDigest over `{ workspaceOutputs, publicOutputs }`.
    *   - `rawArtifactRef` = the opaque host-allocated reference the runner used
    *     for the sealed raw envelope.
    *
@@ -6441,91 +6209,6 @@ export class RunEngine {
       createdAt: new Date(input.now).toISOString(),
     };
     return snapshot;
-  }
-
-  /**
-   * §24 stale propagation. After a successful apply records a new Output,
-   * compares its digest to the Capsule's PREVIOUS Output digest;
-   * when they differ (the outputs changed) every transitive downstream consumer
-   * in the same Workspace that is currently `active` is patched to `stale`.
-   *
-   * The downstream closure is computed over the Workspace's `variable_injection`
-   * dependency edges (producer -> consumer) via {@link downstreamClosure}. Only
-   * `active` consumers are moved: `pending` / `error` / `destroyed` are left
-   * untouched (a stale flag on a not-yet-applied or torn-down Capsule is
-   * meaningless). No-ops when the digest is unchanged, or when there are no
-   * downstream consumers. The lifecycle transition is exact-record CAS-fenced,
-   * so a concurrent state or status commit wins without a stale activity.
-   */
-  async #propagateStale(input: {
-    readonly capsule: Capsule;
-    readonly previousOutput: Output | undefined;
-    readonly newOutput: Output;
-    readonly now: number;
-  }): Promise<void> {
-    if (input.previousOutput?.outputDigest === input.newOutput.outputDigest)
-      return;
-    const edges = await this.#store.listDependenciesByWorkspace(
-      input.capsule.workspaceId,
-    );
-    if (edges.length === 0) return;
-    const changedOutputNames = changedOutputNamesBetween(
-      input.previousOutput,
-      input.newOutput,
-    );
-    const producerOutputReasons = changedOutputNames.map(
-      (outputName) => `${input.capsule.name}.${outputName} changed`,
-    );
-    const closure = downstreamClosure(
-      edges.map((edge) => ({
-        from: edge.producerCapsuleId,
-        to: edge.consumerCapsuleId,
-      })),
-      input.capsule.id,
-    );
-    if (closure.size === 0) return;
-    const updatedAt = new Date(input.now).toISOString();
-    for (const consumerId of closure) {
-      const consumer = await this.#store.getCapsule(consumerId);
-      // Only an active consumer becomes stale; skip the rest (and a consumer the
-      // ledger no longer holds).
-      if (!consumer || consumer.status !== "active") continue;
-      const stale = await this.#store.markCapsuleStale({
-        capsuleId: consumerId,
-        expected: consumer,
-        reason: "dependency-output",
-        updatedAt,
-      });
-      if (stale.kind !== "updated") continue;
-      const staleConsumer = stale.capsule;
-      // Activity (§27 / §34): a downstream consumer was marked stale by the
-      // producer's changed outputs (§24). One event per affected consumer.
-      const directOutputNames = directChangedDependencyOutputs({
-        edges,
-        producerCapsuleId: input.capsule.id,
-        consumerCapsuleId: staleConsumer.id,
-        changedOutputNames,
-      });
-      const directReasons = directOutputNames.map(
-        (outputName) => `${input.capsule.name}.${outputName} changed`,
-      );
-      await this.#recordActivity({
-        workspaceId: staleConsumer.workspaceId,
-        action: "capsule.stale",
-        targetType: "capsule",
-        targetId: staleConsumer.id,
-        metadata: {
-          producerCapsuleId: input.capsule.id,
-          producerCapsuleName: input.capsule.name,
-          changedOutputs: changedOutputNames,
-          reasons:
-            directReasons.length > 0 ? directReasons : producerOutputReasons,
-          directChangedOutputs: directOutputNames,
-          outputId: input.newOutput.id,
-          previousOutputId: input.previousOutput?.id ?? null,
-        },
-      });
-    }
   }
 
   /**
@@ -8843,10 +8526,6 @@ export class RunEngine {
           ...(envDispatch.sourceArchive
             ? { sourceArchive: envDispatch.sourceArchive }
             : {}),
-          // remote_state dependency states materialized into /work/deps (spec §15).
-          ...(envDispatch.depStates
-            ? { depStates: envDispatch.depStates }
-            : {}),
           // Dispatch-only: the minted env never lands on the persisted run.
           ...(environment.credentials
             ? { credentials: environment.credentials }
@@ -9928,18 +9607,6 @@ export class RunEngine {
         };
       }
       ledgerCommitted = true;
-      // §24 stale propagation: when this apply's projected outputs changed
-      // versus the Capsule's PREVIOUS Output, every transitive
-      // downstream consumer in the Workspace that is currently `active` is marked
-      // `stale`. The just-applied Capsule keeps the status selected by the
-      // lifecycle gate (`active` or fail-closed `error`); pending/error/
-      // destroyed consumers are left untouched.
-      await this.#markDownstreamCapsulesStale({
-        capsule: projected.capsule,
-        previousOutput: projected.previousOutput,
-        newOutput: projected.output,
-        now,
-      });
       return await this.#completeApplyRun({
         completed,
         planRun,
@@ -10139,7 +9806,7 @@ export class RunEngine {
   /**
    * Re-asserts every apply pre-flight invariant inside the serialized section
    * (immutable plan artifact, apply-once, state generation, source snapshot,
-   * dependency snapshot, Capsule compatibility, generated-root dispatch, and
+   * Capsule compatibility, generated-root dispatch, and
    * billing reservation) just before dispatch. Returns the currently-planned
    * Capsule (undefined for runs without Capsule context).
    */
@@ -10202,13 +9869,7 @@ export class RunEngine {
     // (spec invariant 10) just before dispatch, mirroring the digest/generation
     // pre-flight checks.
     await this.#verification.revalidateSourceSnapshot(planRun);
-    // DependencySnapshot verification (spec §17 / invariant 9): when the plan
-    // pinned a DependencySnapshot, re-read it and verify producer state
-    // generations (strict mode) + recompute the pinned values digests (tamper
-    // check) before applying. A moved producer (strict) is
-    // `dependency_snapshot_stale`; a digest mismatch is
-    // `dependency_snapshot_tampered`.
-    await this.#verification.verifyDependencySnapshot(planRun);
+    await this.#assertPlanHasNoRetiredDependencies(planRun);
     await this.#verification.assertCapsuleCompatibilityAllowsRun(planRun);
     await this.#billing.assertApplyBillingAllowed(planRun);
     return plannedCapsule;
@@ -10216,7 +9877,7 @@ export class RunEngine {
 
   /**
    * Dispatches the non-destroy apply to the runner. Resolves the M2 env dispatch
-   * (state scope at `base + 1` + source archive + dependency states) and the
+   * (state scope at `base + 1` + source archive) and the
    * provider-capsule mirror policy, then runs `runner.apply` with the minted
    * credentials (dispatch-only — never persisted).
    */
@@ -10423,8 +10084,6 @@ export class RunEngine {
         ...(envDispatch.sourceArchive
           ? { sourceArchive: envDispatch.sourceArchive }
           : {}),
-        // remote_state dependency states materialized into /work/deps (spec §15).
-        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
         ...(credentials ? { credentials } : {}),
         ...(privateRunFiles ? { privateRunFiles } : {}),
       },
@@ -10466,7 +10125,7 @@ export class RunEngine {
    * Projects the apply outputs and BUILDS the §16 Output (persisted
    * later, atomically, by `commitRunState`). Returns the resolved
    * Capsule, the bumped state generation, the new Output, and the Capsule's
-   * PREVIOUS Output (which drives §24 stale propagation).
+   * previous Output for the atomic commit predicate.
    */
   async #projectAndRecordApplyOutputs(input: {
     readonly planRun: PlanRun;
@@ -10505,8 +10164,7 @@ export class RunEngine {
     // §16 Output: capture the allowlisted projected outputs after a
     // successful apply. Sensitive-flagged outputs appear in NEITHER
     // projection; the raw envelope stays an encrypted artifact referenced by
-    // rawArtifactRef. The Capsule's PREVIOUS snapshot digest drives
-    // stale propagation (§24) after this record.
+    // rawArtifactRef. Retain the prior Output for the atomic commit predicate.
     const previousOutput = capsule.currentOutputId
       ? await this.#store.getOutput(capsule.currentOutputId)
       : undefined;
@@ -11533,20 +11191,6 @@ export class RunEngine {
     });
   }
 
-  /**
-   * §24 stale propagation for an apply: a thin named wrapper over
-   * `#propagateStale` so the top-level apply flow reads as a sequence of named
-   * steps.
-   */
-  async #markDownstreamCapsulesStale(input: {
-    readonly capsule: Capsule;
-    readonly previousOutput: Output | undefined;
-    readonly newOutput: Output;
-    readonly now: number;
-  }): Promise<void> {
-    await this.#propagateStale(input);
-  }
-
   /** Builds the terminal ApplyRun committed with StateVersion and Output. */
   #buildCompletedApplyRun(input: {
     readonly running: ApplyRun;
@@ -12096,12 +11740,6 @@ export class RunEngine {
                 : {}),
               ...(envDispatch.sourceArchive
                 ? { sourceArchive: envDispatch.sourceArchive }
-                : {}),
-              // remote_state dependency states materialized into /work/deps (§15):
-              // the teardown config still refreshes its `terraform_remote_state` data
-              // sources, so the producer state files must be present.
-              ...(envDispatch.depStates
-                ? { depStates: envDispatch.depStates }
                 : {}),
               ...(credentials ? { credentials } : {}),
               ...(privateRunFiles ? { privateRunFiles } : {}),
@@ -12967,7 +12605,7 @@ function assertPinnedModuleVariableValues(
   for (const [name, value] of Object.entries(materialization.variables)) {
     if (actual[name] !== value) {
       throw moduleVariableMaterializationError(
-        `dependency injection changed materialized variable ${name}`,
+        `materialized variable ${name} changed after preparation`,
       );
     }
   }

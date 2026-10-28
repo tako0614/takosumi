@@ -2317,6 +2317,7 @@ test("restore preparation captures Workspace authority before backup lookup and 
 
 test("restore rebases StateVersion and Output cursors and marks the Capsule stale", async () => {
   const { store, capsuleId } = await seedUpdatableCapsule();
+  const activityEvents: unknown[] = [];
   let restoreJob: OpenTofuRestoreJob | undefined;
   let sourceAuthorityReads = 0;
   let authoritativeSource: OpenTofuRestoreSourceState | undefined;
@@ -2326,6 +2327,7 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
     store,
     now: sequenceNow(70),
     newId: deterministicIds(),
+    activity: { record: async (event) => { activityEvents.push(event); } },
     runner: {
       restore: async (job, control) => {
         restoreJob = job;
@@ -2470,6 +2472,13 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
   );
   expect(restoredOutput?.outputDigest).toBe(latestSourceOutput.outputDigest);
   expect(restored?.status).toBe("stale");
+  expect(activityEvents).toContainEqual(expect.objectContaining({
+    action: "restore.succeeded",
+    metadata: expect.objectContaining({
+      warningReason: "retired_backup_sections_ignored",
+      warning: expect.stringContaining("legacy Dependency/OutputShare sections are ignored"),
+    }),
+  }));
   expect(lifecycle).toEqual([
     "started:running:running",
     "succeeded:succeeded:succeeded",

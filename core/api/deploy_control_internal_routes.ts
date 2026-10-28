@@ -67,14 +67,6 @@ import {
   mountDeployControlRunRoutes,
 } from "./deploy_control_run_routes.ts";
 import {
-  DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS,
-  mountDeployControlDependencyRoutes,
-} from "./deploy_control_dependency_routes.ts";
-import {
-  DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS,
-  mountDeployControlOutputShareRoutes,
-} from "./deploy_control_output_share_routes.ts";
-import {
   DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS,
   mountDeployControlRunGroupRoutes,
 } from "./deploy_control_run_group_routes.ts";
@@ -125,8 +117,6 @@ const DEPLOY_CONTROL_INTERNAL_ENDPOINTS_RICH: readonly DeployControlEndpoint[] =
     ...DEPLOY_CONTROL_CAPSULE_ENDPOINTS,
     ...DEPLOY_CONTROL_CAPSULE_RESTORE_ENDPOINTS,
     ...DEPLOY_CONTROL_RUN_ENDPOINTS,
-    ...DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS,
-    ...DEPLOY_CONTROL_OUTPUT_SHARE_ENDPOINTS,
     ...DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS,
     ...DEPLOY_CONTROL_ACTIVITY_ENDPOINTS,
     ...DEPLOY_CONTROL_BILLING_ENDPOINTS,
@@ -167,8 +157,6 @@ export function mountDeployControlInternalRoutes(
   mountDeployControlCapsuleRoutes(ctx);
   mountDeployControlCapsuleRestoreRoutes(ctx);
   mountDeployControlRunRoutes(ctx);
-  mountDeployControlDependencyRoutes(ctx);
-  mountDeployControlOutputShareRoutes(ctx);
   mountDeployControlRunGroupRoutes(ctx);
   mountDeployControlActivityRoutes(ctx);
   mountDeployControlBillingRoutes(ctx);

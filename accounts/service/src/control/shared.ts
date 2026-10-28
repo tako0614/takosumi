@@ -59,12 +59,6 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencyMode,
-  DependencyOutputMapping,
-  DependencyVisibility,
-} from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
@@ -78,7 +72,6 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type {
   PublicStateVersion,
   StateVersion,
@@ -221,39 +214,6 @@ export function publicStateVersion(
     generation: stateVersion.generation,
     createdByRunId: stateVersion.createdByRunId,
     createdAt: stateVersion.createdAt,
-  };
-}
-
-export type PublicDependency = Dependency;
-
-/** Canonical account-plane Dependency view without pre-v1 id aliases. */
-export function publicDependency(dependency: Dependency): PublicDependency {
-  return {
-    id: dependency.id,
-    workspaceId: dependency.workspaceId,
-    producerCapsuleId: dependency.producerCapsuleId,
-    consumerCapsuleId: dependency.consumerCapsuleId,
-    mode: dependency.mode,
-    outputs: dependency.outputs,
-    visibility: dependency.visibility,
-    createdAt: dependency.createdAt,
-  };
-}
-
-export type PublicOutputShare = OutputShare;
-
-/** Canonical account-plane OutputShare view without pre-v1 id aliases. */
-export function publicOutputShare(share: OutputShare): PublicOutputShare {
-  return {
-    id: share.id,
-    fromWorkspaceId: share.fromWorkspaceId,
-    toWorkspaceId: share.toWorkspaceId,
-    producerCapsuleId: share.producerCapsuleId,
-    outputs: share.outputs,
-    status: share.status,
-    createdAt: share.createdAt,
-    ...(share.acceptedAt ? { acceptedAt: share.acceptedAt } : {}),
-    ...(share.revokedAt ? { revokedAt: share.revokedAt } : {}),
   };
 }
 

@@ -7,8 +7,11 @@ and checking for drift each leave a Run record.
 
 `plan` creates a Plan Run. `apply` creates a separate Apply Run linked with
 `planRunId` to the Plan Run you reviewed. On apply, Takosumi rechecks the plan
-digest, source snapshot, dependency snapshot, and state generation, so the applied
-change cannot diverge from the plan you reviewed.
+digest, source snapshot, compatibility evidence, and state generation, so the applied
+change cannot diverge from the plan you reviewed. Legacy Plans that pin a DependencySnapshot
+are refused and must be replaced with a fresh plan after retired Dependency edges are removed
+through separately reviewed data maintenance. Migrate the app to its own explicit inputs first;
+see [Apps manage their own inputs](./state-and-outputs.md#apps-manage-their-own-inputs).
 
 **The plan you reviewed and the change that is applied cannot diverge**, because the
 Apply Run is pinned to that plan.

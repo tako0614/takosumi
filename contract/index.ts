@@ -134,7 +134,6 @@ export {
 } from "./provider-env-rules.ts";
 export * from "./credential-recipes.ts";
 export * from "./credential-recipe-host.ts";
-export * from "./dependencies.ts";
 export type {
   TakosumiApiErrorCode,
   TakosumiApiErrorEnvelope,
@@ -146,9 +145,6 @@ export type {
   PublicOutput as Output,
   PublicOutput,
   OutputResponse,
-  OutputShare,
-  OutputShareEntry,
-  OutputShareStatus,
 } from "./outputs.ts";
 export type {
   PublicStateVersion as StateVersion,

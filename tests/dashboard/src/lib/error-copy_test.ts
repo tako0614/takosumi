@@ -90,3 +90,22 @@ describe("friendlyError for a version change refused while another is prepared",
     expect(friendlyError(error, (k) => en[k]).message).not.toBe(message);
   });
 });
+
+describe("friendlyError for a Plan blocked by retired app links", () => {
+  test("dependency_retired explains the migration and operator cleanup in both locales", () => {
+    const error = new ControlApiError(
+      412,
+      "failed_precondition",
+      "dependency_retired: Capsule cap_app has retired dependencies; remove them before re-planning",
+      {
+        error: {
+          code: "failed_precondition",
+          message: "dependency_retired: Capsule cap_app has retired dependencies; remove them before re-planning",
+          details: { reason: "dependency_retired" },
+        },
+      },
+    );
+    expect(friendlyError(error, (key) => ja[key]).message).toBe(ja["controlError.dependencyRetired"]);
+    expect(friendlyError(error, (key) => en[key]).message).toBe(en["controlError.dependencyRetired"]);
+  });
+});

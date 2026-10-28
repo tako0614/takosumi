@@ -9,7 +9,7 @@
  * The desktop sidebar and the mobile bottom bar render this list verbatim, and
  * the top bar names the section from the same table, so a route rename cannot
  * desync the chrome. Nothing else is a top-level destination: run history,
- * activity, dependencies, recovery and created resources belong to each app's
+ * activity, recovery and created resources belong to each app's
  * page, and workspace-wide tools that no behavior needs stay in the API and CLI.
  */
 import { LayoutGrid, Link2, Store, UserCircle2 } from "lucide-solid";

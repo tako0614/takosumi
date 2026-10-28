@@ -43,12 +43,6 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencyMode,
-  DependencyOutputMapping,
-  DependencyVisibility,
-} from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
@@ -61,7 +55,6 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type {
   BackupRecord,
   CreateBackupResponse,
@@ -116,13 +109,8 @@ import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
-  dependencyModeValue,
-  dependencyVisibilityValue,
-  isOutputsMapping,
   jsonRecordValue,
   modulePathValue,
-  outputShareEntries,
-  outputShareSensitivePolicy,
   parseProviderBinding,
   parseProviderBindings,
   parseLimit,
