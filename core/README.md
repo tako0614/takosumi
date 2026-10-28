@@ -12,7 +12,7 @@ runner/profile machinery selected by the operator and resolved from
 ProviderConnection + CredentialRecipe + ProviderBinding + policy.
 
 Current implementation routes and stores use the same Workspace, Project,
-Capsule, Run, StateVersion, Output, Dependency, OutputShare, and AuditEvent
+Capsule, Run, StateVersion, Output, Interface, and AuditEvent
 vocabulary as the public product.
 
 ## Run From Source

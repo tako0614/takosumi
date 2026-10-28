@@ -320,6 +320,7 @@ export class InterfaceService {
     validateCreate(request);
     const workspaceId = requireText(request.workspaceId, "workspaceId");
     const ownerRef = normalizedOwner(request.ownerRef);
+    assertOwnedCapsuleOutputs(ownerRef, request.spec);
     if (
       this.#ownerExists &&
       !(await this.#ownerExists({ workspaceId, ownerRef }))
@@ -772,8 +773,20 @@ export class InterfaceService {
     let projected = 0;
     let failed = 0;
     for (const iface of page) {
-      if (await this.#projectInterface(iface)) projected += 1;
-      else failed += 1;
+      try {
+        const current = hasUnownedCapsuleOutput(
+          iface.metadata.ownerRef,
+          iface.spec,
+        )
+          ? await this.reconcile(iface.metadata.id, {
+              allowSafetyRecovery: true,
+            })
+          : iface;
+        if (await this.#projectInterface(current)) projected += 1;
+        else failed += 1;
+      } catch {
+        failed += 1;
+      }
     }
     const last = page.at(-1)?.metadata.id;
     return {
@@ -806,6 +819,8 @@ export class InterfaceService {
                 }
               > =>
                 input.source === "capsule_output" &&
+                iface.metadata.ownerRef.kind === "Capsule" &&
+                iface.metadata.ownerRef.id === capsuleId &&
                 input.capsuleId === capsuleId,
             )
             .map((input) => input.outputName),
@@ -890,7 +905,7 @@ export class InterfaceService {
     const normalizedPermission = permission.trim();
     const normalizedCapsuleId =
       capsuleId === undefined ? undefined : requireText(capsuleId, "capsuleId");
-    return await this.#stores.authorized.listPage({
+    const page = await this.#stores.authorized.listPage({
       filter: normalizedFilter,
       subjectId: normalizedSubject,
       permission: normalizedPermission,
@@ -898,6 +913,13 @@ export class InterfaceService {
       ...(uiSurfaceCandidates ? { uiSurfaceCandidates: true } : {}),
       ...(normalizedCapsuleId ? { capsuleId: normalizedCapsuleId } : {}),
     });
+    return {
+      ...page,
+      items: page.items.filter(
+        (iface) =>
+          !hasUnownedCapsuleOutput(iface.metadata.ownerRef, iface.spec),
+      ),
+    };
   }
 
   async getAuthorizedForPrincipal(
@@ -1291,6 +1313,7 @@ export class InterfaceService {
         ],
       },
     };
+    assertOwnedCapsuleOutputs(current.metadata.ownerRef, next.spec);
     const expected = guard(current);
     if (!(await this.#stores.interfaces.compareAndSet(next, expected))) {
       throw new InterfaceServiceError(
@@ -1343,53 +1366,63 @@ export class InterfaceService {
         return current;
       }
       let resolution: InterfaceResolutionResult;
-      const lifecycleBlock = await this.#lifecycleGuard?.({
-        workspaceId: current.metadata.workspaceId,
-        ownerRef: current.metadata.ownerRef,
-        inputs: current.spec.inputs ?? {},
-      });
-      if (lifecycleBlock) {
-        resolution = lifecycleBlock;
-      } else if (current.spec.access.policyRef && !this.#policyAllows) {
+      if (hasUnownedCapsuleOutput(current.metadata.ownerRef, current.spec)) {
         resolution = {
           ok: false,
           phase: "NotReady",
-          reason: "UnsupportedPolicy",
-          message: "Interface policyRef has no configured Policy evaluator",
-        };
-      } else if (
-        current.spec.access.policyRef &&
-        !(await this.#policyAllows!({
-          workspaceId: current.metadata.workspaceId,
-          policyRef: current.spec.access.policyRef,
-          iface: current,
-        }))
-      ) {
-        resolution = {
-          ok: false,
-          phase: "NotReady",
-          reason: "PolicyDenied",
-          message: "Interface policy did not allow resolution",
-        };
-      } else if (
-        this.#ownerReady &&
-        !(await this.#ownerReady({
-          workspaceId: current.metadata.workspaceId,
-          ownerRef: current.metadata.ownerRef,
-        }))
-      ) {
-        resolution = {
-          ok: false,
-          phase: "NotReady",
-          reason: "OwnerNotReady",
-          message: "Interface owner is not Ready in the Workspace",
+          reason: "InvalidCapsuleOutputOwner",
+          message:
+            "capsule_output inputs must belong to the Interface's owning Capsule",
         };
       } else {
-        resolution = await this.#resolver.resolve({
+        const lifecycleBlock = await this.#lifecycleGuard?.({
           workspaceId: current.metadata.workspaceId,
-          specGeneration: current.metadata.generation,
+          ownerRef: current.metadata.ownerRef,
           inputs: current.spec.inputs ?? {},
         });
+        if (lifecycleBlock) {
+          resolution = lifecycleBlock;
+        } else if (current.spec.access.policyRef && !this.#policyAllows) {
+          resolution = {
+            ok: false,
+            phase: "NotReady",
+            reason: "UnsupportedPolicy",
+            message: "Interface policyRef has no configured Policy evaluator",
+          };
+        } else if (
+          current.spec.access.policyRef &&
+          !(await this.#policyAllows!({
+            workspaceId: current.metadata.workspaceId,
+            policyRef: current.spec.access.policyRef,
+            iface: current,
+          }))
+        ) {
+          resolution = {
+            ok: false,
+            phase: "NotReady",
+            reason: "PolicyDenied",
+            message: "Interface policy did not allow resolution",
+          };
+        } else if (
+          this.#ownerReady &&
+          !(await this.#ownerReady({
+            workspaceId: current.metadata.workspaceId,
+            ownerRef: current.metadata.ownerRef,
+          }))
+        ) {
+          resolution = {
+            ok: false,
+            phase: "NotReady",
+            reason: "OwnerNotReady",
+            message: "Interface owner is not Ready in the Workspace",
+          };
+        } else {
+          resolution = await this.#resolver.resolve({
+            workspaceId: current.metadata.workspaceId,
+            specGeneration: current.metadata.generation,
+            inputs: current.spec.inputs ?? {},
+          });
+        }
       }
       if (resolution.ok) {
         const resourceUriInput = current.spec.access.resourceUriInput;
@@ -2238,11 +2271,21 @@ export class InterfaceService {
   async #projectInterface(iface: Interface): Promise<boolean> {
     if (!this.#projectionSink) return true;
     try {
+      const bindings = await this.#stores.bindings.listByInterface(
+        iface.metadata.id,
+      );
+      if (
+        hasUnownedCapsuleOutput(iface.metadata.ownerRef, iface.spec) &&
+        (iface.status.phase === "Resolved" ||
+          iface.status.resolvedInputs !== undefined ||
+          iface.status.resourceUri !== undefined ||
+          bindings.some((binding) => binding.status.phase === "Ready"))
+      ) {
+        return false;
+      }
       await this.#projectionSink.project({
         interface: iface,
-        bindings: await this.#stores.bindings.listByInterface(
-          iface.metadata.id,
-        ),
+        bindings,
       });
       return true;
     } catch (error) {
@@ -2876,6 +2919,29 @@ function materializeCapsuleBlueprintInputs(
     );
   }
   return materialized;
+}
+
+function assertOwnedCapsuleOutputs(
+  ownerRef: Interface["metadata"]["ownerRef"],
+  spec: InterfaceSpec,
+): void {
+  if (hasUnownedCapsuleOutput(ownerRef, spec)) {
+    throw new InterfaceServiceError(
+      "failed_precondition",
+      "capsule_output inputs must belong to the Interface's owning Capsule",
+    );
+  }
+}
+
+function hasUnownedCapsuleOutput(
+  ownerRef: Interface["metadata"]["ownerRef"],
+  spec: InterfaceSpec,
+): boolean {
+  return Object.values(spec.inputs ?? {}).some(
+    (input) =>
+      input.source === "capsule_output" &&
+      (ownerRef.kind !== "Capsule" || input.capsuleId !== ownerRef.id),
+  );
 }
 
 function normalizeSpec(spec: InterfaceSpec): InterfaceSpec {

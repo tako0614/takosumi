@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 96 件です。
+次の 89 件です。
 
 ### Account views
 
@@ -237,7 +237,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを追加する                      |
 | PATCH    | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える                  |
 | DELETE   | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す                          |
-| GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Capsule の依存グラフを読む              |
+| GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Workspace の Capsule 一覧を読む。廃止された依存 edge 一覧は空で返す |
 | GET      | `/api/v1/workspaces/{workspaceId}/ui-surfaces`       | 認可済み Workspace UI surface Interface を一覧する |
 | GET      | `/api/v1/workspaces/{workspaceId}/activity`          | 操作履歴を一覧する                      |
 | GET      | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | Interface materialization の value-free な失敗を一覧する |
@@ -282,9 +282,6 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | GET      | `/api/v1/capsules/{capsuleId}/current-resource-inventory`  | 現在の版に記録された OpenTofu の resource の一覧を読む |
 | GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/state-versions`              | StateVersion を一覧する                      |
-| GET      | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を一覧する                               |
-| POST     | `/api/v1/capsules/{capsuleId}/dependencies`                | 依存を作る                                   |
-| DELETE   | `/api/v1/dependencies/{dependencyId}`                      | 依存を削除する                               |
 | GET      | `/api/v1/capsules/{capsuleId}/provider-bindings`           | ProviderBinding の選択を読む                 |
 | GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions`  | 現在の StateVersion をまとめて読む           |
 | GET      | `/api/v1/capsule-configs`                                  | Capsule 作成設定を一覧する                   |
@@ -688,10 +685,6 @@ Apply が新しい InstallConfig を認可することはありません。
 | GET      | `/api/v1/connections/oauth/{helperId}/callback` | OAuth 補助を完了する                               |
 | GET      | `/api/v1/provider-connections`                  | Workspace から見える ProviderConnection を一覧する |
 | GET      | `/api/v1/credential-recipes`                    | Credential Recipe を一覧する                       |
-| GET      | `/api/v1/output-shares`                         | OutputShare を一覧する                             |
-| POST     | `/api/v1/output-shares`                         | OutputShare を作る                                 |
-| POST     | `/api/v1/output-shares/{shareId}/approve`       | OutputShare を承認する                             |
-| POST     | `/api/v1/output-shares/{shareId}/revoke`        | OutputShare を失効させる                           |
 
 Connection の作成は `POST /api/v1/connections` です。`/api/v1/provider-connections`
 は読み取り専用で、失効は `POST /api/v1/connections/{connectionId}/revoke` です。
@@ -758,9 +751,7 @@ Run には次を保存します。
 その Source を使う各 Capsule が apply 済み StateVersion で採用した ref/path を同期します。
 解決された commit は `SourceSnapshot` として保存されます。同じ ref/path lane を採用している
 active Capsule の現在 snapshot と新しい commit が異なると、Capsule は `stale` になります。
-別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。依存先の Capsule の
-Output が変わったときも、active な Capsule は `stale` になります
-（[値を別の Capsule に渡す](../concepts/state-and-outputs.md#値を別の-capsule-に渡す)）。
+別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。
 通常の update plan も採用済み lane の最新 snapshot を使います。そこからは既存の
 Workspace update / RunGroup が reviewable plan を作り、
 apply は通常の Run approval に従います。app artifact をどこから取るかは、あくまで

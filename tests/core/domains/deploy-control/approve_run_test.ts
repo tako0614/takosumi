@@ -53,7 +53,7 @@ async function seedWaitingApprovalPlan(
     runnerProfileId: "opentofu-default",
     variablesDigest: await stableJsonDigest(inputs.variables),
     executionInputsDigest: await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(inputs, undefined),
+      planRunExecutionInputsDigestMaterial(inputs),
     ),
     requiredProviders: [],
     status: "waiting_approval",
@@ -169,7 +169,7 @@ async function d1ApprovalFixture(): Promise<{
     runnerProfileId: "opentofu-default",
     variablesDigest: await stableJsonDigest(inputs.variables),
     executionInputsDigest: await stableJsonDigest(
-      planRunExecutionInputsDigestMaterial(inputs, undefined),
+      planRunExecutionInputsDigestMaterial(inputs),
     ),
     requiredProviders: [],
     status: "waiting_approval",

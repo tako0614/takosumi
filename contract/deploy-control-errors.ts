@@ -4,6 +4,7 @@ export type DeployControlErrorCode =
   | "permission_denied"
   | "not_found"
   | "failed_precondition"
+  | "dependency_retired"
   | "resource_exhausted"
   | "method_not_allowed"
   | "not_implemented"
@@ -26,6 +27,7 @@ export const DEPLOY_CONTROL_ERROR_CODES = [
   "permission_denied",
   "not_found",
   "failed_precondition",
+  "dependency_retired",
   "resource_exhausted",
   "method_not_allowed",
   "not_implemented",
@@ -38,6 +40,7 @@ export const DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE = {
   permission_denied: 403,
   not_found: 404,
   failed_precondition: 409,
+  dependency_retired: 409,
   resource_exhausted: 413,
   method_not_allowed: 405,
   not_implemented: 501,

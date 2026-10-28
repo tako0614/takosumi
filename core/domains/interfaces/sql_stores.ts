@@ -383,6 +383,24 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     }
     const parameters: SqlValue[] = [input.filter.workspaceId];
     const clauses = ["i.workspace_id = $1", "i.phase = 'Resolved'"];
+    clauses.push(
+      `not exists (
+        select 1
+        from jsonb_each(
+          case
+            when jsonb_typeof(i.record_json->'spec'->'inputs') = 'object'
+              then i.record_json->'spec'->'inputs'
+            else '{}'::jsonb
+          end
+        ) as capsule_input(name, input_value)
+        where capsule_input.input_value->>'source' = 'capsule_output'
+          and (
+            i.owner_kind <> 'Capsule'
+            or jsonb_typeof(capsule_input.input_value->'capsuleId') <> 'string'
+            or capsule_input.input_value->>'capsuleId' is distinct from i.owner_id
+          )
+      )`,
+    );
     const placeholder = (value: SqlValue): string => {
       parameters.push(value);
       return `$${parameters.length}`;

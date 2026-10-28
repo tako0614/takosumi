@@ -519,7 +519,6 @@ async function preparationReady(
 async function resetPreparationWorkspace(runId: string): Promise<void> {
   const workspace = workspaceForRun(runId);
   await rm(workspace.root, { recursive: true, force: true });
-  await rm(workspace.depsDir, { recursive: true, force: true });
 }
 
 /** Caller must hold withLocalMutationGate for the entire acquisition/reset. */

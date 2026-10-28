@@ -1567,7 +1567,6 @@ function stateScope(
 async function removeRunWorkspace(runId: string): Promise<void> {
   const workspace = workspaceForRun(runId);
   await rm(workspace.root, { recursive: true, force: true });
-  await rm(workspace.depsDir, { recursive: true, force: true });
 }
 
 function createArchive(sourceDir: string, archivePath: string): void {

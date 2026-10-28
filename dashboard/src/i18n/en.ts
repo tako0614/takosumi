@@ -458,7 +458,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.version.source": "From",
   "app.version.appliedAt": "Applied",
   "app.version.updateAvailable": "A newer version is available",
-  "app.version.dependencyChanged": "An app this app uses changed, so it needs an update",
   "app.version.newVersion": "New version:",
   "app.version.checkTitle": "Check for a newer version",
   "app.version.checkHint": "Reads the latest version of the same branch or tag and shows what would change. Nothing is applied yet.",
@@ -519,9 +518,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.created.costNotRecorded": "Takosumi hasn't recorded a cost for this app.",
   "app.created.costUnavailable": "Couldn't read the cost. Treat it as unknown.",
   "app.created.costCloudNote": "Each cloud also bills for the resources it created.",
-  "app.linked.title": "Linked apps",
-  "app.linked.uses": "Apps this app uses",
-  "app.linked.usedBy": "Apps that use this app",
   "app.history.title": "History",
   "app.history.empty": "Nothing has happened yet.",
   "app.history.install": "Installed",
@@ -567,7 +563,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.review.doneUninstall": "Uninstalled.",
   "app.uninstall.bodyUnapplied": "{name} hasn't created anything in your cloud yet. Uninstalling removes it right away.",
   "app.uninstall.confirmUnapplied": "{name} hasn't created anything in your cloud yet, so it is removed right away.",
-  "app.uninstall.impactTitle": "These apps use this app and will be affected:",
   "app.uninstall.now": "Uninstall now",
   "app.surfaces.activationFailed": "Getting the screen ready failed. See the logs on this page for the reason.",
   "app.config.enabled": "Enabled",
@@ -595,9 +590,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.uninstall.cta": "Uninstall",
   "app.uninstall.confirmTitle": "Uninstall this app?",
   "app.uninstall.confirmMessage": "{name} keeps running and keeps its data until the grace period ends. Then its data is exported where possible and it is removed. You can cancel until then.",
-  "app.uninstall.dependencyWarning": "{name} is used by these apps ({apps}). Uninstalling it may affect them.",
-  "app.uninstall.dependencyCheckLoading": "Checking linked apps before uninstalling…",
-  "app.uninstall.dependencyCheckFailed": "Couldn't check linked apps. Make sure no other app uses this one before uninstalling.",
   "app.uninstall.banner": "{name} will be uninstalled on {date}. Until then its data stays and you can cancel.",
   "app.uninstall.bannerDue": "The grace period for {name} has ended. It will be uninstalled shortly.",
   "app.uninstall.bannerDestroying": "Uninstalling {name}.",
@@ -740,10 +732,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.failed": "{operation} failed.",
   "controlError.stateGenerationMismatch":
     "Another change was applied first. Review again before applying.",
-  "controlError.dependencySnapshotStale":
-    "A linked app was updated first. Review again.",
-  "controlError.dependencyUnavailable":
-    "Values from a linked app aren't available right now. Try again in a moment.",
+  "controlError.dependencyRetired":
+    "This app still has retired links to other apps. Move needed values into this app's own settings or Git configuration, then ask an operator to remove the old records before reviewing another change.",
   "controlError.sourceChanged":
     "The source contents changed. Review the changes again.",
   "controlError.sourceRevisionMismatch":
@@ -764,7 +754,6 @@ export const en: Record<keyof typeof ja, string> = {
     "That app couldn't be found. It may have been uninstalled.",
   "controlError.configNotFound":
     "Setup for this app couldn't be found. Install it again.",
-  "controlError.shareRevoked": "This share has been revoked.",
   "controlError.revisionInProgress":
     "Another update for this app is being prepared. Try again after it finishes.",
   "runError.sourceSyncFailed":
@@ -865,7 +854,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.policy": "Safety check",
   "run.details.capsule": "App",
   "run.details.sourceSnapshot": "Source version",
-  "run.details.dependencySnapshot": "Pinned connected inputs",
+  "run.details.dependencySnapshot": "Retired input snapshot",
   "run.details.baseGeneration": "Previous state",
   "run.details.planDigest": "Change verification ID",
   "run.details.created": "Created",
@@ -873,8 +862,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.finished": "Finished",
   "run.details.error": "Error",
   "run.details.debug": "Identifiers",
-  "run.inputs.title": "Values from linked apps",
-  "run.inputs.empty": "No values were received from linked apps.",
+  "run.inputs.title": "Inputs recorded for this run",
+  "run.inputs.empty": "No input names were recorded.",
   "run.connections.setupCta": "Set up the connection",
   "run.connections.title": "Connected accounts",
   "run.connections.reviewTitle": "Connected account review needed",

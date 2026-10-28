@@ -47,7 +47,6 @@ import {
   handleCredentialRecipes,
   handleProviderConnections,
 } from "./control/providers.ts";
-import { handleDependencies } from "./control/dependencies.ts";
 import {
   handleSources,
   handleCompatibilityReports,
@@ -58,7 +57,6 @@ import {
   handleConnections,
   completeConnectionOAuth,
 } from "./control/connections.ts";
-import { handleOutputShares } from "./control/output-shares.ts";
 import { handleDashboard } from "./control/dashboard.ts";
 import {
   accountWorkspaceInventoryForbiddenResponse,
@@ -130,14 +128,12 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   "capsule-configs": handleInstallConfigs,
   "credential-recipes": handleCredentialRecipes,
   "provider-connections": handleProviderConnections,
-  dependencies: handleDependencies,
   sources: handleSources,
   "compatibility-reports": handleCompatibilityReports,
   "state-versions": handleStateVersions,
   runs: handleRuns,
   "run-groups": handleRunGroups,
   connections: handleConnections,
-  "output-shares": handleOutputShares,
   dashboard: handleDashboard,
   views: handleAccountWorkspaceViews,
 };
@@ -151,6 +147,8 @@ const RETIRED_PUBLIC_CONTROL_SEGMENTS = new Set([
   "installations",
   "install-configs",
   "deployments",
+  "dependencies",
+  "output-shares",
 ]);
 
 /** Registered dispatch resource keys (for the inventory parity test). */

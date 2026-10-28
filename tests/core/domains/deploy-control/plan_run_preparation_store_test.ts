@@ -1,12 +1,10 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
-import type { DependencySnapshot } from "takosumi-contract/dependencies";
 import type { Workspace } from "takosumi-contract/workspaces";
 import {
   InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
-  planRunExecutionInputsDigestMaterial,
   PlanRunPreparationConflictError,
   type OpenTofuControlStore,
   type PlanRunInputs,
@@ -51,26 +49,8 @@ async function stores(): Promise<readonly [string, OpenTofuControlStore][]> {
 async function preparation(label: string): Promise<{
   readonly run: PlanRun;
   readonly inputs: PlanRunInputs;
-  readonly dependencySnapshot: DependencySnapshot;
 }> {
   const runId = `plan_prepare_${label}`;
-  const dependencySnapshot: DependencySnapshot = {
-    id: `depsnap_prepare_${label}`,
-    runId,
-    dependencies: [
-      {
-        dependencyId: `dep_prepare_${label}`,
-        producerCapsuleId: `producer_prepare_${label}`,
-        producerStateGeneration: 4,
-        producerOutputId: `output_prepare_${label}`,
-        producerOutputDigest: "sha256:producer-output",
-        valuesDigest: "sha256:dependency-values",
-        values: { apiUrl: "https://api.example.test" },
-      },
-    ],
-    mode: "strict",
-    createdAt: "2026-09-03T00:00:00.000Z",
-  };
   const inputs: PlanRunInputs = {
     planRunId: runId,
     variables: { replicaCount: 3 },
@@ -137,9 +117,7 @@ async function preparation(label: string): Promise<{
     },
   };
   const variablesDigest = await stableJsonDigest(inputs.variables);
-  const executionInputsDigest = await stableJsonDigest(
-    planRunExecutionInputsDigestMaterial(inputs, dependencySnapshot),
-  );
+  const executionInputsDigest = await stableJsonDigest(inputs);
   const run = {
     id: runId,
     workspaceId: `workspace_prepare_${label}`,
@@ -159,12 +137,11 @@ async function preparation(label: string): Promise<{
     status: "queued",
     policy: { status: "passed", reasons: [], checkedAt: 1 },
     policyDecisionDigest: "sha256:policy",
-    dependencySnapshotId: dependencySnapshot.id,
     auditEvents: [],
     createdAt: 1,
     updatedAt: 1,
   } as PlanRun;
-  return { run, inputs, dependencySnapshot };
+  return { run, inputs };
 }
 
 function transactionFaultClient(
@@ -297,10 +274,6 @@ test("PlanRun preparation publishes the queued run and its exact inputs as one s
     expect(await store.getPlanRunInputs(prepared.run.id), label).toEqual(
       prepared.inputs,
     );
-    expect(
-      await store.getDependencySnapshot(prepared.dependencySnapshot.id),
-      label,
-    ).toEqual(prepared.dependencySnapshot);
   }
 });
 
@@ -370,6 +343,32 @@ test("PlanRun preparation rejects a cross-kind Run ID collision in every adapter
   }
 });
 
+test("new preparations reject legacy snapshot links while historical Run projections remain readable", async () => {
+  for (const [label, store] of await stores()) {
+    const prepared = await preparation(`legacy_snapshot_${label}`);
+    const authority = await seedWorkspace(store, prepared.run.workspaceId);
+    const historical = {
+      ...prepared.run,
+      dependencySnapshotId: `legacy_snapshot_row_${label}`,
+    };
+
+    await expect(
+      store.preparePlanRun({
+        ...prepared,
+        run: historical,
+        expectedWorkspaceManagementAuthority: authority,
+      }),
+      label,
+    ).rejects.toThrow("new PlanRun preparation cannot carry a legacy");
+    expect(await store.getPlanRun(historical.id), label).toBeUndefined();
+
+    await store.putPlanRun(historical);
+    expect(await store.getPlanRun(historical.id), label).toMatchObject({
+      dependencySnapshotId: historical.dependencySnapshotId,
+    });
+  }
+});
+
 test("durable restart recovery preserves the exact reviewed preparation bundle", async () => {
   const pgClient = await PGliteSqlClient.create();
   pgClients.push(pgClient);
@@ -398,21 +397,13 @@ test("durable restart recovery preserves the exact reviewed preparation bundle",
     const restarted = adapter.restart();
     const run = await restarted.getPlanRun(prepared.run.id);
     const inputs = await restarted.getPlanRunInputs(prepared.run.id);
-    const snapshot = await restarted.getDependencySnapshot(
-      prepared.dependencySnapshot.id,
-    );
 
     expect(run, adapter.label).toEqual(prepared.run);
     expect(run?.variablesDigest, adapter.label).toBe(
       await stableJsonDigest(prepared.inputs.variables),
     );
     expect(run?.executionInputsDigest, adapter.label).toBe(
-      await stableJsonDigest(
-        planRunExecutionInputsDigestMaterial(
-          prepared.inputs,
-          prepared.dependencySnapshot,
-        ),
-      ),
+      await stableJsonDigest(prepared.inputs),
     );
     expect(inputs, adapter.label).toEqual(prepared.inputs);
     expect(inputs, adapter.label).toMatchObject({
@@ -425,7 +416,6 @@ test("durable restart recovery preserves the exact reviewed preparation bundle",
       lifecycleActions: prepared.inputs.lifecycleActions,
       interfaceMaterialization: prepared.inputs.interfaceMaterialization,
     });
-    expect(snapshot, adapter.label).toEqual(prepared.dependencySnapshot);
     expect(
       (
         await restarted.listRecoverableOpenTofuRuns({
@@ -536,73 +526,43 @@ test("Workspace management fences new PlanRun preparation while adopting exact r
       ).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
       expect(await store.getPlanRun(newRun.id), label).toBeUndefined();
       expect(await store.getPlanRunInputs(newRun.id), label).toBeUndefined();
-      expect(
-        await store.getDependencySnapshot(different.dependencySnapshot.id),
-        label,
-      ).toBeUndefined();
     }
   }
 });
 
-test("PlanRun preparation adopts retry-equivalent randomized sealed storage", async () => {
+test("PlanRun preparation adopts retry-equivalent randomized sealed inputs", async () => {
   for (const [label, store] of await stores()) {
     const base = await preparation(`sealed_retry_${label}`);
     const authority = await seedWorkspace(store, base.run.workspaceId);
-    const firstSnapshot = {
-      ...base.dependencySnapshot,
-      dependencies: base.dependencySnapshot.dependencies.map((entry) => ({
-        ...entry,
-        sealedValues: {
-          ciphertext: "randomized-snapshot-ciphertext-first",
-          contentDigest: "sha256:sealed-dependency-values",
-          names: ["apiUrl"],
-        },
-      })),
+    const firstInputs: PlanRunInputs = {
+      planRunId: base.run.id,
+      variables: {},
+      sealed: {
+        ciphertext: "randomized-ciphertext-first",
+        contentDigest: "sha256:sealed-plan-inputs",
+        names: ["OIDC_CLIENT_SECRET"],
+      },
+    };
+    const retryInputs: PlanRunInputs = {
+      ...firstInputs,
+      sealed: {
+        ...firstInputs.sealed!,
+        ciphertext: "randomized-ciphertext-retry",
+      },
+    };
+    const firstRun = {
+      ...base.run,
+      executionInputsDigest: await stableJsonDigest(firstInputs),
     };
     const first = {
-      run: {
-        ...base.run,
-        executionInputsDigest: await stableJsonDigest(
-          planRunExecutionInputsDigestMaterial(base.inputs, firstSnapshot),
-        ),
-      },
-      inputs: {
-        planRunId: base.run.id,
-        variables: {},
-        sealed: {
-          ciphertext: "randomized-ciphertext-first",
-          contentDigest: "sha256:sealed-plan-inputs",
-          names: ["OIDC_CLIENT_SECRET"],
-        },
-      },
-      dependencySnapshot: firstSnapshot,
+      run: firstRun,
+      inputs: firstInputs,
       expectedWorkspaceManagementAuthority: authority,
     } satisfies Parameters<OpenTofuControlStore["preparePlanRun"]>[0];
-    const retrySnapshot = {
-      ...first.dependencySnapshot,
-      id: `${first.dependencySnapshot.id}_retry`,
-      createdAt: "2026-09-03T00:00:01.000Z",
-      dependencies: first.dependencySnapshot.dependencies.map((entry) => ({
-        ...entry,
-        sealedValues: {
-          ...entry.sealedValues!,
-          ciphertext: "randomized-snapshot-ciphertext-retry",
-        },
-      })),
-    };
     const retry = {
-      run: {
-        ...first.run,
-        dependencySnapshotId: retrySnapshot.id,
-      },
-      inputs: {
-        ...first.inputs,
-        sealed: {
-          ...first.inputs.sealed,
-          ciphertext: "randomized-ciphertext-retry",
-        },
-      },
-      dependencySnapshot: retrySnapshot,
+      run: firstRun,
+      inputs: retryInputs,
+      expectedWorkspaceManagementAuthority: authority,
     } satisfies Parameters<OpenTofuControlStore["preparePlanRun"]>[0];
 
     expect(await store.preparePlanRun(first), label).toMatchObject({
@@ -610,22 +570,16 @@ test("PlanRun preparation adopts retry-equivalent randomized sealed storage", as
     });
     expect(await store.preparePlanRun(retry), label).toEqual({
       status: "existing",
-      run: first.run,
+      run: firstRun,
     });
-    expect(await store.getPlanRunInputs(first.run.id), label).toEqual(
-      first.inputs,
+    expect(await store.getPlanRunInputs(firstRun.id), label).toEqual(
+      firstInputs,
     );
-    expect(
-      await store.getDependencySnapshot(retrySnapshot.id),
-      label,
-    ).toBeUndefined();
   }
 });
 
-test("Postgres rolls back PlanRun preparation after every former write boundary", async () => {
-  // Before insert 2 = after Run, before insert 3 = after snapshot, and 4 =
-  // after inputs but before transaction commit.
-  for (const failAtInsert of [2, 3, 4]) {
+test("Postgres rolls back PlanRun preparation when the input sidecar insert fails", async () => {
+  for (const failAtInsert of [2]) {
     const client = await PGliteSqlClient.create();
     pgClients.push(client);
     const store = new SqlOpenTofuControlStore({
@@ -647,26 +601,17 @@ test("Postgres rolls back PlanRun preparation after every former write boundary"
     const observedFailure =
       (failure as Error & { readonly cause?: unknown }).cause ?? failure;
     expect(observedFailure).toMatchObject({
-      message:
-        failAtInsert === 4
-          ? "injected postgres after insert 3"
-          : `injected postgres insert ${failAtInsert}`,
+      message: `injected postgres insert ${failAtInsert}`,
     });
     expect(await store.getPlanRun(prepared.run.id)).toBeUndefined();
     expect(await store.getPlanRunInputs(prepared.run.id)).toBeUndefined();
-    expect(
-      await store.getDependencySnapshot(prepared.dependencySnapshot.id),
-    ).toBeUndefined();
   }
 });
 
-test("D1 rolls back PlanRun preparation after every former write boundary", async () => {
-  // Mirror the same after-Run, after-snapshot, and after-inputs boundaries in
-  // the one D1 batch transaction.
+test("D1 rolls back PlanRun preparation when input persistence fails", async () => {
   for (const faultCase of [
     { statement: 2, timing: "before" },
-    { statement: 3, timing: "before" },
-    { statement: 3, timing: "after" },
+    { statement: 2, timing: "after" },
   ] as const) {
     const fault = batchFaultDatabase(new SqliteFakeD1());
     const store = new CloudflareD1OpenTofuControlStore(fault.database);
@@ -689,9 +634,6 @@ test("D1 rolls back PlanRun preparation after every former write boundary", asyn
     );
     expect(await store.getPlanRun(prepared.run.id)).toBeUndefined();
     expect(await store.getPlanRunInputs(prepared.run.id)).toBeUndefined();
-    expect(
-      await store.getDependencySnapshot(prepared.dependencySnapshot.id),
-    ).toBeUndefined();
   }
 });
 

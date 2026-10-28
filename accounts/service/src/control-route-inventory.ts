@@ -187,7 +187,7 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/graph",
-      summary: "Read the Workspace Capsule dependency graph",
+      summary: "Read Workspace Capsule nodes (no dependency edges)",
       auth: "account-session",
     },
     {
@@ -350,18 +350,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
-      path: "/api/v1/capsules/{capsuleId}/dependencies",
-      summary: "List Capsule Dependencies",
-      auth: "account-session",
-    },
-    {
-      method: "POST",
-      path: "/api/v1/capsules/{capsuleId}/dependencies",
-      summary: "Create a Capsule Dependency",
-      auth: "account-session",
-    },
-    {
-      method: "GET",
       path: "/api/v1/capsules/{capsuleId}/provider-bindings",
       summary: "Read Capsule ProviderBinding selections",
       auth: "account-session",
@@ -382,12 +370,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/credential-recipes",
       summary: "List optional guided Credential Recipes",
-      auth: "account-session",
-    },
-    {
-      method: "DELETE",
-      path: "/api/v1/dependencies/{dependencyId}",
-      summary: "Delete a Dependency",
       auth: "account-session",
     },
     {
@@ -564,30 +546,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/connections/oauth/{helperId}/callback",
       summary: "Complete an installed credential OAuth helper",
-      auth: "account-session",
-    },
-    {
-      method: "GET",
-      path: "/api/v1/output-shares",
-      summary: "List OutputShares",
-      auth: "account-session",
-    },
-    {
-      method: "POST",
-      path: "/api/v1/output-shares",
-      summary: "Create an OutputShare",
-      auth: "account-session",
-    },
-    {
-      method: "POST",
-      path: "/api/v1/output-shares/{shareId}/approve",
-      summary: "Approve an OutputShare",
-      auth: "account-session",
-    },
-    {
-      method: "POST",
-      path: "/api/v1/output-shares/{shareId}/revoke",
-      summary: "Revoke an OutputShare",
       auth: "account-session",
     },
     {

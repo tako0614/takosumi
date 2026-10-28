@@ -37,10 +37,9 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                                                                                            | [Source と Capsule](../concepts/sources.md)    |
 | Capsule                          | デプロイされたひとまとまりです。OpenTofu の root module 1 つ分が動き、`production` や `preview` のような具体的な実行環境も Capsule が持ちます。                                              | [Source と Capsule](../concepts/sources.md)    |
 | Environment                      | Capsule が持つ具体的な実行環境です（`production`、`preview` など）。Workspace の別名ではありません。                                                                                      | [Source と Capsule](../concepts/sources.md)    |
-| stale                            | デプロイ済みの Capsule の、追いかけている Source に新しい commit が来たか、依存先の Output が変わった状態です。画面では **更新があります** と表示されます。 | [Source と Capsule](../concepts/sources.md)    |
+| stale                            | デプロイ済みの Capsule が追いかけている Source に新しい commit が来た状態です。画面では **更新があります** と表示されます。 | [Source と Capsule](../concepts/sources.md)    |
 | Stack flow                       | 自分で書いた module を Git から実行する経路です。                                                                       | [全体像](../concepts/index.md)                 |
 | 互換性レポート                   | 登録した module を読み取り専用で解析し、必要な変数と provider を示した結果です。                                        | [Source と Capsule](../concepts/sources.md)    |
-| 依存 (Dependency)                | Capsule どうしをつなぎ、相手の Output を参照できるようにする関係です。Workspace をまたぐ場合は OutputShare を通します。 | [状態と出力](../concepts/state-and-outputs.md) |
 | Capsule 作成設定 (InstallConfig) | 変数の対応づけや公開する Output など、Capsule の実行のしかたを Takosumi 側に持つ設定です。                              | [API](./api.md)                                |
 | Git revision plan                | 既存の Capsule の取得元の版を変えるとき、commit を固定し、互換性を確かめて、変更の確認（Plan Run）を作るまでの手続きの記録です。dashboard の **更新する**（更新があるときに表示）、**変更を確認**、**バージョンを変更** の **このバージョンを確認** で作られます。 | [API](./api.md)                                |
 | 採用済み Source revision         | Capsule の現在の StateVersion が参照する Plan Run から導出した SourceSnapshot の ref/path/commit です。Source の既定 ref とは別です。 | [API](./api.md)                                |
@@ -57,11 +56,10 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | destroy                | Capsule が作ったリソースを削除する操作です。計画を作ってから実行します。                                              | [実行モデル](../concepts/run-model.md)         |
 | 差分確認 (drift check) | 保存した状態と実物のずれを、読み取り専用で調べる操作です。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | drift                  | 保存した状態と実物のあいだに生まれたずれのことです。                                                                  | [状態と出力](../concepts/state-and-outputs.md) |
-| RunGroup               | 依存関係の順に複数の Run をまとめた記録です。Workspace 全体の更新や差分確認で作られます。 | [実行モデル](../concepts/run-model.md)         |
+| RunGroup               | Workspace 全体の更新や差分確認から作られた Run のグループです。 | [実行モデル](../concepts/run-model.md)         |
 | Runner                 | OpenTofu を実際に動かす隔離された実行環境です。認証情報が渡るのはこの中だけです。                                     | [実行モデル](../concepts/run-model.md)         |
 | StateVersion           | デプロイ（apply）の結果として記録された状態です。失敗した apply でも記録されることがあります。上書きされず、積み重なります。                                                            | [状態と出力](../concepts/state-and-outputs.md) |
 | Output                 | Capsule が外に公開する、秘密でない値です。                                                                            | [状態と出力](../concepts/state-and-outputs.md) |
-| OutputShare            | Workspace をまたいで Output を渡す記録です。受け取る側が承認して有効になります。                                      | [状態と出力](../concepts/state-and-outputs.md) |
 | AuditEvent             | 誰が、何に対して、何をして、結果どうなったかを 1 件ずつ残した記録です。                                               | [実行モデル](../concepts/run-model.md)         |
 | ledger                 | Run、StateVersion、Output、監査の記録を積み上げていく保存先です。入口が違っても記録先は同じです。         | [実行モデル](../concepts/run-model.md)         |
 

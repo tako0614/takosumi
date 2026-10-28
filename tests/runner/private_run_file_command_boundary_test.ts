@@ -45,7 +45,6 @@ test("private Run file grant env reaches only explicit OpenTofu invocation", asy
       moduleInfoPath: join(root, "module.json"),
       childModuleDir: join(root, "child"),
       artifactDir: join(root, "artifacts"),
-      depsDir: join(root, "deps"),
     }, runId);
     try {
       const tofu = await runOpenTofuCommand(["tofu", "plan"], {

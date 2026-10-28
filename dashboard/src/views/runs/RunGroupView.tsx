@@ -1,6 +1,6 @@
 /**
  * RunGroup view (`/run-groups/:id`) — a grouped update: multiple Runs ordered
- * across the dependency DAG (e.g. a Workspace update after stale propagation).
+ * across a Workspace update or drift check.
  * Shows the group status + ordered member list and offers a one-shot
  * "approve all" (`POST /api/v1/run-groups/:id/approve`).
  */

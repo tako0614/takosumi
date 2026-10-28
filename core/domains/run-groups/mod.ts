@@ -1,28 +1,4 @@
-/**
- * RunGroups domain service (Core Specification §19 / §24 — "RunGroup basic").
- *
- * A RunGroup orders multiple Runs across the Workspace's dependency DAG. The
- * implemented group types are:
- *   - `workspace_update`: after stale propagation marks downstream consumers
- *     `stale` (§24), re-plan every stale Capsule plus its downstream in
- *     producer-before-consumer topological order.
- *   - `workspace_drift_check`: create one read-only `drift_check` Run per active
- *     Capsule in a Workspace, grouped under one ledger row for scheduled and
- *     operator-initiated sweep observability.
- *
- * There is NO orchestration daemon. The per-capsule write lease already
- * serializes applies, so this service only:
- *   - builds the member set + topological layers (graphJson),
- *   - creates ONE plan Run per member through the controller (carrying the
- *     RunGroup id), and
- *   - persists the run_groups row.
- *
- * Group status is COMPUTED at read time from the member runs (read through the
- * controller's unified `getRun`); no status is persisted on the row beyond its
- * creation snapshot. This is "RunGroup basic": the topological order is recorded
- * and members are created, but applying each member is driven by the existing
- * per-run apply flow (manual approve + createApplyRun), not by this service.
- */
+/** Workspace RunGroups for independent stale-source plans and drift checks. */
 
 import type {
   Run,
@@ -30,7 +6,6 @@ import type {
   RunGroupStatus,
   RunGroupWithRuns,
 } from "takosumi-contract/runs";
-import { GraphCycleError, topologicalLayers } from "takosumi-graph";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
@@ -43,12 +18,11 @@ import {
 } from "../activity/mod.ts";
 
 /**
- * The graphJson recorded on a `workspace_update` RunGroup row: the topological
- * layers (producer-before-consumer) over the member set and the per-member plan
- * Run id. Parsed at read time to drive the dashboard graph view.
+ * Recorded layers and per-member plan Run ids. New groups use a single
+ * unordered layer; older groups retain their persisted order on reads.
  */
 export interface WorkspaceUpdateGraph {
-  /** Topological layers of member capsule ids (layer 0 has no producers). */
+  /** Recorded member layers. New groups use one independent layer. */
   readonly order: readonly (readonly string[])[];
   /** Member capsule id -> the plan Run id created for it. */
   readonly runs: Readonly<Record<string, string>>;
@@ -91,74 +65,27 @@ export class RunGroupsService {
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
   }
 
-  /**
-   * Creates a `workspace_update` RunGroup for a Workspace (spec §19 / §24). The member
-   * set is every `stale` Capsule in the Workspace plus the transitive
-   * downstream of any member (so a chained re-plan is captured even when the far
-   * consumer has not been flagged yet). Members are ordered into topological
-   * layers (producers before consumers) over the Workspace's dependency edges, and
-   * ONE plan Run is created per member through the controller — each carrying
-   * the RunGroup id so the §19 Run projects `runGroupId`. The run_groups row
-   * records the order + the per-member run id. An empty member set is a typed
-   * `failed_precondition` (`nothing_to_update`).
-   */
+  /** Creates one independent plan for each source-stale Capsule. */
   async createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRuns> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const capsules = await this.#store.listCapsules(workspaceId);
-    const edges = (await this.#store.listDependenciesByWorkspace(workspaceId)).map(
-      (edge) => ({
-        from: edge.producerCapsuleId,
-        to: edge.consumerCapsuleId,
-      }),
+    const members = new Set(
+      capsules.filter((capsule) => capsule.status === "stale").map((capsule) => capsule.id),
     );
-    // The member set: every stale Capsule, plus the transitive downstream
-    // of each stale member (a stale producer's consumers must re-plan too even
-    // if they have not yet been flagged). Computed by closing the stale set over
-    // the dependency edges.
-    const capsuleById = new Map(
-      capsules.map((capsule) => [capsule.id, capsule]),
-    );
-    const stale = new Set(
-      capsules
-        .filter((capsule) => capsule.status === "stale")
-        .map((capsule) => capsule.id),
-    );
-    const members = closeDownstream(stale, edges);
-    // An uninstalled consumer only accepts its teardown during the grace
-    // period; re-planning it would fail the whole group.
-    for (const id of [...members]) {
-      if (capsuleById.get(id)?.status === "uninstalled") members.delete(id);
-    }
     if (members.size === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "nothing_to_update: no stale capsules to re-plan",
       );
     }
-    // Topological layers over the member set, restricted to edges whose BOTH
-    // endpoints are members so the ordering is well-defined within the group.
-    const memberEdges = edges.filter(
-      (edge) => members.has(edge.from) && members.has(edge.to),
-    );
-    const layers = topologicalLayersOrPrecondition(
-      [...members],
-      memberEdges,
-      workspaceId,
-    );
-    // Create one plan Run per member, layer by layer (producers first). The
-    // member must still exist; a member missing from the ledger is a precondition
-    // error (the snapshot raced a delete).
+    // Source-stale Capsules are independent. Preserve one stable layer for
+    // the recorded group graph without reviving retired dependency ordering.
+    const layers = [[...members]];
     const runs: Record<string, string> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
     for (const layer of layers) {
       for (const capsuleId of layer) {
-        if (!capsuleById.has(capsuleId)) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            "nothing_to_update: capsule is not available to this workspace",
-          );
-        }
         const response = await this.#controller.createCapsulePlan(
           capsuleId,
           this.#actor ? { actor: this.#actor } : {},
@@ -230,21 +157,7 @@ export class RunGroupsService {
     const capsuleIds = capsules.map(
       (capsule) => capsule.id,
     );
-    const dependencyEdges = (await this.#store.listDependenciesByWorkspace(workspaceId))
-      .map((edge) => ({
-        from: edge.producerCapsuleId,
-        to: edge.consumerCapsuleId,
-      }))
-      .filter(
-        (edge) =>
-          capsuleIds.includes(edge.from) &&
-          capsuleIds.includes(edge.to),
-      );
-    const layers = topologicalLayersOrPrecondition(
-      capsuleIds,
-      dependencyEdges,
-      workspaceId,
-    );
+    const layers = [capsuleIds];
     const runs: Record<string, string> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
@@ -332,7 +245,7 @@ export class RunGroupsService {
   /** Reads the member Runs of a parsed graph through the controller's getRun. */
   async #memberRuns(graph: WorkspaceUpdateGraph): Promise<Run[]> {
     const runs: Run[] = [];
-    // Iterate in the recorded topological order so the member list is stable.
+    // Preserve the order recorded at group creation for stable reads.
     for (const layer of graph.order) {
       for (const capsuleId of layer) {
         const runId = graph.runs[capsuleId];
@@ -357,62 +270,6 @@ function normalizePositiveLimit(limit: number | undefined): number {
   if (limit === undefined) return Number.POSITIVE_INFINITY;
   if (!Number.isFinite(limit) || limit <= 0) return 0;
   return Math.floor(limit);
-}
-
-/**
- * Builds the topological layers for a RunGroup member set, translating a
- * {@link GraphCycleError} (the member edges contain a cycle — the Workspace's
- * dependency DAG is wedged) into a typed `failed_precondition` instead of
- * letting it escape as an uncaught 500. The cycle is normally prevented at
- * Dependency creation, so a cycle here means a pre-existing wedge that the
- * operator must repair (delete one of the offending edges) before a RunGroup
- * can order the affected Capsules.
- */
-function topologicalLayersOrPrecondition(
-  nodes: readonly string[],
-  edges: readonly { readonly from: string; readonly to: string }[],
-  workspaceId: string,
-): string[][] {
-  try {
-    return topologicalLayers(nodes, edges);
-  } catch (error) {
-    if (error instanceof GraphCycleError) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        "dependency_cycle: workspace dependency graph contains a cycle; resolve the cycle before running a RunGroup",
-      );
-    }
-    throw error;
-  }
-}
-
-/**
- * Closes a seed set over the producer -> consumer edges: the seed capsules
- * plus every transitive downstream consumer. The seed is always included even
- * when it has no downstream edge.
- */
-function closeDownstream(
-  seed: ReadonlySet<string>,
-  edges: readonly { readonly from: string; readonly to: string }[],
-): Set<string> {
-  const adjacency = new Map<string, string[]>();
-  for (const edge of edges) {
-    const list = adjacency.get(edge.from) ?? [];
-    list.push(edge.to);
-    adjacency.set(edge.from, list);
-  }
-  const closure = new Set<string>(seed);
-  const stack = [...seed];
-  while (stack.length > 0) {
-    const node = stack.pop() as string;
-    for (const consumer of adjacency.get(node) ?? []) {
-      if (!closure.has(consumer)) {
-        closure.add(consumer);
-        stack.push(consumer);
-      }
-    }
-  }
-  return closure;
 }
 
 /**

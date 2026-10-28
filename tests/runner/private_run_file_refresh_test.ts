@@ -46,7 +46,6 @@ function workspace(root: string) {
     generatedRootDir: join(root, "generated"),
     childModuleDir: join(root, "child"),
     artifactDir: join(root, "artifacts"),
-    depsDir: join(root, "deps"),
   };
 }
 

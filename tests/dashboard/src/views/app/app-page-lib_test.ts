@@ -19,7 +19,6 @@ import {
   appStateSentence,
   appViewIncomplete,
   groupInventoryResources,
-  linkedApps,
   mergeAppHistoryPages,
   openableScreens,
   primaryProblem,
@@ -442,24 +441,7 @@ describe("what the app created", () => {
   });
 });
 
-describe("linked apps and connections", () => {
-  test("names the apps this app uses and the apps that use it", () => {
-    const graph = {
-      nodes: [
-        { capsuleId: "cap_app", name: "office" },
-        { capsuleId: "cap_db", name: "database" },
-        { capsuleId: "cap_web", name: "website" },
-      ],
-      edges: [
-        { id: "dep_1", producerCapsuleId: "cap_db", consumerCapsuleId: "cap_app" },
-        { id: "dep_2", producerCapsuleId: "cap_app", consumerCapsuleId: "cap_web" },
-      ],
-    };
-    expect(linkedApps("cap_app", graph, "uses")).toEqual([{ edgeId: "dep_1", capsuleId: "cap_db", name: "database" }]);
-    expect(linkedApps("cap_app", graph, "usedBy")).toEqual([{ edgeId: "dep_2", capsuleId: "cap_web", name: "website" }]);
-    expect(linkedApps("cap_app", undefined, "uses")).toEqual([]);
-  });
-
+describe("provider connections", () => {
   test("a provider alias appears only to tell repeated providers apart", () => {
     const cloudflare = "registry.opentofu.org/cloudflare/cloudflare";
     expect(providerRowLabels([{ provider: cloudflare, childAlias: "edge" }])).toEqual(["Cloudflare"]);

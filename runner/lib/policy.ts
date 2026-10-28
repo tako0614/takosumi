@@ -177,26 +177,6 @@ export function assertSafeCredentialFileMode(mode: number): void {
   }
 }
 
-// A remote_state dependency name must be a single safe path segment so it can
-// only ever name <depsDir>/<name>.tfstate. Reject empty / traversal / separator
-// / NUL / drive-letter names (the producer Capsule name is `[a-z0-9-]`-ish,
-// but harden against a crafted dispatch).
-export function safeDepName(name: string): string {
-  if (
-    name.length === 0 ||
-    name === "." ||
-    name === ".." ||
-    name.includes("/") ||
-    name.includes("\\") ||
-    name.includes("\0") ||
-    isAbsolute(name) ||
-    /^[A-Za-z]:/.test(name)
-  ) {
-    throw new Error(`unsafe dependency state name: ${name}`);
-  }
-  return name;
-}
-
 // Tar-slip / link-target / zip-bomb hardening for the zstd-compressed
 // source_sync archive format. Reuses the shared
 // per-entry validators (escape quoting, duplicate normalized paths, file/dir

@@ -160,7 +160,6 @@ async function detailFixture(
     if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
     if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: cloudflare })) } } });
     if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
-    if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
     if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
     if (path === "/api/v1/state-versions/sv_inline/rollback-plan" && request.method() === "POST") { retryCount += 1; return route.fulfill({ status: 201, json: { run: plan() } }); }
     if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
@@ -942,22 +941,13 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // reviewed plan instead.
       await expect(page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
     });
-    test("deletion confirmation includes dependent apps and failed dependency reads", async ({ page }) => {
+    test("uninstall confirmation does not claim retired app dependencies", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
-      let failGraph = false;
-      await page.route("**/workspaces/ws_alpha/graph", (route) => failGraph
-        ? route.fulfill({ status: 503, json: { error: "fixture_graph_unavailable" } })
-        : route.fulfill({ json: { nodes: [{ capsuleId: "cap_consumer", name: "Dependent app" }], edges: [{ id: "dep_fixture", producerCapsuleId: capId, consumerCapsuleId: "cap_consumer", outputs: {} }] } }));
       await page.goto(`/new?capsule=${capId}`);
-      // The apps that use this one are named before anything is confirmed.
-      await expect(page.getByTestId("app-uninstall")).toContainText("Dependent app");
-      await expect(page.getByTestId("app-linked")).toContainText("Dependent app");
+      await expect(page.getByTestId("app-uninstall")).not.toContainText("Linked apps");
       await page.getByRole("button", { name: "Uninstall", exact: true }).click();
-      await expect(page.getByRole("dialog")).toContainText("Dependent app");
-      await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
-      failGraph = true;
-      await page.getByRole("button", { name: "Uninstall", exact: true }).click();
-      await expect(page.getByRole("dialog")).toContainText("Couldn't check linked apps");
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.getByRole("dialog")).not.toContainText("Dependent app");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       expect(f.mutations.some((m) => m.startsWith("DELETE"))).toBe(false);
     });

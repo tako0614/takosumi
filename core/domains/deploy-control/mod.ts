@@ -30,7 +30,6 @@ import type {
   CreateConnectionRequest,
   CreatePlanRunRequest,
   DeployControlAuditEvent,
-  DispatchDepState,
   DispatchGeneratedRoot,
   DispatchPriorState,
   DispatchRuntimeInputs,
@@ -177,7 +176,6 @@ import {
   type ScopeBoundaryResult,
 } from "takosumi-policy";
 import { type RootProviderBinding } from "takosumi-rootgen";
-import { downstreamClosure } from "takosumi-graph";
 import type {
   Run,
   RunCostInfo,
@@ -200,17 +198,11 @@ import type {
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import { recoveryPlanForStateVersion } from "./operator_state_recovery.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
-import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type {
   RunnerRuntimeSecretFilesDispatch,
   RuntimeSecretFileBundle,
   RuntimeSecretFileMaterializer,
 } from "./runtime_secret_file_materializer.ts";
-import type {
-  Dependency,
-  DependencySnapshot,
-  SealedDependencyValues,
-} from "takosumi-contract/dependencies";
 import { projectApplyRun, projectPlanRun } from "./projection_run.ts";
 import {
   DEFAULT_CAPSULE_LEASE_TTL_MS,
@@ -283,10 +275,6 @@ import {
   RunEnvResolver,
   type ResolvedRunEnvironment,
 } from "./run_env_resolver.ts";
-import {
-  DependencyResolutionService,
-  type ResolvedDependencies,
-} from "./dependency_resolution.ts";
 import { RunVerificationService } from "./run_verification.ts";
 import {
   type CapsulePlanContext,
@@ -432,7 +420,7 @@ export interface RunModuleDispatch {
   /** Runner-only proof that Core selected the inventory-backed destroy drain. */
   readonly legacySourcelessDestroyRecovery?: true;
   /**
-   * Workspace-local, non-secret Output capture selected for dependency and
+   * Capsule-local, non-secret Output capture selected for the owning Capsule's
    * Interface resolution. This is deliberately broader than the public
    * projection for generic Capsules.
    */
@@ -490,14 +478,6 @@ export interface RunExecutionDispatch {
   readonly rawOutputRef?: string;
   readonly stateAdoption?: DispatchStateAdoption;
   readonly sourceArchive?: DispatchSourceArchive;
-  /**
-   * Remote-state dependency descriptors (spec §15 `remote_state`). One per
-   * `remote_state` Dependency edge of the consumer Capsule; the runner DO
-   * fetches + decrypts each producer state and the container writes it read-only
-   * to `/work/deps/<name>.tfstate` before init/plan/apply. Absent for runs with
-   * no `remote_state` edges.
-   */
-  readonly depStates?: readonly DispatchDepState[];
 }
 
 /**
@@ -1099,24 +1079,6 @@ export function providersRequiringProviderBindings(
   return normalizeProviders(providers);
 }
 
-/**
- * At-rest sealer for the SENSITIVE pinned values of a DependencySnapshot entry
- * (spec §11 / §18). The host wires this with the SAME AES-GCM envelope used for
- * state / plan / raw-output artifacts (no new key management). `seal` takes the
- * `{ name: value }` map of an edge's sensitive values and returns the sealed
- * blob persisted onto {@link SealedDependencyValues}; `open` reverses it at
- * apply time. When absent, an edge that resolves a sensitive value fails closed
- * (`dependency_value_sealer_unavailable`) rather than persisting cleartext.
- */
-export interface DependencyValueSealer {
-  seal(
-    values: Readonly<Record<string, JsonValue>>,
-  ): Promise<SealedDependencyValues>;
-  open(
-    sealed: SealedDependencyValues,
-  ): Promise<Readonly<Record<string, JsonValue>>>;
-}
-
 export interface OpenTofuControllerDependencies {
   readonly validateUninstallRequester?: import("../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly store?: OpenTofuControlStore;
@@ -1220,26 +1182,10 @@ export interface OpenTofuControllerDependencies {
   /**
    * Workspace-scoped Activity audit trail (spec §27 audit_events / §34 Activity).
    * The controller emits run-lifecycle events (plan created, approved, applied,
-   * destroyed) and stale propagation through it. Fire-and-forget: a failed audit
+   * destroyed) through it. Fire-and-forget: a failed audit
    * write never fails the run path. Defaults to a no-op recorder.
    */
   readonly activity?: ActivityRecorder;
-  /**
-   * Host-injected sensitive output resolver. Required only when a cross-Workspace
-   * published_output edge consumes an OutputShare entry marked sensitive. The
-   * resolver reads/decrypts the raw output artifact and returns the value for
-   * dependency injection; values are never persisted outside DependencySnapshot.
-   */
-  readonly sensitiveOutputResolver?: SensitiveOutputResolver;
-  /**
-   * Host-injected at-rest sealer for the sensitive pinned values of a
-   * DependencySnapshot entry (spec §11 / §18). Required whenever a
-   * `published_output` edge resolves a sensitive output: the controller seals
-   * the value into {@link SealedDependencyValues} instead of persisting it as a
-   * cleartext ledger value, and unseals it at apply. Absent ⇒ a sensitive edge
-   * fails closed.
-   */
-  readonly dependencyValueSealer?: DependencyValueSealer;
   /**
    * Host-injected executor for Plan-pinned, service-side Capsule lifecycle
    * actions. Only terminal `succeeded` satisfies a declared phase: post-apply
@@ -1371,13 +1317,6 @@ export interface PlanRunInternalContext {
    * is CLEAN (`succeeded`). See {@link PlanRun.autoApplyRequested}.
    */
   readonly autoApplyRequested?: true;
-  /**
-   * Dependency pins resolved by the Capsule planning path before the PlanRun
-   * row exists. `createPlanRun` persists them immediately after creating the run
-   * row and before queue dispatch, so runner dispatch can restore remote_state
-   * from the same DependencySnapshot apply will verify.
-   */
-  readonly resolvedDependencies?: ResolvedDependencies;
 }
 
 /**
@@ -1397,10 +1336,7 @@ export interface ApplyRunInternalContext {
   readonly onPrepared?: (applyRun: ApplyRun) => Promise<void>;
 }
 
-// `ResolvedDependencies` (the resolved consumer Dependencies for an
-// Capsule-driven plan) + `ShareCoverage` now live with the resolution logic
-// in {@link DependencyResolutionService}; `ResolvedDependencies` is imported above
-// because the controller's plan-creation / snapshot-pin seam still threads it.
+
 
 /**
  * Request to plan / destroy-plan an Capsule (spec §23). Resolves the
@@ -1536,8 +1472,6 @@ export class OpenTofuController {
   readonly #capsuleCoordination?: CapsuleCoordination;
   readonly #runRenewalIntervalMs: number;
   readonly #activity: ActivityRecorder;
-  readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
-  readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
@@ -1556,7 +1490,6 @@ export class OpenTofuController {
   readonly #drift: DriftService;
   readonly #credentials: RunCredentialBroker;
   readonly #runEnv: RunEnvResolver;
-  readonly #dependencies: DependencyResolutionService;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
   readonly #usesExternalRunDispatcher: boolean;
@@ -1607,8 +1540,6 @@ export class OpenTofuController {
         ? dependencies.runRenewalIntervalMs
         : RUN_RENEWAL_INTERVAL_MS;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
-    this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
-    this.#dependencyValueSealer = dependencies.dependencyValueSealer;
     this.#releaseActivator = dependencies.releaseActivator;
     this.#observability = dependencies.observability;
     this.#metricTags = dependencies.metricTags ?? {};
@@ -1688,23 +1619,10 @@ export class OpenTofuController {
       resolveRunProviderBindings: (planRun) =>
         this.#runEngine.resolveRunProviderBindings(planRun),
     });
-    this.#dependencies = new DependencyResolutionService({
-      store: this.#store,
-      ...(this.#dependencyValueSealer
-        ? { dependencyValueSealer: this.#dependencyValueSealer }
-        : {}),
-      ...(this.#sensitiveOutputResolver
-        ? { sensitiveOutputResolver: this.#sensitiveOutputResolver }
-        : {}),
-    });
     this.#verification = new RunVerificationService({
       store: this.#store,
-      dependencies: this.#dependencies,
       ...(this.#artifactReferenceAllocator
         ? { artifactReferenceAllocator: this.#artifactReferenceAllocator }
-        : {}),
-      ...(this.#dependencyValueSealer
-        ? { dependencyValueSealer: this.#dependencyValueSealer }
         : {}),
       policyForPlanRun: (planRun) => this.#runEngine.policyForPlanRun(planRun),
       assertCompatibilityReportRunnable: (report, policy) =>
@@ -1773,7 +1691,6 @@ export class OpenTofuController {
       capsuleCoordination: this.#capsuleCoordination,
       runRenewalIntervalMs: this.#runRenewalIntervalMs,
       activity: this.#activity,
-      dependencyValueSealer: this.#dependencyValueSealer,
       releaseActivator: this.#releaseActivator,
       observability: this.#observability,
       metricTags: this.#metricTags,
@@ -1790,7 +1707,6 @@ export class OpenTofuController {
       billing: this.#billing,
       drift: this.#drift,
       runEnv: this.#runEnv,
-      dependencies: this.#dependencies,
       verification: this.#verification,
       planResolution: this.#planResolution,
       ...(dependencies.privateRunFileGrantMinter
@@ -3153,55 +3069,6 @@ function releaseActivationValueLooksSecret(value: JsonValue): boolean {
     }
   }
   return false;
-}
-
-export function changedOutputNamesBetween(
-  previous: Output | undefined,
-  next: Output,
-): readonly string[] {
-  const before = previous?.workspaceOutputs ?? {};
-  const after = next.workspaceOutputs;
-  const names = new Set([...Object.keys(before), ...Object.keys(after)]);
-  return [...names]
-    .filter(
-      (name) => canonicalJson(before[name]) !== canonicalJson(after[name]),
-    )
-    .sort();
-}
-
-export function directChangedDependencyOutputs(input: {
-  readonly edges: readonly Dependency[];
-  readonly producerCapsuleId: string;
-  readonly consumerCapsuleId: string;
-  readonly changedOutputNames: readonly string[];
-}): readonly string[] {
-  const changed = new Set(input.changedOutputNames);
-  const direct = new Set<string>();
-  for (const edge of input.edges) {
-    if (
-      edge.producerCapsuleId !== input.producerCapsuleId ||
-      edge.consumerCapsuleId !== input.consumerCapsuleId
-    ) {
-      continue;
-    }
-    for (const mapping of Object.values(edge.outputs)) {
-      if (changed.has(mapping.from)) direct.add(mapping.from);
-    }
-  }
-  return [...direct].sort();
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 export function defaultProviderMirrorRequiredForProfile(

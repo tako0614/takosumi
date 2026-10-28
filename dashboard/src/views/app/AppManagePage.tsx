@@ -7,8 +7,8 @@
  * that view and turns each action into the matching in-page flow. Its
  * sections follow what a person does with the app: open it and see its
  * state, deal with its problems, update or change its version, change its
- * settings and connections, see what it created and what that costs, see the
- * apps it is linked with, read its history (`GET /capsules/:id/runs`, page by
+ * settings and connections, see what it created and what that costs, read
+ * its history (`GET /capsules/:id/runs`, page by
  * page), and uninstall it. Every change is reviewed in place — the exact
  * resource list and cost — and applies only from the explicit "Allow and …"
  * click; nothing is applied automatically and no consent travels in a URL or
@@ -27,7 +27,6 @@ import {
   createMemo,
   createResource,
   createSignal,
-  For,
   Match,
   on,
   onCleanup,
@@ -60,7 +59,6 @@ import {
   getCurrentResourceInventory,
   getInstallConfig,
   getRun,
-  getWorkspaceGraph,
   isInterfaceMaterializationRetryStale,
   listCapsuleRuns,
   listProviderConnections,
@@ -72,10 +70,6 @@ import {
   type RunType,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
-import {
-  capsuleUninstallDependencyWarning,
-  uninstallDependencyReadWarning,
-} from "../../lib/capsule-uninstall.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
@@ -99,7 +93,6 @@ import {
   appStateSentence,
   appViewIncomplete,
   isSettled,
-  linkedApps,
   mergeAppHistoryPages,
   openableScreens,
   primaryProblem,
@@ -107,7 +100,7 @@ import {
   settledValue,
   stateVersionLabels,
 } from "../../lib/app-page.ts";
-import { APP_PAGE_SECTIONS, appPageHref, installAttemptHref, reinstallHref, type AppPageSection } from "../../lib/app-links.ts";
+import { APP_PAGE_SECTIONS, installAttemptHref, reinstallHref, type AppPageSection } from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
 import {
   defaultRetryPlanApi,
@@ -123,7 +116,6 @@ import AppVersionSection from "./AppVersionSection.tsx";
 import AppSettingsSection from "./AppSettingsSection.tsx";
 import AppCreatedSection from "./AppCreatedSection.tsx";
 import AppHistorySection from "./AppHistorySection.tsx";
-import AppLinkedSection from "./AppLinkedSection.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
 /** Runs read per history page (the server accepts at most 100). */
@@ -229,14 +221,6 @@ export default function AppManagePage(props: {
     const id = capsule()?.currentStateVersionId;
     return id ? stateVersionList().find((version) => version.id === id) : undefined;
   });
-
-  const [graph, { refetch: refetchGraph }] = createResource(
-    () => (destroyed() || !app() ? null : (workspaceId() ?? null)),
-    getWorkspaceGraph,
-  );
-  const graphValue = () => settledValue(graph);
-  const usesApps = createMemo(() => linkedApps(capsuleId(), graphValue(), "uses"));
-  const usedByApps = createMemo(() => linkedApps(capsuleId(), graphValue(), "usedBy"));
 
   // Snapshots only name previous versions; the server already reports the
   // current and newest version.
@@ -361,7 +345,7 @@ export default function AppManagePage(props: {
     if (!section || !capsule() || !app()) return;
     const key = `${capsuleId()}:${section}`;
     if (scrolledTo === key) return;
-    const settling = [installConfig, stateVersions, graph, inventory, bindingSet, usage, historyFirst]
+    const settling = [installConfig, stateVersions, inventory, bindingSet, usage, historyFirst]
       .some((resource) => resource.loading);
     if (settling) return;
     scrolledTo = key;
@@ -387,7 +371,6 @@ export default function AppManagePage(props: {
       refetchConnections(),
       refetchInventory(),
       refetchUsage(),
-      refetchGraph(),
     ]);
   };
 
@@ -784,22 +767,9 @@ export default function AppManagePage(props: {
     const terms = app()?.uninstall;
     return terms?.mode === "scheduled" ? terms.graceDays : undefined;
   };
-  const dependencyWarning = () =>
-    capsuleUninstallDependencyWarning(
-      displayName(),
-      usedByApps().map((linked) => linked.name),
-    );
-  const dependencyCheck = () =>
-    uninstallDependencyReadWarning(
-      graph.error ? "failed" : graph.loading || graphValue() === undefined ? "loading" : "ready",
-    );
   const uninstall = async () => {
     const inst = capsule();
     if (!inst || uninstallBusy()) return;
-    // Name the apps it affects from a fresh read, right before confirming.
-    setUninstallBusy(true);
-    await Promise.resolve(refetchGraph()).catch(() => undefined);
-    setUninstallBusy(false);
     const days = graceDays();
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
@@ -809,8 +779,6 @@ export default function AppManagePage(props: {
           : days !== undefined
             ? t("app.uninstall.confirmGrace", { name: displayName(), days })
             : t("app.uninstall.confirmMessage", { name: displayName() }),
-        dependencyWarning(),
-        dependencyCheck(),
       ].filter(Boolean).join("\n\n"),
       confirmText: t("app.uninstall.cta"),
       cancelText: t("common.cancel"),
@@ -1172,9 +1140,6 @@ export default function AppManagePage(props: {
                   usageFailed={Boolean(usage.error)}
                   hosted={settledValue(hosted) ?? []}
                 />
-                <Show when={usesApps().length > 0 || usedByApps().length > 0}>
-                  <AppLinkedSection uses={usesApps()} usedBy={usedByApps()} />
-                </Show>
               </Show>
 
               <AppHistorySection
@@ -1208,23 +1173,6 @@ export default function AppManagePage(props: {
                   }
                   testId="app-uninstall"
                 >
-                  <Show when={usedByApps().length > 0}>
-                    <div class="ap-impact" role="note">
-                      <strong>{t("app.uninstall.impactTitle")}</strong>
-                      <ul>
-                        <For each={usedByApps()}>
-                          {(linked) => (
-                            <li>
-                              <a href={appPageHref(linked.capsuleId)}>{linked.name}</a>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </div>
-                  </Show>
-                  <Show when={dependencyCheck()}>
-                    {(status) => <p class="ap-muted" role="status">{status()}</p>}
-                  </Show>
                   <div class="ap-row-actions">
                     <Show
                       when={view().uninstall.mode !== "none"}

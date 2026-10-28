@@ -1,6 +1,6 @@
 /*
- * wave-b.css — view-local rules for the Wave B control views
- * (Sources / Providers / Graph / OutputShares / Backups / Members /
+ * wave-b.css — view-local rules for the control views
+ * (Sources / Providers / Backups / Members /
  * InstallFromGit). Imported locally at the top of each Wave B view file, NOT
  * via the shared index.tsx. These rules layer on top of the canonical app
  * tokens + the shared component classes (tg-*) and never redefine them.
@@ -55,86 +55,6 @@
   gap: var(--tg-s-2);
   justify-content: flex-end;
   white-space: nowrap;
-}
-
-/* Tag chip list (depends-on, outputs, env names). */
-.wb-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-2);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.wb-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--tg-r-full);
-  border: 1px solid var(--tg-line);
-  background: var(--tg-bg-subtle);
-  font-family: var(--tg-font-mono);
-  font-size: var(--tg-fs-xs);
-  color: var(--tg-fg-muted);
-  /* Long output names / ids wrap instead of being clipped. */
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-
-/* ===== Graph: layered DAG board ===== */
-.wb-graph {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-5);
-}
-.wb-graph-layer {
-  display: flex;
-  flex-direction: column;
-  gap: var(--tg-s-3);
-}
-.wb-graph-layer-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  font-size: var(--tg-fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  font-family: var(--tg-font-mono);
-  color: var(--tg-fg-subtle);
-}
-.wb-graph-layer-rule {
-  flex: 1;
-  height: 1px;
-  background: var(--tg-line);
-}
-.wb-graph-nodes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-3);
-}
-.wb-graph-node {
-  min-width: 220px;
-  flex: 0 1 260px;
-}
-.wb-graph-node-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--tg-s-2);
-}
-.wb-graph-node-name {
-  font-weight: 600;
-}
-.wb-graph-node-deps {
-  margin-top: var(--tg-s-2);
-  font-size: var(--tg-fs-xs);
-  color: var(--tg-fg-subtle);
-  font-family: var(--tg-font-mono);
-  overflow-wrap: anywhere;
-}
-.wb-graph-cyclic .wb-graph-node {
-  border-color: color-mix(in srgb, var(--tg-status-error) 40%, var(--tg-line));
 }
 
 /* ===== Install-from-Git: stepper + compatibility ===== */

@@ -411,6 +411,29 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
       return { items: [] };
     }
     const clauses = ["i.workspace_id = ?", "i.phase = 'Resolved'"];
+    clauses.push(
+      `not exists (
+        select 1
+        from json_each(
+          case
+            when json_type(i.record_json, '$.spec.inputs') = 'object'
+              then json_extract(i.record_json, '$.spec.inputs')
+            else '{}'
+          end
+        ) as capsule_input
+        where case when capsule_input.type = 'object'
+          then json_extract(capsule_input.value, '$.source') end = 'capsule_output'
+          and (
+            i.owner_kind <> 'Capsule'
+            or json_type(capsule_input.value, '$.capsuleId') <> 'text'
+            or coalesce(
+              case when capsule_input.type = 'object'
+                then json_extract(capsule_input.value, '$.capsuleId') end,
+              ''
+            ) <> i.owner_id
+          )
+      )`,
+    );
     const parameters: unknown[] = [input.filter.workspaceId];
     const add = (sql: string, value: unknown): void => {
       clauses.push(sql);

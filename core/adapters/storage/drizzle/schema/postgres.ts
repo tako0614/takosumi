@@ -386,6 +386,7 @@ export const providerBindingSets = pgTable(
   ],
 );
 
+// Retired ledger: retain this table unchanged until a later contract schema version.
 export const dependencies = pgTable(
   names.dependencies,
   {
@@ -407,6 +408,7 @@ export const dependencies = pgTable(
   ],
 );
 
+// Retired ledger: retain this table unchanged until a later contract schema version.
 export const dependencySnapshots = pgTable(
   names.dependencySnapshots,
   {
@@ -436,6 +438,7 @@ export const outputs = pgTable(
   ],
 );
 
+// Retired ledger: retain this table unchanged until a later contract schema version.
 export const outputShares = pgTable(
   names.outputShares,
   {

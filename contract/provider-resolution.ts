@@ -127,6 +127,7 @@ export interface RunEnvironment {
   readonly allowedEgressProfileId: string;
   readonly redactionProfileId: string;
   readonly stateBackendRef: string;
+  /** Read-only historical reference; never populated by current resolution. */
   readonly dependencySnapshotId?: string;
   readonly savedPlanDigest?: string;
 }
