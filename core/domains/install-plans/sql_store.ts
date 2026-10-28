@@ -547,6 +547,16 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
           and phase not in ('failed', 'discarded')
           and record_json ->> 'mode' = 'attempt'
           and coalesce(record_json ->> 'operation', 'install') = 'install'
+          and (
+            phase <> 'reviewable'
+            or exists (
+              select 1 from takosumi_capsules as capsule
+               where capsule.id = ${TABLE}.record_json ->> 'capsuleId'
+                 and capsule.status <> 'destroyed'
+                 and capsule.current_state_version_id is null
+                 and coalesce(capsule.installation_json ->> 'currentStateGeneration', '0') = '0'
+            )
+          )
         order by updated_at desc, id asc
         limit $${params.length}`,
       params,

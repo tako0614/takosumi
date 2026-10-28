@@ -71,7 +71,10 @@ test("Git install attempts transition, list and settle blockers with parity", as
   const adapters: readonly {
     readonly label: string;
     readonly workspaceId: string;
-    readonly control: Pick<OpenTofuControlStore, "putWorkspace" | "beginWorkspaceDraining">;
+    readonly control: Pick<
+      OpenTofuControlStore,
+      "putWorkspace" | "beginWorkspaceDraining" | "putCapsule"
+    >;
     readonly store: GitInstallPlanStore;
   }[] = [
     {
@@ -233,6 +236,49 @@ test("Git install attempts transition, list and settle blockers with parity", as
       })).toMatchObject({ status: "completed" });
       expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(false);
 
+      // A reviewable attempt is open only while its Capsule was never
+      // applied, and the filter runs before the limit.
+      const reviewableAttempt = (suffix: string, capsuleId: string, updatedAt: string) => ({
+        ...attempt,
+        id: `attempt_${suffix}_${label}`,
+        idempotencyKeyHash: `attempt_${suffix}_key_${label}`,
+        phase: "reviewable" as const,
+        awaitingInput: undefined,
+        expiresAt: undefined,
+        capsuleId,
+        createdAt: updatedAt,
+        updatedAt,
+      });
+      const capsule = (id: string, name: string, currentStateGeneration: number) => ({
+        id,
+        workspaceId,
+        projectId: `prj_default_${workspaceId}`,
+        name,
+        slug: name,
+        environment: "production",
+        sourceId: `src_${label}`,
+        installConfigId: "cfg-default-opentofu-capsule",
+        installingPrincipalId: "user_one",
+        currentStateGeneration,
+        status: currentStateGeneration > 0 ? "active" as const : "pending" as const,
+        createdAt: "2026-08-21T00:00:00.000Z",
+        updatedAt: "2026-08-21T00:00:00.000Z",
+      });
+      await control.putCapsule(capsule(`cap_open_${label}`, "open-app", 0));
+      await control.putCapsule(capsule(`cap_applied_${label}`, "applied-app", 1));
+      expect((await store.create(
+        reviewableAttempt("open", `cap_open_${label}`, "2026-08-21T00:01:00.000Z"),
+        authority,
+      )).status).toBe("created");
+      expect((await store.create(
+        reviewableAttempt("applied", `cap_applied_${label}`, "2026-08-21T00:02:00.000Z"),
+        authority,
+      )).status).toBe("created");
+      expect(
+        (await store.listOpenAttempts({ workspaceId, actorSubject: "user_one", limit: 1 }))
+          .map((item) => item.id),
+      ).toEqual([`attempt_open_${label}`]);
+
       // After a drain, an admission-fenced answer is refused; a terminal
       // discard needs no admission.
       expect((await control.beginWorkspaceDraining(workspaceId, authority)).status)
@@ -264,8 +310,9 @@ test("Git install attempts transition, list and settle blockers with parity", as
       })).toMatchObject({ status: "updated", plan: { phase: "discarded", generation: 3 } });
       expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(false);
       expect(
-        await store.listOpenAttempts({ workspaceId, actorSubject: "user_one", limit: 20 }),
-      ).toEqual([]);
+        (await store.listOpenAttempts({ workspaceId, actorSubject: "user_one", limit: 20 }))
+          .map((item) => item.id),
+      ).toEqual([`attempt_open_${label}`]);
       expect(await store.transitionUnleased({
         id: "missing_attempt",
         expectedGeneration: 0,
@@ -273,6 +320,7 @@ test("Git install attempts transition, list and settle blockers with parity", as
         plan: { ...attempt, id: "missing_attempt", generation: 1 },
         at: discarded.updatedAt,
       })).toEqual({ status: "not_found" });
+
     }
   } finally {
     await postgres.close();

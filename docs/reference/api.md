@@ -375,12 +375,14 @@ source_has_in_flight_run` で拒否します。削除後は webhook bearer が�
 | POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                         |
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
-は同じ record を返し、内容が異なれば 409 になります。public projection が含むのは Source、
-SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
-reviewed preflight に渡した variable 値は、同じ request の中で atomic initial authority
-commit に直接渡します。coordinator record・request digest・response・diagnostic には値を
-保存しません。残すのは名前だけで、確認できないまま request が終わると試行は
-`awaiting_input` で値の再送を待ちます。credential、token、Output 値は受け付けません。
+は同じ record を返し、内容が異なれば 409 になります。request digest は variable の名前だけを
+含み、値は含みません。そのため同じ key で値だけを変えた request は 409 にならず、最初の
+record を 200 で返します。値を変えるときは新しい key を使ってください。public projection が
+含むのは Source、SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic
+だけです。reviewed preflight に渡した private variable 値は atomic initial authority commit
+まで非公開 coordinator state にだけ保持され、response には投影されず、commit 直後と、
+失敗などの終端に移ったときに coordinator から削除されます。credential、token、Output 値は
+受け付けません。
 `reviewable` になった後の承認と apply は `Run` API だけが所有し、install-plan 専用 apply
 route はありません。
 
@@ -389,13 +391,20 @@ route はありません。
 複数、接続の不足、必須設定、名前の衝突）と、Capsule を作る直前に、非終端の
 `awaiting_input` で止まります。response の `userAction` が次の操作を一つだけ返します
 （`wait`・`choose_module`・`provide_inputs`・`review_run`・`retry`・`none`）。候補が一つだけの
-接続は自動で選びます。`PATCH` は `expectedGeneration` で CAS し、`continue: true` で確定する
-request だけが variable 値を受け取ります。値は保存しません。`DELETE` は未適用の Capsule を
-abandon し、試行が登録した Source をほかに参照がなければ削除して、終端の `discarded`
-にします。適用中・適用済みの試行は拒否します。試行には `expiresAt` があり、期限を過ぎた
-試行は次の読み取りで `discarded`（`install_attempt_expired`）になります。`awaiting_input`
-は lease も実行権限も持たないため Workspace 管理の blocker になりません。管理 epoch が
-変わった後は進めないため、読み取りで `discarded`（`workspace_management_changed`）にします。
+接続は自動で選びます。`PATCH` と `DELETE` は試行を始めた本人だけが使え、`PATCH` は
+`expectedGeneration` で CAS します。variable 値は `continue: true` で確定する request だけが
+受け取り、coordinator には保存しません。確定の結果を確認できなかったときは、同じ値の再送
+だけを受け付けます。`DELETE` は試行が作った未適用の Capsule を abandon して、終端の
+`discarded` にします。適用中・適用済みの試行と、試行ではない install plan は拒否します。
+Source は削除しません。試行が有効にした polling だけを止めます。
+
+試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
+GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の
+管理 epoch の変更（`workspace_management_changed`）は `invalidated` と `userAction: retry`
+で示すだけで、片付けは本人の `DELETE` か、無効な試行に届いた本人の `PATCH`（409
+`install_attempt_invalid`）で行います。`awaiting_input` は lease も実行権限も持たないため、
+Workspace 管理の blocker になりません。そこから先へ進む書き込みは、作成時の管理 admission
+を同じ statement で確かめます。
 
 `configuration-plans` は、現在の private InstallConfig に closed な
 `variablePatch`（`set` / `remove`）、value-free ProviderBinding 選択、Interface

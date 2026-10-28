@@ -127,6 +127,12 @@ export interface CreateGitInstallPlanRequest {
  * matches Provider Connections and pauses in `awaiting_input` for anything it
  * cannot decide alone. Variable values are not accepted here; they are sent
  * only in the confirming `PATCH { continue: true }` request.
+ *
+ * Idempotency: the request digest is the normalized request itself (it has no
+ * values). For a reviewed-preflight `CreateGitInstallPlanRequest`, the digest
+ * covers variable names only, never their values, so reusing one
+ * Idempotency-Key with different values replays the first record (200)
+ * instead of reporting a conflict. Use a new key for new values.
  */
 export interface CreateGitInstallAttemptRequest {
   readonly mode: GitInstallPlanMode;
@@ -164,6 +170,11 @@ export interface CreateGitInstallAttemptRequest {
  * - `variables` are accepted only together with `continue: true`. They are
  *   handed straight to the atomic initial creation and never stored in the
  *   coordinator record, logs, diagnostics or responses.
+ * - While the attempt waits for re-sent values (`resubmitVariables`), only
+ *   `continue: true` with exactly those variable names is accepted; other
+ *   answers are refused with `install_inputs_resubmission_only`.
+ * - An invalidated attempt is discarded by its creator's PATCH, which then
+ *   answers 409 `install_attempt_invalid`.
  */
 export interface PatchGitInstallPlanRequest {
   readonly expectedGeneration: number;
@@ -236,9 +247,12 @@ export interface GitInstallPlan {
    */
   readonly sourceCreatedByAttempt?: boolean;
   /**
-   * Attempt mode: an idle attempt past this instant is discarded lazily on
-   * its next read (`diagnostic.code: "install_attempt_expired"`). Refreshed
-   * whenever the actor answers or the attempt reaches a new pause.
+   * Attempt mode, before the Capsule exists only: past this instant the
+   * attempt is reported `invalidated: "install_attempt_expired"` and can no
+   * longer advance. Reads never change it; the creator discards it. Refreshed
+   * by answers and coordinator progress, and removed once the confirming
+   * request starts creating the Capsule — an attempt with a Capsule never
+   * expires.
    */
   readonly expiresAt?: string;
   /** Present only for `operation: "revision"`. */
@@ -381,20 +395,31 @@ export type GitInstallPlanUserAction =
     }
   | {
       readonly kind: "retry";
-      /** Bounded diagnostic code. */
+      /** Bounded diagnostic or invalidation code. */
       readonly code: string;
       /**
-       * `false`: call `links.reconcile` again. `true`: this attempt failed;
-       * discard it and start a new attempt.
+       * `false`: call `links.reconcile` again. `true`: this attempt failed or
+       * was invalidated; its creator discards it and starts a new attempt.
        */
       readonly restart: boolean;
     }
   | { readonly kind: "none" };
 
+/**
+ * Why an attempt can no longer advance, computed on every read and never
+ * applied by one: it expired before its Capsule existed, or the Workspace
+ * management epoch it was admitted under was replaced while it waited.
+ */
+export type GitInstallPlanInvalidation =
+  | "install_attempt_expired"
+  | "workspace_management_changed";
+
 export interface GitInstallPlanResponse {
   readonly installPlan: GitInstallPlan;
   readonly nextAction: "reconcile" | "review_run" | "none";
   readonly userAction: GitInstallPlanUserAction;
+  /** Present when the attempt can no longer advance; `userAction` is `retry`. */
+  readonly invalidated?: GitInstallPlanInvalidation;
   readonly links: {
     readonly self: string;
     readonly reconcile?: string;
@@ -403,7 +428,12 @@ export interface GitInstallPlanResponse {
   };
 }
 
-/** `GET /api/v1/workspaces/:id/install-plans?open=1`, newest first. */
+/**
+ * `GET /api/v1/workspaces/:id/install-plans?open=1`, newest first: the
+ * caller's attempts that are not failed or discarded and whose Capsule, if
+ * any, was never applied. Invalidated attempts are listed (flagged) so their
+ * creator can discard them; the listing itself never writes.
+ */
 export interface ListOpenGitInstallPlansResponse {
   readonly installPlans: readonly GitInstallPlanResponse[];
 }

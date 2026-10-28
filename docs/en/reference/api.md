@@ -330,15 +330,29 @@ missing connections, required settings, a name collision) and once before it
 creates the Capsule. `userAction` names the single next step (`wait`,
 `choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
 requirement with exactly one eligible connection is selected automatically.
-`PATCH` answers with `expectedGeneration` as a CAS fence, and only the
-confirming `continue: true` request carries variable values, which go straight
-into the atomic initial creation and are never stored. `DELETE` abandons a
-never-applied Capsule, deletes a Source the attempt registered when nothing
-else uses it, and records the terminal `discarded` phase; it is refused once
-the app is applying or applied. Attempts carry `expiresAt` and expire lazily
-on their next read. `awaiting_input` holds no lease and no execution
-authority, so it does not block Workspace management; once the management
-epoch changes the attempt can never advance and is discarded on read.
+Only the member who started the attempt may `PATCH` or `DELETE` it. `PATCH`
+uses `expectedGeneration` as a CAS fence, and only the confirming
+`continue: true` request carries variable values, which go straight into the
+atomic initial creation and are never stored; when that creation cannot be
+confirmed, only the same values may be sent again. `DELETE` abandons a
+never-applied Capsule the attempt created and records the terminal `discarded`
+phase; it is refused once the app is applying or applied, and for plans that
+are not attempts. The Source is never deleted; polling the attempt enabled is
+turned off.
+
+Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
+Capsule never expires. GET and the open listing never write: an expired
+attempt (`install_attempt_expired`) or one whose management epoch changed
+while it waited (`workspace_management_changed`) is reported through
+`invalidated` and `userAction: retry`, and cleaned up only by its creator's
+`DELETE` or by a creator `PATCH` that finds it invalid (409
+`install_attempt_invalid`). `awaiting_input` holds no lease and no execution
+authority, so it does not block Workspace management; every write that
+advances it re-checks the original admission in the same statement.
+
+Idempotency: the request digest covers variable names but never their values,
+so reusing an Idempotency-Key with different values replays the first record
+(200) instead of returning a conflict. Use a new key for new values.
 
 ### Git revision plans
 

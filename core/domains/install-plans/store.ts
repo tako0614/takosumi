@@ -336,7 +336,10 @@ export interface GitInstallPlanStore {
   transitionUnleased(
     input: TransitionGitInstallPlanInput,
   ): Promise<TransitionGitInstallPlanResult>;
-  /** Newest-first attempt-mode install plans that are not failed/discarded. */
+  /**
+   * Newest-first attempt-mode install plans that are not failed/discarded and
+   * whose reviewable Capsule was never applied, filtered before the limit.
+   */
   listOpenAttempts(
     input: ListOpenGitInstallAttemptsInput,
   ): Promise<readonly StoredGitInstallPlan[]>;
@@ -574,7 +577,13 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
         (input.actorSubject === undefined || plan.actorSubject === input.actorSubject) &&
         plan.mode === "attempt" &&
         (plan.operation ?? "install") === "install" &&
-        isOpenGitInstallAttemptPhase(plan.phase)
+        isOpenGitInstallAttemptPhase(plan.phase) &&
+        // A reviewable attempt stays open only while its Capsule was never
+        // applied. Without a co-located Capsule reader the caller filters.
+        (plan.phase !== "reviewable" || plan.capsuleId === undefined ||
+          this.#workspaceManagementValidator?.isNeverAppliedCapsule?.(
+            plan.capsuleId,
+          ) !== false)
       )
       .sort((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt) ||

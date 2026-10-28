@@ -11,7 +11,6 @@
  * captured, projected or compared here.
  */
 import type {
-  GitInstallPlan,
   GitInstallPlanConnectionCandidate,
   GitInstallPlanConnectionRequirement,
   GitInstallPlanModuleCandidate,
@@ -571,13 +570,38 @@ export async function userActionFor(
   };
 }
 
-/** Projection-only helper: the coordinator never stores this decision. */
-export function attemptIsExpired(
-  plan: Pick<GitInstallPlan, "mode" | "expiresAt" | "phase">,
-  now: number,
+const PHASES_BEFORE_CAPSULE: ReadonlySet<string> = new Set([
+  "syncing_source",
+  "compiling_install",
+  "analyzing_compatibility",
+  "awaiting_input",
+]);
+
+/**
+ * Only an attempt whose Capsule cannot exist yet may expire. A pause waiting
+ * for re-sent values may already have a committed Capsule, so it never does.
+ */
+export function attemptCanExpire(
+  plan: Pick<
+    StoredGitInstallPlan,
+    "mode" | "phase" | "capsuleId" | "transientVariableNames"
+  >,
 ): boolean {
   return plan.mode === "attempt" &&
-    plan.phase !== "discarded" &&
+    PHASES_BEFORE_CAPSULE.has(plan.phase) &&
+    plan.capsuleId === undefined &&
+    (plan.transientVariableNames?.length ?? 0) === 0;
+}
+
+/** Projection-only: reads never store or apply this decision. */
+export function attemptIsExpired(
+  plan: Pick<
+    StoredGitInstallPlan,
+    "mode" | "phase" | "capsuleId" | "transientVariableNames" | "expiresAt"
+  >,
+  now: number,
+): boolean {
+  return attemptCanExpire(plan) &&
     typeof plan.expiresAt === "string" &&
     Number.isFinite(Date.parse(plan.expiresAt)) &&
     Date.parse(plan.expiresAt) <= now;

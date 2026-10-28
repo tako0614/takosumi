@@ -484,6 +484,16 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
             and json_valid(record_json) = 1
             and json_extract(record_json, '$.mode') = 'attempt'
             and coalesce(json_extract(record_json, '$.operation'), 'install') = 'install'
+            and (
+              phase <> 'reviewable'
+              or exists (
+                select 1 from capsules as capsule
+                 where capsule.id = json_extract(git_install_plans.record_json, '$.capsuleId')
+                   and capsule.status <> 'destroyed'
+                   and capsule.current_state_generation = 0
+                   and capsule.current_state_version_id is null
+              )
+            )
           order by updated_at desc, id asc
           limit ?`,
       )

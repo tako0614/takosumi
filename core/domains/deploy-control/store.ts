@@ -693,6 +693,11 @@ export interface WorkspaceManagementAdmissionValidator {
   isWorkspaceManagementDraining?(
     expected: FreezeWorkspaceManagementExpectation,
   ): boolean;
+  /**
+   * Optional co-located read for the open install-attempt listing: whether a
+   * Capsule exists, is not destroyed and was never applied.
+   */
+  isNeverAppliedCapsule?(capsuleId: string): boolean;
 }
 
 export class WorkspaceManagementAdmissionConflictError extends Error {
@@ -4477,6 +4482,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     this.#identityOperations.set(next.operationId, next);
     this.#identityEvents.set(eventKey, event);
     return Promise.resolve(true);
+  }
+
+  isNeverAppliedCapsule(capsuleId: string): boolean {
+    const capsule = this.#capsules.get(capsuleId);
+    return capsule !== undefined && capsule.status !== "destroyed" &&
+      capsule.currentStateGeneration === 0 &&
+      capsule.currentStateVersionId === undefined;
   }
 
   /** Named composition pairing; no async observer or generic blocker callback. */

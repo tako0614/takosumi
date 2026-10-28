@@ -3,6 +3,7 @@ import type {
   CreateGitInstallPlanRequest,
   GitInstallPlan,
   GitInstallPlanDiagnostic,
+  GitInstallPlanInvalidation,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanSourceRequest,
@@ -54,6 +55,7 @@ import {
   type StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
 import {
+  attemptCanExpire,
   attemptInputFacts,
   attemptIsExpired,
   bindingMatchesRequirement,
@@ -157,10 +159,10 @@ export async function handleWorkspaceInstallPlans(
   // Variable values never enter the public request digest: only their names
   // do. A replay is still recognized against digests written before values
   // were excluded.
-  const transientVariables = parsed?.variables;
+  const variables = parsed?.variables;
   const [requestDigest, legacyRequestDigest, idempotencyKeyHash] = await Promise.all([
     stableJsonDigest(attempt ?? requestDigestInput(parsed!)),
-    transientVariables ? stableJsonDigest(parsed) : Promise.resolve(undefined),
+    variables ? stableJsonDigest(parsed) : Promise.resolve(undefined),
     stableJsonDigest(key),
   ]);
   const existing = await ctx.operations.gitInstallPlans.getByScope({
@@ -174,11 +176,6 @@ export async function handleWorkspaceInstallPlans(
       (legacyRequestDigest !== undefined &&
         existing.requestDigest === legacyRequestDigest)
     ) {
-      // An exact replay re-supplies the transient values when the original
-      // confirming request could not finish atomic creation.
-      if (transientVariables && awaitsTransientVariables(existing)) {
-        return await createWithTransientVariables(ctx, existing, transientVariables, 200);
-      }
       return await installPlanJson(ctx, existing);
     }
     return errorJson(
@@ -299,11 +296,10 @@ export async function handleWorkspaceInstallPlans(
           compatibilityReportId: request.preflight.compatibilityReportId,
         }
       : {}),
-    // Reviewed values are transient: only their names are recorded so a
-    // reconcile without them cannot create authority that lacks them.
-    ...(transientVariables && Object.keys(transientVariables).length > 0
-      ? { transientVariableNames: Object.keys(transientVariables).sort() }
-      : {}),
+    // Legacy reviewed-preflight values keep their previous lifetime: private,
+    // never projected, consumed by atomic creation and scrubbed by every
+    // terminal transition. Install attempts never store values.
+    ...(variables ? { initialVariables: variables } : {}),
     ...(request.initialConfiguration
       ? { initialConfiguration: request.initialConfiguration }
       : {}),
@@ -324,16 +320,11 @@ export async function handleWorkspaceInstallPlans(
       ctx.request,
     );
   }
-  const status = result.status === "created" ? 201 : 200;
-  if (transientVariables && awaitsTransientVariables(result.plan)) {
-    return await createWithTransientVariables(
-      ctx,
-      result.plan,
-      transientVariables,
-      status,
-    );
-  }
-  return await installPlanJson(ctx, result.plan, status);
+  return await installPlanJson(
+    ctx,
+    result.plan,
+    result.status === "created" ? 201 : 200,
+  );
 }
 
 /** The request digest input: variable names only, never values. */
@@ -354,9 +345,10 @@ function attemptExpiry(now: string): string {
 /**
  * GET/PATCH/DELETE /api/v1/install-plans/:id and POST .../reconcile.
  *
- * GET never claims, reconciles or advances an install plan. The only write a
- * read can cause is lazy settlement of an attempt that can no longer advance:
- * it expired, or its original Workspace management admission was replaced.
+ * GET never writes. An attempt that can no longer advance (it expired before
+ * its Capsule existed, or its management epoch was replaced) is only reported
+ * as `invalidated`; destructive cleanup happens solely in its creator's own
+ * DELETE, or in a creator PATCH that finds the attempt invalid.
  */
 export async function handleInstallPlans(
   ctx: ControlDispatchContext,
@@ -380,16 +372,14 @@ export async function handleInstallPlans(
   if (!auth.ok) return auth.response;
 
   if (segments.length === 2) {
-    if (method === "GET") {
-      return await installPlanJson(ctx, await settleIdleAttempt(ctx, plan));
-    }
+    if (method === "GET") return await installPlanJson(ctx, plan);
     if (method === "PATCH") return await answerInstallAttempt(ctx, plan);
     if (method === "DELETE") return await discardInstallAttempt(ctx, plan);
     return methodNotAllowed("GET, PATCH, DELETE");
   }
   if (segments.length === 3 && segments[2] === "reconcile") {
     if (method !== "POST") return methodNotAllowed("POST");
-    return await reconcileInstallPlan(ctx, await settleIdleAttempt(ctx, plan));
+    return await reconcileInstallPlan(ctx, plan);
   }
   return undefined;
 }
@@ -408,15 +398,16 @@ async function listOpenInstallAttempts(
       ctx.request,
     );
   }
+  // The store applies the open filter (including never-applied Capsules)
+  // before its limit. A read-only listing never settles anything.
   const candidates = await ctx.operations.gitInstallPlans.listOpenAttempts({
     workspaceId,
     actorSubject: ctx.session.subject,
     limit: GIT_INSTALL_ATTEMPT_LIST_LIMIT,
   });
   const installPlans: GitInstallPlanResponse[] = [];
-  for (const candidate of candidates) {
-    const plan = await settleIdleAttempt(ctx, candidate);
-    if (plan.phase === "failed" || plan.phase === "discarded") continue;
+  for (const plan of candidates) {
+    // Defense in depth for a store without a co-located Capsule reader.
     if (
       plan.phase === "reviewable" &&
       (await attemptCapsuleState(ctx, plan)) !== "unapplied"
@@ -461,38 +452,31 @@ async function getCapsuleIfPresent(
 }
 
 /**
- * Lazily settles an attempt that can never advance again. Expiry discards an
- * idle attempt (including its never-applied Capsule); a replaced management
- * admission discards an `awaiting_input` record, whose every advance would be
- * refused by the original-epoch fence anyway. A refusal leaves the record.
+ * Read-only: why an attempt can no longer advance. Expiry applies only before
+ * the Capsule exists; a replaced management epoch matters only while the
+ * attempt idles in `awaiting_input` (any advance re-checks it atomically).
  */
-async function settleIdleAttempt(
+async function attemptInvalidation(
   ctx: ControlDispatchContext,
   plan: StoredGitInstallPlan,
-): Promise<StoredGitInstallPlan> {
-  if (plan.phase === "discarded") return plan;
-  if (attemptIsExpired(plan, Date.now())) {
-    // An installed app is no longer an attempt to expire.
-    if ((await attemptCapsuleState(ctx, plan)) === "applied") return plan;
-    const settled = await discardAttemptRecord(ctx, plan, {
-      code: "install_attempt_expired",
-      message: "This install attempt expired before it was installed.",
-    });
-    return settled.ok ? settled.plan : plan;
-  }
+): Promise<GitInstallPlanInvalidation | undefined> {
+  if (plan.mode !== "attempt") return undefined;
+  if (attemptIsExpired(plan, Date.now())) return "install_attempt_expired";
   if (
     plan.phase === "awaiting_input" &&
     !(await originalAdmissionIsCurrent(ctx, plan))
   ) {
-    const settled = await discardAttemptRecord(ctx, plan, {
-      code: "workspace_management_changed",
-      message:
-        "Workspace management changed while this install attempt waited for input.",
-    });
-    return settled.ok ? settled.plan : plan;
+    return "workspace_management_changed";
   }
-  return plan;
+  return undefined;
 }
+
+const INVALIDATION_MESSAGES: Readonly<Record<GitInstallPlanInvalidation, string>> = {
+  install_attempt_expired:
+    "This install attempt expired before its app was created; discard it and start again.",
+  workspace_management_changed:
+    "Workspace management changed while this install attempt waited for input; discard it and start again.",
+};
 
 async function originalAdmissionIsCurrent(
   ctx: ControlDispatchContext,
@@ -507,7 +491,7 @@ async function originalAdmissionIsCurrent(
     return current.managementEpoch === original.managementEpoch;
   } catch (error) {
     // Only a definite admission refusal proves the epoch is gone; any other
-    // failure is not evidence and must not discard the attempt.
+    // failure is not evidence against the attempt.
     if (error instanceof WorkspaceManagementAdmissionConflictError) return false;
     return true;
   }
@@ -530,13 +514,15 @@ const INITIAL_PHASES_WITHOUT_CAPSULE: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Discards one install plan: abandons a never-applied Capsule this attempt
- * created (which retires its binding slot and leaves its per-install
- * InstallConfig as unreferenced history), records the terminal `discarded`
- * phase, scrubs retained private inputs, then deletes the Source only when
- * this attempt registered it and nothing else uses it. The record is fenced
- * by the reconcile lease for the whole cleanup, so no reconcile can advance
- * it concurrently.
+ * Discards one install attempt on behalf of its creator. A refusal writes
+ * nothing (no generation bump, no lease). Otherwise a never-applied Capsule
+ * this attempt created is abandoned first (which retires its binding slot and
+ * leaves its per-install InstallConfig as unreferenced history), then one
+ * lease-free CAS records the terminal `discarded` phase and scrubs retained
+ * private inputs. A reconcile racing the abandonment is fenced by the Capsule
+ * lifecycle CAS and by this record CAS; the creator simply retries. The
+ * Source is never deleted here: a polling Source this attempt enabled is
+ * turned back off and kept.
  */
 async function discardAttemptRecord(
   ctx: ControlDispatchContext,
@@ -544,70 +530,20 @@ async function discardAttemptRecord(
   diagnostic: GitInstallPlanDiagnostic,
 ): Promise<DiscardResult> {
   if (observed.phase === "discarded") return { ok: true, plan: observed };
-  const store = ctx.operations.gitInstallPlans;
-  const now = new Date();
-  const leaseToken = `gipl_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  const fenced = await store.transitionUnleased({
-    id: observed.id,
-    expectedGeneration: observed.generation,
-    expectedPhase: observed.phase,
-    plan: {
-      ...observed,
-      generation: observed.generation + 1,
-      updatedAt: now.toISOString(),
-    },
-    at: now.toISOString(),
-    lease: {
-      token: leaseToken,
-      expiresAt: new Date(
-        now.getTime() + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
-      ).toISOString(),
-    },
-  });
-  if (fenced.status === "not_found") {
-    return { ok: false, status: 404, code: "not_found", message: "Install plan not found." };
-  }
-  if (fenced.status === "busy") {
-    return {
-      ok: false,
-      status: 409,
-      code: "reconcile_in_progress",
-      message: "Another reconciler currently owns this install plan.",
-    };
-  }
-  if (fenced.status === "conflict") {
-    return {
-      ok: false,
-      status: 409,
-      code: "install_plan_generation_conflict",
-      message: "The install plan changed; read it and retry explicitly.",
-    };
-  }
-  const claimed = fenced.plan;
-  const release = async (): Promise<void> => {
-    await store.completeReconcile({
-      id: claimed.id,
-      expectedGeneration: claimed.generation,
-      leaseToken,
-      plan: claimed,
-    });
-  };
-  const capsuleId = claimed.capsuleId ??
-    (INITIAL_PHASES_WITHOUT_CAPSULE.has(claimed.phase)
+  const capsuleId = observed.capsuleId ??
+    (INITIAL_PHASES_WITHOUT_CAPSULE.has(observed.phase)
       ? undefined
-      : deterministicInitialCapsuleId(claimed.id));
-  let cleanupAuthority: WorkspaceManagementAuthority | undefined;
+      : deterministicInitialCapsuleId(observed.id));
   try {
     const capsule = capsuleId
       ? await getCapsuleIfPresent(ctx.operations, capsuleId)
       : undefined;
     if (capsule && capsule.status !== "destroyed") {
       if (
-        capsule.workspaceId !== claimed.workspaceId ||
-        capsule.installingPrincipalId !== claimed.createdBy ||
-        (claimed.sourceId !== undefined && capsule.sourceId !== claimed.sourceId)
+        capsule.workspaceId !== observed.workspaceId ||
+        capsule.installingPrincipalId !== observed.createdBy ||
+        (observed.sourceId !== undefined && capsule.sourceId !== observed.sourceId)
       ) {
-        await release();
         return {
           ok: false,
           status: 409,
@@ -616,7 +552,6 @@ async function discardAttemptRecord(
         };
       }
       if (capsuleHasAppliedState(capsule)) {
-        await release();
         return {
           ok: false,
           status: 409,
@@ -625,28 +560,22 @@ async function discardAttemptRecord(
             "This app was already installed; uninstall it from its app page instead.",
         };
       }
-      cleanupAuthority = await ctx.operations.workspaces.captureManagementAuthority(
-        claimed.workspaceId,
-      );
       await ctx.operations.capsules.abandonUnappliedCapsule(
         capsule.id,
-        diagnostic.code === "install_attempt_expired"
-          ? "install attempt expired before first successful apply"
-          : "install attempt discarded before first successful apply",
-        cleanupAuthority,
+        "install attempt discarded before first successful apply",
+        await ctx.operations.workspaces.captureManagementAuthority(
+          observed.workspaceId,
+        ),
       );
     }
   } catch (error) {
-    await release();
-    const reason = error instanceof OpenTofuControllerError
-      ? structuredErrorReason(error)
-      : error instanceof WorkspaceManagementAdmissionConflictError
-        ? "workspace_management_admission_conflict"
-        : undefined;
     if (
       error instanceof OpenTofuControllerError ||
       error instanceof WorkspaceManagementAdmissionConflictError
     ) {
+      const reason = error instanceof OpenTofuControllerError
+        ? structuredErrorReason(error)
+        : "workspace_management_admission_conflict";
       return {
         ok: false,
         status: 409,
@@ -666,68 +595,99 @@ async function discardAttemptRecord(
     initialVariables: _initialVariables,
     transientVariableNames: _transientVariableNames,
     awaitingInput: _awaitingInput,
+    expiresAt: _expiresAt,
     ...retained
-  } = claimed;
+  } = observed;
   const discarded: StoredGitInstallPlan = {
     ...retained,
     phase: "discarded",
+    generation: observed.generation + 1,
     diagnostic: boundedDiagnostic(diagnostic),
     updatedAt: completedAt,
     completedAt,
   };
-  const completed = await store.completeReconcile({
-    id: claimed.id,
-    expectedGeneration: claimed.generation,
-    leaseToken,
+  const result = await ctx.operations.gitInstallPlans.transitionUnleased({
+    id: observed.id,
+    expectedGeneration: observed.generation,
+    expectedPhase: observed.phase,
     plan: discarded,
+    at: completedAt,
   });
-  if (completed.status !== "completed") {
+  if (result.status === "not_found") {
+    return { ok: false, status: 404, code: "not_found", message: "Install plan not found." };
+  }
+  if (result.status === "busy") {
     return {
       ok: false,
-      status: completed.status === "not_found" ? 404 : 409,
-      code: completed.status === "not_found" ? "not_found" : "reconcile_conflict",
-      message: "The install plan changed while it was being discarded.",
+      status: 409,
+      code: "reconcile_in_progress",
+      message: "Another reconciler currently owns this install plan; retry the discard.",
     };
   }
-  await deleteAttemptSourceIfUnused(ctx, completed.plan, cleanupAuthority);
-  return { ok: true, plan: completed.plan };
+  if (result.status === "conflict") {
+    return {
+      ok: false,
+      status: 409,
+      code: "install_plan_generation_conflict",
+      message: "The install plan changed; read it and retry explicitly.",
+    };
+  }
+  await stopAttemptSourcePolling(ctx, result.plan);
+  return { ok: true, plan: result.plan };
 }
 
-/** Best effort: a refusal (still referenced, sync in flight) keeps the Source. */
-async function deleteAttemptSourceIfUnused(
+/**
+ * Best effort and never destructive: a Source this attempt registered and
+ * enabled for polling is turned back off unless an active app now uses it.
+ * The Source itself is always kept, because no store can prove atomically
+ * that no other install plan is about to reuse it.
+ */
+async function stopAttemptSourcePolling(
   ctx: ControlDispatchContext,
   plan: StoredGitInstallPlan,
-  capturedAuthority: WorkspaceManagementAuthority | undefined,
 ): Promise<void> {
   if (plan.sourceCreatedByAttempt !== true || !plan.sourceId) return;
   try {
-    const others = await ctx.operations.gitInstallPlans.listOpenAttempts({
-      workspaceId: plan.workspaceId,
-      limit: 200,
-    });
-    if (
-      others.length >= 200 ||
-      others.some((other) => other.id !== plan.id && other.sourceId === plan.sourceId)
-    ) {
-      return;
-    }
-    const authority = capturedAuthority ??
-      await ctx.operations.workspaces.captureManagementAuthority(plan.workspaceId);
-    await ctx.operations.deleteSource(
-      plan.sourceId,
-      installPlanRunActor(plan.id),
-      authority,
-    );
+    const { source } = await ctx.operations.getSource(plan.sourceId);
+    if (!source.autoSync) return;
+    const inUse = (await ctx.operations.capsules.listCapsules(plan.workspaceId))
+      .some((capsule) =>
+        capsule.sourceId === source.id && capsule.status !== "destroyed"
+      );
+    if (inUse) return;
+    await ctx.operations.patchSource(source.id, { autoSync: false });
   } catch {
-    // The discarded record is already terminal. A kept Source is harmless:
-    // it was never enabled for polling unless the attempt reached review.
+    // The discarded record is already terminal; polling is only a preference.
   }
 }
 
+function discardRefusal(
+  ctx: ControlDispatchContext,
+  result: Extract<DiscardResult, { ok: false }>,
+): Response {
+  return errorJson(
+    result.code,
+    result.message,
+    result.status,
+    ctx.request,
+    {},
+    result.reason ? { reason: result.reason } : undefined,
+  );
+}
+
+/** DELETE /api/v1/install-plans/:id — the creator discards an attempt. */
 async function discardInstallAttempt(
   ctx: ControlDispatchContext,
   stored: StoredGitInstallPlan,
 ): Promise<Response> {
+  if (stored.mode !== "attempt") {
+    return errorJson(
+      "install_plan_not_attempt",
+      "Only install attempts can be discarded through this route.",
+      409,
+      ctx.request,
+    );
+  }
   if (stored.actorSubject !== ctx.session.subject) {
     return errorJson(
       "forbidden",
@@ -753,16 +713,7 @@ async function discardInstallAttempt(
     code: "install_attempt_discarded",
     message: "The install attempt was discarded.",
   });
-  if (!result.ok) {
-    return errorJson(
-      result.code,
-      result.message,
-      result.status,
-      ctx.request,
-      {},
-      result.reason ? { reason: result.reason } : {},
-    );
-  }
+  if (!result.ok) return discardRefusal(ctx, result);
   return await installPlanJson(ctx, result.plan);
 }
 
@@ -804,12 +755,45 @@ function generationConflict(ctx: ControlDispatchContext): Response {
   );
 }
 
+/**
+ * The creator's write found the attempt can no longer advance: discard it
+ * (cleanup belongs to this request) and answer with the standard envelope.
+ */
+async function discardInvalidAttempt(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+  invalidation: GitInstallPlanInvalidation,
+  reason: string = invalidation,
+): Promise<Response> {
+  const discarded = await discardAttemptRecord(ctx, plan, {
+    code: invalidation,
+    message: INVALIDATION_MESSAGES[invalidation],
+  });
+  if (!discarded.ok) return discardRefusal(ctx, discarded);
+  return errorJson(
+    "install_attempt_invalid",
+    INVALIDATION_MESSAGES[invalidation],
+    409,
+    ctx.request,
+    {},
+    { reason },
+  );
+}
+
 /** PATCH /api/v1/install-plans/:id — answer an `awaiting_input` attempt. */
 async function answerInstallAttempt(
   ctx: ControlDispatchContext,
-  stored: StoredGitInstallPlan,
+  observed: StoredGitInstallPlan,
 ): Promise<Response> {
-  if (stored.actorSubject !== ctx.session.subject) {
+  if (observed.mode !== "attempt") {
+    return errorJson(
+      "install_plan_not_attempt",
+      "Only install attempts accept answers.",
+      409,
+      ctx.request,
+    );
+  }
+  if (observed.actorSubject !== ctx.session.subject) {
     return errorJson(
       "forbidden",
       "Only the member who started this install can answer it.",
@@ -827,7 +811,6 @@ async function answerInstallAttempt(
       ctx.request,
     );
   }
-  const observed = await settleIdleAttempt(ctx, stored);
   if (observed.generation !== patch.expectedGeneration) {
     return generationConflict(ctx);
   }
@@ -839,28 +822,23 @@ async function answerInstallAttempt(
       ctx.request,
     );
   }
-  const authority = observed.workspaceManagementAuthority;
-  if (!authority) {
-    return errorJson(
-      "failed_precondition",
-      "Workspace management authority is unavailable for this coordinator record.",
-      409,
-      ctx.request,
-      {},
-      { reason: "workspace_management_admission_conflict" },
-    );
-  }
-  const attemptMode = observed.mode === "attempt";
+  const invalidation = await attemptInvalidation(ctx, observed);
+  if (invalidation) return await discardInvalidAttempt(ctx, observed, invalidation);
+  const authority = observed.workspaceManagementAuthority!;
   const invalid = (code: string, message: string) =>
     errorJson(code, message, 400, ctx.request);
   if (
-    !attemptMode &&
-    (patch.modulePath !== undefined || patch.capsuleName !== undefined ||
-      patch.providerBindings !== undefined)
+    (observed.transientVariableNames?.length ?? 0) > 0 &&
+    (!patch.continue || patch.modulePath !== undefined ||
+      patch.capsuleName !== undefined || patch.providerBindings !== undefined)
   ) {
-    return invalid(
-      "invalid_request",
-      "A reviewed preflight install plan only accepts its variables again.",
+    // The confirmed Capsule may already exist and will be adopted as it was
+    // created; accepting new answers here would silently ignore them.
+    return errorJson(
+      "install_inputs_resubmission_only",
+      "Only the same settings can be sent again now; discard the attempt to change anything else.",
+      409,
+      ctx.request,
     );
   }
   const now = new Date().toISOString();
@@ -868,7 +846,7 @@ async function answerInstallAttempt(
     ...observed,
     generation: observed.generation + 1,
     updatedAt: now,
-    ...(attemptMode ? { expiresAt: attemptExpiry(now) } : {}),
+    expiresAt: attemptExpiry(now),
   };
   const currentModule = observed.attemptFacts?.inputs?.modulePath ??
     observed.installModulePath;
@@ -950,15 +928,6 @@ async function answerInstallAttempt(
     // A new answer supersedes the previous refusal.
     next = { ...next, diagnostic: undefined };
   }
-  return await writeAttemptTransition(ctx, observed, next, authority);
-}
-
-async function writeAttemptTransition(
-  ctx: ControlDispatchContext,
-  observed: StoredGitInstallPlan,
-  next: StoredGitInstallPlan,
-  authority: WorkspaceManagementAuthority,
-): Promise<Response> {
   let result;
   try {
     result = await ctx.operations.gitInstallPlans.transitionUnleased({
@@ -971,10 +940,11 @@ async function writeAttemptTransition(
     });
   } catch (error) {
     if (error instanceof WorkspaceManagementAdmissionConflictError) {
-      return await installPlanJson(
+      return await discardInvalidAttempt(
         ctx,
-        await settleIdleAttempt(ctx, observed),
-        409,
+        observed,
+        "workspace_management_changed",
+        "workspace_management_admission_conflict",
       );
     }
     throw error;
@@ -1016,7 +986,35 @@ async function continueInstallAttempt(
   }
   let next = answered;
   const facts = next.attemptFacts?.inputs;
-  if (next.mode === "attempt") {
+  const resubmitting = (observed.transientVariableNames?.length ?? 0) > 0;
+  // While resubmitting: the values of the unconfirmed request, nothing else.
+  // The answers that request carried are recorded and may be committed.
+  if (
+    resubmitting &&
+    JSON.stringify(observed.transientVariableNames) !==
+      JSON.stringify(Object.keys(variables).sort())
+  ) {
+    return errorJson(
+      "install_inputs_resubmission_only",
+      "Send exactly the settings of the unconfirmed request again.",
+      409,
+      ctx.request,
+      {},
+      { reason: "install_variable_resubmission_mismatch" },
+    );
+  }
+  const check = checkAttemptVariables(facts, variables);
+  if (!check.ok) {
+    return errorJson(
+      "invalid_request",
+      `The settings are incomplete or invalid: ${check.names.slice(0, 8).join(", ")}.`,
+      400,
+      ctx.request,
+      {},
+      { reason: check.reason },
+    );
+  }
+  if (!resubmitting) {
     const rows = await connectionRequirements(ctx.operations, next);
     if (!connectionsReady(rows)) {
       return errorJson(
@@ -1039,40 +1037,18 @@ async function continueInstallAttempt(
         { reason: "capsule_name_conflict" },
       );
     }
-    const check = checkAttemptVariables(facts, variables);
-    if (!check.ok) {
-      return errorJson(
-        "invalid_request",
-        `The settings are incomplete or invalid: ${check.names.slice(0, 8).join(", ")}.`,
-        400,
-        ctx.request,
-        {},
-        { reason: check.reason },
-      );
-    }
     next = {
       ...next,
       options: { ...next.options, providerBindings: effectiveProviderBindings(rows) },
     };
-  } else {
-    const expected = observed.transientVariableNames ?? [];
-    const supplied = Object.keys(variables).sort();
-    if (JSON.stringify(expected) !== JSON.stringify(supplied)) {
-      return errorJson(
-        "invalid_request",
-        "Send exactly the reviewed variables of the original request again.",
-        400,
-        ctx.request,
-        {},
-        { reason: "install_variable_resubmission_mismatch" },
-      );
-    }
   }
   const variableNames = Object.keys(variables).sort();
   const {
     awaitingInput: _awaitingInput,
     diagnostic: _diagnostic,
     transientVariableNames: _previousNames,
+    // An attempt that is creating its Capsule never expires again.
+    expiresAt: _expiresAt,
     ...rest
   } = next;
   next = {
@@ -1080,83 +1056,6 @@ async function continueInstallAttempt(
     phase: "creating_capsule",
     ...(variableNames.length > 0 ? { transientVariableNames: variableNames } : {}),
   };
-  return await claimAndCreateWithTransientVariables(
-    ctx,
-    observed,
-    next,
-    variables,
-    200,
-  );
-}
-
-/** Whether a record needs the original request's values to create authority. */
-function awaitsTransientVariables(plan: StoredGitInstallPlan): boolean {
-  if ((plan.transientVariableNames?.length ?? 0) === 0) return false;
-  return plan.phase === "creating_capsule" ||
-    (plan.phase === "awaiting_input" && plan.awaitingInput === "inputs" &&
-      plan.mode !== "attempt");
-}
-
-/** Legacy preflight: run atomic creation inside the request that carries values. */
-async function createWithTransientVariables(
-  ctx: ControlDispatchContext,
-  plan: StoredGitInstallPlan,
-  variables: Readonly<Record<string, JsonValue>>,
-  status: number,
-): Promise<Response> {
-  if (plan.phase === "awaiting_input") {
-    const { awaitingInput: _awaiting, diagnostic: _diagnostic, ...rest } = plan;
-    const now = new Date().toISOString();
-    return await claimAndCreateWithTransientVariables(
-      ctx,
-      plan,
-      {
-        ...rest,
-        phase: "creating_capsule",
-        generation: plan.generation + 1,
-        updatedAt: now,
-      },
-      variables,
-      status,
-    );
-  }
-  const authority = plan.workspaceManagementAuthority;
-  if (!authority) return await installPlanJson(ctx, plan, status);
-  const claimedAt = new Date();
-  const leaseToken = `gipl_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  const claim = await ctx.operations.gitInstallPlans.claimReconcile({
-    id: plan.id,
-    expectedGeneration: plan.generation,
-    leaseToken,
-    claimedAt: claimedAt.toISOString(),
-    leaseExpiresAt: new Date(
-      claimedAt.getTime() + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
-    ).toISOString(),
-    expectedWorkspaceManagementAuthority: authority,
-  });
-  if (claim.status !== "claimed") {
-    return claim.status === "not_found"
-      ? errorJson("not_found", "Install plan not found.", 404)
-      : await installPlanJson(ctx, claim.plan, status);
-  }
-  return await runTransientCreation(
-    ctx,
-    claim.claim.plan,
-    leaseToken,
-    variables,
-    status,
-  );
-}
-
-async function claimAndCreateWithTransientVariables(
-  ctx: ControlDispatchContext,
-  observed: StoredGitInstallPlan,
-  next: StoredGitInstallPlan,
-  variables: Readonly<Record<string, JsonValue>>,
-  status: number,
-): Promise<Response> {
-  const authority = observed.workspaceManagementAuthority;
-  if (!authority) return await installPlanJson(ctx, observed, 409);
   const claimedAt = new Date();
   const leaseToken = `gipl_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
   let result;
@@ -1173,14 +1072,15 @@ async function claimAndCreateWithTransientVariables(
           claimedAt.getTime() + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
         ).toISOString(),
       },
-      expectedWorkspaceManagementAuthority: authority,
+      expectedWorkspaceManagementAuthority: observed.workspaceManagementAuthority!,
     });
   } catch (error) {
     if (error instanceof WorkspaceManagementAdmissionConflictError) {
-      return await installPlanJson(
+      return await discardInvalidAttempt(
         ctx,
-        await settleIdleAttempt(ctx, observed),
-        409,
+        observed,
+        "workspace_management_changed",
+        "workspace_management_admission_conflict",
       );
     }
     throw error;
@@ -1197,7 +1097,7 @@ async function claimAndCreateWithTransientVariables(
     );
   }
   if (result.status === "conflict") return generationConflict(ctx);
-  return await runTransientCreation(ctx, result.plan, leaseToken, variables, status);
+  return await runTransientCreation(ctx, result.plan, leaseToken, variables);
 }
 
 async function runTransientCreation(
@@ -1205,7 +1105,6 @@ async function runTransientCreation(
   claimed: StoredGitInstallPlan,
   leaseToken: string,
   variables: Readonly<Record<string, JsonValue>>,
-  status: number,
 ): Promise<Response> {
   let outcome: StoredGitInstallPlan;
   try {
@@ -1235,7 +1134,7 @@ async function runTransientCreation(
       ctx.request,
     );
   }
-  return await installPlanJson(ctx, completed.plan, status);
+  return await installPlanJson(ctx, completed.plan);
 }
 
 /** Diagnostics that reopen an attempt's sheet instead of failing it. */
@@ -1250,6 +1149,7 @@ const ATTEMPT_INPUT_DIAGNOSTICS: ReadonlySet<string> = new Set([
   "install_inputs_resubmission_required",
 ]);
 
+/** Validation failures happen before any commit, so the attempt may expire again. */
 function reopenUserFixableFailure(plan: StoredGitInstallPlan): StoredGitInstallPlan {
   if (
     plan.mode !== "attempt" || plan.phase !== "failed" ||
@@ -1263,17 +1163,21 @@ function reopenUserFixableFailure(plan: StoredGitInstallPlan): StoredGitInstallP
     ...rest,
     phase: "awaiting_input",
     awaitingInput: "inputs",
-    ...(plan.expiresAt ? { expiresAt: attemptExpiry(plan.updatedAt) } : {}),
+    expiresAt: attemptExpiry(plan.updatedAt),
   };
 }
 
+/**
+ * Attempt mode only. The Capsule may already be committed, so this pause has
+ * no expiry; the creator re-sends the values or discards the attempt.
+ */
 function awaitingResubmission(
   plan: StoredGitInstallPlan,
   cause: GitInstallPlanDiagnostic,
 ): StoredGitInstallPlan {
-  const now = new Date().toISOString();
+  const { expiresAt: _expiresAt, ...rest } = plan;
   return {
-    ...plan,
+    ...rest,
     phase: "awaiting_input",
     awaitingInput: "inputs",
     diagnostic: boundedDiagnostic({
@@ -1283,8 +1187,7 @@ function awaitingResubmission(
       ...(cause.controllerCode ? { controllerCode: cause.controllerCode } : {}),
       ...(cause.reason ? { reason: cause.reason } : {}),
     }),
-    updatedAt: now,
-    ...(plan.mode === "attempt" ? { expiresAt: attemptExpiry(now) } : {}),
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -1294,7 +1197,9 @@ async function reconcileInstallPlan(
 ): Promise<Response> {
   if (
     observed.phase === "reviewable" || observed.phase === "failed" ||
-    observed.phase === "awaiting_input" || observed.phase === "discarded"
+    observed.phase === "awaiting_input" || observed.phase === "discarded" ||
+    // An expired attempt can no longer advance; only its creator discards it.
+    attemptIsExpired(observed, Date.now())
   ) {
     return await installPlanJson(ctx, observed);
   }
@@ -1371,8 +1276,9 @@ async function reconcileInstallPlan(
     id: observed.id,
     expectedGeneration: acquired.plan.generation,
     leaseToken: acquired.leaseToken,
-    // Coordinator activity keeps an attempt alive; only idleness expires it.
-    plan: settled.mode === "attempt" && settled.phase !== "failed"
+    // Coordinator activity keeps an attempt alive before its Capsule exists;
+    // only idleness expires it.
+    plan: attemptCanExpire(settled) && settled.expiresAt !== undefined
       ? { ...settled, expiresAt: attemptExpiry(settled.updatedAt) }
       : settled,
   });
@@ -2518,14 +2424,11 @@ async function createOrObservePlanRun(
     if (plan.mode === "attempt" && plan.sourceCreatedByAttempt === true) {
       await enableAttemptSourcePolling(plan, operations);
     }
-    const reviewable = progressed(plan, {
+    return progressed(plan, {
       planRunId: run.id,
       phase: "reviewable",
       completedAt: new Date().toISOString(),
     });
-    return plan.mode === "attempt"
-      ? { ...reviewable, expiresAt: attemptExpiry(reviewable.updatedAt) }
-      : reviewable;
   }
   return progressed(plan, { planRunId: run.id });
 }
@@ -3407,18 +3310,24 @@ async function installPlanResponseFor(
   ctx: ControlDispatchContext,
   stored: StoredGitInstallPlan,
 ): Promise<GitInstallPlanResponse> {
+  const invalidated = await attemptInvalidation(ctx, stored);
   return installPlanResponse(
     publicGitInstallPlan(stored),
-    await userActionFor(ctx.operations, stored),
+    invalidated
+      ? { kind: "retry", code: invalidated, restart: true }
+      : await userActionFor(ctx.operations, stored),
+    invalidated,
   );
 }
 
 function installPlanResponse(
   plan: GitInstallPlan,
   userAction: GitInstallPlanResponse["userAction"],
+  invalidated: GitInstallPlanInvalidation | undefined,
 ): GitInstallPlanResponse {
   const self = `/api/v1/install-plans/${encodeURIComponent(plan.id)}`;
-  const reconcileable = isReconcileableGitInstallPlanPhase(plan.phase);
+  const reconcileable = invalidated === undefined &&
+    isReconcileableGitInstallPlanPhase(plan.phase);
   return {
     installPlan: plan,
     nextAction:
@@ -3428,6 +3337,7 @@ function installPlanResponse(
           ? "reconcile"
           : "none",
     userAction,
+    ...(invalidated ? { invalidated } : {}),
     links: {
       self,
       ...(reconcileable ? { reconcile: `${self}/reconcile` } : {}),

@@ -31,6 +31,7 @@ import type {
 import type { GitInstallPlanProviderBindingRequest } from "../../../../contract/install-plans.ts";
 
 const ADMIN_SUBJECT = "tsub_admin";
+const VIEWER_SUBJECT = "tsub_viewer";
 
 const WORKSPACE = {
   id: "ws_install",
@@ -168,12 +169,10 @@ test("reviewed preflight creates exact initial authority atomically and only ret
     body,
     { "idempotency-key": "reviewed-preflight-atomic" },
   );
-  // Reviewed values are transient: the request that carries them performs the
-  // atomic initial creation itself, so the coordinator never stores them.
   expect(first.status).toBe(201);
   const firstPayload = await first.clone().json();
   expect(firstPayload.installPlan).toMatchObject({
-    phase: "planning",
+    phase: "creating_capsule",
     sourceId: preflight.sourceId,
     sourceSnapshotId: preflight.sourceSnapshotId,
     compatibilityCheckRunId: preflight.compatibilityCheckRunId,
@@ -182,12 +181,28 @@ test("reviewed preflight creates exact initial authority atomically and only ret
   expect(firstPayload.installPlan.preflightInstallConfigDigest).toBeUndefined();
   expect(JSON.stringify(firstPayload)).not.toContain("top-secret-reviewed-value");
   const planId = firstPayload.installPlan.id as string;
-  const stored = await fixture.planStore.get(planId);
-  expect(stored?.preflightInstallConfigDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
-  expect(JSON.stringify(stored)).not.toContain("top-secret-reviewed-value");
-  expect(stored?.initialVariables).toBeUndefined();
-  expect(stored?.transientVariableNames).toBeUndefined();
-  const planning = firstPayload;
+  expect(
+    (await fixture.planStore.get(planId))?.preflightInstallConfigDigest,
+  ).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  // The public request digest covers variable names, never their values.
+  expect(firstPayload.installPlan.requestDigest).toBe(
+    await stableJsonDigest({
+      source: { name: "example", url: "https://github.com/takos/example", ref: "main", path: "." },
+      capsule: { name: "example", environment: "production" },
+      options: { modulePath: ".", providerBindings: [] },
+      preflight,
+      initialConfiguration: body.initialConfiguration,
+      variableNames: ["region"],
+    }),
+  );
+
+  const createdAuthority = await fixture.reconcile(planId);
+  expect(createdAuthority.status).toBe(200);
+  const planning = await createdAuthority.clone().json();
+  expect(planning.installPlan.phase).toBe("planning");
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(
+    "top-secret-reviewed-value",
+  );
   expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 1, plan: 0 });
   expect(fixture.compatibilityMutationCount).toBe(0);
   expect(fixture.installConfigMutationCount).toBe(1);
@@ -238,11 +253,10 @@ test("reviewed preflight fails closed when its pinned host authority changes bef
       },
     ],
   });
-  // Without values the record waits in creating_capsule for an explicit
-  // reconcile, which must refuse the drifted host authority.
   const body = {
     ...createBody({ modulePath: ".", providerBindings: [] }),
     preflight,
+    variables: { region: "ap-northeast-1" },
   };
   const created = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
@@ -266,6 +280,11 @@ test("reviewed preflight fails closed when its pinned host authority changes bef
   });
   expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 0, plan: 0 });
   expect(fixture.installConfigMutationCount).toBe(0);
+  // A terminal record never keeps reviewed values.
+  expect((await fixture.planStore.get(planId))?.initialVariables).toBeUndefined();
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(
+    "ap-northeast-1",
+  );
 
   const replay = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
@@ -1519,6 +1538,8 @@ test("install attempt pauses once for the whole sheet, auto-selects the only con
       ],
     },
   });
+  // Once the Capsule exists the attempt can no longer expire.
+  expect(planning.installPlan.expiresAt).toBeUndefined();
   const stored = await fixture.planStore.get(planId);
   expect(JSON.stringify(stored)).not.toContain(SECRET_VALUE);
   expect(stored?.transientVariableNames).toBeUndefined();
@@ -1746,142 +1767,13 @@ test("install attempt with a repository manifest pauses after manifest analysis 
   expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 1, plan: 1 });
 });
 
-test("discarding an attempt abandons its never-applied Capsule and deletes only its own unreferenced Source", async () => {
-  const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
-  const paused = await reconcileUntilIdle(fixture, planId);
-  const confirmed = await answer(fixture, planId, {
-    expectedGeneration: paused.installPlan.generation,
-    continue: true,
-    variables: { region: "eu" },
-  });
-  expect(confirmed.status).toBe(200);
-  const reviewable = await reconcileUntilIdle(fixture, planId);
-  expect(reviewable.installPlan.phase).toBe("reviewable");
-
-  expect((await discard(fixture, planId, undefined)).status).toBe(400);
-  expect((await discard(fixture, planId, reviewable.installPlan.generation - 1)).status)
-    .toBe(409);
-  // A Workspace admin who did not start the attempt cannot answer or discard it.
-  expect((await discard(fixture, planId, reviewable.installPlan.generation, ADMIN_SUBJECT)).status)
-    .toBe(403);
-  expect(
-    (await answer(fixture, planId, { expectedGeneration: 0 }, ADMIN_SUBJECT)).status,
-  ).toBe(403);
-  expect((await readPlan(fixture, planId, ADMIN_SUBJECT)).installPlan.id).toBe(planId);
-
-  const discarded = await discard(fixture, planId, reviewable.installPlan.generation);
-  expect(discarded.status).toBe(200);
-  expect(await discarded.json()).toMatchObject({
-    installPlan: {
-      phase: "discarded",
-      diagnostic: { code: "install_attempt_discarded" },
-    },
-    nextAction: "none",
-    userAction: { kind: "none" },
-  });
-  expect(fixture.abandonedCapsules).toEqual([reviewable.installPlan.capsuleId]);
-  expect(fixture.capsules[0]?.status).toBe("destroyed");
-  expect(fixture.deletedSources).toEqual(["src_one"]);
-  expect(fixture.sources).toHaveLength(0);
-  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
-
-  // Discard is idempotent once terminal.
-  const again = await discard(fixture, planId, 0);
-  expect(again.status).toBe(200);
-  expect((await again.json()).installPlan.phase).toBe("discarded");
-});
-
-test("discard is refused after apply and keeps a Source that another app references", async () => {
-  const fixture = attemptFixture();
-  const planId = await startAttempt(fixture);
-  const paused = await reconcileUntilIdle(fixture, planId);
-  await answer(fixture, planId, {
-    expectedGeneration: paused.installPlan.generation,
-    continue: true,
-    variables: { region: "eu" },
-  });
-  const reviewable = await reconcileUntilIdle(fixture, planId);
-  fixture.applyCapsule(reviewable.installPlan.capsuleId);
-  const refused = await discard(fixture, planId, reviewable.installPlan.generation);
-  expect(refused.status).toBe(409);
-  expect((await refused.json()).error.code).toBe("install_attempt_applied");
-  const afterRefusal = await readPlan(fixture, planId);
-  expect(afterRefusal.installPlan.phase).toBe("reviewable");
-  expect(fixture.abandonedCapsules).toEqual([]);
-  // An applied attempt is no longer open for resume.
-  const listed = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans?open=1",
-  );
-  expect((await listed.json()).installPlans).toEqual([]);
-
-  const shared = attemptFixture();
-  const sharedPlanId = await startAttempt(shared);
-  const sharedPaused = await reconcileUntilIdle(shared, sharedPlanId);
-  shared.addCapsule({
-    id: "cap_sharedsource0001",
-    workspaceId: WORKSPACE.id,
-    projectId: "prj_default",
-    name: "other-app",
-    slug: "other-app",
-    environment: "production",
-    sourceId: "src_one",
-    installConfigId: "cfg-default-opentofu-capsule",
-    installingPrincipalId: WORKSPACE.ownerUserId,
-    currentStateGeneration: 1,
-    status: "active",
-    createdAt: WORKSPACE.createdAt,
-    updatedAt: WORKSPACE.createdAt,
-  });
-  const sharedDiscard = await discard(shared, sharedPlanId, sharedPaused.installPlan.generation);
-  expect(sharedDiscard.status).toBe(200);
-  expect((await sharedDiscard.json()).installPlan.phase).toBe("discarded");
-  expect(shared.deletedSources).toEqual([]);
-  expect(shared.sources.map((source) => source.id)).toEqual(["src_one"]);
-});
-
-test("open attempts are listed per actor and expire lazily on read", async () => {
-  const fixture = attemptFixture();
-  const ownerPlanId = await startAttempt(fixture);
-  const adminPlanId = await startAttempt(
-    fixture,
-    attemptBody({ capsuleName: "admin-app" }),
-    "attempt-admin",
-    ADMIN_SUBJECT,
-  );
-  const legacy = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans",
-    "POST",
-    createBody({ providerBindings: [] }),
-    { "idempotency-key": "legacy-not-an-attempt" },
-  );
-  expect(legacy.status).toBe(201);
-
-  expect((await fixture.request("/api/v1/workspaces/ws_install/install-plans")).status)
-    .toBe(400);
-  const ownerList = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans?open=1",
-  );
-  expect(ownerList.status).toBe(200);
-  expect((await ownerList.json()).installPlans.map(
-    (item: { installPlan: { id: string } }) => item.installPlan.id,
-  )).toEqual([ownerPlanId]);
-  const adminList = await fixture.request(
-    "/api/v1/workspaces/ws_install/install-plans?open=1",
-    "GET",
-    undefined,
-    {},
-    ADMIN_SUBJECT,
-  );
-  expect((await adminList.json()).installPlans.map(
-    (item: { installPlan: { id: string } }) => item.installPlan.id,
-  )).toEqual([adminPlanId]);
-
-  const paused = await reconcileUntilIdle(fixture, ownerPlanId);
-  expect(paused.installPlan.phase).toBe("awaiting_input");
-  const stored = (await fixture.planStore.get(ownerPlanId))!;
+async function expireStoredAttempt(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+): Promise<number> {
+  const stored = (await fixture.planStore.get(planId))!;
   const expired = await fixture.planStore.transitionUnleased({
-    id: ownerPlanId,
+    id: planId,
     expectedGeneration: stored.generation,
     expectedPhase: stored.phase,
     plan: {
@@ -1892,23 +1784,242 @@ test("open attempts are listed per actor and expire lazily on read", async () =>
     at: new Date().toISOString(),
   });
   expect(expired.status).toBe("updated");
+  return stored.generation + 1;
+}
 
-  const afterExpiry = await fixture.request(
+async function reachReviewable(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+) {
+  const paused = await reconcileUntilIdle(fixture, planId);
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(confirmed.status).toBe(200);
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan.phase).toBe("reviewable");
+  return reviewable;
+}
+
+test("discarding an attempt abandons its never-applied Capsule and keeps the Source with polling off", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  expect(fixture.sources[0]?.autoSync).toBe(true);
+
+  expect((await discard(fixture, planId, undefined)).status).toBe(400);
+  const stale = await discard(fixture, planId, reviewable.installPlan.generation - 1);
+  expect(stale.status).toBe(409);
+  expect((await stale.json()).error.code).toBe("install_plan_generation_conflict");
+  // A Workspace admin who did not start the attempt cannot answer or discard it.
+  expect((await discard(fixture, planId, reviewable.installPlan.generation, ADMIN_SUBJECT)).status)
+    .toBe(403);
+  expect(
+    (await answer(fixture, planId, { expectedGeneration: 0 }, ADMIN_SUBJECT)).status,
+  ).toBe(403);
+  expect((await readPlan(fixture, planId, ADMIN_SUBJECT)).installPlan.id).toBe(planId);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(
+    reviewable.installPlan.generation,
+  );
+
+  const discarded = await discard(fixture, planId, reviewable.installPlan.generation);
+  expect(discarded.status).toBe(200);
+  expect(await discarded.json()).toMatchObject({
+    installPlan: {
+      phase: "discarded",
+      generation: reviewable.installPlan.generation + 1,
+      diagnostic: { code: "install_attempt_discarded" },
+    },
+    nextAction: "none",
+    userAction: { kind: "none" },
+  });
+  expect(fixture.abandonedCapsules).toEqual([reviewable.installPlan.capsuleId]);
+  expect(fixture.capsules[0]?.status).toBe("destroyed");
+  // The Source is never deleted; polling this attempt enabled is turned off.
+  expect(fixture.deletedSources).toEqual([]);
+  expect(fixture.sources.map((source) => source.id)).toEqual(["src_one"]);
+  expect(fixture.sources[0]?.autoSync).toBe(false);
+  expect(fixture.sourcePatches).toEqual([
+    { id: "src_one", autoSync: true },
+    { id: "src_one", autoSync: false },
+  ]);
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+
+  // Discard is idempotent once terminal.
+  const again = await discard(fixture, planId, 0);
+  expect(again.status).toBe(200);
+  expect((await again.json()).installPlan.phase).toBe("discarded");
+});
+
+test("refused discards write nothing, legacy plans cannot be discarded here, and applied attempts leave the open list", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  fixture.applyCapsule(reviewable.installPlan.capsuleId);
+  const refused = await discard(fixture, planId, reviewable.installPlan.generation);
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error.code).toBe("install_attempt_applied");
+  const afterRefusal = (await fixture.planStore.get(planId))!;
+  expect(afterRefusal.phase).toBe("reviewable");
+  expect(afterRefusal.generation).toBe(reviewable.installPlan.generation);
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+  expect(fixture.abandonedCapsules).toEqual([]);
+  const listed = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans?open=1",
   );
-  expect((await afterExpiry.json()).installPlans).toEqual([]);
-  const read = await readPlan(fixture, ownerPlanId);
-  expect(read).toMatchObject({
+  expect((await listed.json()).installPlans).toEqual([]);
+
+  const legacy = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings: [] }),
+    { "idempotency-key": "legacy-not-discardable" },
+  );
+  const legacyPlan = (await legacy.json()).installPlan;
+  const legacyDiscard = await discard(fixture, legacyPlan.id, legacyPlan.generation);
+  expect(legacyDiscard.status).toBe(409);
+  expect((await legacyDiscard.json()).error.code).toBe("install_plan_not_attempt");
+  const legacyAnswer = await answer(fixture, legacyPlan.id, {
+    expectedGeneration: legacyPlan.generation,
+    capsuleName: "renamed",
+  });
+  expect(legacyAnswer.status).toBe(409);
+  expect((await legacyAnswer.json()).error.code).toBe("install_plan_not_attempt");
+});
+
+test("discarding an attempt never removes a Source that a legacy install plan reuses", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    sourceId: "src_one",
+    sourceCreatedByAttempt: true,
+  });
+  // A legacy plan with the same Git address reuses the attempt's Source.
+  const legacy = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings: [], capsuleName: "legacy-app" }),
+    { "idempotency-key": "legacy-shares-source" },
+  );
+  const legacyId = (await legacy.json()).installPlan.id as string;
+  const matched = await fixture.reconcile(legacyId);
+  expect((await matched.json()).installPlan.sourceId).toBe("src_one");
+
+  const discarded = await discard(fixture, planId, paused.installPlan.generation);
+  expect(discarded.status).toBe(200);
+  expect(fixture.deletedSources).toEqual([]);
+  expect(fixture.sources.map((source) => source.id)).toEqual(["src_one"]);
+  expect(fixture.sourcePatches).toEqual([]);
+
+  const legacyReviewable = await reconcileUntilIdle(fixture, legacyId);
+  expect(legacyReviewable.installPlan).toMatchObject({
+    phase: "reviewable",
+    sourceId: "src_one",
+  });
+});
+
+test("reads never settle an expired or epoch-changed attempt; only the creator's write discards it", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const adminPlanId = await startAttempt(
+    fixture,
+    attemptBody({ capsuleName: "admin-app" }),
+    "attempt-admin",
+    ADMIN_SUBJECT,
+  );
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan.phase).toBe("awaiting_input");
+  const generation = await expireStoredAttempt(fixture, planId);
+  const mutationsBefore = fixture.mutationCount();
+  const effectsBefore = JSON.stringify([
+    fixture.abandonedCapsules,
+    fixture.deletedSources,
+    fixture.sourcePatches,
+  ]);
+
+  for (const subject of [VIEWER_SUBJECT, ADMIN_SUBJECT, WORKSPACE.ownerUserId]) {
+    const read = await readPlan(fixture, planId, subject);
+    expect(read).toMatchObject({
+      installPlan: { phase: "awaiting_input", generation },
+      invalidated: "install_attempt_expired",
+      nextAction: "none",
+      userAction: { kind: "retry", code: "install_attempt_expired", restart: true },
+    });
+    expect(read.links.reconcile).toBeUndefined();
+  }
+  const ownerList = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  const ownerItems = (await ownerList.json()).installPlans;
+  expect(ownerItems.map((item: { installPlan: { id: string } }) => item.installPlan.id))
+    .toEqual([planId]);
+  expect(ownerItems[0].invalidated).toBe("install_attempt_expired");
+  const adminList = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+    "GET",
+    undefined,
+    {},
+    ADMIN_SUBJECT,
+  );
+  expect((await adminList.json()).installPlans.map(
+    (item: { installPlan: { id: string } }) => item.installPlan.id,
+  )).toEqual([adminPlanId]);
+  const reconciled = await fixture.reconcile(planId);
+  expect((await reconciled.json()).invalidated).toBe("install_attempt_expired");
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+  expect(fixture.mutationCount()).toBe(mutationsBefore);
+  expect(JSON.stringify([
+    fixture.abandonedCapsules,
+    fixture.deletedSources,
+    fixture.sourcePatches,
+  ])).toBe(effectsBefore);
+
+  // Only the creator's own write cleans up.
+  const answered = await answer(fixture, planId, {
+    expectedGeneration: generation,
+    capsuleName: "too-late",
+  });
+  expect(answered.status).toBe(409);
+  expect((await answered.json()).error).toMatchObject({
+    code: "install_attempt_invalid",
+    details: { reason: "install_attempt_expired" },
+  });
+  expect(await readPlan(fixture, planId, VIEWER_SUBJECT)).toMatchObject({
     installPlan: {
       phase: "discarded",
       diagnostic: { code: "install_attempt_expired" },
+      capsule: { name: "example" },
     },
     userAction: { kind: "none" },
   });
-  expect(fixture.deletedSources).toEqual(["src_one"]);
+  expect(fixture.deletedSources).toEqual([]);
 });
 
-test("an idle attempt does not block Workspace management and cannot advance after the epoch changes", async () => {
+test("an attempt with a Capsule never expires", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  expect(reviewable.installPlan.expiresAt).toBeUndefined();
+  const generation = await expireStoredAttempt(fixture, planId);
+  for (const subject of [VIEWER_SUBJECT, WORKSPACE.ownerUserId]) {
+    const read = await readPlan(fixture, planId, subject);
+    expect(read.invalidated).toBeUndefined();
+    expect(read.userAction).toMatchObject({ kind: "review_run" });
+  }
+  const listed = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  expect((await listed.json()).installPlans.map(
+    (item: { installPlan: { id: string } }) => item.installPlan.id,
+  )).toEqual([planId]);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+  expect(fixture.abandonedCapsules).toEqual([]);
+});
+
+test("an idle attempt does not block Workspace management; after a drain reads only report it and the creator's answer discards it", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);
   // An attempt with coordinator work pending is still a blocker.
@@ -1918,13 +2029,25 @@ test("an idle attempt does not block Workspace management and cannot advance aft
   expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
 
   await fixture.beginDrain();
+  const viewed = await readPlan(fixture, planId, VIEWER_SUBJECT);
+  expect(viewed).toMatchObject({
+    installPlan: { phase: "awaiting_input", generation: paused.installPlan.generation },
+    invalidated: "workspace_management_changed",
+    userAction: { kind: "retry", code: "workspace_management_changed", restart: true },
+  });
+  expect((await fixture.planStore.get(planId))?.generation).toBe(
+    paused.installPlan.generation,
+  );
   const refused = await answer(fixture, planId, {
     expectedGeneration: paused.installPlan.generation,
     capsuleName: "renamed",
   });
   expect(refused.status).toBe(409);
-  const read = await readPlan(fixture, planId);
-  expect(read.installPlan).toMatchObject({
+  expect((await refused.json()).error).toMatchObject({
+    code: "install_attempt_invalid",
+    details: { reason: "workspace_management_changed" },
+  });
+  expect((await readPlan(fixture, planId)).installPlan).toMatchObject({
     phase: "discarded",
     diagnostic: { code: "workspace_management_changed" },
     capsule: { name: "example" },
@@ -1932,7 +2055,38 @@ test("an idle attempt does not block Workspace management and cannot advance aft
   expect(fixture.counts.capsule).toBe(0);
 });
 
-test("a confirming request whose creation acknowledgement is lost pauses for resubmission and adopts the committed Capsule", async () => {
+test("the store admission fence refuses answers after an epoch change even when the route read looked current", async () => {
+  for (const body of [
+    { capsuleName: "renamed" },
+    { continue: true, variables: { region: "eu" } },
+  ]) {
+    const fixture = attemptFixture({ staleManagementCapture: true });
+    const planId = await startAttempt(fixture);
+    const paused = await reconcileUntilIdle(fixture, planId);
+    expect(paused.installPlan.phase).toBe("awaiting_input");
+    await fixture.beginDrain();
+    // The stale capture hides the drain from the route's read-only check.
+    expect((await readPlan(fixture, planId)).invalidated).toBeUndefined();
+    const refused = await answer(fixture, planId, {
+      expectedGeneration: paused.installPlan.generation,
+      ...body,
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toMatchObject({
+      code: "install_attempt_invalid",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    expect((await fixture.planStore.get(planId))).toMatchObject({
+      phase: "discarded",
+      diagnostic: { code: "workspace_management_changed" },
+      capsule: { name: "example" },
+    });
+    expect(fixture.counts.capsule).toBe(0);
+    expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+  }
+});
+
+test("a confirming request whose creation acknowledgement is lost accepts only the same values and adopts the committed Capsule", async () => {
   const fixture = attemptFixture({ loseAckOnce: ["capsule"] });
   const planId = await startAttempt(fixture);
   const paused = await reconcileUntilIdle(fixture, planId);
@@ -1951,6 +2105,8 @@ test("a confirming request whose creation acknowledgement is lost pauses for res
     awaitingInput: "inputs",
     diagnostic: { code: "install_inputs_resubmission_required" },
   });
+  // A Capsule may exist, so this pause never expires.
+  expect(lostPayload.installPlan.expiresAt).toBeUndefined();
   expect(lostPayload.userAction.resubmitVariables).toEqual(["region"]);
   expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
   expect(fixture.counts.capsule).toBe(1);
@@ -1958,6 +2114,26 @@ test("a confirming request whose creation acknowledgement is lost pauses for res
   // A reconcile without the values never re-creates authority.
   const reconciled = await fixture.reconcile(planId);
   expect((await reconciled.json()).installPlan.phase).toBe("awaiting_input");
+  for (const change of [
+    { capsuleName: "renamed" },
+    { capsuleName: "renamed", continue: true, variables: { region: SECRET_VALUE } },
+    {
+      providerBindings: [
+        { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_cloudflare01" },
+      ],
+    },
+    { continue: true },
+  ]) {
+    const refused = await answer(fixture, planId, {
+      expectedGeneration: lostPayload.installPlan.generation,
+      ...change,
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.code).toBe("install_inputs_resubmission_only");
+  }
+  expect((await fixture.planStore.get(planId))?.generation).toBe(
+    lostPayload.installPlan.generation,
+  );
 
   const resubmitted = await answer(fixture, planId, {
     expectedGeneration: lostPayload.installPlan.generation,
@@ -1968,12 +2144,13 @@ test("a confirming request whose creation acknowledgement is lost pauses for res
   expect((await resubmitted.json()).installPlan).toMatchObject({
     phase: "planning",
     capsuleId: fixture.capsules[0]!.id,
+    capsule: { name: "example" },
   });
   expect(fixture.counts.capsule).toBe(1);
   expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
 });
 
-test("reviewed preflight values survive a lost acknowledgement only through an exact replay", async () => {
+test("legacy reviewed-preflight rows keep their previous lifecycle across a lost acknowledgement", async () => {
   const fixture = installFixture({ loseAckOnce: ["capsule"] });
   const preflight = fixture.seedPreflight({
     variableDeclarations: [{ name: "region", type: "string", hasDefault: false }],
@@ -1991,40 +2168,106 @@ test("reviewed preflight values survive a lost acknowledgement only through an e
   );
   expect(first.status).toBe(201);
   const firstPayload = await first.json();
-  expect(firstPayload.installPlan).toMatchObject({
-    phase: "awaiting_input",
-    diagnostic: { code: "install_inputs_resubmission_required" },
+  expect(firstPayload).toMatchObject({
+    installPlan: { phase: "creating_capsule" },
+    nextAction: "reconcile",
+    userAction: { kind: "wait", phase: "creating_capsule" },
   });
-  // Legacy clients stop on `none`; the record never stored the value.
-  expect(firstPayload.nextAction).toBe("none");
+  expect(firstPayload.installPlan.mode).toBeUndefined();
   expect(JSON.stringify(firstPayload)).not.toContain(SECRET_VALUE);
   const planId = firstPayload.installPlan.id as string;
-  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
-  expect(firstPayload.installPlan.requestDigest).toBe(
-    await stableJsonDigest({
-      source: { name: "example", url: "https://github.com/takos/example", ref: "main", path: "." },
-      capsule: { name: "example", environment: "production" },
-      options: { modulePath: ".", providerBindings: [] },
-      preflight,
-      variableNames: ["region"],
-    }),
+
+  const lost = await fixture.reconcile(planId);
+  expect(lost.status).toBe(202);
+  const lostPayload = await lost.json();
+  expect(lostPayload).toMatchObject({
+    installPlan: {
+      phase: "creating_capsule",
+      diagnostic: { code: "install_plan_reconcile_retryable" },
+    },
+    nextAction: "reconcile",
+  });
+  expect(JSON.stringify(lostPayload)).not.toContain(SECRET_VALUE);
+  expect((await fixture.planStore.get(planId))?.initialVariables).toEqual({
+    region: SECRET_VALUE,
+  });
+
+  const recovered = await fixture.reconcile(planId);
+  expect((await recovered.json()).installPlan.phase).toBe("planning");
+  expect(fixture.counts.capsule).toBe(1);
+  expect((await fixture.planStore.get(planId))?.initialVariables).toBeUndefined();
+  expect(fixture.getInstallConfig(fixture.capsules[0]!.installConfigId)).toMatchObject({
+    variableMapping: { region: SECRET_VALUE },
+  });
+});
+
+test("a legacy row written with the value-bearing digest still replays and keeps its reviewed values", async () => {
+  const fixture = installFixture();
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [{ name: "region", type: "string", hasDefault: false }],
+  });
+  const body = {
+    ...createBody({ modulePath: ".", providerBindings: [] }),
+    preflight,
+    variables: { region: "legacy-region" },
+  };
+  // Seed the row exactly as the previous release wrote it: value-bearing
+  // request digest and stored initialVariables.
+  const template = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "template-only" },
   );
+  const templateRecord = (await fixture.planStore.get(
+    (await template.json()).installPlan.id,
+  ))!;
+  const legacyDigest = await stableJsonDigest({
+    source: { name: "example", url: "https://github.com/takos/example", ref: "main", path: "." },
+    capsule: { name: "example", environment: "production" },
+    options: { modulePath: ".", providerBindings: [] },
+    preflight,
+    variables: { region: "legacy-region" },
+  });
+  expect(templateRecord.requestDigest).not.toBe(legacyDigest);
+  const legacyId = "gip_legacyrow000001";
+  const seeded = await fixture.planStore.create({
+    ...templateRecord,
+    id: legacyId,
+    idempotencyKeyHash: await stableJsonDigest("legacy-replay-key"),
+    requestDigest: legacyDigest,
+    initialVariables: { region: "legacy-region" },
+  });
+  expect(seeded.status).toBe("created");
 
   const replay = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
     body,
-    { "idempotency-key": "preflight-lost-ack" },
+    { "idempotency-key": "legacy-replay-key" },
   );
   expect(replay.status).toBe(200);
-  expect((await replay.json()).installPlan).toMatchObject({
-    id: planId,
-    phase: "planning",
+  const replayPayload = await replay.json();
+  expect(replayPayload.installPlan).toMatchObject({ id: legacyId, phase: "creating_capsule" });
+  expect(JSON.stringify(replayPayload)).not.toContain("legacy-region");
+
+  const created = await fixture.reconcile(legacyId);
+  const planning = await created.json();
+  expect(planning.installPlan.phase).toBe("planning");
+  expect(fixture.getInstallConfig(planning.installPlan.installConfigId)).toMatchObject({
+    variableMapping: { region: "legacy-region" },
   });
-  expect(fixture.counts.capsule).toBe(1);
-  expect(fixture.getInstallConfig(fixture.capsules[0]!.installConfigId)).toMatchObject({
-    variableMapping: { region: SECRET_VALUE },
-  });
+  expect((await fixture.planStore.get(legacyId))?.initialVariables).toBeUndefined();
+
+  // Same key, different values: the digest covers names only, so it replays.
+  const differentValues = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    { ...body, variables: { region: "another-region" } },
+    { "idempotency-key": "template-only" },
+  );
+  expect(differentValues.status).toBe(200);
+  expect((await differentValues.json()).installPlan.id).toBe(templateRecord.id);
 });
 
 function installFixture(
@@ -2044,6 +2287,8 @@ function installFixture(
     readonly providerValidationError?: OpenTofuControllerError;
     readonly pausePreparation?: boolean;
     readonly raceAfterClaimBeforeSourceSync?: boolean;
+    /** Capture keeps returning the first epoch, so only the store fence refuses. */
+    readonly staleManagementCapture?: boolean;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -2135,6 +2380,13 @@ function installFixture(
         return WORKSPACE;
       },
       captureManagementAuthority: async (workspaceId: string) => {
+        if (options.staleManagementCapture) {
+          return {
+            workspaceId,
+            managementState: "active" as const,
+            managementEpoch: 1,
+          };
+        }
         if (resumedManagementEpoch !== undefined) {
           return {
             workspaceId,
@@ -2148,12 +2400,12 @@ function installFixture(
     members: {
       // One active admin who is not the Workspace owner, for actor isolation.
       getMember: async (workspaceId: string, subject: string) =>
-        subject === ADMIN_SUBJECT
+        subject === ADMIN_SUBJECT || subject === VIEWER_SUBJECT
           ? {
               workspaceId,
               accountId: subject,
               status: "active",
-              roles: ["admin"],
+              roles: [subject === ADMIN_SUBJECT ? "admin" : "viewer"],
             }
           : undefined,
       listMembers: async () => [],
