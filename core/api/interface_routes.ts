@@ -150,7 +150,9 @@ export function registerInterfaceRoutes(
       const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
       const interfaceId = string(body.interfaceId);
       if (!interfaceId) throw invalid("interfaceId is required");
-      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, capsule.workspaceId)) }, 200);
+      const expectedRequirementFingerprint = body.expectedRequirementFingerprint;
+      if (expectedRequirementFingerprint !== undefined && (typeof expectedRequirementFingerprint !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(expectedRequirementFingerprint))) throw invalid("expectedRequirementFingerprint must be a SHA-256 digest");
+      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration), ...(expectedRequirementFingerprint ? { expectedRequirementFingerprint } : {}) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, capsule.workspaceId)) }, 200);
     });
   });
   app.delete(linkPath, async (c) => {
@@ -163,15 +165,17 @@ export function registerInterfaceRoutes(
       const requirementKey = c.req.param("requirementKey");
       const capsule = await options.service.getInterfaceLinkConsumer(capsuleId);
       let scoped = await scopeInterfaceWorkspace(c, options, auth.actor, capsule.workspaceId);
+      let authorizedProvider: { linkId: string; providerInterfaceId: string; providerCapsuleId: string } | undefined;
       if (!scoped.ok) {
         const link = await options.service.getLatestCapsuleInterfaceLink(capsuleId, requirementKey);
         if (!link) return scoped.response;
         const provider = await options.service.get(link.providerInterfaceId);
         scoped = await scopeInterfaceWorkspace(c, options, auth.actor, provider.metadata.workspaceId);
+        if (scoped.ok) authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
       }
       if (!scoped.ok) return scoped.response;
       const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
-      return c.json({ link: await options.service.revokeCapsuleInterfaceLink(capsuleId, requirementKey, expectedLinkGeneration(body.expectedGeneration), scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, scoped.actor?.workspaceId ?? capsule.workspaceId)) }, 200);
+      return c.json({ link: await options.service.revokeCapsuleInterfaceLink(capsuleId, requirementKey, expectedLinkGeneration(body.expectedGeneration), scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, scoped.actor?.workspaceId ?? capsule.workspaceId), authorizedProvider) }, 200);
     });
   });
 

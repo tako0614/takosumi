@@ -228,11 +228,16 @@ for (const backend of backends) {
       const approved = active(initial);
       expect(await stores.links.compareAndSet(approved, 1)).toBe(true);
       expect((await page()).items).toEqual([iface]);
-      expect((await page("storage.write")).items).toEqual([]); // Only requested AND approved grants.
-      const mismatched = { ...binding, metadata: { ...binding.metadata, generation: 3, materializedFrom: { ...source, linkId: initial.id, capsuleId: "another_consumer" } } };
-      expect(await stores.bindings.compareAndSet(mismatched, 2)).toBe(true);
+      const legacySource = source;
+      const legacy = { ...binding, metadata: { ...binding.metadata, generation: 3, materializedFrom: legacySource } };
+      expect(await stores.bindings.compareAndSet(legacy, 2)).toBe(true);
+      expect((await page()).items).toEqual([iface]); // Exact active consent also covers pre-link provenance.
+      expect((await page("storage.write")).items).toEqual([]);
+      expect(await stores.bindings.compareAndSet({ ...binding, metadata: { ...binding.metadata, generation: 4 } }, 3)).toBe(true); // Only requested AND approved grants.
+      const mismatched = { ...binding, metadata: { ...binding.metadata, generation: 5, materializedFrom: { ...source, linkId: initial.id, capsuleId: "another_consumer" } } };
+      expect(await stores.bindings.compareAndSet(mismatched, 4)).toBe(true);
       expect((await page()).items).toEqual([]);
-      expect(await stores.bindings.compareAndSet({ ...binding, metadata: { ...binding.metadata, generation: 4 } }, 3)).toBe(true);
+      expect(await stores.bindings.compareAndSet({ ...binding, metadata: { ...binding.metadata, generation: 6 } }, 5)).toBe(true);
       expect((await page()).items).toEqual([iface]);
       expect(await stores.links.compareAndSet(revoke(approved), 2)).toBe(true);
       expect((await page()).items).toEqual([]); // A retained Ready Binding cannot outlive consent.
@@ -266,3 +271,46 @@ for (const head of [71, 75]) {
     expect((await page("required")).items).toEqual([]);
   });
 }
+
+
+test("D1 v75 link store reads are empty, writes refuse, and a warm store observes v76", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
+  const stores = createD1InterfaceStores(db);
+  expect(await stores.links.get("missing")).toBeUndefined();
+  expect(await stores.links.getCurrent(key)).toBeUndefined();
+  expect(await stores.links.getLatest(key)).toBeUndefined();
+  expect(await stores.links.listByConsumerCapsule("consumer")).toEqual([]);
+  expect(await stores.links.listByProviderCapsule("provider")).toEqual([]);
+  expect(await stores.links.listByProviderInterface("interface_provider")).toEqual([]);
+  await expect(stores.links.create(link())).rejects.toMatchObject({ code: "failed_precondition" });
+  await expect(stores.links.compareAndSet(active(link()), 1)).rejects.toMatchObject({ code: "failed_precondition" });
+  await expect(stores.links.replace({ record: link({ id: "next", generation: 3 }), expected: link(), revoked: revoke(link()) })).rejects.toMatchObject({ code: "failed_precondition" });
+  await ensureD1OpenTofuLedgerSchema(db);
+  await Bun.sleep(1_050);
+  expect(await stores.links.create(link())).toBe(true);
+  expect(await stores.links.get(link().id)).toEqual(link());
+});
+
+test("D1 link schema probe retries failures and shares availability with authorization", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  let probes = 0;
+  const wrapped = {
+    prepare(query: string) {
+      const statement = db.prepare(query);
+      if (query.includes("select 1 as available from schema_migrations")) {
+        probes++;
+        if (probes === 1) statement.first = async () => { throw new Error("synthetic temporary probe failure"); };
+      }
+      return statement;
+    },
+    batch: db.batch.bind(db),
+  };
+  const stores = createD1InterfaceStores(wrapped);
+  const authorized = () => stores.authorized.listPage({ filter: { workspaceId: "workspace" }, subjectId: "subject", permission: "read", params: { limit: 20 } });
+  await expect(authorized()).rejects.toThrow("temporary probe failure");
+  expect(await authorized()).toEqual({ items: [] });
+  expect(await stores.links.get("missing")).toBeUndefined();
+  expect(probes).toBe(2);
+});

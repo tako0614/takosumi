@@ -242,6 +242,7 @@ export async function handleCapsules(
     if (leaf === "abandon" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       if (capsule.status === "destroyed") {
+        await operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
         return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
       }
       // This action is deliberately abandonment-only. The domain operation
@@ -576,6 +577,7 @@ async function deleteCapsule(
   expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
+    await operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
     return jsonStatus(
       {
         capsule: publicCapsule(capsule),
@@ -638,6 +640,7 @@ async function abandonUnappliedCapsule(input: {
     input.reason,
     input.expectedWorkspaceManagementAuthority,
   );
+  await input.operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
   return jsonStatus(
     {
       capsule: publicCapsule(capsule),

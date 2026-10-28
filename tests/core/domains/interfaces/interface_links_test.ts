@@ -3,6 +3,7 @@ import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import type { InterfaceLink } from "takosumi-contract/interfaces";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { InterfaceService, InterfaceServiceError, createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 
 const NOW = "2026-07-13T12:00:00.000Z";
 const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.read", "mcp.write"], delivery: { type: "oauth2" } } as const;
@@ -10,8 +11,8 @@ const requirement = { key: "tools", interface: { type: "mcp.server", version: "1
 async function fixture(options: { readonly pending?: boolean; readonly issuer?: () => Promise<{ accessToken: string; expiresAt: string }> } = {}) {
   const stores = createInMemoryInterfaceStores();
   const capsules = new Map(["consumer", "provider_a", "provider_b"].map((id) => [id, { id, workspaceId: "ws", name: id, installConfigId: "config", status: "active" } as Capsule]));
-  const state: { lookupFailure?: Error } = {};
-  const service = new InterfaceService({ stores, now: () => NOW, capsules: { getCapsule: async (id) => { if (state.lookupFailure && id === "provider_a") throw state.lookupFailure; const capsule = capsules.get(id); if (!capsule) throw new OpenTofuControllerError("not_found", "Capsule not found"); return capsule; }, getInstallConfig: async () => ({ requiredInterfaces: [requirement] }) as unknown as InstallConfig }, oauth2ResourceAuthorizer: () => true, credentialIssuer: { issuePrincipalOAuth2Token: options.issuer ?? (async () => ({ accessToken: "runtime-token", expiresAt: "2026-07-13T12:01:00.000Z" })) }, ...(options.pending ? { linkApprovalPolicy: { evaluate: async () => undefined } } : {}) });
+  const state: { lookupFailure?: Error; capsuleReads: string[]; requirement: typeof requirement | { key: string; interface: { type: string; version: string }; permissions: readonly string[]; delivery: { type: string } } } = { requirement, capsuleReads: [] };
+  const service = new InterfaceService({ stores, now: () => NOW, capsules: { getCapsule: async (id) => { state.capsuleReads.push(id); if (state.lookupFailure && id === "provider_a") throw state.lookupFailure; const capsule = capsules.get(id); if (!capsule) throw new OpenTofuControllerError("not_found", "Capsule not found"); return capsule; }, getInstallConfig: async () => ({ requiredInterfaces: [state.requirement] }) as unknown as InstallConfig }, oauth2ResourceAuthorizer: () => true, credentialIssuer: { issuePrincipalOAuth2Token: options.issuer ?? (async () => ({ accessToken: "runtime-token", expiresAt: "2026-07-13T12:01:00.000Z" })) }, ...(options.pending ? { linkApprovalPolicy: { evaluate: async () => undefined } } : {}) });
   const providers = await Promise.all(["provider_a", "provider_b"].map((id) => service.create({ workspaceId: "ws", name: id, ownerRef: { kind: "Capsule", id }, spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: `https://${id}.example.test/mcp` } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } } })));
   const link = async (index = 0) => (await service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [requirement], selections: [{ requirementKey: "tools", interfaceId: providers[index]!.metadata.id, selection: "explicit" }] }))[0]!;
   const ensure = (principalId = "pairwise_consumer") => service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId, requirements: [requirement] });
@@ -32,6 +33,19 @@ test("missing, pending and revoked links never infer one provider or block sign-
   expect(await pending.service.listBindings(pending.providers[0]!.metadata.id)).toHaveLength(0);
 });
 
+test("a domain failure in one required Interface still reconciles the next requirement", async () => {
+  const f = await fixture();
+  const read = f.stores.links.getCurrent.bind(f.stores.links);
+  const visited: string[] = [];
+  f.stores.links.getCurrent = async (key) => {
+    visited.push(key.requirementKey);
+    if (key.requirementKey === "tools") throw new InterfaceServiceError("failed_precondition", "v76 link ledger unavailable");
+    return await read(key);
+  };
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "pairwise_consumer", requirements: [requirement, { ...requirement, key: "other", interface: { type: "example.other", version: "1" } }] });
+  expect(visited).toEqual(["tools", "other"]);
+});
+
 test("active link pins provider and limits binding to requested intersect approved permissions", async () => {
   const f = await fixture();
   const link = await f.link();
@@ -44,6 +58,19 @@ test("active link pins provider and limits binding to requested intersect approv
   expect(binding.spec.permissions).toEqual(["mcp.read"]);
   expect(await f.service.listBindings(f.providers[1]!.metadata.id)).toHaveLength(0);
   await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).rejects.toThrow("grant not found");
+});
+
+test("authorized binding list reads one link and each Capsule once", async () => {
+  const f = await fixture();
+  await f.link();
+  await f.ensure();
+  f.state.capsuleReads.length = 0;
+  const get = f.stores.links.get.bind(f.stores.links);
+  let linkReads = 0;
+  f.stores.links.get = async (id) => { linkReads += 1; return await get(id); };
+  expect(await f.service.listAuthorizedBindingsForPrincipal(f.providers[0]!.metadata.id, "pairwise_consumer", "mcp.read")).toHaveLength(1);
+  expect(linkReads).toBe(1);
+  expect(f.state.capsuleReads.sort()).toEqual(["consumer", "provider_a"]);
 });
 
 test("repoint prepares known subjects, atomically replaces link and revokes old grants", async () => {
@@ -72,6 +99,87 @@ test("failed link CAS cleans preparatory grants without revoking current authori
   expect((await f.stores.links.get(old.id))?.state).toBe("active");
   expect((await f.service.listBindings(f.providers[0]!.metadata.id))[0]!.status.phase).toBe("Ready");
   expect((await f.service.listBindings(f.providers[1]!.metadata.id))[0]!.status.phase).toBe("Revoked");
+  const retried = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: old.generation });
+  expect(retried.state).toBe("active");
+  expect((await f.service.listBindings(f.providers[1]!.metadata.id)).filter((binding) => binding.status.phase === "Ready")).toHaveLength(1);
+  expect((await f.service.issueToken(f.providers[1]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+});
+
+test("matching legacy required grant adopts the active link before the subject uniqueness check", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  await f.ensure();
+  const current = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const source = current.metadata.materializedFrom;
+  if (source?.source !== "capsule_required_interface") throw new Error("required grant expected");
+  const legacy = { ...current, metadata: { ...current.metadata, generation: current.metadata.generation + 1, materializedFrom: { ...source, linkId: undefined } } };
+  expect(await f.stores.bindings.compareAndSet(legacy, current.metadata.generation)).toBe(true);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+  await f.ensure();
+  const adopted = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  expect(adopted.metadata.materializedFrom).toMatchObject({ linkId: link.id });
+  expect(adopted.metadata.id).toBe(current.metadata.id);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+});
+
+test("legacy wider grant mints only the permission approved by its active link", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  await f.ensure();
+  const binding = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const source = binding.metadata.materializedFrom;
+  if (source?.source !== "capsule_required_interface") throw new Error("required grant expected");
+  expect(await f.stores.bindings.compareAndSet({ ...binding, metadata: { ...binding.metadata, generation: binding.metadata.generation + 1, materializedFrom: { ...source, linkId: undefined } } }, binding.metadata.generation)).toBe(true);
+  expect(await f.stores.links.compareAndSet({ ...link, generation: link.generation + 1, approvedPermissions: ["mcp.read"] }, link.generation)).toBe(true);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).rejects.toThrow("grant not found");
+});
+
+test("same-provider permission change replaces the old grant with the new pinned grant", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure();
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  const next = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: old.generation });
+  expect(next.id).not.toBe(old.id);
+  expect(next.requestedPermissions).toEqual(["mcp.read"]);
+  const bindings = await f.service.listBindings(f.providers[0]!.metadata.id);
+  expect(bindings.filter((binding) => binding.status.phase === "Ready").map((binding) => binding.spec.permissions)).toEqual([["mcp.read"]]);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+});
+
+test("same-provider version change revokes a linkId-less old grant before recreating it", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure();
+  const binding = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const source = binding.metadata.materializedFrom;
+  if (source?.source !== "capsule_required_interface") throw new Error("required grant expected");
+  expect(await f.stores.bindings.compareAndSet({ ...binding, metadata: { ...binding.metadata, generation: binding.metadata.generation + 1, materializedFrom: { ...source, linkId: undefined } } }, binding.metadata.generation)).toBe(true);
+  const iface = await f.service.get(f.providers[0]!.metadata.id);
+  await f.service.update(iface.metadata.id, { spec: { ...iface.spec, version: "2" } }, iface.metadata.generation);
+  f.state.requirement = { ...requirement, interface: { type: "mcp.server", version: "2" } };
+  const next = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: iface.metadata.id, expectedGeneration: old.generation });
+  expect(next.interface.version).toBe("2");
+  const bindings = await f.service.listBindings(iface.metadata.id);
+  expect(bindings.filter((item) => item.status.phase === "Ready").map((item) => item.metadata.materializedFrom)).toEqual([expect.objectContaining({ linkId: next.id, interfaceVersion: "2" })]);
+  expect(bindings.find((item) => item.metadata.id === binding.metadata.id)?.status.phase).toBe("Revoked");
+});
+
+test("auto_single never selects a private Interface", async () => {
+  const f = await fixture();
+  const provider = f.providers[0]!;
+  await f.service.update(provider.metadata.id, { spec: { ...provider.spec, access: { ...provider.spec.access, visibility: "private" } } }, provider.metadata.generation);
+  await expect(f.service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [requirement], selections: [{ requirementKey: "tools", interfaceId: provider.metadata.id, selection: "auto_single" }] })).rejects.toThrow("private Interface requires explicit selection");
+  expect(await f.service.listCapsuleInterfaceLinks("consumer")).toHaveLength(0);
+});
+
+test("backfill PUT refuses a requirement changed since dry-run", async () => {
+  const f = await fixture();
+  const expectedRequirementFingerprint = await stableJsonDigest({ permissions: requirement.permissions, delivery: requirement.delivery });
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  await expect(f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: 0, expectedRequirementFingerprint })).rejects.toThrow("changed since review");
+  expect(await f.service.listCapsuleInterfaceLinks("consumer")).toHaveLength(0);
 });
 
 test("link revoke independently blocks mint and existing OAuth evidence even before binding cleanup", async () => {
@@ -124,6 +232,18 @@ test("provider selection rejects cross-workspace and destroyed providers", async
   await expect(f.link()).rejects.toThrow("unavailable");
   f.capsules.set("provider_a", { ...provider, status: "destroyed" });
   await expect(f.link()).rejects.toThrow("unavailable");
+});
+
+test("scheduled-uninstall providers are not candidates and destroyed consumers disappear from provider usage", async () => {
+  const f = await fixture();
+  const provider = f.capsules.get("provider_a")!;
+  f.capsules.set("provider_a", { ...provider, status: "uninstalled" });
+  expect((await f.service.listInterfaceLinkCandidates({ workspaceId: "ws", capsuleId: "consumer", requirement })).map((item) => item.metadata.ownerRef.id)).toEqual(["provider_b"]);
+  f.capsules.set("provider_a", provider);
+  await f.link();
+  expect(await f.service.listProviderCapsuleInterfaceLinks("provider_a")).toHaveLength(1);
+  f.capsules.set("consumer", { ...f.capsules.get("consumer")!, status: "destroyed" });
+  expect(await f.service.listProviderCapsuleInterfaceLinks("provider_a")).toHaveLength(0);
 });
 
 test("separate consumer pairwise subjects share one provider without sharing revocation", async () => {
