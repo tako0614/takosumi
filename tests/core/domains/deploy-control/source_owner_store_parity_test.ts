@@ -137,6 +137,30 @@ test("initial authority atomically claims an unowned Source and replays the matc
   }
 });
 
+test("new initial authority refuses disabled or retiring Sources without partial writes", async () => {
+  for (const [label, store] of await stores()) {
+    await store.putWorkspace(workspace());
+    for (const [index, state] of [
+      { status: "disabled" as const },
+      { status: "disabled" as const, retiringAt: NOW },
+      { status: "active" as const, retiringAt: NOW },
+    ].entries()) {
+      for (const preowned of [false, true]) {
+        const capsuleId = `cap_fenced_${label}_${index}_${preowned}`;
+        const sourceId = `${SOURCE}_${index}_${preowned}`;
+        await store.putSource({ ...source(preowned ? capsuleId : undefined, sourceId), ...state });
+        const input = authority(capsuleId, sourceId);
+        expect(await store.createCapsuleInitialAuthority(input), label).toEqual({ status: "conflict" });
+        expect(await store.getCapsule(capsuleId), label).toBeUndefined();
+        expect(await store.getInstallConfig(input.installConfig.id), label).toBeUndefined();
+        expect(await store.getProviderBindingSetByCapsule(capsuleId, "production"), label).toBeUndefined();
+        expect((await store.getSource(sourceId))?.ownerCapsuleId, label)
+          .toBe(preowned ? capsuleId : undefined);
+      }
+    }
+  }
+});
+
 test("exact initial authority replay survives later conflicting references and Source deletion", async () => {
   for (const [label, store] of await stores()) {
     await store.putWorkspace(workspace());

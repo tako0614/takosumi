@@ -203,3 +203,70 @@ test("cross-Source Run reuse blocks both retirements until migration normalizes 
     await Promise.all(fixtures.map((fixture) => fixture.close()));
   }
 }, 30_000);
+
+test("retirement advances one bounded archive page and resumes after a failed later page", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      await seed(store);
+      for (let i = 0; i < 35; i++) {
+        const id = `snapshot_extra_${String(i).padStart(3, "0")}`;
+        await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+          id, archiveRef: `workspaces/${WS}/sources/${SRC}/snapshots/${id}/source.tar.zst` });
+      }
+      const calls: string[][] = [];
+      const service = new SourcesService({ store, now: () => new Date(NOW),
+        deleteRetiredSourceArchives: async ({ archiveRefs }) => {
+          calls.push([...archiveRefs]);
+          if (calls.length === 2) throw new Error("second page custody failed");
+        },
+      });
+      expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("deferred");
+      const marker = await store.getSource(SRC);
+      expect(marker?.retirementArchiveCursor, name).toBe(calls[0]?.at(-1));
+      expect(marker?.retirementSnapshotCount, name).toBe(36);
+      expect(calls[0]?.length, name).toBe(32);
+      await expect(service.retireOwnedSource(SRC, "destroyed"), name)
+        .rejects.toThrow("second page custody failed");
+      expect((await store.getSource(SRC))?.retirementArchiveCursor, name)
+        .toBe(marker?.retirementArchiveCursor);
+      expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("retired");
+      expect(calls.map((refs) => refs.length), name).toEqual([32, 5, 5]);
+      expect(await store.getSource(SRC), name).toBeUndefined();
+      expect((await store.listActivityEvents(WS)).filter((event) => event.action === "source.retired"), name)
+        .toHaveLength(1);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("foreign reuse in a later archive page blocks every physical deletion", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      await seed(store);
+      const foreignRef = `workspaces/${WS}/sources/${SRC}/snapshots/zz_foreign/source.tar.zst`;
+      for (let i = 0; i < 35; i++) {
+        const id = `snapshot_extra_${String(i).padStart(3, "0")}`;
+        await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+          id, archiveRef: `workspaces/${WS}/sources/${SRC}/snapshots/${id}/source.tar.zst` });
+      }
+      await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+        id: "zz_foreign", archiveRef: foreignRef });
+      await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+        id: "zz_shared", sourceId: "source_other", archiveRef: foreignRef });
+      let deleted = false;
+      const service = new SourcesService({ store, now: () => new Date(NOW),
+        deleteRetiredSourceArchives: async () => { deleted = true; },
+      });
+      await expect(service.retireOwnedSource(SRC, "destroyed"), name).rejects.toMatchObject({
+        details: { reason: "source_archive_shared_by_another_source" },
+      });
+      expect(deleted, name).toBe(false);
+      expect(await store.getSource(SRC), name).toMatchObject({ status: "disabled", retiringAt: NOW });
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);

@@ -84,7 +84,7 @@ test("public DELETE of a destroyed app retires archives, snapshots and Source wi
       expect(await store.getSource(row.id), name).toMatchObject({ status: "active" });
       expect(removed, name).toEqual([]);
       expect((await service.deleteSource(row.id, "operator_public_delete", authority)).source.id, name).toBe(row.id);
-      expect(removed, name).toEqual([snapshot(row).archiveRef, syncRun(row).archiveRef]);
+      expect(removed, name).toEqual([snapshot(row).archiveRef, syncRun(row).archiveRef].sort());
       expect(await store.getSource(row.id), name).toBeUndefined();
       expect(await store.listSourceSnapshots(row.id), name).toEqual([]);
       expect(await store.listSourceSyncRuns(row.id), name).toHaveLength(1);

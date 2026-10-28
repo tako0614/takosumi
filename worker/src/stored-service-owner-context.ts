@@ -205,13 +205,27 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
   readonly restoreCleanup?: { readonly runId: string; readonly scopeKey: string; readonly stateRef: string };
   readonly sourceCleanup?: SourceArchiveCleanupAllocation;
   readonly sourceRetirement?: RetiredSourceArchiveAllocation;
+  readonly sourceRetirementBatch?: { readonly workspaceId: string; readonly sourceId: string; readonly archiveRefs: readonly string[] };
 }): R2Bucket {
   if (!composition) return bucket;
   const frozen = structuredClone(allocation);
   const fences = new Map<string, string>();
+  let batchPrepare: Promise<boolean> | undefined;
+  let batchDispatch: Promise<boolean> | undefined;
   const resolve = async (key: string, dispatch = false): Promise<{ readonly workspaceId: string }> => {
     const db = storedOwnerDatabase(database);
     const cleanup = frozen.restoreCleanup;
+    if (frozen.sourceRetirementBatch) {
+      const batch = frozen.sourceRetirementBatch;
+      if (frozen.bucketRole !== "source" || !batch.archiveRefs.includes(key)) throw new StoredServiceUsageError();
+      const check = () => assertStoredRetiredSourceArchiveDeletions(database, batch);
+      const validated = dispatch
+        ? await (batchDispatch ??= check())
+        : await (batchPrepare ??= check());
+      if (!validated) throw new StoredServiceUsageError();
+      fences.set(key, JSON.stringify(batch));
+      return { workspaceId: batch.workspaceId };
+    }
     if (frozen.sourceRetirement) {
       if (frozen.bucketRole !== "source" || key !== frozen.sourceRetirement.archiveRef ||
         !(await assertStoredRetiredSourceArchiveDeletion(database, frozen.sourceRetirement))) {
@@ -262,7 +276,7 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
       // The active allocation path validates the current lease even when a
       // previous inventory already knows the object. General retained reads
       // use the immutable ledger resolver directly.
-      if (frozen.runId || frozen.restoreCleanup || frozen.sourceCleanup || frozen.sourceRetirement) {
+      if (frozen.runId || frozen.restoreCleanup || frozen.sourceCleanup || frozen.sourceRetirement || frozen.sourceRetirementBatch) {
         try { return await resolve(input.key); }
         catch (error) {
           // A read of another immutable source during Restore is historical;
@@ -277,11 +291,11 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
   }, {
     bucketRole: frozen.bucketRole, writerId: "runner",
     beforePrepare: async (key, kind) => {
-      if (frozen.restoreCleanup || frozen.sourceCleanup || frozen.sourceRetirement ? kind !== "delete" : kind !== "put") throw new StoredServiceUsageError();
-      await resolve(key, true);
+      if (frozen.restoreCleanup || frozen.sourceCleanup || frozen.sourceRetirement || frozen.sourceRetirementBatch ? kind !== "delete" : kind !== "put") throw new StoredServiceUsageError();
+      await resolve(key, frozen.sourceRetirementBatch ? false : true);
     },
     beforeDispatch: async (key, kind) => {
-      if (frozen.restoreCleanup || frozen.sourceCleanup || frozen.sourceRetirement ? kind !== "delete" : kind !== "put") throw new StoredServiceUsageError();
+      if (frozen.restoreCleanup || frozen.sourceCleanup || frozen.sourceRetirement || frozen.sourceRetirementBatch ? kind !== "delete" : kind !== "put") throw new StoredServiceUsageError();
       if (!fences.has(key)) throw new StoredServiceUsageError();
       await resolve(key, true);
     },
@@ -368,6 +382,74 @@ export async function assertStoredRetiredSourceArchiveDeletion(
       and (case when json_valid(run_json) = 1 then json_extract(run_json, '$.archiveRef') else null end) = ? limit 1`,
     [input.sourceId, input.sourceId, input.archiveRef]);
   return !foreignSnapshots.length && !foreignRuns.length;
+}
+
+/** One bounded DO dispatch validates the complete Source scope before R2 mutation. */
+export async function assertStoredRetiredSourceArchiveDeletions(
+  database: D1Database,
+  input: { readonly workspaceId: string; readonly sourceId: string; readonly archiveRefs: readonly string[] },
+): Promise<boolean> {
+  if (!SEGMENT.test(input.workspaceId) || !SEGMENT.test(input.sourceId) ||
+    input.archiveRefs.length < 1 || input.archiveRefs.length > 32 ||
+    new Set(input.archiveRefs).size !== input.archiveRefs.length) throw new StoredServiceUsageError();
+  const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
+  for (const ref of input.archiveRefs) {
+    const suffix = ref.startsWith(prefix) ? ref.slice(prefix.length) : "";
+    const snapshotId = suffix.split("/")[0];
+    if (!snapshotId || !SEGMENT.test(snapshotId) || suffix !== `${snapshotId}/source.tar.zst`)
+      throw new StoredServiceUsageError();
+  }
+  const db = storedOwnerDatabase(database);
+  const sources = await storedOwnerRows(db,
+    "select id, space_id, status, record_json from sources where id = ? limit 2", [input.sourceId]);
+  if (sources.length !== 1) throw new StoredServiceUsageError();
+  const row = sources[0]!, source = storedOwnerRecord(row.record_json);
+  if (row.id !== input.sourceId || row.space_id !== input.workspaceId || row.status !== "disabled" ||
+    source.id !== input.sourceId || source.workspaceId !== input.workspaceId || source.status !== "disabled" ||
+    source.autoSync !== false || typeof source.retiringAt !== "string" || !source.retiringAt)
+    throw new StoredServiceUsageError();
+  const capsules = await storedOwnerRows(db,
+    "select id from capsules where source_id = ? and status is not 'destroyed' limit 1", [input.sourceId]);
+  if (capsules.length) throw new StoredServiceUsageError();
+  if (typeof source.ownerCapsuleId === "string") {
+    const owners = await storedOwnerRows(db,
+      "select id, space_id, source_id, status from capsules where id = ? limit 2", [source.ownerCapsuleId]);
+    if (owners.some(owner => owner.space_id !== input.workspaceId || owner.source_id !== input.sourceId ||
+      owner.status !== "destroyed")) throw new StoredServiceUsageError();
+  }
+  const active = await storedOwnerRows(db,
+    `select id from runs where type = 'source_sync' and status in ('queued', 'running')
+      and (source_id = ? or (source_id is null and
+        (case when json_valid(run_json) = 1 then json_extract(run_json, '$.sourceId') else null end) = ?)) limit 1`,
+    [input.sourceId, input.sourceId]);
+  if (active.length) throw new StoredServiceUsageError();
+  const refs = input.archiveRefs;
+  const placeholders = refs.map(() => "?").join(",");
+  const owned = await db.prepare(
+    `select count(distinct ref) as owned_count from (
+      select coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+        from source_snapshots where source_id = ? and json_valid(record_json) = 1
+          and json_extract(record_json, '$.sourceId') = ? and json_extract(record_json, '$.workspaceId') = ?
+      union all
+      select coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+        from runs where type = 'source_sync' and source_id = ? and space_id = ? and json_valid(run_json) = 1
+          and json_extract(run_json, '$.sourceId') = ? and json_extract(run_json, '$.workspaceId') = ?
+    ) where ref in (${placeholders})`,
+    ).bind(input.sourceId, input.sourceId, input.workspaceId, input.sourceId, input.workspaceId,
+      input.sourceId, input.workspaceId, ...refs).first<{ owned_count: number }>();
+  if (Number(owned?.owned_count) !== refs.length)
+    throw new StoredServiceUsageError();
+  const blocker = await db.prepare(
+    `with refs as (
+      select source_id, coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+        from source_snapshots
+      union all
+      select source_id, coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+        from runs where type = 'source_sync'
+    ) select 1 from refs where (source_id is not ? and substr(ref, 1, length(?)) = ?)
+      or (source_id = ? and (ref is null or substr(ref, 1, length(?)) <> ?)) limit 1`,
+    ).bind(input.sourceId, prefix, prefix, input.sourceId, prefix, prefix).first();
+  return blocker === null;
 }
 
 /** Delete custody is derived from the terminal Run and its canonical snapshot. */
