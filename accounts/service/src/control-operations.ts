@@ -159,6 +159,8 @@ export interface MembershipActor {
  */
 export interface ControlPlaneOperations {
   readonly appAccess?: import("../../../contract/app-access.ts").AppAccessResolver;
+  readonly appAuthorization?: import("./control/app-ownership.ts").AppOwnershipOperations;
+  readonly accountResources?: import("../../../core/domains/account-resources/read.ts").AccountResourceReader;
   /** Optional private owner-to-owner identity custody; no public caller admission. */
   readonly identityReconciliation?:import("../../../contract/identity-reconciliation.ts").ControlIdentityReconciliationPort;
   /** Durable, actor-scoped Git install/revision coordinator ledger. */

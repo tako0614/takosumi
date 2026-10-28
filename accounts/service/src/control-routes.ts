@@ -64,6 +64,8 @@ import {
   isAccountWorkspaceInventorySegments,
 } from "./control/account-workspace-views.ts";
 import { handleProjects } from "./control/projects.ts";
+import { handleAppOwnership } from "./control/app-ownership.ts";
+import { handleUsage } from "./control/usage.ts";
 import { handleInstallPlans } from "./control/install-plans.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
 import {
@@ -120,11 +122,15 @@ type ControlResourceHandler = (
  * parity test.
  */
 const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
+  apps: handleAppOwnership,
+  usage: handleUsage,
+  "ownership-transfers": handleAppOwnership,
   workspaces: handleWorkspaces,
   projects: handleProjects,
   "install-plans": handleInstallPlans,
   "revision-plans": handleRevisionPlans,
-  capsules: handleCapsules,
+  capsules: async (ctx, segments, method) =>
+    await handleAppOwnership(ctx, segments, method) ?? await handleCapsules(ctx, segments, method),
   "capsule-configs": handleInstallConfigs,
   "credential-recipes": handleCredentialRecipes,
   "provider-connections": handleProviderConnections,

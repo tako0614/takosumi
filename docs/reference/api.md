@@ -209,7 +209,25 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 92 件です。
+次の 101 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+
+### アプリの所有と個人の接続・使用量
+
+`GET /api/v1/apps?cursor&limit` は、自分が所有または管理するアプリを、現在の `role`・所有者の表示名・状態・主な操作とともに返します。アプリを使うだけの人には管理権限を付与しません。
+
+| メソッド | パス | 権限と入力 |
+| --- | --- | --- |
+| GET | `/api/v1/capsules/{capsuleId}/members` | 所有者・メンバー。メールは所有者にだけ表示 |
+| POST | `/api/v1/capsules/{capsuleId}/members` | 所有者。`{ email, consent: "connections_and_code" }`。確認済みアカウントを追加 |
+| DELETE | `/api/v1/capsules/{capsuleId}/members/{accountId}` | 所有者または離脱本人。本人の待機・承認待ちRunを同じ書き込みで取消 |
+| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | 所有者。`{ toAccountId }` |
+| POST | `/api/v1/ownership-transfers/{transferId}/accept` | 受取人。実行をdrainし、所有epochを増加、接続bindingをリセット |
+| DELETE | `/api/v1/ownership-transfers/{transferId}` | 所有者。保留中の譲渡を取消 |
+| GET, POST | `/api/v1/connections` | 本人の個人接続とoperatorのbindable接続。新規接続の所有者は本人 |
+| POST | `/api/v1/install-plans` | アカウント資格情報。`mode: "attempt"`、workspace指定なし。本人がアプリ所有者 |
+| GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ |
+
+PATには `appIds` を指定できます。実効権限はscopeと現在のアプリ内の役割の積です。アプリに束縛したPATはアカウント全体の個人接続や使用量を読めません。旧Workspace route・claimは互換期間だけ維持します。インストールされたアプリへのOIDCサインインは全アカウントに開き、`takosumi.capsule_id` でアプリを示します。現在の所有者・メンバーだけに `takosumi.app_role` を発行します。
 
 ### Account views
 

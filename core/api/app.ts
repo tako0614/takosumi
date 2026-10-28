@@ -17,6 +17,7 @@ import { registerApiErrorHandler } from "./errors.ts";
 import {
   createTakosumiOpenApiDocument,
   type OpenApiDocument,
+  type PublicSessionOpenApiEndpoint,
 } from "./openapi.ts";
 import { apiError, requestIdFromContext } from "./errors.ts";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
@@ -51,6 +52,7 @@ import {
 } from "./route_families.ts";
 
 export interface CreateApiAppOptions {
+  readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
   readonly role?: TakosumiProcessRole;
   readonly registerOpenApiRoute?: boolean;
   readonly registerReadinessRoutes?: boolean;
@@ -172,7 +174,7 @@ export async function createApiApp(
   if (openApiRouteMounted) {
     const createOpenApiDocument =
       options.createOpenApiDocument ??
-      (() => createTakosumiOpenApiDocument(mounted));
+      (() => createTakosumiOpenApiDocument({ ...mounted, publicSessionControlEndpoints: options.publicSessionControlEndpoints }));
     app.get("/openapi.json", async (c) => {
       const guard = authorizeInventoryRoute(c, options, "openapi");
       if (guard) return guard;

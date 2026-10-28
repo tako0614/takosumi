@@ -10,12 +10,21 @@ export interface PublicSessionControlEndpoint {
 
 /**
  * Inventory for the account-plane session `/api/v1` control surface implemented
- * by `control-routes.ts`. The process `/openapi.json` describes internal
- * process families; this table keeps the public session route set reviewable
- * and lets docs/tests gate the separate session surface.
+ * by `control-routes.ts`. Hosts pass this table to the composed `/openapi.json`
+ * inventory; Core-only services omit these unmounted Accounts paths. This table
+ * also gates public session documentation and route dispatch parity.
  */
 export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndpoint[] =
   [
+    { method: "GET", path: "/api/v1/apps", summary: "List apps the caller owns or manages", auth: "account-session" },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/members", summary: "Read app owner and members; email is owner-only", auth: "account-session" },
+    { method: "POST", path: "/api/v1/capsules/{capsuleId}/members", summary: "Add a verified member with owner consent", auth: "account-session" },
+    { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/members/{accountId}", summary: "Remove a member and cancel their waiting runs atomically", auth: "account-session" },
+    { method: "POST", path: "/api/v1/capsules/{capsuleId}/ownership-transfers", summary: "Offer app ownership to another account", auth: "account-session" },
+    { method: "POST", path: "/api/v1/ownership-transfers/{transferId}/accept", summary: "Accept ownership after draining; reset provider bindings", auth: "account-session" },
+    { method: "DELETE", path: "/api/v1/ownership-transfers/{transferId}", summary: "Cancel a pending app ownership transfer", auth: "account-session" },
+    { method: "POST", path: "/api/v1/install-plans", summary: "Create an app install attempt owned by the caller", auth: "account-session" },
+    { method: "GET", path: "/api/v1/usage", summary: "List usage charged to the caller", auth: "account-session" },
     { method: "GET", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates", summary: "List manageable providers for one app requirement", auth: "account-session" },
     { method: "PUT", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Select one provider with generation CAS", auth: "account-session" },
     { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Revoke a link as consumer or provider manager", auth: "account-session" },

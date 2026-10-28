@@ -247,6 +247,8 @@ export interface PlanRun {
   readonly createdBy?: string;
   /** App ownership generation captured before Plan dispatch. */
   readonly ownershipEpoch?: number;
+  /** App management generation pinned when the Plan first enters the queue. */
+  readonly appManagementEpoch?: number;
   readonly capsuleId?: string;
   readonly capsuleCurrentStateVersionId?: string | null;
   /** Private Capsule execution-authority epoch pinned before Plan dispatch. */

@@ -42,6 +42,7 @@ import {
   workspaceBillingBindingMatches, workspaceBillingIntentMatches,
 } from "takosumi-contract";
 import { planRunAwaitsApproval } from "./projection_run.ts";
+import { appApplyAdmission, appClaimAdmission, appPlanAdmission } from "./app_run_admission.ts";
 import {
   assertRecoveryCommitCandidate,
   exactRecoveryReplay,
@@ -1203,6 +1204,8 @@ function planRunPreparationIdentity(run: PlanRun) {
     id: run.id,
     workspaceId: run.workspaceId,
     createdBy: run.createdBy,
+    ownershipEpoch: run.ownershipEpoch,
+    appManagementEpoch: run.appManagementEpoch,
     capsuleId: run.capsuleId,
     capsuleCurrentStateVersionId: run.capsuleCurrentStateVersionId,
     capsuleExecutionAuthorityEpoch: run.capsuleExecutionAuthorityEpoch,
@@ -1316,6 +1319,17 @@ function validateConnectionActorAuthority(
   }
 }
 
+function validatePersonalConnectionAuthority(
+  connection: ProviderConnection,
+  management: WorkspaceManagementAuthority | undefined,
+  actorAuthority: ConnectionActorAuthority | null,
+): void {
+  if (connection.workspaceId !== undefined || management !== undefined || actorAuthority !== null ||
+    typeof connection.ownerAccountId !== "string" || connection.ownerAccountId.trim() === "") {
+    throw new TypeError("Personal Connection requires an owner and no Workspace authority");
+  }
+}
+
 export function prepareConnectionTestResult(
   input: CommitConnectionTestResultInput,
 ): CommitConnectionTestResultInput {
@@ -1372,6 +1386,8 @@ export function prepareConnectionRevocation(
       throw new TypeError("Workspace Connection revocation requires captured management authority");
     }
     assertWorkspaceManagementAuthorityInput(authority, connection.workspaceId);
+  } else if (connection.scope === "personal") {
+    validatePersonalConnectionAuthority(connection, authority, snapshot.actorAuthority);
   } else if (connection.scope !== "operator" || connection.workspaceId !== undefined || authority !== undefined) {
     throw new TypeError("Operator Connection revocation cannot carry Workspace authority");
   }
@@ -1396,6 +1412,8 @@ export function prepareConnectionRegistration(
       throw new TypeError("Workspace Connection registration requires captured management authority");
     }
     assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, connection.workspaceId);
+  } else if (connection.scope === "personal") {
+    validatePersonalConnectionAuthority(connection, expectedWorkspaceManagementAuthority, snapshot.actorAuthority);
   } else if (connection.scope !== "operator" || connection.workspaceId !== undefined ||
     expectedWorkspaceManagementAuthority !== undefined) {
     throw new TypeError("Operator Connection registration cannot carry Workspace authority");
@@ -1442,6 +1460,9 @@ export function prepareConnectionExpiration(
   if (
     typeof expected.id !== "string" ||
     expected.id.trim() === "" ||
+    (expected.scope === "personal" &&
+      (expected.workspaceId !== undefined || typeof expected.ownerAccountId !== "string" ||
+        expected.ownerAccountId.trim() === "")) ||
     (expected.status !== "pending" && expected.status !== "verified")
   ) {
     return undefined;
@@ -4631,6 +4652,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         input.expectedCapsulePlanAuthority,
       );
     }
+    if (input.run.capsuleId !== undefined &&
+      !appPlanAdmission(this.#capsules.get(input.run.capsuleId), input.run)) {
+      throw new CapsulePlanCreationFenceConflictError(input.run.capsuleId);
+    }
     // No await or externally observable callback exists between these writes.
     // Publish the queue-visible Run last so even an in-process observer cannot
     // see it before the exact private inputs are present.
@@ -4755,6 +4780,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       ) {
         throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
       }
+      const storedPlan = this.#runs.get(run.planRunId);
+      if (!appApplyAdmission(capsule,
+        storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
+        throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+      }
     }
     this.#runs.set(
       run.id,
@@ -4827,6 +4857,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         management?.managementEpoch !== authority.managementEpoch ||
         input.run.workspaceId !== current.workspaceId
       ) {
+        return Promise.resolve({ won: false, run: publicStoredRun(current) });
+      }
+    }
+    if (input.setLeaseToken !== undefined &&
+      (isPlanRunRecord(current) || isApplyRunRecord(current)) && current.capsuleId !== undefined) {
+      const storedPlan = isPlanRunRecord(current)
+        ? current
+        : isApplyRunRecord(current) ? this.#runs.get(current.planRunId) : undefined;
+      if (!appClaimAdmission(this.#capsules.get(current.capsuleId),
+        storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined,
+        current, current.status === "running" && input.expectFrom.includes("running") &&
+          input.expectHeartbeatAt !== undefined)) {
         return Promise.resolve({ won: false, run: publicStoredRun(current) });
       }
     }
@@ -7663,7 +7705,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const current = this.#connections.get(expected.id);
     if (
       !current ||
-      replacement.id !== expected.id ||
+      replacement.id !== expected.id || replacement.ownerAccountId !== expected.ownerAccountId ||
       JSON.stringify(current) !== JSON.stringify(expected)
     ) {
       return Promise.resolve(false);

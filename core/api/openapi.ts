@@ -65,6 +65,8 @@ export interface OpenApiOperation {
 }
 
 export interface CreateTakosumiOpenApiDocumentOptions {
+  /** Host-supplied inventory for the Accounts control surface mounted beside Core. */
+  readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
   readonly deployControlInternalRoutesMounted?: boolean;
   readonly readinessRoutesMounted?: boolean;
   /**
@@ -86,6 +88,13 @@ export interface CreateTakosumiOpenApiDocumentOptions {
    * can pass concrete `https://service.example.com` URLs.
    */
   readonly servers?: readonly OpenApiServer[];
+}
+
+export interface PublicSessionOpenApiEndpoint {
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly path: string;
+  readonly summary: string;
+  readonly auth: "account-session";
 }
 
 export function createTakosumiOpenApiDocument(
@@ -136,7 +145,36 @@ export function createTakosumiOpenApiDocument(
       schemas: createSchemas(),
     },
   };
-  return filterMountedRouteFamilies(document, options);
+  const mounted = filterMountedRouteFamilies(document, options);
+  const sessionEndpoints = options.publicSessionControlEndpoints;
+  if (!sessionEndpoints) return mounted;
+  const paths = { ...mounted.paths };
+  for (const endpoint of sessionEndpoints) {
+    const method = endpoint.method.toLowerCase() as OpenApiHttpMethod;
+    const path = toOpenApiPath(endpoint.path);
+    if (!path.startsWith("/api/v1/") || paths[path]?.[method]) {
+      throw new TypeError("Invalid or duplicate public session endpoint");
+    }
+    paths[path] = { ...paths[path], [method]: {
+      operationId: `account_${endpoint.method.toLowerCase()}_${path.replace(/[^a-zA-Z0-9]+/gu, "_")}`,
+      summary: endpoint.summary,
+      tags: ["accountsControl"],
+      security: [{ accountSession: [] }, { accountsBearer: [] }],
+      parameters: [...path.matchAll(/\{([^}]+)\}/gu)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } })),
+      responses: { "200": { description: "Successful operation; response shape is documented in the public API reference." }, default: { description: "Standard error envelope (error.code, error.message, error.requestId)." } },
+      "x-takos-auth": "account-session",
+    } };
+  }
+  return {
+    ...mounted,
+    paths,
+    "x-takos-public-session-endpoint-count": sessionEndpoints.length,
+    components: { ...mounted.components, securitySchemes: {
+      ...mounted.components.securitySchemes,
+      accountSession: { type: "apiKey", in: "cookie", name: "takosumi_session" },
+      accountsBearer: { type: "http", scheme: "bearer", description: "Accounts PAT or app-bound OAuth token; token scopes intersect live app access." },
+    } },
+  };
 }
 
 function filterMountedRouteFamilies(

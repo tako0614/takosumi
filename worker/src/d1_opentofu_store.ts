@@ -43,7 +43,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import type { SQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
+import { alias, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
 import type {
   ApplyRun,
   ProviderConnection,
@@ -2872,6 +2872,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             }),
           ]
         : []),
+      ...(run.capsuleId !== undefined
+        ? [d1AppPlanAdmissionGuardStmt(this.#orm, run)]
+        : []),
     ];
     try {
       await this.#orm.batch(
@@ -2880,8 +2883,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       return { status: "created", run: publicStoredRun(run) };
     } catch (error) {
       if (
-        input.expectedCapsulePlanAuthority !== undefined &&
-        isD1CapsuleStateGuardError(error)
+        run.capsuleId !== undefined && isD1CapsuleStateGuardError(error)
       ) {
         throw new CapsulePlanCreationFenceConflictError(
           run.capsuleId ?? "unknown",
@@ -3077,6 +3079,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               capsuleApplyRunAdmissionFenceMatchesRun(run, expectedCapsule),
           )
         : undefined;
+    const appGuard = run.capsuleId !== undefined
+      ? d1AppApplyAdmissionGuardStmt(this.#orm, run)
+      : undefined;
     const insert = this.#orm
       .insert(schema.runs)
       .values({
@@ -3096,8 +3101,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .onConflictDoNothing({ target: schema.runs.id });
     try {
       if (capsuleGuard !== undefined) {
-        const results = await this.#orm.batch([guard, capsuleGuard, insert]);
-        if (changes(results[2] as D1Result) > 0) {
+        const results = await this.#orm.batch(appGuard === undefined
+          ? [guard, capsuleGuard, insert]
+          : [guard, capsuleGuard, appGuard, insert]);
+        if (changes(results[appGuard === undefined ? 2 : 3] as D1Result) > 0) {
           return { status: "created", run: publicStoredRun(run) };
         }
       } else {
@@ -3107,7 +3114,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         }
       }
     } catch (error) {
-      if (capsuleGuard !== undefined && isD1CapsuleStateGuardError(error)) {
+      if ((capsuleGuard !== undefined || appGuard !== undefined) && isD1CapsuleStateGuardError(error)) {
         throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
       }
       if (isD1WorkspaceManagementGuardError(error)) {
@@ -3339,6 +3346,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const runJson = input.kind === "plan" || input.kind === "apply"
       ? d1RunJsonPreservingAuditEvents(persisted as PlanRun | ApplyRun)
       : d1RunJsonPreservingAuthority(persisted);
+    const appClaim = input.setLeaseToken !== undefined &&
+        (input.kind === "plan" || input.kind === "apply")
+      ? d1AppClaimAdmissionWhere(this.#orm, input)
+      : undefined;
     const result = await this.#orm
       .update(schema.runs)
       .set({
@@ -3388,6 +3399,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               ? sql`json_extract(${schema.runs.runJson}, '$.startedAt') IS NULL`
               : sql`json_extract(${schema.runs.runJson}, '$.startedAt') = ${input.expectStartedAt}`,
           activeWorkspace,
+          appClaim,
           d1RunStoredIdentityWhere(persisted, types),
           drainSettlement !== undefined
             ? d1RunDrainSettlementManagementFence(
@@ -8881,7 +8893,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     expected: ProviderConnection,
     replacement: ProviderConnection,
   ): Promise<boolean> {
-    if (replacement.id !== expected.id) return false;
+    if (replacement.id !== expected.id || replacement.ownerAccountId !== expected.ownerAccountId) return false;
     await this.#ensureSchema();
     const result = await this.#orm
       .update(schema.connections)
@@ -12594,6 +12606,137 @@ function d1CapsuleAbandonmentEligibility(
     // eligible; malformed/orphaned rows fail closed and stay for repair.
     notExists(invalidBindingSlot),
   )!;
+}
+
+/** App authority lives in JSON until v77 physical columns are available. */
+function d1AppPlanAuthorityWhere(capsuleJson: SQL, planJson: SQL, continuation: SQL): SQL {
+  const owner = sql`json_extract(${capsuleJson}, '$.ownerAccountId')`;
+  const ownerEpoch = sql`json_extract(${capsuleJson}, '$.ownershipEpoch')`;
+  const managementEpoch = sql`json_extract(${capsuleJson}, '$.managementEpoch')`;
+  const state = sql`json_extract(${capsuleJson}, '$.managementState')`;
+  const planOwnerEpoch = sql`json_extract(${planJson}, '$.ownershipEpoch')`;
+  const planManagementEpoch = sql`json_extract(${planJson}, '$.appManagementEpoch')`;
+  return sql`json_valid(${capsuleJson}) = 1 AND json_valid(${planJson}) = 1 AND (
+    (json_type(${capsuleJson}, '$.ownerAccountId') IS NULL
+      AND json_type(${capsuleJson}, '$.ownershipEpoch') IS NULL
+      AND json_type(${capsuleJson}, '$.managementEpoch') IS NULL
+      AND json_type(${capsuleJson}, '$.managementState') IS NULL
+      AND json_type(${planJson}, '$.ownershipEpoch') IS NULL
+      AND json_type(${planJson}, '$.appManagementEpoch') IS NULL)
+    OR
+    (json_type(${capsuleJson}, '$.ownerAccountId') = 'text'
+      AND length(trim(${owner})) > 0
+      AND json_type(${capsuleJson}, '$.ownershipEpoch') = 'integer'
+      AND ${ownerEpoch} BETWEEN 0 AND 9007199254740991
+      AND json_type(${capsuleJson}, '$.managementEpoch') = 'integer'
+      AND ${managementEpoch} BETWEEN 0 AND 9007199254740991
+      AND json_type(${planJson}, '$.ownershipEpoch') = 'integer'
+      AND json_type(${planJson}, '$.appManagementEpoch') = 'integer'
+      AND ${planOwnerEpoch} = ${ownerEpoch}
+      AND ${planManagementEpoch} BETWEEN 0 AND 9007199254740991
+      AND ((${state} = 'active' AND ${planManagementEpoch} = ${managementEpoch})
+        OR (${continuation} AND ${state} = 'draining'
+          AND ${managementEpoch} = ${planManagementEpoch} + 1))))`;
+}
+
+function d1LegacyAppWhere(capsuleJson: SQL): SQL {
+  return sql`json_valid(${capsuleJson}) = 1
+    AND json_type(${capsuleJson}, '$.ownerAccountId') IS NULL
+    AND json_type(${capsuleJson}, '$.ownershipEpoch') IS NULL
+    AND json_type(${capsuleJson}, '$.managementEpoch') IS NULL
+    AND json_type(${capsuleJson}, '$.managementState') IS NULL`;
+}
+
+function d1LegacyPlanUnpinnedWhere(
+  orm: DrizzleD1Database<typeof schema>, planRunId: SQL,
+): SQL {
+  const plan = alias(schema.runs, "legacy_app_plan");
+  return notExists(orm.select({ one: sql`1` }).from(plan).where(and(
+    eq(plan.id, planRunId),
+    or(
+      sql`json_valid(${plan.runJson}) <> 1`,
+      sql`json_type(${plan.runJson}, '$.ownershipEpoch') IS NOT NULL`,
+      sql`json_type(${plan.runJson}, '$.appManagementEpoch') IS NOT NULL`,
+    ),
+  )));
+}
+
+function d1AppPlanAdmissionGuardStmt(
+  orm: DrizzleD1Database<typeof schema>, run: PlanRun,
+) {
+  const capsule = schema.capsules;
+  const current = orm.select({ one: sql`1` }).from(capsule).where(and(
+    eq(capsule.id, run.capsuleId!),
+    eq(capsule.workspaceId, run.workspaceId),
+    d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`,
+      sql`${JSON.stringify({ ownershipEpoch: run.ownershipEpoch, appManagementEpoch: run.appManagementEpoch })}`,
+      sql`0`),
+  ));
+  const anyCapsule = orm.select({ one: sql`1` }).from(capsule)
+    .where(eq(capsule.id, run.capsuleId!));
+  return orm.insert(capsule).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
+    .from(sql`(select 1) as app_plan_guard_source`)
+    .where(and(notExists(current),
+      run.ownershipEpoch === undefined && run.appManagementEpoch === undefined
+        ? exists(anyCapsule)
+        : undefined)));
+}
+
+function d1AppApplyAdmissionGuardStmt(
+  orm: DrizzleD1Database<typeof schema>, run: ApplyRun,
+) {
+  const capsule = schema.capsules;
+  const plan = schema.runs;
+  const current = orm.select({ one: sql`1` }).from(capsule).where(and(
+    eq(capsule.id, run.capsuleId!),
+    eq(capsule.workspaceId, run.workspaceId),
+    or(and(d1LegacyAppWhere(sql`${capsule.recordJson}`),
+      d1LegacyPlanUnpinnedWhere(orm, sql`${run.planRunId}`)),
+      exists(orm.select({ one: sql`1` }).from(plan).where(and(
+      eq(plan.id, run.planRunId),
+      inArray(plan.type, [RUN_KIND_PLAN, "destroy_plan", "drift_check"]),
+      eq(plan.capsuleId, run.capsuleId!),
+      eq(plan.workspaceId, run.workspaceId),
+      d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${plan.runJson}`, sql`0`),
+    )))),
+  ));
+  const existing = orm.select({ one: sql`1` }).from(schema.runs)
+    .where(eq(schema.runs.id, run.id));
+  return orm.insert(capsule).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
+    .from(sql`(select 1) as app_apply_guard_source`)
+    .where(and(notExists(current), notExists(existing))));
+}
+
+function d1AppClaimAdmissionWhere(
+  orm: DrizzleD1Database<typeof schema>, input: TransitionRunInput,
+): SQL {
+  const capsule = schema.capsules;
+  const plan = alias(schema.runs, "app_claim_plan");
+  const continuation = input.expectHeartbeatAt !== undefined &&
+      input.expectFrom.includes("running")
+    ? sql`${schema.runs.status} = 'running'`
+    : sql`0`;
+  const legacyPlanWhere = input.kind === "plan"
+    ? sql`json_type(${schema.runs.runJson}, '$.ownershipEpoch') IS NULL
+      AND json_type(${schema.runs.runJson}, '$.appManagementEpoch') IS NULL`
+    : d1LegacyPlanUnpinnedWhere(orm,
+      sql`json_extract(${schema.runs.runJson}, '$.planRunId')`);
+  const planWhere = input.kind === "plan"
+    ? d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${schema.runs.runJson}`, continuation)
+    : exists(orm.select({ one: sql`1` }).from(plan).where(and(
+      eq(plan.id, sql`json_extract(${schema.runs.runJson}, '$.planRunId')`),
+      inArray(plan.type, [RUN_KIND_PLAN, "destroy_plan", "drift_check"]),
+      eq(plan.capsuleId, schema.runs.capsuleId),
+      eq(plan.workspaceId, schema.runs.workspaceId),
+      d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${plan.runJson}`, continuation),
+    )));
+  return sql`(${schema.runs.capsuleId} IS NULL OR ${exists(
+    orm.select({ one: sql`1` }).from(capsule).where(and(
+      eq(capsule.id, schema.runs.capsuleId),
+      eq(capsule.workspaceId, schema.runs.workspaceId),
+      or(and(d1LegacyAppWhere(sql`${capsule.recordJson}`), legacyPlanWhere), planWhere),
+    )),
+  )})`;
 }
 
 /** Exact new-Apply fence; an occupied Run ID remains read-only adoption. */

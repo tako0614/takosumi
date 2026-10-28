@@ -80,6 +80,7 @@ import {
 import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { personalResourceNamespace } from "./personal-resources.ts";
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import {
   errorJson,
@@ -372,6 +373,19 @@ export async function handleInstallPlans(
   segments: readonly string[],
   method: string,
 ): Promise<Response | undefined> {
+  if (segments[0] === "install-plans" && segments.length === 1) {
+    if (method !== "POST") return methodNotAllowed("POST");
+    if (ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) {
+      return errorJson("app_access_denied", "An account credential is required to install an app.", 403, ctx.request);
+    }
+    const body = await readJsonObject(ctx.request.clone());
+    if (!body || body.mode !== "attempt" || body.workspaceId !== undefined) {
+      return errorJson("invalid_request", "A workspace-less install attempt is required.", 400, ctx.request);
+    }
+    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
+    if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
+    return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
+  }
   if (segments[0] !== "install-plans" || segments.length < 2) {
     return undefined;
   }
@@ -1683,6 +1697,7 @@ async function advanceSource(
           },
         },
         plan.workspaceManagementAuthority,
+        plan.actorSubject,
       )
     ).run;
   }

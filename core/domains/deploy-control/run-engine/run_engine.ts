@@ -2468,7 +2468,7 @@ export class RunEngine {
       createdBy: context.actor ?? "system",
       ...(requestCapsuleId ? { capsuleId: requestCapsuleId } : {}),
       ...(capsule?.ownerAccountId !== undefined
-        ? { ownershipEpoch: capsule.ownershipEpoch }
+        ? { ownershipEpoch: capsule.ownershipEpoch, appManagementEpoch: capsule.managementEpoch }
         : {}),
       ...(capsule
         ? {

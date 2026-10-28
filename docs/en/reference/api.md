@@ -222,9 +222,27 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 92
-public route descriptors, listed below. The descriptions follow the inventory's summaries,
+`accounts/service/src/control-route-inventory.ts`; it currently contains 101
+public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
+
+### App ownership and personal resources
+
+`GET /api/v1/apps?cursor&limit` lists the caller's owned and shared apps, with a live `role`, owner display name, app state and primary action. Using an app does not grant management access.
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/api/v1/capsules/{capsuleId}/members` | Owner/member; only owner sees email |
+| POST | `/api/v1/capsules/{capsuleId}/members` | Owner; `{ email, consent: "connections_and_code" }`; verified account |
+| DELETE | `/api/v1/capsules/{capsuleId}/members/{accountId}` | Owner or the departing member; cancels their queued/pending approval runs atomically |
+| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | Owner; `{ toAccountId }` |
+| POST | `/api/v1/ownership-transfers/{transferId}/accept` | Recipient; drains runs, increments ownership epoch, resets provider bindings |
+| DELETE | `/api/v1/ownership-transfers/{transferId}` | Owner; cancels pending transfer |
+| GET, POST | `/api/v1/connections` | Account's own personal connections and bindable operator connections; new connections belong to caller |
+| POST | `/api/v1/install-plans` | Account credential; `mode: "attempt"`, no workspace field; caller owns app |
+| GET | `/api/v1/usage` | Account credential; caller's payer usage only |
+
+PATs may set `appIds`; effective permission is token scopes intersected with the caller's current app role. App-bound credentials cannot read account-wide personal resources. Workspace routes and claims remain compatibility surfaces. Installed-app OIDC accepts any account and always identifies the app with `takosumi.capsule_id`; only current managers receive `takosumi.app_role`. Nonmembers receive no management role.
 
 ### Account views
 

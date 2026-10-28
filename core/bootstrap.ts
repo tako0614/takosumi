@@ -1,5 +1,6 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
+import type { PublicSessionOpenApiEndpoint } from "./api/openapi.ts";
 import {
   PRIVATE_RUN_FILE_HTTP_PATH,
   type PrivateRunFileRouteDependencies,
@@ -76,6 +77,8 @@ import { ConnectionsService } from "./domains/connections/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import type { AppAccessResolver } from "../contract/app-access.ts";
+import { sqlAccountResourceReader, type AccountResourceReader } from "./domains/account-resources/read.ts";
+import { SqlAppAuthorizationStore, type AppAuthorizationMutations } from "./domains/app-authorization/store.ts";
 import { createWorkspaceAppAccessResolver } from "./adapters/app-access/workspace.ts";
 import {
   resolveTargetConnection,
@@ -373,8 +376,12 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
+  readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
   /** Canonical ownership resolver; pre-v77 hosts use the temporary adapter. */
   readonly appAccessResolver?: AppAccessResolver;
+  readonly accountResourceReader?: AccountResourceReader;
+  /** Host factory binds atomic app mutations to the same canonical resolver. */
+  readonly appAuthorizationFactory?: (access: AppAccessResolver) => AppAuthorizationMutations;
   /** Private Accounts proof/fence reader, selected only by owner composition. */
   readonly identityReconciliationAuthority?: ControlIdentityAuthorityReader;
   readonly validateUninstallRequester?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterValidator;
@@ -652,6 +659,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  */
 export interface TakosumiOperations {
   readonly appAccess: AppAccessResolver;
+  readonly accountResources?: AccountResourceReader;
+  readonly appAuthorization?: AppAuthorizationMutations;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
@@ -1744,6 +1753,7 @@ export async function createTakosumiService(
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
   const app = await createApiApp({
     role,
+    publicSessionControlEndpoints: options.publicSessionControlEndpoints,
     ...(options.privateRunFiles
       ? { privateRunFileRoutes: options.privateRunFiles }
       : {}),
@@ -1847,6 +1857,14 @@ export async function createTakosumiService(
   };
   const operations: TakosumiOperations = {
     appAccess,
+    ...(options.appAuthorizationFactory ? {
+      appAuthorization: options.appAuthorizationFactory(appAccess),
+    } : options.sqlClient ? {
+      appAuthorization: new SqlAppAuthorizationStore(options.sqlClient, appAccess),
+    } : {}),
+    ...(options.accountResourceReader || options.sqlClient ? {
+      accountResources: options.accountResourceReader ?? sqlAccountResourceReader(options.sqlClient!),
+    } : {}),
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,

@@ -25,6 +25,7 @@ import type {
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
 import type { SqlClient, SqlParameters } from "../../adapters/storage/sql.ts";
+import { appApplyAdmission, appClaimAdmission, appPlanAdmission } from "./app_run_admission.ts";
 import {
   and,
   asc,
@@ -223,6 +224,7 @@ import {
   CapsuleStateGenerationGuardConflict,
   WorkspaceManagementAdmissionConflictError,
   CapsuleApplyRunAdmissionConflictError,
+  CapsulePlanCreationFenceConflictError,
   isApplyRunRecord,
   isPlanRunRecord,
   isSourceSyncRunRecord,
@@ -1986,7 +1988,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           run,
           expectedWorkspaceManagementAuthority,
         );
-        if (input.expectedCapsulePlanAuthority !== undefined && run.capsuleId) {
+        if (run.capsuleId) {
           const rows = await transaction.query<{
             installConfigId: string | null;
             currentStateVersionId: string | null;
@@ -2004,11 +2006,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             [run.capsuleId],
           );
           const row = rows.rows[0];
-          const persistedCapsule = row
-            ? normalizeOptionalCapsuleRecord(
-                parseJson(row.capsuleJson) as Capsule,
-              )
-            : undefined;
+          let persistedCapsule: Capsule | undefined;
+          try {
+            persistedCapsule = row
+              ? normalizeOptionalCapsuleRecord(parseJson(row.capsuleJson) as Capsule)
+              : undefined;
+          } catch {
+            persistedCapsule = undefined;
+          }
           const capsule = persistedCapsule
             ? {
                 ...persistedCapsule,
@@ -2019,14 +2024,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
                   row?.currentStateVersionId ?? undefined,
               }
             : undefined;
-          assertCapsulePlanCreationFence(
-            capsule,
-            row?.executionAuthorityEpoch === null ||
-                row?.executionAuthorityEpoch === undefined
-              ? undefined
-              : Number(row.executionAuthorityEpoch),
-            input.expectedCapsulePlanAuthority,
-          );
+          if (input.expectedCapsulePlanAuthority !== undefined) {
+            assertCapsulePlanCreationFence(
+              capsule,
+              row?.executionAuthorityEpoch === null ||
+                  row?.executionAuthorityEpoch === undefined
+                ? undefined
+                : Number(row.executionAuthorityEpoch),
+              input.expectedCapsulePlanAuthority,
+            );
+          }
+          if (!appPlanAdmission(capsule, run)) {
+            throw new CapsulePlanCreationFenceConflictError(run.capsuleId);
+          }
         }
       }
       const inserted = await db
@@ -2348,6 +2358,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             expectedCapsule,
           )
         ) {
+          throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+        }
+        const planRows = await transaction.query<{ readonly runJson: unknown }>(
+          `select run_json as "runJson" from takosumi_runs
+             where id = $1 and kind in ('plan', 'destroy_plan', 'drift_check')
+             for update`,
+          [run.planRunId],
+        );
+        const storedPlan = planRows.rows[0]
+          ? parseJson(planRows.rows[0].runJson) as StoredRunRecord
+          : undefined;
+        if (!appApplyAdmission(persistedCapsule,
+          storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
           throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
         }
       }
@@ -2891,6 +2914,63 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             // transition. Missing or malformed legacy metadata is an ordinary
             // CAS miss.
             return undefined;
+          }
+          if (input.setLeaseToken !== undefined && current !== undefined &&
+            (isPlanRunRecord(current) || isApplyRunRecord(current)) && current.capsuleId !== undefined &&
+            (input.kind === "plan" || input.kind === "apply")) {
+            const observedCapsuleId = current.capsuleId;
+            const capsuleRows = await transaction.query<{ readonly capsuleJson: unknown }>(
+              `select installation_json as "capsuleJson" from takosumi_capsules where id = $1 for update`,
+              [observedCapsuleId],
+            );
+            // Lock the Run after the Capsule, matching transfer's lock order.
+            // A concurrent direct Run write cannot replace its pinned epochs
+            // between this read and the lease CAS.
+            const lockedRunRows = await transaction.query<{
+              readonly runJson: unknown;
+              readonly status: string;
+            }>(
+              `select run_json as "runJson", status from takosumi_runs where id = $1 for update`,
+              [input.id],
+            );
+            const lockedRun = lockedRunRows.rows[0]
+              ? parseJson(lockedRunRows.rows[0].runJson) as StoredRunRecord
+              : undefined;
+            if (!lockedRun ||
+              !(isPlanRunRecord(lockedRun) || isApplyRunRecord(lockedRun)) ||
+              lockedRunRows.rows[0]?.status !== lockedRun.status ||
+              lockedRun.capsuleId !== observedCapsuleId ||
+              lockedRun.workspaceId !== management.workspaceId ||
+              runManagementAuthority(lockedRun)?.managementEpoch !== management.managementEpoch) {
+              return undefined;
+            }
+            current = lockedRun;
+            let capsule: Capsule | undefined;
+            try {
+              capsule = capsuleRows.rows[0]
+                ? normalizeOptionalCapsuleRecord(parseJson(capsuleRows.rows[0].capsuleJson) as Capsule)
+                : undefined;
+            } catch {
+              capsule = undefined;
+            }
+            let plan: PlanRun | undefined;
+            if (isPlanRunRecord(current)) {
+              plan = current;
+            } else if (isApplyRunRecord(current)) {
+              const planRows = await transaction.query<{ readonly runJson: unknown }>(
+                `select run_json as "runJson" from takosumi_runs where id = $1 and kind in ('plan', 'destroy_plan', 'drift_check') for update`,
+                [current.planRunId],
+              );
+              const stored = planRows.rows[0]
+                ? parseJson(planRows.rows[0].runJson) as StoredRunRecord
+                : undefined;
+              plan = stored && isPlanRunRecord(stored) ? stored : undefined;
+            }
+            if (!appClaimAdmission(capsule, plan, current,
+              current.status === "running" && input.expectFrom.includes("running") &&
+                input.expectHeartbeatAt !== undefined)) {
+              return undefined;
+            }
           }
         }
         // The initial Run read did not lock the dependent row. Bind the CAS to
@@ -9052,7 +9132,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     expected: ProviderConnection,
     replacement: ProviderConnection,
   ): Promise<boolean> {
-    if (replacement.id !== expected.id) return false;
+    if (replacement.id !== expected.id || replacement.ownerAccountId !== expected.ownerAccountId) return false;
     const updated = await this.#db
       .update(pgSchema.connections)
       .set({
