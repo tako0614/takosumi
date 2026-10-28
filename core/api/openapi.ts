@@ -3220,6 +3220,10 @@ export function sourceSchemas(): Record<string, Record<string, unknown>> {
         archiveDigest: { type: "string" },
         archiveSizeBytes: { type: "number" },
         snapshotId: { type: "string" },
+        requestedSnapshotId: {
+          type: "string",
+          description: "Original snapshot allocation when an unchanged sync reuses its canonical snapshotId.",
+        },
         phaseTimings: {
           type: "array",
           items: {
