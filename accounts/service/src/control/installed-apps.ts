@@ -39,16 +39,24 @@ export async function handleWorkspaceInstalledApps(
   const configIds = [...new Set(live.map((capsule) => capsule.installConfigId))];
   // One batch read avoids per-app D1 requests. Missing configs omit only their
   // own rows; a failed batch returns an empty optional presentation list.
-  const configs = await (ctx.operations.capsules.getInstallConfigsByIds
-    ? ctx.operations.capsules.getInstallConfigsByIds(configIds)
-    : ctx.operations.capsules.listInstallConfigs(workspaceId, { includeInternal: true }))
-    .catch(() => [] as readonly InstallConfig[]);
+  let complete = true;
+  let configs: readonly InstallConfig[];
+  try {
+    configs = await (ctx.operations.capsules.getInstallConfigsByIds
+      ? ctx.operations.capsules.getInstallConfigsByIds(configIds)
+      : ctx.operations.capsules.listInstallConfigs(workspaceId, { includeInternal: true }));
+  } catch {
+    // An empty result here would falsely assert that no matching app is installed.
+    complete = false;
+    configs = [];
+  }
   const configsById = new Map(configs.map((config) => [config.id, config]));
   const sourcesById = new Map<string, Source>();
   const neededSources = new Set(live.filter((capsule) => {
     const selector = configsById.get(capsule.installConfigId)?.sourceSelector;
     return configsById.has(capsule.installConfigId) && (!selector?.url || !selector.path);
   }).map((capsule) => capsule.sourceId));
+  let sourcesTruncated = false;
   try {
     let cursor: string | undefined;
     // Legacy configs need Source fallback; bound its cost per request. Modern
@@ -61,9 +69,12 @@ export async function handleWorkspaceInstalledApps(
       cursor = page.nextCursor;
       if (!cursor) break;
     }
+    sourcesTruncated = Boolean(cursor && neededSources.size > sourcesById.size);
   } catch {
     // Keep the rows whose source already resolved; do not start per-app reads.
+    if (neededSources.size > sourcesById.size) complete = false;
   }
+  if (sourcesTruncated) complete = false;
   const installedApps = live.flatMap((capsule): InstalledAppSummary[] => {
     try {
       const config = configsById.get(capsule.installConfigId);
@@ -93,7 +104,7 @@ export async function handleWorkspaceInstalledApps(
       return [];
     }
   });
-  return json({ installedApps } satisfies ListInstalledAppsResponse, 200, {
+  return json({ installedApps, complete } satisfies ListInstalledAppsResponse, 200, {
     "cache-control": "no-store",
   });
 }

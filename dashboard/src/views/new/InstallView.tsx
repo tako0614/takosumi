@@ -144,7 +144,7 @@ function StorePage(props: { readonly principalId: string }) {
     navigate(`/new?${buildNewQuery(listing)}`);
   };
   return (
-    <main class="iv-page iv-browse-page" data-install-state="not-installed">
+    <main class="iv-page iv-browse-page" data-install-state={!installedApps() || installedApps()?.complete === false ? "unknown" : "not-installed"}>
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
       <OpenAttempts principalId={props.principalId} />
       <Show when={installedApps.error}>
@@ -156,7 +156,8 @@ function StorePage(props: { readonly principalId: string }) {
       <section class="iv-catalogue iv-catalogue-browse" aria-label={t("installStore.browseTitle")}>
         <StoreBrowser
           locale={locale()}
-          installedApps={!installedApps.loading && !installedApps.error ? installedApps() : []}
+          installedApps={!installedApps.loading && !installedApps.error ? installedApps()?.installedApps : []}
+          installedAppsComplete={!installedApps.loading && !installedApps.error ? installedApps()?.complete : false}
           onConfigure={choose}
           onSelectListing={choose}
           showSourceControls={true}
@@ -337,7 +338,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
     (workspaceId) => listInstalledApps(workspaceId),
   );
   const existingApps = createMemo(() => matchingInstalledApps(
-    !installedApps.loading && !installedApps.error ? installedApps() ?? [] : [],
+    !installedApps.loading && !installedApps.error ? installedApps()?.installedApps ?? [] : [],
     {
       url: gitUrl(),
       path: listed()?.source.path || [prefill()?.sourcePath, prefill()?.path]

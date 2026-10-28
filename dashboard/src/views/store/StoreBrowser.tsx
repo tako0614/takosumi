@@ -85,6 +85,11 @@ const STR = {
   noStoreCta: { ja: "取得元を設定", en: "Configure a source" },
   install: { ja: "追加", en: "Add" },
   installAria: { ja: "追加: {name}", en: "Add {name}" },
+  installedUnknown: { ja: "インストール状況を確認できません", en: "Install status unavailable" },
+  installedUnknownHint: {
+    ja: "既存アプリとの一致を確認できませんでした。続ける前にアプリ一覧を確認してください。",
+    en: "Existing apps could not be checked. Review your apps before continuing.",
+  },
   loadingAnnounce: { ja: "読み込み中…", en: "Loading…" },
   resultsAnnounce: {
     ja: "{n} 件のサービスが見つかりました",
@@ -156,6 +161,7 @@ export interface StoreBrowserProps {
   readonly locale: TcsLocale;
   readonly onConfigure: (listing: TcsListing) => void;
   readonly installedApps?: readonly InstalledAppSummary[];
+  readonly installedAppsComplete?: boolean;
   /** Hosts with their own persistent detail view can skip this component's drawer. */
   readonly onSelectListing?: (listing: TcsListing) => void;
   readonly showSourceControls?: boolean;
@@ -310,8 +316,10 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   // filled accent button is reserved for the detail drawer where a single
   // listing has the user's attention.
   const installButton = (listing: TcsListing, prominent = false) => {
+    const installed = () => installedFor(listing);
     return (
-      <Show when={installedFor(listing).length > 0} fallback={
+      <Show when={installed().length > 0} fallback={
+        <Show when={props.installedAppsComplete === false} fallback={
         <button
           type="button"
           class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
@@ -327,10 +335,19 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         >
           {s("install", props.locale)}
         </button>
+        }>
+          <div class="tcs-installed-choice" data-testid="store-installed-unknown">
+            <span class="tcs-installed-label">{s("installedUnknown", props.locale)}</span>
+            <p class="tcs-installed-hint">{s("installedUnknownHint", props.locale)}</p>
+            <button type="button" class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"} onClick={() => props.onConfigure(listing)}>
+              {s("install", props.locale)}
+            </button>
+          </div>
+        </Show>
       }>
         <div class="tcs-installed-choice" data-testid="store-installed-choice">
-          <span class="tcs-installed-label">{installedLabel(installedFor(listing).length)}</span>
-          <For each={installedFor(listing)}>{(app) => (
+          <span class="tcs-installed-label">{installedLabel(installed().length)}</span>
+          <For each={installed()}>{(app) => (
             <a class="tcs-btn tcs-primary" href={appPageHref(app.capsuleId)} aria-label={`${s("open", props.locale)}: ${app.name}`}>
               {s("open", props.locale)}<Show when={installedFor(listing).length > 1}> · {app.name}</Show>
             </a>

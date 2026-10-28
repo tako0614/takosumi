@@ -21,6 +21,8 @@ export interface InstalledAppSummary {
 
 export interface ListInstalledAppsResponse {
   readonly installedApps: readonly InstalledAppSummary[];
+  /** False when bounded discovery could not establish every installed identity. */
+  readonly complete: boolean;
 }
 
 /**

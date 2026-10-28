@@ -59,6 +59,7 @@ test("installed-apps summarizes each live install by executable module without v
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
   const body = await response.json() as ListInstalledAppsResponse;
+  expect(body.complete).toBe(true);
   expect(body.installedApps).toHaveLength(3);
   expect(body.installedApps.find((app) => app.capsuleId === "cap_first")).toEqual({
     capsuleId: "cap_first", name: "cap_first", state: "installed",
@@ -158,4 +159,39 @@ test("a large Store list uses one config batch and no per-app or Interface candi
   expect(batchCalls).toBe(1);
   expect(exactReads).toBe(0);
   expect(sourceReads).toBe(0);
+});
+
+test("a failed bulk config read marks the identity summary incomplete", async () => {
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => [{ id: "cap_unknown", workspaceId: "ws_installed", installConfigId: "cfg_unknown", sourceId: "src_unknown", name: "Unknown app", status: "active", currentStateGeneration: 1 }],
+      getInstallConfigsByIds: async () => { throw new Error("database unavailable"); },
+    },
+    listSources: async () => { throw new Error("must not read Sources without configs"); },
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(body.installedApps).toEqual([]);
+  expect(body.complete).toBe(false);
+});
+
+test("legacy Source lookup reports bounded pagination truncation", async () => {
+  const capsule = { id: "cap_legacy", workspaceId: "ws_installed", installConfigId: "cfg_legacy", sourceId: "src_page_9", name: "Legacy app", status: "active", currentStateGeneration: 1 };
+  let pageCalls = 0;
+  const ctx = { operations: {
+    capsules: {
+      listCapsules: async () => [capsule],
+      getInstallConfigsByIds: async () => [{ id: "cfg_legacy", workspaceId: "ws_installed", modulePath: "." }],
+    },
+    listSources: async (_workspaceId: string, options: { cursor?: string }) => {
+      pageCalls += 1;
+      const index = Number(options.cursor ?? "0");
+      return { sources: index === 8 ? [{ id: "src_page_9", workspaceId: "ws_installed", url: "https://git.example.test/team/legacy.git", defaultPath: "." }] : [], nextCursor: String(index + 1) };
+    },
+  } } as never;
+  const response = await handleWorkspaceInstalledApps(ctx, "ws_installed", "GET");
+  const body = await response.json() as ListInstalledAppsResponse;
+  expect(pageCalls).toBe(8);
+  expect(body.installedApps).toEqual([]);
+  expect(body.complete).toBe(false);
 });
