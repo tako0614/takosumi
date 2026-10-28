@@ -25,10 +25,9 @@ const execution = read("views/new/InstallExecution.tsx");
 const allAppSources = [page, attention, version, settings, created, history, ui, route].join("\n");
 
 describe("installed app page", () => {
-  test("the canonical route renders the one app page; the install page reuses it", () => {
+  test("the canonical route renders the one app page", () => {
     expect(route).toContain("<AppManagePage");
     expect(route).toContain("appPageSectionFromHash(location.hash)");
-    expect(read("views/new/InstallLifecycle.tsx")).toContain("<AppManagePage");
   });
 
   test("sections follow the keep-an-app behaviors in order", () => {
@@ -259,6 +258,11 @@ describe("installed app page", () => {
     const continueInstall = page.slice(page.indexOf("const continueInstall = () =>"), page.indexOf("const [screenRetryBusy"));
     expect(continueInstall).toContain("const attempt = app()?.progress.installPlanId;");
     expect(continueInstall).toContain("await advanceGitInstallPlan(attempt)");
+    // An install that waits for the person continues on its own install page,
+    // which only whoever started it can answer.
+    expect(continueInstall).toContain("navigate(installAttemptHref(attempt));");
+    expect(continueInstall).toContain("advanced.installPlan.createdBy !== props.principalId");
+    expect(continueInstall).toContain('throw new Error(t("app.problem.installNeedsInput"));');
     expect(continueInstall).toContain("if (!attempt) return extractRunId(await planCapsule(capsuleId()));");
   });
 
@@ -276,6 +280,9 @@ describe("installed app page", () => {
     expect(page).toContain('view.state === "installed" && !versionChangeBusy(view);');
     // An attempt waiting for input says whose input it needs.
     expect(attention).toContain('who() === "viewer" ? t("app.progress.awaitingYourInput") : t("app.progress.awaitingStarterInput")');
+    // Only the person who started it gets a way to its install page.
+    expect(attention).toContain('if (awaitingInput() !== "viewer" || !attempt) return undefined;');
+    expect(attention).toContain("return installAttemptHref(attempt);");
   });
 
   test("a re-plan of the installed version is labelled as such, not as a retry of the failed change", () => {
@@ -300,9 +307,8 @@ describe("installed app page", () => {
   });
 
   test("another app never shows this app's review, notices or reads", () => {
-    // The route and the install page mount a fresh page per app.
+    // The route mounts a fresh page per app.
     expect(route).toContain("<Show when={params.id ?? \"\"} keyed>");
-    expect(read("views/new/InstallLifecycle.tsx")).toContain("<Show when={managed() ? props.capsuleId : undefined} keyed>");
     // Defense in depth inside the page.
     expect(page).toContain("const forCapsule = capsuleId();");
     expect(page).toContain("if (capsuleId() !== forCapsule) return;");

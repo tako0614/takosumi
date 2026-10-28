@@ -34,6 +34,7 @@ import {
 } from "../../lib/run-cost.ts";
 import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
+import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
@@ -123,6 +124,11 @@ interface Props {
   readonly purpose?: ReviewPurpose;
   /** Closes a review that can no longer be applied (failed or blocked). */
   readonly onClose?: () => void;
+  /**
+   * Show the Plan's structured policy reasons from this Run read. The app
+   * page shows them above its review instead.
+   */
+  readonly showPolicyReasons?: boolean;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -693,6 +699,10 @@ export default function InstallExecution(props: Props) {
                   <dd>{summary()?.destroy ?? 0}</dd>
                 </div>
               </dl>
+            </Show>
+
+            <Show when={props.showPolicyReasons && isReviewRun(current().type) ? current().policyReasons : undefined}>
+              {(reasons) => <PolicyReasonList reasons={reasons()} />}
             </Show>
 
             <Show when={reviewedPlanRunId()}>

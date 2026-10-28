@@ -12,10 +12,14 @@ import {
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  createInstallAttemptFixture,
   PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
+  type InstallAttemptFixture,
+  type InstallAttemptFixtureConnection,
+  type InstallAttemptFixtureOptions,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import { resolvePortableOrigin } from "./portable-origin.ts";
@@ -358,69 +362,32 @@ function workspaceTrigger(page: Page) {
     .first();
 }
 
-const SOURCE_ARCHIVE_DIGEST = `sha256:${"1".repeat(64)}`;
-
-interface SourceCreateFixtureState {
-  readonly sourceListReads: string[];
-  readonly sourcePosts: string[];
-}
-
-function expectSingleSourceCreate(state: SourceCreateFixtureState): void {
-  expect(state.sourceListReads).toEqual([
-    "/api/v1/sources?workspaceId=ws_alpha&limit=100",
-  ]);
-  expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
-}
-
-async function expectSourceAutoSyncOptInAfterPlan(
-  state: ProviderDestinationFixtureState,
-): Promise<void> {
-  expect(state.sourceCreateBodies).toEqual([
-    expect.objectContaining({ autoSync: false }),
-  ]);
-  await expect.poll(() => state.sourceAutoSyncPatches).toEqual([
-    { autoSync: true },
-  ]);
-  const planIndex = state.mutations.indexOf(
-    "POST /api/v1/workspaces/ws_alpha/install-plans",
-  );
-  const patchIndex = state.mutations.indexOf(
-    "PATCH /api/v1/sources/src_provider_destination_e2e",
-  );
-  expect(planIndex).toBeGreaterThanOrEqual(0);
-  expect(patchIndex).toBeGreaterThan(planIndex);
-}
-
-interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
+interface ProviderDestinationFixtureState {
   readonly mutations: string[];
-  readonly compatibilityBodies: unknown[];
-  readonly installModuleRequests: string[];
-  readonly sourceCreateBodies: Record<string, unknown>[];
-  readonly sourceAutoSyncPatches: Record<string, unknown>[];
-  installPlanBody?: {
-    readonly capsule?: Readonly<Record<string, unknown>>;
-    readonly options?: {
-      readonly providerBindings?: readonly Record<string, unknown>[];
-    };
-    readonly preflight?: Readonly<Record<string, unknown>>;
+  /** The scripted install-plan coordinator behind the install page. */
+  readonly attempts: InstallAttemptFixture;
+  /** The confirming answer (`continue: true`), once the page sent it. */
+  readonly continued: () => {
     readonly variables?: Readonly<Record<string, unknown>>;
-  };
+    readonly capsuleName?: string;
+  } | undefined;
 }
 
 interface ProviderDestinationFixtureCoordinates {
-  readonly sourcePath?: string;
-  readonly modulePath?: string;
-  readonly freshCompatibilityIds?: boolean;
-  readonly providerPackages?: readonly { readonly source: string; readonly version?: string }[];
-  readonly rootProviderRequirements?: readonly Record<string, unknown>[];
-  /** Resource types the compatibility report previews before any Plan. */
-  readonly resources?: readonly Record<string, unknown>[];
+  /** Resource types the analysis previews before any Plan. */
+  readonly resources?: readonly { readonly type: string; readonly count?: number; readonly allowed: boolean }[];
+  readonly variables?: InstallAttemptFixtureOptions["variables"];
 }
 
-/** Stub a complete manual source check while retaining mutation ordering. */
+/**
+ * One app behind the scripted install-plan coordinator: Install starts an
+ * attempt, the sheet answers it, Review confirms it and its Plan Run
+ * (`run_provider_plan_e2e`) is the review. Nothing applies before the
+ * review's explicit click.
+ */
 async function stubProviderDestinationFixture(
   page: Page,
-  providerConnections = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
+  providerConnections: readonly InstallAttemptFixtureConnection[] = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   compatibilityProviders: readonly Record<string, unknown>[] = [
     {
       source: "registry.opentofu.org/cloudflare/cloudflare",
@@ -431,23 +398,36 @@ async function stubProviderDestinationFixture(
   ],
   coordinates: ProviderDestinationFixtureCoordinates = {},
 ): Promise<ProviderDestinationFixtureState> {
-  const sourcePath = coordinates.sourcePath ?? ".";
-  const modulePath = coordinates.modulePath ?? ".";
+  const planRunId = "run_provider_plan_e2e";
+  const attempts = createInstallAttemptFixture({
+    capsuleId: "cap_provider_destination_e2e",
+    planRunId,
+    resources: coordinates.resources ?? [],
+    requirements: compatibilityProviders
+      .filter((provider) => provider.credentialRequired === true && typeof provider.source === "string")
+      .map((provider) => ({
+        provider: provider.source as string,
+        moduleLocalName: String(provider.moduleLocalName ?? ""),
+        ...(typeof provider.childAlias === "string" ? { childAlias: provider.childAlias } : {}),
+      })),
+    connections: () => providerConnections,
+    variables: coordinates.variables ?? [],
+  });
   const state: ProviderDestinationFixtureState = {
     mutations: [],
-    compatibilityBodies: [],
-    installModuleRequests: [],
-    sourceCreateBodies: [],
-    sourceAutoSyncPatches: [],
-    sourceListReads: [],
-    sourcePosts: [],
+    attempts,
+    continued: () => attempts.log.answers.find((answer) =>
+      (answer as { continue?: boolean } | undefined)?.continue === true
+    ) as ReturnType<ProviderDestinationFixtureState["continued"]>,
   };
-  const sourceId = "src_provider_destination_e2e";
-  const snapshotId = "snap_provider_destination_e2e";
-  const syncRunId = "run_provider_source_sync_e2e";
-  const planRunId = "run_provider_plan_e2e";
-  let sourceName = "cloudflare-service";
-  let sourceUrl = "https://github.com/example/cloudflare-service.git";
+  // Whatever route answers it, an Apply posted for the reviewed Plan makes
+  // the app's own view report it applied.
+  let applied = false;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === `/api/v1/runs/${planRunId}/apply`) {
+      applied = true;
+    }
+  });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -455,220 +435,42 @@ async function stubProviderDestinationFixture(
     if (request.method() !== "GET") {
       state.mutations.push(`${request.method()} ${path}`);
     }
-    if (
-      path === "/api/v1/sources" &&
-      request.method() === "GET" &&
-      url.search === "?workspaceId=ws_alpha&limit=100"
-    ) {
-      state.sourceListReads.push(`${path}${url.search}`);
-      return route.fulfill({ json: { sources: [] } });
-    }
-    if (path === "/api/v1/connections") {
-      return route.fulfill({ json: { connections: [] } });
-    }
+    const attempt = attempts.handle({
+      method: request.method(),
+      path,
+      search: url.search,
+      body: request.postData() ? request.postDataJSON() : undefined,
+      idempotencyKey: request.headers()["idempotency-key"],
+    });
+    if (attempt) return route.fulfill({ status: attempt.status, json: attempt.json });
     if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES } });
     if (path === "/api/v1/connections" && request.method() === "GET") return route.fulfill({ json: { connections: providerConnections.filter((c) => c.scope === "workspace") } });
+    if (path === "/api/v1/provider-connections") {
+      return route.fulfill({ json: { providerConnections } });
+    }
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e/runs") return route.fulfill({ json: { runs: [] } });
+    if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
+      return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
+    }
     // The installed app's own reads (`/app`, `/runs`) once an install
     // finishes: installed, with no screen unless a case adds one.
     if (path === "/api/v1/capsules/cap_provider_destination_e2e/app") return route.fulfill({ json: { app: {
       kind: "takosumi.capsule-app@v1", capsuleId: "cap_provider_destination_e2e", workspaceId: "ws_alpha",
-      projectId: "prj_alpha", name: sourceName, environment: "production", status: "active", applied: true,
-      state: "installed", primaryAction: "view_resources", problems: [], screens: [],
+      projectId: "prj_alpha", name: "cloudflare-service", environment: "production",
+      // Not applied until the review's Allow and install posted its Apply.
+      status: applied ? "active" : "pending", applied,
+      state: applied ? "installed" : "installing", primaryAction: applied ? "view_resources" : "review", problems: [], screens: [],
       version: { updateAvailable: false, stale: false, autoUpdate: false },
       progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
       observedAt: "2026-08-01T00:00:00Z",
     } } });
-    if (path === "/api/v1/capsules/cap_provider_destination_e2e/runs") return route.fulfill({ json: { runs: [] } });
     if (path === "/api/v1/capsules/cap_provider_destination_e2e") return route.fulfill({ json: { capsule: {
-      id: "cap_provider_destination_e2e", workspaceId: "ws_alpha", sourceId,
-      installConfigId: "cfg-default-opentofu-capsule", name: sourceName, slug: sourceName,
+      id: "cap_provider_destination_e2e", workspaceId: "ws_alpha", sourceId: "src_provider_destination_e2e",
+      installConfigId: "cfg-default-opentofu-capsule", name: "cloudflare-service", slug: "cloudflare-service",
       environment: "production", currentStateGeneration: 1,
       currentStateVersionId: "sv_provider_apply_e2e", status: "active",
       createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
     }, installConfigReAdoption: { authorityGuard: `sha256:${"d".repeat(64)}` } } });
-    if (path === "/api/v1/provider-connections") {
-      return route.fulfill({
-        json: { providerConnections },
-      });
-    }
-    if (path === "/api/v1/sources" && request.method() === "POST") {
-      const body = request.postDataJSON() as {
-        readonly workspaceId: string;
-        readonly name: string;
-        readonly url: string;
-        readonly defaultRef?: string;
-        readonly defaultPath?: string;
-        readonly autoSync?: boolean;
-      };
-      state.sourcePosts.push(path);
-      state.sourceCreateBodies.push(body);
-      sourceName = body.name;
-      sourceUrl = body.url;
-      return route.fulfill({
-        json: {
-          source: {
-            id: sourceId,
-            workspaceId: body.workspaceId,
-            name: body.name,
-            url: body.url,
-            defaultRef: body.defaultRef ?? "HEAD",
-            defaultPath: body.defaultPath ?? ".",
-            status: "active",
-            autoSync: body.autoSync ?? false,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:00.000Z",
-          },
-          hookSecret: "fixture-only",
-        },
-      });
-    }
-    if (
-      path === `/api/v1/sources/${sourceId}` &&
-      request.method() === "PATCH"
-    ) {
-      const body = request.postDataJSON() as Record<string, unknown>;
-      state.sourceAutoSyncPatches.push(body);
-      return route.fulfill({
-        json: {
-          source: {
-            id: sourceId,
-            workspaceId: "ws_alpha",
-            name: sourceName,
-            url: sourceUrl,
-            defaultRef: PORTABLE_SOURCE_COMMIT,
-            defaultPath: sourcePath,
-            status: "active",
-            autoSync: body.autoSync === true,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:01.000Z",
-          },
-        },
-      });
-    }
-    if (
-      path === `/api/v1/sources/${sourceId}/sync` &&
-      request.method() === "POST"
-    ) {
-      return route.fulfill({ json: { run: { id: syncRunId } } });
-    }
-    if (path === `/api/v1/runs/${syncRunId}`) {
-      return route.fulfill({
-        json: {
-          run: {
-            id: syncRunId,
-            workspaceId: "ws_alpha",
-            sourceId,
-            type: "source_sync",
-            status: "succeeded",
-            sourceSnapshotId: snapshotId,
-            createdBy: "portable-e2e",
-            createdAt: "2026-08-01T00:00:00.000Z",
-          },
-        },
-      });
-    }
-    if (path === `/api/v1/sources/${sourceId}/snapshots`) {
-      return route.fulfill({
-        json: {
-          snapshots: [
-            {
-              id: snapshotId,
-              origin: "git",
-              workspaceId: "ws_alpha",
-              sourceId,
-              url: sourceUrl,
-              ref: PORTABLE_SOURCE_COMMIT,
-              resolvedCommit: PORTABLE_SOURCE_COMMIT,
-              path: sourcePath,
-              archiveRef: "fixture",
-              archiveDigest: SOURCE_ARCHIVE_DIGEST,
-              archiveSizeBytes: 1,
-              fetchedByRunId: syncRunId,
-              fetchedAt: "2026-08-01T00:00:00.000Z",
-            },
-          ],
-        },
-      });
-    }
-    if (
-      path ===
-        `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/install-modules` &&
-      request.method() === "GET"
-    ) {
-      state.installModuleRequests.push(path);
-      return route.fulfill({
-        json: {
-          status: "ready",
-          sourceSnapshotId: snapshotId,
-          scopePath: sourcePath,
-          modules: [
-            {
-              path: modulePath,
-              providerPackages: coordinates.providerPackages ?? [],
-              rootProviderRequirements: coordinates.rootProviderRequirements ?? [],
-            },
-          ],
-        },
-      });
-    }
-    if (path === `/api/v1/sources/${sourceId}/compatibility-check`) {
-      state.compatibilityBodies.push(request.postDataJSON());
-      const suffix = coordinates.freshCompatibilityIds
-        ? `_${state.compatibilityBodies.length}`
-        : "";
-      return route.fulfill({
-        json: {
-          run: {
-            id: `ccr_provider_destination_e2e${suffix}`,
-            type: "compatibility_check",
-            status: "succeeded",
-            compatibilityReportId: `caprep_provider_destination_e2e${suffix}`,
-          },
-          report: {
-            id: `caprep_provider_destination_e2e${suffix}`,
-            level: "ready",
-            findings: [],
-            providerPackages: [
-              ...new Map(
-                compatibilityProviders
-                  .filter((provider) => typeof provider.source === "string")
-                  .map((provider) => [
-                    provider.source,
-                    {
-                      source: provider.source,
-                      ...(typeof provider.version === "string"
-                        ? { version: provider.version }
-                        : {}),
-                      allowed: provider.allowed !== false,
-                    },
-                  ]),
-              ).values(),
-            ],
-            rootProviderRequirements: compatibilityProviders
-              .filter(
-                (provider) =>
-                  typeof provider.source === "string" &&
-                  typeof provider.moduleLocalName === "string",
-              )
-              .map((provider) => ({
-                source: provider.source,
-                moduleLocalName: provider.moduleLocalName,
-                ...(typeof provider.childAlias === "string"
-                  ? { childAlias: provider.childAlias }
-                  : {}),
-                ...(typeof provider.version === "string"
-                  ? { version: provider.version }
-                  : {}),
-                ...(provider.credentialRequired === true
-                  ? { credentialRequired: true }
-                  : {}),
-              })),
-            resources: coordinates.resources ?? [],
-            rootModuleVariables: [],
-          },
-        },
-      });
-    }
     if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") {
       return route.fulfill({
         json: {
@@ -681,47 +483,6 @@ async function stubProviderDestinationFixture(
             outputAllowlist: {},
             createdAt: "2026-08-01T00:00:00.000Z",
             updatedAt: "2026-08-01T00:00:00.000Z",
-          },
-        },
-      });
-    }
-    if (
-      path === "/api/v1/workspaces/ws_alpha/install-plans" &&
-      request.method() === "POST"
-    ) {
-      state.installPlanBody =
-        request.postDataJSON() as ProviderDestinationFixtureState["installPlanBody"];
-      return route.fulfill({
-        status: 201,
-        json: {
-          installPlan: {
-            id: "install_provider_destination_e2e",
-            workspaceId: "ws_alpha",
-            createdBy: "portable-e2e",
-            requestDigest: `sha256:${"2".repeat(64)}`,
-            source: {
-              name: sourceName,
-              url: sourceUrl,
-              ref: PORTABLE_SOURCE_COMMIT,
-              path: sourcePath,
-            },
-            capsule: { name: sourceName, environment: "production" },
-            options: state.installPlanBody?.options ?? {},
-            preflight: state.installPlanBody?.preflight,
-            sourceId,
-            sourceSnapshotId: snapshotId,
-            installConfigId: "cfg-default-opentofu-capsule",
-            capsuleId: "cap_provider_destination_e2e",
-            planRunId,
-            phase: "reviewable",
-            generation: 1,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:00.000Z",
-          },
-          nextAction: "review_run",
-          links: {
-            self: "/api/v1/install-plans/install_provider_destination_e2e",
-            run: `/api/v1/runs/${planRunId}`,
           },
         },
       });
@@ -1088,8 +849,8 @@ test.describe("Takosumi dashboard browser surface", () => {
       await expect(page.getByTestId("install-provenance")).toContainText(
         "github.com/example/cloudflare-service",
       );
-      await expect(page.getByLabel("Git URL")).toHaveValue(
-        "https://github.com/example/cloudflare-service.git",
+      await expect(page.getByTestId("install-source-fields").locator("input").first()).toHaveValue(
+        PORTABLE_SOURCE_COMMIT,
       );
       // Showing the context is read-only: nothing is registered or planned yet.
       expect(writes).toEqual([]);
@@ -1234,21 +995,12 @@ test.describe("Takosumi dashboard browser surface", () => {
         },
       ] } });
     });
-    const install = await stubProviderDestinationFixture(page);
+    const install = await stubProviderDestinationFixture(page, undefined, undefined, {
+      variables: [{ name: "region", type: "string", required: true, sensitive: false, label: { en: "Region", ja: "Region" } }],
+    });
     await page.route("**/api/v1/**", async (route) => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
-      if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
-        return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
-      }
-      if (path === "/api/v1/runs/run_provider_source_sync_e2e") {
-        return route.fulfill({ json: { run: {
-          id: "run_provider_source_sync_e2e", workspaceId: "ws_alpha",
-          sourceId: "src_provider_destination_e2e", type: "source_sync", status: "succeeded",
-          sourceSnapshotId: "snap_provider_destination_e2e", ref: PORTABLE_SOURCE_COMMIT,
-          createdBy: "portable-e2e", createdAt: "2026-08-01T00:00:00.000Z",
-        } } });
-      }
       if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") {
         return route.fulfill({ json: { installConfig: {
           id: "cfg-default-opentofu-capsule",
@@ -1320,7 +1072,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           createdAt: activationAction === "release_activation.succeeded" ? "2026-08-01T00:00:02.000Z" : "2026-08-01T00:00:01.000Z",
         }] } });
       }
-      if (path === "/api/v1/capsules/cap_provider_destination_e2e/app") {
+      if (path === "/api/v1/capsules/cap_provider_destination_e2e/app" && applyPosts.length > 0) {
         // The installed app's page opens the screen the server lists.
         return route.fulfill({ json: { app: {
           kind: "takosumi.capsule-app@v1", capsuleId: "cap_provider_destination_e2e", workspaceId: "ws_alpha",
@@ -1377,13 +1129,21 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(page.getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
     const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
     await expect(addButton).toBeDisabled();
-    expect(install.installPlanBody).toMatchObject({
-      variables: { region: "us-west-2" },
-      options: { providerBindings: [expect.objectContaining({
+    // The connection choice is an answer; the setting travels only with Review.
+    expect(install.attempts.log.answers).toContainEqual(expect.objectContaining({
+      providerBindings: [expect.objectContaining({
         provider: "registry.opentofu.org/cloudflare/cloudflare",
         connectionId: "pc_takosumi_cloud",
-      })] },
-    });
+      })],
+    }));
+    expect(install.continued()).toMatchObject({ continue: true, variables: { region: "us-west-2" } });
+    // A Store listing installs its newest released version unless one is chosen.
+    expect(install.attempts.log.creates).toEqual([expect.objectContaining({
+      source: {
+        url: expect.stringMatching(/^https:\/\/github\.com\/example\/cloudflare-service(?:\.git)?$/u),
+        ref: PORTABLE_SOURCE_COMMIT,
+      },
+    })]);
 
     // Billing is disabled here: provider pricing is explained, never "$0.00".
     await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
@@ -1417,13 +1177,13 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(popup.getByText("Synthetic app fixture")).toBeVisible();
     await popup.close();
     await assertNoPageErrors(errors);
-    expect(requests.filter((entry) => entry.startsWith("PATCH "))).toEqual([
-      `PATCH ${mutationOrigin}/api/v1/sources/src_provider_destination_e2e`,
-    ]);
+    // Every change the page made was an answer to its own install attempt.
+    expect(requests.filter((entry) => entry.startsWith("PATCH ")).every((entry) =>
+      entry.startsWith(`PATCH ${mutationOrigin}/api/v1/install-plans/gip_`))).toBe(true);
     expect(requests.every((entry) =>
       entry.startsWith(`GET ${mutationOrigin}/`) ||
       entry.startsWith(`POST ${mutationOrigin}/`) ||
-      entry === `PATCH ${mutationOrigin}/api/v1/sources/src_provider_destination_e2e` ||
+      entry.startsWith(`PATCH ${mutationOrigin}/api/v1/install-plans/gip_`) ||
       entry.startsWith("GET https://store.example.test/") ||
       entry.startsWith("GET https://service.example.test/"),
     )).toBe(true);
@@ -1696,14 +1456,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       "/new?git=https%3A%2F%2Fgithub.com%2Fexample%2Fservice.git" +
       "&ref=0123456789abcdef0123456789abcdef01234567&path=deploy%2Fopentofu";
     await gotoDashboardDocument(page, installPath, installTargetPath);
-    await expect(page.getByLabel(/Git URL/u)).toHaveValue(
-      "https://github.com/example/service.git",
+    // The link names the app and its version; opening it starts nothing.
+    await expect(page.getByTestId("install-provenance")).toContainText(
+      "github.com/example/service",
     );
     await expect(page.getByLabel(/^Version \(tag, branch or commit; optional\)|^版（tag・branch・commit。省略可）/u)).toHaveValue(
       "0123456789abcdef0123456789abcdef01234567",
-    );
-    await expect(page.getByLabel(/Module folder|モジュールのフォルダ/u)).toHaveValue(
-      "deploy/opentofu",
     );
 
     expect(
@@ -1881,7 +1639,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       // One primary Install plus "choose again"; no second form behind it.
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toHaveCount(1);
       await expect(page.getByRole("button", { name: "インストール", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "選び直す", exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "選び直す", exact: true })).toBeVisible();
       await expect(page.getByTestId("install-provenance")).toContainText("github.com/example/service");
       await expect(page.getByTestId("install-configuration")).toHaveCount(0);
       // A Store listing exposes only its version, shown plainly.
@@ -1898,1443 +1656,6 @@ test.describe("Takosumi dashboard browser surface", () => {
         ).toBeLessThanOrEqual(1);
       }
     }
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("reload reads the accepted install coordinator and links a terminal Plan without automatic mutation", async ({
-    page,
-  }) => {
-    test.skip(mode !== "portable", "acknowledged install recovery fixture is portable-only");
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const planId = "gip_0123456789abcdef";
-    const runId = "plan_0123456789abcdef";
-    const recoveryUrl = `/new?installPlan=${planId}`;
-    const coordinatorReads: string[] = [];
-    const mutations: string[] = [];
-    let phase: "reviewable" | "failed" = "reviewable";
-    page.on("request", (request) => {
-      const path = new URL(request.url()).pathname;
-      if (path.startsWith("/api/v1/") && request.method() !== "GET") {
-        mutations.push(`${request.method()} ${path}`);
-      }
-    });
-    await page.route(`**/api/v1/install-plans/${planId}`, async (route) => {
-      const request = route.request();
-      expect(request.method()).toBe("GET");
-      coordinatorReads.push(request.url());
-      await route.fulfill({
-        json: {
-          installPlan: {
-            id: planId,
-            operation: "install",
-            workspaceId: "ws_alpha",
-            createdBy: "sub_portable_e2e",
-            planRunId: runId,
-            phase,
-            generation: phase === "reviewable" ? 5 : 6,
-          },
-          nextAction: phase === "reviewable" ? "review_run" : "none",
-          links: { self: `/api/v1/install-plans/${planId}`, run: `/api/v1/runs/${runId}` },
-        },
-      });
-    });
-
-    await gotoDashboardDocument(page, recoveryUrl);
-    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "reviewable");
-    await expect(page.getByRole("heading", { name: /最初の変更を確認できます|The first review is ready/u })).toBeVisible();
-    await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
-    expect(coordinatorReads).toHaveLength(1);
-
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "reviewable");
-    expect(coordinatorReads).toHaveLength(2);
-
-    phase = "failed";
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-plan-recovery")).toHaveAttribute("data-phase", "failed");
-    await expect(page.getByRole("heading", { name: /インストールの準備は停止|The install stopped/u })).toBeVisible();
-    await expect(page.locator(`[data-testid="install-plan-recovery"] a[href="/runs/${runId}"]`)).toBeVisible();
-    expect(coordinatorReads).toHaveLength(3);
-    expect(mutations).toEqual([]);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("supported resources show every compatible Host/account before Plan", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the compatible ProviderConnection fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const accountA = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_cloudflare_account_a_v02",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
-      displayName: "Cloudflare account A",
-    };
-    const accountB = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
-      id: "pc_cloudflare_account_b_v02",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
-      displayName: "Cloudflare account B",
-    };
-    const state = await stubProviderDestinationFixture(
-      page,
-      [accountA, accountB],
-      [
-        {
-          source: "registry.opentofu.org/cloudflare/cloudflare-v02",
-          moduleLocalName: "cloudflare-v02",
-          allowed: true,
-          credentialRequired: true,
-        },
-      ],
-    );
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    const destinationControl = page.getByLabel(/Host \/ account/u);
-    await expect(destinationControl).toHaveValue("");
-    await expect(destinationControl.locator("option")).toContainText([
-      "Cloudflare account A",
-      "Cloudflare account B",
-    ]);
-    await expect(installConnectionRows(page)).toHaveAttribute("data-connection-state", "missing");
-    expect(state.installPlanBody).toBeUndefined();
-    await destinationControl.selectOption("pc_cloudflare_account_b_v02");
-    await expect(installConnectionRows(page)).toHaveAttribute("data-connection-state", "connected");
-    await reviewInlineFixture(page);
-
-    await expect
-      .poll(() => state.installPlanBody?.options?.providerBindings)
-      .toEqual([
-        {
-          provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
-          moduleLocalName: "cloudflare-v02",
-          connectionId: "pc_cloudflare_account_b_v02",
-        },
-      ]);
-    await expect(
-      page.locator('[data-install-provider-destination="auto-selected"]'),
-    ).toHaveCount(0);
-    await expect
-      .poll(() =>
-        state.mutations.indexOf(
-          "POST /api/v1/workspaces/ws_alpha/install-plans",
-        ),
-      )
-      .toBeGreaterThanOrEqual(0);
-    expect(state.installPlanBody?.preflight).toEqual({
-      sourceId: "src_provider_destination_e2e",
-      sourceSnapshotId: "snap_provider_destination_e2e",
-      compatibilityCheckRunId: "ccr_provider_destination_e2e",
-      compatibilityReportId: "caprep_provider_destination_e2e",
-      installConfigId: "cfg-default-opentofu-capsule",
-    });
-    await expectSourceAutoSyncOptInAfterPlan(state);
-    expect(state.mutations).not.toContain(
-      "POST /api/v1/workspaces/ws_alpha/capsules",
-    );
-    expect(state.mutations).not.toContain(
-      "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
-    );
-    expect(state.mutations).not.toContain(
-      "POST /api/v1/capsules/cap_provider_destination_e2e/plan",
-    );
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  for (const edited of [false, true]) {
-    test(`direct Git timeout retry ${edited ? "discards edited" : "retains exact"} request`, async ({ page }) => {
-      test.skip(mode !== "portable", "local install fixture only");
-      const state = await stubProviderDestinationFixture(page, [], [], {
-        freshCompatibilityIds: true,
-      });
-      const posts: { body: string; key: string | undefined }[] = [];
-      await page.route("**/workspaces/ws_alpha/install-plans", async (route) => {
-        posts.push({
-          body: route.request().postData()!,
-          key: route.request().headers()["idempotency-key"],
-        });
-        if (posts.length === 1) {
-          return route.fulfill({ status: 504, json: {
-            error: { code: "git_install_plan_timeout", message: "Timed out" },
-          } });
-        }
-        return route.fallback();
-      });
-      const query = new URLSearchParams({
-        git: "https://github.com/example/cloudflare-service.git",
-        ref: PORTABLE_SOURCE_COMMIT,
-        path: ".",
-        name: "cloudflare-service",
-      });
-      await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-      await prepareInlineFixture(page);
-      await expect.poll(() => posts.length).toBe(1);
-      // The unknown outcome returns to the sheet with its inputs intact.
-      const review = installSheetActions(page).getByRole("button", { name: "Review", exact: true });
-      await expect(review).toBeEnabled();
-      // No automatic mutation retry after an unknown outcome.
-      expect(posts).toHaveLength(1);
-      expect(state.sourceAutoSyncPatches).toEqual([]);
-      if (edited) {
-        await page.getByTestId("install-configuration")
-          .getByRole("textbox", { name: /^App name\b/u }).fill("edited-service");
-      }
-      await review.click();
-      await expect.poll(() => posts.length).toBe(2);
-      await expect(page.locator(".iv-execution")).toBeVisible();
-      expect(posts[0]!.key).toBeTruthy();
-      if (edited) {
-        // A renamed request is a new request; the immutable Source and
-        // compatibility evidence are reused because the name is not bound to them.
-        expect(posts[1]!.key).not.toBe(posts[0]!.key);
-        const [first, retried] = posts.map((post) => JSON.parse(post.body));
-        expect(retried.capsule.name).toBe("edited-service");
-        expect(first.capsule.name).toBe("cloudflare-service");
-        // The Source keeps its registered name; only the Capsule is renamed.
-        expect(retried.source.name).toBe("cloudflare-service");
-        expect(retried.preflight).toEqual(first.preflight);
-      } else {
-        expect(posts[1]).toEqual(posts[0]);
-      }
-      expect(state.compatibilityBodies).toHaveLength(1);
-    });
-  }
-
-  test("source auto-sync retries after PATCH failure without recreating the install Plan", async ({ page }) => {
-    test.skip(mode !== "portable", "auto-sync failures are a portable-only fixture");
-    const errors = pageErrors(page);
-    const state = await stubProviderDestinationFixture(page, [], []);
-    const patchBodies: unknown[] = [];
-    const patchPath = "/api/v1/sources/src_provider_destination_e2e";
-    await page.route(`**${patchPath}`, async (route) => {
-      if (route.request().method() !== "PATCH") return route.fallback();
-      patchBodies.push(route.request().postDataJSON());
-      if (patchBodies.length <= 2) {
-        return route.fulfill({ status: 503, json: {
-          error: { code: "unavailable", message: "Source polling temporarily unavailable" },
-        } });
-      }
-      return route.fallback();
-    });
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-    await expect(page.locator(".iv-execution")).toBeVisible();
-    await expect.poll(() => patchBodies.length).toBe(1);
-    const warning = page.getByTestId("install-source-auto-sync-retry");
-    await expect(warning).toContainText(/自動更新を有効にできませんでした|Automatic source updates could not be enabled/u);
-    const retry = warning.getByRole("button", { name: /再試行|Retry/u });
-    await retry.click();
-    await expect.poll(() => patchBodies.length).toBe(2);
-    await expect(retry).toBeEnabled();
-    await expect(warning).toContainText(/自動更新を有効にできませんでした|Automatic source updates could not be enabled/u);
-    await retry.click();
-    await expect.poll(() => patchBodies.length).toBe(3);
-    await expect(warning).toHaveCount(0);
-    expect(patchBodies).toEqual([
-      { autoSync: true }, { autoSync: true }, { autoSync: true },
-    ]);
-    expect(state.sourceAutoSyncPatches).toEqual([{ autoSync: true }]);
-    expectSingleSourceCreate(state);
-    expect(state.compatibilityBodies).toHaveLength(1);
-    expect(state.mutations.filter((mutation) =>
-      mutation === "POST /api/v1/workspaces/ws_alpha/install-plans"
-    )).toHaveLength(1);
-    expect(state.mutations.some((mutation) => mutation.includes("/apply"))).toBe(false);
-    await assertNoPageErrors(errors);
-  });
-
-  for (const succeeds of [false, true]) {
-    test(`source auto-sync ignores a late PATCH ${succeeds ? "success" : "failure"} after Workspace change`, async ({ page }) => {
-      test.skip(mode !== "portable", "auto-sync races are a portable-only fixture");
-      const errors = pageErrors(page);
-      const state = await stubProviderDestinationFixture(page, [], []);
-      let heldPatch: Route | undefined;
-      await page.route("**/api/v1/sources/src_provider_destination_e2e", (route) => {
-        if (route.request().method() !== "PATCH") return route.fallback();
-        heldPatch = route;
-      });
-      const query = new URLSearchParams({
-        git: "https://github.com/example/cloudflare-service.git",
-        ref: PORTABLE_SOURCE_COMMIT,
-        name: "cloudflare-service",
-      });
-      await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-      await prepareInlineFixture(page);
-      await expect.poll(() => Boolean(heldPatch)).toBe(true);
-      const trigger = workspaceTrigger(page);
-      await trigger.click();
-      await page.locator('[role="menu"]:visible').first()
-        .getByRole("menuitemradio").filter({ hasText: expectations.switchWorkspaceName })
-        .first().click();
-      await expect(trigger).toHaveAttribute("aria-label", /Beta Workspace/u);
-      const response = page.waitForResponse((current) =>
-        current.request().method() === "PATCH" &&
-        new URL(current.url()).pathname === "/api/v1/sources/src_provider_destination_e2e"
-      );
-      await heldPatch!.fulfill(succeeds
-        ? { json: { source: {
-            id: "src_provider_destination_e2e",
-            workspaceId: "ws_alpha",
-            name: "cloudflare-service",
-            url: "https://github.com/example/cloudflare-service.git",
-            defaultRef: PORTABLE_SOURCE_COMMIT,
-            defaultPath: ".",
-            status: "active",
-            autoSync: true,
-            createdAt: "2026-08-01T00:00:00.000Z",
-            updatedAt: "2026-08-01T00:00:01.000Z",
-          } } }
-        : { status: 503, json: { error: { code: "unavailable", message: "Stale polling failure" } } });
-      await response;
-      await expect(page.getByRole("button", { name: /^(インストール|Install)$/u })).toBeEnabled();
-      await expect(page.getByTestId("install-source-auto-sync-retry")).toHaveCount(0);
-      await expect(page.locator(".iv-execution")).toHaveCount(0);
-      await expect(page.locator("body")).not.toContainText("Stale polling failure");
-      expectSingleSourceCreate(state);
-      expect(state.mutations.filter((mutation) => mutation.includes("/install-plans")))
-        .toHaveLength(1);
-      await assertNoPageErrors(errors);
-    });
-  }
-
-  test("unsupported resources offer connection setup before Plan", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the unsupported provider fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(page, []);
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    const row = installConnectionRows(page);
-    await expect(row).toHaveCount(1);
-    await expect(row).toHaveAttribute("data-connection-state", "missing");
-    await expect(row.getByRole("button", { name: /^(Connect|接続する)$/u })).toBeEnabled();
-    await expect(page.getByTestId("install-configuration")).toHaveAttribute("data-install-state", "provider-required");
-    await expect(installSheetActions(page).getByRole("button", { name: /^(Connect|接続する)$/u })).toBeVisible();
-    await expect(installSheetActions(page).getByRole("button", { name: /^(Review|内容を確認)$/u })).toHaveCount(0);
-    await expect(
-      page.locator('[data-install-provider-destination="auto-selected"]'),
-    ).toHaveCount(0);
-    expect(state.installPlanBody).toBeUndefined();
-    expect(state.mutations).not.toContain(
-      "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
-    );
-    expect(state.mutations).not.toContain(
-      "POST /api/v1/workspaces/ws_alpha/install-plans",
-    );
-    expect(state.sourceAutoSyncPatches).toEqual([]);
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("module review shows each required connection before apply", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the mixed ProviderConnection fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const cloudflareHost = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_cloudflare_host_v02_mixed",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
-      displayName: "Cloudflare host",
-    };
-    const awsPrimary = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
-      id: "pc_aws_primary_mixed",
-      provider: "aws",
-      providerSource: "registry.opentofu.org/hashicorp/aws",
-      displayName: "AWS primary",
-    };
-    const awsSecondary = {
-      ...awsPrimary,
-      id: "pc_aws_secondary_mixed",
-      displayName: "AWS secondary",
-    };
-    const state = await stubProviderDestinationFixture(
-      page,
-      [cloudflareHost, awsPrimary, awsSecondary],
-      [
-        {
-          source: "registry.opentofu.org/cloudflare/cloudflare-v02",
-          moduleLocalName: "cloudflare-v02",
-          allowed: true,
-          credentialRequired: true,
-        },
-        {
-          source: "registry.opentofu.org/hashicorp/aws",
-          moduleLocalName: "aws",
-          allowed: true,
-          credentialRequired: true,
-        },
-      ],
-      {
-        modulePath: "deploy/opentofu/portable",
-        providerPackages: [
-          { source: "registry.opentofu.org/cloudflare/cloudflare-v02", version: "5.0.0" },
-          { source: "registry.opentofu.org/hashicorp/aws", version: "5.0.0" },
-          { source: "registry.opentofu.org/hashicorp/random", version: "3.6.0" },
-        ],
-        rootProviderRequirements: [
-          { source: "registry.opentofu.org/cloudflare/cloudflare-v02", moduleLocalName: "cloudflare-v02", version: "5.0.0" },
-          { source: "registry.opentofu.org/hashicorp/aws", moduleLocalName: "aws", version: "5.0.0" },
-        ],
-      },
-    );
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: "deploy/opentofu/portable",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    // One row per required provider: the single Cloudflare candidate is
-    // already chosen, while two AWS candidates ask for a choice.
-    const rows = installConnectionRows(page);
-    await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toHaveAttribute("data-provider-source", "registry.opentofu.org/cloudflare/cloudflare-v02");
-    await expect(rows.nth(0)).toHaveAttribute("data-connection-state", "connected");
-    await expect(rows.nth(0)).toContainText("Cloudflare host");
-    await expect(rows.nth(0).locator("select")).toHaveCount(0);
-    await expect(rows.nth(1)).toHaveAttribute("data-provider-source", "registry.opentofu.org/hashicorp/aws");
-    await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "missing");
-    const awsDestination = rows.nth(1).locator("select");
-    await expect(awsDestination).toHaveValue("");
-    // The module's package list and provider addresses are not part of
-    // installing; each required connection is its own row.
-    const summary = page.getByTestId("install-configuration");
-    await expect(page.getByTestId("install-source-summary")).toHaveCount(0);
-    await expect(page.getByTestId("install-module-requirements")).toHaveCount(0);
-    await expect(summary).not.toContainText("registry.opentofu.org");
-    expect(state.installPlanBody).toBeUndefined();
-    await awsDestination.selectOption("pc_aws_primary_mixed");
-    await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "connected");
-    await page.screenshot({ path: test.info().outputPath("module-sheet-desktop.png"), fullPage: true });
-    for (const width of [320, 375, 390, 414, 768, 1440]) {
-      await page.setViewportSize({ width, height: 1000 });
-      await expect(summary).toBeVisible();
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-        `the install sheet must not overflow at ${width}px`,
-      ).toBe(true);
-    }
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await reviewInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", { name: /このアプリがあなたのクラウドに作るもの|What this app will create in your cloud/u }),
-    ).toBeVisible();
-    // A succeeded plan is ready to review; nothing has been installed yet.
-    const reviewBadge = page.locator(".iv-review-head .tg-badge");
-    await expect(reviewBadge).toHaveText(/確認できます|Ready to review/u);
-    await expect(reviewBadge).not.toHaveText(/成功|Succeeded/u);
-    await expect(
-      page.locator('[data-install-provider-destination="auto-selected"]'),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("install-plan-cost")).toBeVisible();
-    await expect(page.getByRole("link", { name: /Technical details/u }).first()).toHaveAttribute("href", "/runs/run_provider_plan_e2e");
-    expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
-    await page.screenshot({ path: test.info().outputPath("module-review-desktop.png"), fullPage: true });
-    for (const width of [320, 375, 390, 414, 768, 1440]) {
-      await page.setViewportSize({ width, height: 1000 });
-      await expect(page.locator(".iv-execution")).toBeVisible();
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-        `the review must not overflow at ${width}px`,
-      ).toBe(true);
-      if (width === 375) {
-        await page.screenshot({ path: test.info().outputPath("module-review-mobile.png"), fullPage: true });
-      }
-    }
-    await expect
-      .poll(() => state.installPlanBody?.options?.providerBindings)
-      .toEqual([
-        {
-          provider: "registry.opentofu.org/cloudflare/cloudflare-v02",
-          moduleLocalName: "cloudflare-v02",
-          connectionId: "pc_cloudflare_host_v02_mixed",
-        },
-        {
-          provider: "registry.opentofu.org/hashicorp/aws",
-          moduleLocalName: "aws",
-          connectionId: "pc_aws_primary_mixed",
-        },
-      ]);
-    await expectSourceAutoSyncOptInAfterPlan(state);
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("exact compatibility provider tuples preserve same-source aliases", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the exact provider tuple fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const awsPrimary = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_aws_primary_tuple",
-      provider: "aws",
-      providerSource: "registry.opentofu.org/aws/aws",
-      displayName: "AWS primary",
-    };
-    const awsSecondary = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
-      id: "pc_aws_secondary_tuple",
-      provider: "aws",
-      providerSource: "registry.opentofu.org/aws/aws",
-      displayName: "AWS secondary",
-    };
-    const state = await stubProviderDestinationFixture(
-      page,
-      [awsPrimary, awsSecondary],
-      [
-        {
-          source: "registry.opentofu.org/aws/aws",
-          moduleLocalName: "aws",
-          childAlias: "primary",
-          version: "5.0.0",
-          allowed: true,
-          credentialRequired: true,
-        },
-        {
-          source: "registry.opentofu.org/aws/aws",
-          moduleLocalName: "aws",
-          childAlias: "secondary",
-          version: "5.0.0",
-          allowed: true,
-          credentialRequired: true,
-        },
-        {
-          source: "registry.opentofu.org/aws/aws",
-          moduleLocalName: "aws-edge",
-          childAlias: "edge",
-          allowed: true,
-          credentialRequired: true,
-        },
-      ],
-    );
-    const query = new URLSearchParams({
-      git: "https://github.com/example/aws-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "aws-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    const choices = installConnectionRows(page);
-    await expect(choices).toHaveCount(3);
-    await expect(choices.nth(0)).toHaveAttribute(
-      "data-provider-source",
-      "registry.opentofu.org/aws/aws",
-    );
-    await expect(choices.nth(0)).toHaveAttribute(
-      "data-module-local-name",
-      "aws",
-    );
-    await expect(choices.nth(1)).toHaveAttribute(
-      "data-module-local-name",
-      "aws",
-    );
-    await expect(choices.nth(2)).toHaveAttribute(
-      "data-module-local-name",
-      "aws-edge",
-    );
-    await expect(choices.nth(0)).toHaveAttribute("data-child-alias", "primary");
-    await expect(choices.nth(1)).toHaveAttribute("data-child-alias", "secondary");
-    await expect(choices.nth(2)).toHaveAttribute("data-child-alias", "edge");
-    await choices.nth(0).locator("select").selectOption("pc_aws_primary_tuple");
-    await choices.nth(1).locator("select").selectOption("pc_aws_secondary_tuple");
-    await choices.nth(2).locator("select").selectOption("pc_aws_primary_tuple");
-    for (const [index, connection] of ["pc_aws_primary_tuple", "pc_aws_secondary_tuple", "pc_aws_primary_tuple"].entries()) {
-      await expect(choices.nth(index).locator("select")).toHaveValue(connection);
-      await expect(choices.nth(index)).toHaveAttribute("data-connection-state", "connected");
-    }
-
-    // Each same-provider row is told apart by its alias, and only by that.
-    await expect(choices.nth(0)).toContainText("(primary)");
-    await expect(choices.nth(1)).toContainText("(secondary)");
-    await expect(choices.nth(2)).toContainText("(edge)");
-    await expect(page.getByTestId("install-source-summary")).toHaveCount(0);
-    await reviewInlineFixture(page);
-
-    await expect
-      .poll(() => state.installPlanBody?.options?.providerBindings)
-      .toEqual([
-        {
-          provider: "registry.opentofu.org/aws/aws",
-          moduleLocalName: "aws",
-          childAlias: "primary",
-          rootAlias: "primary",
-          connectionId: "pc_aws_primary_tuple",
-        },
-        {
-          provider: "registry.opentofu.org/aws/aws",
-          moduleLocalName: "aws",
-          childAlias: "secondary",
-          rootAlias: "secondary",
-          connectionId: "pc_aws_secondary_tuple",
-        },
-        {
-          provider: "registry.opentofu.org/aws/aws",
-          moduleLocalName: "aws-edge",
-          childAlias: "edge",
-          rootAlias: "edge",
-          connectionId: "pc_aws_primary_tuple",
-        },
-      ]);
-    await expectSourceAutoSyncOptInAfterPlan(state);
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("ambiguous supported destinations ask for a choice without connection setup", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the ambiguous destination fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const connectionA = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_cloudflare_connection_a",
-      displayName: "Cloudflare connection A",
-    };
-    const connectionB = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
-      id: "pc_cloudflare_connection_b",
-      displayName: "Cloudflare connection B",
-    };
-    const state = await stubProviderDestinationFixture(page, [
-      connectionA,
-      connectionB,
-    ]);
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", {
-        name: /新しい接続を追加|Add a new connection/u,
-      }),
-    ).toHaveCount(0);
-    const destination = page.getByLabel(/Host \/ account/u);
-    await expect(destination).toBeVisible();
-    await expect(destination).toHaveValue("");
-    await expect(destination.locator("option")).toContainText([
-      "Cloudflare connection A",
-      "Cloudflare connection B",
-    ]);
-    // Choosing is enough: no connection form opens on its own, and adding
-    // another account stays a collapsed, explicit choice.
-    const row = installConnectionRows(page);
-    await expect(row).toHaveAttribute("data-connection-state", "missing");
-    await expect(page.locator(".iv-inline-connect")).toHaveCount(0);
-    const another = row.getByRole("button", { name: /Connect another account|別のアカウントで接続/u });
-    await expect(another).toHaveAttribute("aria-expanded", "false");
-    await expect(
-      page.locator('[data-install-provider-destination="auto-selected"]'),
-    ).toHaveCount(0);
-    expect(state.installPlanBody).toBeUndefined();
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("the auto-selected Host/account keeps its label on one line on a phone", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the single destination fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    await page.setViewportSize({ width: 390, height: 844 });
-    const longName = "Cloudflare (direct) production account for the example team";
-    const state = await stubProviderDestinationFixture(page, [
-      { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!, displayName: longName },
-    ]);
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", { name: /このアプリがあなたのクラウドに作るもの|What this app will create in your cloud/u }),
-    ).toBeVisible();
-    const destination = page.locator(
-      '[data-install-provider-destination="auto-selected"]',
-    );
-    await expect(destination).toHaveAttribute(
-      "data-provider-connection-id",
-      "pc_cloudflare_direct",
-    );
-    // The choice is already made: plain text, not a disabled select.
-    await expect(destination.locator("select, [role=combobox]")).toHaveCount(0);
-    await expect(destination).toContainText(/ホスト \/ アカウント|Host \/ account/u);
-    await expect(destination.locator(".iv-destination-name")).toHaveText(longName);
-    // A squeezed flex label used to stack one character per line; a long name
-    // has to wrap inside the row rather than be cut off.
-    for (const width of [390, 320]) {
-      await page.setViewportSize({ width, height: 844 });
-      const geometry = await destination.evaluate((row) => {
-        const style = getComputedStyle(row);
-        const outer = row.getBoundingClientRect();
-        const label = row.querySelector(":scope > span")!;
-        return {
-          content: {
-            left: outer.left + Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.paddingLeft),
-            right: outer.right - Number.parseFloat(style.borderRightWidth) - Number.parseFloat(style.paddingRight),
-          },
-          label: label.getBoundingClientRect().toJSON() as DOMRect,
-          name: row.querySelector(".iv-destination-name")!.getBoundingClientRect().toJSON() as DOMRect,
-          fontSize: Number.parseFloat(getComputedStyle(label).fontSize),
-          pageFits: document.documentElement.scrollWidth <= window.innerWidth,
-        };
-      });
-      expect(geometry.label.height, `label is one line at ${width}px`).toBeLessThan(geometry.fontSize * 2);
-      for (const [name, box] of [
-        ["label", geometry.label],
-        ["name", geometry.name],
-      ] as const) {
-        expect(box.left, `${name} starts inside the row at ${width}px`).toBeGreaterThanOrEqual(geometry.content.left);
-        expect(box.right, `${name} ends inside the row at ${width}px`).toBeLessThanOrEqual(geometry.content.right);
-      }
-      expect(geometry.pageFits, `page fits ${width}px`).toBe(true);
-      if (width === 320) {
-        expect(geometry.name.height, "the long name wraps at 320px").toBeGreaterThan(geometry.fontSize * 2);
-      }
-    }
-    expect(state.mutations.some((entry) => /apply|approve/u.test(entry))).toBe(false);
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("unrelated v01 provider labels cannot masquerade as a v02 destination", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the provider version mismatch fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const unrelatedV01 = {
-      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
-      id: "pc_cloudflare_connection_v01",
-      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v01",
-      displayName: "Cloudflare v01 connection",
-    };
-    const state = await stubProviderDestinationFixture(
-      page,
-      [unrelatedV01],
-      [
-        {
-          source: "registry.opentofu.org/cloudflare/cloudflare-v02",
-          moduleLocalName: "cloudflare-v02",
-          allowed: true,
-          credentialRequired: true,
-        },
-      ],
-    );
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    await expect(
-      page.locator('[data-install-provider-destination="auto-selected"]'),
-    ).toHaveCount(0);
-    // The v01 connection is not offered for the v02 provider row.
-    const row = installConnectionRows(page);
-    await expect(row).toHaveAttribute("data-provider-source", "registry.opentofu.org/cloudflare/cloudflare-v02");
-    await expect(row).toHaveAttribute("data-connection-state", "missing");
-    await expect(row.locator("select")).toHaveCount(0);
-    await expect(row).not.toContainText("Cloudflare v01 connection");
-    await expect(row.getByRole("button", { name: /^(Connect|接続する)$/u })).toBeEnabled();
-    expect(state.installPlanBody).toBeUndefined();
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("mixed provider support keeps connection setup available for the unsupported provider", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the mixed provider fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(
-      page,
-      [PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!],
-      [
-        {
-          source: "registry.opentofu.org/cloudflare/cloudflare",
-          moduleLocalName: "cloudflare",
-          allowed: true,
-          credentialRequired: true,
-        },
-        {
-          source: "registry.opentofu.org/hashicorp/aws",
-          moduleLocalName: "aws",
-          allowed: true,
-          credentialRequired: true,
-        },
-      ],
-    );
-    const query = new URLSearchParams({
-      git: "https://github.com/example/cloudflare-service.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      path: ".",
-      name: "cloudflare-service",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await prepareInlineFixture(page);
-
-    await expect(
-      page.getByRole("heading", {
-        name: /クラウド接続|Cloud connection/u,
-      }),
-    ).toBeVisible();
-    const rows = installConnectionRows(page);
-    await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toHaveAttribute("data-provider-source", "registry.opentofu.org/cloudflare/cloudflare");
-    await expect(rows.nth(0)).toHaveAttribute("data-connection-state", "connected");
-    await expect(rows.nth(1)).toHaveAttribute("data-provider-source", "registry.opentofu.org/hashicorp/aws");
-    await expect(rows.nth(1)).toHaveAttribute("data-connection-state", "missing");
-    const connectAws = rows.nth(1).getByRole("button", { name: /^(Connect|接続する)$/u });
-    await expect(connectAws).toBeEnabled();
-    // Connecting the unsupported provider opens a form for that provider only.
-    await connectAws.click();
-    const form = rows.nth(1).locator(".iv-inline-connect");
-    await expect(form).toBeVisible();
-    await expect(rows.nth(0).locator(".iv-inline-connect")).toHaveCount(0);
-    expect(state.installPlanBody).toBeUndefined();
-    expectSingleSourceCreate(state);
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  const storeSetupRetryTest = (
-    retryMode: "none" | "unchanged" | "edited",
-    reviewedModule?: { readonly path: string; readonly exposed: boolean },
-  ) => {
-  const reviewedLabel = reviewedModule
-    ? `, reviewed ${reviewedModule.path}${reviewedModule.exposed ? "" : " (stale)"}`
-    : "";
-  test(`Store setup edits keep the ready compatibility fence and continue to Plan (${retryMode}${reviewedLabel})`, async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the deterministic install API fixture is portable-only",
-    );
-    const now = "2026-08-04T00:00:00.000Z";
-    const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
-    const seenMutations: string[] = [];
-    const prematureConfigReads: string[] = [];
-    const installModuleRequests: string[] = [];
-    const compatibilityBodies: unknown[] = [];
-    const stableRefResolutionBodies: unknown[] = [];
-    const sourcePostBodies: unknown[] = [];
-    const sourceAutoSyncPatchBodies: unknown[] = [];
-    const syncBodies: unknown[] = [];
-    const installPlanBodies: unknown[] = [];
-    const installPlanKeys: (string | undefined)[] = [];
-    const sourceState: SourceCreateFixtureState = {
-      sourceListReads: [],
-      sourcePosts: [],
-    };
-    await page.route("https://store.example.test/**", async (route) => {
-      await route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({
-          id: "example/service",
-          // A catalog that reviewed one module of a multi-module repository.
-          source: {
-            git: "https://github.com/example/service.git",
-            ...(reviewedModule ? { path: reviewedModule.path } : {}),
-          },
-          suggestedName: "example-service",
-          name: { ja: "Example Service", en: "Example Service" },
-          description: { ja: "Example", en: "Example" },
-          badge: { ja: "追加", en: "Add" },
-          createdAt: now,
-          updatedAt: now,
-        }),
-      });
-    });
-    await page.route("**/api/v1/**", async (route) => {
-      const request = route.request();
-      const url = new URL(request.url());
-      const path = url.pathname;
-      if (
-        shouldRecordControlPlaneMutation(
-          mode,
-          mutationOrigin,
-          request.url(),
-          request.method(),
-        )
-      ) {
-        seenMutations.push(`${request.method()} ${path}`);
-      }
-      if (
-        path === "/api/v1/sources" &&
-        request.method() === "GET" &&
-        url.search === "?workspaceId=ws_alpha&limit=100"
-      ) {
-        sourceState.sourceListReads.push(`${path}${url.search}`);
-        return route.fulfill({ json: { sources: [] } });
-      }
-      if (
-        path ===
-          "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" &&
-        request.method() === "POST"
-      ) {
-        stableRefResolutionBodies.push(request.postDataJSON());
-        return route.fulfill({
-          json: { tag: "v1.0.0", commit: resolvedCommit },
-        });
-      }
-      if (
-        path === "/api/v1/capsule-configs" &&
-        request.method() === "GET" &&
-        url.search === "?view=store"
-      ) {
-        prematureConfigReads.push(`${path}${url.search}`);
-        return route.fulfill({ json: { installConfigs: [] } });
-      }
-      if (path === "/api/v1/connections") {
-        return route.fulfill({ json: { connections: [] } });
-      }
-      if (path === "/api/v1/provider-connections") {
-        return route.fulfill({ json: { providerConnections: [] } });
-      }
-      if (path === "/api/v1/sources" && request.method() === "POST") {
-        const body = request.postDataJSON() as {
-          readonly workspaceId: string;
-          readonly name: string;
-          readonly url: string;
-          readonly defaultRef?: string;
-          readonly defaultPath?: string;
-          readonly autoSync?: boolean;
-        };
-        sourceState.sourcePosts.push(path);
-        sourcePostBodies.push(body);
-        return route.fulfill({
-          json: {
-            source: {
-              id: "src_install_e2e",
-              workspaceId: body.workspaceId,
-              name: body.name,
-              url: body.url,
-              defaultRef: body.defaultRef ?? "HEAD",
-              defaultPath: body.defaultPath ?? ".",
-              status: "active",
-              autoSync: body.autoSync ?? false,
-              createdAt: now,
-              updatedAt: now,
-            },
-            hookSecret: "fixture-only",
-          },
-        });
-      }
-      if (
-        path === "/api/v1/sources/src_install_e2e" &&
-        request.method() === "PATCH"
-      ) {
-        sourceAutoSyncPatchBodies.push(request.postDataJSON());
-        return route.fulfill({
-          json: {
-            source: {
-              id: "src_install_e2e",
-              workspaceId: "ws_alpha",
-              name: "example-service",
-              url: "https://github.com/example/service",
-              defaultRef: resolvedCommit,
-              defaultPath: ".",
-              status: "active",
-              autoSync: true,
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-        });
-      }
-      if (path === "/api/v1/sources/src_install_e2e/sync") {
-        syncBodies.push(request.postDataJSON());
-        return route.fulfill({ json: { run: { id: "run_sync_e2e" } } });
-      }
-      if (path === "/api/v1/runs/run_sync_e2e") {
-        return route.fulfill({
-          json: {
-            run: {
-              id: "run_sync_e2e",
-              workspaceId: "ws_alpha",
-              sourceId: "src_install_e2e",
-              type: "source_sync",
-              status: "succeeded",
-              sourceSnapshotId: "snap_install_e2e",
-              ref: resolvedCommit,
-              createdBy: "portable-e2e",
-              createdAt: now,
-            },
-          },
-        });
-      }
-      if (path === "/api/v1/sources/src_install_e2e/snapshots") {
-        return route.fulfill({
-          json: {
-            snapshots: [
-              {
-                id: "snap_install_e2e",
-                origin: "git",
-                workspaceId: "ws_alpha",
-                sourceId: "src_install_e2e",
-                url: "https://github.com/example/service.git",
-                ref: resolvedCommit,
-                resolvedCommit,
-                path: ".",
-                archiveRef: "fixture",
-                archiveDigest: `sha256:${"0".repeat(64)}`,
-                archiveSizeBytes: 1,
-                fetchedByRunId: "run_sync_e2e",
-                fetchedAt: now,
-              },
-            ],
-          },
-        });
-      }
-      if (
-        path ===
-          "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules" &&
-        request.method() === "GET"
-      ) {
-        installModuleRequests.push(path);
-        return route.fulfill({
-          json: {
-            status: "ready",
-            sourceSnapshotId: "snap_install_e2e",
-            scopePath: ".",
-            modules: [
-              {
-                path: ".",
-                providerPackages: [
-                  {
-                    source: "registry.opentofu.org/cloudflare/cloudflare",
-                  },
-                ],
-                rootProviderRequirements: [
-                  {
-                    source: "registry.opentofu.org/cloudflare/cloudflare",
-                    moduleLocalName: "cloudflare",
-                  },
-                ],
-              },
-              {
-                path: "deploy/takoform",
-                providerPackages: [
-                  {
-                    source: "registry.opentofu.org/aws/aws",
-                  },
-                  {
-                    source: "registry.opentofu.org/cloudflare/cloudflare",
-                    version: "4.0.0",
-                  },
-                ],
-                rootProviderRequirements: [
-                  {
-                    source: "registry.opentofu.org/aws/aws",
-                    moduleLocalName: "aws",
-                  },
-                  {
-                    source: "registry.opentofu.org/cloudflare/cloudflare",
-                    moduleLocalName: "cloudflare",
-                    childAlias: "edge",
-                    version: "4.0.0",
-                  },
-                ],
-              },
-            ],
-          },
-        });
-      }
-      if (path === "/api/v1/sources/src_install_e2e/compatibility-check") {
-        compatibilityBodies.push(request.postDataJSON());
-        return route.fulfill({
-          json: {
-            run: {
-              id: "ccr_install_e2e",
-              type: "compatibility_check",
-              status: "succeeded",
-              compatibilityReportId: "caprep_install_e2e",
-            },
-            report: {
-              id: "caprep_install_e2e",
-              level: "ready",
-              findings: [],
-              providerPackages: [],
-              rootProviderRequirements: [],
-              resources: [],
-              rootModuleVariables: ["region"],
-            },
-            repositoryInstallUx: {
-              status: "accepted",
-              installConfigId: "cfg_install_e2e",
-            },
-          },
-        });
-      }
-      if (path === "/api/v1/capsule-configs/cfg_install_e2e") {
-        return route.fulfill({
-          json: {
-            installConfig: {
-              id: "cfg_install_e2e",
-              name: "example-service",
-              policy: {},
-              variableMapping: {},
-              variablePresentation: [
-                {
-                  name: "region",
-                  type: "string",
-                  required: true,
-                  label: { ja: "リージョン", en: "Region" },
-                  defaultValue: "initial",
-                },
-              ],
-              outputAllowlist: {},
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-        });
-      }
-      if (
-        path === "/api/v1/workspaces/ws_alpha/install-plans" &&
-        request.method() === "POST"
-      ) {
-        const body = request.postDataJSON() as Record<string, unknown>;
-        installPlanBodies.push(body);
-        installPlanKeys.push(request.headers()["idempotency-key"]);
-        if (retryMode !== "none" && installPlanBodies.length === 1) {
-          return route.fulfill({ status: 504, json: {
-            error: { code: "git_install_plan_timeout", message: "Timed out" },
-          } });
-        }
-        return route.fulfill({
-          status: 201,
-          json: {
-            installPlan: {
-              id: "install_plan_e2e",
-              workspaceId: "ws_alpha",
-              createdBy: "portable-e2e",
-              requestDigest: `sha256:${"3".repeat(64)}`,
-              source: body.source,
-              capsule: body.capsule,
-              options: body.options ?? {},
-              preflight: body.preflight,
-              sourceId: "src_install_e2e",
-              sourceSnapshotId: "snap_install_e2e",
-              installConfigId: "cfg_install_e2e",
-              capsuleId: "cap_install_e2e",
-              planRunId: "run_plan_e2e",
-              phase: "reviewable",
-              generation: 1,
-              createdAt: now,
-              updatedAt: now,
-            },
-            nextAction: "review_run",
-            links: {
-              self: "/api/v1/install-plans/install_plan_e2e",
-              run: "/api/v1/runs/run_plan_e2e",
-            },
-          },
-        });
-      }
-      return route.fallback();
-    });
-
-    const handoff = new URLSearchParams({
-      tcsBase: "https://store.example.test",
-      tcsListing: "example/service",
-    });
-    await page.goto(`/new?${handoff}`, { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle");
-    const hostingOption = page.getByRole("combobox", {
-      name: /プロバイダー|Provider/u,
-    });
-    await expect(hostingOption).toHaveCount(0);
-    expect(prematureConfigReads).toEqual([]);
-    await prepareInlineFixture(page);
-    const moduleChooser = page.getByTestId("install-module-chooser");
-    // This revision's tracked OpenTofu files expose two root modules, so the
-    // chooser is where the destination comes from. A Store listing that
-    // reviewed one of them makes that module the preselected choice; it never
-    // replaces the repository's other roots with a single entry path.
-    await expect(moduleChooser).toBeVisible();
-    expect(sourceAutoSyncPatchBodies).toEqual([]);
-    // No compatibility check may run before the user confirms a module.
-    expect(seenMutations).not.toContain(
-      "POST /api/v1/sources/src_install_e2e/compatibility-check",
-    );
-    const moduleOption = moduleChooser.getByRole("combobox", {
-      name: /モジュールディレクトリ|Module directory/u,
-    });
-    await expect(moduleOption).toHaveValue(
-      reviewedModule?.exposed ? reviewedModule.path : "",
-    );
-    // Each candidate carries the provider set derived from that exact scanned
-    // directory, so the choice names the destination instead of a bare path:
-    // the Cloudflare root and the takoform root stay selectable either way.
-    await expect(moduleOption.locator("option")).toHaveText([
-      /モジュールディレクトリ|Module directory/u,
-      ". — Cloudflare",
-      "deploy/takoform — AWS, Cloudflare",
-    ]);
-    await moduleOption.selectOption("deploy/takoform");
-    await moduleChooser
-      .getByRole("button", {
-        name: /このモジュールで続ける|Continue with this module/u,
-      })
-      .click();
-    await expect
-      .poll(() => compatibilityBodies.length)
-      .toBe(1);
-    await expect
-      .poll(() => installModuleRequests.length)
-      .toBe(1);
-    expect(installModuleRequests).toEqual([
-      "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/install-modules",
-    ]);
-    expect(compatibilityBodies[0]).toMatchObject({
-      compileInstallUx: true,
-      modulePath: "deploy/takoform",
-      sourceSnapshotId: "snap_install_e2e",
-    });
-    await expect(
-      page.getByTestId("install-configuration").getByRole("heading", { name: /^(設定|Settings)$/u }),
-    ).toBeVisible();
-    await page.getByLabel(/リージョン|Region/u).fill("edited");
-    await reviewInlineFixture(page);
-    await expect
-      .poll(() =>
-        seenMutations.includes("POST /api/v1/workspaces/ws_alpha/install-plans"),
-      )
-      .toBe(true);
-    expect(installPlanBodies).toEqual([
-      expect.objectContaining({
-        options: expect.objectContaining({ modulePath: "deploy/takoform" }),
-        preflight: {
-          sourceId: "src_install_e2e",
-          sourceSnapshotId: "snap_install_e2e",
-          compatibilityCheckRunId: "ccr_install_e2e",
-          compatibilityReportId: "caprep_install_e2e",
-          installConfigId: "cfg_install_e2e",
-        },
-        variables: { region: "edited" },
-      }),
-    ]);
-    if (retryMode !== "none") {
-      const next = installSheetActions(page).getByRole("button", { name: /^(内容を確認|Review)$/u });
-      await expect(next).toBeEnabled();
-      expect(installPlanBodies).toHaveLength(1);
-      if (retryMode === "edited") await page.getByLabel(/リージョン|Region/u).fill("changed-again");
-      await next.click();
-      await expect.poll(() => installPlanBodies.length).toBe(2);
-      expect(installPlanKeys[0]).toBeTruthy();
-      if (retryMode === "unchanged") {
-        expect(installPlanBodies[1]).toEqual(installPlanBodies[0]);
-        expect(installPlanKeys[1]).toBe(installPlanKeys[0]);
-      } else {
-        expect(installPlanBodies[1]).toMatchObject({ variables: { region: "changed-again" } });
-        expect(installPlanKeys[1]).not.toBe(installPlanKeys[0]);
-      }
-      expect(compatibilityBodies).toHaveLength(1);
-    }
-    expect(seenMutations).not.toContain(
-      "POST /api/v1/workspaces/ws_alpha/capsules",
-    );
-    expect(seenMutations).not.toContain(
-      "PUT /api/v1/capsules/cap_install_e2e/provider-bindings",
-    );
-    expect(seenMutations).not.toContain(
-      "POST /api/v1/capsules/cap_install_e2e/plan",
-    );
-    expectSingleSourceCreate(sourceState);
-    expect(stableRefResolutionBodies).toEqual([
-      { url: "https://github.com/example/service" },
-    ]);
-    expect(sourcePostBodies).toEqual([
-      expect.objectContaining({
-        defaultRef: resolvedCommit,
-        defaultPath: ".",
-        autoSync: false,
-      }),
-    ]);
-    await expect.poll(() => sourceAutoSyncPatchBodies).toEqual([
-      { autoSync: true },
-    ]);
-    const installPlanMutationIndex = seenMutations.lastIndexOf(
-      "POST /api/v1/workspaces/ws_alpha/install-plans",
-    );
-    const sourcePatchMutationIndex = seenMutations.lastIndexOf(
-      "PATCH /api/v1/sources/src_install_e2e",
-    );
-    expect(installPlanMutationIndex).toBeGreaterThanOrEqual(0);
-    expect(sourcePatchMutationIndex).toBeGreaterThan(installPlanMutationIndex);
-    expect(syncBodies).toEqual([{ expectedRef: resolvedCommit }]);
-  });
-  };
-  storeSetupRetryTest("none");
-  storeSetupRetryTest("unchanged");
-  storeSetupRetryTest("edited");
-  // Store handoff: a reviewed module the snapshot proves is preselected, a
-  // stale entry falls back to the scan's own choice, and in both cases every
-  // root module of the scanned revision stays selectable.
-  storeSetupRetryTest("none", { path: "deploy/takoform", exposed: true });
-  storeSetupRetryTest("none", { path: "deploy/moved", exposed: false });
-
-  test("direct Git installs submit the exact scanned module path", async ({
-    page,
-  }) => {
-    test.skip(
-      mode !== "portable",
-      "the deterministic direct Git install fixture is portable-only",
-    );
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(page, [], [], {
-      sourcePath: "infra",
-      modulePath: "deploy/selected",
-    });
-    const query = new URLSearchParams({
-      git: "https://github.com/tako0614/yurucommu.git",
-      ref: PORTABLE_SOURCE_COMMIT,
-      sourcePath: "infra",
-      path: "deploy/selected",
-      name: "yurucommu",
-    });
-    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("install-module-chooser")).toHaveCount(0);
-
-    await prepareInlineFixture(page);
-    await expect
-      .poll(() => state.sourcePosts.length)
-      .toBe(1);
-    expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
-    await expect
-      .poll(() => state.installModuleRequests.length)
-      .toBe(1);
-    expect(state.installModuleRequests).toEqual([
-      "/api/v1/sources/src_provider_destination_e2e/snapshots/snap_provider_destination_e2e/install-modules",
-    ]);
-    await expect
-      .poll(() => state.compatibilityBodies.length)
-      .toBe(1);
-    expect(state.compatibilityBodies[0]).toMatchObject({
-      compileInstallUx: true,
-      modulePath: "deploy/selected",
-      sourceSnapshotId: "snap_provider_destination_e2e",
-    });
-    expect(state.sourceCreateBodies).toEqual([
-      expect.objectContaining({ defaultPath: "infra" }),
-    ]);
-    expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
-    await expectSourceAutoSyncOptInAfterPlan(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });

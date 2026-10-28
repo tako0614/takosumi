@@ -1,18 +1,14 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
-import { PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS, PORTABLE_UI_SURFACES } from "./fixture-data.ts";
+import {
+  createInstallAttemptFixture,
+  PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
+  PORTABLE_UI_SURFACES,
+  type InstallAttemptFixture,
+  type InstallAttemptFixtureOptions,
+} from "./fixture-data.ts";
 
-type BaseFixture = {
-  readonly mutations: string[];
-  readonly sourceCreateBodies?: readonly unknown[];
-  readonly compatibilityBodies?: readonly unknown[];
-  installPlanBody?: {
-    readonly capsule?: Readonly<Record<string, unknown>>;
-    readonly source?: Readonly<Record<string, unknown>>;
-    readonly variables?: Readonly<Record<string, unknown>>;
-    readonly options?: { readonly providerBindings?: readonly Record<string, unknown>[] };
-  };
-};
+type BaseFixture = { readonly mutations: string[] };
 type CostFixture = "not_applicable" | "rated_zero" | "unrated" | "unavailable";
 const capId = "cap_provider_destination_e2e";
 const sourceId = "src_provider_destination_e2e";
@@ -20,15 +16,27 @@ const planId = "run_provider_plan_e2e";
 const applyId = "run_provider_apply_e2e";
 const now = "2026-10-27T01:00:00.000Z";
 const sourceCommit = "0123456789abcdef0123456789abcdef01234567";
+const cloudflare = "registry.opentofu.org/cloudflare/cloudflare";
 const sourceUrl = `/new?git=https%3A%2F%2Fgithub.com%2Fexample%2Fcloudflare-service.git&ref=${sourceCommit}&path=.&name=cloudflare-service`;
 const domainField = /^Domain(?:\s*\*)?$/;
 const applyMutation = `POST /api/v1/runs/${planId}/apply`;
-const abandonMutation = `POST /api/v1/capsules/${capId}/abandon`;
-const sourceDeleteMutation = `DELETE /api/v1/sources/${sourceId}`;
+const attemptPost = "POST /api/v1/workspaces/ws_alpha/install-plans";
 
-async function detailFixture(page: Page, base: (page: Page, provider: boolean) => Promise<BaseFixture>, provider = false, oauth = false, cost: CostFixture = "not_applicable") {
+/**
+ * One app behind the install-plan coordinator: the attempt routes come from
+ * the shared fixture coordinator, the Run, Capsule and app-page reads from
+ * this fixture's state.
+ */
+async function detailFixture(
+  page: Page,
+  base: (page: Page, provider: boolean) => Promise<BaseFixture>,
+  provider = false,
+  oauth = false,
+  cost: CostFixture = "not_applicable",
+  attemptOptions: Partial<InstallAttemptFixtureOptions> = {},
+) {
   await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
-  const initial = await base(page, provider);
+  await base(page, provider);
   const mutations: string[] = [];
   let applied = false;
   let applyStatus = "running";
@@ -38,6 +46,22 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
   let retryFailed = false;
   let screensUnreadable = false;
   const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), id: "conn_inline_fixture", displayName: "My Cloudflare" };
+  const attempts: InstallAttemptFixture = createInstallAttemptFixture({
+    capsuleId: capId,
+    planRunId: planId,
+    resources: [
+      { type: "cloudflare_workers_script", allowed: true },
+      { type: "cloudflare_d1_database", count: 2, allowed: true },
+    ],
+    requirements: provider ? [{ provider: cloudflare, moduleLocalName: "cloudflare" }] : [],
+    connections: () => connected ? [{ ...connection, status: "verified" }] : [],
+    variables: [
+      { name: "domain", type: "string", required: false, sensitive: false, label: { ja: "ドメイン", en: "Domain" }, defaultValue: "default.example.com" },
+      { name: "custom_domain", type: "string", required: false, sensitive: false, label: { en: "Custom domain", ja: "カスタムドメイン" } },
+      { name: "service_name", type: "string", required: false, sensitive: false, label: { en: "Service name", ja: "サービス名" }, derivedDefault: "capsule_name" },
+    ],
+    ...attemptOptions,
+  });
   const planResources = [
     { address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["create"] },
     { address: "cloudflare_d1_database.data", type: "cloudflare_d1_database", actions: ["create"] },
@@ -100,9 +124,17 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     return route.fulfill({ contentType: "text/html", body: `<h1>Connection callback</h1><script>new BroadcastChannel(${JSON.stringify("takosumi.oauth." + flow)}).postMessage(${JSON.stringify(result)})</script>` });
   });
   await page.route("**/api/v1/**", async (route) => {
-    const request = route.request(); const path = new URL(request.url()).pathname;
+    const request = route.request(); const url = new URL(request.url()); const path = url.pathname;
     if (request.method() !== "GET") mutations.push(`${request.method()} ${path}`);
-    if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES, oauthHelpers: oauth ? [{ id: "cloudflare", providerSource: "registry.opentofu.org/cloudflare/cloudflare", credentialRecipe: { id: "cloudflare", authMode: "oauth" }, setupFields: [{ key: "accountId", envName: "CLOUDFLARE_ACCOUNT_ID" }] }] : [] } });
+    const attempt = attempts.handle({
+      method: request.method(),
+      path,
+      search: url.search,
+      body: request.postData() ? request.postDataJSON() : undefined,
+      idempotencyKey: request.headers()["idempotency-key"],
+    });
+    if (attempt) return route.fulfill({ status: attempt.status, json: attempt.json });
+    if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES, oauthHelpers: oauth ? [{ id: "cloudflare", providerSource: cloudflare, credentialRecipe: { id: "cloudflare", authMode: "oauth" }, setupFields: [{ key: "accountId", envName: "CLOUDFLARE_ACCOUNT_ID" }] }] : [] } });
     if (path === "/api/v1/connections/oauth/cloudflare/start") return route.fulfill({ json: { authorizationUrl: "https://dash.cloudflare.test/oauth2/auth?state=opaque-fixture-state", state: "opaque-fixture-state", expiresAt: new Date(Date.now() + 600000).toISOString() } });
     if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: connected ? [connection] : [] } });
     if (path === "/api/v1/connections") {
@@ -111,18 +143,9 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     }
     if (path === "/api/v1/connections/conn_inline_fixture/test") { connected = true; return route.fulfill({ json: { status: "verified" } }); }
     if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") return route.fulfill({ json: { installConfig: {
-      id: "cfg-default-opentofu-capsule", name: "Example", policy: {}, variableMapping: {},
-      variablePresentation: [{ name: "domain", type: "string", required: true, label: { ja: "ドメイン", en: "Domain" }, defaultValue: { source: "literal", value: "default.example.com" } }, { name: "custom_domain", type: "string", required: false, label: { en: "Custom domain", ja: "カスタムドメイン" } }, { name: "service_name", type: "string", required: true, label: { en: "Service name", ja: "サービス名" }, defaultValue: { source: "capsule_name" } }],
+      id: "cfg-default-opentofu-capsule", name: "Example", policy: {}, variableMapping: {}, variablePresentation: [],
       outputAllowlist: {}, createdAt: now, updatedAt: now,
     } } });
-    if (path === `/api/v1/capsules/${capId}/abandon` && request.method() === "POST") {
-      // The server abandons only a never-applied Capsule.
-      capsuleStatus = "destroyed";
-      return route.fulfill({ json: { capsule: { ...capsule(), status: "destroyed", currentStateGeneration: 0, currentStateVersionId: undefined }, abandoned: true } });
-    }
-    if (path === `/api/v1/sources/${sourceId}` && request.method() === "DELETE") {
-      return route.fulfill({ json: { source: { id: sourceId, workspaceId: "ws_alpha", name: "cloudflare-service", url: "https://github.com/example/cloudflare-service.git", defaultRef: sourceCommit, defaultPath: ".", status: "disabled", autoSync: false, createdAt: now, updatedAt: now } } });
-    }
     if (path === `/api/v1/capsules/${capId}`) {
       if (request.method() === "DELETE") capsuleStatus = "uninstalled";
       // A capsule read always carries the configuration authority guard.
@@ -131,17 +154,16 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     if (path === `/api/v1/capsules/${capId}/app`) return route.fulfill({ json: { app: appView() } });
     if (path === `/api/v1/capsules/${capId}/runs`) {
       const runs = applied ? [apply(), plan()] : [plan()];
-      return route.fulfill({ json: { runs: runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) } });
+      const types = url.searchParams.getAll("type");
+      return route.fulfill({ json: { runs: runs.filter((run) => types.length === 0 || types.includes(run.type)) } });
     }
-    if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
-    if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: "registry.opentofu.org/cloudflare/cloudflare" })) } } });
+    if (path === `/api/v1/capsules/${capId}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: { id: "pbs_inline", workspaceId: "ws_alpha", capsuleId: capId, environment: "production", bindings: provider ? [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: connection.id }] : [], createdAt: now, updatedAt: now } } });
+    if (path === `/api/v1/capsules/${capId}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: capId, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_inline", generation: 1, applyRunId: applyId, planRunId: planId, recordedAt: now, availability: "recorded", resources: planResources.map(({ address, type }) => ({ address, type, providerSource: cloudflare })) } } });
     if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
     if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
     if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
-    if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
-    // An installed app's failed change with no recorded origin is planned
-    // again on the installed version (never the Source's default ref).
     if (path === "/api/v1/state-versions/sv_inline/rollback-plan" && request.method() === "POST") { retryCount += 1; return route.fulfill({ status: 201, json: { run: plan() } }); }
+    if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
     if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
     if (path.startsWith("/api/v1/runs/") && path.endsWith("/cost")) {
       if (cost === "unavailable") return route.fulfill({ status: 503, json: { error: "fixture_cost_unavailable" } });
@@ -165,10 +187,23 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     return route.fallback();
   });
   await page.context().route("https://apps.example.test/inline-app", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Installed application</h1>" }));
-  return { initial, mutations, authorize: () => { connected = true; }, finish: () => { applied = true; applyStatus = "succeeded"; capsuleStatus = "active"; }, fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; }, destroy: () => { capsuleStatus = "destroyed"; }, problem: (status: string) => { capsuleStatus = status; }, failRetry: (failed: boolean) => { retryFailed = failed; }, screensUnreadable: (value: boolean) => { screensUnreadable = value; } };
+  return {
+    attempts,
+    mutations,
+    authorize: () => { connected = true; },
+    finish: () => { applied = true; applyStatus = "succeeded"; capsuleStatus = "active"; },
+    fail: (partialState = false) => { applyStatus = "failed"; if (partialState) capsuleStatus = "error"; },
+    destroy: () => { capsuleStatus = "destroyed"; },
+    problem: (status: string) => { capsuleStatus = status; },
+    failRetry: (failed: boolean) => { retryFailed = failed; },
+    screensUnreadable: (value: boolean) => { screensUnreadable = value; },
+    /** The confirming answer (`continue: true`) the page sent, if any. */
+    continued: () => attempts.log.answers.find((answer) => (answer as { continue?: boolean } | undefined)?.continue === true) as
+      { readonly variables?: Readonly<Record<string, unknown>>; readonly capsuleName?: string } | undefined,
+  };
 }
 
-/** The install sheet opened by the app page's single Install button. */
+/** The install sheet the attempt opens once the repository is read. */
 function installSheet(page: Page): Locator {
   return page.getByTestId("install-configuration");
 }
@@ -190,7 +225,7 @@ async function openInstallSheet(page: Page): Promise<Locator> {
   return sheet;
 }
 
-/** Review creates the Plan; Allow and install is the only Apply consent. */
+/** Review confirms the sheet; Allow and install is the only Apply consent. */
 async function reviewPlan(page: Page): Promise<Locator> {
   await sheetActions(page).getByRole("button", { name: "Review", exact: true }).click();
   const review = page.locator(".iv-execution");
@@ -229,16 +264,15 @@ async function captureInstallState(page: Page, name: string): Promise<void> {
 }
 
 async function expectNothingStored(page: Page, ...values: string[]): Promise<void> {
-  const stored = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
+  const stored = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage }, url: location.href }));
   for (const value of values) expect(stored).not.toContain(value);
 }
 
 export function registerInstallDetailCases(mode: string, base: (page: Page, provider: boolean) => Promise<BaseFixture>) {
   test.describe("Inline app detail installation", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
-    test("connects a missing provider inline, keeps settings, and submits the verified binding", async ({ page }) => {
-      const f = await detailFixture(page, base, true);
-      await page.setViewportSize({ width: 390, height: 844 });
+    test("opening the app page creates nothing; Install reads the repository as one attempt", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 6 });
       const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(sourceUrl);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
@@ -248,13 +282,40 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(provenance).toContainText(sourceCommit.slice(0, 7));
       await expect(provenance).not.toContainText(sourceCommit);
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+      await expect(page.getByRole("link", { name: "Choose again", exact: true })).toHaveAttribute("href", "/new");
+      await expect(page.getByTestId("install-start")).toContainText("Nothing is created in your cloud yet");
+      await captureInstallState(page, "app-not-installed");
+      await page.waitForTimeout(500);
+      expect(f.mutations).toEqual([]);
+
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const reading = page.getByTestId("install-reading");
+      await expect(reading.getByRole("heading", { name: "Reading the repository", exact: true })).toBeVisible();
+      await expect(page).toHaveURL(/[?&]installPlan=gip_[0-9a-f]{16}/u);
+      await captureInstallState(page, "app-reading");
+      await expect(installSheet(page)).toBeVisible({ timeout: 15_000 });
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
+      expect(f.attempts.log.creates).toEqual([{
+        mode: "attempt",
+        source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
+        capsule: { name: "cloudflare-service" },
+        options: { modulePath: "." },
+      }]);
+      // Reading and the sheet never apply anything.
+      expect(f.mutations.some((m) => /\/(apply|approve)$/u.test(m))).toBe(false);
+      expect(errors).toEqual([]);
+    });
+    test("connects a missing provider inline, keeps settings, and submits the verified binding", async ({ page }) => {
+      const f = await detailFixture(page, base, true);
+      await page.setViewportSize({ width: 390, height: 844 });
+      const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(sourceUrl);
       await expect(installSheet(page)).toHaveCount(0);
-      expect(f.initial.sourceCreateBodies ?? []).toEqual([]);
       const sheet = await openInstallSheet(page);
       await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("default.example.com");
       await sheet.getByRole("textbox", { name: domainField }).fill("chosen.example.com");
-      expect(f.initial.installPlanBody).toBeUndefined();
+      expect(f.continued()).toBeUndefined();
 
       const row = connectionRows(page);
       await expect(row).toHaveCount(1);
@@ -271,7 +332,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(form).toHaveCount(0);
       await captureInstallState(page, "app-sheet-missing-connection");
       // While a connection is missing the sheet's primary action is Connect,
-      // and it opens that row instead of creating a Plan.
+      // and it opens that row instead of confirming the sheet.
       // Opening the form must not suspend and remount the whole sheet.
       await sheet.evaluate((element) => element.setAttribute("data-e2e-mounted", "before-connect"));
       await sheetActions(page).getByRole("button", { name: "Connect", exact: true }).click();
@@ -281,7 +342,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(form).toHaveClass(/\biv-inline-connect\b/u);
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
       await expect(toggle).toHaveText("Close");
-      expect(f.initial.installPlanBody).toBeUndefined();
+      expect(f.continued()).toBeUndefined();
       // The form is limited to the row's provider: only its own sign-in methods.
       const methods = await form.locator("#connection-provider option").allTextContents();
       expect(methods.length).toBeGreaterThan(0);
@@ -304,7 +365,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await form.locator("#connection-field-CLOUDFLARE_API_TOKEN").fill("fixture-only-token");
       await form.locator("#connection-field-CLOUDFLARE_ACCOUNT_ID").fill("fixture-account");
       await form.getByRole("button", { name: "Save connection", exact: true }).click();
-      // Saved, tested once, then selected for this row; the form closes.
+      // Saved, tested once, then offered (and chosen) for this row; the form closes.
       await expect(row).toHaveAttribute("data-connection-state", "connected");
       await expect(row).toContainText("Connected");
       await expect(row).toContainText("My Cloudflare");
@@ -318,18 +379,41 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((m) => m === "POST /api/v1/connections")).toHaveLength(1);
       expect(f.mutations.filter((m) => m === "POST /api/v1/connections/conn_inline_fixture/test")).toHaveLength(1);
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("chosen.example.com");
-      expect(f.initial.installPlanBody).toBeUndefined();
+      expect(f.continued()).toBeUndefined();
 
       await reviewPlan(page);
-      await expect.poll(() => f.initial.installPlanBody?.variables).toEqual({ domain: "chosen.example.com" });
-      expect(f.initial.installPlanBody?.options?.providerBindings).toEqual([
-        expect.objectContaining({ provider: "registry.opentofu.org/cloudflare/cloudflare", connectionId: "conn_inline_fixture" }),
-      ]);
+      // Only the edited value travels, and only in the confirming answer.
+      expect(f.continued()?.variables).toEqual({ domain: "chosen.example.com" });
+      expect(f.attempts.latest()?.options.providerBindings ?? []).toEqual([]);
+      expect(f.attempts.log.answers.filter((answer) => JSON.stringify(answer).includes("chosen.example.com"))).toHaveLength(1);
       expect(f.mutations).not.toContain(applyMutation);
       await expectNothingStored(page, "fixture-only-token", "chosen.example.com");
       expect(errors).toEqual([]);
     });
-    test("OAuth keeps declared domain settings mounted and uses the verified returned connection", async ({ page, context }) => {
+    test("several connections ask for a choice that is answered as the exact provider tuple", async ({ page }) => {
+      const others = [
+        { id: "pc_account_a", providerSource: cloudflare, displayName: "Cloudflare account A", status: "verified", scope: "workspace", workspaceId: "ws_alpha" },
+        { id: "pc_account_b", providerSource: cloudflare, displayName: "Cloudflare account B", status: "verified", scope: "workspace", workspaceId: "ws_alpha" },
+      ];
+      const f = await detailFixture(page, base, true, false, "not_applicable", { connections: () => others });
+      await page.goto(sourceUrl);
+      const sheet = await openInstallSheet(page);
+      const row = connectionRows(page);
+      const choice = row.getByRole("combobox", { name: /Host \/ account/u });
+      await expect(choice).toHaveValue("");
+      await expect(choice.locator("option")).toContainText(["Cloudflare account A", "Cloudflare account B"]);
+      await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
+      await choice.selectOption("pc_account_b");
+      await expect(row).toHaveAttribute("data-connection-state", "connected");
+      await expect(row).toContainText("✓ Connected");
+      expect(f.attempts.log.answers).toEqual([{
+        expectedGeneration: expect.any(Number),
+        providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_account_b" }],
+      }]);
+      await reviewPlan(page);
+      expect(f.continued()).toEqual({ expectedGeneration: expect.any(Number), continue: true });
+    });
+    test("OAuth keeps settings mounted and uses the verified returned connection", async ({ page, context }) => {
       const f = await detailFixture(page, base, true, true);
       await context.route("https://dash.cloudflare.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Authorize Cloudflare</h1>" }));
       await page.goto(sourceUrl);
@@ -337,8 +421,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await sheet.getByRole("textbox", { name: domainField }).fill("oauth-chosen.example.net");
       // Optional settings are shown plainly, not behind a disclosure.
       await expect(sheet.getByTestId("install-optional-settings")).toBeVisible();
-      await expect(sheet.getByRole("textbox", { name: /^Service name(?:\s*\*)?$/ })).toHaveValue("cloudflare-service");
-      await sheet.getByLabel("Custom domain", { exact: true }).fill("custom.example.org");
+      await sheet.getByLabel("Custom domain", { exact: false }).fill("custom.example.org");
       const row = connectionRows(page);
       await row.getByRole("button", { name: "Connect", exact: true }).click();
       const form = row.locator(".iv-inline-connect");
@@ -349,15 +432,14 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const popup = await popupEvent;
       await expect(popup.getByRole("heading")).toHaveText("Authorize Cloudflare");
       await popup.goto(new URL("/api/v1/connections/oauth/cloudflare/callback?state=opaque-fixture-state&code=fixture", page.url()).toString());
-      // The OAuth connection arrives verified: adopted for the row without a test.
+      // The OAuth connection arrives verified: chosen for the row without a test.
       await expect(row).toHaveAttribute("data-connection-state", "connected");
       await expect(form).toHaveCount(0);
       await expect(page.getByTestId("install-connections")).toContainText("Connected. Ready to install.");
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("oauth-chosen.example.net");
-      await expect(sheet.getByLabel("Custom domain", { exact: true })).toHaveValue("custom.example.org");
+      await expect(sheet.getByLabel("Custom domain", { exact: false })).toHaveValue("custom.example.org");
       await reviewPlan(page);
-      await expect.poll(() => f.initial.installPlanBody?.variables).toEqual({ domain: "oauth-chosen.example.net", custom_domain: "custom.example.org" });
-      expect(f.initial.installPlanBody?.options?.providerBindings?.[0]?.connectionId).toBe("conn_inline_fixture");
+      expect(f.continued()?.variables).toEqual({ domain: "oauth-chosen.example.net", custom_domain: "custom.example.org" });
       expect(f.mutations.some((entry) => entry === "POST /api/v1/connections")).toBe(false);
       expect(f.mutations.some((entry) => entry.endsWith("/test"))).toBe(false);
       await expectNothingStored(page, "oauth-chosen.example.net", "opaque-fixture-state");
@@ -394,46 +476,58 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(toggle).toBeFocused();
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("retry.example.net");
       await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
-      expect(f.initial.installPlanBody).toBeUndefined();
+      expect(f.continued()).toBeUndefined();
     });
-    test("installs inline, restores the real running Apply after reload, and opens the deployed app", async ({ page, context }) => {
+    test("a secret setting is write-only and leaves the page only in the confirming answer", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", {
+        variables: [{ name: "api_token", type: "string", required: true, sensitive: true, label: { en: "API token", ja: "APIトークン" } }],
+      });
+      await page.goto(sourceUrl);
+      const sheet = await openInstallSheet(page);
+      const secret = sheet.getByLabel(/^API token/u);
+      await expect(secret).toHaveAttribute("type", "password");
+      await expect(secret).toHaveValue("");
+      await expect(sheet).toContainText("Not saved. Sent only when you confirm the install.");
+      const review = sheetActions(page).getByRole("button", { name: "Review", exact: true });
+      await expect(review).toBeDisabled();
+      await secret.fill("fixture-secret-value");
+      await expect(review).toBeEnabled();
+      await reviewPlan(page);
+      expect(f.continued()?.variables).toEqual({ api_token: "fixture-secret-value" });
+      const carrying = f.attempts.log.answers.filter((answer) => JSON.stringify(answer).includes("fixture-secret-value"));
+      expect(carrying).toEqual([f.continued()]);
+      expect(JSON.stringify(f.attempts.log.creates)).not.toContain("fixture-secret-value");
+      await expectNothingStored(page, "fixture-secret-value");
+    });
+    test("installs inline after the explicit click and moves to the installed app's page", async ({ page, context }) => {
       const f = await detailFixture(page, base);
       const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(sourceUrl);
-      await expect(page.getByTestId("install-app-header")).toBeVisible();
-      await expect(page.getByRole("button", { name: "Choose again", exact: true })).toBeVisible();
-      await captureInstallState(page, "app-not-installed");
-      await page.setViewportSize({ width: 390, height: 844 });
-      await expectNoHorizontalOverflow(page, "not-installed app page at 390px");
       await openInstallSheet(page);
       await reviewPlan(page);
       await page.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
-      // A reload lands on the app's own page, which follows the running Apply
-      // the server reports — nothing is applied again.
-      await page.reload();
-      await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));
-      const app = page.getByTestId("app-page");
-      await expect(app).toHaveAttribute("data-app-state", "installing");
-      await expect(page.getByTestId("app-header")).toContainText("cloudflare-service");
       await expect(page.locator(".iv-execution")).toContainText("Installing");
+      // A reload follows the Apply already started for this Plan; it never
+      // offers Allow and install again.
+      await page.reload();
+      await expect(page.locator(".iv-execution")).toContainText("Installing");
+      await expect(page.getByRole("button", { name: "Allow and install", exact: true })).toHaveCount(0);
       await page.getByText("Progress and logs", { exact: true }).click();
       await expect(page.getByTestId("install-run-logs")).toContainText("Installing fixture resources");
       f.finish();
-      // Once installed, the page shows the same sections as everywhere else.
-      await expect(app).toHaveAttribute("data-app-state", "installed", { timeout: 20000 });
+      // Once installed, the app's own page takes over: the same sections as
+      // everywhere else.
+      await expect(page).toHaveURL(new RegExp(`/(workloads|apps)/${capId}$`, "u"), { timeout: 20_000 });
+      const app = page.getByTestId("app-page");
+      await expect(app).toBeVisible();
       await expect(page.getByTestId("install-app-header")).toHaveCount(0);
       const open = page.getByTestId("app-header").getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", "https://apps.example.test/inline-app");
-      for (const section of ["app-version", "app-settings", "app-created", "app-history", "app-uninstall"]) {
-        await expect(app.getByTestId(section)).toBeVisible();
-      }
-      await expect(app.getByTestId("app-created-groups")).toContainText("Workers Script");
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       await captureInstallState(page, "app-installed");
       const popupPromise = context.waitForEvent("page"); await open.click(); const popup = await popupPromise;
       await expect(popup.getByRole("heading")).toHaveText("Installed application"); await popup.close();
-      await page.reload(); await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
       expect(errors).toEqual([]);
     });
@@ -443,7 +537,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(sourceUrl);
         const sheet = await openInstallSheet(page);
-        // Before any connection or Plan, the sheet previews the scanned types.
+        // Before any connection or Plan, the sheet previews the analyzed types.
         const planned = sheet.getByTestId("install-planned-resources");
         await expect(planned.getByRole("heading", { name: "What this app will create (planned)" })).toBeVisible();
         await expect(planned.locator('li[data-resource-type="cloudflare_workers_script"]')).toBeVisible();
@@ -475,106 +569,174 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         // A clean Plan waits for consent: no Apply across Run poll intervals.
         await page.waitForTimeout(3_500);
         expect(f.mutations).not.toContain(applyMutation);
-        await allow.click();
+        // A reload reopens the same review, read-only: no new attempt, no Apply.
+        await page.reload();
+        await expect(page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+        expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
+        expect(f.mutations).not.toContain(applyMutation);
+        await page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true }).click();
         await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
-        await expect(review.getByRole("heading", { name: "Installing", exact: true })).toBeVisible();
+        await expect(page.locator(".iv-execution").getByRole("heading", { name: "Installing", exact: true })).toBeVisible();
         expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
         expect(errors).toEqual([]);
       });
     }
-    test("Stop installing from the sheet deletes only the Source this attempt created", async ({ page }) => {
+    test("Stop installing from the sheet discards the whole attempt and returns to the same app", async ({ page }) => {
       const f = await detailFixture(page, base);
       await page.goto(sourceUrl);
       await openInstallSheet(page);
-      expect(f.mutations).toContain("POST /api/v1/sources");
+      const attemptId = new URL(page.url()).searchParams.get("installPlan");
       await sheetActions(page).getByRole("button", { name: "Stop installing", exact: true }).click();
       await expect(installSheet(page)).toHaveCount(0);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
       await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
       await expect(page.getByTestId("install-start")).toBeVisible();
-      await expect.poll(() => f.mutations.filter((m) => m === sourceDeleteMutation).length).toBe(1);
-      // No Capsule existed yet, so nothing is abandoned and no Plan exists.
-      expect(f.mutations.some((m) => m.includes("/abandon"))).toBe(false);
-      expect(f.mutations.some((m) => m.includes("/install-plans"))).toBe(false);
-      // A deleted Source needs no polling opt-out.
-      expect(f.mutations.some((m) => m.startsWith("PATCH /api/v1/sources/"))).toBe(false);
-      expect(f.initial.installPlanBody).toBeUndefined();
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/install-plans/${attemptId}`)).toHaveLength(1);
+      expect(f.attempts.log.discards).toEqual([{ id: attemptId, expectedGeneration: f.attempts.latest()!.generation - 1 }]);
+      // The page itself deletes nothing else: the coordinator owns the cleanup.
+      expect(f.mutations.some((m) => m.includes("/sources") || m.includes("/abandon"))).toBe(false);
       // The URL still names this app, so a reload returns to the same page.
       const discarded = new URL(page.url());
+      expect(discarded.searchParams.get("installPlan")).toBeNull();
       expect(discarded.searchParams.get("git")).toBe("https://github.com/example/cloudflare-service.git");
-      expect(discarded.searchParams.get("name")).toBe("cloudflare-service");
       await page.reload();
       await expect(page.getByRole("heading", { level: 1, name: "cloudflare-service" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
-      expect(f.mutations.filter((m) => m === "POST /api/v1/sources")).toHaveLength(1);
-      // A new attempt starts from a fresh Source rather than the deleted one.
-      await openInstallSheet(page);
-      expect(f.mutations.filter((m) => m === "POST /api/v1/sources")).toHaveLength(2);
-      expect(f.mutations.filter((m) => m === sourceDeleteMutation)).toHaveLength(1);
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
     });
-    test("Stop installing from the review abandons the unapplied Capsule before deleting its Source", async ({ page }) => {
+    test("Stop installing from the review discards the attempt and its unapplied app", async ({ page }) => {
       const f = await detailFixture(page, base);
       await page.goto(sourceUrl);
       await openInstallSheet(page);
       const review = await reviewPlan(page);
-      await expect(page).toHaveURL(new RegExp(`[?&]capsule=${capId}`, "u"));
       await review.getByRole("button", { name: "Stop installing", exact: true }).click();
       await expect(page.locator(".iv-execution")).toHaveCount(0);
-      await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
       await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
-      await expect(page).not.toHaveURL(/[?&]capsule=/u);
-      expect(new URL(page.url()).searchParams.get("git")).toBe("https://github.com/example/cloudflare-service.git");
-      await expect.poll(() => f.mutations.filter((m) => m === sourceDeleteMutation).length).toBe(1);
-      expect(f.mutations.filter((m) => m === abandonMutation)).toHaveLength(1);
-      expect(f.mutations.indexOf(abandonMutation)).toBeLessThan(f.mutations.indexOf(sourceDeleteMutation));
-      expect(f.mutations.some((m) => m.endsWith("/apply") || m.startsWith("DELETE /api/v1/capsules/"))).toBe(false);
+      await expect(page).not.toHaveURL(/[?&]installPlan=/u);
+      expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
+      expect(f.mutations.some((m) => m.endsWith("/apply") || m.startsWith("DELETE /api/v1/capsules/") || m.includes("/abandon"))).toBe(false);
     });
-    test("Cancel while preparing before a Source exists deletes nothing", async ({ page }) => {
-      const f = await detailFixture(page, base);
-      let releaseList!: () => void;
-      const listHeld = new Promise<void>((resolve) => { releaseList = resolve; });
-      let listRequested = false;
-      await page.route((url) => url.pathname === "/api/v1/sources", async (route) => {
-        if (route.request().method() !== "GET") return route.fallback();
-        listRequested = true;
-        await listHeld;
-        await route.fulfill({ json: { sources: [] } }).catch(() => undefined);
+    test("Stop installing while reading waits for the coordinator and then discards", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 1_000 });
+      await page.goto(sourceUrl);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const reading = page.getByTestId("install-reading");
+      await expect(reading).toBeVisible();
+      await expect.poll(() => f.attempts.log.reconciles).toBeGreaterThan(0);
+      await reading.getByRole("button", { name: "Stop installing", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
+      // The user's own stop is not reported as a failure.
+      await expect(page.locator(".iv-error")).toHaveCount(0);
+      expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
+      const reconcilesAfterStop = f.attempts.log.reconciles;
+      await page.waitForTimeout(1_000);
+      expect(f.attempts.log.reconciles).toBe(reconcilesAfterStop);
+    });
+    test("the app name is edited before the app exists; a taken name offers a free one", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", { takenNames: ["cloudflare-service"] });
+      await page.goto(sourceUrl);
+      const sheet = await openInstallSheet(page);
+      const name = sheet.getByTestId("install-app-name");
+      await expect(name).toHaveValue("cloudflare-service");
+      await expect(sheet).toContainText("Another app in this workspace already uses this name.");
+      const review = sheetActions(page).getByRole("button", { name: "Review", exact: true });
+      await expect(review).toBeDisabled();
+      await name.fill("Not A Valid Name");
+      await expect(review).toBeDisabled();
+      await sheet.getByRole("button", { name: "Use “cloudflare-service-2”", exact: true }).click();
+      await expect(name).toHaveValue("cloudflare-service-2");
+      await expect(review).toBeEnabled();
+      expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), capsuleName: "cloudflare-service-2" });
+      // Typing a name and pressing Review at once is one click: leaving the
+      // field renames first and Review waits for it.
+      await name.fill("renamed-app");
+      await reviewPlan(page);
+      expect(f.attempts.latest()?.capsule.name).toBe("renamed-app");
+      expect(f.mutations).not.toContain(applyMutation);
+      await expectNothingStored(page, "renamed-app");
+    });
+    test("a repository with several modules asks which one before the sheet", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", {
+        modules: [{ path: "apps/web", providers: [cloudflare] }, { path: "apps/api", providers: [] }],
+      });
+      await page.goto(`/new?git=${encodeURIComponent("https://github.com/example/cloudflare-service.git")}&name=cloudflare-service`);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const chooser = page.getByTestId("install-module-chooser");
+      await expect(chooser.getByRole("heading", { name: "Choose a module" })).toBeVisible();
+      await chooser.getByRole("combobox").selectOption("apps/api");
+      await chooser.getByRole("button", { name: "Continue with this module", exact: true }).click();
+      await expect(installSheet(page)).toBeVisible();
+      expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), modulePath: "apps/api" });
+    });
+    test("a failed attempt explains why and starts over as a new attempt", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", {
+        failAt: { phase: "analyzing_compatibility", code: "source_sync_failed" },
       });
       await page.goto(sourceUrl);
       await page.getByRole("button", { name: "Install", exact: true }).click();
-      await expect(page.getByRole("heading", { name: "Getting the install ready", exact: true })).toBeVisible();
-      await expect.poll(() => listRequested).toBe(true);
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
-      releaseList();
-      await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
-      await expect(installSheet(page)).toHaveCount(0);
-      // The user's own cancel is not reported as a failure.
-      await expect(page.locator(".iv-error")).toHaveCount(0);
-      expect(f.mutations.filter((m) => m === "POST /api/v1/sources")).toEqual([]);
-      expect(f.mutations.some((m) => m.startsWith("DELETE ") || m.includes("/abandon"))).toBe(false);
+      const problem = page.getByTestId("install-attempt-problem");
+      await expect(problem).toHaveAttribute("data-install-stage", "failed");
+      await expect(problem).toContainText("The Git repository couldn't be read.");
+      await problem.getByRole("button", { name: "Start over", exact: true }).click();
+      await expect.poll(() => f.mutations.filter((m) => m === attemptPost).length).toBe(2);
+      expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
+      expect(f.attempts.log.creates[1]).toEqual(f.attempts.log.creates[0]);
     });
-    test("the app name stays editable in the sheet and becomes the planned Capsule name", async ({ page }) => {
+    test("a reopened attempt is read only until the person continues", async ({ page }) => {
+      const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 3 });
+      await page.goto(sourceUrl);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      await expect(page).toHaveURL(/[?&]installPlan=gip_/u);
+      const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
+      // A reopened attempt alone (as from the Store's unfinished list).
+      await page.goto(`/new?installPlan=${attemptId}`);
+      const reading = page.getByTestId("install-reading");
+      await expect(reading.getByRole("heading", { name: "Reading paused", exact: true })).toBeVisible();
+      const reconciles = f.attempts.log.reconciles;
+      await page.waitForTimeout(1_000);
+      expect(f.attempts.log.reconciles).toBe(reconciles);
+      await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
+      await reading.getByRole("button", { name: "Continue", exact: true }).click();
+      await expect(installSheet(page)).toBeVisible();
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
+    });
+    test("unfinished installs are listed on the Store page and can continue or stop", async ({ page }) => {
       const f = await detailFixture(page, base);
       await page.goto(sourceUrl);
-      const sheet = await openInstallSheet(page);
-      const name = sheet.getByRole("textbox", { name: /^App name\b/u });
-      await expect(name).toHaveValue("cloudflare-service");
-      await name.fill("Not A Valid Name");
-      await sheetActions(page).getByRole("button", { name: "Review", exact: true }).click();
-      await expect(sheet.locator(".iv-error[role=alert]")).toBeVisible();
-      expect(f.initial.installPlanBody).toBeUndefined();
-      await name.fill("renamed-app");
-      await reviewPlan(page);
-      await expect.poll(() => f.initial.installPlanBody?.capsule?.name).toBe("renamed-app");
-      // The Source keeps the name it was registered with during preparation.
-      expect(f.initial.installPlanBody?.source?.name).toBe("cloudflare-service");
-      expect(f.initial.sourceCreateBodies).toEqual([expect.objectContaining({ name: "cloudflare-service" })]);
-      // Renaming does not repeat the Source or compatibility work.
-      expect(f.initial.compatibilityBodies).toHaveLength(1);
-      expect(f.mutations.filter((m) => m === "POST /api/v1/sources")).toHaveLength(1);
-      expect(f.mutations).not.toContain(applyMutation);
-      await expectNothingStored(page, "renamed-app");
+      await openInstallSheet(page);
+      const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
+      await page.goto("/new");
+      const open = page.getByTestId("install-open-attempts");
+      await expect(open.getByRole("heading", { name: "Unfinished installs" })).toBeVisible();
+      const row = open.locator(`li[data-install-plan-id="${attemptId}"]`);
+      await expect(row).toContainText("cloudflare-service");
+      await expect(row).toContainText("github.com/example/cloudflare-service");
+      await expect(row).toContainText("Waiting for connections and settings");
+      await captureInstallState(page, "store-unfinished");
+      await row.getByRole("link", { name: "Continue", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/new\\?installPlan=${attemptId}$`, "u"));
+      await expect(installSheet(page)).toBeVisible();
+      await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
+      await page.goto("/new");
+      await open.locator(`li[data-install-plan-id="${attemptId}"]`).getByRole("button", { name: "Stop installing", exact: true }).click();
+      await expect(open).toHaveCount(0);
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/install-plans/${attemptId}`)).toHaveLength(1);
+      // Listing, opening and continuing created nothing new.
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
+    });
+    test("an expired attempt says so and starts over", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      await page.goto(sourceUrl);
+      await openInstallSheet(page);
+      const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
+      f.attempts.invalidate(attemptId);
+      await page.reload();
+      const problem = page.getByTestId("install-attempt-problem");
+      await expect(problem).toHaveAttribute("data-install-stage", "invalidated");
+      await expect(problem).toContainText("This install expired");
+      await problem.getByRole("button", { name: "Start over", exact: true }).click();
+      await expect(installSheet(page)).toBeVisible();
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(2);
     });
     test("failed Apply offers a new reviewed Plan without abandoning partial state or replaying Apply", async ({ page }) => {
       const f = await detailFixture(page, base);
@@ -582,28 +744,35 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await reviewPlan(page);
       await page.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
-      f.fail(true); f.failRetry(true); await page.reload();
-      // The failure is this app's problem, on its own page (`/apps/:id`).
-      await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));
-      const problem = page.getByTestId("app-problems").locator('[data-problem="run_failed"]');
-      await expect(problem).toContainText("The last change couldn't be applied");
-      await expect(problem.getByRole("link", { name: "See reason and logs" })).toHaveAttribute("href", `/runs/${applyId}`);
-      await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
-      // The failed first-install plan recorded no change origin, so the
-      // action says what it does: plan the installed version again.
-      await page.getByTestId("app-header").getByRole("button", { name: "Review the installed version again", exact: true }).click();
-      const replan = "POST /api/v1/state-versions/sv_inline/rollback-plan";
-      await expect.poll(() => f.mutations.filter((m) => m === replan).length).toBe(1);
-      const review = page.getByTestId("app-review");
-      await expect(review.locator('.iv-error a[href="/runs/run_retry_fixture_1"]')).toBeVisible();
-      f.failRetry(false);
-      await review.getByRole("button", { name: "Review again", exact: true }).click();
-      await expect.poll(() => f.mutations.filter((m) => m === replan).length).toBe(2);
-      expect(f.mutations.some((m) => m.endsWith(`/${capId}/plan`))).toBe(false);
-      await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+      f.fail(true); f.failRetry(true);
+      const review = page.locator(".iv-execution");
+      await expect(review.getByRole("button", { name: "Retry installation", exact: true })).toBeVisible({ timeout: 15_000 });
+      await review.getByRole("button", { name: "Retry installation", exact: true }).click();
+      await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(1);
       expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
-      expect(f.mutations.some((m) => m.includes("/abandon"))).toBe(false);
+      expect(f.mutations.some((m) => m.includes("/abandon") || m.startsWith("DELETE "))).toBe(false);
     });
+    test("an unconfirmed Apply is held and reload does not restore consent", async ({ page }) => {
+      await detailFixture(page, base);
+      let posts = 0;
+      await page.route(`**/runs/${planId}/apply`, (route) => { posts += 1; return route.fulfill({ status: 503, json: { error: "fixture_indeterminate" } }); });
+      await page.goto(sourceUrl); await openInstallSheet(page);
+      const review = await reviewPlan(page);
+      expect(posts).toBe(0);
+      await review.getByRole("button", { name: "Allow and install", exact: true }).click();
+      await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
+      await expect(review.getByRole("alert")).toContainText("The execution could not be confirmed.");
+      // An Apply that may have started can no longer be discarded from here.
+      await expect(review.getByRole("button", { name: "Stop installing", exact: true })).toHaveCount(0);
+      expect(posts).toBe(1);
+      await page.reload();
+      await expect(page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+      expect(posts).toBe(1);
+    });
+  });
+
+  test.describe("Installed app page", () => {
+    test.skip(mode !== "portable", "controlled API fixture; not production evidence");
     test("Uninstall confirms once, restores its real reservation, and supports cancellation", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
       // An old install-page locator opens the app's own page.
@@ -684,23 +853,6 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByRole("dialog")).toContainText("Couldn't check linked apps");
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       expect(f.mutations.some((m) => m.startsWith("DELETE"))).toBe(false);
-    });
-    test("an unconfirmed Apply is held and reload does not restore consent", async ({ page }) => {
-      await detailFixture(page, base);
-      let posts = 0;
-      await page.route(`**/runs/${planId}/apply`, (route) => { posts += 1; return route.fulfill({ status: 503, json: { error: "fixture_indeterminate" } }); });
-      await page.goto(sourceUrl); await openInstallSheet(page);
-      const review = await reviewPlan(page);
-      expect(posts).toBe(0);
-      await review.getByRole("button", { name: "Allow and install", exact: true }).click();
-      await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
-      await expect(review.getByRole("alert")).toContainText("The execution could not be confirmed.");
-      // An Apply that may have started can no longer be discarded from here.
-      await expect(review.getByRole("button", { name: "Stop installing", exact: true })).toHaveCount(0);
-      expect(posts).toBe(1);
-      await page.reload();
-      await expect(page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
-      expect(posts).toBe(1);
     });
   });
 }

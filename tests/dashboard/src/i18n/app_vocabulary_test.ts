@@ -37,10 +37,9 @@ const SURFACE_FILES = [
     .filter((file) => /\.tsx?$/u.test(file))
     .map((file) => `views/app/${file}`),
   "views/apps/AppListView.tsx",
-  "views/new/InstallView.tsx",
-  "views/new/InstallExecution.tsx",
-  "views/new/InstallLifecycle.tsx",
-  "views/new/install-helpers.ts",
+  ...readdirSync(resolve(root, "views/new"))
+    .filter((file) => /\.tsx?$/u.test(file))
+    .map((file) => `views/new/${file}`),
   "views/runs/RunView.tsx",
   "views/runs/RunGroupView.tsx",
   "components/run/PlanResourceList.tsx",
@@ -77,7 +76,7 @@ const renderedKeys = (Object.keys(ja) as Key[]).filter(
 
 describe("app, install and run vocabulary", () => {
   test("covers the app page, Home, install and run surfaces", () => {
-    for (const prefix of ["app.", "apps.", "installStore.", "run.", "runError.", "op.", "new."]) {
+    for (const prefix of ["app.", "apps.", "installStore.", "run.", "runError.", "op."]) {
       expect(namespaceKeys.some((key) => key.startsWith(prefix)), prefix).toBe(true);
     }
     expect(namespaceKeys.length).toBeGreaterThan(450);

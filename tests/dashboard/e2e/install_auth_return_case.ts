@@ -150,6 +150,12 @@ function knownAppRead(url: URL): boolean {
       ["includeTotal", "includeArchived"].every((key) => [null, "true", "false"].includes(p.get(key))) &&
       (p.get("cursor")?.length ?? 0) <= 2048 && (p.get("selectedWorkspaceId") === null || /^[A-Za-z0-9_.:-]{1,128}$/u.test(p.get("selectedWorkspaceId")!));
   }
+  // The not-installed app page offers an existing Git connection for a private
+  // repository; reading the list starts nothing.
+  if (url.pathname === "/api/v1/connections") {
+    return exactKeys(p, ["workspaceId", "cursor"]) && /^[A-Za-z0-9_.:-]{1,128}$/u.test(p.get("workspaceId") ?? "") &&
+      (p.get("cursor")?.length ?? 0) <= 2048;
+  }
   return /^\/api\/v1\/workspaces\/[A-Za-z0-9_.:-]{1,128}\/activity$/u.test(url.pathname) &&
     exactKeys(p, ["limit"]) && p.get("limit") === "50";
 }
@@ -702,9 +708,11 @@ function registerLiveInstallReturnCase(): void {
         await expect(page.getByTestId("install-start")).toBeVisible();
         await expect(page.getByTestId("install-app-header").getByRole("heading", { level: 1 })).toHaveText(input.name);
         await expect(page.getByTestId("install-configuration")).toHaveCount(0);
+        // The repository is the provenance line; only the version is a field.
+        await expect(page.getByTestId("install-provenance")).toContainText(input.git.replace(/^https:\/\//u, "").replace(/\.git$/u, ""));
         const fields = page.getByTestId("install-source-fields").locator("input");
-        await expect(fields).toHaveCount(2);
-        for (const [index, value] of [input.git, input.ref].entries()) await expect(fields.nth(index)).toHaveValue(value);
+        await expect(fields).toHaveCount(1);
+        await expect(fields.first()).toHaveValue(input.ref);
         await expect(page.getByRole("button", { name: /ワークスペースを切り替え|Switch workspace/u }).first()).toContainText(input.workspace);
         const session = await page.evaluate(async () => {
           const response = await fetch("/api/v1/account/session/me", { credentials: "include", headers: { accept: "application/json" } });

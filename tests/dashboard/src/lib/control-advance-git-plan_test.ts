@@ -2,8 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import {
   advanceGitInstallPlan,
   advanceGitRevisionPlan,
-  gitPlanProgressSignature,
 } from "../../../../dashboard/src/lib/control-api.ts";
+import { gitPlanProgressSignature } from "../../../../dashboard/src/lib/git-plan-progress.ts";
 
 // The app page continues a stalled install attempt or version change through
 // the coordinator's own reconcile command. The server bumps the coordinator's

@@ -107,12 +107,7 @@ import {
   settledValue,
   stateVersionLabels,
 } from "../../lib/app-page.ts";
-import {
-  APP_PAGE_SECTIONS,
-  appPageHref,
-  type AppPageSection,
-  reinstallHref,
-} from "../../lib/app-links.ts";
+import { APP_PAGE_SECTIONS, appPageHref, installAttemptHref, reinstallHref, type AppPageSection } from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
 import {
   defaultRetryPlanApi,
@@ -143,7 +138,7 @@ interface ActiveReview {
   /** A run to follow first (an Apply already under way). */
   readonly initialRunId?: string;
   /** Recreates the same request when its review fails. */
-  readonly restart?: () => Promise<string | undefined>;
+  readonly restart?: () => Promise<string | null | undefined>;
   /** Opened because the server reported work in progress, not by a click. */
   readonly auto?: boolean;
 }
@@ -479,7 +474,8 @@ export default function AppManagePage(props: {
   const startReview = async (
     section: ReviewSection,
     purpose: ReviewPurpose,
-    create: () => Promise<string | undefined>,
+    /** The Plan Run to review; `null` when the work continues elsewhere. */
+    create: () => Promise<string | null | undefined>,
     options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision" } = {},
   ) => {
     if (reviewBusy()) return;
@@ -491,6 +487,8 @@ export default function AppManagePage(props: {
     try {
       const planRunId = await create();
       if (capsuleId() !== forCapsule) return;
+      // The work continues elsewhere (an install that waits on its own page).
+      if (planRunId === null) return;
       if (!planRunId) throw new Error(t("app.review.notStarted"));
       setReview({
         section,
@@ -727,9 +725,15 @@ export default function AppManagePage(props: {
         const attempt = app()?.progress.installPlanId;
         if (!attempt) return extractRunId(await planCapsule(capsuleId()));
         const advanced = await advanceGitInstallPlan(attempt);
-        // An attempt that now waits for input is answered by whoever started it.
-        if (!advanced.installPlan.planRunId) throw new Error(t("app.problem.installNeedsInput"));
-        return advanced.installPlan.planRunId;
+        if (advanced.installPlan.planRunId) return advanced.installPlan.planRunId;
+        // The install waits for a person (connections, settings, a module,
+        // or starting over), and only whoever started it answers: its own
+        // install page asks them for that.
+        if (!props.principalId || advanced.installPlan.createdBy !== props.principalId) {
+          throw new Error(t("app.problem.installNeedsInput"));
+        }
+        navigate(installAttemptHref(attempt));
+        return null;
       },
       { action: "continue_install" },
     );

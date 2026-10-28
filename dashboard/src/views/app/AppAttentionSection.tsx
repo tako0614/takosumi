@@ -21,6 +21,7 @@ import {
   primaryProblem,
   providerName,
 } from "../../lib/app-page.ts";
+import { installAttemptHref } from "../../lib/app-links.ts";
 import { appUninstallBanner, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { t, type MessageKey } from "../../i18n/index.ts";
@@ -130,6 +131,15 @@ export default function AppAttentionSection(props: {
       : undefined;
   };
   const awaitingInput = () => app().progress.installPlanAwaitingInput;
+  const resumeInstallHref = () => {
+    const attempt = app().progress.installPlanId;
+    if (awaitingInput() !== "viewer" || !attempt) return undefined;
+    try {
+      return installAttemptHref(attempt);
+    } catch {
+      return undefined;
+    }
+  };
   const preparing = () =>
     app().progress.revisionPreparing && !app().progress.run && !app().progress.review &&
     !awaitingInput() && props.reviewRunId === undefined;
@@ -394,9 +404,19 @@ export default function AppAttentionSection(props: {
 
           <Show when={awaitingInput()}>
             {(who) => (
-              <p class="ap-notice" role="status" data-progress="awaiting-input">
-                {who() === "viewer" ? t("app.progress.awaitingYourInput") : t("app.progress.awaitingStarterInput")}
-              </p>
+              <>
+                <p class="ap-notice" role="status" data-progress="awaiting-input">
+                  {who() === "viewer" ? t("app.progress.awaitingYourInput") : t("app.progress.awaitingStarterInput")}
+                </p>
+                {/* Only whoever started the install answers it, on its install page. */}
+                <Show when={resumeInstallHref()}>
+                  {(href) => (
+                    <div class="ap-row-actions">
+                      <Button variant="primary" href={href()}>{t("app.problem.continueInstall")}</Button>
+                    </div>
+                  )}
+                </Show>
+              </>
             )}
           </Show>
 

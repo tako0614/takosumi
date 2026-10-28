@@ -612,7 +612,7 @@ const RULES: readonly BoundaryRule[] = [
       "Store kind and surface are open presentation tokens; unknown values must not be collapsed into a built-in taxonomy",
     appliesTo: (path) =>
       path === "dashboard/src/lib/tcs-client.ts" ||
-      path === "dashboard/src/views/new/install-helpers.ts",
+      path === "dashboard/src/views/new/InstallView.tsx",
     patterns: [
       /type\s+TcsListingKind\s*=\s*["']app["']\s*\|/,
       /type\s+TcsListingSurface\s*=\s*["']service["']\s*\|/,
@@ -896,7 +896,9 @@ const RULES: readonly BoundaryRule[] = [
     message:
       "Run and dashboard behavior must use diagnostic codes and structured error reasons, never parse human-readable messages",
     appliesTo: (path) =>
-      path === "dashboard/src/views/new/install-helpers.ts" ||
+      path === "dashboard/src/views/new/install-attempt.ts" ||
+      path === "dashboard/src/views/new/use-install-attempt.ts" ||
+      path === "dashboard/src/views/new/InstallView.tsx" ||
       path === "dashboard/src/views/runs/RunView.tsx" ||
       path === "core/domains/deploy-control/projection.ts" ||
       path === "core/domains/deploy-control/projection_run.ts" ||

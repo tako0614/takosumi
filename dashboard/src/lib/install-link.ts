@@ -133,10 +133,6 @@ export function isSafeInstallVariableName(name: string): boolean {
   return trimmed.split(".").every(isSafeInstallVariablePathSegment);
 }
 
-export function isSafeInstallVariableValue(value: string): boolean {
-  return value.length <= 512 && !/[\r\n\0]/u.test(value);
-}
-
 function isSafeInstallVariablePathSegment(segment: string): boolean {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(segment)) return false;
   if (
