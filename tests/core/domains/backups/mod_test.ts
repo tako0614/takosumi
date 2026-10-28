@@ -1128,6 +1128,8 @@ test("provider_snapshot and custom_command service-data backup modes use isolate
   await seedCapsuleModel(store, {
     workspaceId: "ws_backup1",
     capsuleId: "cap_command1",
+    sourceId: "src_command1",
+    snapshotId: "snap_command1",
     installConfigId: "cfg_cmd",
     name: "cmd",
   });
