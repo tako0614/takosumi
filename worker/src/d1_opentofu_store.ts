@@ -67,6 +67,19 @@ const legacyCapsuleGuardTable = sqliteTable("capsules", {
   executionAuthorityEpoch: integer("execution_authority_epoch"),
 });
 
+// Connection admission guards also use INSERT SELECT. Keep their target at
+// the v75/v76 shape; the new nullable owner column must not change the
+// selected field count or make old D1 schema reads fail.
+const legacyConnectionGuardTable = sqliteTable("connections", {
+  id: text("id").primaryKey(),
+  workspaceId: text("space_id"),
+  provider: text("provider"),
+  status: text("status"),
+  connectionJson: text("connection_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
 const d1LegacyUsageSelect = {
   id: schema.usageEvents.id,
   workspaceId: schema.usageEvents.workspaceId,
@@ -13163,7 +13176,7 @@ function d1ConnectionActorAuthorityGuardStmt(
     : authority.expectedActor === undefined
       ? sql`0`
       : d1WorkspaceMemberSnapshotExists(orm, authority.expectedActor);
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionActorGuardRow())
       .from(sql`(select 1) as connection_actor_guard_source`)
@@ -13234,7 +13247,7 @@ function d1ConnectionRegistrationWorkspaceGuardStmt(
     workspaceId,
     expected,
   );
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(
         d1InvalidConnectionRegistrationGuardRow(
@@ -13284,7 +13297,7 @@ function d1ConnectionRegistrationIdentityGuardStmt(
           ),
         ]),
   ];
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(
         d1InvalidConnectionRegistrationGuardRow(
@@ -13361,7 +13374,7 @@ function d1ConnectionRevocationWorkspaceGuardStmt(
           : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
       ),
     );
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(
         d1InvalidConnectionRevocationGuardRow("workspace"),
@@ -13384,7 +13397,7 @@ function d1ConnectionRevocationSnapshotGuardStmt(
     .select({ one: sql`1` })
     .from(schema.connections)
     .where(d1ConnectionRevocationSnapshotWhere(expectedConnection));
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionRevocationGuardRow("snapshot"))
       .from(sql`(select 1) as connection_revocation_snapshot_guard_source`)
@@ -13466,7 +13479,7 @@ function d1ConnectionTestResultSnapshotGuardStmt(
         expectedSecretBlob === null ? notExists(blob) : exists(blob),
       ),
     );
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionTestResultGuardRow())
       .from(sql`(select 1) as connection_test_result_guard_source`)
