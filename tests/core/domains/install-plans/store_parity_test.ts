@@ -61,6 +61,224 @@ test("Git install-plan store has idempotency and CAS parity", async () => {
   }
 });
 
+test("Git install attempts transition, list and settle blockers with parity", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly workspaceId: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace" | "beginWorkspaceDraining">;
+    readonly store: GitInstallPlanStore;
+  }[] = [
+    {
+      label: "memory",
+      workspaceId: "attempt_memory",
+      control: memoryControl,
+      store: new InMemoryGitInstallPlanStore(memoryControl),
+    },
+    {
+      label: "postgres",
+      workspaceId: "attempt_postgres",
+      control: postgresControl,
+      store: new SqlGitInstallPlanStore(postgres),
+    },
+    {
+      label: "d1",
+      workspaceId: "attempt_d1",
+      control: d1Control,
+      store: new D1GitInstallPlanStore(d1),
+    },
+  ];
+  try {
+    for (const { label, workspaceId, control, store } of adapters) {
+      await control.putWorkspace(workspace(workspaceId));
+      const authority: WorkspaceManagementAuthority = {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      const attempt: StoredGitInstallPlan = {
+        ...plan(`attempt_${label}`, `attempt_digest_${label}`),
+        workspaceId,
+        workspaceManagementAuthority: authority,
+        idempotencyKeyHash: `attempt_key_${label}`,
+        operation: "install",
+        mode: "attempt",
+        phase: "awaiting_input",
+        awaitingInput: "inputs",
+        expiresAt: "2026-08-22T00:00:00.000Z",
+      };
+      expect((await store.create(attempt, authority)).status).toBe("created");
+      for (const extra of [
+        {
+          ...attempt,
+          id: `attempt_other_${label}`,
+          idempotencyKeyHash: `attempt_other_key_${label}`,
+          actorSubject: "user_two",
+          createdBy: "user_two",
+          updatedAt: "2026-08-21T00:00:05.000Z",
+          createdAt: "2026-08-21T00:00:05.000Z",
+        },
+        {
+          ...attempt,
+          id: `attempt_failed_${label}`,
+          idempotencyKeyHash: `attempt_failed_key_${label}`,
+          phase: "failed" as const,
+          awaitingInput: undefined,
+        },
+        {
+          ...attempt,
+          id: `legacy_${label}`,
+          idempotencyKeyHash: `legacy_key_${label}`,
+          mode: undefined,
+          phase: "reviewable" as const,
+          awaitingInput: undefined,
+        },
+      ]) {
+        expect((await store.create(extra, authority)).status).toBe("created");
+      }
+      // Idle attempts and terminal rows do not block Workspace management.
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(false);
+      expect(
+        (await store.listOpenAttempts({ workspaceId, actorSubject: "user_one", limit: 20 }))
+          .map((item) => item.id),
+      ).toEqual([attempt.id]);
+      expect(
+        (await store.listOpenAttempts({ workspaceId, limit: 20 })).map((item) => item.id),
+      ).toEqual([`attempt_other_${label}`, attempt.id]);
+      expect(
+        (await store.listOpenAttempts({ workspaceId, limit: 1 })).map((item) => item.id),
+      ).toEqual([`attempt_other_${label}`]);
+
+      const answered: StoredGitInstallPlan = {
+        ...attempt,
+        generation: 1,
+        updatedAt: "2026-08-21T00:00:01.000Z",
+        capsule: { ...attempt.capsule, name: "renamed" },
+        options: { modulePath: "." },
+      };
+      expect(await store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 4,
+        expectedPhase: "awaiting_input",
+        plan: { ...answered, generation: 5 },
+        at: answered.updatedAt,
+        expectedWorkspaceManagementAuthority: authority,
+      })).toMatchObject({ status: "conflict" });
+      expect(await store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 0,
+        expectedPhase: "planning",
+        plan: answered,
+        at: answered.updatedAt,
+      })).toMatchObject({ status: "conflict" });
+      await expect(store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 0,
+        expectedPhase: "awaiting_input",
+        plan: { ...answered, source: { ...answered.source, url: "https://github.com/other/repo" } },
+        at: answered.updatedAt,
+      })).rejects.toBeInstanceOf(TypeError);
+      expect(await store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 0,
+        expectedPhase: "awaiting_input",
+        plan: answered,
+        at: answered.updatedAt,
+        expectedWorkspaceManagementAuthority: authority,
+      })).toEqual({ status: "updated", plan: answered });
+      expect(await store.get(attempt.id)).toEqual(answered);
+
+      // A continue claim takes the lease atomically and blocks management.
+      const claimed: StoredGitInstallPlan = {
+        ...answered,
+        generation: 2,
+        phase: "creating_capsule",
+        awaitingInput: undefined,
+        transientVariableNames: ["region"],
+        updatedAt: "2026-08-21T00:00:02.000Z",
+      };
+      expect(await store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 1,
+        expectedPhase: "awaiting_input",
+        plan: claimed,
+        at: claimed.updatedAt,
+        lease: { token: `lease_${label}`, expiresAt: "2026-08-21T00:01:00.000Z" },
+        expectedWorkspaceManagementAuthority: authority,
+      })).toMatchObject({ status: "updated" });
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(true);
+      expect(await store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 2,
+        expectedPhase: "creating_capsule",
+        plan: { ...claimed, generation: 3 },
+        at: "2026-08-21T00:00:03.000Z",
+      })).toMatchObject({ status: "busy" });
+      const reopened: StoredGitInstallPlan = {
+        ...claimed,
+        phase: "awaiting_input",
+        awaitingInput: "inputs",
+        updatedAt: "2026-08-21T00:00:04.000Z",
+      };
+      expect(await store.completeReconcile({
+        id: attempt.id,
+        expectedGeneration: 2,
+        leaseToken: `lease_${label}`,
+        plan: reopened,
+      })).toMatchObject({ status: "completed" });
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(false);
+
+      // After a drain, an admission-fenced answer is refused; a terminal
+      // discard needs no admission.
+      expect((await control.beginWorkspaceDraining(workspaceId, authority)).status)
+        .toBe("started");
+      await expect(store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 2,
+        expectedPhase: "awaiting_input",
+        plan: { ...reopened, generation: 3, phase: "compiling_install", awaitingInput: undefined },
+        at: "2026-08-21T00:00:05.000Z",
+        expectedWorkspaceManagementAuthority: authority,
+      })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
+      const discarded: StoredGitInstallPlan = {
+        ...reopened,
+        generation: 3,
+        phase: "discarded",
+        awaitingInput: undefined,
+        transientVariableNames: undefined,
+        diagnostic: { code: "workspace_management_changed", message: "changed" },
+        updatedAt: "2026-08-21T00:00:06.000Z",
+        completedAt: "2026-08-21T00:00:06.000Z",
+      };
+      expect(await store.transitionUnleased({
+        id: attempt.id,
+        expectedGeneration: 2,
+        expectedPhase: "awaiting_input",
+        plan: discarded,
+        at: discarded.updatedAt,
+      })).toMatchObject({ status: "updated", plan: { phase: "discarded", generation: 3 } });
+      expect(await store.hasWorkspaceManagementBlockers(workspaceId)).toBe(false);
+      expect(
+        await store.listOpenAttempts({ workspaceId, actorSubject: "user_one", limit: 20 }),
+      ).toEqual([]);
+      expect(await store.transitionUnleased({
+        id: "missing_attempt",
+        expectedGeneration: 0,
+        expectedPhase: "awaiting_input",
+        plan: { ...attempt, id: "missing_attempt", generation: 1 },
+        at: discarded.updatedAt,
+      })).toEqual({ status: "not_found" });
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("Git unclaimed plans settle during a Workspace drain", async () => {
   const postgres = await PGliteSqlClient.create();
   const d1 = new SqliteFakeD1();

@@ -440,12 +440,14 @@ async function advanceRevisionPlan(
       return await createOrObserveRevisionPlanRun(plan, operations);
     case "compiling_install":
     case "creating_capsule":
+    case "awaiting_input":
       throw permanent(
         "revision_phase_invalid",
         "The revision coordinator reached an install-only phase.",
       );
     case "reviewable":
     case "failed":
+    case "discarded":
       return plan;
   }
 }

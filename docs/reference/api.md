@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 91 件です。
+次の 94 件です。
 
 ### Account views
 
@@ -365,20 +365,37 @@ source_has_in_flight_run` で拒否します。削除後は webhook bearer が�
 
 ### Git install plan
 
-| メソッド | パス                                              | 説明                                      |
-| -------- | ------------------------------------------------- | ----------------------------------------- |
-| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`  | Git から reviewable Plan Run まで準備する |
-| GET      | `/api/v1/install-plans/{installPlanId}`           | coordinator の現在状態を読む              |
-| POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                    |
+| メソッド | パス                                              | 説明                                           |
+| -------- | ------------------------------------------------- | ---------------------------------------------- |
+| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`  | Git から reviewable Plan Run まで準備する      |
+| GET      | `/api/v1/workspaces/{workspaceId}/install-plans`  | 自分の未完了のインストール試行を読む（`open=1`） |
+| GET      | `/api/v1/install-plans/{installPlanId}`           | coordinator の現在状態を読む                   |
+| PATCH    | `/api/v1/install-plans/{installPlanId}`           | 入力待ちの試行に回答する（generation CAS）     |
+| DELETE   | `/api/v1/install-plans/{installPlanId}`           | 試行と、試行が作った未適用の Capsule を捨てる  |
+| POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                         |
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
 は同じ record を返し、内容が異なれば 409 になります。public projection が含むのは Source、
 SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
-作成時に渡した private variable 値は atomic initial authority commit まで非公開 coordinator
-state にだけ保持され、response には投影されず、commit 直後に coordinator から削除されます。
-credential、token、Output 値は受け付けません。
+reviewed preflight に渡した variable 値は、同じ request の中で atomic initial authority
+commit に直接渡します。coordinator record・request digest・response・diagnostic には値を
+保存しません。残すのは名前だけで、確認できないまま request が終わると試行は
+`awaiting_input` で値の再送を待ちます。credential、token、Output 値は受け付けません。
 `reviewable` になった後の承認と apply は `Run` API だけが所有し、install-plan 専用 apply
 route はありません。
+
+`mode: "attempt"` で作ると、coordinator が試行全体を持ちます。Source sync、module 走査、
+互換性確認、Provider Connection の照合を自分で進め、利用者の判断が要るとき（module 候補が
+複数、接続の不足、必須設定、名前の衝突）と、Capsule を作る直前に、非終端の
+`awaiting_input` で止まります。response の `userAction` が次の操作を一つだけ返します
+（`wait`・`choose_module`・`provide_inputs`・`review_run`・`retry`・`none`）。候補が一つだけの
+接続は自動で選びます。`PATCH` は `expectedGeneration` で CAS し、`continue: true` で確定する
+request だけが variable 値を受け取ります。値は保存しません。`DELETE` は未適用の Capsule を
+abandon し、試行が登録した Source をほかに参照がなければ削除して、終端の `discarded`
+にします。適用中・適用済みの試行は拒否します。試行には `expiresAt` があり、期限を過ぎた
+試行は次の読み取りで `discarded`（`install_attempt_expired`）になります。`awaiting_input`
+は lease も実行権限も持たないため Workspace 管理の blocker になりません。管理 epoch が
+変わった後は進めないため、読み取りで `discarded`（`workspace_management_changed`）にします。
 
 `configuration-plans` は、現在の private InstallConfig に closed な
 `variablePatch`（`set` / `remove`）、value-free ProviderBinding 選択、Interface

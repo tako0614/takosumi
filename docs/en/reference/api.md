@@ -222,7 +222,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 91
+`accounts/service/src/control-route-inventory.ts`; it currently contains 94
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -315,9 +315,30 @@ Add, role change, and remove responses carry neither field.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| POST | `/api/v1/workspaces/{workspaceId}/install-plans` | Create or replay an idempotent Git install plan |
+| POST | `/api/v1/workspaces/{workspaceId}/install-plans` | Create or replay an idempotent Git install plan or install attempt |
+| GET | `/api/v1/workspaces/{workspaceId}/install-plans` | List the caller's open install attempts for resume (`open=1`) |
 | GET | `/api/v1/install-plans/{installPlanId}` | Read an install plan without advancing it |
+| PATCH | `/api/v1/install-plans/{installPlanId}` | Answer an install attempt that is waiting for input (generation CAS) |
+| DELETE | `/api/v1/install-plans/{installPlanId}` | Discard an install attempt and the never-applied app it created |
 | POST | `/api/v1/install-plans/{installPlanId}/reconcile` | Explicitly advance an install plan toward a reviewable Run |
+
+An install plan created with `mode: "attempt"` is owned end to end by the
+coordinator. It syncs the Source, scans modules, analyzes compatibility and
+matches Provider Connections itself, and pauses in the non-terminal
+`awaiting_input` phase whenever it needs the user (several module candidates,
+missing connections, required settings, a name collision) and once before it
+creates the Capsule. `userAction` names the single next step (`wait`,
+`choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
+requirement with exactly one eligible connection is selected automatically.
+`PATCH` answers with `expectedGeneration` as a CAS fence, and only the
+confirming `continue: true` request carries variable values, which go straight
+into the atomic initial creation and are never stored. `DELETE` abandons a
+never-applied Capsule, deletes a Source the attempt registered when nothing
+else uses it, and records the terminal `discarded` phase; it is refused once
+the app is applying or applied. Attempts carry `expiresAt` and expire lazily
+on their next read. `awaiting_input` holds no lease and no execution
+authority, so it does not block Workspace management; once the management
+epoch changes the attempt can never advance and is discarded on read.
 
 ### Git revision plans
 

@@ -4,19 +4,45 @@
  * An install plan is orchestration evidence only. It may register/sync a Git
  * Source, compile a Takosumi-owned InstallConfig, create a Capsule and create
  * one canonical Plan Run. It never approves or applies that Run.
+ *
+ * An install plan created with `mode: "attempt"` is an install attempt: the
+ * coordinator owns the whole attempt (Source sync, module scan, compatibility
+ * analysis and connection matching) and pauses in `awaiting_input` whenever it
+ * needs the user, including once before it creates the Capsule. Clients follow
+ * `userAction`, answer with `PATCH /api/v1/install-plans/:id`, and may discard
+ * the attempt with `DELETE /api/v1/install-plans/:id`.
  */
 
 import type { JsonValue } from "./types.ts";
-import type { InstallConfig } from "./install-configs.ts";
+import type {
+  InstallConfig,
+  InstallConfigStoreText,
+} from "./install-configs.ts";
+import type { CapsuleResourceSummary } from "./capsules.ts";
+import type { ProviderConnection } from "./connections.ts";
 
 export type GitInstallPlanPhase =
   | "syncing_source"
   | "compiling_install"
   | "analyzing_compatibility"
+  /**
+   * Attempt mode only. Idle and lease-free until the actor answers through
+   * PATCH; holds no execution authority and is not a Workspace management
+   * blocker. Any advance re-checks the original management admission.
+   */
+  | "awaiting_input"
   | "creating_capsule"
   | "planning"
   | "reviewable"
-  | "failed";
+  | "failed"
+  /** Terminal: discarded by its actor, or expired lazily on read. */
+  | "discarded";
+
+/** `"attempt"`: the coordinator owns the attempt and pauses for input. */
+export type GitInstallPlanMode = "attempt";
+
+/** What an `awaiting_input` attempt is waiting for. */
+export type GitInstallPlanAwaitingInput = "module" | "inputs";
 
 export type GitInstallPlanOperation = "install" | "revision";
 
@@ -95,6 +121,64 @@ export interface CreateGitInstallPlanRequest {
   readonly initialConfiguration?: GitInstallPlanInitialConfiguration;
 }
 
+/**
+ * Create an install attempt (`mode: "attempt"`). Everything except the Git
+ * address is optional: the coordinator proposes the app name, scans modules,
+ * matches Provider Connections and pauses in `awaiting_input` for anything it
+ * cannot decide alone. Variable values are not accepted here; they are sent
+ * only in the confirming `PATCH { continue: true }` request.
+ */
+export interface CreateGitInstallAttemptRequest {
+  readonly mode: GitInstallPlanMode;
+  readonly source: {
+    readonly url: string;
+    /** Defaults to `HEAD`. */
+    readonly ref?: string;
+    /** Source-sync subtree; defaults to `.`. */
+    readonly path?: string;
+    /** Defaults to a name derived from the Git URL. */
+    readonly name?: string;
+    /** Reference only. Credential values never enter this record. */
+    readonly authConnectionId?: string;
+  };
+  readonly capsule?: {
+    /** Defaults to a collision-checked name derived from the Git URL. */
+    readonly name?: string;
+    /** Defaults to `production`. */
+    readonly environment?: string;
+  };
+  readonly options?: GitInstallPlanOptions;
+}
+
+/**
+ * Answer an `awaiting_input` attempt. Every field except
+ * `expectedGeneration` is optional; omitted fields keep their current answer.
+ *
+ * - `modulePath` selects one scanned module and restarts analysis for it
+ *   (previous connection answers are cleared because they are module-bound).
+ * - `capsuleName` renames the app before the Capsule exists.
+ * - `providerBindings` replaces the complete explicit connection selection;
+ *   requirements left unanswered still auto-select their only candidate.
+ * - `continue: true` confirms the sheet: the coordinator validates the
+ *   answers, creates the Capsule atomically and starts the Plan Run.
+ * - `variables` are accepted only together with `continue: true`. They are
+ *   handed straight to the atomic initial creation and never stored in the
+ *   coordinator record, logs, diagnostics or responses.
+ */
+export interface PatchGitInstallPlanRequest {
+  readonly expectedGeneration: number;
+  readonly modulePath?: string;
+  readonly capsuleName?: string;
+  readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
+  readonly variables?: Readonly<Record<string, JsonValue>>;
+  readonly continue?: boolean;
+}
+
+/** Discard an attempt. The expected generation fences concurrent advances. */
+export interface DiscardGitInstallPlanRequest {
+  readonly expectedGeneration: number;
+}
+
 /** Exact, value-free upgrade intent for an existing Capsule. */
 export interface CreateGitRevisionPlanRequest {
   readonly ref: string;
@@ -142,6 +226,21 @@ export interface GitInstallPlan {
   readonly options: GitInstallPlanOptions;
   /** Exact value-free preflight identity, when supplied by an installer. */
   readonly preflight?: GitInstallPlanPreflightAuthority;
+  /** `"attempt"` when this record is a coordinator-owned install attempt. */
+  readonly mode?: GitInstallPlanMode;
+  /** Present only while `phase` is `awaiting_input`. */
+  readonly awaitingInput?: GitInstallPlanAwaitingInput;
+  /**
+   * True when this attempt registered `sourceId` itself. Only such a Source
+   * is enabled for polling on review and deleted on discard.
+   */
+  readonly sourceCreatedByAttempt?: boolean;
+  /**
+   * Attempt mode: an idle attempt past this instant is discarded lazily on
+   * its next read (`diagnostic.code: "install_attempt_expired"`). Refreshed
+   * whenever the actor answers or the attempt reaches a new pause.
+   */
+  readonly expiresAt?: string;
   /** Present only for `operation: "revision"`. */
   readonly revision?: GitRevisionPlanIntent;
   readonly sourceId?: string;
@@ -178,15 +277,135 @@ export type GitRevisionPlan = GitInstallPlan & {
   readonly installConfigId: string;
 };
 
+/** One scanned OpenTofu root the actor may choose. */
+export interface GitInstallPlanModuleCandidate {
+  /** Exact module path relative to the SourceSnapshot subtree. */
+  readonly path: string;
+  /** Canonical provider source addresses the module uses. */
+  readonly providers: readonly string[];
+}
+
+/** A Provider Connection offered for one requirement. Never carries values. */
+export interface GitInstallPlanConnectionCandidate {
+  readonly id: string;
+  readonly displayName: string;
+  readonly status: ProviderConnection["status"];
+  readonly scope: ProviderConnection["scope"];
+}
+
+/**
+ * One provider identity that needs credential material, with the exact
+ * tuple a `providerBindings` answer must repeat.
+ */
+export interface GitInstallPlanConnectionRequirement {
+  readonly provider: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+  readonly rootAlias?: string;
+  /** Eligible connections under the Workspace and install policy. */
+  readonly candidates: readonly GitInstallPlanConnectionCandidate[];
+  /** Explicit answer, or the only candidate when `autoSelected`. */
+  readonly selectedConnectionId?: string;
+  /** True when the coordinator chose the only eligible candidate. */
+  readonly autoSelected: boolean;
+}
+
+/**
+ * Value-free presentation of one install input. `sensitive` inputs are
+ * write-only: no default or value is ever echoed. Generic OpenTofu variables
+ * are reported sensitive because static analysis cannot prove HCL
+ * `sensitive` metadata, so the host treats every such value as write-only.
+ */
+export interface GitInstallPlanVariablePresentation {
+  readonly name: string;
+  readonly type: "string" | "number" | "boolean" | "json" | "unknown";
+  readonly required: boolean;
+  readonly sensitive: boolean;
+  readonly advanced?: boolean;
+  readonly label?: InstallConfigStoreText;
+  readonly description?: InstallConfigStoreText;
+  readonly placeholder?: string;
+  /** Literal default for a non-sensitive input. */
+  readonly defaultValue?: JsonValue;
+  /** Takosumi derives the value from the app name unless it is supplied. */
+  readonly derivedDefault?: "capsule_name" | "workspace_scoped_capsule_name";
+}
+
+export interface GitInstallPlanNameProposal {
+  /** The app name the attempt will create. */
+  readonly current: string;
+  /** Collision-free suggestion; equals `current` when it is free. */
+  readonly proposed: string;
+  /** True when `current` is already used by another app here. */
+  readonly conflict: boolean;
+}
+
+/**
+ * The single next thing the actor can do. `provide_inputs` is one sheet:
+ * connections, settings and the app name are answered together, and
+ * `continue` is allowed once `missing` is empty and every required variable
+ * is supplied in the confirming request.
+ */
+export type GitInstallPlanUserAction =
+  | {
+      /** Coordinator work is pending; call `links.reconcile`. */
+      readonly kind: "wait";
+      readonly phase: GitInstallPlanPhase;
+    }
+  | {
+      readonly kind: "choose_module";
+      readonly modules: readonly GitInstallPlanModuleCandidate[];
+      /** A requested path the scan could not prove, when there was one. */
+      readonly requested?: string;
+    }
+  | {
+      readonly kind: "provide_inputs";
+      readonly modulePath: string;
+      /** Planned resources from the compatibility analysis. */
+      readonly resources: readonly CapsuleResourceSummary[];
+      readonly connections: readonly GitInstallPlanConnectionRequirement[];
+      readonly variables: readonly GitInstallPlanVariablePresentation[];
+      readonly name: GitInstallPlanNameProposal;
+      /** Answers that still block `continue`. */
+      readonly missing: readonly ("connections" | "name")[];
+      /**
+       * Names whose values must be sent again because a confirming request
+       * could not be completed. Values are never retained between requests.
+       */
+      readonly resubmitVariables?: readonly string[];
+    }
+  | {
+      readonly kind: "review_run";
+      readonly planRunId: string;
+      readonly capsuleId: string;
+    }
+  | {
+      readonly kind: "retry";
+      /** Bounded diagnostic code. */
+      readonly code: string;
+      /**
+       * `false`: call `links.reconcile` again. `true`: this attempt failed;
+       * discard it and start a new attempt.
+       */
+      readonly restart: boolean;
+    }
+  | { readonly kind: "none" };
+
 export interface GitInstallPlanResponse {
   readonly installPlan: GitInstallPlan;
   readonly nextAction: "reconcile" | "review_run" | "none";
+  readonly userAction: GitInstallPlanUserAction;
   readonly links: {
     readonly self: string;
     readonly reconcile?: string;
     /** Canonical Run review URL. Approval/apply stay exclusively on Run routes. */
     readonly run?: string;
   };
+}
+
+/** `GET /api/v1/workspaces/:id/install-plans?open=1`, newest first. */
+export interface ListOpenGitInstallPlansResponse {
+  readonly installPlans: readonly GitInstallPlanResponse[];
 }
 
 export interface GitRevisionPlanResponse {

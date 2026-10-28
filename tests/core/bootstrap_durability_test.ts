@@ -28,6 +28,8 @@ function declaredDurableTestGitInstallPlanStore(): GitInstallPlanStore {
     hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),
     claimReconcile: (input) => store.claimReconcile(input),
     completeReconcile: (input) => store.completeReconcile(input),
+    transitionUnleased: (input) => store.transitionUnleased(input),
+    listOpenAttempts: (input) => store.listOpenAttempts(input),
   };
 }
 

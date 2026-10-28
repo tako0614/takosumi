@@ -2,11 +2,17 @@
  * Existing Git install-plan blocker predicates shared by quiescence observers
  * and future Workspace management commands.  The surrounding query supplies
  * the Workspace filter and dialect-specific parameter placeholder.
+ *
+ * `awaiting_input` is an idle attempt waiting for its actor: it holds no
+ * lease and no execution authority, and every advance out of it re-checks the
+ * original active admission in the same write, so a drain makes it inert
+ * rather than racing it. It blocks only while a lease column is set.
+ * `discarded` is terminal like `failed`.
  */
 export const PG_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL = `
   (
     phase is null
-    or phase not in ('failed', 'reviewable')
+    or phase not in ('failed', 'reviewable', 'discarded', 'awaiting_input')
     or reconcile_lease_token is not null
     or reconcile_lease_expires_at is not null
     or jsonb_typeof(record_json -> 'workspaceId') is distinct from 'string'
@@ -21,7 +27,7 @@ export const PG_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL = `
 export const SQLITE_GIT_INSTALL_PLAN_MANAGEMENT_BLOCKER_SQL = `
   (
     phase is null
-    or phase not in ('failed', 'reviewable')
+    or phase not in ('failed', 'reviewable', 'discarded', 'awaiting_input')
     or reconcile_lease_token is not null
     or reconcile_lease_expires_at is not null
     or case when json_valid(record_json) = 1 then
