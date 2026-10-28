@@ -878,8 +878,10 @@ export interface InstallConfig {
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;
   /**
-   * Service-owned context mapping. This does not read repository metadata or
-   * Outputs and cannot inject credentials.
+   * Service-owned context mapping. A bounded repository proposal may be
+   * validated and compiled into this row; Run preparation reads only this
+   * persisted map and current Capsule context, never metadata or Outputs.
+   * It selects non-secret identity data and cannot inject credentials.
    */
   readonly installContextVariableMapping?: InstallContextVariableMapping;
   /**
