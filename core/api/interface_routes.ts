@@ -150,7 +150,9 @@ export function registerInterfaceRoutes(
       const body = await readJsonObject(c.req.raw, { maxBytes: 16_384 });
       const interfaceId = string(body.interfaceId);
       if (!interfaceId) throw invalid("interfaceId is required");
-      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, capsule.workspaceId)) }, 200);
+      const expectedRequirementFingerprint = body.expectedRequirementFingerprint;
+      if (expectedRequirementFingerprint !== undefined && (typeof expectedRequirementFingerprint !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(expectedRequirementFingerprint))) throw invalid("expectedRequirementFingerprint must be a SHA-256 digest");
+      return c.json({ link: await options.service.putCapsuleInterfaceLink({ capsuleId, requirementKey, interfaceId, expectedGeneration: expectedLinkGeneration(body.expectedGeneration), ...(expectedRequirementFingerprint ? { expectedRequirementFingerprint } : {}) }, scoped.actor, await interfaceLinkWriteFence(c, options, scoped.actor, capsule.workspaceId)) }, 200);
     });
   });
   app.delete(linkPath, async (c) => {

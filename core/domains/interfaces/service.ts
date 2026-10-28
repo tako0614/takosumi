@@ -722,11 +722,11 @@ export class InterfaceService {
     return accepted;
   }
 
-  async listInterfaceLinkCandidateView(input: { readonly workspaceId: string; readonly capsuleId: string; readonly requirement: CapsuleRequiredInterface }): Promise<{ readonly candidates: readonly { readonly interfaceId: string; readonly providerCapsuleId: string; readonly providerCapsuleName: string; readonly interfaceName: string }[]; readonly generation: number }> {
+  async listInterfaceLinkCandidateView(input: { readonly workspaceId: string; readonly capsuleId: string; readonly requirement: CapsuleRequiredInterface }): Promise<{ readonly candidates: readonly { readonly interfaceId: string; readonly providerCapsuleId: string; readonly providerCapsuleName: string; readonly interfaceName: string }[]; readonly generation: number; readonly requirementFingerprint: string }> {
     const interfaces = await this.listInterfaceLinkCandidates(input);
     const candidates = await Promise.all(interfaces.map(async (iface) => ({ interfaceId: iface.metadata.id, providerCapsuleId: iface.metadata.ownerRef.id, providerCapsuleName: this.#capsules ? (await this.#capsules.getCapsule(iface.metadata.ownerRef.id)).name : iface.metadata.ownerRef.id, interfaceName: iface.metadata.name })));
     const latest = await this.getLatestCapsuleInterfaceLink(input.capsuleId, input.requirement.key);
-    return { candidates, generation: latest?.generation ?? 0 };
+    return { candidates, generation: latest?.generation ?? 0, requirementFingerprint: await stableJsonDigest({ permissions: input.requirement.permissions, delivery: input.requirement.delivery }) };
   }
 
   async ensureCapsuleInterfaceLinks(input: {
@@ -758,6 +758,7 @@ export class InterfaceService {
     readonly requirementKey: string;
     readonly interfaceId: string;
     readonly expectedGeneration: number;
+    readonly expectedRequirementFingerprint?: string;
   }, actor?: ActorContext, writeFence?: InterfaceLinkWriteFence): Promise<InterfaceLink> {
     const { capsule, requirement } = await this.getInterfaceLinkRequirement(input.capsuleId, input.requirementKey);
     return this.#replaceInterfaceLink({ ...input, workspaceId: capsule.workspaceId, requirement, selection: "explicit" }, actor, writeFence);
@@ -770,6 +771,7 @@ export class InterfaceService {
     readonly interfaceId: string;
     readonly expectedGeneration: number;
     readonly selection: "explicit" | "auto_single";
+    readonly expectedRequirementFingerprint?: string;
   }, actor?: ActorContext, suppliedFence?: InterfaceLinkWriteFence): Promise<InterfaceLink> {
     const writeFence = await this.#linkWriteFence(input.workspaceId, suppliedFence);
     await writeFence.assertCurrent();
@@ -781,6 +783,7 @@ export class InterfaceService {
       const { capsule, requirement } = await this.getInterfaceLinkRequirement(input.capsuleId, input.requirement.key);
       if (capsule.workspaceId !== input.workspaceId || JSON.stringify(requirement) !== JSON.stringify(input.requirement)) throw new InterfaceServiceError("failed_precondition", "consumer Interface requirement changed");
     }
+    if (input.expectedRequirementFingerprint !== undefined && input.expectedRequirementFingerprint !== await stableJsonDigest({ permissions: input.requirement.permissions, delivery: input.requirement.delivery })) throw new InterfaceServiceError("conflict", "Interface requirement changed since review");
     const candidates = await this.listInterfaceLinkCandidates({ workspaceId: input.workspaceId, capsuleId: input.capsuleId, requirement: input.requirement });
     const iface = candidates.find((item) => item.metadata.id === input.interfaceId);
     if (!iface || iface.metadata.ownerRef.kind !== "Capsule") throw new InterfaceServiceError("failed_precondition", "selected Interface provider is unavailable");
@@ -961,13 +964,15 @@ export class InterfaceService {
   async #bindingLinkActive(binding: InterfaceBinding, iface: Interface, permission?: string, cache?: { links: Map<string, InterfaceLink | undefined>; capsules: Map<string, Capsule | undefined> }): Promise<boolean> {
     const source = binding.metadata.materializedFrom;
     if (source?.source !== "capsule_required_interface") return true;
-    if (!source.linkId) return false;
-    let link = cache?.links.get(source.linkId);
-    if (!cache?.links.has(source.linkId)) {
-      link = await this.#stores.links.get(source.linkId);
-      cache?.links.set(source.linkId, link);
+    const lookupKey = source.linkId ?? `legacy:${source.capsuleId}:${source.requirementKey}`;
+    let link = cache?.links.get(lookupKey);
+    if (!cache?.links.has(lookupKey)) {
+      link = source.linkId
+        ? await this.#stores.links.get(source.linkId)
+        : await this.#stores.links.getCurrent({ consumerCapsuleId: source.capsuleId, requirementKey: source.requirementKey });
+      cache?.links.set(lookupKey, link);
     }
-    return !!link && link.state === "active" && link.providerInterfaceId === iface.metadata.id && link.providerCapsuleId === iface.metadata.ownerRef.id && link.consumerCapsuleId === source.capsuleId && link.requirementKey === source.requirementKey && link.interface.type === source.interfaceType && link.interface.version === source.interfaceVersion && link.deliveryType === binding.spec.delivery.type && (!permission || (link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission))) && await this.#linkProviderAvailable(link, iface, binding.metadata.workspaceId, cache?.capsules);
+    return !!link && link.state === "active" && link.providerInterfaceId === iface.metadata.id && link.providerCapsuleId === iface.metadata.ownerRef.id && link.consumerCapsuleId === source.capsuleId && link.requirementKey === source.requirementKey && link.interface.type === source.interfaceType && link.interface.version === source.interfaceVersion && link.deliveryType === binding.spec.delivery.type && (permission ? (link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission)) : binding.spec.permissions.every((granted) => link.requestedPermissions.includes(granted) && link.approvedPermissions.includes(granted))) && await this.#linkProviderAvailable(link, iface, binding.metadata.workspaceId, cache?.capsules);
   }
 
   async get(id: string): Promise<Interface> {

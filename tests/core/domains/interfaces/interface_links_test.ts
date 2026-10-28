@@ -3,6 +3,7 @@ import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import type { InterfaceLink } from "takosumi-contract/interfaces";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { InterfaceService, InterfaceServiceError, createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 
 const NOW = "2026-07-13T12:00:00.000Z";
 const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.read", "mcp.write"], delivery: { type: "oauth2" } } as const;
@@ -113,11 +114,25 @@ test("matching legacy required grant adopts the active link before the subject u
   if (source?.source !== "capsule_required_interface") throw new Error("required grant expected");
   const legacy = { ...current, metadata: { ...current.metadata, generation: current.metadata.generation + 1, materializedFrom: { ...source, linkId: undefined } } };
   expect(await f.stores.bindings.compareAndSet(legacy, current.metadata.generation)).toBe(true);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
   await f.ensure();
   const adopted = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
   expect(adopted.metadata.materializedFrom).toMatchObject({ linkId: link.id });
   expect(adopted.metadata.id).toBe(current.metadata.id);
   expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+});
+
+test("legacy wider grant mints only the permission approved by its active link", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  await f.ensure();
+  const binding = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const source = binding.metadata.materializedFrom;
+  if (source?.source !== "capsule_required_interface") throw new Error("required grant expected");
+  expect(await f.stores.bindings.compareAndSet({ ...binding, metadata: { ...binding.metadata, generation: binding.metadata.generation + 1, materializedFrom: { ...source, linkId: undefined } } }, binding.metadata.generation)).toBe(true);
+  expect(await f.stores.links.compareAndSet({ ...link, generation: link.generation + 1, approvedPermissions: ["mcp.read"] }, link.generation)).toBe(true);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).rejects.toThrow("grant not found");
 });
 
 test("same-provider permission change replaces the old grant with the new pinned grant", async () => {
@@ -156,6 +171,14 @@ test("auto_single never selects a private Interface", async () => {
   const provider = f.providers[0]!;
   await f.service.update(provider.metadata.id, { spec: { ...provider.spec, access: { ...provider.spec.access, visibility: "private" } } }, provider.metadata.generation);
   await expect(f.service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [requirement], selections: [{ requirementKey: "tools", interfaceId: provider.metadata.id, selection: "auto_single" }] })).rejects.toThrow("private Interface requires explicit selection");
+  expect(await f.service.listCapsuleInterfaceLinks("consumer")).toHaveLength(0);
+});
+
+test("backfill PUT refuses a requirement changed since dry-run", async () => {
+  const f = await fixture();
+  const expectedRequirementFingerprint = await stableJsonDigest({ permissions: requirement.permissions, delivery: requirement.delivery });
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  await expect(f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: 0, expectedRequirementFingerprint })).rejects.toThrow("changed since review");
   expect(await f.service.listCapsuleInterfaceLinks("consumer")).toHaveLength(0);
 });
 

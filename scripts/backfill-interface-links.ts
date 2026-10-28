@@ -1,13 +1,15 @@
 #!/usr/bin/env bun
 /** Operator-run, API-fenced backfill of pre-link required Interface bindings. */
 import type { Interface, InterfaceBinding, InterfaceLink } from "takosumi-contract/interfaces";
+import { stableJsonDigest } from "../core/adapters/source/digest.ts";
 
 export interface LegacyLinkBackfillEntry {
   readonly workspaceId: string;
   readonly consumerCapsuleId: string;
   readonly requirementKey: string;
   readonly providerInterfaceId: string;
-  readonly bindingIds: readonly string[];
+  readonly bindings: readonly { readonly id: string; readonly generation: number }[];
+  readonly grantFingerprint: string;
 }
 
 export interface LegacyLinkBackfillOptions {
@@ -45,18 +47,22 @@ export async function planLegacyInterfaceLinkBackfill(options: LegacyLinkBackfil
         const source = binding.metadata.materializedFrom;
         if (source?.source !== "capsule_required_interface" || source.linkId || binding.status.phase !== "Ready" || binding.spec.subjectRef.kind !== "Principal") continue;
         if (binding.spec.interfaceId !== iface.metadata.id || binding.metadata.workspaceId !== workspaceId || source.interfaceType !== iface.spec.type || source.interfaceVersion !== iface.spec.version) throw new Error(`Legacy binding ${binding.metadata.id} does not match its Interface`);
+        if (!Number.isSafeInteger(binding.metadata.generation) || binding.metadata.generation < 1) throw new Error(`Legacy binding ${binding.metadata.id} has invalid generation`);
         const scope = `${workspaceId}\0${source.capsuleId}\0${source.requirementKey}`;
         const prior = scopes.get(scope);
         if (prior && prior.providerInterfaceId !== iface.metadata.id) throw new Error(`Ambiguous legacy providers for ${source.capsuleId}/${source.requirementKey}`);
-        scopes.set(scope, { workspaceId, consumerCapsuleId: source.capsuleId, requirementKey: source.requirementKey, providerInterfaceId: iface.metadata.id, bindingIds: [...(prior?.bindingIds ?? []), binding.metadata.id] });
+        const grantFingerprint = await stableJsonDigest({ permissions: binding.spec.permissions, delivery: binding.spec.delivery });
+        if (prior && prior.grantFingerprint !== grantFingerprint) throw new Error(`Divergent legacy grants for ${source.capsuleId}/${source.requirementKey}`);
+        scopes.set(scope, { workspaceId, consumerCapsuleId: source.capsuleId, requirementKey: source.requirementKey, providerInterfaceId: iface.metadata.id, bindings: [...(prior?.bindings ?? []), { id: binding.metadata.id, generation: binding.metadata.generation }], grantFingerprint });
       }
     }
   }
   const entries = [...scopes.values()].sort((a, b) => `${a.workspaceId}/${a.consumerCapsuleId}/${a.requirementKey}`.localeCompare(`${b.workspaceId}/${b.consumerCapsuleId}/${b.requirementKey}`));
   for (const entry of entries) {
-    const view = await getJson<{ generation: number; candidates: { interfaceId: string }[] }>(options, `/api/v1/capsules/${encodeURIComponent(entry.consumerCapsuleId)}/interface-links/${encodeURIComponent(entry.requirementKey)}/candidates`);
+    const view = await getJson<{ generation: number; requirementFingerprint: string; candidates: { interfaceId: string }[] }>(options, `/api/v1/capsules/${encodeURIComponent(entry.consumerCapsuleId)}/interface-links/${encodeURIComponent(entry.requirementKey)}/candidates`);
     if (view.generation !== 0) throw new Error(`Existing Interface-link lineage requires manual review: ${entry.consumerCapsuleId}/${entry.requirementKey}`);
     if (!view.candidates.some((candidate) => candidate.interfaceId === entry.providerInterfaceId)) throw new Error(`Legacy provider is no longer a candidate: ${entry.consumerCapsuleId}/${entry.requirementKey}`);
+    if (view.requirementFingerprint !== entry.grantFingerprint) throw new Error(`Legacy grant differs from the current requirement: ${entry.consumerCapsuleId}/${entry.requirementKey}`);
   }
   return entries;
 }
@@ -65,11 +71,18 @@ export async function planLegacyInterfaceLinkBackfill(options: LegacyLinkBackfil
 export async function applyLegacyInterfaceLinkBackfill(options: LegacyLinkBackfillOptions, plan: readonly LegacyLinkBackfillEntry[]): Promise<readonly InterfaceLink[]> {
   const applied: InterfaceLink[] = [];
   for (const entry of plan) {
+    if (entry.bindings.length === 0 || !/^sha256:[0-9a-f]{64}$/u.test(entry.grantFingerprint)) throw new Error("Backfill plan has no valid legacy grant proof");
+    const current = await getJson<{ bindings: InterfaceBinding[] }>(options, `/api/v1/interfaces/${encodeURIComponent(entry.providerInterfaceId)}/bindings`);
+    for (const proof of entry.bindings) {
+      const binding = current.bindings.find((item) => item.metadata.id === proof.id);
+      const source = binding?.metadata.materializedFrom;
+      if (!binding || binding.metadata.generation !== proof.generation || binding.metadata.workspaceId !== entry.workspaceId || binding.status.phase !== "Ready" || binding.spec.interfaceId !== entry.providerInterfaceId || source?.source !== "capsule_required_interface" || source.linkId || source.capsuleId !== entry.consumerCapsuleId || source.requirementKey !== entry.requirementKey || await stableJsonDigest({ permissions: binding.spec.permissions, delivery: binding.spec.delivery }) !== entry.grantFingerprint) throw new Error(`Legacy binding changed since review: ${proof.id}`);
+    }
     const path = `/api/v1/capsules/${encodeURIComponent(entry.consumerCapsuleId)}/interface-links/${encodeURIComponent(entry.requirementKey)}`;
     const response = await (options.fetcher ?? fetch)(new URL(path, verifiedBaseUrl(options.baseUrl)), {
       method: "PUT",
       headers: { authorization: `Bearer ${options.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ interfaceId: entry.providerInterfaceId, expectedGeneration: 0 }),
+      body: JSON.stringify({ interfaceId: entry.providerInterfaceId, expectedGeneration: 0, expectedRequirementFingerprint: entry.grantFingerprint }),
       redirect: "error",
     });
     if (!response.ok) throw new Error(`Interface-link backfill stopped after ${applied.length} writes: ${path} (${response.status})`);

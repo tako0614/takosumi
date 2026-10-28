@@ -5,6 +5,7 @@ import { registerInterfaceRoutes } from "../../../core/api/interface_routes.ts";
 import { InterfaceService, createInMemoryInterfaceStores } from "../../../core/domains/interfaces/mod.ts";
 import { handleCapsuleInterfaceLinks } from "../../../accounts/service/src/control/interface-links.ts";
 import type { ControlDispatchContext } from "../../../accounts/service/src/control/shared.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 
 const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.invoke"], delivery: { type: "none" } } as const;
 async function fixture() {
@@ -31,8 +32,9 @@ test("Interface link routes return data-free candidates, use generation CAS and 
   const f = await fixture();
   const candidates = await f.request(`${f.path}/candidates`);
   expect(candidates.status).toBe(200);
-  expect(await candidates.json()).toEqual({ candidates: [{ interfaceId: f.provider.metadata.id, providerCapsuleId: "provider", providerCapsuleName: "provider app", interfaceName: "provider-mcp" }], generation: 0 });
+  expect(await candidates.json()).toEqual({ candidates: [{ interfaceId: f.provider.metadata.id, providerCapsuleId: "provider", providerCapsuleName: "provider app", interfaceName: "provider-mcp" }], generation: 0, requirementFingerprint: await stableJsonDigest({ permissions: requirement.permissions, delivery: requirement.delivery }) });
   expect((await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: -1 })).status).toBe(400);
+  expect((await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0, expectedRequirementFingerprint: await stableJsonDigest({ permissions: ["other"], delivery: requirement.delivery }) })).status).toBe(409);
   const selected = await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0 });
   expect(selected.status).toBe(200);
   expect((await selected.json()).link.state).toBe("active");

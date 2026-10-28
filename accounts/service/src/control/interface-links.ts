@@ -47,7 +47,8 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
     const actor = { actorAccountId: ctx.session.subject, roles: [], requestId: ctx.request.headers.get("x-request-id") ?? "interface-link", workspaceId: capsule.workspaceId };
     if (method === "DELETE") return json({ link: await service.revokeCapsuleInterfaceLink(capsule.id, key, body.expectedGeneration, actor, writeFence, authorizedProvider) });
     if (typeof body.interfaceId !== "string" || !body.interfaceId.trim()) return errorJson("invalid_request", "interfaceId is required", 400);
-    return json({ link: await service.putCapsuleInterfaceLink({ capsuleId: capsule.id, requirementKey: key, interfaceId: body.interfaceId, expectedGeneration: body.expectedGeneration }, actor, writeFence) });
+    if (body.expectedRequirementFingerprint !== undefined && (typeof body.expectedRequirementFingerprint !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(body.expectedRequirementFingerprint))) return errorJson("invalid_request", "expectedRequirementFingerprint must be a SHA-256 digest", 400);
+    return json({ link: await service.putCapsuleInterfaceLink({ capsuleId: capsule.id, requirementKey: key, interfaceId: body.interfaceId, expectedGeneration: body.expectedGeneration, ...(typeof body.expectedRequirementFingerprint === "string" ? { expectedRequirementFingerprint: body.expectedRequirementFingerprint } : {}) }, actor, writeFence) });
   } catch (error) {
     if (!(error instanceof InterfaceServiceError)) throw error;
     return errorJson(error.code, error.message, error.code === "permission_denied" ? 403 : error.code === "not_found" ? 404 : error.code === "invalid_argument" ? 400 : error.code === "failed_precondition" ? 412 : 409);
