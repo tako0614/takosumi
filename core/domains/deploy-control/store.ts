@@ -4068,7 +4068,7 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   /** Historical cross-Source archive reuse must not let retirement delete foreign bytes. */
   hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean>;
   /** Bounded, keyset-ordered retirement work and a complete row census. */
-  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number, prefix: string): Promise<{
     readonly archiveRefs: readonly string[];
     readonly hasMore: boolean;
     readonly snapshotCount: number;
@@ -7971,7 +7971,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (current.ownerCapsuleId && (() => {
       const owner = this.#capsules.get(current.ownerCapsuleId);
-      return owner !== undefined && owner.status !== "destroyed";
+      return !owner || owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
+        owner.status !== "destroyed";
     })()) return { status: "blocked", blockers: ["source_owner_not_destroyed"] };
     for (const capsule of this.#capsules.values()) {
       if (capsule.sourceId !== current.id) continue;
@@ -8035,7 +8036,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(false);
   }
 
-  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number, prefix: string): Promise<{
     readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
     readonly snapshotCount: number; readonly sourceSyncRunCount: number;
   }> {
@@ -8043,7 +8044,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const runs = [...this.#runs.values()].filter(isSourceSyncRunRecord)
       .filter((row) => row.sourceId === sourceId);
     const refs = [...new Set([...snapshots.map((row) => row.archiveRef), ...runs.map((row) => row.archiveRef)])]
-      .filter((ref) => after === undefined || ref > after).sort();
+      .filter((ref) => ref.startsWith(prefix) && (after === undefined || ref > after)).sort();
     const bounded = refs.slice(0, limit);
     return Promise.resolve({ archiveRefs: bounded, hasMore: refs.length > limit,
       snapshotCount: snapshots.length, sourceSyncRunCount: runs.length });
@@ -8054,11 +8055,34 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       ...[...this.#sourceSnapshots.values()].map((row) => ({ sourceId: row.sourceId, ref: row.archiveRef })),
       ...[...this.#runs.values()].filter(isSourceSyncRunRecord).map((row) => ({ sourceId: row.sourceId, ref: row.archiveRef })),
     ];
-    if (refs.some((row) => row.sourceId === sourceId && !row.ref.startsWith(prefix)))
-      return Promise.resolve("outside_scope");
-    if (refs.some((row) => row.sourceId !== sourceId && row.ref.startsWith(prefix)))
+    if (refs.some((row) => row.sourceId !== sourceId && row.ref.startsWith(prefix) &&
+      !this.#retirementReferenceReleasedSync(row.sourceId)))
       return Promise.resolve("foreign_reference");
     return Promise.resolve(undefined);
+  }
+
+  #retirementReferenceReleasedSync(sourceId: string | undefined): boolean {
+    if (!sourceId) return false;
+    const source = this.#sources.get(sourceId);
+    if (source) {
+      if (source.status !== "disabled" || source.autoSync || !source.retiringAt) return false;
+      if (source.ownerCapsuleId) {
+        const owner = this.#capsules.get(source.ownerCapsuleId);
+        if (!owner || owner.workspaceId !== source.workspaceId || owner.sourceId !== sourceId ||
+          owner.status !== "destroyed") return false;
+      }
+    } else if (![...this.#activityEvents.values()].some((event) => event.action === "source.retired" &&
+      event.targetType === "source" && event.targetId === sourceId)) return false;
+    if ([...this.#capsules.values()].some((capsule) => capsule.sourceId === sourceId && capsule.status !== "destroyed"))
+      return false;
+    for (const run of this.#runs.values()) {
+      if (!runIsInFlight(run.status)) continue;
+      const record = run as unknown as Record<string, unknown>;
+      if (record["sourceId"] === sourceId ||
+        (typeof record["capsuleId"] === "string" && this.#capsules.get(record["capsuleId"])?.sourceId === sourceId))
+        return false;
+    }
+    return true;
   }
 
   getLatestSourceSnapshotForLane(input: {

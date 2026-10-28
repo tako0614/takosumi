@@ -61,19 +61,22 @@ test("source archive cleanup deletes only the terminal Run's unreferenced alloca
 test("Source retirement deletes only owned R2 archives and preserves shared historical refs", async () => {
   const db = new SqliteFakeD1();
   await db.exec(`create table sources (id text, space_id text, status text, record_json text);
-    create table capsules (id text, space_id text, source_id text, status text);
-    create table runs (id text, space_id text, source_id text, type text, status text, lease_token text, run_json text);
-    create table source_snapshots (id text, source_id text, record_json text)`);
+    create table capsules (id text, space_id text, source_id text, status text, record_json text);
+    create table runs (id text, space_id text, source_id text, installation_id text, type text, status text, lease_token text, run_json text);
+    create table source_snapshots (id text, source_id text, record_json text);
+    create table audit_events (id text, action text, target_type text, target_id text)`);
   const sourceRecord = { id: "src_1", workspaceId: "spc_1", status: "disabled", autoSync: false,
     retiringAt: "2026-10-28T00:00:00.000Z", ownerCapsuleId: "cap_1" };
   await db.prepare("insert into sources values (?, ?, ?, ?)")
     .bind("src_1", "spc_1", "disabled", JSON.stringify(sourceRecord)).run();
-  await db.prepare("insert into capsules values (?, ?, ?, ?)").bind("cap_1", "spc_1", "src_1", "destroyed").run();
+  await db.prepare("insert into capsules (id, space_id, source_id, status, record_json) values (?, ?, ?, ?, ?)")
+    .bind("cap_1", "spc_1", "src_1", "destroyed", JSON.stringify({ id: "cap_1", workspaceId: "spc_1",
+      sourceId: "src_1", status: "destroyed" })).run();
   const archive = ARCHIVE_KEY;
   const orphan = "workspaces/spc_1/sources/src_1/snapshots/snap_orphan/source.tar.zst";
   await db.prepare("insert into source_snapshots values (?, ?, ?)")
     .bind("snap_1", "src_1", JSON.stringify({ id: "snap_1", sourceId: "src_1", workspaceId: "spc_1", archiveRef: archive })).run();
-  await db.prepare("insert into runs values (?, ?, ?, ?, ?, ?, ?)")
+  await db.prepare("insert into runs (id, space_id, source_id, type, status, lease_token, run_json) values (?, ?, ?, ?, ?, ?, ?)")
     .bind("sync_orphan", "spc_1", "src_1", "source_sync", "failed", null,
       JSON.stringify({ id: "sync_orphan", workspaceId: "spc_1", sourceId: "src_1", kind: "source_sync", archiveRef: orphan })).run();
   const bucket = new FakeR2Bucket();
@@ -94,7 +97,7 @@ test("Source retirement deletes only owned R2 archives and preserves shared hist
   expect((await retire(archive)).status).toBe(503);
   expect(bucket.body(archive)).toBeDefined();
   await db.prepare("delete from source_snapshots where id = ?").bind("foreign").run();
-  await db.prepare("insert into runs values (?, ?, ?, ?, ?, ?, ?)")
+  await db.prepare("insert into runs (id, space_id, source_id, type, status, lease_token, run_json) values (?, ?, ?, ?, ?, ?, ?)")
     .bind("sync_foreign", "spc_2", "src_other", "source_sync", "succeeded", null,
       JSON.stringify({ id: "sync_foreign", workspaceId: "spc_2", sourceId: "src_other", kind: "source_sync", archiveRef: archive })).run();
   expect((await retire(archive)).status).toBe(503);
@@ -107,14 +110,17 @@ test("Source retirement deletes only owned R2 archives and preserves shared hist
 test("Source retirement refuses live owners, active sync and unreferenced keys", async () => {
   const db = new SqliteFakeD1();
   await db.exec(`create table sources (id text, space_id text, status text, record_json text);
-    create table capsules (id text, space_id text, source_id text, status text);
-    create table runs (id text, space_id text, source_id text, type text, status text, lease_token text, run_json text);
-    create table source_snapshots (id text, source_id text, record_json text)`);
+    create table capsules (id text, space_id text, source_id text, status text, record_json text);
+    create table runs (id text, space_id text, source_id text, installation_id text, type text, status text, lease_token text, run_json text);
+    create table source_snapshots (id text, source_id text, record_json text);
+    create table audit_events (id text, action text, target_type text, target_id text)`);
   const sourceRecord = { id: "src_1", workspaceId: "spc_1", status: "disabled", autoSync: false,
     retiringAt: "2026-10-28T00:00:00.000Z", ownerCapsuleId: "cap_1" };
   await db.prepare("insert into sources values (?, ?, ?, ?)")
     .bind("src_1", "spc_1", "disabled", JSON.stringify(sourceRecord)).run();
-  await db.prepare("insert into capsules values (?, ?, ?, ?)").bind("cap_1", "spc_1", "src_1", "active").run();
+  await db.prepare("insert into capsules (id, space_id, source_id, status, record_json) values (?, ?, ?, ?, ?)")
+    .bind("cap_1", "spc_1", "src_1", "active", JSON.stringify({ id: "cap_1", workspaceId: "spc_1",
+      sourceId: "src_1", status: "active" })).run();
   await db.prepare("insert into source_snapshots values (?, ?, ?)")
     .bind("snap_1", "src_1", JSON.stringify({ id: "snap_1", sourceId: "src_1", workspaceId: "spc_1", archiveRef: ARCHIVE_KEY })).run();
   const bucket = new FakeR2Bucket();
@@ -128,7 +134,7 @@ test("Source retirement refuses live owners, active sync and unreferenced keys",
   }));
   expect((await retire(ARCHIVE_KEY)).status).toBe(503);
   await db.prepare("update capsules set status = ? where id = ?").bind("destroyed", "cap_1").run();
-  await db.prepare("insert into runs values (?, ?, ?, ?, ?, ?, ?)")
+  await db.prepare("insert into runs (id, space_id, source_id, type, status, lease_token, run_json) values (?, ?, ?, ?, ?, ?, ?)")
     .bind("sync_live", "spc_1", "src_1", "source_sync", "running", "lease",
       JSON.stringify({ id: "sync_live", workspaceId: "spc_1", sourceId: "src_1", kind: "source_sync", archiveRef: ARCHIVE_KEY })).run();
   expect((await retire(ARCHIVE_KEY)).status).toBe(503);
@@ -146,9 +152,10 @@ test("Source retirement refuses live owners, active sync and unreferenced keys",
 test("Source retirement batch checks the whole prefix and resumes when objects are missing", async () => {
   const db = new SqliteFakeD1();
   await db.exec(`create table sources (id text, space_id text, status text, record_json text);
-    create table capsules (id text, space_id text, source_id text, status text);
-    create table runs (id text, space_id text, source_id text, type text, status text, lease_token text, run_json text);
-    create table source_snapshots (id text, source_id text, record_json text)`);
+    create table capsules (id text, space_id text, source_id text, status text, record_json text);
+    create table runs (id text, space_id text, source_id text, installation_id text, type text, status text, lease_token text, run_json text);
+    create table source_snapshots (id text, source_id text, record_json text);
+    create table audit_events (id text, action text, target_type text, target_id text)`);
   await db.prepare("insert into sources values (?, ?, ?, ?)")
     .bind("src_1", "spc_1", "disabled", JSON.stringify({ id: "src_1", workspaceId: "spc_1",
       status: "disabled", autoSync: false, retiringAt: "2026-10-28T00:00:00.000Z" })).run();

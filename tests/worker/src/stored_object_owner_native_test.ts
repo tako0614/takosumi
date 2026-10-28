@@ -121,6 +121,7 @@ async function nativeFixture() {
     "create table artifacts(id text primary key,run_id text,object_key text)",
     "create table sources(id text primary key,space_id text,record_json text)",
     "create table source_snapshots(id text primary key,source_id text,record_json text)",
+    "create table audit_events(id text primary key,action text,target_type text,target_id text)",
     "create table backups(id text primary key,space_id text,record_json text)",
     "create table private_run_file_pointers(workspace_id text,capsule_id text,environment text,slot text,digest text,blob_id text,version integer)",
     "create table private_run_file_receipts(workspace_id text,capsule_id text,environment text,slot text,digest text,blob_id text)",
@@ -235,23 +236,38 @@ test("native stored-service custody rechecks Source retirement before R2 deletio
       retiringAt: "2026-10-28T00:00:00.000Z", ownerCapsuleId: "capsule_one" };
     await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
       .bind(sourceId, workspaceId, "disabled", JSON.stringify(source)).run();
-    await db.prepare("insert into capsules(id,space_id,source_id,status) values(?,?,?,?)")
-      .bind("capsule_one", workspaceId, sourceId, "destroyed").run();
+    await db.prepare("insert into capsules(id,space_id,source_id,status,record_json) values(?,?,?,?,?)")
+      .bind("capsule_one", workspaceId, sourceId, "destroyed", JSON.stringify({ id: "capsule_one",
+        workspaceId, sourceId, status: "destroyed" })).run();
     await db.prepare("insert into source_snapshots values(?,?,?)")
       .bind("snap_one", sourceId, JSON.stringify({ id: "snap_one", sourceId, workspaceId, archiveRef: key })).run();
     const bucket = await runtime.getR2Bucket("SOURCE");
     await bucket.put(key, "source bytes");
     const request = { operation: "retire", key,
       sourceRetirement: { workspaceId, sourceId, archiveRef: key } };
-    await db.prepare("update capsules set status='active' where id='capsule_one'").run();
+    await db.prepare("update capsules set status='active',record_json=json_set(record_json,'$.status','active') where id='capsule_one'").run();
     expect((await call(request)).status).toBe(503);
     expect(await bucket.head(key)).not.toBeNull();
-    await db.prepare("update capsules set status='destroyed' where id='capsule_one'").run();
+    await db.prepare("update capsules set status='destroyed',record_json=json_set(record_json,'$.status','destroyed') where id='capsule_one'").run();
+    const foreignSource = { id: "source_other", workspaceId: "workspace_other", status: "active",
+      autoSync: true };
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(foreignSource.id, foreignSource.workspaceId, foreignSource.status, JSON.stringify(foreignSource)).run();
     await db.prepare("insert into source_snapshots values(?,?,?)")
       .bind("snap_shared", "source_other", JSON.stringify({ id: "snap_shared", sourceId: "source_other", workspaceId: "workspace_other", archiveRef: key })).run();
     expect((await call(request)).status).toBe(503);
     expect(await bucket.head(key)).not.toBeNull();
-    await db.prepare("delete from source_snapshots where id='snap_shared'").run();
+    const marked = { ...foreignSource, status: "disabled", autoSync: false,
+      retiringAt: "2026-10-28T00:00:00.000Z" };
+    await db.prepare("update sources set status='disabled',record_json=? where id='source_other'")
+      .bind(JSON.stringify(marked)).run();
+    expect((await call(request)).status).toBe(200);
+    expect(await bucket.head(key)).toBeNull();
+    await bucket.put(key, "source bytes again");
+    await db.prepare("delete from fixture_usage").run();
+    await db.prepare("delete from sources where id='source_other'").run();
+    expect((await call(request)).status).toBe(503);
+    await db.prepare("insert into audit_events values('act_other','source.retired','source','source_other')").run();
     expect((await call(request)).status).toBe(200);
     expect(await bucket.head(key)).toBeNull();
   } finally { await fixture.close(); }
@@ -267,6 +283,7 @@ test("native stored-service custody validates one bounded Source retirement batc
     const workspaceId = "workspace_original", sourceId = "source_one";
     const keys = ["snap_one", "snap_two"].map((id) =>
       `workspaces/${workspaceId}/sources/${sourceId}/snapshots/${id}/source.tar.zst`);
+    const unselected = `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_three/source.tar.zst`;
     await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
       .bind(sourceId, workspaceId, "disabled", JSON.stringify({ id: sourceId, workspaceId,
         status: "disabled", autoSync: false, retiringAt: "2026-10-28T00:00:00.000Z" })).run();
@@ -275,14 +292,31 @@ test("native stored-service custody validates one bounded Source retirement batc
       await db.prepare("insert into source_snapshots values(?,?,?)")
         .bind(id, sourceId, JSON.stringify({ id, sourceId, workspaceId, archiveRef: keys[i] })).run();
     }
+    await db.prepare("insert into source_snapshots values(?,?,?)")
+      .bind("snap_three", sourceId, JSON.stringify({ id: "snap_three", sourceId, workspaceId,
+        archiveRef: unselected })).run();
     const bucket = await runtime.getR2Bucket("SOURCE");
     await bucket.put(keys[0]!, "source bytes");
     await bucket.put(keys[1]!, "source bytes");
+    await bucket.put(unselected, "source bytes");
     const request = { operation: "retire", key: keys[0], keys,
       sourceRetirementBatch: { workspaceId, sourceId, archiveRefs: keys } };
+    const foreign = { id: "source_other", workspaceId: "workspace_other", status: "active", autoSync: true };
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(foreign.id, foreign.workspaceId, foreign.status, JSON.stringify(foreign)).run();
+    await db.prepare("insert into runs(id,space_id,source_id,type,status,run_json) values(?,?,?,?,?,?)")
+      .bind("sync_other", foreign.workspaceId, foreign.id, "source_sync", "succeeded",
+        JSON.stringify({ id: "sync_other", workspaceId: foreign.workspaceId, sourceId: foreign.id,
+          kind: "source_sync", status: "succeeded", archiveRef: unselected })).run();
+    expect((await call(request)).status).toBe(503);
+    expect(await bucket.head(keys[0]!)).not.toBeNull();
+    await db.prepare("update sources set status='disabled',record_json=? where id='source_other'")
+      .bind(JSON.stringify({ ...foreign, status: "disabled", autoSync: false,
+        retiringAt: "2026-10-28T00:00:00.000Z" })).run();
     expect((await call(request)).status).toBe(200);
     expect(await bucket.head(keys[0]!)).toBeNull();
     expect(await bucket.head(keys[1]!)).toBeNull();
+    expect(await bucket.head(unselected)).not.toBeNull();
   } finally { await fixture.close(); }
 }, 30_000);
 

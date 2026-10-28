@@ -19,3 +19,5 @@ Implementation and verification are in progress.
 - Legacy ownerless retirement requires an operator mark after backup, dry-run and approval. Preserve ownerless live-app behavior until explicit backfill.
 - No deployment, merge, external database access, or changes to capsule ownership/members, vault, OIDC, dashboard sharing or billing are authorized here.
 - Review-fix report: `/root/dev/tmp/tk0118/phase2-fix-report.md`.
+
+- No-copy retirement also releases terminal historical archive references after disabled retirement marking plus no live Capsule/in-flight work, or after committed `source.retired` evidence with the same guards. SourceSyncRun history remains; external-prefix archives are neither copied nor physically deleted. Active foreign consumers continue to block cleanup.
