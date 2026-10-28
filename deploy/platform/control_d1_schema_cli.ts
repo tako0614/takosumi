@@ -232,7 +232,9 @@ export async function runControlD1SchemaCli(
   let plan: ControlD1SchemaPlan;
   try {
     plan = await (dependencies.buildSchemaPlan ?? buildControlD1SchemaPlan)(
-      productionTransition ? { throughMigrationVersion: productionTransition.target } : undefined,
+      dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD
+        ? { throughMigrationVersion: CONTROL_D1_PRODUCTION_V66_V75_TARGET }
+        : undefined,
     );
     if (
       productionTransition &&
