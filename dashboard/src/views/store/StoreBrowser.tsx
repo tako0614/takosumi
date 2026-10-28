@@ -32,6 +32,8 @@ import {
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
 import { openModalDialog } from "../../lib/modal-dialog.ts";
 import AppFace from "../../components/AppFace.tsx";
+import { matchingInstalledApps, type InstalledAppSummary } from "takosumi-contract";
+import { appPageHref } from "../../lib/app-links.ts";
 import "./StoreBrowser.css";
 
 const STR = {
@@ -97,6 +99,14 @@ const STR = {
   },
   sourceLocation: { ja: "取得元", en: "Source" },
   openRepo: { ja: "取得元を開く", en: "Open source" },
+  installed: { ja: "インストール済み", en: "Installed" },
+  installedCount: { ja: "{count}つインストール済み", en: "{count} installed" },
+  open: { ja: "開く", en: "Open" },
+  installAnother: { ja: "もう1つ入れる", en: "Add another" },
+  installAnotherHint: {
+    ja: "別のアプリとして新しく追加します。データや設定は共有されません。",
+    en: "This adds a separate app. Its data and settings are not shared.",
+  },
 } as const;
 
 function s(key: keyof typeof STR, locale: TcsLocale): string {
@@ -145,6 +155,7 @@ const EMPTY: TcsAggregateState = {
 export interface StoreBrowserProps {
   readonly locale: TcsLocale;
   readonly onConfigure: (listing: TcsListing) => void;
+  readonly installedApps?: readonly InstalledAppSummary[];
   /** Hosts with their own persistent detail view can skip this component's drawer. */
   readonly onSelectListing?: (listing: TcsListing) => void;
   readonly showSourceControls?: boolean;
@@ -287,26 +298,49 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     return publisher.displayName?.trim() || `@${publisher.handle}`;
   };
 
+  const installedFor = (listing: TcsListing) => matchingInstalledApps(
+    props.installedApps ?? [],
+    { url: listing.source.url, path: listing.source.path ?? "." },
+  );
+  const installedLabel = (count: number) => count === 1
+    ? s("installed", props.locale)
+    : s("installedCount", props.locale).replace("{count}", String(count));
+
   // App-store posture: the grid repeats one quiet action per card, and the
   // filled accent button is reserved for the detail drawer where a single
   // listing has the user's attention.
   const installButton = (listing: TcsListing, prominent = false) => {
     return (
-      <button
-        type="button"
-        class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
-        // Every card repeats the same visible verb; the accessible name
-        // carries the listing so the buttons are distinguishable. The verb is
-        // 追加/Add — the same one the add flow's CTA and every progress,
-        // done and error line use.
-        aria-label={s("installAria", props.locale).replace(
-          "{name}",
-          pick(listing.name, props.locale),
-        )}
-        onClick={() => props.onConfigure(listing)}
-      >
-        {s("install", props.locale)}
-      </button>
+      <Show when={installedFor(listing).length > 0} fallback={
+        <button
+          type="button"
+          class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
+          // Every card repeats the same visible verb; the accessible name
+          // carries the listing so the buttons are distinguishable. The verb is
+          // 追加/Add — the same one the add flow's CTA and every progress,
+          // done and error line use.
+          aria-label={s("installAria", props.locale).replace(
+            "{name}",
+            pick(listing.name, props.locale),
+          )}
+          onClick={() => props.onConfigure(listing)}
+        >
+          {s("install", props.locale)}
+        </button>
+      }>
+        <div class="tcs-installed-choice" data-testid="store-installed-choice">
+          <span class="tcs-installed-label">{installedLabel(installedFor(listing).length)}</span>
+          <For each={installedFor(listing)}>{(app) => (
+            <a class="tcs-btn tcs-primary" href={appPageHref(app.capsuleId)} aria-label={`${s("open", props.locale)}: ${app.name}`}>
+              {s("open", props.locale)}<Show when={installedFor(listing).length > 1}> · {app.name}</Show>
+            </a>
+          )}</For>
+          <button type="button" class="tcs-btn" onClick={() => props.onConfigure(listing)}>
+            {s("installAnother", props.locale)}
+          </button>
+          <p class="tcs-installed-hint">{s("installAnotherHint", props.locale)}</p>
+        </div>
+      </Show>
     );
   };
 

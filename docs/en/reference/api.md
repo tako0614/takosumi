@@ -245,7 +245,7 @@ lightly edited for readers.
 | POST | `/api/v1/workspaces/{workspaceId}/members` | Add a Workspace member |
 | PATCH | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Change a Workspace member role |
 | DELETE | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Remove a Workspace member |
-| GET | `/api/v1/workspaces/{workspaceId}/graph` | Read the Workspace Capsule inventory; the retired dependency edge list is empty |
+| GET | `/api/v1/workspaces/{workspaceId}/installed-apps` | Read value-free installed-app summaries for store matching |
 | GET | `/api/v1/workspaces/{workspaceId}/ui-surfaces` | List authorized Workspace UI surface Interfaces |
 | GET | `/api/v1/workspaces/{workspaceId}/activity` | List Workspace Activity |
 | GET | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | List Interface materialization failures, which contain no secret values |
@@ -262,6 +262,14 @@ account has one. `email` is returned only when the caller is an active owner or
 admin of that Workspace, and never for an address the identity provider marked
 unverified. Members and viewers do not receive other members' email addresses.
 Add, role change, and remove responses carry neither field.
+
+`GET /api/v1/workspaces/{workspaceId}/installed-apps` has no query parameters. With
+Workspace read access, it returns `{ installedApps: [...] }`, excluding destroyed apps.
+Each row has `capsuleId`, `name`, optional `displayName` (`{ja,en}`) and `iconUrl`, `state`,
+`primaryAction`, and `installedFrom: {url,path}`. The URL contains no credentials; `path`
+is the executable module's repository-relative directory. Matching ignores ref. The store
+uses normalized Git URL and module to show the installed count, Open, and Add another.
+Each additional installation is an independent app with separate data and settings.
 
 ### Projects and Capsules
 
@@ -302,19 +310,22 @@ a window of Workspace-wide Runs.
 - `state`: `installing` / `installed` / `updating` / `needs_attention` /
   `stopped` / `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` /
-  `retry_screen` / `fix_connection` / `continue_install` / `cancel_uninstall` /
-  `uninstall_now` / `reinstall` / `none`
+  `retry_screen` / `fix_connection` / `fix_interface_link` / `continue_install` /
+  `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
 - `problems[].code`, in priority order: `connection_unavailable` /
-  `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
+  `interface_link_unavailable` / `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
   `capsule_error` / `install_incomplete` / `screen_unavailable` /
-  `uninstall_scheduled` (warning)
+  `interface_link_degraded` / `interface_link_unset` / `uninstall_scheduled` (the last three are warnings)
 
 The view also lists every launchable screen (`screens`), the adopted version and
 the newest snapshot of the same ref (`version.current`, `version.latest`,
 `updateAvailable`, `stale`, `autoUpdate`), in-progress work (`progress`), the
 newest Run (`latestRun`) and the uninstall terms (`uninstall.mode`, the
 `graceDays` that apply before anything is scheduled, and
-`scheduled.deleteAfter` once scheduled). It carries no secret, no Output value
+`scheduled.deleteAfter` once scheduled). `links.uses` lists outgoing links and
+`links.usedBy` lists incoming links. `uninstall.impact.usedBy` identifies consumers
+affected by removal. Removing a provider leaves consumer apps in place and never
+selects a replacement automatically. The view carries no secret, no Output value
 and no Interface input other than a screen's checked launch URL. Parts that a
 supporting read could not load are named in `incomplete`.
 `progress.revisionPreparing` is true only while an install or revision
@@ -436,6 +447,15 @@ the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
 `DELETE` finishes it. It is refused once the app is applying or applied, and
 for plans that are not attempts. The Source is never deleted; only polling
 that the attempt itself turned on is turned off.
+
+For `userAction.kind: "provide_inputs"`, `interfaces` lists each `requirementKey`, exact
+type/version, permissions, value-free candidates, `choice`, and `autoSelected`. No candidates
+allows later; one is selected automatically; several require a provider or later. PATCH
+`interfaceLinks` replaces the complete answer list with entries shaped as
+`{requirementKey,choice:{kind:"interface",interfaceId}}` or
+`{requirementKey,choice:{kind:"later"}}`. The selected provider ID lives in this answer,
+not the manifest. Immediately after Capsule creation, it becomes a pinned InterfaceLink
+and is never resolved again from the candidate set.
 
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired

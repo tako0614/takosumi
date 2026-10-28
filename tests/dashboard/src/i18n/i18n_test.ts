@@ -138,6 +138,11 @@ describe("i18n dictionaries", () => {
     );
     expect(installKeys.length).toBeGreaterThan(50);
     for (const key of installKeys) {
+      // TASK-0118 explicitly explains the second, independent installation.
+      if (key === "installStore.installAnotherHint") {
+        expect(ja[key]).toBe("別のアプリとして新しく追加します。データや設定は共有されません。");
+        continue;
+      }
       expect({ key, value: ja[key] }).not.toEqual(
         expect.objectContaining({ value: expect.stringMatching(/サービス|ワークロード|追加|デプロイ|公開(?!リポジトリ)|反映/u) }),
       );

@@ -987,7 +987,7 @@ test("retired relationship roots return 404", async () => {
   }
 });
 
-test("Capsule dependency reads and writes are retired and graph edges are empty", async () => {
+test("Capsule dependency and empty Workspace graph reads are retired", async () => {
   const fixture = operationsFixture();
   const operations = {
     ...fixture.operations,
@@ -1006,13 +1006,10 @@ test("Capsule dependency reads and writes are retired and graph edges are empty"
     expect(response?.status).toBe(404);
   }
   const request = new Request("https://app.example.test/api/v1/workspaces/ws_owner/graph");
-  const response = await handleWorkspaces(
-    context(operations, request), ["workspaces", "ws_owner", "graph"], "GET",
-  );
-  expect(response?.status).toBe(200);
-  const graph = await response!.json();
-  expect(graph.nodes.length).toBeGreaterThan(0);
-  expect(graph.edges).toEqual([]);
+  const response = await handleAuthenticatedControlRoute({
+    ...context(operations, request), subject: "tsub_owner",
+  });
+  expect(response?.status).toBe(404);
 });
 
 test("account-plane control errors preserve structured reason details", async () => {

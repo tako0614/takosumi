@@ -55,6 +55,8 @@ import type {
   DiscardGitInstallPlanRequest,
   GitInstallPlanResponse,
   ListOpenGitInstallPlansResponse,
+  InstalledAppSummary,
+  ListInstalledAppsResponse,
   PatchGitInstallPlanRequest,
   CreateGitRevisionPlanRequest,
   GitRevisionPlanResponse,
@@ -2028,6 +2030,17 @@ export type {
 export type CapsuleAppView = ContractCapsuleAppView;
 export type RunPolicyReason = ContractRunPolicyReason;
 export type RunPlanOrigin = ContractRunPlanOrigin;
+
+/** Reads value-free installed app identities for matching Store listings. */
+export async function listInstalledApps(workspaceId: string): Promise<readonly InstalledAppSummary[]> {
+  const body = await controlFetch<ListInstalledAppsResponse>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/installed-apps`,
+  );
+  if (!Array.isArray(body.installedApps)) {
+    throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+  }
+  return body.installedApps;
+}
 
 /** The view kind this dashboard build understands. */
 const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1";

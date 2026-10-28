@@ -237,7 +237,7 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを追加する                      |
 | PATCH    | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える                  |
 | DELETE   | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す                          |
-| GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Workspace の Capsule 一覧を読む。廃止された依存 edge 一覧は空で返す |
+| GET      | `/api/v1/workspaces/{workspaceId}/installed-apps`    | ストア照合用の、値を含まないインストール済みアプリの要約を読む |
 | GET      | `/api/v1/workspaces/{workspaceId}/ui-surfaces`       | 認可済み Workspace UI surface Interface を一覧する |
 | GET      | `/api/v1/workspaces/{workspaceId}/activity`          | 操作履歴を一覧する                      |
 | GET      | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | Interface materialization の value-free な失敗を一覧する |
@@ -250,6 +250,14 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 | POST     | `/api/v1/workspaces/{workspaceId}/drift-check`       | Workspace 全体の差分確認 Run を作る     |
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
+
+`GET /api/v1/workspaces/{workspaceId}/installed-apps` に query parameter はありません。その Workspace を
+読める利用者に、destroyed を除くアプリを `{ installedApps: [...] }` で返します。各行は
+`capsuleId`、`name`、任意の `displayName`（`{ja,en}`）と `iconUrl`、`state`、`primaryAction`、
+`installedFrom: {url,path}` を持ちます。URL は認証情報を含まず、`path` はリポジトリから見た
+実行する module のフォルダです。ref は照合に使いません。ストアは正規化した Git URL と module
+で照合し、「インストール済み」の件数と「開く」、副操作の「もう1つ入れる」を表示します。
+追加したものは独立したアプリで、データや設定は共有しません。
 
 メンバー一覧の各行は、membership の field に加えて、アカウントに表示名があれば
 `displayName` を返します。`email` は呼び出し元がその Workspace の active な owner または
@@ -330,16 +338,21 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 - `state`: `installing` / `installed` / `updating` / `needs_attention` / `stopped` /
   `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` / `retry_screen` /
-  `fix_connection` / `continue_install` / `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
-- `problems[].code`（優先順）: `connection_unavailable` / `uninstall_failed` /
+  `fix_connection` / `fix_interface_link` / `continue_install` / `cancel_uninstall` /
+  `uninstall_now` / `reinstall` / `none`
+- `problems[].code`（優先順）: `connection_unavailable` / `interface_link_unavailable` / `uninstall_failed` /
   `uninstall_blocked` / `policy_blocked` / `run_failed` / `capsule_error` /
-  `install_incomplete` / `screen_unavailable` / `uninstall_scheduled`（警告）
+  `install_incomplete` / `screen_unavailable` / `interface_link_degraded` /
+  `interface_link_unset` / `uninstall_scheduled`（最後の3つは警告）
 
 応答には、開ける画面のすべて (`screens`)、採用中の版と同じ ref の最新 snapshot
 (`version.current` / `version.latest` / `updateAvailable` / `stale` / `autoUpdate`)、
 進行中の Run と確認待ちの計画 (`progress`)、最新の Run (`latestRun`)、削除の条件
 (`uninstall.mode` と、予約前でも分かる `graceDays`、予約後の `scheduled.deleteAfter`)
-が入ります。秘密の値、Output の値、画面の起動 URL 以外の Interface 入力は含みません。
+が入ります。`links.uses` はこのアプリが使う連携、`links.usedBy` はこのアプリを使う連携です。
+`uninstall.impact.usedBy` は、削除の影響を受ける利用側を示します。提供元を削除しても利用側の
+アプリは残り、他の提供元へは自動で切り替えません。秘密の値、Output の値、画面の起動 URL
+以外の Interface 入力は含みません。
 補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
 `progress.revisionPreparing` は、インストールまたは版の更新処理がまだ計画の Run を作っていない
 間だけ true です（インストールの試みは一度も適用していないアプリに限り、止まった試みは除きます）。
@@ -478,6 +491,13 @@ route はありません。
 止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
 すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
 Source は削除しません。その試行自身が有効にした polling だけを止めます。
+
+`userAction.kind: "provide_inputs"` の `interfaces` は、`requirementKey`、type/version、
+permissions、値を含まない候補、`choice`、`autoSelected` を返します。候補が 0 件なら「あとで」、
+1 件なら自動選択、複数なら提供元か「あとで」を選びます。PATCH の `interfaceLinks` は
+`[{requirementKey,choice:{kind:"interface",interfaceId}}]` または
+`[{requirementKey,choice:{kind:"later"}}]` という完全な回答一覧です。提供元の ID は manifest ではなく
+この選択に保存し、Capsule 作成の直後に固定した InterfaceLink を作ります。以後は候補を解決し直しません。
 
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の

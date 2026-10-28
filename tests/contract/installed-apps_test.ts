@@ -1,0 +1,57 @@
+import { describe, expect, test } from "bun:test";
+import { installedAppSourceUrl, matchingInstalledApps, type InstalledAppSummary } from "../../contract/installed-apps.ts";
+
+const source = { url: "https://git.example.test/team/app.git", path: "deploy/app" };
+function app(id: string, overrides: Partial<InstalledAppSummary> = {}): InstalledAppSummary {
+  return { capsuleId: id, name: id, state: "installed", primaryAction: "open", installedFrom: source, ...overrides };
+}
+
+describe("Store installed app identity", () => {
+  test("normalizes .git, trailing slash, URL fragment and relative module spelling", () => {
+    expect(matchingInstalledApps([app("one")], {
+      url: " https://git.example.test/team/app/#release ", path: "./deploy/app/",
+    }).map((item) => item.capsuleId)).toEqual(["one"]);
+  });
+
+  test("two installs remain separate even when their revisions differ", () => {
+    const first = { ...app("one"), ref: "v1.0.0" };
+    const second = { ...app("two"), ref: "v2.0.0" };
+    expect(matchingInstalledApps([first, second], source).map((item) => item.capsuleId)).toEqual(["one", "two"]);
+  });
+
+  test("root is equivalent to ./, but another module or repository is different", () => {
+    const root = app("root", { installedFrom: { ...source, path: "." } });
+    expect(matchingInstalledApps([root], { ...source, path: "./" })).toEqual([root]);
+    expect(matchingInstalledApps([app("one")], { ...source, path: "deploy/another" })).toEqual([]);
+    expect(matchingInstalledApps([app("one")], { ...source, url: "https://git.example.test/team/another" })).toEqual([]);
+  });
+
+  test("destroyed apps and unsafe paths never count; scheduled removals still count", () => {
+    const removed = app("gone", { state: "uninstalled", primaryAction: "reinstall" });
+    const scheduled = app("scheduled", { state: "uninstall_scheduled", primaryAction: "cancel_uninstall" });
+    expect(matchingInstalledApps([removed, scheduled], source)).toEqual([scheduled]);
+    for (const path of ["../deploy/app", "/deploy/app", "deploy/../app", ""]) {
+      expect(matchingInstalledApps([app("one")], { ...source, path })).toEqual([]);
+    }
+  });
+
+  test("Store comparison uses the same value-free URL on both sides", () => {
+    const selected = { ...source, url: "https://reader:private@git.example.test/team/app.git?variant=one#release" };
+    const summary = app("one", { installedFrom: { ...source, url: "https://git.example.test/team/app.git" } });
+    expect(matchingInstalledApps([summary], selected)).toEqual([summary]);
+    expect(matchingInstalledApps([app("raw", { installedFrom: selected })], source)).toHaveLength(1);
+  });
+
+  test("value-free identities support URL SSH and scp without exposing userinfo", () => {
+    for (const [raw, safe] of [
+      ["https://reader:private@git.example.test/team/app.git?token=private#secret", "https://git.example.test/team/app.git"],
+      ["ssh://git@git.example.test/team/app.git?token=private#secret", "ssh://git.example.test/team/app.git"],
+      ["git@git.example.test:team/app.git?token=private#secret", "git.example.test:team/app.git"],
+    ]) {
+      expect(installedAppSourceUrl(raw!)).toBe(safe!);
+      const summary = app("one", { installedFrom: { ...source, url: safe! } });
+      expect(matchingInstalledApps([summary], { ...source, url: raw! })).toEqual([summary]);
+    }
+    expect(installedAppSourceUrl("file:///private/repo")).toBe("");
+  });
+});

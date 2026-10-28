@@ -177,6 +177,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/installed-apps",
+      summary: "List value-free installed app identities for Store discovery",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/capsules",
       summary: "List Workspace Capsules",
       auth: "account-session",
@@ -185,12 +191,6 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/current-state-versions",
       summary: "List current StateVersions for Workspace Capsules",
-      auth: "account-session",
-    },
-    {
-      method: "GET",
-      path: "/api/v1/workspaces/{workspaceId}/graph",
-      summary: "Read Workspace Capsule nodes (no dependency edges)",
       auth: "account-session",
     },
     {

@@ -2,6 +2,7 @@ import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-reci
 import { registerInstallDetailCases } from "./install_detail_case.ts";
 import { registerAppPageCases } from "./app_page_case.ts";
 import { registerInterfaceLinksCases } from "./interface_links_case.ts";
+import { registerInstalledAppsCases } from "./installed_apps_case.ts";
 import {
   expect,
   request as apiRequest,
@@ -2252,6 +2253,7 @@ test.describe("public-live bootstrap response local regression", () => {
 
 registerAppPageCases(mode);
 registerInterfaceLinksCases(mode);
+registerInstalledAppsCases(mode);
 registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinationFixture(
   page,
   [],
