@@ -470,10 +470,11 @@ export async function interfaceRequirements(
   const capsules = new Map(
     (await operations.capsules.listCapsules(plan.workspaceId))
       .filter((capsule) => capsule.workspaceId === plan.workspaceId &&
-        capsule.status !== "destroyed" && capsule.id !== capsuleId)
+        capsule.status !== "destroyed" && capsule.status !== "uninstalled" &&
+        capsule.uninstall?.phase !== "scheduled" && capsule.id !== capsuleId)
       .map((capsule) => [capsule.id, capsule]),
   );
-  return await Promise.all(requirements.map(async (requirement) => {
+  const rows = await Promise.all(requirements.map(async (requirement) => {
     const offered = await operations.interfaces?.listInterfaceLinkCandidates?.({
       workspaceId: plan.workspaceId,
       capsuleId,
@@ -495,7 +496,11 @@ export async function interfaceRequirements(
     const answer = plan.options.interfaceLinks?.find((entry) =>
       entry.requirementKey === requirement.key
     );
-    const choice = answer?.choice ?? (candidates.length === 1
+    const onlyCandidate = candidates.length === 1 ? offered.find((candidate) =>
+      candidate.metadata.id === candidates[0]!.id
+    ) : undefined;
+    const choice = answer?.choice ?? (candidates.length === 1 &&
+      onlyCandidate?.spec.access.visibility !== "private"
       ? { kind: "interface" as const, interfaceId: candidates[0]!.id }
       : candidates.length === 0 ? { kind: "later" as const } : undefined);
     return {
@@ -511,15 +516,32 @@ export async function interfaceRequirements(
           plan.autoSelectedInterfaceKeys?.includes(requirement.key) === true,
     };
   }));
+  const used = new Set(rows.flatMap((row) =>
+    !row.autoSelected && row.choice?.kind === "interface" ? [row.choice.interfaceId] : []
+  ));
+  return rows.map((row) => {
+    if (!row.autoSelected || row.choice?.kind !== "interface") return row;
+    if (used.has(row.choice.interfaceId)) {
+      return { ...row, choice: undefined, autoSelected: false };
+    }
+    used.add(row.choice.interfaceId);
+    return row;
+  });
 }
 
 /** Missing choices block only when multiple providers need a user decision. */
 export function interfacesReady(rows: readonly GitInstallPlanInterfaceRequirement[]): boolean {
-  return rows.every((row) => {
+  return !duplicateSelectedInterface(rows) && rows.every((row) => {
     const choice = row.choice;
     return choice?.kind === "later" || choice?.kind === "interface" &&
       row.candidates.some((candidate) => candidate.id === choice.interfaceId);
   });
+}
+
+/** A provider can back only one requirement of the same consumer Capsule. */
+export function duplicateSelectedInterface(rows: readonly GitInstallPlanInterfaceRequirement[]): boolean {
+  const selected = rows.flatMap((row) => row.choice?.kind === "interface" ? [row.choice.interfaceId] : []);
+  return new Set(selected).size !== selected.length;
 }
 
 /** Freeze the choices without persisting provider documents or grant material. */

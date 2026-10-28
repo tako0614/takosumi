@@ -57,10 +57,10 @@ export interface GitInstallAttemptFacts {
     readonly requirements: readonly GitInstallAttemptRequirement[];
     readonly variables: readonly GitInstallPlanVariablePresentation[];
     readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
-    /** Sole providers observed when this sheet was opened; reads never change it. */
+    /** Candidate sets observed when this sheet was opened; reads never change them. */
     readonly autoInterfaceCandidates?: readonly {
       readonly requirementKey: string;
-      readonly interfaceId: string;
+      readonly candidateIds: readonly string[];
     }[];
     /** Name only; captured for the accepted repository OIDC endpoint input. */
     readonly repositoryAccountsOidcPublicUrlVariable?: string;
@@ -800,11 +800,16 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     transientVariableNames: _transientVariableNames,
     creationAttempted: _creationAttempted,
     sourcePollingEnabledByAttempt: _sourcePollingEnabledByAttempt,
-    autoSelectedInterfaceKeys: _autoSelectedInterfaceKeys,
+    autoSelectedInterfaceKeys,
     attemptFacts: _attemptFacts,
     ...publicPlan
   } = plan;
-  return publicPlan;
+  return {
+    ...publicPlan,
+    ...(autoSelectedInterfaceKeys !== undefined
+      ? { implicitInterfaceKeys: autoSelectedInterfaceKeys }
+      : {}),
+  };
 }
 
 export function assertImmutableScope(

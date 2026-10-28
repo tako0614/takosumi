@@ -174,8 +174,11 @@ export function restartRequest(
       ? { authConnectionId: plan.source.authConnectionId }
       : {}),
   });
-  return plan.options.interfaceLinks !== undefined
-    ? { ...base, options: { ...base.options, interfaceLinks: [...plan.options.interfaceLinks] } }
+  const explicit = plan.options.interfaceLinks?.filter((answer) =>
+    !plan.implicitInterfaceKeys?.includes(answer.requirementKey)
+  );
+  return explicit !== undefined
+    ? { ...base, options: { ...base.options, interfaceLinks: explicit } }
     : base;
 }
 
