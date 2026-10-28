@@ -1,14 +1,14 @@
 /** Retirement guards for persisted dependency rows and old PlanRun pins. */
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   applyExpectedGuardFromPlanRun,
   OpenTofuController,
   type OpenTofuPlanJob,
   type OpenTofuRunner,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore, planRunExecutionInputsDigestMaterial } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
@@ -27,9 +27,16 @@ function ids() {
   return (prefix: string) => `${prefix}_${String(next++).padStart(8, "0")}`;
 }
 
-function fixture(legacyDependencyConsumerCapsuleIds: readonly string[] = []) {
+function fixture(legacyDependencyConsumerCapsuleIds: readonly string[] = [], withCompatibilityService = false) {
   const store = new InMemoryOpenTofuControlStore({ legacyDependencyConsumerCapsuleIds });
   const jobs: OpenTofuPlanJob[] = [];
+  let compatibilityReads = 0;
+  const sourcesService = withCompatibilityService ? new SourcesService({
+    store,
+    readCapsuleSourceFiles: async () => { compatibilityReads++; return []; },
+    newId: ids(),
+    now: () => new Date("2026-10-28T00:00:00.000Z"),
+  }) : undefined;
   const runner: OpenTofuRunner = {
     plan: async (job) => {
       jobs.push(job);
@@ -53,13 +60,14 @@ function fixture(legacyDependencyConsumerCapsuleIds: readonly string[] = []) {
   const controller = new OpenTofuController({
     store,
     runner,
+    sourcesService,
     vault: fakeProviderVault() as never,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: (() => { let t = 1; return () => t++; })(),
     newId: ids(),
   });
-  return { store, controller, jobs };
+  return { store, controller, jobs, compatibilityReads: () => compatibilityReads };
 }
 
 async function seed(store: InMemoryOpenTofuControlStore, name: string) {
@@ -76,23 +84,45 @@ async function seed(store: InMemoryOpenTofuControlStore, name: string) {
   return seeded.capsule;
 }
 
-for (const mode of ["variable_injection", "remote_state"] as const) {
-  test(`legacy ${mode} consumer refuses both plan and destroy plan`, async () => {
-    const { store, controller, jobs } = fixture(["cap_consumer"]);
-    await seed(store, "producer");
-    await seed(store, "consumer");
-    for (const destroy of [false, true]) {
-      await expect(controller.createCapsulePlan("cap_consumer", {}, { destroy })).rejects.toMatchObject({
-        code: "dependency_retired",
-        details: { reason: "dependency_retired" },
-      });
+test("a retained consumer dependency refuses both plan and destroy plan", async () => {
+  const { store, controller, jobs } = fixture(["cap_consumer"]);
+  await seed(store, "producer");
+  await seed(store, "consumer");
+  for (const destroy of [false, true]) {
+    await expect(controller.createCapsulePlan("cap_consumer", {}, { destroy })).rejects.toMatchObject({
+      code: "dependency_retired",
+      message: expect.stringContaining("operator data maintenance is required"),
+      details: { reason: "dependency_retired" },
+    });
+  }
+  expect(jobs).toHaveLength(0);
+  const independent = await controller.createCapsulePlan("cap_producer");
+  expect(independent.planRun.dependencySnapshotId).toBeUndefined();
+  expect(jobs).toHaveLength(1);
+});
+
+test("retired consumers refuse before configuration, compatibility checks, or Run creation", async () => {
+  const { store, controller, jobs, compatibilityReads } = fixture(["cap_consumer"], true);
+  await seed(store, "consumer");
+  const configurationRead = spyOn(store, "getInstallConfig");
+  const before = await store.listRunsByWorkspace("ws_test001");
+  try {
+    for (const create of [
+      () => controller.createCapsulePlan("cap_consumer"),
+      () => controller.createCapsuleDestroyPlan("cap_consumer"),
+      () => controller.createCapsuleDriftCheck("cap_consumer"),
+    ]) {
+      await expect(create()).rejects.toMatchObject({ code: "dependency_retired" });
     }
+    expect(configurationRead).not.toHaveBeenCalled();
+    expect(compatibilityReads()).toBe(0);
     expect(jobs).toHaveLength(0);
-    const independent = await controller.createCapsulePlan("cap_producer");
-    expect(independent.planRun.dependencySnapshotId).toBeUndefined();
-    expect(jobs).toHaveLength(1);
-  });
-}
+    expect(await store.listRunsByWorkspace("ws_test001")).toEqual(before);
+    expect((await store.getCapsule("cap_consumer"))?.compatibilityReportId).toBeUndefined();
+  } finally {
+    configurationRead.mockRestore();
+  }
+});
 
 test("historical plan with dependencySnapshotId refuses request-time apply", async () => {
   const { store, controller } = fixture();
@@ -167,14 +197,17 @@ test("direct createPlanRun also refuses a retained consumer dependency", async (
   });
 });
 
-test("an independent queued plan keeps the pre-retirement digest frame", async () => {
+test("an independent plan keeps the pre-retirement digest frame", async () => {
   const { store, controller } = fixture();
   await seed(store, "consumer");
   const plan = await controller.createCapsulePlan("cap_consumer");
   const inputs = await store.getPlanRunInputs(plan.planRun.id);
   const stored = await store.getPlanRun(plan.planRun.id);
   expect(inputs).toBeDefined();
-  expect(stored?.executionInputsDigest).toBe(await stableJsonDigest(planRunExecutionInputsDigestMaterial(inputs!)));
+  // Golden SHA-256 of the pre-retirement frame for this deterministic fixture:
+  // { planRunInputs: inputs, dependencySnapshot: null }. Do not derive the
+  // expectation with the production framing helper: dropping that null must fail.
+  expect(stored?.executionInputsDigest).toBe("sha256:ecaaf961558c8533d703c1d12b2df7c5a808d59ce6291edbe218b103051cdbd9");
   expect(plan.planRun.status).toBe("succeeded");
   const applied = await controller.createApplyRun({
     planRunId: plan.planRun.id,

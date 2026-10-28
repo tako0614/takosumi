@@ -460,7 +460,7 @@ test("control bundle captures the Workspace ledger as public projections", async
   const bundle = await readBundle(artifactStore!, record.ref);
 
   expect(bundle.kind).toBe("control");
-  expect(bundle.bundleVersion).toBe(2);
+  expect(bundle.bundleVersion).toBe(3);
   expect(bundle.workspaceId).toBe("ws_backup1");
   expect(bundle.capturedAt).toBe(TS);
   expect((bundle.workspace as { id: string }).id).toBe("ws_backup1");

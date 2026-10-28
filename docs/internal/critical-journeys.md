@@ -14,7 +14,7 @@ dashboard flow. It runs five groups:
 | Group | Coverage | Negative control |
 | --- | --- | --- |
 | `source-install` | tracked Git tree scan, module/provider discovery, compatibility preparation, and source snapshots | ambiguous topology, remote modules, scan limits, missing auth, scope, and URL rejection |
-| `plan-apply-approval` | destructive-plan approval, create-once apply, and stale propagation | unapproved plans and stale recovery checkpoints |
+| `plan-apply-approval` | destructive-plan approval, create-once apply, and dependency retirement guards | unapproved plans and stale recovery checkpoints |
 | `output-interface-readback` | public Output projection, Interface discovery, lifecycle readiness, and redaction | dangling/mismatched Output, cross-Workspace access, and secret-like values |
 | `destroy-recreate-idempotency` | portable host retry/replay, interrupted lifecycle mutations, and Resource incarnation fencing | tenant/request substitution, corrupt or non-exact replays, and stale delete conflicts |
 | `dashboard-install` | `/install` and `/new` Git URL/module-choice behavior plus the browser harness policy | non-ready compatibility, unsafe browser state, and required-route failures |

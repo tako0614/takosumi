@@ -493,26 +493,3 @@ function parseConfigVariableValue(
   }
   return { value: row.value };
 }
-
-/** Human-readable stale reason recorded on an `capsule.stale` event. */
-export function staleReasonFromActivity(
-  event: ActivityEvent,
-): string | undefined {
-  const reasons = event.metadata.reasons;
-  if (Array.isArray(reasons)) {
-    const text = reasons
-      .filter((entry): entry is string => typeof entry === "string")
-      .join(", ");
-    if (text) return text;
-  }
-  const changed = event.metadata.changedOutputs;
-  const producer = event.metadata.producerCapsuleName;
-  if (Array.isArray(changed) && typeof producer === "string") {
-    const text = changed
-      .filter((entry): entry is string => typeof entry === "string")
-      .map((name) => `${producer}.${name} changed`)
-      .join(", ");
-    if (text) return text;
-  }
-  return undefined;
-}

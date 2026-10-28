@@ -127,8 +127,6 @@ export const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 export const WORKSPACE_ID_PATTERN = /^ws_[0-9a-zA-Z]{3,64}$/;
 export const RUN_ID_PATTERN =
   /^(?:(?:plan|apply|ssr|ccr)_[0-9a-zA-Z]{8,64}|run_resource_[0-9a-zA-Z]{8,64}|(?:backup|restore)_[0-9a-zA-Z]{4,64})$/;
-export const DEPENDENCY_ID_PATTERN = /^dep_[0-9a-zA-Z]{8,64}$/;
-export const OUTPUT_SHARE_ID_PATTERN = /^oshare_[0-9a-zA-Z]{8,64}$/;
 export const RUN_GROUP_ID_PATTERN = /^rg_[0-9a-zA-Z]{8,64}$/;
 export const STATE_VERSION_ID_PATTERN = /^state_[0-9a-zA-Z]{8,64}$/;
 export const COMPATIBILITY_REPORT_ID_PATTERN = /^caprep_[0-9a-zA-Z]{8,64}$/;

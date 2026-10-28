@@ -4,8 +4,41 @@ import {
   PORTABLE_GATE_PHASES,
   PortableGateFailure,
   runPortableGate,
+  selectPortableGatePhases,
   validatePortableGatePhases,
 } from "../../scripts/check-portable-gate.ts";
+
+test("no selection retains every phase; selections preserve inventory order", () => {
+  expect(selectPortableGatePhases([])).toEqual(PORTABLE_GATE_PHASES);
+  expect(selectPortableGatePhases(["--only", "tests,typescript"]).map(({ name }) => name))
+    .toEqual(["typescript", "tests"]);
+  const excluded = ["tests", "dashboard-browser", "docs-browser"];
+  expect(selectPortableGatePhases(["--except", excluded.join(",")]))
+    .toEqual(PORTABLE_GATE_PHASES.filter(({ name }) => !excluded.includes(name)));
+});
+
+test("invalid and empty selections fail before any phase starts", async () => {
+  for (const args of [
+    ["--only", "typo"], ["--except", "typo"], ["--only"],
+    ["--only", "tests,"], ["--only", "tests,tests"],
+    ["--only", "tests", "--only", "typescript"], ["--oops"],
+    ["--only", "tests", "--except", "tests"],
+  ]) {
+    let calls = 0;
+    await expect(runPortableGate({ run: async () => { calls += 1; return 0; } }, PORTABLE_GATE_PHASES, args))
+      .rejects.toThrow();
+    expect(calls).toBe(0);
+  }
+});
+
+test("selected execution retains command failure and timing behavior", async () => {
+  const commands: string[] = [];
+  await runPortableGate({
+    write: () => {},
+    run: async (command) => { commands.push(command.join(" ")); return 0; },
+  }, PORTABLE_GATE_PHASES, ["--only", "tests"]);
+  expect(commands).toEqual(["bun run test"]);
+});
 
 test("preserves the complete check phase order and commands", () => {
   validatePortableGatePhases(PORTABLE_GATE_PHASES);

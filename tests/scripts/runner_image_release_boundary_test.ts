@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { portableTestCommands } from "../../scripts/run-portable-tests.ts";
 
 const ROOT = join(import.meta.dir, "../..");
 
@@ -60,8 +61,10 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
   expect(packageJson.scripts?.["check:runner-image-release"]).toContain(
     "release_config_composition_test.ts",
   );
-  expect(packageJson.scripts?.test).toContain("bun test");
-  expect(packageJson.scripts?.test).toContain("./tests");
+  expect(packageJson.scripts?.test).toBe("bun scripts/run-portable-tests.ts");
+  expect(portableTestCommands().at(-1)?.slice(0, 4)).toEqual([
+    "bun", "test", "--only-failures", "./tests",
+  ]);
   expect(portableGate).toContain('phase("tests", ["bun", "run", "test"])');
   expect(portableGate).not.toContain(
     'phase("runner-image-release", ["bun", "run", "check:runner-image-release"])',
