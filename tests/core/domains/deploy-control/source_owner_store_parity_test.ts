@@ -291,7 +291,7 @@ test("Postgres and D1 roll back the Source claim with the entire initial unit on
   }
 });
 
-test("D1 classifies a Source deleted between its read and atomic claim as lost ownership", async () => {
+test("D1 classifies a Source deleted between its read and atomic claim as conflict", async () => {
   const db = new FailFinalBatchD1();
   const store = new CloudflareD1OpenTofuControlStore(db);
   await store.putWorkspace(workspace());
@@ -300,7 +300,7 @@ test("D1 classifies a Source deleted between its read and atomic claim as lost o
   db.beforeNextBatch = async () => {
     expect(await store.deleteSource(SOURCE)).toBe(true);
   };
-  expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "source_owned_by_another_app" });
+  expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "conflict" });
   expect(await store.getSource(SOURCE)).toBeUndefined();
   expect(await store.getInstallConfig(input.installConfig.id)).toBeUndefined();
   expect(await store.getCapsule(input.capsule.id)).toBeUndefined();

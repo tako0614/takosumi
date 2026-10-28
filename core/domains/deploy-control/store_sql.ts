@@ -165,6 +165,8 @@ import type {
   DeleteWorkspaceExclusiveResult,
   DeleteSourceWithActivityInput,
   DeleteSourceWithActivityResult,
+  RetireSourceInput,
+  RetireSourceResult,
 } from "./store.ts";
 import {
   assertExactRunTransitionInput,
@@ -3252,6 +3254,18 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         run.workspaceId,
         expectedWorkspaceManagementAuthority,
       );
+      // Retirement/configuration takes the same Workspace-then-Source lock.
+      // A new sync must not be admitted after the Source is disabled or gone.
+      const sourceRows = await transaction.query<PgStoredSourceRow>(
+        `select id, space_id as "workspaceId", status, source_json as "sourceJson",
+                created_at as "createdAt", updated_at as "updatedAt"
+           from takosumi_sources where id = $1 for update`,
+        [run.sourceId],
+      );
+      const source = sourceRows.rows[0] ? sourceFromPgRow(sourceRows.rows[0]) : undefined;
+      if (!source || source.workspaceId !== run.workspaceId || source.status !== "active" || source.retiringAt) {
+        return { status: "conflict" as const };
+      }
       const stored = storeSourceSyncRun(
         run,
         expectedWorkspaceManagementAuthority,
@@ -9962,6 +9976,67 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     });
   }
 
+  async retireSource(input: RetireSourceInput): Promise<RetireSourceResult> {
+    const { expectedSource, expectedWorkspaceManagementAuthority, activity } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedSource.workspaceId);
+    return await this.#client.transaction(async (transaction) => {
+      const management = await pgWorkspaceManagementForTransaction(transaction, expectedSource.workspaceId);
+      if (management === undefined) return { status: "not_found" as const };
+      try {
+        assertWorkspaceManagementAdmission(management, expectedSource.workspaceId, expectedWorkspaceManagementAuthority);
+      } catch {
+        return { status: "conflict" as const };
+      }
+      const rows = await transaction.query<PgStoredSourceRow>(
+        `select id, space_id as "workspaceId", status, source_json as "sourceJson",
+                created_at as "createdAt", updated_at as "updatedAt"
+           from takosumi_sources where id = $1 for update`, [expectedSource.id],
+      );
+      const current = rows.rows[0] ? sourceFromPgRow(rows.rows[0]) : undefined;
+      if (!current || current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" as const };
+      if (stableStringify(current) !== stableStringify(expectedSource) ||
+        current.status !== "disabled" || current.autoSync || !current.retiringAt)
+        return { status: "conflict" as const };
+      const owner = await transaction.query(
+        `select 1 from takosumi_capsules where id = $1 and status <> 'destroyed' limit 1`,
+        [current.ownerCapsuleId ?? ""],
+      );
+      if (owner.rows.length) return { status: "blocked" as const, blockers: ["source_owner_not_destroyed"] };
+      const live = await transaction.query(
+        `select 1 from takosumi_capsules where source_id = $1 and status <> 'destroyed' limit 1`, [current.id],
+      );
+      if (live.rows.length) return { status: "blocked" as const, blockers: ["source_referenced_by_capsule"] };
+      const inflight = await transaction.query(
+        `select 1 from takosumi_runs where status in ('queued', 'running')
+          and (source_id = $1 or installation_id in
+            (select id from takosumi_capsules where source_id = $1)) limit 1`, [current.id],
+      );
+      if (inflight.rows.length) return { status: "blocked" as const, blockers: ["source_has_in_flight_run"] };
+      const census = await transaction.query<{ snapshots: string; runs: string }>(
+        `select (select count(*) from takosumi_source_snapshots where source_id = $1) as snapshots,
+                (select count(*) from takosumi_runs where source_id = $1 and kind = 'source_sync') as runs`,
+        [current.id],
+      );
+      if (Number(census.rows[0]?.snapshots) !== input.expectedSnapshotCount ||
+        Number(census.rows[0]?.runs) !== input.expectedSourceSyncRunCount)
+        return { status: "conflict" as const };
+      await transaction.query(`delete from takosumi_source_snapshots where source_id = $1`, [current.id]);
+      const deleted = await transaction.query(
+        `delete from takosumi_sources where id = $1 and space_id = $2 returning id`,
+        [current.id, current.workspaceId],
+      );
+      if (deleted.rows.length !== 1) return { status: "conflict" as const };
+      await transaction.query(
+        `insert into takosumi_audit_events
+          (id, space_id, actor_id, action, target_type, target_id, run_id, event_json, created_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+        [activity.id, activity.workspaceId, activity.actorId ?? null, activity.action,
+         activity.targetType, activity.targetId, activity.runId ?? null, JSON.stringify(activity), activity.createdAt],
+      );
+      return { status: "deleted" as const, source: current };
+    });
+  }
+
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
     const normalized = normalizeSourceSnapshotRecord(snapshot);
     await this.#pgUpsert(pgSchema.sourceSnapshots, {
@@ -10017,13 +10092,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return { snapshot: normalizeSourceSnapshotRecord(rawJson), rawJson };
   }
 
-  async hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean> {
+  async hasSourceSnapshotArchiveReference(archiveRef: string, sourceId?: string): Promise<boolean> {
     const snapshots = pgSchema.sourceSnapshots;
     const rows = await this.#db.select({ id: snapshots.id })
       .from(snapshots)
-      .where(sql`${snapshots.snapshotJson} ->> 'archiveRef' = ${archiveRef}`)
+      .where(and(sql`${snapshots.snapshotJson} ->> 'archiveRef' = ${archiveRef}`,
+        sourceId === undefined ? undefined : eq(snapshots.sourceId, sourceId)))
       .limit(1);
     return rows.length !== 0;
+  }
+
+  async hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean> {
+    const rows = await this.#client.query(
+      `select 1 from takosumi_source_snapshots
+        where source_id is distinct from $2 and snapshot_json ->> 'archiveRef' = $1
+       union all
+       select 1 from takosumi_runs
+        where kind = 'source_sync' and source_id is distinct from $2
+          and coalesce(run_json ->> 'archiveRef', run_json ->> 'archiveObjectKey') = $1
+       limit 1`, [archiveRef, sourceId],
+    );
+    return rows.rows.length !== 0;
   }
 
   async listSourceSnapshots(

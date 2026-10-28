@@ -12,6 +12,7 @@ import type { StorageStagingEnv } from "../../../deploy/platform/storage-staging
 const ROOT = resolve(import.meta.dir, "../../..");
 const NATIVE = `
 import { createStoredObjectOwnerResolver } from ${JSON.stringify(join(ROOT, "worker/src/stored-object-owner-resolver.ts"))};
+import { storedNativeVersion } from ${JSON.stringify(join(ROOT, "worker/src/stored-service-usage.ts"))};
 import { runnerStoredServiceBucket, createBackupStoredOwnerContext } from ${JSON.stringify(join(ROOT, "worker/src/stored-service-owner-context.ts"))};
 import { createStoredInventoryProducer } from ${JSON.stringify(join(ROOT, "worker/src/artifact-storage-inventory.ts"))};
 import { ObjectKeyArtifactReferenceAllocator } from ${JSON.stringify(join(ROOT, "core/adapters/storage/artifact-references.ts"))};
@@ -70,6 +71,22 @@ export default {
       else if(input.operation === "runner") {
         const bucket = runnerStoredServiceBucket(buckets[input.bucketRole],composition(env,owners),env.DB,input);
         await bucket.put(input.key,new Uint8Array([9,8,7]),{customMetadata:{"takosumi-run-id":input.runId}});
+        result = {ok:true};
+      } else if(input.operation === "retire") {
+        const usage = {
+          ...composition(env,owners).usage,
+          async readStoredObject(ctx) {
+            const object = await buckets.source.head(input.key);
+            return {workspaceId:ctx.workspaceId,revision:0,bytes:String(object?.size??0),versionDigest:object?await storedNativeVersion(object):null};
+          },
+          async prepareStoredObject(ctx) {
+            const intent = {operationRef:ctx.operationRef,expectedRevision:ctx.expectedRevision,kind:"delete",bytes:"0",contentDigest:null,state:"pending"};
+            return {dispatch:true,intent,dispatchToken:"f".repeat(64)};
+          },
+          async confirmStoredObject() {},
+        };
+        const bucket = runnerStoredServiceBucket(buckets.source,{usage,owners},env.DB,{bucketRole:"source",sourceRetirement:input.sourceRetirement});
+        await bucket.delete(input.key);
         result = {ok:true};
       } else if(input.operation === "backup") {
         const context = createBackupStoredOwnerContext(new ObjectKeyArtifactReferenceAllocator(),composition(env,owners),env.BACKUPS);
@@ -201,6 +218,41 @@ test("native preledger source write pins the original Run owner; forged ref and 
     expect((await call({ operation: "backup" })).status).toBe(503);
     expect(await db.prepare("select count(*) as n from backups").first("n")).toBe(0);
     expect(await (await runtime.getR2Bucket("BACKUPS")).head("workspaces/workspace_original/backups/backup_prefinal/control.json.zst.enc")).toBeNull();
+  } finally { await fixture.close(); }
+}, 30_000);
+
+test("native stored-service custody rechecks Source retirement before R2 deletion", async () => {
+  const fixture = await nativeFixture();
+  try {
+    const { db, runtime, call } = fixture;
+    await db.prepare("alter table sources add column status text").run();
+    await db.prepare("alter table capsules add column source_id text").run();
+    await db.prepare("alter table capsules add column status text").run();
+    const workspaceId = "workspace_original", sourceId = "source_one";
+    const key = `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_one/source.tar.zst`;
+    const source = { id: sourceId, workspaceId, status: "disabled", autoSync: false,
+      retiringAt: "2026-10-28T00:00:00.000Z", ownerCapsuleId: "capsule_one" };
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(sourceId, workspaceId, "disabled", JSON.stringify(source)).run();
+    await db.prepare("insert into capsules(id,space_id,source_id,status) values(?,?,?,?)")
+      .bind("capsule_one", workspaceId, sourceId, "destroyed").run();
+    await db.prepare("insert into source_snapshots values(?,?,?)")
+      .bind("snap_one", sourceId, JSON.stringify({ id: "snap_one", sourceId, workspaceId, archiveRef: key })).run();
+    const bucket = await runtime.getR2Bucket("SOURCE");
+    await bucket.put(key, "source bytes");
+    const request = { operation: "retire", key,
+      sourceRetirement: { workspaceId, sourceId, archiveRef: key } };
+    await db.prepare("update capsules set status='active' where id='capsule_one'").run();
+    expect((await call(request)).status).toBe(503);
+    expect(await bucket.head(key)).not.toBeNull();
+    await db.prepare("update capsules set status='destroyed' where id='capsule_one'").run();
+    await db.prepare("insert into source_snapshots values(?,?,?)")
+      .bind("snap_shared", "source_other", JSON.stringify({ id: "snap_shared", sourceId: "source_other", workspaceId: "workspace_other", archiveRef: key })).run();
+    expect((await call(request)).status).toBe(503);
+    expect(await bucket.head(key)).not.toBeNull();
+    await db.prepare("delete from source_snapshots where id='snap_shared'").run();
+    expect((await call(request)).status).toBe(200);
+    expect(await bucket.head(key)).toBeNull();
   } finally { await fixture.close(); }
 }, 30_000);
 

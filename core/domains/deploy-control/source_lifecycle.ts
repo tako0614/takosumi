@@ -551,7 +551,8 @@ export class SourceLifecycleService {
       // A historical/sibling snapshot may retain this exact key. The local
       // archive adapter cannot consult the ledger itself, so Core fences the
       // deletion before invoking either host's custody path.
-      if (await this.#store.hasSourceSnapshotArchiveReference(run.archiveRef)) return;
+      if (await this.#store.hasSourceSnapshotArchiveReference(run.archiveRef, run.sourceId)) return;
+      if (await this.#store.hasForeignSourceArchiveReference(run.archiveRef, run.sourceId)) return;
       const cleanup = this.#runner?.cleanupUnusedSourceArchive;
       if (!cleanup) throw new Error("runner source archive cleanup capability is unavailable");
       await cleanup.call(this.#runner, {

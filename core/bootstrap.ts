@@ -1216,6 +1216,10 @@ export async function createTakosumiService(
   const sourcesService = new SourcesService({
     store: sharedOpenTofuStore,
     enqueueSourceSync,
+    ...(options.opentofuRunner?.deleteRetiredSourceArchives
+      ? { deleteRetiredSourceArchives: (input) =>
+          options.opentofuRunner!.deleteRetiredSourceArchives!(input) }
+      : {}),
     ...(options.artifactReferenceAllocator
       ? { artifactReferenceAllocator: options.artifactReferenceAllocator }
       : {}),

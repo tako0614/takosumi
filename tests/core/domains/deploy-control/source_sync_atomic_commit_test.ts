@@ -120,6 +120,14 @@ async function claimRun(
   queued: SourceSyncRun = queuedRun(),
 ): Promise<SourceSyncRun> {
   await store.putWorkspace(workspace());
+  if (!(await store.getSource(queued.sourceId))) {
+    await store.putSource({
+      id: queued.sourceId, workspaceId: queued.workspaceId, name: "atomic source sync",
+      url: queued.url, defaultRef: queued.ref, defaultPath: queued.path,
+      status: "active", autoSync: false, hookSecretHash: "test-hash",
+      createdAt: CREATED_AT, updatedAt: CREATED_AT,
+    });
+  }
   await store.beginSourceSyncRun(queued, {
     workspaceId: WORKSPACE_ID,
     managementState: "active",

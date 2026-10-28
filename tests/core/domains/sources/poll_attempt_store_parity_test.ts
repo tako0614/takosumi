@@ -34,7 +34,7 @@ test("all stores advance failed polls without a Run and quarantine broken applie
       const first = sources[0]!;
       const next = sources[1]!;
       // The missing host allocator is retryable and fails before Run creation.
-      await expect(service.createReconciliationSyncs(first.id)).rejects.toMatchObject({ code: "not_implemented" });
+      await expect(service.createReconciliationSyncs(first.id, { scheduled: true })).rejects.toMatchObject({ code: "not_implemented" });
       expect((await store.getSource(first.id))?.status, label).toBe("active");
       expect((await store.getSource(first.id))?.lastAutoSyncAttemptAt, label).toBe("2026-10-28T00:00:00.000Z");
       expect((await store.listAutoSyncSourcesDue(1))[0]?.id, label).toBe(next.id);
@@ -48,7 +48,7 @@ test("all stores advance failed polls without a Run and quarantine broken applie
         currentStateVersionId: "state_missing", createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
-      await expect(service.createReconciliationSyncs(first.id)).rejects.toMatchObject({ code: "failed_precondition" });
+      await expect(service.createReconciliationSyncs(first.id, { scheduled: true })).rejects.toMatchObject({ code: "failed_precondition" });
       expect((await store.getSource(first.id))?.status, label).toBe("error");
       expect((await store.listAutoSyncSourcesDue(25)).map((source) => source.id), label).toEqual([next.id]);
     }

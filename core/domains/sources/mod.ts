@@ -159,6 +159,12 @@ export interface SourcesServiceDependencies {
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly compatibilityAnalyzer?: CapsuleCompatibilityAnalyzer;
   readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
+  /** Idempotent host custody deletion; missing objects count as deleted. */
+  readonly deleteRetiredSourceArchives?: (input: {
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRefs: readonly string[];
+  }) => Promise<void>;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Per-source webhook secret generator. Defaults to a random URL-safe token. */
@@ -171,6 +177,7 @@ export class SourcesService {
   readonly #enqueue: EnqueueSourceSync;
   readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
   readonly #readCapsuleSourceFiles: ReadCapsuleSourceFiles;
+  readonly #deleteRetiredSourceArchives?: SourcesServiceDependencies["deleteRetiredSourceArchives"];
   readonly #sourceFilesCache = new Map<
     string,
     Promise<readonly CapsuleSourceFile[]>
@@ -187,6 +194,7 @@ export class SourcesService {
       deps.compatibilityAnalyzer ?? new StaticHclCapsuleCompatibilityAnalyzer();
     this.#readCapsuleSourceFiles =
       deps.readCapsuleSourceFiles ?? (() => Promise.resolve([]));
+    this.#deleteRetiredSourceArchives = deps.deleteRetiredSourceArchives;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
     this.#newHookSecret = deps.newHookSecret ?? defaultHookSecret;
@@ -353,6 +361,10 @@ export class SourcesService {
     patch: PatchSourceRequest,
   ): Promise<SourceResponse> {
     const stored = await this.#requireSource(id);
+    if (stored.retiringAt) {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${id} is retiring`, { reason: "source_retiring" });
+    }
     const next: StoredSource = { ...stored };
     const shouldValidateAuthConnection =
       patch.authConnectionId !== undefined && patch.authConnectionId !== null;
@@ -540,6 +552,107 @@ export class SourcesService {
   }
 
   /**
+   * Retire an app-owned or orphan Source. A disabled durable marker makes this
+   * resumable: archives are deleted while their snapshot/run rows still name
+   * them, then one store transaction removes the snapshots and Source and
+   * records the value-free Activity. Missing Source is an idempotent replay.
+   */
+  async retireOwnedSource(
+    sourceId: string,
+    reason: string,
+  ): Promise<"retired" | "already_retired" | "deferred"> {
+    requireNonEmptyString(sourceId, "sourceId");
+    requireNonEmptyString(reason, "reason");
+    let source = await this.#store.getSource(sourceId);
+    if (!source) return "already_retired";
+    const assertUnreferenced = async () => {
+      const owner = source!.ownerCapsuleId
+        ? await this.#store.getCapsule(source!.ownerCapsuleId)
+        : undefined;
+      if (owner && owner.status !== "destroyed") {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} owner Capsule is not destroyed`,
+          { reason: "source_owner_not_destroyed" });
+      }
+      const capsules = await this.#store.listCapsules(source!.workspaceId);
+      if (capsules.some((capsule) => capsule.sourceId === sourceId && capsule.status !== "destroyed")) {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} is still referenced by a Capsule`,
+          { reason: "source_referenced_by_capsule" });
+      }
+    };
+    await assertUnreferenced();
+    const authority = await this.#captureWorkspaceManagementAuthority(source.workspaceId);
+    if (!source.retiringAt) {
+      try {
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, status: "disabled", autoSync: false,
+            retiringAt: this.#now().toISOString(), updatedAt: this.#now().toISOString() },
+          expectedSource: source,
+          expectedWorkspaceManagementAuthority: authority,
+        });
+      } catch (error) {
+        if (!(error instanceof OpenTofuControllerError) ||
+          structuredErrorReason(error) !== "source_configuration_conflict") throw error;
+        const raced = await this.#store.getSource(sourceId);
+        if (!raced) return "already_retired";
+        if (!raced.retiringAt || raced.status !== "disabled" || raced.autoSync) throw error;
+        source = raced;
+      }
+    } else if (source.status !== "disabled" || source.autoSync) {
+      throw sourceConfigurationConflictError();
+    }
+    if (await this.#hasInFlightSourceRun(source)) return "deferred";
+    const [snapshots, runs] = await Promise.all([
+      this.#store.listSourceSnapshots(sourceId),
+      this.#store.listSourceSyncRuns(sourceId),
+    ]);
+    const archiveRefs = [...new Set([
+      ...snapshots.map((snapshot) => snapshot.archiveRef),
+      ...runs.map((run) => run.archiveRef),
+    ])];
+    const scope = `workspaces/${source.workspaceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/sources/${sourceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/snapshots/`;
+    // Historical SourceSyncs can point to another Source's archive. Custody
+    // belongs to that other Source; only remove keys in this Source's prefix.
+    const ownedArchiveRefs = archiveRefs.filter((ref) => ref.startsWith(scope));
+    if ((await Promise.all(ownedArchiveRefs.map((ref) =>
+      this.#store.hasForeignSourceArchiveReference(ref, sourceId)
+    ))).some(Boolean)) {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${sourceId} shares an archive with another Source`,
+        { reason: "source_archive_shared_by_another_source" });
+    }
+    if (ownedArchiveRefs.length > 0) {
+      if (!this.#deleteRetiredSourceArchives) {
+        throw new OpenTofuControllerError("failed_precondition",
+          "Source archive custody is unavailable",
+          { reason: "source_archive_custody_unavailable" });
+      }
+      await this.#deleteRetiredSourceArchives({
+        workspaceId: source.workspaceId, sourceId, archiveRefs: ownedArchiveRefs,
+      });
+    }
+    const result = await this.#store.retireSource({
+      expectedSource: source,
+      expectedWorkspaceManagementAuthority: authority,
+      expectedSnapshotCount: snapshots.length,
+      expectedSourceSyncRunCount: runs.length,
+      activity: {
+        id: this.#newId("act"), workspaceId: source.workspaceId,
+        action: "source.retired", targetType: "source", targetId: sourceId,
+        metadata: { reason }, createdAt: this.#now().toISOString(),
+      },
+    });
+    if (result.status === "deleted") return "retired";
+    if (result.status === "not_found") return "already_retired";
+    if (result.status === "blocked" && result.blockers.includes("source_has_in_flight_run"))
+      return "deferred";
+    throw new OpenTofuControllerError("failed_precondition",
+      `Source ${sourceId} retirement was blocked`,
+      { reason: result.status === "blocked" ? result.blockers[0] : "source_retirement_conflict" });
+  }
+
+  /**
    * Whether any queued/running Run still touches this Source: a source_sync
    * Run for it, a Workspace Run carrying its id, or a Run bound to a Capsule
    * that tracks it (a destroyed Capsule's history alone does not block).
@@ -623,17 +736,26 @@ export class SourcesService {
    */
   async createReconciliationSyncs(
     sourceId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): Promise<readonly CreateSourceSyncResponse[]> {
     let stored = await this.#requireSource(sourceId);
     try {
       const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
-      // Persist the attempt before lineage enumeration or archive allocation:
-      // either can fail before there is a Run to advance the polling cursor.
-      stored = await this.#writeSourceConfiguration({
-        source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
-        expectedSource: stored,
-        expectedWorkspaceManagementAuthority: authority,
-      });
+      if (options.scheduled) {
+        // A webhook does not consume the scheduler's fairness cursor. The
+        // marker is best effort if another Source update wins its exact CAS.
+        try {
+          stored = await this.#writeSourceConfiguration({
+            source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
+            expectedSource: stored,
+            expectedWorkspaceManagementAuthority: authority,
+          });
+        } catch (error) {
+          if (!(error instanceof OpenTofuControllerError) ||
+            structuredErrorReason(error) !== "source_configuration_conflict") throw error;
+          stored = await this.#requireSource(sourceId);
+        }
+      }
       return await this.#createReconciliationSyncs(stored, authority);
     } catch (error) {
       // Invalid durable configuration cannot make progress on another hourly
@@ -751,6 +873,10 @@ export class SourcesService {
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
+    if (stored.status !== "active" || stored.retiringAt) {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${sourceId} is not active`, { reason: "source_not_active" });
+    }
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         expectedWorkspaceManagementAuthority,
@@ -1705,6 +1831,7 @@ export function toPublicSource(stored: StoredSource): Source {
     lastSeenCommit: _lastSeenCommit,
     createdByInstallPlanId: _createdByInstallPlanId,
     lastAutoSyncAttemptAt: _lastAutoSyncAttemptAt,
+    retiringAt: _retiringAt,
     ...rest
   } = stored;
   return rest;
