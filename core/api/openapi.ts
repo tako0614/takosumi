@@ -1292,7 +1292,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
     },
     ListInterfaceLinkCandidatesResponse: {
       type: "object",
-      required: ["candidates", "generation"],
+      required: ["candidates", "generation", "requirementFingerprint"],
       properties: {
         candidates: {
           type: "array",
@@ -1314,6 +1314,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
           },
         },
         generation: { type: "integer", minimum: 0 },
+        requirementFingerprint: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },
@@ -1323,6 +1324,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         interfaceId: { type: "string", minLength: 1 },
         expectedGeneration: { type: "integer", minimum: 0 },
+        expectedRequirementFingerprint: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
       },
       additionalProperties: false,
     },

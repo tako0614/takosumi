@@ -788,7 +788,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed qualification verification accepts only the exact current v76 ledger", async () => {
+test("predeployed qualification verification accepts complete v75 and v76 ledgers during the additive rollout", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -801,6 +801,11 @@ test("predeployed qualification verification accepts only the exact current v76 
       "workspaces_personal_bootstrap_owner_unique",
     ),
   ).toBe(false);
+
+  const v75 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(v75, { throughMigrationVersion: 75 });
+  await verifyD1OpenTofuLedgerSchemaPredeployed(v75);
+  expect((await tableNames(v75)).has("interface_links")).toBe(false);
 
   const current = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(current);
@@ -874,7 +879,7 @@ test("predeployed v71/v72/v73/v74/v75/v76 bridge keeps billing at v72 and identi
     }
     if (head >= 73) {
       expect(await store.captureIdentityReconciliationInventory([workspace.ownerUserId])).toMatchObject({ accountIds: [workspace.ownerUserId], workspaces: [{ workspace }], members: [member], bindings: [], principalReferences: [], overflow: false });
-      if (head === 76) await verifyD1OpenTofuLedgerSchemaPredeployed(observed);
+      if (head >= 75) await verifyD1OpenTofuLedgerSchemaPredeployed(observed);
       else await expect(verifyD1OpenTofuLedgerSchemaPredeployed(observed)).rejects.toThrow();
     } else {
       const before = queries.length;
