@@ -772,7 +772,7 @@ export default function InstallExecution(props: Props) {
               </Show>
               <Show when={props.blockedReason}>
                 {(reason) => (
-                  <p class="iv-apply-reason" data-testid="install-plan-outdated" role="status">{reason()}</p>
+                  <p class="iv-apply-reason" id="iv-plan-outdated" data-testid="install-plan-outdated" role="status">{reason()}</p>
                 )}
               </Show>
               <div class="iv-action-row">
@@ -781,7 +781,12 @@ export default function InstallExecution(props: Props) {
                   variant="primary"
                   size="lg"
                   busy={applying()}
-                  disabled={Boolean(props.blockedReason) || applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
+                  disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
+                  // Held, not disabled, while the screen changed under it:
+                  // still focusable so the reason is read out; the click
+                  // does nothing (install() refuses).
+                  aria-disabled={props.blockedReason ? "true" : undefined}
+                  aria-describedby={props.blockedReason ? "iv-plan-outdated" : undefined}
                   onClick={() => void install()}
                 >
                   {t(copy().allow)}

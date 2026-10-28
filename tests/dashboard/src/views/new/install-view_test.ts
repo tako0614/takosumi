@@ -48,11 +48,17 @@ describe("attempt-driven install page", () => {
     expect(between(controller, "const start = async", "const resume = () =>")).toContain("await postAttempt(");
     expect(between(controller, "const restart = async", "const reload = async")).toContain("await postAttempt(");
     expect(between(controller, "const replan = async", "// A complete sheet is confirmed")).toContain("await postAttempt(");
-    // Preparing again runs only for an out-of-date Plan, once per edit.
-    expect(controller.match(/void replan\(\)/gu)).toHaveLength(1);
+    // Preparing again runs for an out-of-date Plan (once per edit, never
+    // while typing or with an invalid name), from Continue after it failed,
+    // and from Start over with the answers kept.
     const replanEffect = between(controller, "// An out-of-date Plan is prepared again", "// Preparing again ends");
-    expect(replanEffect).toContain("if (!outdated() || locked()) return;");
-    expect(replanEffect).toContain("version <= replannedVersion");
+    expect(replanEffect).toContain("if (!outdated() || locked() || replanStalled()) return;");
+    expect(replanEffect).toContain("editing() || nameInvalid() || version <= replannedVersion");
+    expect(replanEffect).toContain("void replan();");
+    const resume = between(controller, "const resume = () =>", "/** One PATCH");
+    expect(resume.match(/void replan\(\)/gu)).toHaveLength(2);
+    expect(between(controller, "const restart = async", "const reload = async")).toContain("if (sheet()) return await replan();");
+    expect(controller.match(/void replan\(\)/gu)).toHaveLength(3);
     expect(view).toContain("void attempt.start(");
     expect(view.match(/attempt\.start\(/gu)).toHaveLength(1);
     // A workspace is created only on that same Install path.
@@ -76,10 +82,13 @@ describe("attempt-driven install page", () => {
     // Once an Apply started, the screen's answers are locked.
     expect(sheet).toContain("onApplyStarted={() => props.attempt.lockAnswers()}");
     expect(execution).toContain("if (hasSeenApply() || applying() || applyUnconfirmed()) props.onApplyStarted?.();");
-    // Before the Plan, 「許可してインストール」 is shown but cannot be pressed.
+    // Before the Plan, 「許可してインストール」 is shown (focusable, with its
+    // reason) but does nothing.
     const preview = between(sheet, "function PlanPreview(", "function PlanReview(");
-    expect(preview).toContain('<Button type="button" variant="primary" size="lg" disabled>');
-    expect(preview).not.toContain("onClick");
+    expect(preview).toContain('aria-disabled="true"');
+    expect(preview).toContain("aria-describedby={block() ? APPLY_REASON_ID : undefined}");
+    expect(preview).toContain("onClick={(event) => event.preventDefault()}");
+    expect(preview).not.toContain("confirm(");
   });
 
   test("inputs and secrets never reach the URL or browser storage", () => {
@@ -142,7 +151,7 @@ describe("attempt-driven install page", () => {
   });
 
   test("discarding never runs alongside another request", () => {
-    const discard = between(controller, "const discard = async", "/** Start over:");
+    const discard = between(controller, "const discard = async", "const restart = async");
     expect(discard).toContain("if (!current || mutating()) return false;");
     expect(discard.indexOf("await stopDriving()")).toBeLessThan(discard.indexOf("discardInstallAttempt("));
     // Stopping aborts the reconcile in flight instead of waiting it out.

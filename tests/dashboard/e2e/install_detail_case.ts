@@ -329,7 +329,16 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const sheet = await openInstallSheet(page);
       await expect(sheet).toHaveAttribute("data-install-state", "connections");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a connection to check it");
-      await expect(planPreview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
+      // Held, not removed from the keyboard: it stays focusable and names
+      // its reason, and pressing it does nothing.
+      const waiting = planPreview(page).getByRole("button", { name: "Allow and install", exact: true });
+      await expect(waiting).toBeDisabled();
+      await expect(waiting).toHaveAttribute("aria-describedby", "iv-apply-reason");
+      await waiting.focus();
+      await expect(waiting).toBeFocused();
+      await waiting.click({ force: true });
+      expect(f.continued()).toBeUndefined();
+      expect(f.mutations.some((m) => m.endsWith("/apply"))).toBe(false);
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("default.example.com");
       await sheet.getByRole("textbox", { name: domainField }).fill("chosen.example.com");
       expect(f.continued()).toBeUndefined();
@@ -518,7 +527,12 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(preview.getByTestId("install-cost-pending")).toContainText("Not known yet.");
       await page.waitForTimeout(1_500);
       expect(f.continued()).toBeUndefined();
+      // Typed text counts once its field is left (Enter here).
       await secret.fill("fixture-secret-value");
+      await expect(page.getByTestId("install-apply-reason")).toHaveText("Checked once you finish typing");
+      await page.waitForTimeout(1_200);
+      expect(f.continued()).toBeUndefined();
+      await secret.press("Enter");
       await waitForPlan(page);
       expect(f.continued()?.variables).toEqual({ api_token: "fixture-secret-value" });
       const carrying = f.attempts.log.answers.filter((answer) => JSON.stringify(answer).includes("fixture-secret-value"));
@@ -583,11 +597,17 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const firstAttempt = new URL(page.url()).searchParams.get("installPlan");
       // The only connection was chosen on its own; the first Plan carries no values.
       expect(f.continued()).toEqual({ expectedGeneration: expect.any(Number), continue: true });
-      // An edit marks the shown Plan out of date at once: it cannot be applied.
-      await installSheet(page).getByRole("textbox", { name: domainField }).fill("edited.example.com");
-      await expect(first.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
-      await expect(first.getByTestId("install-plan-outdated")).toHaveText("Preparing again with your change…");
+      // Typing holds the shown Plan at once: it cannot be applied while the
+      // screen differs from it.
+      const domain = installSheet(page).getByRole("textbox", { name: domainField });
+      await domain.fill("edited.example.com");
+      const held = first.getByRole("button", { name: "Allow and install", exact: true });
+      await expect(held).toBeDisabled();
+      await expect(held).toHaveAttribute("aria-describedby", "iv-plan-outdated");
+      await expect(first.getByTestId("install-plan-outdated")).toHaveText("Checked once you finish typing");
       await captureInstallState(page, "app-plan-outdated");
+      // Leaving the field makes the change count: the install is prepared again.
+      await domain.press("Enter");
       // Prepared again in place: the attempt is discarded and a new one starts
       // with the same name, module and connection; the value goes only with
       // its confirmation.

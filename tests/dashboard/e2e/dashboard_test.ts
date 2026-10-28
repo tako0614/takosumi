@@ -1112,6 +1112,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(sheet.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
     await expect(sheet).toHaveAttribute("data-install-state", "settings");
     await page.getByLabel("Region").fill("us-west-2");
+    await page.getByLabel("Region").press("Enter");
     // Nothing else to press: the Plan is made once the setting is in.
     await expect(installReview(page).getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
     const addButton = page.getByRole("button", { name: "Allow and install", exact: true });

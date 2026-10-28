@@ -22,7 +22,8 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 4. If a connection is missing, use **Connect** on that connection's row to create and verify it on
    the same screen. A connection with only one candidate is chosen for you. The app name and settings
    can be changed here too; declared defaults are filled in. When the repository holds several apps,
-   the module is chosen on the same screen.
+   the module is chosen on the same screen. Typed settings, the name and the version count once you
+   leave the field (or press Enter); while you type, checking and allowing wait.
 5. Once nothing is missing, Takosumi says **Checking what will be created** and shows what the app
    will create in your cloud (the create, update, replace and delete list) and a cost estimate on its
    own. This check creates nothing in your cloud. When the cost can't be estimated, it says so.

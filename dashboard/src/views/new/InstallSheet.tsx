@@ -16,7 +16,7 @@
  * Nothing here asks for a "next" click: the attempt controller confirms a
  * complete sheet on its own and prepares the install again after a change.
  */
-import { createEffect, createMemo, createResource, createSignal, For, Match, on, Show, Suspense, Switch } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Suspense, Switch } from "solid-js";
 import { PlugZap } from "lucide-solid";
 import type {
   GitInstallPlanConnectionRequirement,
@@ -42,6 +42,7 @@ import { PlannedResources } from "../app/PlannedResources.tsx";
 import InstallExecution from "./InstallExecution.tsx";
 import {
   appNameValue,
+  attemptPastInputs,
   attemptProblemKey,
   awaitingResubmission,
   connectionKey,
@@ -57,12 +58,18 @@ import type { InstallAttempt } from "./use-install-attempt.ts";
 type ChooseModule = Extract<GitInstallPlanUserAction, { kind: "choose_module" }>;
 type ReviewRun = Extract<GitInstallPlanUserAction, { kind: "review_run" }>;
 
-const PROGRESS_TEXT: Readonly<Record<Exclude<InstallProgress, "paused">, MessageKey>> = {
+/** The working progress lines (a spinner and words). */
+type WorkingProgress = Exclude<InstallProgress, "paused" | "replanPaused" | "failed">;
+
+const PROGRESS_TEXT: Readonly<Record<WorkingProgress, MessageKey>> = {
   reading: "installStore.progress.reading",
   analyzing: "installStore.progress.analyzing",
   planning: "installStore.progress.planning",
   replanning: "installStore.progress.replanning",
 };
+
+/** The id that ties 「許可してインストール」 to why it waits. */
+const APPLY_REASON_ID = "iv-apply-reason";
 
 const APPLY_WAIT_TEXT: Readonly<Record<ApplyBlock, MessageKey>> = {
   reading: "installStore.applyWait.reading",
@@ -72,7 +79,9 @@ const APPLY_WAIT_TEXT: Readonly<Record<ApplyBlock, MessageKey>> = {
   settings: "installStore.applyWait.settings",
   invalid: "installStore.applyWait.invalid",
   checking: "installStore.applyWait.checking",
+  editing: "installStore.applyWait.editing",
   replanning: "installStore.applyWait.replanning",
+  failed: "installStore.applyWait.failed",
 };
 
 function localizedText(
@@ -88,6 +97,8 @@ function ScreenError(props: { readonly attempt: InstallAttempt }) {
   const message = () => {
     const local = props.attempt.error();
     if (local) return local;
+    // A failed Plan's reason is the progress line's own.
+    if (props.attempt.view().stage === "failed") return undefined;
     const diagnostic = props.attempt.response()?.installPlan.diagnostic;
     return diagnostic ? t(attemptProblemKey(diagnostic.code)) : undefined;
   };
@@ -112,20 +123,45 @@ function StopButton(props: { readonly attempt: InstallAttempt }) {
   );
 }
 
-/** What is under way, in one line; a paused install continues from here. */
+/**
+ * What is under way, in one line. A paused install, a preparation that did
+ * not go through and a Plan that failed continue from here.
+ */
 function ProgressLine(props: { readonly attempt: InstallAttempt }) {
   const view = () => props.attempt.view();
-  const pausedText = () =>
-    view().stage === "provide_inputs" ? t("installStore.progress.pausedReady") : t("installStore.progress.paused");
+  const stoppedText = (kind: InstallProgress) => {
+    switch (kind) {
+      case "replanPaused":
+        return t("installStore.progress.replanPaused");
+      case "failed":
+        return t(attemptProblemKey(view().retryCode));
+      default:
+        return view().stage === "provide_inputs"
+          ? t("installStore.progress.pausedReady")
+          : t("installStore.progress.paused");
+    }
+  };
+  const working = (kind: InstallProgress): kind is WorkingProgress =>
+    kind !== "paused" && kind !== "replanPaused" && kind !== "failed";
   return (
     <Show when={view().progress}>
       {(kind) => (
-        <div class="iv-progress" role="status" aria-live="polite" data-testid="install-progress" data-progress={kind()}>
-          <Show when={kind() !== "paused"} fallback={<span>{pausedText()}</span>}>
-            <Spinner size={16} />
-            <span>{t(PROGRESS_TEXT[kind() as Exclude<InstallProgress, "paused">])}</span>
+        <div
+          class="iv-progress"
+          role={kind() === "failed" ? "alert" : "status"}
+          aria-live="polite"
+          data-testid="install-progress"
+          data-progress={kind()}
+        >
+          <Show when={working(kind()) ? kind() as WorkingProgress : undefined} fallback={<span>{stoppedText(kind())}</span>}>
+            {(progress) => (
+              <>
+                <Spinner size={16} />
+                <span>{t(PROGRESS_TEXT[progress()])}</span>
+              </>
+            )}
           </Show>
-          <Show when={kind() === "paused"}>
+          <Show when={!working(kind())}>
             <Button
               type="button"
               variant="secondary"
@@ -133,7 +169,7 @@ function ProgressLine(props: { readonly attempt: InstallAttempt }) {
               disabled={props.attempt.mutating() !== undefined}
               onClick={() => props.attempt.resume()}
             >
-              {t("installStore.continue")}
+              {kind() === "failed" ? t("installStore.problem.retry") : t("installStore.continue")}
             </Button>
           </Show>
         </div>
@@ -211,11 +247,22 @@ function PlanPreview(props: { readonly attempt: InstallAttempt }) {
       </section>
       <Show when={block()}>
         {(reason) => (
-          <p class="iv-apply-reason" data-testid="install-apply-reason">{t(APPLY_WAIT_TEXT[reason()])}</p>
+          <p class="iv-apply-reason" id={APPLY_REASON_ID} data-testid="install-apply-reason">
+            {t(APPLY_WAIT_TEXT[reason()])}
+          </p>
         )}
       </Show>
       <div class="iv-action-row">
-        <Button type="button" variant="primary" size="lg" disabled>
+        {/* Focusable (aria-disabled, not disabled) so its reason is read
+            out; it never does anything before the Plan is ready. */}
+        <Button
+          type="button"
+          variant="primary"
+          size="lg"
+          aria-disabled="true"
+          aria-describedby={block() ? APPLY_REASON_ID : undefined}
+          onClick={(event) => event.preventDefault()}
+        >
           {t("installStore.allowInstall")}
         </Button>
         <StopButton attempt={props.attempt} />
@@ -299,6 +346,13 @@ export function InstallScreen(props: {
   const busy = () => props.attempt.mutating() !== undefined;
   /** An Apply started: the answers on this screen are what it applies. */
   const locked = () => props.attempt.locked();
+  /**
+   * A connection can be answered while the sheet is asked for, or changed
+   * once the Plan was asked for (preparing the install again); not while a
+   * new attempt is still reading the repository.
+   */
+  const connectionsEditable = () =>
+    !locked() && (view().stage === "provide_inputs" || attemptPastInputs(plan()?.phase));
   // The provider row whose connection form is open inside the screen.
   const [connecting, setConnecting] = createSignal<string>();
   const [rowErrors, setRowErrors] = createSignal<Readonly<Record<string, string>>>({});
@@ -415,7 +469,7 @@ export function InstallScreen(props: {
           <FormField label={t("installStore.destination")} required>
             <Select
               value={selected()?.id ?? ""}
-              disabled={busy() || locked()}
+              disabled={busy() || !connectionsEditable()}
               onChange={async (event) => {
                 const element = event.currentTarget;
                 // A refused choice must not stay shown: return to the
@@ -436,7 +490,7 @@ export function InstallScreen(props: {
             </Select>
           </FormField>
         </Show>
-        <Show when={!resubmitting() && !locked()}>
+        <Show when={!resubmitting() && connectionsEditable()}>
           <div class="iv-action-row">
             <Button
               type="button"
@@ -514,7 +568,16 @@ export function InstallScreen(props: {
       const check = settingsCheck();
       return Boolean(check && !check.ok && check.invalid.includes(variable().name));
     };
-    const update = (value: string) => attempt().setDraft(variable().name, value);
+    // A choice counts at once; typed text counts when its field is left.
+    const choose = (value: string) => attempt().setDraft(variable().name, value);
+    const type = (value: string) => attempt().setDraft(variable().name, value, { typing: true });
+    const leave = () => attempt().commitDraft(variable().name);
+    const leaveOnEnter = (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        leave();
+      }
+    };
     return (
       <FormField
         label={localizedText(variable().label, variable().name)}
@@ -533,7 +596,9 @@ export function InstallScreen(props: {
               spellcheck={false}
               disabled={locked()}
               data-variable-name={variable().name}
-              onInput={(event) => update(event.currentTarget.value)}
+              onInput={(event) => type(event.currentTarget.value)}
+              onBlur={leave}
+              onKeyDown={leaveOnEnter}
             />
           }
         >
@@ -544,7 +609,7 @@ export function InstallScreen(props: {
               value={draftText(variable())}
               disabled={locked()}
               data-variable-name={variable().name}
-              onChange={(event) => update(event.currentTarget.value)}
+              onChange={(event) => choose(event.currentTarget.value)}
             >
               <option value="">{t("installStore.selectValue")}</option>
               <option value="true">{t("installStore.yes")}</option>
@@ -561,7 +626,8 @@ export function InstallScreen(props: {
               autocomplete="off"
               disabled={locked()}
               data-variable-name={variable().name}
-              onInput={(event) => update(event.currentTarget.value)}
+              onInput={(event) => type(event.currentTarget.value)}
+              onBlur={leave}
             />
           </Match>
         </Switch>
@@ -608,12 +674,7 @@ export function InstallScreen(props: {
     if (resolved && resolved.commit === ref) return resolved.tag;
     return ref === "HEAD" ? "" : ref;
   };
-  const [versionText, setVersionText] = createSignal(versionShown());
-  // A new attempt (or a resolved version) shows its own version again.
-  createEffect(on(versionShown, (shown) => setVersionText(shown), { defer: true }));
-  const commitVersion = () => {
-    if (versionText().trim() !== versionShown()) attempt().changeVersion(versionText());
-  };
+  const versionText = () => attempt().versionDraft() ?? versionShown();
 
   const reviewAction = () => {
     const action = props.attempt.response()?.userAction;
@@ -671,14 +732,14 @@ export function InstallScreen(props: {
               value={versionText()}
               placeholder={props.fromStore ? t("installStore.sourceRefStable") : undefined}
               spellcheck={false}
-              disabled={busy() || resubmitting() || !plan() || locked()}
+              disabled={resubmitting() || !plan() || locked()}
               data-testid="install-version"
-              onInput={(event) => setVersionText(event.currentTarget.value)}
-              onBlur={commitVersion}
+              onInput={(event) => attempt().setVersionDraft(event.currentTarget.value)}
+              onBlur={() => attempt().commitVersion()}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  commitVersion();
+                  attempt().commitVersion();
                 }
               }}
             />

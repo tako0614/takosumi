@@ -15,6 +15,7 @@ import {
   appNameValue,
   attemptBelongsHere,
   attemptCreateRequest,
+  attemptPastInputs,
   attemptProblemKey,
   bindingsWith,
   canAdvance,
@@ -488,5 +489,39 @@ describe("answers kept when the install is prepared again", () => {
     const request = replanRequest(plan({ source: { ...original.source, ref: "HEAD", path: "." } }), { name: "office", ref: "HEAD", providerBindings: [] });
     expect(request).toEqual({ mode: "attempt", source: { url: "https://github.com/example/office.git", authConnectionId: "conn_git" }, capsule: { name: "office" } });
     expect(JSON.stringify(request)).not.toContain("variables");
+  });
+});
+
+describe("what holds 「許可してインストール」 after a change", () => {
+  const review = respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_a" }, { phase: "reviewable" });
+
+  test("only phases after the sheet date a Plan", () => {
+    for (const phase of ["creating_capsule", "planning", "reviewable", "failed"] as const) expect(attemptPastInputs(phase)).toBe(true);
+    for (const phase of ["syncing_source", "compiling_install", "analyzing_compatibility", "awaiting_input", "discarded"] as const) {
+      expect(attemptPastInputs(phase)).toBe(false);
+    }
+    expect(attemptPastInputs(undefined)).toBe(false);
+  });
+
+  test("a field being typed in holds the apply and the confirmation", () => {
+    expect(deriveInstallView(review, { editing: true }).applyBlock).toBe("editing");
+    expect(deriveInstallView(respond(inputs()), { armed: true, editing: true }).applyBlock).toBe("editing");
+    // Reading is reading, whatever is typed meanwhile.
+    expect(deriveInstallView(respond({ kind: "wait", phase: "syncing_source" }, { phase: "syncing_source" }), { driving: true, editing: true }).applyBlock).toBe("reading");
+  });
+
+  test("an out-of-date Plan is held: by an invalid name, by typing, or until preparing again is continued", () => {
+    expect(deriveInstallView(review, { outdated: true, nameInvalid: true })).toMatchObject({ applyBlock: "invalid" });
+    expect(deriveInstallView(review, { outdated: true, nameInvalid: true }).progress).toBeUndefined();
+    expect(deriveInstallView(review, { outdated: true, editing: true })).toMatchObject({ applyBlock: "editing" });
+    expect(deriveInstallView(review, { outdated: true, replanStalled: true })).toMatchObject({ applyBlock: "paused", progress: "replanPaused" });
+    expect(deriveInstallView(review, { outdated: true })).toMatchObject({ applyBlock: "replanning", progress: "replanning" });
+  });
+
+  test("a Plan that failed stays on the screen only while the answers are kept", () => {
+    const failed = respond({ kind: "retry", code: "plan_run_failed", restart: true }, { phase: "failed" });
+    expect(deriveInstallView(failed, { answersKept: true })).toMatchObject({ stage: "failed", applyBlock: "failed", progress: "failed", retryCode: "plan_run_failed" });
+    expect(deriveInstallView(failed, { answersKept: true, outdated: true })).toMatchObject({ applyBlock: "replanning" });
+    expect(deriveInstallView(failed).applyBlock).toBeUndefined();
   });
 });

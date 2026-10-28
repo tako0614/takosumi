@@ -55,6 +55,7 @@ import { t } from "../../i18n/index.ts";
 import {
   appNameValue,
   attemptBelongsHere,
+  attemptPastInputs,
   attemptCreateRequest,
   attemptProblemKey,
   awaitingResubmission,
@@ -229,6 +230,11 @@ export interface InstallAttemptOptions {
   readonly pacing?: InstallAttemptPacing;
   /** How long edits rest before confirming or preparing again (tests shorten it). */
   readonly settleMs?: number;
+  /**
+   * The app comes from a Store listing (the page's own link says so), so an
+   * emptied version means its newest release rather than the default branch.
+   */
+  readonly fromStore?: () => boolean;
 }
 
 export function useInstallAttempt(options: InstallAttemptOptions) {
@@ -241,8 +247,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [error, setError] = createSignal<string>();
   const [drafts, setDrafts] = createSignal<VariableDrafts>({});
   const [nameDraft, setNameDraftSignal] = createSignal<string>();
-  /** The name field has focus with typing not yet left (Enter or blur). */
+  /** The name field has typing not yet left (Enter or blur). */
   const [nameEditing, setNameEditing] = createSignal(false);
+  /** A version being typed, before it is left (Enter or blur). */
+  const [versionDraft, setVersionDraftSignal] = createSignal<string>();
+  /** Typed settings not yet left (Enter or blur); a choice counts at once. */
+  const [settingsEditing, setSettingsEditing] = createSignal<ReadonlySet<string>>(new Set());
   const [resolvedVersion, setResolvedVersion] = createSignal<ResolvedStoreVersion>();
   /** The last sheet the coordinator asked for, kept while it moves past it. */
   const [sheet, setSheet] = createSignal<ProvideInputs>();
@@ -260,13 +270,31 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [replanning, setReplanning] = createSignal(false);
   /** An Apply started: the answers it applies can no longer change here. */
   const [locked, setLocked] = createSignal(false);
+  /** Preparing again did not go through; Continue tries it again. */
+  const [replanStalled, setReplanStalled] = createSignal(false);
   const settleMs = options.settleMs ?? SETTLE_MS;
   /** The attempt and edit a confirmation was sent for on its own, never twice. */
   let autoSentFor: string | undefined;
   /** The edit the last preparation-again covered, never prepared twice. */
   let replannedVersion = -1;
-  /** Whether this page view started the install from a Store listing. */
-  let startedFromStore = false;
+  /**
+   * `editVersion` when the earliest confirmation whose outcome is not known
+   * yet was sent. A read that shows the attempt moved past its sheet adopts
+   * it, so a confirmation whose answer was lost still dates its Plan.
+   */
+  let unconfirmedPlanVersion: number | undefined;
+  /** `editVersion` when this page began following the attempt it holds. */
+  let attemptBaseVersion = 0;
+  /** The attempt preparing-again discarded before its replacement started. */
+  let replanDiscarded: string | undefined;
+  /**
+   * The replacement whose start could not be confirmed: it is sent again
+   * exactly as it was (and so with its idempotency key), never a new one
+   * beside it that could leave the first behind.
+   */
+  let pendingReplan:
+    | { readonly workspaceId: string; readonly request: CreateGitInstallAttemptRequest; readonly name: string; readonly refText?: string }
+    | undefined;
 
   const now = options.pacing?.now ?? (() => Date.now());
   const wait = options.pacing?.wait ??
@@ -307,11 +335,22 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * something after it was asked for, or chose another version.
    */
   const outdated = createMemo(() => {
-    if (refDraft() !== undefined) return true;
+    if (refDraft() !== undefined || (replanDiscarded !== undefined && replanStalled())) return true;
     const asked = planVersion();
     return asked !== undefined && editVersion() > asked &&
-      response()?.userAction.kind !== "provide_inputs";
+      attemptPastInputs(response()?.installPlan.phase);
   });
+
+  /** A name, version or typed setting is still being typed in. */
+  const editing = () =>
+    nameEditing() || versionDraft() !== undefined || settingsEditing().size > 0;
+
+  /** The typed app name is not one the API accepts (and differs from the current one). */
+  const nameInvalid = () => {
+    const typed = nameDraft()?.trim();
+    const current = sheet()?.name.current ?? response()?.installPlan.capsule.name;
+    return typed !== undefined && typed !== current && !appNameValue(typed);
+  };
 
   const view = createMemo<InstallView>(() => {
     const current = mutating();
@@ -328,6 +367,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       confirming: confirming() || current === "continue",
       outdated: outdated(),
       replanning: replanning(),
+      replanStalled: replanStalled(),
+      editing: editing(),
+      nameInvalid: nameInvalid(),
+      answersKept: sheet() !== undefined,
     });
   });
 
@@ -347,6 +390,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setDrafts({});
     setNameDraftSignal(undefined);
     setNameEditing(false);
+    setVersionDraftSignal(undefined);
+    setSettingsEditing(new Set<string>());
   };
 
   /** Everything this page view kept for one install, values included. */
@@ -357,9 +402,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setRefDraft(undefined);
     setPlanVersion(undefined);
     setReplanning(false);
+    setReplanStalled(false);
     setArmed(false);
     setLocked(false);
     autoSentFor = undefined;
+    unconfirmedPlanVersion = undefined;
+    replanDiscarded = undefined;
+    pendingReplan = undefined;
   };
 
   /** The person changed something: count it, and let the page act on it. */
@@ -401,6 +450,15 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setSheet(next.userAction);
       setOverrides({});
       setPlanVersion(undefined);
+      // Still asking for the sheet: no confirmation went through.
+      unconfirmedPlanVersion = undefined;
+    } else if (attemptPastInputs(next.installPlan.phase) && untrack(planVersion) === undefined) {
+      // Past the sheet with no answer that dated the Plan (a lost answer, or
+      // an attempt opened again): date it by the earliest confirmation that
+      // may have made it, or else by when this page began following it, so
+      // any later edit marks it out of date (never the other way round).
+      setPlanVersion(unconfirmedPlanVersion ?? attemptBaseVersion);
+      unconfirmedPlanVersion = undefined;
     }
     setResponse(next);
     setLoadFailed(false);
@@ -452,6 +510,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setError(undefined);
       forgetSession();
       if (!attemptId) return;
+      attemptBaseVersion = untrack(editVersion);
       const expected = epoch;
       if (!workspaceId) {
         resolveWorkspace(expected);
@@ -631,6 +690,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     // for the new attempt; anything else starts from nothing.
     if (!adoptOptions.keepAnswers) forgetSession();
     setPlanVersion(undefined);
+    unconfirmedPlanVersion = undefined;
+    attemptBaseVersion = untrack(editVersion);
     setResponse(created);
     setLoadFailed(false);
     setArmed(true);
@@ -669,7 +730,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         if (expected === epoch) setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
       }
       const created = await postAttempt(workspaceId, attemptCreateRequest({ ...candidate, ref }));
-      if (adoptNewAttempt(created, expected)) startedFromStore = startOptions.fromStore;
+      adoptNewAttempt(created, expected);
     } catch (cause) {
       if (!disposed) setError(installErrorMessage(cause));
     } finally {
@@ -678,14 +739,23 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   };
 
   /**
-   * 「続ける」: continue a paused attempt, try a step again, or confirm a
+   * 「続ける」: continue a paused attempt, try a step again, confirm a
    * complete sheet that was waiting for the person (a reopened attempt, or a
-   * confirmation that did not go through).
+   * confirmation that did not go through), prepare the install again after
+   * that failed, or try a Plan that failed again with the same answers.
    */
   const resume = () => {
     if (mutating()) return;
     setArmed(true);
+    if (replanStalled()) {
+      void replan();
+      return;
+    }
     const current = response();
+    if (current && view().stage === "failed" && sheet()) {
+      void replan();
+      return;
+    }
     if (current?.userAction.kind === "provide_inputs") {
       if (view().readyToConfirm) {
         autoSentFor = `${current.installPlan.id}:${editVersion()}`;
@@ -762,8 +832,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       );
       return Boolean(next);
     }
-    if (!sheet() || mutating()) return false;
-    setOverrides((current) => ({ ...current, [connectionKey(requirement)]: connectionId }));
+    // Past the sheet the choice prepares the install again; while the
+    // repository is read again there is no sheet to answer yet.
+    if (!sheet() || !attemptPastInputs(current?.installPlan.phase)) return false;
+    setOverrides((overridden) => ({ ...overridden, [connectionKey(requirement)]: connectionId }));
     edited();
     return true;
   };
@@ -824,19 +896,39 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setNameDraftSignal(undefined);
       return;
     }
-    if (!appNameValue(typed)) return;
+    // Any change counts, valid or not: an invalid name holds the apply (and
+    // anything sent) until it is fixed.
     edited();
-    if (current?.userAction.kind !== "provide_inputs") return;
+    if (!appNameValue(typed) || current?.userAction.kind !== "provide_inputs") return;
     const next = await answer({ capsuleName: typed }, "answer");
     // A name typed while this rename was in flight is kept for the next one.
     if (next && nameDraft()?.trim() === typed) setNameDraftSignal(undefined);
   };
 
-  /** A setting typed in the screen; it stays in this page's memory only. */
-  const setDraft = (name: string, value: string) => {
+  /**
+   * A setting entered on the screen; it stays in this page's memory only. A
+   * choice counts at once; typed text counts when its field is left
+   * (`commitDraft`), so no Plan is made from half-typed values.
+   */
+  const setDraft = (name: string, value: string, draftOptions: { readonly typing?: boolean } = {}) => {
     if (locked()) return;
     setDrafts((current) => ({ ...current, [name]: { value, touched: true } }));
+    if (draftOptions.typing) {
+      setSettingsEditing((current) => new Set(current).add(name));
+      return;
+    }
     edited();
+  };
+
+  /** A typed setting's field was left (blur or Enter). */
+  const commitDraft = (name: string) => {
+    if (!settingsEditing().has(name)) return;
+    setSettingsEditing((current) => {
+      const next = new Set(current);
+      next.delete(name);
+      return next;
+    });
+    if (!locked()) edited();
   };
 
   /**
@@ -844,9 +936,26 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * prepared again with it (empty means the default, or a Store listing's
    * newest release).
    */
+  /** Typing in the version field; it counts once the field is left. */
+  const setVersionDraft = (text: string) => {
+    if (locked() || !response()) return;
+    setVersionDraftSignal(text);
+  };
+
+  /** The version field was left (blur or Enter). */
+  const commitVersion = () => {
+    const typed = versionDraft();
+    setVersionDraftSignal(undefined);
+    if (typed !== undefined) changeVersion(typed);
+  };
+
+  /**
+   * Another version. It is kept even while a request is in flight (it is
+   * read by the next attempt), so the install is prepared again with it.
+   */
   const changeVersion = (text: string) => {
     const current = response();
-    if (!current || mutating() || locked()) return;
+    if (!current || locked()) return;
     const next = text.trim();
     const shown = refDraft() ?? current.installPlan.source.ref;
     if (next === shown || (next === "" && shown === "HEAD")) return;
@@ -882,7 +991,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const typed = nameDraft()?.trim();
       const rename = typed !== undefined && typed !== action.name.current &&
         !awaitingResubmission(action);
-      const version = untrack(editVersion);
+      // Dated before it is sent: if the answer is lost but the server made
+      // the Plan, a later read adopts this edit number for it.
+      unconfirmedPlanVersion ??= untrack(editVersion);
       const next = await answer(
         {
           continue: true,
@@ -892,11 +1003,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         "continue",
       );
       if (!next) {
-        // Not sent again on its own: the person continues or changes something.
+        // Not sent again on its own: the person continues or changes
+        // something. (A read that shows it went through dated its Plan.)
         setArmed(false);
+        if (attemptPastInputs(response()?.installPlan.phase)) drive();
         return;
       }
-      if (next.userAction.kind !== "provide_inputs") setPlanVersion(version);
       if (rename && nameDraft()?.trim() === typed) setNameDraftSignal(undefined);
       drive();
     } finally {
@@ -909,68 +1021,89 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * for: discard the attempt (its unapplied app goes with it) and start a
    * new one with the same repository, the person's name, version, module and
    * connections. Setting values stay here and go with the new attempt's
-   * confirmation. Runs at most once per edit.
+   * confirmation. Runs at most once per edit; a failure waits for Continue,
+   * and a replacement that could not be confirmed is sent again exactly as
+   * it was (same idempotency key), never a second one beside it.
    */
   const replan = async (): Promise<boolean> => {
     const current = response();
-    if (!current || mutating()) return false;
+    if (!current || mutating() || locked()) return false;
     replannedVersion = untrack(editVersion);
     setMutating("replan");
     setReplanning(true);
+    setReplanStalled(false);
     setError(undefined);
     try {
       await stopDriving();
+      if (disposed) return false;
       const latest = response() ?? current;
       const plan = latest.installPlan;
-      const workspaceId = plan.workspaceId;
       const retained = sheet();
       const rows = retained ? withConnectionOverrides(retained.connections, overrides()) : [];
-      const typed = nameDraft()?.trim();
-      const name = typed && appNameValue(typed) ? typed : (currentName() ?? plan.capsule.name);
-      const refText = refDraft();
-      let ref = refText ?? plan.source.ref;
-      if (refText === "" && startedFromStore) {
-        const resolved = await resolveStableSourceTag(workspaceId, plan.source.url);
-        if (!isImmutableSourceRevision(resolved.commit)) {
-          throw new ControlApiError(
-            502,
-            "invalid_stable_source_tag_response",
-            "Stable source tag resolution did not return an immutable commit.",
-          );
+      let replacement = pendingReplan;
+      if (!replacement || replacement.workspaceId !== plan.workspaceId) {
+        const typed = nameDraft()?.trim();
+        const name = typed && appNameValue(typed) ? typed : (currentName() ?? plan.capsule.name);
+        const refText = refDraft();
+        let ref = refText ?? plan.source.ref;
+        if (refText === "" && options.fromStore?.()) {
+          const resolved = await resolveStableSourceTag(plan.workspaceId, plan.source.url);
+          if (disposed) return false;
+          if (!isImmutableSourceRevision(resolved.commit)) {
+            throw new ControlApiError(
+              502,
+              "invalid_stable_source_tag_response",
+              "Stable source tag resolution did not return an immutable commit.",
+            );
+          }
+          ref = resolved.commit;
+          setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
         }
-        ref = resolved.commit;
-        setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
+        const request = replanRequest(plan, {
+          name,
+          ref,
+          ...(retained ? { modulePath: retained.modulePath } : {}),
+          providerBindings: retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
+        });
+        if (plan.phase !== "discarded" && replanDiscarded !== plan.id) {
+          await discardInstallAttempt(plan.id, plan.generation, wait);
+          if (disposed) return false;
+          replanDiscarded = plan.id;
+        }
+        replacement = { workspaceId: plan.workspaceId, request, name, ...(refText !== undefined ? { refText } : {}) };
       }
-      const request = replanRequest(plan, {
-        name,
-        ref,
-        ...(retained ? { modulePath: retained.modulePath } : {}),
-        providerBindings: retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
-      });
-      if (plan.phase !== "discarded") {
-        await discardInstallAttempt(plan.id, plan.generation, wait);
-      }
-      if (disposed || currentWorkspaceId() !== workspaceId) return false;
-      clearCaches(workspaceId);
+      if (currentWorkspaceId() !== replacement.workspaceId) return false;
+      clearCaches(replacement.workspaceId);
       const expected = ++epoch;
-      const created = await postAttempt(workspaceId, request);
+      pendingReplan = replacement;
+      const created = await postAttempt(replacement.workspaceId, replacement.request);
       if (!adoptNewAttempt(created, expected, { keepAnswers: true })) return false;
+      pendingReplan = undefined;
+      replanDiscarded = undefined;
       // The new attempt starts with these answers; until its own sheet
       // arrives the screen keeps showing them.
       if (retained) {
-        setSheet({ ...retained, connections: rows, name: { ...retained.name, current: name, conflict: false } });
+        setSheet({
+          ...retained,
+          connections: rows,
+          name: { ...retained.name, current: replacement.name, conflict: false },
+        });
       }
       setOverrides({});
-      if (nameDraft()?.trim() === name) setNameDraftSignal(undefined);
-      if (refDraft() === refText) setRefDraft(undefined);
+      if (nameDraft()?.trim() === replacement.name) setNameDraftSignal(undefined);
+      if (refDraft() === replacement.refText) setRefDraft(undefined);
       return true;
     } catch (cause) {
+      // Only a start whose outcome is unknown is sent again as it was; a
+      // refused one is built again from the answers on the screen.
+      if (pendingReplan && !outcomeUnknown(cause)) pendingReplan = undefined;
       if (!disposed) {
         setError(installErrorMessage(cause));
         setReplanning(false);
-        // The changed version is not retried on its own.
-        setRefDraft(undefined);
-        await refresh();
+        setReplanStalled(true);
+        // While the attempt still exists, show it as it is now; once it is
+        // discarded, the screen keeps the person's answers for Continue.
+        if (!replanDiscarded) await refresh();
       }
       return false;
     } finally {
@@ -985,7 +1118,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const ready = view().readyToConfirm;
     const version = editVersion();
     if (current?.userAction.kind !== "provide_inputs" || !ready) return;
-    if (!armed() || mutating() || confirming() || nameEditing() || outdated()) return;
+    if (!armed() || mutating() || confirming() || editing() || nameInvalid() || outdated()) return;
     const key = `${current.installPlan.id}:${version}`;
     if (autoSentFor === key) return;
     const timer = setTimeout(() => {
@@ -998,11 +1131,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   // An out-of-date Plan is prepared again once edits settle, once per edit.
   createEffect(() => {
-    if (!outdated() || locked()) return;
+    if (!outdated() || locked() || replanStalled()) return;
     const stage = view().stage;
     const version = editVersion();
-    if (!INSTALL_SCREEN_STAGES.has(stage) || stage === "starting") return;
-    if (mutating() || confirming() || nameEditing() || version <= replannedVersion) return;
+    if ((!INSTALL_SCREEN_STAGES.has(stage) && stage !== "failed") || stage === "starting") return;
+    if (mutating() || confirming() || editing() || nameInvalid() || version <= replannedVersion) return;
     const timer = setTimeout(() => {
       if (disposed || untrack(editVersion) !== version) return;
       void replan();
@@ -1056,10 +1189,15 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
-  /** Start over: discard this attempt and read the same app again. */
+  /**
+   * Start over: discard this attempt and read the same app again. With the
+   * person's answers still on the screen (a Plan that failed), they are
+   * kept: the install is prepared again with them.
+   */
   const restart = async (): Promise<boolean> => {
     const current = response();
     if (!current || mutating()) return false;
+    if (sheet()) return await replan();
     setMutating("restart");
     setError(undefined);
     try {
@@ -1129,8 +1267,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setError,
     drafts,
     setDraft,
+    commitDraft,
     nameDraft,
     setNameDraft,
+    versionDraft,
+    setVersionDraft,
+    commitVersion,
     resolvedVersion,
     sheet,
     connectionRows,

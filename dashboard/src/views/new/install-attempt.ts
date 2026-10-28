@@ -521,6 +521,22 @@ export const INSTALL_SCREEN_STAGES: ReadonlySet<InstallStage> = new Set([
   "review",
 ]);
 
+/**
+ * Phases after the sheet was confirmed: a Plan was asked for (or failed).
+ * An edit made in one of them no longer reaches that Plan.
+ */
+const PAST_INPUT_PHASES: ReadonlySet<GitInstallPlan["phase"]> = new Set([
+  "creating_capsule",
+  "planning",
+  "reviewable",
+  "failed",
+]);
+
+/** The attempt moved past its sheet: a Plan was asked for from it. */
+export function attemptPastInputs(phase: GitInstallPlan["phase"] | undefined): boolean {
+  return phase !== undefined && PAST_INPUT_PHASES.has(phase);
+}
+
 /** The one primary action of a stage. */
 export type InstallPrimary =
   | "install"
@@ -553,8 +569,12 @@ export type ApplyBlock =
   | "invalid"
   /** The Plan is being made (or about to be). */
   | "checking"
+  /** A field is being typed in; it counts once it is left. */
+  | "editing"
   /** Something changed after the Plan: the install is prepared again. */
-  | "replanning";
+  | "replanning"
+  /** Making the Plan failed; the person fixes something or tries again. */
+  | "failed";
 
 /** The inline progress line of the install screen. */
 export type InstallProgress =
@@ -562,7 +582,11 @@ export type InstallProgress =
   | "analyzing"
   | "planning"
   | "replanning"
-  | "paused";
+  | "paused"
+  /** Preparing again did not go through; Continue tries it again. */
+  | "replanPaused"
+  /** Making the Plan failed; the reason, and Try again. */
+  | "failed";
 
 export interface InstallLocalState {
   /** The starting request is in flight and no attempt exists yet. */
@@ -595,6 +619,14 @@ export interface InstallLocalState {
   readonly outdated?: boolean;
   /** The install is being prepared again after such a change. */
   readonly replanning?: boolean;
+  /** Preparing again failed and waits for Continue. */
+  readonly replanStalled?: boolean;
+  /** A field (name, version or a typed setting) is being typed in. */
+  readonly editing?: boolean;
+  /** The app name typed is not one the API accepts. */
+  readonly nameInvalid?: boolean;
+  /** The page still holds the person's answers (the sheet they saw). */
+  readonly answersKept?: boolean;
 }
 
 export interface InstallView {
@@ -731,15 +763,31 @@ export function deriveInstallView(
   local: InstallLocalState = {},
 ): InstallView {
   const view = deriveStage(response, local);
-  if (!INSTALL_SCREEN_STAGES.has(view.stage)) return view;
-  // A change after the Plan, and the attempt that replaces it, read as one
-  // step until its new Plan is ready or it needs the person again.
-  const preparingAgain = local.outdated === true ||
-    (local.replanning === true &&
-      view.stage !== "review" && view.stage !== "choose_module" &&
-      !(view.stage === "provide_inputs" && !view.readyToConfirm));
-  if (preparingAgain) {
+  // A Plan that failed after the sheet stays on the screen with the
+  // person's answers: they fix something or try again.
+  const failedWithAnswers = view.stage === "failed" && local.answersKept === true;
+  if (!INSTALL_SCREEN_STAGES.has(view.stage) && !failedWithAnswers) return view;
+  if (local.outdated) {
+    // The shown Plan no longer matches the screen: never applicable, and
+    // prepared again only from valid, finished input.
+    if (local.nameInvalid) return { ...view, applyBlock: "invalid" };
+    if (local.editing) return { ...view, applyBlock: "editing" };
+    if (local.replanStalled) return { ...view, applyBlock: "paused", progress: "replanPaused" };
     return { ...view, applyBlock: "replanning", progress: "replanning" };
+  }
+  if (local.replanStalled) return { ...view, applyBlock: "paused", progress: "replanPaused" };
+  // The attempt that replaces it reads the repository and plans as one
+  // step until its new Plan is ready or it needs the person again.
+  if (
+    local.replanning === true &&
+    view.stage !== "review" && view.stage !== "choose_module" && !failedWithAnswers &&
+    !(view.stage === "provide_inputs" && !view.readyToConfirm)
+  ) {
+    return { ...view, applyBlock: "replanning", progress: "replanning" };
+  }
+  if (failedWithAnswers) return { ...view, applyBlock: "failed", progress: "failed" };
+  if (local.editing && (view.stage === "review" || view.stage === "provide_inputs")) {
+    return { ...view, applyBlock: "editing" };
   }
   const phase = response?.installPlan.phase;
   switch (view.stage) {

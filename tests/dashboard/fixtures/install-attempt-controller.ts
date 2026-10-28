@@ -890,4 +890,278 @@ describe("install attempt controller", () => {
     expect(calls.filter(({ name }) => name === "discardGitInstallAttempt" || name === "createGitInstallAttempt")).toHaveLength(1);
     page.dispose();
   });
+  // --- Review findings: lost answers, failures while preparing again --------
+
+  /**
+   * A coordinator with several attempts (one per create) that the tests can
+   * make refuse a discard, fail a start, lose a confirmation's answer after
+   * committing it, or fail the Plan.
+   */
+  function coordinator(config: {
+    readonly sheet: () => GitInstallPlanUserAction;
+    readonly refuseDiscard?: () => boolean;
+    readonly failCreate?: (count: number) => boolean;
+    readonly loseContinue?: () => boolean;
+    readonly planFails?: () => boolean;
+  }) {
+    const ids = [ID, "gip_00000000000000b2", "gip_00000000000000b3", "gip_00000000000000b4"];
+    const attempts = new Map<string, { generation: number; phase: string; action: GitInstallPlanUserAction }>();
+    let creates = 0;
+    const read = (id: string) => {
+      const attempt = attempts.get(id)!;
+      return respond(attempt.action, attempt.generation, attempt.phase, id);
+    };
+    const handlers = {
+      createGitInstallAttempt: async () => {
+        creates += 1;
+        if (config.failCreate?.(creates)) throw new api.ControlApiError(503, "unavailable", "unavailable");
+        const id = ids[attempts.size]!;
+        attempts.set(id, { generation: 0, phase: "syncing_source", action: { kind: "wait", phase: "syncing_source" } });
+        return read(id);
+      },
+      reconcileGitInstallPlan: async (id: never) => {
+        const attempt = attempts.get(id as unknown as string)!;
+        attempt.generation += 1;
+        if (attempt.phase === "syncing_source") {
+          attempt.phase = "awaiting_input";
+          attempt.action = config.sheet();
+        } else if (attempt.phase === "planning") {
+          if (config.planFails?.()) {
+            attempt.phase = "failed";
+            attempt.action = { kind: "retry", code: "plan_run_failed", restart: true };
+          } else {
+            attempt.phase = "reviewable";
+            attempt.action = { kind: "review_run", planRunId: `run_${id as unknown as string}`, capsuleId: "cap_office" };
+          }
+        }
+        return read(id as unknown as string);
+      },
+      answerGitInstallAttempt: async (id: never, body: never) => {
+        const attempt = attempts.get(id as unknown as string)!;
+        attempt.generation += 1;
+        if ((body as { continue?: boolean }).continue) {
+          attempt.phase = "planning";
+          attempt.action = { kind: "wait", phase: "planning" };
+          if (config.loseContinue?.()) throw new api.ControlApiError(503, "unavailable", "unavailable");
+        }
+        return read(id as unknown as string);
+      },
+      getGitInstallPlan: async (id: never) => read(id as unknown as string),
+      discardGitInstallAttempt: async (id: never) => {
+        if (config.refuseDiscard?.()) throw new api.ControlApiError(409, "install_attempt_discard_refused", "refused");
+        const attempt = attempts.get(id as unknown as string)!;
+        attempt.generation += 1;
+        attempt.phase = "discarded";
+        attempt.action = { kind: "none" };
+        return read(id as unknown as string);
+      },
+    };
+    return { handlers, creates: () => creates };
+  }
+  const named = (name: string) => calls.filter((call) => call.name === name);
+  const settingSheet = () => inputs({
+    connections: [{ ...requirement, selectedConnectionId: "conn_a" }],
+    variables: [{ name: "domain", type: "string", required: false, sensitive: false }],
+    missing: [],
+  });
+
+  test("a confirmation whose answer was lost but went through still dates its Plan: a later edit prepares again", async () => {
+    let lose = true;
+    const server = coordinator({ sheet: settingSheet, loseContinue: () => (lose ? !(lose = false) : false) });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "review", "the Plan made by the lost confirmation");
+    expect(answerBodies().filter((body) => body.continue)).toHaveLength(1);
+    page.attempt.setDraft("domain", "changed.example.com");
+    await page.attempt.chooseConnection(requirement, "conn_b");
+    // The Plan holds conn_a and no domain; the screen now shows conn_b and a
+    // domain, so the Plan can no longer be applied.
+    expect(page.attempt.outdated()).toBe(true);
+    expect(page.attempt.view().applyBlock).toBe("replanning");
+    await until(() => page.attempt.view().stage === "review" && page.attempt.response()?.installPlan.id !== ID, "the new Plan");
+    const created = named("createGitInstallAttempt").map(({ args }) => args[1]);
+    expect(created[1]).toMatchObject({
+      options: { providerBindings: [{ provider: requirement.provider, moduleLocalName: "cloudflare", connectionId: "conn_b" }] },
+    });
+    expect(answerBodies().at(-1)).toMatchObject({ continue: true, variables: { domain: "changed.example.com" } });
+    page.dispose();
+  });
+
+  test("an attempt reopened past its sheet treats any edit as making its Plan out of date", async () => {
+    reset({ getGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 7) });
+    const page = mount(ID, { settleMs: 60_000 });
+    await until(() => page.attempt.view().stage === "review", "the reopened review");
+    expect(page.attempt.outdated()).toBe(false);
+    page.attempt.changeVersion("v2.0.0");
+    expect(page.attempt.outdated()).toBe(true);
+    expect(page.attempt.view().applyBlock).toBe("replanning");
+    page.dispose();
+  });
+
+  test("a refused discard while preparing again waits for Continue instead of spinning, and Continue tries again", async () => {
+    let refuse = true;
+    const server = coordinator({ sheet: settingSheet, refuseDiscard: () => refuse });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    page.attempt.setDraft("domain", "changed.example.com");
+    await until(() => named("discardGitInstallAttempt").length === 1 && page.attempt.mutating() === undefined, "the refused discard");
+    await pause(40);
+    expect(page.attempt.view()).toMatchObject({ stage: "review", applyBlock: "paused", progress: "replanPaused" });
+    expect(page.attempt.error()).toBeTruthy();
+    // Nothing more on its own.
+    expect(named("discardGitInstallAttempt")).toHaveLength(1);
+    expect(server.creates()).toBe(1);
+    refuse = false;
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "review" && page.attempt.response()?.installPlan.id !== ID, "the new Plan");
+    expect(named("discardGitInstallAttempt")).toHaveLength(2);
+    expect(server.creates()).toBe(2);
+    expect(page.attempt.view().applyBlock).toBeUndefined();
+    page.dispose();
+  });
+
+  test("a replacement whose start failed keeps the answers and is sent again with the same idempotency key", async () => {
+    const server = coordinator({ sheet: settingSheet, failCreate: (count) => count === 2 });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    page.attempt.setDraft("domain", "changed.example.com");
+    await until(() => server.creates() === 2 && page.attempt.mutating() === undefined, "the failed start");
+    await pause(40);
+    // The discarded attempt is not shown as a dead end: the screen keeps the
+    // answers and waits for Continue.
+    expect(page.attempt.view()).toMatchObject({ applyBlock: "paused", progress: "replanPaused" });
+    expect(page.attempt.drafts()).toEqual({ domain: { value: "changed.example.com", touched: true } });
+    expect(page.attempt.sheet()).toBeTruthy();
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "review" && page.attempt.response()?.installPlan.id !== ID, "the new Plan");
+    const starts = named("createGitInstallAttempt");
+    expect(starts).toHaveLength(3);
+    // The same request and key as the start whose outcome was unknown; no
+    // second discard.
+    expect(starts[2]!.args).toEqual(starts[1]!.args);
+    expect(named("discardGitInstallAttempt")).toHaveLength(1);
+    page.dispose();
+  });
+
+  test("leaving the page while preparing again sends nothing more", async () => {
+    const hold = deferred<void>();
+    let reconciles = 0;
+    const server = coordinator({ sheet: settingSheet });
+    reset({
+      ...server.handlers,
+      reconcileGitInstallPlan: async (id: never, init: never) => {
+        reconciles += 1;
+        if (reconciles >= 2) await hold.promise; // a slow command that ignores the abort
+        return await server.handlers.reconcileGitInstallPlan(id);
+      },
+    });
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => reconciles >= 2, "planning");
+    page.attempt.changeVersion("v2.0.0");
+    await pause(30);
+    page.dispose();
+    hold.resolve();
+    await pause(30);
+    expect(named("discardGitInstallAttempt")).toHaveLength(0);
+    expect(server.creates()).toBe(1);
+  });
+
+  test("a version typed while the sheet is confirmed is held until it is left, then prepares the install again", async () => {
+    const server = coordinator({ sheet: settingSheet });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setVersionDraft("v2.0");
+    await pause(30);
+    // While typing nothing is confirmed, and the field is not dropped.
+    expect(answerBodies()).toEqual([]);
+    expect(page.attempt.view().applyBlock).toBe("editing");
+    page.attempt.setVersionDraft("v2.0.0");
+    page.attempt.commitVersion();
+    await until(() => server.creates() === 2 && page.attempt.view().stage === "review", "the Plan for the new version");
+    expect(named("createGitInstallAttempt")[1]!.args[1]).toMatchObject({ source: { url: URL_, ref: "v2.0.0" } });
+    // Only the new attempt's sheet was confirmed.
+    expect(answerBodies()).toHaveLength(1);
+    page.dispose();
+  });
+
+  test("a version changed while a confirmation is in flight is kept and prepares the install again", async () => {
+    const answered = deferred<void>();
+    const server = coordinator({ sheet: settingSheet });
+    reset({
+      ...server.handlers,
+      answerGitInstallAttempt: async (id: never, body: never) => {
+        if (named("answerGitInstallAttempt").length === 1) await answered.promise;
+        return await server.handlers.answerGitInstallAttempt(id, body);
+      },
+    });
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.confirming(), "the confirmation in flight");
+    page.attempt.setVersionDraft("v3.0.0");
+    page.attempt.commitVersion();
+    expect(page.attempt.refDraft()).toBe("v3.0.0");
+    answered.resolve();
+    await until(() => server.creates() === 2 && page.attempt.view().stage === "review", "the Plan for the new version");
+    expect(named("createGitInstallAttempt")[1]!.args[1]).toMatchObject({ source: { ref: "v3.0.0" } });
+    page.dispose();
+  });
+
+  test("typed settings and an invalid name count only once left, and an invalid name holds the Plan", async () => {
+    const server = coordinator({ sheet: settingSheet });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setDraft("domain", "half.exa", { typing: true });
+    await pause(30);
+    expect(answerBodies()).toEqual([]);
+    expect(page.attempt.view().applyBlock).toBe("editing");
+    page.attempt.setDraft("domain", "half.example.com", { typing: true });
+    page.attempt.commitDraft("domain");
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    expect(answerBodies()).toEqual([{ expectedGeneration: 1, continue: true, variables: { domain: "half.example.com" } }]);
+    // After the Plan, an invalid name holds it without preparing again.
+    page.attempt.setNameDraft("Not Valid");
+    expect(page.attempt.view().applyBlock).toBe("editing");
+    await page.attempt.saveName();
+    expect(page.attempt.outdated()).toBe(true);
+    expect(page.attempt.view().applyBlock).toBe("invalid");
+    await pause(40);
+    expect(named("discardGitInstallAttempt")).toHaveLength(0);
+    page.attempt.setNameDraft("valid-name");
+    await page.attempt.saveName();
+    await until(() => server.creates() === 2 && page.attempt.view().stage === "review", "the Plan under the new name");
+    expect(named("createGitInstallAttempt")[1]!.args[1]).toMatchObject({ capsule: { name: "valid-name" } });
+    page.dispose();
+  });
+
+  test("a Plan that failed keeps the answers on the screen; Try again prepares it again with them", async () => {
+    let fail = true;
+    const server = coordinator({
+      sheet: () => inputs({ connections: [], variables: [{ name: "api_token", type: "string", required: true, sensitive: true }], missing: [] }),
+      planFails: () => (fail ? !(fail = false) : false),
+    });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setDraft("api_token", SECRET);
+    await until(() => page.attempt.view().stage === "failed", "the failed Plan");
+    expect(page.attempt.view()).toMatchObject({ applyBlock: "failed", progress: "failed" });
+    expect(page.attempt.drafts()).toEqual({ api_token: { value: SECRET, touched: true } });
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "review", "the Plan made again");
+    expect(server.creates()).toBe(2);
+    expect(answerBodies().at(-1)).toMatchObject({ continue: true, variables: { api_token: SECRET } });
+    expect(JSON.stringify(named("createGitInstallAttempt"))).not.toContain(SECRET);
+    page.dispose();
+  });
 });

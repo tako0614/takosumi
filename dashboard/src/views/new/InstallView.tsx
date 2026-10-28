@@ -311,6 +311,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
     onStarted: (attemptId) =>
       navigate(`${location.pathname}${withInstallAttempt(location.search, attemptId)}`, { replace: true }),
     onLeft: (plan) => navigate(`${location.pathname}${leaveSearch(plan)}`, { replace: true }),
+    // The page's own link says whether this app came from a Store listing,
+    // also when the attempt is opened again.
+    fromStore: () => Boolean(store()),
   });
   const plan = () => attempt.response()?.installPlan;
   const fromStore = () => Boolean(store());
@@ -398,7 +401,10 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
 
   const stage = () => attempt.view().stage;
-  const onScreen = () => INSTALL_SCREEN_STAGES.has(stage()) && stage() !== "starting";
+  // A Plan that failed after the sheet stays on the screen with the answers.
+  const onScreen = () =>
+    (INSTALL_SCREEN_STAGES.has(stage()) && stage() !== "starting") ||
+    (stage() === "failed" && attempt.sheet() !== undefined);
   // Entering the install screen, a problem or the end moves focus to its
   // heading, so keyboard and screen reader users land where the page
   // changed. Moving within the screen keeps focus where the person types.
