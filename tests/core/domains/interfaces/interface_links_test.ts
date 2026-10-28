@@ -349,6 +349,26 @@ test("an explicitly revoked linkId-less current grant remains denied", async () 
   expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready")).toHaveLength(0);
 });
 
+test("legacy linkId-less grant retries narrowing after create fails following automatic revoke", async () => {
+  const f = await fixture();
+  await f.link();
+  await f.ensure("alice");
+  const binding = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const linkless = { ...binding, metadata: { ...binding.metadata, generation: binding.metadata.generation + 1, materializedFrom: { ...binding.metadata.materializedFrom!, linkId: undefined } } };
+  expect(await f.stores.bindings.compareAndSet(linkless, binding.metadata.generation)).toBe(true);
+  const reduced = { ...requirement, permissions: ["mcp.read"] };
+  const create = f.service.createBinding.bind(f.service);
+  f.service.createBinding = async () => { throw new Error("transient create failure"); };
+  await expect(f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [reduced] })).rejects.toThrow("transient create failure");
+  f.service.createBinding = create;
+  const revoked = (await f.service.listBindings(f.providers[0]!.metadata.id)).find((item) => item.metadata.id === binding.metadata.id)!;
+  expect(revoked.status.phase).toBe("Revoked");
+  expect(revoked.status.conditions?.[0]?.reason).toBe("Superseded");
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [reduced] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((item) => item.status.phase === "Ready").map((item) => [item.metadata.materializedFrom?.linkId, item.spec.permissions])).toEqual([[expect.any(String), ["mcp.read"]]]);
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+});
+
 test("same-provider version change revokes a linkId-less old grant before recreating it", async () => {
   const f = await fixture();
   const old = await f.link();
