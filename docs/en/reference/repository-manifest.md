@@ -192,9 +192,20 @@ An identical context assignment is idempotent, and unrelated mappings remain.
 The accepted mapping participates in the derived config digest bound to the
 original SourceSnapshot and module.
 
-These two sources are an explicit v2.5 compatibility path. Older and unknown
-future versions do not inherit them. Any later retirement of Workspace-dependent
-inputs must separately define how already-persisted v2.5 configs are handled.
+`workspace_id` is deprecated at introduction in v2.5 for existing-app compatibility.
+Workspace dependence is scheduled for retirement, and a later contract version
+will remove this source. Older and unknown future versions do not inherit it.
+Persisted v2.5 mappings also require explicit migration or retirement: rejecting
+new declarations in a future parser does not migrate stored mappings, and their
+execution is not guaranteed indefinitely.
+
+Use `capsule_id` for a new integration whose actual semantics need Capsule identity.
+It is not a Workspace ID alias. An existing app with Workspace-specific identity or
+authorization must have those contracts migrated by its owner before removing its
+`workspace_id` input. Substituting an ID alone cannot satisfy its current Workspace
+guards. The v2.5 parser still accepts valid `workspace_id` declarations; deprecation
+is not a technical ban on new declarations. Current authenticated Capsule and
+membership records remain the source of values and authority.
 
 ## `requires`
 

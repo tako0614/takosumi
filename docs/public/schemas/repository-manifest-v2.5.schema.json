@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://takosumi.com/docs/schemas/repository-manifest-v2.5.schema.json",
   "title": "Takosumi repository manifest v2.5",
-  "description": "Closed structural schema for takosumi.com/v2.5. Retains v2.4 runtime delivery and adds explicit root-string compatibility input sources for current installation context. Values are selected by the service from authenticated Capsule context; declarations carry no identity value or grant.",
+  "description": "Closed structural schema for takosumi.com/v2.5. Retains v2.4 runtime delivery and adds explicit root-string installation-context sources. workspace_id is deprecated at introduction for existing-app compatibility and scheduled for removal in a later contract. Persisted mappings require explicit migration or retirement; capsule_id is not a Workspace identity alias. Values come from authenticated Capsule context, not declaration literals or grants.",
   "type": "object",
   "required": [
     "apiVersion",
