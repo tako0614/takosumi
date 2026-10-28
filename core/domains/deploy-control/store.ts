@@ -4052,7 +4052,7 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>>;
   deleteSource(id: string, expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority): Promise<boolean>;
   /**
-   * Atomic Source deletion with its value-free `source.deleted` Activity.
+   * Atomic pristine, unowned Source deletion with value-free `source.deleted` Activity.
    * The reference/in-flight checks, the row delete, and the Activity insert
    * share one storage boundary (transaction / D1 batch), so a concurrent
    * Capsule/Run creation cannot slip between the check and the delete and a
@@ -7914,6 +7914,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const current = this.#sources.get(expectedSource.id);
     if (current === undefined) return { status: "not_found" };
     if (current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" };
+    if (stableStringify(current) !== stableStringify(expectedSource)) return { status: "conflict" };
     try {
       assertWorkspaceManagementAdmission(
         this.#workspaces.has(current.workspaceId) ? this.#workspaceManagement.get(current.workspaceId) : undefined,
@@ -7923,6 +7924,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     } catch (error) {
       if (error instanceof WorkspaceManagementAdmissionConflictError) return { status: "conflict" };
       throw error;
+    }
+    if (current.ownerCapsuleId || current.retiringAt ||
+      [...this.#sourceSnapshots.values()].some((snapshot) => snapshot.sourceId === current.id) ||
+      [...this.#runs.values()].some((run) => isSourceSyncRunRecord(run) && run.sourceId === current.id)) {
+      return { status: "blocked", blockers: ["source_retirement_required"] };
     }
     for (const capsule of this.#capsules.values()) {
       if (capsule.sourceId === current.id && capsule.status !== "destroyed") {

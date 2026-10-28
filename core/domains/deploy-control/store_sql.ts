@@ -9987,6 +9987,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       const current = currentRow ? sourceFromPgRow(currentRow) : undefined;
       if (!current) return { status: "not_found" as const };
       if (current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" as const };
+      if (stableStringify(current) !== stableStringify(expectedSource)) return { status: "conflict" as const };
+      if (current.ownerCapsuleId || current.retiringAt) {
+        return { status: "blocked" as const, blockers: ["source_retirement_required"] };
+      }
+      const history = await transaction.query(
+        `select 1 from takosumi_source_snapshots where source_id = $1
+         union all
+         select 1 from takosumi_runs where source_id = $1 and kind = 'source_sync'
+         limit 1`, [current.id],
+      );
+      if (history.rows.length > 0) {
+        return { status: "blocked" as const, blockers: ["source_retirement_required"] };
+      }
       const refCapsule = await transaction.query(
         `select 1 from takosumi_capsules where source_id = $1 and status <> 'destroyed' limit 1`,
         [expectedSource.id],
