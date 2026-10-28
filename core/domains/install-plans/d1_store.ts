@@ -130,31 +130,16 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
-  async hasInFlightRevisionForCapsule(
-    capsuleId: string,
-    workspaceId: string,
-  ): Promise<boolean> {
-    const row = await this.#db
-      .prepare(
-        `select exists (
-           select 1 from git_install_plans
-            where workspace_id = ?
-              and json_extract(record_json, '$.operation') = 'revision'
-              and json_extract(record_json, '$.capsuleId') = ?
-              and phase not in ('failed', 'reviewable')
-         ) as present`,
-      )
-      .bind(workspaceId, capsuleId)
-      .first<{ readonly present: number }>();
-    return row?.present === 1;
-  }
-
   async preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,
-    options: { readonly includeInstall: boolean },
+    options: {
+      readonly includeInstall: boolean;
+      readonly currentStateGeneration: number;
+    },
   ): Promise<PreparingGitPlanCoordinator | undefined> {
-    // A row counts until it creates its Plan Run; install rows only while the
+    // A row counts until it creates its Plan Run; a revision row only while
+    // its base is the current state generation; install rows only while the
     // Capsule was never applied.
     const row = await this.#db
       .prepare(
@@ -167,17 +152,25 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
             and phase not in ('failed', 'reviewable', 'discarded')
             and json_extract(record_json, '$.planRunId') is null
             and json_extract(record_json, '$.workspaceManagementAuthority') is not null
-            and (? = 1 or json_extract(record_json, '$.operation') = 'revision')
+            and (case when json_extract(record_json, '$.operation') = 'revision'
+                      then json_type(record_json, '$.revision.base.capsuleStateGeneration') = 'integer'
+                        and json_extract(record_json, '$.revision.base.capsuleStateGeneration') = ?
+                      else ? = 1 end)
           order by updated_at desc, id desc
           limit 1`,
       )
-      .bind(workspaceId, capsuleId, options.includeInstall ? 1 : 0)
+      .bind(
+        workspaceId,
+        capsuleId,
+        options.currentStateGeneration,
+        options.includeInstall ? 1 : 0,
+      )
       .first<{
         readonly id: string;
         readonly phase: PreparingGitPlanCoordinator["phase"];
         readonly operation: string | null;
         readonly actor_subject: string;
-          readonly updated_at: string;
+        readonly updated_at: string;
       }>();
     return row
       ? {

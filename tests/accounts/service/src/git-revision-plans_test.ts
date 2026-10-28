@@ -11,7 +11,11 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
+import {
+  GIT_REVISION_PREPARATION_STALL_AFTER_MS,
+  InMemoryGitInstallPlanStore,
+  type StoredGitInstallPlan,
+} from "../../../../core/domains/install-plans/store.ts";
 import type { CapsuleCompatibilityReport } from "../../../../contract/capsules.ts";
 import type { Capsule, InstallConfig } from "../../../../contract/install-configs.ts";
 import type { Run } from "../../../../contract/runs.ts";
@@ -324,6 +328,68 @@ test("a second version change waits while one is being prepared, and is admitted
     { "idempotency-key": "revision-second" },
   );
   expect(later.status).toBe(201);
+});
+
+/**
+ * A revision coordinator row left behind by an earlier request, stored in a
+ * fresh fixture as `change` rewrites it, then a new version change.
+ */
+async function newRevisionBeside(
+  change: (row: StoredGitInstallPlan) => StoredGitInstallPlan,
+): Promise<Response> {
+  const earlier = revisionFixture();
+  const created = await earlier.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v2" },
+    { "idempotency-key": "revision-left-behind" },
+  );
+  expect(created.status).toBe(201);
+  const original = (await earlier.planStore.get((await created.json()).revisionPlan.id))!;
+  const fixture = revisionFixture();
+  expect((await fixture.planStore.create(change(original), original.workspaceManagementAuthority)).status)
+    .toBe("created");
+  return await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans",
+    "POST",
+    { ref: "release/v3" },
+    { "idempotency-key": "revision-next" },
+  );
+}
+
+function idleFor(row: StoredGitInstallPlan, ms: number): StoredGitInstallPlan {
+  const at = new Date(Date.now() - ms).toISOString();
+  return { ...row, createdAt: at, updatedAt: at };
+}
+
+test("a version change that stopped moving no longer blocks a new one", async () => {
+  // Inside the stall window it still holds the app.
+  expect((await newRevisionBeside((row) => idleFor(row, GIT_REVISION_PREPARATION_STALL_AFTER_MS - 60_000))).status)
+    .toBe(409);
+  expect((await newRevisionBeside((row) => idleFor(row, GIT_REVISION_PREPARATION_STALL_AFTER_MS + 60_000))).status)
+    .toBe(201);
+});
+
+test("a failed version change never blocks a new one", async () => {
+  const failed = await newRevisionBeside((row) => ({
+    ...row,
+    phase: "failed",
+    diagnostic: { code: "revision_identity_changed", message: "The pinned base changed." },
+    completedAt: row.updatedAt,
+  }));
+  expect(failed.status).toBe(201);
+});
+
+test("a version change pinned to an older state does not block a new one", async () => {
+  // Another change was applied after it started: its reconcile can only fail.
+  const moved = await newRevisionBeside((row) => ({
+    ...row,
+    revision: {
+      ...row.revision!,
+      base: { ...row.revision!.base, capsuleStateGeneration: row.revision!.base.capsuleStateGeneration - 1 },
+    },
+  }));
+  expect(moved.status).toBe(201);
 });
 
 test("Git revision reconciliation uses the original private management authority", async () => {

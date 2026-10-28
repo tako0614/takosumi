@@ -805,7 +805,11 @@ test("an install attempt left in planning after its Plan Run exists does not hol
 });
 
 /** A revision coordinator row for the applied fixture Capsule. */
-async function putRevisionRow(h: Awaited<ReturnType<typeof fixture>>, updatedAt: string): Promise<void> {
+async function putRevisionRow(
+  h: Awaited<ReturnType<typeof fixture>>,
+  updatedAt: string,
+  baseGeneration = 1,
+): Promise<void> {
   const authority = { workspaceId: WORKSPACE, managementState: "active" as const, managementEpoch: 1 };
   const created = await h.core.gitInstallPlans.create(
     {
@@ -823,7 +827,7 @@ async function putRevisionRow(h: Awaited<ReturnType<typeof fixture>>, updatedAt:
       revision: {
         targetRef: "v2",
         base: {
-          capsuleStateGeneration: 1,
+          capsuleStateGeneration: baseGeneration,
           installConfigId: "cfg_app_route",
           installConfigDigest: "sha256:config",
           sourceDefaultRef: "main",
@@ -859,6 +863,18 @@ test("a version change being prepared holds the app; one that stopped moving is 
     state: "installed",
     progress: { revisionPreparing: false, revisionPlanId: "rp_app_route" },
   });
+});
+
+test("a version change pinned to an older state is neither preparing nor offered to continue", async () => {
+  // Another change was applied after these rows started (the fixture Capsule
+  // is at generation 1): their reconcile can only fail on the moved base.
+  for (const updatedAt of [new Date().toISOString(), new Date(Date.now() - 20 * 60 * 1000).toISOString()]) {
+    const h = await fixture();
+    await putRevisionRow(h, updatedAt, 0);
+    const app = await h.app();
+    expect(app).toMatchObject({ state: "installed", progress: { revisionPreparing: false } });
+    expect(app.progress.revisionPlanId).toBeUndefined();
+  }
 });
 
 test("an applied app is never held by an install row", async () => {

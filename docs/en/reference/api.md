@@ -330,14 +330,22 @@ the attempt waits for its creator's input, `progress.installPlanAwaitingInput`
 is `viewer` (the caller started it) or `other`, and reconciling does not
 advance it. A revision coordinator that stopped before creating its Plan Run is
 named in `progress.revisionPlanId` and continues with
-`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`. Any Workspace member
+`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`. A revision
+coordinator counts only while the state generation it started from is still
+the Capsule's current one; after another change was applied its reconcile can
+only fail, so it is neither preparing nor named. Any Workspace member
 may reconcile these; the Plan Run they create records the coordinator itself
 (`git-install-plan:<id>` / `git-revision-plan:<id>`) as its actor, not the
 member who advanced it. While a revision coordinator for the same Capsule is
-still preparing its Plan (and has not stalled), another
-`POST /api/v1/capsules/{capsuleId}/revision-plans` is refused with 409
-(`details.reason: "revision_in_progress"`, `details.revisionPlanId`); an exact
-Idempotency-Key replay is still answered.
+still preparing its Plan (the same rule as `progress.revisionPreparing`: no Plan
+Run yet, not stalled, management authority recorded, based on the current
+generation), another `POST /api/v1/capsules/{capsuleId}/revision-plans` is
+refused with 409 (`details.reason: "revision_in_progress"`,
+`details.revisionPlanId`); an exact Idempotency-Key replay is still answered.
+Configuration changes (`configuration-plans`) and configuration re-adoption
+(`install-config-re-adoptions`) are refused with 409
+(`details.reason: "capsule_install_config_rebind_busy"`) under that same rule
+only.
 An uninstall record counts only while the Capsule is `uninstalled`, or while it
 is `error` after a provider-reached teardown failure and its newest Run is still
 a removal. A recorded `blockedReason` yields `uninstall_blocked` in either

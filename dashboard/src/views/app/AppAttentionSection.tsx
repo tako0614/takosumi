@@ -15,7 +15,12 @@ import type {
   CapsuleAppView,
   RunType,
 } from "../../lib/control-api.ts";
-import { appViewIncomplete, primaryProblem, providerName } from "../../lib/app-page.ts";
+import {
+  appVersionChangeBusy,
+  appViewIncomplete,
+  primaryProblem,
+  providerName,
+} from "../../lib/app-page.ts";
 import { appUninstallBanner, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { t, type MessageKey } from "../../i18n/index.ts";
@@ -131,6 +136,9 @@ export default function AppAttentionSection(props: {
   // A version change whose preparation stopped (its client went away).
   const stalledRevision = () =>
     props.reviewRunId === undefined ? app().progress.revisionPlanId : undefined;
+  // Another change under way or waiting for review goes first: continuing the
+  // stopped one beside it would race it to a second Plan.
+  const revisionWaits = () => appVersionChangeBusy(app());
   const screenProblemsUnknown = () => appViewIncomplete(app(), "screen_problems");
   const hasError = () => app().problems.some((problem) => problem.severity === "error");
   const visible = () =>
@@ -396,13 +404,17 @@ export default function AppAttentionSection(props: {
             {(revisionPlanId) => (
               <article class="ap-problem ap-problem-info" data-problem="revision-stalled">
                 <strong>{t("app.progress.revisionStalled")}</strong>
-                <p>{t("app.progress.revisionStalledHint")}</p>
+                <p>
+                  {revisionWaits()
+                    ? t("app.progress.revisionStalledWaits")
+                    : t("app.progress.revisionStalledHint")}
+                </p>
                 <div class="ap-row-actions">
                   <Button
                     variant="secondary"
                     type="button"
                     busy={props.startingAction === "continue_revision"}
-                    disabled={props.busy}
+                    disabled={props.busy || revisionWaits()}
                     onClick={() => props.actions.continueRevision(revisionPlanId())}
                   >
                     {t("app.progress.continueRevision")}

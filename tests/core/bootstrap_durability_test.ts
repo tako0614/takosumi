@@ -24,8 +24,6 @@ function declaredDurableTestGitInstallPlanStore(): GitInstallPlanStore {
     create: (plan, authority) => store.create(plan, authority),
     get: (id) => store.get(id),
     getByScope: (scope) => store.getByScope(scope),
-    hasInFlightRevisionForCapsule: (id, workspaceId) =>
-      store.hasInFlightRevisionForCapsule(id, workspaceId),
     preparingCoordinatorForCapsule: (id, workspaceId, options) =>
       store.preparingCoordinatorForCapsule(id, workspaceId, options),
     hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),

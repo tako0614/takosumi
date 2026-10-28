@@ -138,30 +138,18 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
-  async hasInFlightRevisionForCapsule(
-    capsuleId: string,
-    workspaceId: string,
-  ): Promise<boolean> {
-    const result = await this.#client.query<{ readonly present: boolean }>(
-      `select exists (
-         select 1 from ${TABLE}
-          where workspace_id = $2
-            and record_json ->> 'operation' = 'revision'
-            and record_json ->> 'capsuleId' = $1
-            and phase not in ('failed', 'reviewable')
-       ) as present`,
-      [capsuleId, workspaceId],
-    );
-    return result.rows[0]?.present === true;
-  }
-
   async preparingCoordinatorForCapsule(
     capsuleId: string,
     workspaceId: string,
-    options: { readonly includeInstall: boolean },
+    options: {
+      readonly includeInstall: boolean;
+      readonly currentStateGeneration: number;
+    },
   ): Promise<PreparingGitPlanCoordinator | undefined> {
-    // A row counts until it creates its Plan Run; install rows only while the
-    // Capsule was never applied.
+    // A row counts until it creates its Plan Run; a revision row only while
+    // its base is the current state generation; install rows only while the
+    // Capsule was never applied. `->>` reads JSON null authority as absent,
+    // like D1's json_extract.
     const result = await this.#client.query<{
       readonly id: string;
       readonly phase: PreparingGitPlanCoordinator["phase"];
@@ -177,11 +165,14 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
           and record_json ->> 'capsuleId' = $1
           and phase not in ('failed', 'reviewable', 'discarded')
           and record_json ->> 'planRunId' is null
-          and record_json -> 'workspaceManagementAuthority' is not null
-          and ($3::boolean or record_json ->> 'operation' = 'revision')
+          and record_json ->> 'workspaceManagementAuthority' is not null
+          and (case when record_json ->> 'operation' = 'revision'
+                    then record_json #> '{revision,base,capsuleStateGeneration}' =
+                      to_jsonb($4::bigint)
+                    else $3::boolean end)
         order by updated_at desc, id desc
         limit 1`,
-      [capsuleId, workspaceId, options.includeInstall],
+      [capsuleId, workspaceId, options.includeInstall, options.currentStateGeneration],
     );
     const row = result.rows[0];
     return row

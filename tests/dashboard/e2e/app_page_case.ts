@@ -813,7 +813,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const ID = "cap_states_e";
       const NAME = "State Echo";
       const now = "2026-10-20T00:00:00.000Z";
-      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "revision_stalled" | "review_pending" | "incomplete" | "uninstalled";
+      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "awaiting_input" | "revision_stalled" | "revision_stalled_behind_review" | "review_pending" | "incomplete" | "uninstalled";
       let scene: Scene = "uninstall_scheduled";
       let viewUnavailable = false;
       const capsule = () => ({
@@ -900,6 +900,13 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               screens: [screen],
               version: { current: { sourceSnapshotId: "snap_e", ref: "v1", path: ".", commit: PORTABLE_SOURCE_COMMIT }, updateAvailable: true, stale: false, autoUpdate: false },
               progress: { revisionPreparing: false, revisionPlanId: "grp_states_e" },
+            });
+          case "revision_stalled_behind_review":
+            // A newer change waits for its review while an older one stopped.
+            return appView(ID, NAME, {
+              screens: [screen],
+              version: { current: { sourceSnapshotId: "snap_e", ref: "v1", path: ".", commit: PORTABLE_SOURCE_COMMIT }, updateAvailable: true, stale: false, autoUpdate: false },
+              progress: { revisionPreparing: false, revisionPlanId: "grp_states_e", review: { runId: revisionPlanRun.id, runType: "plan" } },
             });
           case "review_pending":
             return appView(ID, NAME, {
@@ -1098,6 +1105,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(stalledRevision).toContainText("Getting an update ready stopped partway");
       await stalledRevision.getByRole("button", { name: "Continue", exact: true }).click();
       await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and update", exact: true })).toBeEnabled();
+
+      // A stopped version change waits behind a change under review instead
+      // of racing it to a second plan.
+      scene = "revision_stalled_behind_review";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      const behindReview = problems.locator('[data-problem="revision-stalled"]');
+      await expect(behindReview).toContainText("Another change is under way or waiting for review.");
+      await expect(behindReview.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
 
       // While a change waits for its review, no second version change starts.
       scene = "review_pending";

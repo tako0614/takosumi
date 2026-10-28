@@ -267,6 +267,10 @@ describe("installed app page", () => {
     expect(continueRevision).toContain("(await advanceGitRevisionPlan(revisionPlanId)).revisionPlan.planRunId");
     expect(continueRevision).toContain('"update",');
     expect(attention).toContain("props.actions.continueRevision(revisionPlanId())");
+    // Continuing a stopped one waits too while another change is under way
+    // or waiting for review.
+    expect(attention).toContain("const revisionWaits = () => appVersionChangeBusy(app());");
+    expect(attention).toContain("disabled={props.busy || revisionWaits()}");
     // Update, check, choose a version and go back all wait.
     expect(page).toContain("reviewBusy={reviewBusy() || versionChangeBusy(view())}");
     expect(page).toContain('view.state === "installed" && !versionChangeBusy(view);');
