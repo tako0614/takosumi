@@ -543,6 +543,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await review.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
       await expect(planReview(page)).toContainText("Installing");
+      // What is being applied can no longer be changed on the screen.
+      await expect(installSheet(page).getByRole("textbox", { name: domainField })).toBeDisabled();
+      await expect(installSheet(page).getByTestId("install-app-name")).toBeDisabled();
       // A reload follows the Apply already started for this Plan; it never
       // offers Allow and install again.
       await page.reload();

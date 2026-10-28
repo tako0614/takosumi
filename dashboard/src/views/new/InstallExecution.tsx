@@ -135,6 +135,8 @@ interface Props {
    * held and this says why.
    */
   readonly blockedReason?: string;
+  /** An Apply was started (or may have been): what it applies can no longer change. */
+  readonly onApplyStarted?: () => void;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -336,6 +338,9 @@ export default function InstallExecution(props: Props) {
   const [error, setError] = createSignal<string | null>(null);
   const [hasSeenApply, setHasSeenApply] = createSignal(false);
   createEffect(() => { if (isApplyRun(runLatest()?.type)) setHasSeenApply(true); });
+  createEffect(() => {
+    if (hasSeenApply() || applying() || applyUnconfirmed()) props.onApplyStarted?.();
+  });
 
   createEffect(() => {
     const id = runId();

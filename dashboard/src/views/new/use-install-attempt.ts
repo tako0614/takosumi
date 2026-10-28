@@ -258,6 +258,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [planVersion, setPlanVersion] = createSignal<number>();
   /** The install is being prepared again until its new Plan (or the person) is needed. */
   const [replanning, setReplanning] = createSignal(false);
+  /** An Apply started: the answers it applies can no longer change here. */
+  const [locked, setLocked] = createSignal(false);
   const settleMs = options.settleMs ?? SETTLE_MS;
   /** The attempt and edit a confirmation was sent for on its own, never twice. */
   let autoSentFor: string | undefined;
@@ -356,6 +358,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setPlanVersion(undefined);
     setReplanning(false);
     setArmed(false);
+    setLocked(false);
     autoSentFor = undefined;
   };
 
@@ -734,6 +737,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   /** The repository has several apps: the person's choice, inline. */
   const chooseModule = async (modulePath: string): Promise<void> => {
+    if (locked()) return;
     edited();
     const next = await answer({ modulePath }, "answer");
     if (next) drive();
@@ -748,6 +752,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     requirement: GitInstallPlanConnectionRequirement,
     connectionId: string,
   ): Promise<boolean> => {
+    if (locked()) return false;
     const current = response();
     if (current?.userAction.kind === "provide_inputs") {
       edited();
@@ -798,6 +803,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   /** Typing in the name field; it counts as a change once the field is left. */
   const setNameDraft = (value: string | undefined) => {
+    if (locked()) return;
     setNameDraftSignal(value);
     setNameEditing(value !== undefined);
   };
@@ -809,6 +815,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    */
   const saveName = async (): Promise<void> => {
     setNameEditing(false);
+    if (locked()) return;
     const typed = nameDraft()?.trim();
     if (typed === undefined) return;
     const current = response();
@@ -827,6 +834,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   /** A setting typed in the screen; it stays in this page's memory only. */
   const setDraft = (name: string, value: string) => {
+    if (locked()) return;
     setDrafts((current) => ({ ...current, [name]: { value, touched: true } }));
     edited();
   };
@@ -838,7 +846,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    */
   const changeVersion = (text: string) => {
     const current = response();
-    if (!current || mutating()) return;
+    if (!current || mutating() || locked()) return;
     const next = text.trim();
     const shown = refDraft() ?? current.installPlan.source.ref;
     if (next === shown || (next === "" && shown === "HEAD")) return;
@@ -990,7 +998,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   // An out-of-date Plan is prepared again once edits settle, once per edit.
   createEffect(() => {
-    if (!outdated()) return;
+    if (!outdated() || locked()) return;
     const stage = view().stage;
     const version = editVersion();
     if (!INSTALL_SCREEN_STAGES.has(stage) || stage === "starting") return;
@@ -1095,6 +1103,15 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
+  /**
+   * An Apply started for the reviewed Plan: from now on nothing on the
+   * screen changes what is being installed. The screen keeps showing what
+   * it applies until the install finishes.
+   */
+  const lockAnswers = () => {
+    if (!locked()) setLocked(true);
+  };
+
   /** The install is done: nothing typed for it stays in memory. */
   const finish = () => {
     halt();
@@ -1120,6 +1137,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     refDraft,
     outdated,
     replanning,
+    locked,
+    lockAnswers,
     start,
     resume,
     chooseModule,

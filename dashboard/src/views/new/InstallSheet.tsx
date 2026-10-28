@@ -263,6 +263,7 @@ function PlanReview(props: {
             initialRunId={entryRunId()}
             capsuleId={props.action.capsuleId}
             blockedReason={block() ? t(APPLY_WAIT_TEXT[block()!]) : undefined}
+            onApplyStarted={() => props.attempt.lockAnswers()}
             onDone={() => props.onDone(props.action.capsuleId)}
             restartLabel={t("installStore.problem.restart")}
             onRestart={async () => {
@@ -296,6 +297,8 @@ export function InstallScreen(props: {
     return Boolean(current && props.attempt.response()?.userAction.kind === "provide_inputs" && awaitingResubmission(current));
   };
   const busy = () => props.attempt.mutating() !== undefined;
+  /** An Apply started: the answers on this screen are what it applies. */
+  const locked = () => props.attempt.locked();
   // The provider row whose connection form is open inside the screen.
   const [connecting, setConnecting] = createSignal<string>();
   const [rowErrors, setRowErrors] = createSignal<Readonly<Record<string, string>>>({});
@@ -412,7 +415,7 @@ export function InstallScreen(props: {
           <FormField label={t("installStore.destination")} required>
             <Select
               value={selected()?.id ?? ""}
-              disabled={busy()}
+              disabled={busy() || locked()}
               onChange={async (event) => {
                 const element = event.currentTarget;
                 // A refused choice must not stay shown: return to the
@@ -433,7 +436,7 @@ export function InstallScreen(props: {
             </Select>
           </FormField>
         </Show>
-        <Show when={!resubmitting()}>
+        <Show when={!resubmitting() && !locked()}>
           <div class="iv-action-row">
             <Button
               type="button"
@@ -528,6 +531,7 @@ export function InstallScreen(props: {
               value={draftText(variable())}
               placeholder={variable().sensitive ? undefined : variable().placeholder}
               spellcheck={false}
+              disabled={locked()}
               data-variable-name={variable().name}
               onInput={(event) => update(event.currentTarget.value)}
             />
@@ -538,6 +542,7 @@ export function InstallScreen(props: {
           <Match when={variable().type === "boolean"}>
             <Select
               value={draftText(variable())}
+              disabled={locked()}
               data-variable-name={variable().name}
               onChange={(event) => update(event.currentTarget.value)}
             >
@@ -554,6 +559,7 @@ export function InstallScreen(props: {
               value={draftText(variable())}
               spellcheck={false}
               autocomplete="off"
+              disabled={locked()}
               data-variable-name={variable().name}
               onInput={(event) => update(event.currentTarget.value)}
             />
@@ -645,7 +651,7 @@ export function InstallScreen(props: {
             <Input
               value={nameText()}
               spellcheck={false}
-              disabled={!sheet() || resubmitting()}
+              disabled={!sheet() || resubmitting() || locked()}
               data-testid="install-app-name"
               onInput={(event) => attempt().setNameDraft(event.currentTarget.value)}
               onBlur={() => void attempt().saveName()}
@@ -665,7 +671,7 @@ export function InstallScreen(props: {
               value={versionText()}
               placeholder={props.fromStore ? t("installStore.sourceRefStable") : undefined}
               spellcheck={false}
-              disabled={busy() || resubmitting() || !plan()}
+              disabled={busy() || resubmitting() || !plan() || locked()}
               data-testid="install-version"
               onInput={(event) => setVersionText(event.currentTarget.value)}
               onBlur={commitVersion}

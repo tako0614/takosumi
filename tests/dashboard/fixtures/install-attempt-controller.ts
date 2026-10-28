@@ -859,4 +859,35 @@ describe("install attempt controller", () => {
     expect(calls.some(({ name }) => /apply|approve/u.test(name))).toBe(false);
     page.dispose();
   });
+  test("once an Apply started, nothing on the screen changes what is installed", async () => {
+    let generation = 0;
+    reset({
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, generation),
+      reconcileGitInstallPlan: async () => {
+        generation += 1;
+        return generation === 1
+          ? respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_b" }], variables: [{ name: "domain", type: "string", required: false, sensitive: false }], missing: [] }), generation)
+          : respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, generation);
+      },
+      answerGitInstallAttempt: async () => {
+        generation += 1;
+        return respond({ kind: "wait", phase: "planning" }, generation);
+      },
+    });
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    page.attempt.setDraft("domain", "kept.example.com");
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    page.attempt.lockAnswers();
+    page.attempt.setDraft("domain", "late.example.com");
+    page.attempt.setNameDraft("late-name");
+    expect(await page.attempt.chooseConnection(requirement, "conn_a")).toBe(false);
+    page.attempt.changeVersion("v9.9.9");
+    await pause(40);
+    expect(page.attempt.outdated()).toBe(false);
+    expect(page.attempt.drafts()).toEqual({ domain: { value: "kept.example.com", touched: true } });
+    expect(page.attempt.nameDraft()).toBeUndefined();
+    expect(calls.filter(({ name }) => name === "discardGitInstallAttempt" || name === "createGitInstallAttempt")).toHaveLength(1);
+    page.dispose();
+  });
 });

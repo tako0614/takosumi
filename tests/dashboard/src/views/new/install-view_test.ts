@@ -51,7 +51,7 @@ describe("attempt-driven install page", () => {
     // Preparing again runs only for an out-of-date Plan, once per edit.
     expect(controller.match(/void replan\(\)/gu)).toHaveLength(1);
     const replanEffect = between(controller, "// An out-of-date Plan is prepared again", "// Preparing again ends");
-    expect(replanEffect).toContain("if (!outdated()) return;");
+    expect(replanEffect).toContain("if (!outdated() || locked()) return;");
     expect(replanEffect).toContain("version <= replannedVersion");
     expect(view).toContain("void attempt.start(");
     expect(view.match(/attempt\.start\(/gu)).toHaveLength(1);
@@ -73,6 +73,9 @@ describe("attempt-driven install page", () => {
     // An out-of-date Plan is never applied.
     expect(install).toContain("if (props.blockedReason ||");
     expect(execution.match(/void install\(\)/gu)).toHaveLength(1);
+    // Once an Apply started, the screen's answers are locked.
+    expect(sheet).toContain("onApplyStarted={() => props.attempt.lockAnswers()}");
+    expect(execution).toContain("if (hasSeenApply() || applying() || applyUnconfirmed()) props.onApplyStarted?.();");
     // Before the Plan, 「許可してインストール」 is shown but cannot be pressed.
     const preview = between(sheet, "function PlanPreview(", "function PlanReview(");
     expect(preview).toContain('<Button type="button" variant="primary" size="lg" disabled>');
