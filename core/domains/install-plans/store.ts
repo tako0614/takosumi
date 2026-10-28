@@ -55,6 +55,8 @@ export interface GitInstallAttemptFacts {
     readonly resources: readonly CapsuleResourceSummary[];
     readonly requirements: readonly GitInstallAttemptRequirement[];
     readonly variables: readonly GitInstallPlanVariablePresentation[];
+    /** Name only; captured for the accepted repository OIDC endpoint input. */
+    readonly repositoryAccountsOidcPublicUrlVariable?: string;
     readonly providerPolicy?: GitInstallAttemptProviderPolicy;
   };
 }
