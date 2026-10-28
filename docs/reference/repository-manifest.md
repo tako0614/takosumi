@@ -44,6 +44,7 @@ manifest は次のように扱われます。
 | `takosumi.com/v2.2` | `modules`、`defaultModule`（任意） | v2.1 + `requires[].kind: interface.consume` |
 | `takosumi.com/v2.3` | `modules`、`defaultModule`（任意） | v2.2 + `sourceBuild`（任意）               |
 | `takosumi.com/v2.4` | `modules`              | v2.3 + OIDC の値を実行時の binding で渡す        |
+| `takosumi.com/v2.5` | `modules`              | v2.4 + 明示した context ID 入力。Workspace を含む命名は不可 |
 
 どの階層の object も、書ける項目が決まっています。表や各節にない項目、`$schema`、古い
 `schemaVersion: takosumi.install-ux/v1` を書くと拒否されます。
@@ -52,7 +53,8 @@ manifest は次のように扱われます。
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json) と
 [`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json) と
 [`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json) と
-[`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json)
+[`repository-manifest-v2.4.schema.json`](/schemas/repository-manifest-v2.4.schema.json) と
+[`repository-manifest-v2.5.schema.json`](/schemas/repository-manifest-v2.5.schema.json)
 です。Schema が確かめるのは形だけで、Takosumi の検査と完全には一致しません。項目どうしの重複、
 JSON の入れ子の深さ（最大 32）、秘密や権限を表す語（下の「Authority と secret の境界」）は、Takosumi が
 さらに確かめ、合わなければ受け付けません。
@@ -133,13 +135,49 @@ scan の結果全体を `invalid` にします。`../` も、選んだ module �
 | `advanced`    | no   | boolean                                                      |
 | `secret`      | no   | 利用者の入力を、秘密として用意して渡す（secret materialization）印 |
 
-`source.kind` は `user`、`capsule_name`、`workspace_scoped_capsule_name`、`module_default` の
-どれかです。`secret: true` を付けられるのは `user` だけで、`module_default` には `required: true` を
+v1〜v2.4 の `source.kind` は `user`、`capsule_name`、`workspace_scoped_capsule_name`、`module_default` の
+どれかです。v2.5 は `workspace_scoped_capsule_name` を受け付けません。`secret: true` を付けられるのは `user` だけで、`module_default` には `required: true` を
 付けられません。`env` のような環境変数の map を、秘密や `initial_secret` として公開することはできません。
 入力の名前と role は module の中で重複できず、名前の前後の空白は取り除かずに、正規の形でなければ
 拒否します。互換性の確認結果で、正確に同じ名前の変数があること、型、既定値の有無を確かめられなければ採用されません。
 表示用の label、helper、placeholder は、よく知られた認証情報らしい形を検査しますが、「Use a token
 value」のようなふつうの文章は通します。
+
+### v2.5 の context ID 入力
+
+v2.5 は、v2.4 の提供 Interface、`sourceBuild`、runtime binding の形を引き継ぎます。
+v2.5 だけで、`source: { "kind": "workspace_id" }` または
+`source: { "kind": "capsule_id" }` を宣言できます。書ける項目は `name`、`source`、
+`label`、任意の `type: "string"` だけです。ID の値は書きません。`name` は調査で確認できた
+root の `string` 変数と正確に一致する必要があり、`.` を含む path、`env`、
+`__proto__`、`constructor`、`prototype` は拒否されます。たとえば次の入力は、
+root に `app_capsule_id` という文字列変数がある場合に使えます。
+
+```json
+{
+  "name": "app_capsule_id",
+  "source": { "kind": "capsule_id" },
+  "label": { "ja": "Capsule ID", "en": "Capsule ID" }
+}
+```
+
+これらは利用者が編集する入力欄にならず、feature、確認した入力値、requirement の渡し先にも
+使えません。変換結果は値を含まない `InstallConfig.installContextVariableMapping` として保存され、
+Run は認証済みの現在の Capsule とその Workspace の値を既存の規則で渡します。別の権限や認証情報を
+与えるものではありません。運用側の固定値・編集欄・context mapping と渡し先が重なる場合は拒否し、
+同じ渡し先への同じ context source だけを再採用できます。無関係な mapping は保持され、採用した
+mapping は元の SourceSnapshot・module に結ばれた派生 config の digest に含まれます。
+
+`workspace_id` は、既存アプリとの互換のために v2.5 へ導入した時点から非推奨です。Workspace 依存は
+退役する方針で、後続の契約版ではこの source を削除します。旧版や未知の将来版へ自動追加しません。
+保存済み v2.5 config の mapping も、明示的な移行・退役の対象です。将来の parser が新規宣言を
+拒否するだけでは保存済み mapping は移行されず、無期限に実行できることも保証しません。
+
+新しい連携で Capsule 自体の識別子が必要なら `capsule_id` を使います。これは Workspace ID の別名では
+ありません。Workspace 固有の認証・権限に依存する既存アプリは、アプリ所有者がその実契約を移行してから
+`workspace_id` 入力を除く必要があります。ID の置換だけでは、現行の Workspace guard を満たしません。
+v2.5 の parser は依然として有効な `workspace_id` 宣言を受理するため、非推奨を新規利用の技術的な拒否とは
+扱いません。値と権限の源流は現在の認証済み Capsule／membership のままです。
 
 ## `requires`
 
@@ -162,7 +200,7 @@ binding、無い変数や文字列でない変数、運用している人が許�
 `identity.oidc` は、確認を経た Git の OpenTofu のアプリが、製品や provider に依存せずに求められる、
 Takosumi Accounts の機能（capability）です。選んだ module には、`identity.oidc` と `http.endpoint` が
 ちょうど 1 件ずつ必要です。OIDC の `deliver` はふつう `variables` で、slot は `accountsUrl`、`issuerUrl`、
-`clientId`、`redirectUri` のちょうど 4 つです。v2.4 では `bindings` でも渡せ、その slot は `issuerUrl`、
+`clientId`、`redirectUri` のちょうど 4 つです。v2.4 と v2.5 では `bindings` でも渡せ、その slot は `issuerUrl`、
 `clientId`、`ownerSubject`、`redirectUri` のちょうど 4 つです。endpoint は `url` を、別の文字列の変数に
 渡します。OIDC の scopes は重複がなく `openid` を含み、データベースに保存された
 `InstallConfig.policy.repositoryInstallUx` で明示的に許可された `allowedOidcScopes` の中になければ
@@ -171,7 +209,7 @@ Takosumi Accounts の機能（capability）です。選んだ module には、`i
 `variables` で渡す場合、変更の確認（Plan）は、endpoint の `url` 変数から、パス、query、fragment、
 認証情報を含まない、正規の HTTPS の origin を読めなければ止まります。その origin と確認済みの
 `callbackPath` から redirect URI を作り、4 つの変数と権限の digest を、Plan に付ける記録（sidecar）に
-固定します。`bindings` で渡す場合（v2.4）は、4 つの値を plan、state、ログに書かず、デプロイ（Apply）の
+固定します。`bindings` で渡す場合（v2.4、v2.5）は、4 つの値を plan、state、ログに書かず、デプロイ（Apply）の
 ときだけ runner に渡します。
 
 Plan と `apply_check` は Accounts を変更しません。最後の Apply だけが、その Capsule に結びついた公開
@@ -338,7 +376,8 @@ bearer や代入の形、URI に埋め込んだ認証情報など、よく知ら
 `apiVersion` の値は、書ける項目が決まった schema を表します。既にある版の項目や意味を、後から広げる
 ことはありません。v2.1〜v2.3 で公開済みの `defaultModule` は、互換のための目安として残します。v2.2 は
 provider に依存しない `interface.consume`、v2.3 は上限があり認証情報を含まない `sourceBuild`、v2.4 は
-OIDC の値を実行時の binding で渡す方法を加えた版です。既存の module、提供する Interface、権限の意味は
+OIDC の値を実行時の binding で渡す方法を加えた版です。v2.5 は前記の context ID 入力を
+明示的に加え、`workspace_scoped_capsule_name` を受け付けない版です。既存の module、提供する Interface、権限の意味は
 変えていません。知らない版や項目は受け付けません。互換のない語彙や権限の考え方の変更には、別の schema
 の識別子が必要です。
 

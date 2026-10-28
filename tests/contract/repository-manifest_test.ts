@@ -108,7 +108,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   ).toEqual({
     ok: false,
     error:
-      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, takosumi.com/v2.3, or takosumi.com/v2.4",
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, takosumi.com/v2.3, takosumi.com/v2.4, or takosumi.com/v2.5",
   });
   expect(
     parseRepositoryManifestText(
