@@ -499,6 +499,12 @@ permissions、値を含まない候補、`choice`、`autoSelected` を返しま�
 `[{requirementKey,choice:{kind:"later"}}]` という完全な回答一覧です。提供元の ID は manifest ではなく
 この選択に保存し、Capsule 作成の直後に固定した InterfaceLink を作ります。以後は候補を解決し直しません。
 
+表示した自動選択を確認するときは、`continue: true` と一緒に
+`observedInterfaces: [{requirementKey,interfaceId}]` を返します。明示した `interfaceLinks` が
+ある requirement はそちらを優先し、それ以外で表示した ID が唯一の候補でなくなっていれば
+409 `interface_candidate_unavailable` を返します。最新の sheet を GET して確認し直してください。
+この観測情報は ID だけで、`options` への保存や権限の付与は行いません。
+
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の
 管理 epoch の変更（`workspace_management_changed`）は `invalidated` と `userAction: retry`
