@@ -184,6 +184,7 @@ import type {
   RunEventsResponse,
   RunLogsResponse,
   RunServiceDataRestoreResult,
+  RunType,
 } from "takosumi-contract/runs";
 import { IN_FLIGHT_RUN_STATUSES, runIsInFlight } from "takosumi-contract/runs";
 import type {
@@ -2530,6 +2531,18 @@ export class OpenTofuController {
     options: { readonly limit?: number; readonly cursor?: string } = {},
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
     return await this.#runQuery.listRunsPage(workspaceId, options);
+  }
+
+  async listCapsuleRunsPage(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      readonly types?: readonly RunType[];
+    },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    return await this.#runQuery.listCapsuleRunsPage(capsuleId, options);
   }
 
   async listRecoverableOpenTofuRuns(options: {

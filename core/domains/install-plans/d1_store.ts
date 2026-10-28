@@ -129,17 +129,21 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
-  async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+  async hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
     const row = await this.#db
       .prepare(
         `select exists (
            select 1 from git_install_plans
-            where json_extract(record_json, '$.operation') = 'revision'
+            where workspace_id = ?
+              and json_extract(record_json, '$.operation') = 'revision'
               and json_extract(record_json, '$.capsuleId') = ?
               and phase not in ('failed', 'reviewable')
          ) as present`,
       )
-      .bind(capsuleId)
+      .bind(workspaceId, capsuleId)
       .first<{ readonly present: number }>();
     return row?.present === 1;
   }

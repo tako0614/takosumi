@@ -40,6 +40,28 @@ export type RunType =
   // artifact restored.
   | "restore";
 
+/** Every {@link RunType}, for request validation. */
+export const RUN_TYPES = [
+  "source_sync",
+  "compatibility_check",
+  "artifact",
+  "plan",
+  "apply",
+  "destroy_plan",
+  "destroy_apply",
+  "drift_check",
+  "backup",
+  "state_recovery",
+  "restore",
+] as const satisfies readonly RunType[];
+
+// Compile-time proof that RUN_TYPES lists every RunType.
+type _RunTypesExhaustive = Exclude<RunType, (typeof RUN_TYPES)[number]> extends never
+  ? true
+  : never;
+const _runTypesExhaustive: _RunTypesExhaustive = true;
+void _runTypesExhaustive;
+
 /**
  * Run terminal status covers every phase pinned by the reviewed Plan. For an
  * apply with required post-apply lifecycle actions, `succeeded` means both the
@@ -140,7 +162,89 @@ export const RUN_LIST_DEFAULT_LIMIT = 100;
 /** Maximum page size accepted on the Workspace Run listing route. */
 export const RUN_LIST_MAX_LIMIT = 500;
 
+/** Default page size for one Capsule's Run listing when no limit is given. */
+export const CAPSULE_RUN_LIST_DEFAULT_LIMIT = 50;
+/** Maximum page size accepted on one Capsule's Run listing route. */
+export const CAPSULE_RUN_LIST_MAX_LIMIT = 100;
+
 export type RunPolicyStatus = "pass" | "warn" | "deny";
+
+/**
+ * The policy layer that produced one {@link RunPolicyReason}.
+ *
+ * - `runner_profile`: the execution profile's own lifecycle, availability and
+ *   provider allow/deny list.
+ * - `provider` / `resource` / `scope` / `quota`: the Workspace and
+ *   InstallConfig policy layers evaluated over the plan.
+ * - `action`: a reviewed change that needs an explicit approval.
+ * - `supply_chain`: provider lockfile and mirror attestation requirements.
+ * - `credential`: ProviderConnection rules checked before execution.
+ * - `compatibility`: the reviewed compatibility report gate.
+ * - `billing`: the showback or host billing decision.
+ * - `unclassified`: a recorded reason this build does not recognize.
+ */
+export const RUN_POLICY_LAYERS = [
+  "runner_profile",
+  "provider",
+  "resource",
+  "scope",
+  "action",
+  "quota",
+  "supply_chain",
+  "credential",
+  "compatibility",
+  "billing",
+  "unclassified",
+] as const;
+export type RunPolicyLayer = (typeof RUN_POLICY_LAYERS)[number];
+
+/** Closed, stable set of policy reason codes. Clients never parse prose. */
+export const RUN_POLICY_REASON_CODES = [
+  "runner_profile_inactive",
+  "runner_profile_unavailable",
+  "runner_profile_no_executor",
+  "providers_undeclared",
+  "provider_denied",
+  "provider_not_allowed",
+  "resource_type_not_allowed",
+  "resource_changes_unknown",
+  "resource_out_of_scope",
+  "quota_exceeded",
+  "quota_invalid",
+  "provider_lockfile_missing",
+  "provider_attestation_missing",
+  "provider_not_mirrored",
+  "credential_connection_scope",
+  "compatibility_report_missing",
+  "compatibility_report_mismatch",
+  "compatibility_not_runnable",
+  "compatibility_finding",
+  "data_source_not_allowed",
+  "provisioner_not_allowed",
+  "billing_blocked",
+  "approval_required_change",
+  "approval_required_destroy",
+  "unclassified",
+] as const;
+export type RunPolicyReasonCode = (typeof RUN_POLICY_REASON_CODES)[number];
+
+/** Upper bound on structured policy reasons projected onto one Run. */
+export const RUN_POLICY_REASON_LIMIT = 50;
+
+/**
+ * One structured, value-free reason a policy blocked a plan or made it wait
+ * for approval. It names only the policy layer, a stable code, and the
+ * provider source or resource type the reason is about; it never carries
+ * resource addresses, values, credential or profile identifiers.
+ */
+export interface RunPolicyReason {
+  readonly code: RunPolicyReasonCode;
+  readonly layer: RunPolicyLayer;
+  /** Provider source address the reason names, when it names one. */
+  readonly provider?: string;
+  /** OpenTofu resource or data source type the reason names, when it names one. */
+  readonly resourceType?: string;
+}
 
 export interface RunChangeSummary {
   readonly add?: number;
@@ -523,6 +627,11 @@ export interface Run {
   /** Non-secret resource/action review lines. No raw resource values. */
   readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
+  /**
+   * Structured reasons a policy blocked this plan or made it wait for an
+   * approval. Present only on plan rows where that happened.
+   */
+  readonly policyReasons?: readonly RunPolicyReason[];
   /** Exact non-secret provider identities pinned by current Plan creation. */
   readonly requiredProviderRequirements?: readonly CapsuleProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];

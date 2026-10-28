@@ -157,6 +157,7 @@ import {
   handleCapsuleInstallConfigReAdoption,
 } from "./install-config-re-adoptions.ts";
 import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
+import { handleCapsuleApp, handleCapsuleRuns } from "./capsule-app.ts";
 import {
   WorkspaceManagementAdmissionConflictError,
   type WorkspaceManagementAuthority,
@@ -399,6 +400,12 @@ export async function handleCapsules(
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
+    }
+    if (leaf === "app" && segments.length === 3) {
+      return await handleCapsuleApp(ctx, capsule, method);
+    }
+    if (leaf === "runs" && segments.length === 3) {
+      return await handleCapsuleRuns(ctx, capsule, method);
     }
     if (leaf === "usage-summary" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");

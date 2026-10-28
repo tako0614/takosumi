@@ -16,7 +16,9 @@
  * execution policy. User repos carry NO Takosumi manifest.
  */
 
-import type { PublicRun, Run } from "./runs.ts";
+import type { PublicRun, Run, RunStatus, RunType } from "./runs.ts";
+import type { InstallConfigStoreText } from "./install-configs.ts";
+import type { InterfaceDisplayIcon } from "./interface-display.ts";
 import type {
   ProviderRequirement,
   ProviderResolution,
@@ -486,4 +488,282 @@ export interface PublicCapsuleCompatibilityReportResponse {
   readonly report: PublicCapsuleCompatibilityReport;
   readonly run?: PublicRun;
   readonly repositoryInstallUx?: RepositoryInstallUxCompatibilityResult;
+}
+
+// ---------------------------------------------------------------------------
+// Installed-app view (`GET /api/v1/capsules/:capsuleId/app`)
+// ---------------------------------------------------------------------------
+
+export const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1" as const;
+
+/**
+ * One state per installed app, computed by the control plane from the Capsule
+ * row, its newest lifecycle Run, the revision coordinator, its
+ * ProviderConnections and its screen materialization ledger.
+ *
+ * - `installing`: never applied; the first install is preparing, running, or
+ *   waiting for the person's review.
+ * - `installed`: applied, with no change in progress and nothing needing the
+ *   person.
+ * - `updating`: applied, and a change (revision preparation, plan or apply)
+ *   is in progress.
+ * - `needs_attention`: at least one error-severity problem and nothing in
+ *   progress that could resolve it.
+ * - `stopped`: the operator disabled the app.
+ * - `uninstall_scheduled`: inside the uninstall grace period.
+ * - `uninstalling`: the teardown is running or starting, or a teardown plan
+ *   the person requested waits for their review.
+ * - `uninstalled`: destroyed.
+ *
+ * An uninstall record counts only while the Capsule is `uninstalled`, or
+ * while it is `error` after a teardown failure and its newest lifecycle Run is
+ * still a removal; older records are kept only as evidence.
+ */
+export const CAPSULE_APP_STATES = [
+  "installing",
+  "installed",
+  "updating",
+  "needs_attention",
+  "stopped",
+  "uninstall_scheduled",
+  "uninstalling",
+  "uninstalled",
+] as const;
+export type CapsuleAppState = (typeof CAPSULE_APP_STATES)[number];
+
+/**
+ * The one main action for the current state.
+ *
+ * - `open`: open the app's first screen (`screens[0]`).
+ * - `view_resources`: an installed app without screens; show what it created.
+ * - `review`: review the plan in `progress.review`, or the policy reasons of
+ *   the blocked Run named by the first problem.
+ * - `retry`: plan again — the failed Run named by the first problem, or the
+ *   app's current configuration when no Run is named.
+ * - `retry_screen`: retry the screen materialization failure named by the
+ *   first problem.
+ * - `fix_connection`: repair the ProviderConnection named by the first problem.
+ * - `continue_install`: resume an install that stopped before a plan.
+ * - `cancel_uninstall`: cancel the scheduled uninstall (the cancel command
+ *   would admit it now).
+ * - `uninstall_now`: the stalled scheduled uninstall can no longer be
+ *   cancelled; create the immediate teardown plan
+ *   (`DELETE /api/v1/capsules/:id?immediate=true`) and review it.
+ * - `reinstall`: install the app again.
+ * - `none`: nothing for the person to do now (work is in progress).
+ */
+export const CAPSULE_APP_ACTIONS = [
+  "open",
+  "view_resources",
+  "review",
+  "retry",
+  "retry_screen",
+  "fix_connection",
+  "continue_install",
+  "cancel_uninstall",
+  "uninstall_now",
+  "reinstall",
+  "none",
+] as const;
+export type CapsuleAppAction = (typeof CAPSULE_APP_ACTIONS)[number];
+
+/**
+ * Stable problem codes, listed in the priority order the primary action
+ * follows.
+ *
+ * - `connection_unavailable`: a ProviderBinding points at a connection that is
+ *   missing, revoked, expired or in error.
+ * - `uninstall_failed`: a teardown that reached the provider failed; the
+ *   problem names the failed removal Run.
+ * - `uninstall_blocked`: the scheduled uninstall stopped (in either phase) and
+ *   waits for the person while the resources keep running; `reason` is the
+ *   finalizer's stable `blockedReason` token.
+ * - `policy_blocked`: the newest plan was denied by policy; see the Run's
+ *   `policyReasons`.
+ * - `run_failed`: the newest lifecycle Run failed.
+ * - `capsule_error`: the Capsule is in error without a failed newest Run.
+ * - `install_incomplete`: a never-applied app with no Run in progress, nothing
+ *   to review, and no recent progress.
+ * - `screen_unavailable`: the current version's screens could not be made
+ *   openable (a dead-lettered materialization).
+ * - `uninstall_scheduled`: warning only; the app will be destroyed at
+ *   `uninstall.scheduled.deleteAfter` unless cancelled.
+ */
+export const CAPSULE_APP_PROBLEM_CODES = [
+  "connection_unavailable",
+  "uninstall_failed",
+  "uninstall_blocked",
+  "policy_blocked",
+  "run_failed",
+  "capsule_error",
+  "install_incomplete",
+  "screen_unavailable",
+  "uninstall_scheduled",
+] as const;
+export type CapsuleAppProblemCode = (typeof CAPSULE_APP_PROBLEM_CODES)[number];
+
+export type CapsuleAppConnectionStatus =
+  | "missing"
+  | "revoked"
+  | "expired"
+  | "error";
+
+/** Value-free identity of one dead-lettered screen materialization. */
+export interface CapsuleAppScreenFailure {
+  readonly id: string;
+  readonly failureDigest: string;
+  readonly stateVersionId: string;
+  readonly stateGeneration: number;
+  readonly errorCode: string;
+}
+
+export interface CapsuleAppProblem {
+  readonly code: CapsuleAppProblemCode;
+  readonly severity: "error" | "warning";
+  /** The Run behind the problem, when one is. */
+  readonly runId?: string;
+  readonly runType?: RunType;
+  readonly errorCode?: string;
+  /** `uninstall_blocked`: the finalizer's stable `blockedReason` token. */
+  readonly reason?: string;
+  /** `connection_unavailable`: the provider source the binding serves. */
+  readonly provider?: string;
+  readonly connectionId?: string;
+  readonly connectionStatus?: CapsuleAppConnectionStatus;
+  /** `screen_unavailable`: the exact failure the retry route expects. */
+  readonly screenFailure?: CapsuleAppScreenFailure;
+}
+
+/**
+ * One launchable, authorized screen (a Resolved `ui-surface` Interface the
+ * caller may open). Only display metadata and the checked launch URL are
+ * projected; no other Interface input or Output value is.
+ */
+export interface CapsuleAppScreen {
+  readonly interfaceId: string;
+  readonly name: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly icon?: InterfaceDisplayIcon;
+  readonly category?: string;
+  readonly sortOrder?: number;
+  readonly url: string;
+}
+
+export interface CapsuleAppRunSummary {
+  readonly id: string;
+  readonly type: RunType;
+  readonly status: RunStatus;
+  readonly createdAt: string;
+  readonly startedAt?: string;
+  readonly finishedAt?: string;
+  readonly errorCode?: string;
+  readonly requiresApproval?: boolean;
+}
+
+export interface CapsuleAppVersion {
+  /** The Git repository (credential-free URL) and the Source's default ref. */
+  readonly repository?: {
+    readonly url: string;
+    readonly defaultRef: string;
+  };
+  /** The version the current successful apply adopted. */
+  readonly current?: {
+    readonly sourceSnapshotId: string;
+    readonly ref: string;
+    readonly path: string;
+    readonly commit: string;
+  };
+  /** The newest snapshot fetched for the current ref (may equal `current`). */
+  readonly latest?: {
+    readonly sourceSnapshotId: string;
+    readonly ref: string;
+    readonly commit: string;
+    readonly fetchedAt: string;
+  };
+  /** True when `latest` names a different commit than `current`. */
+  readonly updateAvailable: boolean;
+  /**
+   * The control plane marked the app stale: its last apply no longer matches
+   * its inputs (a newer source snapshot or a changed dependency Output).
+   */
+  readonly stale: boolean;
+  readonly autoUpdate: boolean;
+}
+
+export interface CapsuleAppProgress {
+  /** The revision coordinator is preparing a reviewable plan. */
+  readonly revisionPreparing: boolean;
+  /** The newest lifecycle Run, while it is queued or running. */
+  readonly run?: CapsuleAppRunSummary;
+  /** The newest lifecycle Run, while it is a plan waiting for review. */
+  readonly review?: {
+    readonly runId: string;
+    readonly runType: RunType;
+  };
+}
+
+export interface CapsuleAppUninstall {
+  /**
+   * What a new uninstall request does now: `scheduled` keeps resources and
+   * data for `graceDays` first, `discard` drops a never-applied app at once,
+   * and `none` means no default uninstall is available (already destroyed, or
+   * the host has no scheduled uninstall; an explicit immediate destroy plan
+   * remains possible).
+   */
+  readonly mode: "scheduled" | "discard" | "none";
+  /** Whole days a scheduled uninstall waits; present when `mode` is `scheduled`. */
+  readonly graceDays?: number;
+  /** The current scheduled uninstall, when one is pending or running. */
+  readonly scheduled?: {
+    readonly phase: "scheduled" | "destroying";
+    readonly requestedAt: string;
+    readonly deleteAfter: string;
+    readonly cancellable: boolean;
+    readonly blocked: boolean;
+    readonly preDestroyExport?: {
+      readonly status: CapsulePreDestroyExport["status"];
+      readonly includesServiceData?: boolean;
+    };
+  };
+}
+
+/** Parts of the view the control plane could not read for this response. */
+export type CapsuleAppIncompleteSection =
+  | "display"
+  | "screens"
+  | "version"
+  | "screen_problems";
+
+/** Body of `GET /api/v1/capsules/:capsuleId/app`. Value-free; no secrets. */
+export interface CapsuleAppView {
+  readonly kind: typeof CAPSULE_APP_VIEW_KIND;
+  readonly capsuleId: string;
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly environment: string;
+  /** Store-provided display name, when the InstallConfig carries one. */
+  readonly displayName?: InstallConfigStoreText;
+  readonly iconUrl?: string;
+  readonly status: CapsuleStatus;
+  readonly applied: boolean;
+  readonly state: CapsuleAppState;
+  readonly primaryAction: CapsuleAppAction;
+  /** Ordered by {@link CAPSULE_APP_PROBLEM_CODES} priority. */
+  readonly problems: readonly CapsuleAppProblem[];
+  /** Every launchable screen, in display order. */
+  readonly screens: readonly CapsuleAppScreen[];
+  readonly version: CapsuleAppVersion;
+  readonly progress: CapsuleAppProgress;
+  /** The newest lifecycle Run (plan, apply, destroy plan or destroy apply). */
+  readonly latestRun?: CapsuleAppRunSummary;
+  readonly uninstall: CapsuleAppUninstall;
+  /** Present when a supporting read failed; the named parts may be missing. */
+  readonly incomplete?: readonly CapsuleAppIncompleteSection[];
+  readonly observedAt: string;
+}
+
+export interface CapsuleAppResponse {
+  readonly app: CapsuleAppView;
 }

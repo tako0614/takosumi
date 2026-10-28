@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 94 件です。
+次の 96 件です。
 
 ### Account views
 
@@ -276,6 +276,8 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
+| GET      | `/api/v1/capsules/{capsuleId}/app`                         | アプリの状態・主操作・問題・画面・版・削除条件をまとめて読む |
+| GET      | `/api/v1/capsules/{capsuleId}/runs`                        | この Capsule の Run を新しい順に一覧する     |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/current-resource-inventory`  | 現在の版に記録された OpenTofu の resource の一覧を読む |
 | GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
@@ -322,6 +324,34 @@ destroy-plan が bridge になります。猶予なしで破棄したい client 
 `uninstall.blockedReason` を残して止まり、所有者が取り消すか即時削除を選びます。
 provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
 `destroy-plan` は猶予なしの破棄計画を作ります。
+
+`GET /api/v1/capsules/{capsuleId}/app` は、インストール済みのアプリを1つの見え方として
+返します。状態 (`state`) と主操作 (`primaryAction`) は control plane が Capsule、
+この Capsule の最新の計画・デプロイ Run、版の更新処理、ProviderConnection、
+画面の作成記録から決めます。Workspace 全体の Run の窓には頼りません。
+
+- `state`: `installing` / `installed` / `updating` / `needs_attention` / `stopped` /
+  `uninstall_scheduled` / `uninstalling` / `uninstalled`
+- `primaryAction`: `open` / `view_resources` / `review` / `retry` / `retry_screen` /
+  `fix_connection` / `continue_install` / `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
+- `problems[].code`（優先順）: `connection_unavailable` / `uninstall_failed` /
+  `uninstall_blocked` / `policy_blocked` / `run_failed` / `capsule_error` /
+  `install_incomplete` / `screen_unavailable` / `uninstall_scheduled`（警告）
+
+応答には、開ける画面のすべて (`screens`)、採用中の版と同じ ref の最新 snapshot
+(`version.current` / `version.latest` / `updateAvailable` / `stale` / `autoUpdate`)、
+進行中の Run と確認待ちの計画 (`progress`)、最新の Run (`latestRun`)、削除の条件
+(`uninstall.mode` と、予約前でも分かる `graceDays`、予約後の `scheduled.deleteAfter`)
+が入ります。秘密の値、Output の値、画面の起動 URL 以外の Interface 入力は含みません。
+補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
+削除の予約記録は、Capsule が `uninstalled` の間と、provider に届いた破棄が失敗して
+`error` になり、最新の Run がまだ破棄である間だけ有効と見なします。予約が猶予中でも
+破棄中でも、`blockedReason` が記録されていれば `uninstall_blocked` になります。
+`cancel_uninstall` と `uninstall.mode` / `scheduled.cancellable` は、取り消しと予約の
+コマンド自身の受付条件で判定します。
+
+`GET /api/v1/capsules/{capsuleId}/runs` は `limit`（既定 50、上限 100）と
+`cursor` で新しい順にページングします。`type` を繰り返すと Run の種類で絞れます。
 
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
 exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された
@@ -611,6 +641,11 @@ Apply が新しい InstallConfig を認可することはありません。
 | POST     | `/api/v1/run-groups/{runGroupId}/approve`               | まとめて実行した Run を承認する |
 | GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
 | POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |
+
+ポリシーで止まった計画と承認が必要な計画の Run には `policyReasons` が付きます。各要素は
+`{ code, layer, provider?, resourceType? }` で、`code` と `layer` は決まった値だけを取ります
+（例: `provider_not_allowed` / `provider`、`approval_required_change` / `action`）。
+英文の理由そのものは返しません。分類できない理由は `unclassified` として残ります。
 
 ### 認証情報と Output の共有
 

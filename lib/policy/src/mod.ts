@@ -295,20 +295,28 @@ export function evaluateQuotaPolicy(
 export function evaluateActionPolicy(
   changes: readonly PlanResourceChange[],
 ): ActionPolicyResult {
+  const destructiveTypes = resourceTypesRequiringApproval(changes);
+  const requiresApproval = destructiveTypes.length > 0;
+  const reasons = destructiveTypes.map(
+    (type) =>
+      `resource type ${type} has an import, delete/replace, or otherwise unapproved change requiring approval`,
+  );
+  return { requiresApproval, reasons };
+}
+
+/**
+ * The sorted, distinct resource types whose changes need approval under the
+ * §25 action policy. Shared by {@link evaluateActionPolicy} and the structured
+ * Run projection so both always agree on which changes are gated.
+ */
+export function resourceTypesRequiringApproval(
+  changes: readonly PlanResourceChange[],
+): readonly string[] {
   const destructiveTypes = new Set<string>();
   for (const change of changes) {
     if (needsApproval(change)) destructiveTypes.add(change.type);
   }
-  const requiresApproval = destructiveTypes.size > 0;
-  const reasons = requiresApproval
-    ? Array.from(destructiveTypes)
-        .sort()
-        .map(
-          (type) =>
-            `resource type ${type} has an import, delete/replace, or otherwise unapproved change requiring approval`,
-        )
-    : [];
-  return { requiresApproval, reasons };
+  return Array.from(destructiveTypes).sort();
 }
 
 // ---------------------------------------------------------------------------

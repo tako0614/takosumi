@@ -28,6 +28,7 @@ import type {
   RunEventsResponse,
   RunCredentialMintEvidence,
   RunLogsResponse,
+  RunType,
 } from "takosumi-contract/runs";
 import {
   applyRunRunnerUsagePending,
@@ -130,6 +131,44 @@ export class RunQueryService {
     const page = await this.#store.listRunsByWorkspacePage(workspaceId, {
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
       ...(after ? { after } : {}),
+    });
+    const runs = await this.#projectStoredRuns(page.rows);
+    const last = page.rows.at(-1);
+    return {
+      runs,
+      ...(page.hasMore && last
+        ? { nextCursor: encodeRunListCursor({
+            createdAtMillis: storedRunRecordTimestamp(last),
+            id: last.id,
+          }) }
+        : {}),
+    };
+  }
+
+  /**
+   * Lists one Capsule's unified Run projections newest first, with the same
+   * opaque keyset cursor as the Workspace listing. `types` narrows the page to
+   * exact Run types at the store; the caller authorizes the Capsule first.
+   */
+  async listCapsuleRunsPage(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      readonly types?: readonly RunType[];
+    },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
+    requireNonEmptyString(capsuleId, "capsuleId");
+    requireNonEmptyString(options.workspaceId, "workspaceId");
+    const after = options.cursor === undefined
+      ? undefined
+      : decodeRunListCursor(options.cursor);
+    const page = await this.#store.listRunsByCapsulePage(capsuleId, {
+      workspaceId: options.workspaceId,
+      ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      ...(after ? { after } : {}),
+      ...(options.types !== undefined ? { kinds: options.types } : {}),
     });
     const runs = await this.#projectStoredRuns(page.rows);
     const last = page.rows.at(-1);
