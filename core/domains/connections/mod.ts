@@ -443,7 +443,7 @@ export class ConnectionsService {
   }
 
   async #resolveBindings(
-    capsule: Pick<Capsule, "workspaceId">,
+    capsule: Pick<Capsule, "workspaceId" | "ownerAccountId">,
     bindings: ProviderBindings,
     policy: PolicyConfig | undefined,
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
@@ -548,7 +548,7 @@ export class ConnectionsService {
   }
 
   async #resolveBinding(
-    capsule: Pick<Capsule, "workspaceId">,
+    capsule: Pick<Capsule, "workspaceId" | "ownerAccountId">,
     binding: ProviderBinding,
     policy: PolicyConfig | undefined,
   ): Promise<ResolvedCapsuleProviderBinding> {
@@ -568,6 +568,14 @@ export class ConnectionsService {
         `Provider Connection ${connection.id} is a git source connection and cannot back a provider binding`,
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
+    }
+    if (connection.scope === "personal" || (capsule.ownerAccountId !== undefined && connection.scope !== "operator")) {
+      const ownerAccountId = capsule.ownerAccountId ?? (await this.#store.getWorkspace(capsule.workspaceId))?.ownerUserId;
+      if (!ownerAccountId || connection.ownerAccountId !== ownerAccountId) {
+        throw new OpenTofuControllerError("permission_denied", "Connection is not owned by the app owner", {
+          reason: "connection_not_owned_by_app_owner",
+        });
+      }
     }
     if (
       connection.scope === "workspace" &&

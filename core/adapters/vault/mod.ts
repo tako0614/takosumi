@@ -106,6 +106,7 @@ const MAX_CREDENTIAL_VERIFICATION_CAPABILITIES = 64;
  * owning Workspace, so their sealed blobs bind to this fixed partition label.
  */
 const OPERATOR_SCOPE_AAD = "__operator__";
+const OPERATOR_OWNER_AAD = "__operator__";
 const SECRET_BLOB_KEY_SCHEME = "secret-boundary-aes-gcm/v1";
 
 /**
@@ -294,6 +295,17 @@ export interface ConnectionVault {
     entries: readonly CapsuleProviderBindingMintEntry[],
     options?: CapsuleProviderBindingMintOptions,
   ): Promise<PhaseMintBundle>;
+  /** Rewraps one legacy sealed blob using the connection row's current owner. */
+  rewrapConnectionSecret(
+    connectionId: string,
+    options?: { readonly dryRun?: boolean },
+  ): Promise<SecretRewrapResult>;
+}
+
+export interface SecretRewrapResult {
+  readonly connectionId: string;
+  readonly status: "rewrapped" | "dry_run" | "already_v3" | "no_secret" | "conflict";
+  readonly fromVersion?: 1 | 2;
 }
 
 /**
@@ -492,9 +504,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "operator-scoped connections must not have an owning Workspace (omit workspaceId for scope: operator)",
       );
     }
-    const actorAuthority = await this.#captureConnectionActorAuthority(workspaceId, actorAccountId);
+    if (workspaceId !== undefined && input.scope === "personal") {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "personal connections must not carry a Workspace",
+      );
+    }
+    const actorAuthority = input.scope === "personal"
+      ? this.#requirePersonalActor(actorAccountId, actorAccountId)
+      : await this.#captureConnectionActorAuthority(workspaceId, actorAccountId);
     if (isSourceGitKind(input.kind)) {
-      return await this.#registerGitConnection(input, input.kind, originalAuthority, actorAuthority);
+      return await this.#registerGitConnection(input, input.kind, originalAuthority, actorAuthority, actorAccountId);
     }
     requireNonEmpty(input.provider, "provider");
     if (
@@ -731,6 +751,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ),
     );
     const registrationAuthority = await this.#captureManagementAuthority(workspaceId, originalAuthority);
+    const ownerAccountId = await this.#ownerForRegistration(workspaceId, connectionScope, actorAccountId);
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -751,14 +772,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         secretPartition,
         secretEnvelopeAad({
           secretPartition,
-          ...(workspaceId ? { workspaceId: workspaceId } : {}),
+          ownerAccountId,
           connectionId: id,
           provider: input.provider,
-        }),
+        }, 3),
       );
       blob = makeStoredSecretBlob({
         connectionId: id,
         ...(workspaceId ? { workspaceId: workspaceId } : {}),
+        ownerAccountId,
         provider: input.provider,
         sealed,
         secretPartition,
@@ -770,6 +792,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const connection: ProviderConnection = {
       id,
       ...(workspaceId ? { workspaceId } : {}),
+      ...(connectionScope !== "operator" ? { ownerAccountId } : {}),
       provider: input.provider,
       providerSource: canonicalProviderSource(input.provider),
       credentialRecipe,
@@ -802,6 +825,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     kind: SourceGitConnectionKind,
     originalAuthority: WorkspaceManagementAuthority | undefined,
     actorAuthority: ConnectionActorAuthority | null,
+    actorAccountId: string | null,
   ): Promise<ProviderConnection> {
     const workspaceId = workspaceIdForConnectionInput(input);
     const values = input.values;
@@ -843,6 +867,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       throw new ConnectionVaultError("invalid_argument", validation.detail);
     }
     const registrationAuthority = await this.#captureManagementAuthority(workspaceId, originalAuthority);
+    const ownerAccountId = await this.#ownerForRegistration(workspaceId, connectionScope, actorAccountId);
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -854,15 +879,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       secretPartition,
       secretEnvelopeAad({
         secretPartition,
-        ...(workspaceId ? { workspaceId: workspaceId } : {}),
+        ownerAccountId,
         connectionId: id,
         provider: kind,
-      }),
+      }, 3),
     );
     const nowIso = now.toISOString();
     const blob = makeStoredSecretBlob({
       connectionId: id,
       ...(workspaceId ? { workspaceId: workspaceId } : {}),
+      ownerAccountId,
       provider: kind,
       sealed,
       secretPartition,
@@ -873,6 +899,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const connection: ProviderConnection = {
       id,
       ...(workspaceId ? { workspaceId } : {}),
+      ...(connectionScope !== "operator" ? { ownerAccountId } : {}),
       provider: kind,
       providerSource: canonicalProviderSource(kind),
       secretPartition,
@@ -917,6 +944,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     return authority;
   }
 
+  #requirePersonalActor(
+    actorAccountId: string | null,
+    ownerAccountId: string | null,
+  ): null {
+    if (!actorAccountId?.trim() || actorAccountId !== ownerAccountId) {
+      throw new ConnectionVaultError("failed_precondition", "Personal connection account authority is unavailable");
+    }
+    return null;
+  }
+
   async #captureManagementAuthority(
     workspaceId: string | undefined,
     originalAuthority?: WorkspaceManagementAuthority,
@@ -935,6 +972,74 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     } catch (error) {
       throw connectionManagementAdmissionError(error);
     }
+  }
+
+  async #ownerForRegistration(
+    workspaceId: string | undefined,
+    scope: ProviderConnection["scope"],
+    actorAccountId: string | null,
+  ): Promise<string> {
+    if (scope === "operator") return OPERATOR_OWNER_AAD;
+    if (workspaceId) {
+      const workspace = await this.#store.getWorkspace(workspaceId);
+      if (workspace?.ownerUserId) return workspace.ownerUserId;
+    } else if (actorAccountId?.trim()) {
+      return actorAccountId;
+    }
+    throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable");
+  }
+
+  async rewrapConnectionSecret(
+    connectionId: string,
+    options: { readonly dryRun?: boolean } = {},
+  ): Promise<SecretRewrapResult> {
+    requireNonEmpty(connectionId, "connectionId");
+    const connection = structuredClone(await this.#store.getConnection(connectionId));
+    if (!connection) throw new ConnectionVaultError("not_found", "Connection was not found");
+    const blob = structuredClone(await this.#store.getSecretBlob(connectionId));
+    if (!blob) return { connectionId, status: "no_secret" };
+    const fromVersion = secretEnvelopeVersionForBlob(blob);
+    if (fromVersion === 3) return { connectionId, status: "already_v3" };
+    if (blob.renewalLease) return { connectionId, status: "conflict", fromVersion };
+    // Rewrap requires a durable owner on personal rows. The migration must
+    // backfill it first; a mutable Workspace lookup must never select AAD.
+    const ownerAccountId = ownerAccountIdForConnection(connection);
+    const plaintext = await openConnectionSecret(this.#crypto, connection, blob);
+    if (options.dryRun) return { connectionId, status: "dry_run", fromVersion };
+    const partition = secretPartitionForConnection(connection);
+    const sealed = await this.#crypto.seal(
+      plaintext,
+      partition,
+      connectionEnvelopeAad(connection, 3),
+    );
+    const replacementSecretBlob: StoredSecretBlob = {
+      ...makeStoredSecretBlob({
+        connectionId,
+        ...(connection.workspaceId ? { workspaceId: connection.workspaceId } : {}),
+        ownerAccountId,
+        provider: connection.provider,
+        sealed,
+        secretPartition: partition,
+        createdAt: blob.createdAt,
+        crypto: this.#crypto,
+      }),
+      id: blob.id,
+      rotatedAt: this.#now().toISOString(),
+    };
+    const authority = await this.#captureManagementAuthority(connection.workspaceId);
+    const replaced = await this.#store.commitConnectionTestResult({
+      expectedConnection: connection,
+      expectedSecretBlob: blob,
+      replacement: connection,
+      replacementSecretBlob,
+      expectedWorkspaceManagementAuthority: authority,
+      actorAuthority: null,
+    });
+    return {
+      connectionId,
+      status: replaced ? "rewrapped" : "conflict",
+      fromVersion,
+    };
   }
 
   async #persistRegistration(
@@ -964,7 +1069,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const authority = await this.#captureManagementAuthority(connection.workspaceId, originalAuthority);
-    const actorAuthority = await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
+    const actorAuthority = connection.scope === "personal"
+      ? this.#requirePersonalActor(actorAccountId, ownerAccountIdForConnection(connection))
+      : await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
     if (connectionIsExpired(connection, this.#now())) {
       if (this.#operatorProviderConnections.has(connection.id)) {
         await this.#markConnectionExpired(connection);
@@ -1167,7 +1274,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // owning Connection. Repeated revocation remains an observation only.
     if (!connection) return false;
     const authority = await this.#captureManagementAuthority(connection.workspaceId, originalAuthority);
-    const actorAuthority = await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
+    const actorAuthority = connection.scope === "personal"
+      ? this.#requirePersonalActor(actorAccountId, ownerAccountIdForConnection(connection))
+      : await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
     const revoked = await this.#store.revokeConnectionIfUnchanged({
       expectedConnection: connection, expectedWorkspaceManagementAuthority: authority, actorAuthority,
     }).catch((error: unknown) => { throw connectionManagementAdmissionError(error); });
@@ -1770,9 +1879,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     const partition = secretPartitionForConnection(connection);
     const sealed = await this.#crypto.seal(JSON.stringify({ env: values, files: observed.material.files }),
-      partition, connectionEnvelopeAad(connection, 2));
+      partition, connectionEnvelopeAad(connection, 3));
     const replacementSecretBlob = { ...makeStoredSecretBlob({ connectionId: connection.id,
-      workspaceId: connection.workspaceId, provider: connection.provider, sealed,
+      workspaceId: connection.workspaceId, ownerAccountId: ownerAccountIdForConnection(connection), provider: connection.provider, sealed,
       secretPartition: partition, createdAt: originalBlob.createdAt, crypto: this.#crypto }),
       id: originalBlob.id, rotatedAt: this.#now().toISOString() };
     const replacement = { ...connection, updatedAt: this.#now().toISOString() };
@@ -1797,11 +1906,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // Partition and AAD are derived from the CONNECTION ROW — never from the
     // blob's self-described AAD partition — so a swapped or tampered blob
     // cannot select its provider env/AAD and fails the AES-GCM auth tag.
-    const plaintext = await this.#crypto.open(
-      base64ToBytes(blob.ciphertext),
-      secretPartitionForConnection(connection),
-      connectionEnvelopeAad(connection, secretEnvelopeVersionForBlob(blob)),
-    );
+    const plaintext = await openConnectionSecret(this.#crypto, connection, blob);
     const parsed = JSON.parse(plaintext) as Record<string, unknown>;
     if (isRecord(parsed.env)) {
       return {
@@ -3399,6 +3504,7 @@ function connectionManagementAdmissionError(error: unknown): unknown {
 interface SecretEnvelopeIdentity {
   readonly secretPartition: SecretPartition;
   readonly workspaceId?: string;
+  readonly ownerAccountId?: string;
   readonly connectionId: string;
   readonly provider: string;
 }
@@ -3411,8 +3517,19 @@ interface SecretEnvelopeIdentity {
  */
 function secretEnvelopeAad(
   identity: SecretEnvelopeIdentity,
-  version: 1 | 2 = 2,
+  version: 1 | 2 | 3 = 3,
 ): Uint8Array {
+  if (version === 3) {
+    if (!identity.ownerAccountId?.trim()) {
+      throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+    }
+    return new TextEncoder().encode(JSON.stringify({
+      v: 3,
+      ownerAccountId: identity.ownerAccountId,
+      connectionId: identity.connectionId,
+      provider: identity.provider,
+    }));
+  }
   const canonical = JSON.stringify({
     v: version,
     ...(version === 1
@@ -3431,7 +3548,7 @@ function secretEnvelopeAad(
  */
 function connectionEnvelopeAad(
   connection: ProviderConnection,
-  version: 1 | 2,
+  version: 1 | 2 | 3,
 ): Uint8Array {
   return secretEnvelopeAad(
     {
@@ -3439,6 +3556,7 @@ function connectionEnvelopeAad(
       ...(connection.workspaceId
         ? { workspaceId: connection.workspaceId }
         : {}),
+      ...(version === 3 ? { ownerAccountId: ownerAccountIdForConnection(connection) } : {}),
       connectionId: connection.id,
       provider: connection.provider,
     },
@@ -3446,15 +3564,44 @@ function connectionEnvelopeAad(
   );
 }
 
-function secretEnvelopeVersionForBlob(blob: StoredSecretBlob): 1 | 2 {
+function secretEnvelopeVersionForBlob(blob: StoredSecretBlob): 1 | 2 | 3 {
   try {
     const metadata = JSON.parse(blob.aad) as Record<string, unknown>;
+    if (metadata.v === 3) return 3;
     return Object.hasOwn(metadata, "secretPartition") ? 2 : 1;
   } catch {
     // Historical blobs used v1 before the generic secret-partition metadata
     // field existed. The parsed blob metadata never supplies a key or identity.
     return 1;
   }
+}
+
+function ownerAccountIdForConnection(connection: ProviderConnection): string {
+  if (connection.scope === "operator") return OPERATOR_OWNER_AAD;
+  if (typeof connection.ownerAccountId === "string" && connection.ownerAccountId.trim()) {
+    return connection.ownerAccountId;
+  }
+  throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+}
+
+async function openConnectionSecret(
+  crypto: SecretBoundaryCrypto,
+  connection: ProviderConnection,
+  blob: StoredSecretBlob,
+): Promise<string> {
+  const bytes = base64ToBytes(blob.ciphertext);
+  const partition = secretPartitionForConnection(connection);
+  const version = secretEnvelopeVersionForBlob(blob);
+  if (connection.scope === "operator" || connection.ownerAccountId) {
+    try {
+      return await crypto.open(bytes, partition, connectionEnvelopeAad(connection, 3));
+    } catch (error) {
+      if (version === 3) throw error;
+    }
+  } else if (version === 3) {
+    throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+  }
+  return await crypto.open(bytes, partition, connectionEnvelopeAad(connection, version));
 }
 
 function secretPartitionForConnection(
@@ -3504,6 +3651,7 @@ function isSecretPartitionToken(value: unknown): value is string {
 function makeStoredSecretBlob(input: {
   readonly connectionId: string;
   readonly workspaceId?: string;
+  readonly ownerAccountId: string;
   readonly provider: string;
   readonly sealed: Uint8Array;
   readonly secretPartition: SecretPartition;
@@ -3511,8 +3659,9 @@ function makeStoredSecretBlob(input: {
   readonly crypto: SecretBoundaryCrypto;
 }): StoredSecretBlob {
   const aad = {
+    v: 3,
     secretPartition: input.secretPartition,
-    workspaceId: input.workspaceId ?? OPERATOR_SCOPE_AAD,
+    ownerAccountId: input.ownerAccountId,
     provider: input.provider,
   };
   return {

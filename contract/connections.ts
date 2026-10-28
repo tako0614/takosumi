@@ -26,7 +26,7 @@ export const CONNECTION_TEST_PATH = (id: string): string =>
 export const CONNECTION_REVOKE_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}/revoke`;
 
-export type ConnectionScopeKind = "operator" | "workspace";
+export type ConnectionScopeKind = "operator" | "workspace" | "personal";
 
 /**
  * Operational credential state machine (vault authority). The public read view
@@ -279,6 +279,8 @@ export function isWorkspaceBindableOperatorConnection(
 export interface ProviderConnection {
   readonly id: string;
   readonly workspaceId?: string;
+  /** Personal owner; absent on operator connections and pre-v77 records. */
+  readonly ownerAccountId?: string;
   readonly provider: string;
   readonly providerSource: string;
   /** Canonical credential materialization authority for provider connections. */
@@ -464,6 +466,8 @@ export interface ProviderBindingSet {
 
 export interface CreateConnectionRequest {
   readonly workspaceId?: string;
+  /** Trusted composition input. Public routes replace this with the caller. */
+  readonly ownerAccountId?: string;
   readonly provider: string;
   /** Explicit recipe/mode selected by a setup helper or generic create flow. */
   readonly credentialRecipe?: ProviderConnectionRecipeRef;
