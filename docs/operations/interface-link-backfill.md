@@ -39,8 +39,9 @@ manual review rather than automatic overwrite.
 The API response must confirm an active link pinned to the chosen provider.
 On the next sign-in, a matching legacy Binding receives the link ID through a
 generation-guarded update. Until that reconciliation, the token path accepts a
-linkId-less Binding only when its complete grant matches an active link. Verify
-the selected links and a real consumer sign-in before
-considering the backfill complete. Recovery is a normal link DELETE using its
+linkId-less Binding only when its consumer, requirement, Interface and delivery
+match an active link and the requested token permission is both requested and
+approved by that link. Verify the selected links and a real consumer sign-in
+before considering the backfill complete. Recovery is a normal link DELETE using its
 current generation, followed by inspection of the corresponding Binding; the
 script never deletes historical records.
