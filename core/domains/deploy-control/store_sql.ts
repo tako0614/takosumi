@@ -11777,9 +11777,10 @@ async function pgReadSourceOwnershipGroup(
   if (!source) throw new Error(`source_ownership_migration_source_row_drift:${sourceId}`);
   const capsuleRows = await client.query<{
     id: string; workspaceId: string; sourceId: string | null; status: string;
-    currentStateVersionId: string | null; capsuleJson: unknown;
+    installConfigId: string; currentStateVersionId: string | null; capsuleJson: unknown;
   }>(
     `select id, space_id as "workspaceId", source_id as "sourceId", status,
+            install_config_id as "installConfigId",
             current_state_version_id as "currentStateVersionId",
             installation_json as "capsuleJson"
        from takosumi_capsules
@@ -11794,6 +11795,7 @@ async function pgReadSourceOwnershipGroup(
     const capsule = parseJson(row.capsuleJson) as Capsule;
     if (capsule.id !== row.id || capsule.workspaceId !== row.workspaceId ||
       capsule.sourceId !== row.sourceId || capsule.status !== row.status ||
+      capsule.installConfigId !== row.installConfigId ||
       (capsule.currentStateVersionId ?? null) !== row.currentStateVersionId) {
       throw new Error(`source_ownership_migration_capsule_row_drift:${row.id}`);
     }
@@ -11941,7 +11943,50 @@ async function pgReadSourceOwnershipGroup(
     }
   }
   compatibilityRuns.sort((a, b) => a.id.localeCompare(b.id));
+  const configIds = new Set<string>([
+    ...capsules.map(({ capsule }) => capsule.installConfigId),
+    ...gitPlans.flatMap((plan) => [plan.installConfigId, plan.preflight?.installConfigId,
+      plan.revision?.base.installConfigId]).filter((id): id is string => !!id),
+  ]);
+  const pinnedConfigRows = await client.query<{
+    id: string; workspaceId: string | null; configJson: unknown;
+    createdAt: string; updatedAt: string;
+  }>(
+    `select id, space_id as "workspaceId", config_json as "configJson",
+            created_at as "createdAt", updated_at as "updatedAt"
+       from takosumi_install_configs
+      where config_json #>> '{internal,genericOpenTofuSourceSnapshotId}' in
+              (select id from takosumi_source_snapshots where source_id = $1)
+         or config_json #>> '{internal,sourceSnapshotId}' in
+              (select id from takosumi_source_snapshots where source_id = $1)
+         or config_json #>> '{internal,migrationRestore,sourceSnapshotId}' in
+              (select id from takosumi_source_snapshots where source_id = $1)
+         or config_json #>> '{internal,reAdoption,sourceSnapshotId}' in
+              (select id from takosumi_source_snapshots where source_id = $1)
+      order by id`, [sourceId],
+  );
+  const configRows = [...pinnedConfigRows.rows];
+  for (const id of configIds) {
+    if (configRows.some((row) => row.id === id)) continue;
+    const row = await client.query<typeof configRows[number]>(
+      `select id, space_id as "workspaceId", config_json as "configJson",
+              created_at as "createdAt", updated_at as "updatedAt"
+         from takosumi_install_configs where id = $1`, [id],
+    );
+    if (!row.rows[0]) throw new Error(`source_ownership_migration_missing_install_config:${id}`);
+    configRows.push(row.rows[0]);
+  }
+  const installConfigs = configRows.map((row) => {
+    const config = parseJson(row.configJson) as StoredInstallConfig;
+    if (config.id !== row.id || (config.workspaceId ?? null) !== row.workspaceId ||
+      config.createdAt !== row.createdAt || config.updatedAt !== row.updatedAt ||
+      (config.workspaceId !== undefined && config.workspaceId !== source.workspaceId)) {
+      throw new Error(`source_ownership_migration_install_config_row_drift:${row.id}`);
+    }
+    return config;
+  }).sort((a, b) => a.id.localeCompare(b.id));
   return { source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans,
+    installConfigs,
     inFlightRunIds: [...new Set(inFlightRunIds)].sort() };
 }
 
@@ -11993,6 +12038,43 @@ async function pgCommitSourceOwnershipGroup(
     );
     if (result.rows.length !== 1) throw new Error("Source ownership migration lost SourceSyncRun row");
   }
+  for (const run of mutation.retainedCompatibilityRuns) {
+    const original = expected.compatibilityRuns.find((old) => old.id === run.id);
+    if (!original?.capsuleId || run.capsuleId !== undefined ||
+      original.type !== "compatibility_check" || original.sourceId !== source.id ||
+      !mutation.splits.some((split) => split.capsuleId === original.capsuleId) ||
+      stableStringify(run) !== stableStringify({ ...original, capsuleId: undefined })) {
+      throw new TypeError("invalid retained compatibility Run");
+    }
+    const result = await transaction.query(
+      `update takosumi_runs
+          set installation_id = null, run_json = $2::jsonb
+        where id = $1 and kind = 'compatibility_check' and source_id = $3
+          and installation_id = $4 returning id`,
+      [run.id, JSON.stringify(run), source.id, original.capsuleId],
+    );
+    if (result.rows.length !== 1) {
+      throw new Error("Source ownership migration lost compatibility Run row");
+    }
+  }
+  for (const report of mutation.retainedReports) {
+    const original = expected.reports.find((old) => old.id === report.id);
+    if (!original?.capsuleId || report.capsuleId !== undefined ||
+      original.sourceId !== source.id ||
+      !mutation.splits.some((split) => split.capsuleId === original.capsuleId) ||
+      stableStringify(report) !== stableStringify({ ...original, capsuleId: undefined })) {
+      throw new TypeError("invalid retained compatibility report");
+    }
+    const result = await transaction.query(
+      `update takosumi_capsule_compatibility_reports
+          set installation_id = null
+        where id = $1 and source_id = $2 and installation_id = $3 returning id`,
+      [report.id, source.id, original.capsuleId],
+    );
+    if (result.rows.length !== 1) {
+      throw new Error("Source ownership migration lost compatibility report row");
+    }
+  }
   for (const split of mutation.splits) {
     const freshSource = split.source;
     await transaction.query(
@@ -12002,6 +12084,22 @@ async function pgCommitSourceOwnershipGroup(
       [freshSource.id, freshSource.workspaceId, freshSource.status,
         JSON.stringify(freshSource), freshSource.createdAt, freshSource.updatedAt],
     );
+    for (const { originalId, config } of split.installConfigs) {
+      const original = expected.installConfigs.find((entry) => entry.id === originalId);
+      if (!original || config.id === originalId ||
+        (config.workspaceId ?? null) !== (original.workspaceId ?? null) ||
+        stableStringify(config.workspaceManagementAuthority) !==
+          stableStringify(original.workspaceManagementAuthority)) {
+        throw new TypeError("invalid split InstallConfig");
+      }
+      await transaction.query(
+        `insert into takosumi_install_configs
+          (id, space_id, config_json, created_at, updated_at)
+         values ($1, $2, $3::jsonb, $4, $5)`,
+        [config.id, config.workspaceId ?? null, JSON.stringify(config),
+          config.createdAt, config.updatedAt],
+      );
+    }
     for (const run of split.syncRuns) {
       if (run.sourceId !== freshSource.id || run.workspaceId !== freshSource.workspaceId) {
         throw new TypeError("invalid split SourceSyncRun");
@@ -12076,9 +12174,10 @@ async function pgCommitSourceOwnershipGroup(
     }
     const capsuleResult = await transaction.query(
       `update takosumi_capsules set source_id = $2, installation_json = $3::jsonb,
-              updated_at = $4 where id = $1 and source_id = $5 and space_id = $6 returning id`,
+              install_config_id = $4, updated_at = $5
+        where id = $1 and source_id = $6 and space_id = $7 returning id`,
       [split.capsuleId, freshSource.id, JSON.stringify(split.capsule),
-        split.capsule.updatedAt, source.id, source.workspaceId],
+        split.capsule.installConfigId, split.capsule.updatedAt, source.id, source.workspaceId],
     );
     if (capsuleResult.rows.length !== 1) throw new Error("Source ownership migration lost Capsule row");
     for (const plan of split.planRuns) {

@@ -7,12 +7,13 @@ import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { Capsule, CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
-import { isPlanRunRecord, type StoredRunRecord, type StoredSource } from
+import { isPlanRunRecord, type StoredInstallConfig, type StoredRunRecord, type StoredSource } from
   "../../core/domains/deploy-control/store.ts";
 import type { StoredGitInstallPlan } from "../../core/domains/install-plans/store.ts";
 import { getCapsuleAdoptedSourceSnapshot } from "../../core/domains/deploy-control/capsule_source_revision.ts";
 import { normalizeSourceSnapshotRecord } from "../../core/domains/deploy-control/store_row_mappers.ts";
 import { sha256HexOfStringAsync } from "../../core/shared/runtime/hash.ts";
+import { stableStringify } from "../../core/adapters/source/digest.ts";
 import type {
   SourceOwnershipMigrationGroup,
   SourceOwnershipMigrationMutation,
@@ -21,7 +22,7 @@ import type { D1Database, D1PreparedStatement } from "./bindings.ts";
 
 type PhysicalRow = Record<string, string | number | null>;
 type Table = "sources" | "capsules" | "source_snapshots" | "runs" |
-  "capsule_compatibility_reports" | "git_install_plans";
+  "capsule_compatibility_reports" | "git_install_plans" | "install_configs";
 interface ObservedTable {
   readonly table: Table;
   readonly where: string;
@@ -39,6 +40,33 @@ const scopes = (sourceId: string): readonly Omit<ObservedTable, "rows">[] => [
   { table: "runs", where: "(type in ('source_sync', 'compatibility_check') and source_id = ?) or (type in ('plan', 'destroy_plan', 'drift_check') and installation_id in (select id from capsules where source_id = ?))", args: [sourceId, sourceId] },
   { table: "capsule_compatibility_reports", where: "source_id = ? or installation_id in (select id from capsules where source_id = ?)", args: [sourceId, sourceId] },
   { table: "git_install_plans", where: "json_extract(record_json, '$.sourceId') = ? or json_extract(record_json, '$.preflight.sourceId') = ? or json_extract(record_json, '$.capsuleId') in (select id from capsules where source_id = ?)", args: [sourceId, sourceId, sourceId] },
+  { table: "install_configs", where: `
+    id in (select install_config_id from capsules where source_id = ?)
+    or id in (select json_extract(g.record_json, '$.installConfigId') from git_install_plans g
+      where json_extract(g.record_json, '$.sourceId') = ?
+        or json_extract(g.record_json, '$.preflight.sourceId') = ?
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+    or id in (select json_extract(g.record_json, '$.preflight.installConfigId') from git_install_plans g
+      where json_extract(g.record_json, '$.sourceId') = ?
+        or json_extract(g.record_json, '$.preflight.sourceId') = ?
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+    or id in (select json_extract(g.record_json, '$.installConfigBaseId') from git_install_plans g
+      where json_extract(g.record_json, '$.sourceId') = ?
+        or json_extract(g.record_json, '$.preflight.sourceId') = ?
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+    or id in (select json_extract(g.record_json, '$.revision.base.installConfigId') from git_install_plans g
+      where json_extract(g.record_json, '$.sourceId') = ?
+        or json_extract(g.record_json, '$.preflight.sourceId') = ?
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+    or json_extract(record_json, '$.internal.sourceSnapshotId') in
+      (select id from source_snapshots where source_id = ?)
+    or json_extract(record_json, '$.internal.genericOpenTofuSourceSnapshotId') in
+      (select id from source_snapshots where source_id = ?)
+    or json_extract(record_json, '$.internal.migrationRestore.sourceSnapshotId') in
+      (select id from source_snapshots where source_id = ?)
+    or json_extract(record_json, '$.internal.reAdoption.sourceSnapshotId') in
+      (select id from source_snapshots where source_id = ?)`,
+    args: Array(17).fill(sourceId) },
 ];
 
 async function rows(db: D1Database, sql: string, args: readonly unknown[] = []): Promise<PhysicalRow[]> {
@@ -188,10 +216,19 @@ export async function readD1SourceOwnershipGroup(
     }
     return plan;
   });
+  const installConfigs = table("install_configs").map((row) => {
+    const config = parseJson<StoredInstallConfig>(row, "record_json");
+    if (config.id !== row.id || (config.workspaceId ?? null) !== row.space_id ||
+      config.createdAt !== row.created_at || config.updatedAt !== row.updated_at) {
+      throw new Error(`D1 Source ownership InstallConfig scope mismatch: ${row.id}`);
+    }
+    return config;
+  });
   const capsules = await Promise.all(capsuleRows.map(async (row) => {
     const capsule = parseJson<Capsule>(row, "record_json");
     if (capsule.id !== row.id || capsule.sourceId !== sourceId || capsule.workspaceId !== source.workspaceId ||
-      capsule.status !== row.status || capsule.updatedAt !== row.updated_at) {
+      capsule.status !== row.status || capsule.installConfigId !== row.install_config_id ||
+      capsule.updatedAt !== row.updated_at) {
       throw new Error(`D1 Source ownership Capsule scope mismatch: ${row.id}`);
     }
     const adopted = capsule.status === "destroyed" ? undefined :
@@ -230,7 +267,8 @@ export async function readD1SourceOwnershipGroup(
     throw new Error("D1 Source ownership report inventory changed");
   }
   const group: SourceOwnershipMigrationGroup = {
-    source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans, inFlightRunIds,
+    source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans,
+    installConfigs, inFlightRunIds,
   };
   observations.set(group, observed);
   return group;
@@ -305,6 +343,7 @@ export async function commitD1SourceOwnershipGroup(
     and status in ('queued', 'running', 'waiting_approval')) then 1
     else json_extract('source_ownership_conflict', '$') end as guard`).bind(mutation.sourceId, mutation.sourceId));
   const sourceRow = oldRow(physicalByTable, "sources", mutation.sourceId);
+  const movedCapsuleIds = new Set(mutation.splits.map((split) => split.capsuleId));
   statements.push(db.prepare(`update sources set status = ?, record_json = ?, updated_at = ? where id = ?`)
     .bind(mutation.retainedSource.status, checkedJson(mutation.retainedSource, "retained Source"),
       mutation.retainedSource.updatedAt, mutation.sourceId));
@@ -316,6 +355,31 @@ export async function commitD1SourceOwnershipGroup(
     const before = parseRun<SourceSyncRun>(oldRow(physicalByTable, "runs", run.id));
     statements.push(db.prepare(`update runs set run_json = ? where id = ?`)
       .bind(checkedJson({ ...before, archiveRef: run.archiveRef }, `retained SyncRun:${run.id}`), run.id));
+  }
+  for (const run of mutation.retainedCompatibilityRuns) {
+    const base = oldRow(physicalByTable, "runs", run.id);
+    const before = parseRun<Run>(base);
+    if (base.type !== "compatibility_check" ||
+      !mutation.expected.compatibilityRuns.some((entry) => entry.id === run.id) ||
+      !before.capsuleId || !movedCapsuleIds.has(before.capsuleId) ||
+      run.capsuleId !== undefined || run.sourceId !== mutation.sourceId ||
+      stableStringify(run) !== stableStringify({ ...before, capsuleId: undefined })) {
+      throw new Error(`D1 Source ownership retained CompatibilityRun mismatch: ${run.id}`);
+    }
+    statements.push(db.prepare(`update runs set installation_id = ?, run_json = ? where id = ?`)
+      .bind(run.capsuleId ?? null,
+        checkedJson({ ...before, capsuleId: run.capsuleId }, `retained CompatibilityRun:${run.id}`), run.id));
+  }
+  for (const report of mutation.retainedReports) {
+    const before = mutation.expected.reports.find((entry) => entry.id === report.id);
+    const physical = oldRow(physicalByTable, "capsule_compatibility_reports", report.id);
+    if (!before || !before.capsuleId || !movedCapsuleIds.has(before.capsuleId) ||
+      physical.installation_id !== before.capsuleId || report.capsuleId !== undefined ||
+      stableStringify(report) !== stableStringify({ ...before, capsuleId: undefined })) {
+      throw new Error(`D1 Source ownership retained report mismatch: ${report.id}`);
+    }
+    statements.push(db.prepare(`update capsule_compatibility_reports set installation_id = ? where id = ?`)
+      .bind(report.capsuleId ?? null, report.id));
   }
   for (const split of mutation.splits) {
     const originalSnapshotsBySplitId = new Map(await Promise.all(
@@ -334,8 +398,17 @@ export async function commitD1SourceOwnershipGroup(
       id: split.source.id, status: split.source.status,
       record_json: checkedJson(split.source, `split Source:${split.source.id}`), created_at: split.source.createdAt,
       updated_at: split.source.updatedAt }));
-    statements.push(db.prepare(`update capsules set source_id = ?, record_json = ?, updated_at = ? where id = ?`)
-      .bind(split.source.id, checkedJson(split.capsule, `Capsule:${split.capsule.id}`), split.capsule.updatedAt, split.capsule.id));
+    for (const entry of split.installConfigs) {
+      const base = oldRow(physicalByTable, "install_configs", entry.originalId);
+      const config = entry.config;
+      statements.push(insertRow(db, "install_configs", { ...base,
+        id: config.id, space_id: config.workspaceId ?? null,
+        record_json: checkedJson(config, `split InstallConfig:${config.id}`),
+        created_at: config.createdAt, updated_at: config.updatedAt }));
+    }
+    statements.push(db.prepare(`update capsules set source_id = ?, install_config_id = ?, record_json = ?, updated_at = ? where id = ?`)
+      .bind(split.source.id, split.capsule.installConfigId,
+        checkedJson(split.capsule, `Capsule:${split.capsule.id}`), split.capsule.updatedAt, split.capsule.id));
     for (const snapshot of split.snapshots) {
       const original = originalSnapshotsBySplitId.get(snapshot.id);
       const base = original ? oldRow(physicalByTable, "source_snapshots", original.id) : undefined;

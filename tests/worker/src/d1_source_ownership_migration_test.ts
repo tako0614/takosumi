@@ -7,9 +7,12 @@ import type { StoredGitInstallPlan } from "../../../core/domains/install-plans/s
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { D1PreparedStatement, D1Result } from "../../../worker/src/bindings.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../worker/src/d1_opentofu_store.ts";
+import { handleSourceOwnershipMigrationOperatorRequest, SOURCE_OWNERSHIP_MIGRATION_PATH } from
+  "../../../worker/src/source_ownership_migration_operator.ts";
+import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
-import { migrateSourceOwnership, prepareSourceOwnershipMigration } from
+import { inventorySourceOwnershipGroup, migrateSourceOwnership, prepareSourceOwnershipMigration } from
   "../../../core/domains/sources/ownership-migration.ts";
 
 const t0 = "2026-10-01T00:00:00.000Z";
@@ -39,6 +42,11 @@ async function fixture(db: InterleavedD1, capsuleIds: readonly string[], ownerCa
       sourceId, installConfigId: `cfg_${id}`, environment: "production", currentStateGeneration: 0,
       status: "active", createdAt: t0, updatedAt: t0 };
     await store.putCapsule(capsule);
+    const config = { id: capsule.installConfigId, workspaceId, name: `config ${id}`,
+      createdAt: t0, updatedAt: t0 };
+    await db.prepare(`insert into install_configs (id, space_id, record_json, created_at, updated_at)
+      values (?, ?, ?, ?, ?)`)
+      .bind(config.id, workspaceId, JSON.stringify(config), t0, t0).run();
   }
   return store;
 }
@@ -66,7 +74,7 @@ test("D1 migrates one shared Source, copying a complete snapshot and producer Ru
     source: { kind: "git", url, ref: "main", commit: "a".repeat(40) },
     sourceDigest: "digest", variablesDigest: "digest" } as unknown as PlanRun;
   await store.putPlanRun(plan);
-  const compatibilityRun: Run = { id: "check_old", workspaceId, sourceId,
+  const compatibilityRun: Run = { id: "check_old", workspaceId, sourceId, capsuleId: "cap_b",
     type: "compatibility_check", status: "succeeded", sourceSnapshotId: snapshot.id,
     compatibilityReportId: report.id };
   await store.putCompatibilityCheckRun(compatibilityRun);
@@ -92,9 +100,15 @@ test("D1 migrates one shared Source, copying a complete snapshot and producer Ru
   // identity still places it in this migration group.
   const legacyRevision = { ...gitPlan, id: "revision_old", operation: "revision",
     idempotencyKeyHash: "revision_hash", phase: "failed", generation: 2,
+    revision: { base: { installConfigId: "cfg_revision_base" } },
     sourceId: undefined, sourceSyncRunId: undefined, sourceSnapshotId: undefined,
     compatibilityReportId: undefined, compatibilityCheckRunId: undefined,
     preflight: undefined } as StoredGitInstallPlan;
+  const revisionBase = { id: "cfg_revision_base", workspaceId, name: "old revision base",
+    createdAt: t0, updatedAt: t0 };
+  await db.prepare(`insert into install_configs (id, space_id, record_json, created_at, updated_at)
+    values (?, ?, ?, ?, ?)`)
+    .bind(revisionBase.id, workspaceId, JSON.stringify(revisionBase), t0, t0).run();
   await db.prepare(`insert into git_install_plans
     (id, workspace_id, actor_subject, idempotency_key_hash, request_digest,
       phase, generation, record_json, created_at, updated_at)
@@ -103,6 +117,8 @@ test("D1 migrates one shared Source, copying a complete snapshot and producer Ru
       legacyRevision.idempotencyKeyHash, legacyRevision.requestDigest,
       legacyRevision.phase, legacyRevision.generation, JSON.stringify(legacyRevision),
       legacyRevision.createdAt, legacyRevision.updatedAt).run();
+  expect((await store.readGroup(sourceId))?.installConfigs.map((config) => config.id))
+    .toContain(revisionBase.id);
   let copied = 0;
   const result = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
     { copyVerified: async () => { copied++; } }, { apply: true, now: "2026-10-28T00:00:00.000Z" });
@@ -137,11 +153,116 @@ test("D1 migrates one shared Source, copying a complete snapshot and producer Ru
   expect(movedGitPlan.preflight?.compatibilityCheckRunId).toBe(movedGitPlan.compatibilityCheckRunId);
   const movedCheck = await store.getCompatibilityCheckRun(movedGitPlan.compatibilityCheckRunId!);
   expect(movedCheck?.sourceId).toBe(moved!.sourceId);
+  expect(movedCheck?.capsuleId).toBe("cap_b");
   expect(movedCheck?.sourceSnapshotId).toBe(copiedSnapshots[0]?.id);
   expect(movedCheck?.compatibilityReportId).toBe(movedReport?.id);
+  const oldCheck = await db.prepare("select installation_id, run_json from runs where id = ?")
+    .bind(compatibilityRun.id).first<{ installation_id: string | null; run_json: string }>();
+  expect(oldCheck?.installation_id).toBeNull();
+  expect((JSON.parse(oldCheck!.run_json) as Run).capsuleId).toBeUndefined();
   const movedLegacyRow = await db.prepare("select record_json from git_install_plans where id = ?")
     .bind(legacyRevision.id).first<{ record_json: string }>();
   expect((JSON.parse(movedLegacyRow!.record_json) as StoredGitInstallPlan).sourceId).toBe(moved!.sourceId);
+});
+
+test("D1 split clones a Capsule InstallConfig and repoints its Snapshot provenance", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a", "cap_b"]);
+  const archiveRef = `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_config/source.tar.zst`;
+  await store.putSourceSyncRun({ id: "ssr_config", kind: "source_sync", workspaceId, sourceId, url,
+    ref: "main", path: ".", archiveRef, status: "succeeded", snapshotId: "snap_config",
+    createdAt: t0, updatedAt: t0 });
+  await store.putSourceSnapshot({ id: "snap_config", origin: "git", workspaceId, sourceId, url,
+    ref: "main", path: ".", resolvedCommit: "a".repeat(40), archiveRef,
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+    fetchedByRunId: "ssr_config", fetchedAt: t0 });
+  const config = { id: "cfg_cap_b", workspaceId, name: "config b",
+    internal: { reason: "per_install_overrides", sourceSnapshotId: "snap_config" },
+    workspaceManagementAuthority: { workspaceId, managementState: "active", managementEpoch: 1 },
+    createdAt: t0, updatedAt: t0 };
+  await db.prepare(`update install_configs set record_json = ? where id = ?`)
+    .bind(JSON.stringify(config), config.id).run();
+  const [result] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now: "2026-10-28T00:00:00.000Z" });
+  expect(result?.status).toBe("committed");
+  const moved = (await store.getCapsule("cap_b"))!;
+  expect(moved.installConfigId).not.toBe(config.id);
+  const newRow = await db.prepare("select record_json from install_configs where id = ?")
+    .bind(moved.installConfigId).first<{ record_json: string }>();
+  const movedSnapshotId = JSON.parse(newRow!.record_json).internal.sourceSnapshotId as string;
+  expect(movedSnapshotId).not.toBe("snap_config");
+  expect((await store.getSourceSnapshot(movedSnapshotId))?.sourceId).toBe(moved.sourceId);
+  expect((await store.listSourceSnapshots(moved.sourceId))[0]?.id).toBe(movedSnapshotId);
+  expect(JSON.parse(newRow!.record_json).workspaceManagementAuthority)
+    .toEqual(config.workspaceManagementAuthority);
+  const movedPhysical = await db.prepare("select install_config_id from capsules where id = ?")
+    .bind(moved.id).first<{ install_config_id: string }>();
+  expect(movedPhysical?.install_config_id).toBe(moved.installConfigId);
+  expect((await db.prepare("select record_json from install_configs where id = ?")
+    .bind(config.id).first<{ record_json: string }>())?.record_json).toBe(JSON.stringify(config));
+  const retainedGroup = await store.readGroup(sourceId);
+  const movedGroup = await store.readGroup(moved.sourceId);
+  expect(inventorySourceOwnershipGroup(retainedGroup!).action).toBe("none");
+  expect(inventorySourceOwnershipGroup(movedGroup!).action).toBe("none");
+  const dryRunCopier = { copyVerified: async () => { throw new Error("unexpected retry copy"); } };
+  expect((await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    dryRunCopier, { sourceId }))[0]?.status).toBe("unchanged");
+  expect((await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    dryRunCopier, { sourceId: moved.sourceId }))[0]?.status).toBe("unchanged");
+});
+
+test("D1 split releases the old report's moved Capsule association", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a", "cap_b"]);
+  const archiveRef = `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_report/source.tar.zst`;
+  await store.putSourceSyncRun({ id: "ssr_report", kind: "source_sync", workspaceId, sourceId, url,
+    ref: "main", path: ".", archiveRef, status: "succeeded", snapshotId: "snap_report",
+    createdAt: t0, updatedAt: t0 });
+  await store.putSourceSnapshot({ id: "snap_report", origin: "git", workspaceId, sourceId, url,
+    ref: "main", path: ".", resolvedCommit: "a".repeat(40), archiveRef,
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+    fetchedByRunId: "ssr_report", fetchedAt: t0 });
+  await store.putCapsuleCompatibilityReport({ id: "report_bound", sourceId, capsuleId: "cap_b",
+    sourceSnapshotId: "snap_report", modulePath: ".", level: "ready", findings: [],
+    providerPackages: [], rootProviderRequirements: [], resources: [], dataSources: [],
+    provisioners: [], createdAt: t0 });
+  await store.putCompatibilityCheckRun({ id: "check_bound", workspaceId, sourceId,
+    capsuleId: "cap_b", type: "compatibility_check", status: "succeeded",
+    sourceSnapshotId: "snap_report", compatibilityReportId: "report_bound" });
+  const observed = await store.readGroup(sourceId);
+  const prepared = await prepareSourceOwnershipMigration(observed!, new ObjectKeyArtifactReferenceAllocator(),
+    "2026-10-28T00:00:00.000Z");
+  expect(prepared?.retainedReports).toHaveLength(1);
+  expect(prepared?.retainedCompatibilityRuns).toHaveLength(1);
+  await expect(store.commitGroup({ ...prepared!, retainedReports:
+    prepared!.retainedReports.map((report) => ({ ...report, sourceSnapshotId: "wrong_snapshot" })) }))
+    .rejects.toThrow("retained report mismatch");
+  await expect(store.commitGroup({ ...prepared!, retainedCompatibilityRuns:
+    prepared!.retainedCompatibilityRuns.map((run) => ({ ...run, status: "failed" as const })) }))
+    .rejects.toThrow("retained CompatibilityRun mismatch");
+  expect((await store.getCapsule("cap_b"))?.sourceId).toBe(sourceId);
+  const [result] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now: "2026-10-28T00:00:00.000Z" });
+  expect(result?.status).toBe("committed");
+  const old = await db.prepare("select installation_id from capsule_compatibility_reports where id = ?")
+    .bind("report_bound").first<{ installation_id: string | null }>();
+  expect(old?.installation_id).toBeNull();
+  const movedSourceId = (await store.getCapsule("cap_b"))!.sourceId;
+  const oldGroup = await store.readGroup(sourceId);
+  const newGroup = await store.readGroup(movedSourceId);
+  const copiedReport = newGroup?.reports.find((report) => report.id !== "report_bound");
+  const copiedCheck = newGroup?.compatibilityRuns.find((run) => run.id !== "check_bound");
+  expect(copiedReport?.sourceId).toBe(movedSourceId);
+  expect(copiedReport?.capsuleId).toBe("cap_b");
+  expect(copiedCheck?.sourceId).toBe(movedSourceId);
+  expect(copiedCheck?.capsuleId).toBe("cap_b");
+  expect(copiedCheck?.compatibilityReportId).toBe(copiedReport?.id);
+  const oldCheck = await db.prepare("select installation_id, run_json from runs where id = ?")
+    .bind("check_bound").first<{ installation_id: string | null; run_json: string }>();
+  expect(oldCheck?.installation_id).toBeNull();
+  expect((JSON.parse(oldCheck!.run_json) as Run).capsuleId).toBeUndefined();
+  expect(inventorySourceOwnershipGroup(oldGroup!).action).toBe("none");
+  expect(inventorySourceOwnershipGroup(newGroup!).action).toBe("none");
 });
 
 test("D1 normalizes a foreign archive reference on an already owned Source", async () => {
@@ -296,4 +417,52 @@ test("D1 rolls back the whole migration when the observed Source changes before 
   expect((await store.getSource(sourceId))?.name).toBe("changed");
   expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
   expect((await store.getCapsule("cap_a"))?.sourceId).toBe(sourceId);
+});
+
+test("D1 conflicts when private InstallConfig authority changes after inventory", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a"]);
+  const group = await store.readGroup(sourceId);
+  const mutation = await prepareSourceOwnershipMigration(group!, new ObjectKeyArtifactReferenceAllocator(), t0);
+  db.beforeNextBatch = async () => {
+    const before = group!.installConfigs.find((config) => config.id === "cfg_cap_a")!;
+    const changed = { ...before, workspaceManagementAuthority: {
+      workspaceId, managementState: "active", managementEpoch: 77 } };
+    await db.prepare("update install_configs set record_json = ? where id = ?")
+      .bind(JSON.stringify(changed), changed.id).run();
+  };
+  expect(await store.commitGroup(mutation!)).toBe("conflict");
+  expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
+  const configRow = await db.prepare("select record_json from install_configs where id = ?")
+    .bind("cfg_cap_a").first<{ record_json: string }>();
+  expect(JSON.parse(configRow!.record_json).workspaceManagementAuthority.managementEpoch).toBe(77);
+});
+
+test("D1 inventory rejects Capsule JSON and physical InstallConfig identity drift", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a"]);
+  await db.prepare("update capsules set install_config_id = ? where id = ?")
+    .bind("cfg_wrong", "cap_a").run();
+  await expect(store.readGroup(sourceId)).rejects.toThrow("Capsule scope mismatch: cap_a");
+  expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
+});
+
+test("operator dry-run response does not expose private InstallConfig authority", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a"]);
+  const config = { id: "cfg_cap_a", workspaceId, name: "config cap_a", createdAt: t0,
+    updatedAt: t0, workspaceManagementAuthority: { workspaceId,
+      managementState: "active", managementEpoch: 77 }, privateMarker: "private_authority_do_not_expose" };
+  await db.prepare("update install_configs set record_json = ? where id = ?")
+    .bind(JSON.stringify(config), config.id).run();
+  const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator_token", TAKOSUMI_CONTROL_DB: db } as
+    unknown as CloudflareWorkerEnv;
+  const request = new Request(`https://example.test${SOURCE_OWNERSHIP_MIGRATION_PATH}?sourceId=${sourceId}`,
+    { headers: { authorization: "Bearer operator_token" } });
+  const response = await handleSourceOwnershipMigrationOperatorRequest(request, env, { store });
+  expect(response?.status).toBe(200);
+  const body = await response!.text();
+  expect(body).not.toContain("workspaceManagementAuthority");
+  expect(body).not.toContain("private_authority_do_not_expose");
+  expect(JSON.parse(body).results[0].status).toBe("dry_run");
 });

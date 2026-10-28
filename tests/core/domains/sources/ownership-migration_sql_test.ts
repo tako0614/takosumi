@@ -1,6 +1,7 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -48,9 +49,25 @@ async function fixture(capsuleIds: readonly string[]) {
         capsule.sourceId, capsule.installConfigId, capsule.status,
         JSON.stringify(capsule), NOW, NOW],
     );
+    const config: InstallConfig = { id: capsule.installConfigId,
+      workspaceId: workspace.id, name: id, variableMapping: {},
+      outputAllowlist: {}, policy: {}, createdAt: NOW, updatedAt: NOW };
+    await client.query(
+      `insert into takosumi_install_configs
+        (id, space_id, config_json, created_at, updated_at)
+       values ($1, $2, $3::jsonb, $4, $5)`,
+      [config.id, config.workspaceId, JSON.stringify(config), NOW, NOW],
+    );
   }
   return { client, store, source };
 }
+
+test("Postgres migration inventories Capsule InstallConfigs", async () => {
+  const { store, source } = await fixture(["cap_a", "cap_b"]);
+  const group = (await store.readGroup(source.id))!;
+  expect((Reflect.get(group, "installConfigs") as readonly InstallConfig[] | undefined)?.map((config) => config.id))
+    .toEqual(["cfg_cap_a", "cfg_cap_b"]);
+});
 
 test("Postgres Source split commits Source, Capsule and Activity atomically", async () => {
   const { client, store } = await fixture(["cap_a", "cap_b"]);
@@ -86,6 +103,31 @@ test("Postgres Source migration rejects changed group before any write", async (
   expect(await store.listSources()).toHaveLength(1);
   const events = await client.query(`select id from takosumi_audit_events where action = 'source.split'`);
   expect(events.rows).toHaveLength(0);
+});
+
+test("Postgres migration conflicts on a private InstallConfig change after inventory", async () => {
+  const { client, store, source } = await fixture(["cap_a", "cap_b"]);
+  const authority = { workspaceId: source.workspaceId, managementState: "active",
+    managementEpoch: 1 };
+  await client.query(
+    `update takosumi_install_configs
+        set config_json = config_json || jsonb_build_object('workspaceManagementAuthority', $2::jsonb)
+      where id = $1`, ["cfg_cap_b", JSON.stringify(authority)],
+  );
+  const dry = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} });
+  expect(JSON.stringify(dry)).not.toContain("workspaceManagementAuthority");
+  const group = (await store.readGroup(source.id))!;
+  const mutation = (await prepareSourceOwnershipMigration(
+    group, new ObjectKeyArtifactReferenceAllocator(), NOW))!;
+  await client.query(
+    `update takosumi_install_configs
+        set config_json = jsonb_set(config_json, '{workspaceManagementAuthority,managementEpoch}', '2'::jsonb)
+      where id = $1`, ["cfg_cap_b"],
+  );
+  expect(await store.commitGroup(mutation)).toBe("conflict");
+  expect((await store.getSource(source.id))?.ownerCapsuleId).toBeUndefined();
+  expect((await store.getCapsule("cap_b"))?.sourceId).toBe(source.id);
 });
 
 test("Postgres Source split collision rolls back the retained Source update", async () => {
@@ -126,10 +168,24 @@ test("Postgres split rewrites snapshot, sync, PlanRun, report and GitInstallPlan
      values ($1, $2, $3::jsonb, $4)`,
     [snapshot.id, snapshot.sourceId, JSON.stringify(snapshot), snapshot.fetchedAt],
   );
+  const currentConfig = { id: "cfg_cap_b", workspaceId: source.workspaceId,
+    name: "cap_b", variableMapping: {}, outputAllowlist: {}, policy: {},
+    internal: { reason: "per_install_overrides", sourceSnapshotId: snapshot.id },
+    workspaceManagementAuthority: { workspaceId: source.workspaceId,
+      managementState: "active", managementEpoch: 1 },
+    createdAt: NOW, updatedAt: NOW };
+  await client.query(
+    `update takosumi_install_configs set config_json = $2::jsonb where id = $1`,
+    [currentConfig.id, JSON.stringify(currentConfig)],
+  );
   const report: CapsuleCompatibilityReport = { id: "report_shared", sourceId: source.id,
     sourceSnapshotId: snapshot.id, level: "ready", findings: [], providerPackages: [],
     rootProviderRequirements: [], resources: [], dataSources: [], provisioners: [], createdAt: NOW };
   await store.putCapsuleCompatibilityReport(report);
+  const capsuleReport: CapsuleCompatibilityReport = {
+    ...report, id: "report_capsule_b", capsuleId: "cap_b",
+  };
+  await store.putCapsuleCompatibilityReport(capsuleReport);
   const compatibilityRun = { id: "check_shared", workspaceId: source.workspaceId,
     sourceId: source.id, sourceSnapshotId: snapshot.id,
     compatibilityReportId: report.id, type: "compatibility_check",
@@ -140,6 +196,16 @@ test("Postgres split rewrites snapshot, sync, PlanRun, report and GitInstallPlan
      values ($1, 'compatibility_check', $2, $3, $4, $5, $6::jsonb)`,
     [compatibilityRun.id, compatibilityRun.workspaceId, compatibilityRun.sourceId,
       compatibilityRun.status, compatibilityRun.createdAt, JSON.stringify(compatibilityRun)],
+  );
+  const capsuleCheckRun = { ...compatibilityRun, id: "check_capsule_b",
+    capsuleId: "cap_b", compatibilityReportId: capsuleReport.id };
+  await client.query(
+    `insert into takosumi_runs
+      (id, kind, space_id, source_id, installation_id, status, created_at, run_json)
+     values ($1, 'compatibility_check', $2, $3, $4, $5, $6, $7::jsonb)`,
+    [capsuleCheckRun.id, capsuleCheckRun.workspaceId, capsuleCheckRun.sourceId,
+      capsuleCheckRun.capsuleId, capsuleCheckRun.status,
+      capsuleCheckRun.createdAt, JSON.stringify(capsuleCheckRun)],
   );
   const plan = { id: "plan_b", workspaceId: source.workspaceId, capsuleId: "cap_b",
     source: { kind: "git", url: source.url, ref: "main", commit: "abc123" },
@@ -155,10 +221,10 @@ test("Postgres split rewrites snapshot, sync, PlanRun, report and GitInstallPlan
     actorSubject: "owner", idempotencyKeyHash: "hash", requestDigest: "digest",
     phase: "reviewable", generation: 1, capsuleId: "cap_b", sourceId: source.id,
     sourceSnapshotId: snapshot.id, sourceSyncRunId: sync.id,
-    compatibilityReportId: report.id, compatibilityCheckRunId: compatibilityRun.id,
+    compatibilityReportId: report.id, compatibilityCheckRunId: capsuleCheckRun.id,
     preflight: { sourceId: source.id, sourceSnapshotId: snapshot.id,
       compatibilityCheckRunId: compatibilityRun.id, compatibilityReportId: report.id,
-      installConfigId: "cfg_b" },
+      installConfigId: currentConfig.id },
     createdAt: NOW, updatedAt: NOW } as unknown as StoredGitInstallPlan;
   await client.query(
     `insert into takosumi_git_install_plans
@@ -170,7 +236,8 @@ test("Postgres split rewrites snapshot, sync, PlanRun, report and GitInstallPlan
   );
   const original = (await store.readGroup(source.id))!;
   expect(original.syncRuns.map((run) => run.id)).toEqual([sync.id]);
-  expect(original.compatibilityRuns.map((run) => run.id)).toEqual([compatibilityRun.id]);
+  expect(original.compatibilityRuns.map((run) => run.id)).toEqual([capsuleCheckRun.id, compatibilityRun.id]);
+  expect(original.installConfigs.map((config) => config.id)).toEqual(["cfg_cap_a", "cfg_cap_b"]);
   expect(original.planRuns.map((run) => run.id)).toEqual([plan.id]);
   expect(original.gitPlans.map((run) => run.id)).toEqual([gitPlan.id]);
   const result = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
@@ -178,20 +245,97 @@ test("Postgres split rewrites snapshot, sync, PlanRun, report and GitInstallPlan
   expect(result[0]?.status).toBe("committed");
   const moved = (await store.listSources()).find((item) => item.ownerCapsuleId === "cap_b")!;
   const group = (await store.readGroup(moved.id))!;
+  const copiedPreflightReport = group.reports.find((item) => item.capsuleId === undefined)!;
+  const copiedPreflightRun = group.compatibilityRuns.find((item) => item.capsuleId === undefined)!;
+  const copiedCapsuleRun = group.compatibilityRuns.find((item) => item.capsuleId === "cap_b")!;
   expect(group.snapshots).toHaveLength(1);
   expect(group.syncRuns).toHaveLength(1);
-  expect(group.compatibilityRuns).toHaveLength(1);
+  expect(group.compatibilityRuns).toHaveLength(2);
   expect(group.snapshots[0]?.fetchedByRunId).toBe(group.syncRuns[0]?.id);
   expect(group.snapshots[0]?.archiveRef).toContain(`/sources/${moved.id}/`);
   expect(group.planRuns[0]?.sourceSnapshotId).toBe(group.snapshots[0]?.id);
-  expect(group.reports[0]?.sourceSnapshotId).toBe(group.snapshots[0]?.id);
+  expect(copiedPreflightReport.sourceSnapshotId).toBe(group.snapshots[0]?.id);
   expect(group.gitPlans[0]?.sourceSnapshotId).toBe(group.snapshots[0]?.id);
   expect(group.gitPlans[0]?.sourceSyncRunId).toBe(group.syncRuns[0]?.id);
-  expect(group.gitPlans[0]?.compatibilityReportId).toBe(group.reports[0]?.id);
-  expect(group.gitPlans[0]?.compatibilityCheckRunId).toBe(group.compatibilityRuns[0]?.id);
-  expect(group.gitPlans[0]?.preflight?.compatibilityCheckRunId).toBe(group.compatibilityRuns[0]?.id);
-  expect(group.compatibilityRuns[0]?.sourceSnapshotId).toBe(group.snapshots[0]?.id);
-  expect(group.compatibilityRuns[0]?.compatibilityReportId).toBe(group.reports[0]?.id);
+  expect(group.gitPlans[0]?.compatibilityReportId).toBe(copiedPreflightReport.id);
+  expect(group.gitPlans[0]?.compatibilityCheckRunId).toBe(copiedCapsuleRun.id);
+  expect(group.gitPlans[0]?.preflight?.compatibilityCheckRunId).toBe(copiedPreflightRun.id);
+  expect(copiedPreflightRun.sourceSnapshotId).toBe(group.snapshots[0]?.id);
+  expect(copiedPreflightRun.compatibilityReportId).toBe(copiedPreflightReport.id);
+  expect((await store.getCapsuleCompatibilityReport(capsuleReport.id))?.capsuleId).toBeUndefined();
+  expect((await store.getCompatibilityCheckRun(capsuleCheckRun.id))?.capsuleId).toBeUndefined();
+  const movedCapsule = (await store.getCapsule("cap_b"))!;
+  expect(movedCapsule.installConfigId).not.toBe(currentConfig.id);
+  const movedConfig = (await store.getInstallConfig(movedCapsule.installConfigId))!;
+  expect(movedConfig.internal?.sourceSnapshotId).toBe(group.snapshots[0]?.id);
+  expect((await store.getSourceSnapshot(movedConfig.internal!.sourceSnapshotId!))?.sourceId).toBe(moved.id);
+  const rawConfig = await client.query<{ configJson: { workspaceManagementAuthority?: unknown } }>(
+    `select config_json as "configJson" from takosumi_install_configs where id = $1`,
+    [movedConfig.id],
+  );
+  expect(rawConfig.rows[0]?.configJson.workspaceManagementAuthority)
+    .toEqual(currentConfig.workspaceManagementAuthority);
+  const dry = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} });
+  expect(dry.map((item) => [item.inventory.sourceId, item.status]).sort())
+    .toEqual([[moved.id, "unchanged"], [source.id, "unchanged"]].sort());
+});
+
+test("Postgres split carries standalone Capsule compatibility evidence without a GitInstallPlan", async () => {
+  const { client, store, source } = await fixture(["cap_a", "cap_b"]);
+  const sync: SourceSyncRun = { id: "sync_standalone", kind: "source_sync",
+    workspaceId: source.workspaceId, sourceId: source.id, url: source.url,
+    ref: "main", path: ".", archiveRef: "archive_standalone",
+    status: "succeeded", snapshotId: "snap_standalone", createdAt: NOW, updatedAt: NOW };
+  const snapshot: SourceSnapshot = { id: sync.snapshotId!, origin: "git",
+    workspaceId: source.workspaceId, sourceId: source.id, url: source.url,
+    ref: "main", path: ".", resolvedCommit: "abc123", archiveRef: sync.archiveRef,
+    archiveDigest: "sha256:abc", archiveSizeBytes: 42,
+    fetchedByRunId: sync.id, fetchedAt: NOW };
+  await client.query(
+    `insert into takosumi_runs (id, kind, space_id, source_id, status, created_at, run_json)
+     values ($1, 'source_sync', $2, $3, $4, $5, $6::jsonb)`,
+    [sync.id, sync.workspaceId, sync.sourceId, sync.status, sync.createdAt, JSON.stringify(sync)],
+  );
+  await client.query(
+    `insert into takosumi_source_snapshots (id, source_id, snapshot_json, fetched_at)
+     values ($1, $2, $3::jsonb, $4)`,
+    [snapshot.id, snapshot.sourceId, JSON.stringify(snapshot), snapshot.fetchedAt],
+  );
+  const report: CapsuleCompatibilityReport = { id: "report_standalone",
+    sourceId: source.id, capsuleId: "cap_b", sourceSnapshotId: snapshot.id,
+    level: "ready", findings: [], providerPackages: [], rootProviderRequirements: [],
+    resources: [], dataSources: [], provisioners: [], createdAt: NOW };
+  await store.putCapsuleCompatibilityReport(report);
+  const check = { id: "check_standalone", workspaceId: source.workspaceId,
+    sourceId: source.id, capsuleId: "cap_b", sourceSnapshotId: snapshot.id,
+    compatibilityReportId: report.id, type: "compatibility_check",
+    status: "succeeded", createdAt: NOW };
+  await client.query(
+    `insert into takosumi_runs
+      (id, kind, space_id, source_id, installation_id, status, created_at, run_json)
+     values ($1, 'compatibility_check', $2, $3, $4, $5, $6, $7::jsonb)`,
+    [check.id, check.workspaceId, check.sourceId, check.capsuleId,
+      check.status, check.createdAt, JSON.stringify(check)],
+  );
+  expect((await store.readGroup(source.id))?.gitPlans).toEqual([]);
+  const applied = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now: NOW });
+  expect(applied[0]?.status).toBe("committed");
+  const moved = (await store.listSources()).find((item) => item.ownerCapsuleId === "cap_b")!;
+  const movedGroup = (await store.readGroup(moved.id))!;
+  expect(movedGroup.compatibilityRuns).toHaveLength(1);
+  expect(movedGroup.reports).toHaveLength(1);
+  expect(movedGroup.compatibilityRuns[0]?.capsuleId).toBe("cap_b");
+  expect(movedGroup.reports[0]?.capsuleId).toBe("cap_b");
+  expect(movedGroup.compatibilityRuns[0]?.sourceSnapshotId).toBe(movedGroup.snapshots[0]?.id);
+  expect(movedGroup.compatibilityRuns[0]?.compatibilityReportId).toBe(movedGroup.reports[0]?.id);
+  expect((await store.getCompatibilityCheckRun(check.id))?.capsuleId).toBeUndefined();
+  expect((await store.getCapsuleCompatibilityReport(report.id))?.capsuleId).toBeUndefined();
+  const dry = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} });
+  expect(dry.map((item) => [item.inventory.sourceId, item.status]).sort())
+    .toEqual([[moved.id, "unchanged"], [source.id, "unchanged"]].sort());
 });
 
 test("Postgres SourceSync admission rejects disabled and retiring Sources but replays exact rows", async () => {

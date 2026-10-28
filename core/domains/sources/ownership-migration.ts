@@ -12,7 +12,7 @@ import type { Capsule, CapsuleCompatibilityReport } from "takosumi-contract/caps
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
-import type { StoredSource } from "../deploy-control/store.ts";
+import type { StoredInstallConfig, StoredSource } from "../deploy-control/store.ts";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import type { StoredGitInstallPlan } from "../install-plans/store.ts";
@@ -32,6 +32,8 @@ export interface SourceOwnershipMigrationGroup {
   readonly planRuns: readonly PlanRun[];
   readonly reports: readonly CapsuleCompatibilityReport[];
   readonly gitPlans: readonly StoredGitInstallPlan[];
+  /** Exact private rows used by this Source's Capsules and install plans. */
+  readonly installConfigs: readonly StoredInstallConfig[];
   /** All non-terminal runs involving this Source or any of its Capsules. */
   readonly inFlightRunIds: readonly string[];
 }
@@ -70,6 +72,8 @@ export interface SourceOwnershipMigrationSplit {
   readonly planRuns: readonly PlanRun[];
   readonly reports: readonly CapsuleCompatibilityReport[];
   readonly gitPlans: readonly StoredGitInstallPlan[];
+  /** Insert-only copies whose SourceSnapshot pins now name this split lane. */
+  readonly installConfigs: readonly { readonly originalId: string; readonly config: StoredInstallConfig }[];
   readonly archiveCopies: readonly SourceOwnershipMigrationArchiveCopy[];
 }
 
@@ -82,6 +86,10 @@ export interface SourceOwnershipMigrationMutation {
   /** Existing rows whose foreign archive refs were copied into this Source. */
   readonly retainedSnapshots: readonly SourceSnapshot[];
   readonly retainedSyncRuns: readonly SourceSyncRun[];
+  /** Historical old-Source checks no longer claim the moved Capsule. */
+  readonly retainedCompatibilityRuns: readonly Run[];
+  /** Historical old-Source reports no longer claim the moved Capsule. */
+  readonly retainedReports: readonly CapsuleCompatibilityReport[];
   readonly splits: readonly SourceOwnershipMigrationSplit[];
   readonly archiveCopies: readonly SourceOwnershipMigrationArchiveCopy[];
   readonly activity: readonly ActivityEvent[];
@@ -115,6 +123,7 @@ export function inventorySourceOwnershipGroup(group: SourceOwnershipMigrationGro
   const destroyed = group.capsules.filter(({ capsule }) => capsule.status === "destroyed").map(({ capsule }) => capsule.id).sort();
   const inFlight = [...new Set(group.inFlightRunIds)].sort();
   const snapshotById = new Map(group.snapshots.map((snapshot) => [snapshot.id, snapshot]));
+  const configById = new Map(group.installConfigs.map((config) => [config.id, config]));
   const ownerCapsuleId = source.ownerCapsuleId ?? live[0];
   const ownerEvidence = group.capsules.find(({ capsule }) => capsule.id === ownerCapsuleId);
   const ownerAdopted = ownerEvidence?.adoptedSnapshotId
@@ -143,6 +152,19 @@ export function inventorySourceOwnershipGroup(group: SourceOwnershipMigrationGro
     reason = "git_install_plan_source_scope_mismatch";
   } else if (group.planRuns.some((run) => !run.capsuleId || !group.capsules.some(({ capsule }) => capsule.id === run.capsuleId))) {
     reason = "plan_run_capsule_scope_mismatch";
+  } else if (group.installConfigs.some((config) => config.workspaceId && config.workspaceId !== source.workspaceId)) {
+    reason = "install_config_workspace_scope_mismatch";
+  } else if (live.some((id) => !configById.has(group.capsules.find(({ capsule }) => capsule.id === id)!.capsule.installConfigId))) {
+    reason = "install_config_missing";
+  } else if (live.some((id) => installConfigSnapshotPins(
+    configById.get(group.capsules.find(({ capsule }) => capsule.id === id)!.capsule.installConfigId)!,
+  ).some((pin) => !snapshotById.has(pin)))) {
+    reason = "install_config_snapshot_scope_mismatch";
+  } else if (live.filter((id) => id !== ownerCapsuleId).some((id) => {
+    const config = configById.get(group.capsules.find(({ capsule }) => capsule.id === id)!.capsule.installConfigId)!;
+    return config.internal?.migrationRestore !== undefined || config.internal?.reAdoption !== undefined;
+  })) {
+    reason = "install_config_sealed_provenance";
   } else if (ownerEvidence?.adoptedSnapshotId && !ownerAdopted) {
     reason = "owner_adopted_snapshot_missing";
   } else if (source.ownerCapsuleId && !live.includes(source.ownerCapsuleId) && live.length > 0) {
@@ -183,6 +205,8 @@ export async function prepareSourceOwnershipMigration(
       ...retainedOwnerLane(group, inventory.ownerCapsuleId), updatedAt: now };
   const retainedSnapshots: SourceSnapshot[] = [];
   const retainedSyncRuns: SourceSyncRun[] = [];
+  const retainedCompatibilityRuns: Run[] = [];
+  const retainedReports: CapsuleCompatibilityReport[] = [];
   const retainedCopies: SourceOwnershipMigrationArchiveCopy[] = [];
   const canonicalSnapshots = new Map<string, SourceSnapshot>();
   for (const snapshot of group.snapshots) {
@@ -210,6 +234,12 @@ export async function prepareSourceOwnershipMigration(
   const splits: SourceOwnershipMigrationSplit[] = [];
   for (const capsuleId of inventory.splitCapsuleIds) {
     splits.push(await prepareSplit(group, capsuleId, allocator, now));
+    for (const run of group.compatibilityRuns) {
+      if (run.capsuleId === capsuleId) retainedCompatibilityRuns.push({ ...run, capsuleId: undefined });
+    }
+    for (const report of group.reports) {
+      if (report.capsuleId === capsuleId) retainedReports.push({ ...report, capsuleId: undefined });
+    }
   }
   const activity = await Promise.all(splits.map(async (split) => ({
     id: await deterministicId("act", group.source.id, split.capsuleId, "source.split"),
@@ -223,12 +253,18 @@ export async function prepareSourceOwnershipMigration(
   } satisfies ActivityEvent)));
   return { sourceId: group.source.id, expected: group,
     action: inventory.action as "backfill" | "retire" | "split" | "normalize", retainedSource,
-    retainedSnapshots, retainedSyncRuns, splits,
+    retainedSnapshots, retainedSyncRuns, retainedCompatibilityRuns, retainedReports, splits,
     archiveCopies: [...retainedCopies, ...splits.flatMap((split) => split.archiveCopies)], activity };
 }
 
 function archiveOwnedBySource(ref: string, source: StoredSource): boolean {
   return ref.startsWith(`workspaces/${source.workspaceId}/sources/${source.id}/snapshots/`);
+}
+
+function installConfigSnapshotPins(config: StoredInstallConfig): readonly string[] {
+  return [config.internal?.sourceSnapshotId, config.internal?.genericOpenTofuSourceSnapshotId,
+    config.internal?.migrationRestore?.sourceSnapshotId, config.internal?.reAdoption?.sourceSnapshotId]
+    .filter((id): id is string => id !== undefined);
 }
 
 function retainedOwnerLane(group: SourceOwnershipMigrationGroup, ownerCapsuleId: string | undefined):
@@ -254,13 +290,18 @@ async function prepareSplit(
   const originalGitPlans = group.gitPlans.filter((plan) => plan.capsuleId === capsuleId);
   const referencedCheckRunIds = new Set(originalGitPlans.flatMap((plan) =>
     [plan.compatibilityCheckRunId, plan.preflight?.compatibilityCheckRunId]).filter((id): id is string => !!id));
-  const originalCompatibilityRuns = group.compatibilityRuns.filter((run) => referencedCheckRunIds.has(run.id));
-  if (referencedCheckRunIds.size !== originalCompatibilityRuns.length) {
+  const originalCompatibilityRuns = group.compatibilityRuns.filter((run) =>
+    referencedCheckRunIds.has(run.id) || run.capsuleId === capsuleId);
+  const selectedCheckRunIds = new Set(originalCompatibilityRuns.map((run) => run.id));
+  if ([...referencedCheckRunIds].some((id) => !selectedCheckRunIds.has(id))) {
     throw new Error(`source_ownership_migration_missing_compatibility_run:${capsuleId}`);
   }
   const originalSnapshots = new Map(group.snapshots.map((snapshot) => [snapshot.id, snapshot]));
   const referencedIds = new Set<string>();
   if (evidence.adoptedSnapshotId) referencedIds.add(evidence.adoptedSnapshotId);
+  const currentConfig = group.installConfigs.find((config) => config.id === evidence.capsule.installConfigId);
+  if (!currentConfig) throw new Error(`source_ownership_migration_missing_install_config:${evidence.capsule.installConfigId}`);
+  for (const pin of installConfigSnapshotPins(currentConfig)) referencedIds.add(pin);
   for (const plan of plans) if (plan.sourceSnapshotId) referencedIds.add(plan.sourceSnapshotId);
   for (const plan of originalGitPlans) {
     if (plan.sourceSnapshotId) referencedIds.add(plan.sourceSnapshotId);
@@ -269,6 +310,7 @@ async function prepareSplit(
   for (const run of originalCompatibilityRuns) if (run.sourceSnapshotId) referencedIds.add(run.sourceSnapshotId);
   const originalReports = group.reports.filter((report) => report.capsuleId === capsuleId ||
     report.id === evidence.capsule.compatibilityReportId || plans.some((plan) => plan.compatibilityReportId === report.id) ||
+    originalCompatibilityRuns.some((run) => run.compatibilityReportId === report.id) ||
     originalGitPlans.some((plan) => plan.compatibilityReportId === report.id || plan.preflight?.compatibilityReportId === report.id));
   const reportSet = new Set(originalReports.map((report) => report.id));
   if (originalReports.some((report) => report.capsuleId && report.capsuleId !== capsuleId)) {
@@ -276,6 +318,7 @@ async function prepareSplit(
   }
   for (const id of [evidence.capsule.compatibilityReportId,
     ...plans.map((plan) => plan.compatibilityReportId),
+    ...originalCompatibilityRuns.map((run) => run.compatibilityReportId),
     ...originalGitPlans.flatMap((plan) => [plan.compatibilityReportId, plan.preflight?.compatibilityReportId])]) {
     if (id && !reportSet.has(id)) throw new Error(`source_ownership_migration_missing_report:${id}`);
   }
@@ -291,6 +334,19 @@ async function prepareSplit(
   const selected = group.snapshots.filter((snapshot) => referencedIds.has(snapshot.id));
   const snapshotIds = new Map(await Promise.all(selected.map(async (snapshot) =>
     [snapshot.id, await deterministicId("snap", snapshot.id, capsuleId, "split")] as const)));
+  const currentConfigPins = installConfigSnapshotPins(currentConfig);
+  const copiedConfigId = currentConfigPins.length > 0
+    ? await deterministicId("cfg", currentConfig.id, capsuleId, "split") : undefined;
+  const installConfigs: SourceOwnershipMigrationSplit["installConfigs"] = copiedConfigId
+    ? [{ originalId: currentConfig.id, config: {
+      ...currentConfig, id: copiedConfigId,
+      internal: { ...currentConfig.internal!,
+        ...(currentConfig.internal?.sourceSnapshotId
+          ? { sourceSnapshotId: requiredMap(snapshotIds, currentConfig.internal.sourceSnapshotId) } : {}),
+        ...(currentConfig.internal?.genericOpenTofuSourceSnapshotId
+          ? { genericOpenTofuSourceSnapshotId: requiredMap(snapshotIds, currentConfig.internal.genericOpenTofuSourceSnapshotId) } : {}),
+      },
+    } }] : [];
   const producerRunIds = new Set([...selected.map((snapshot) => snapshot.fetchedByRunId),
     ...originalGitPlans.map((plan) => plan.sourceSyncRunId).filter((id): id is string => !!id)]);
   const originalRuns = group.syncRuns.filter((run) => producerRunIds.has(run.id));
@@ -354,13 +410,14 @@ async function prepareSplit(
     lastAutoSyncAttemptAt: undefined, retiringAt: undefined, createdAt: now, updatedAt: now,
     name: `${original.name} (${capsuleId})` };
   const capsule: Capsule = { ...evidence.capsule, sourceId: newSourceId,
+    installConfigId: copiedConfigId ?? evidence.capsule.installConfigId,
     compatibilityReportId: evidence.capsule.compatibilityReportId
       ? reportIds.get(evidence.capsule.compatibilityReportId) ?? evidence.capsule.compatibilityReportId : undefined,
     autoUpdateAttemptSourceSnapshotId: evidence.capsule.autoUpdateAttemptSourceSnapshotId
       ? snapshotIds.get(evidence.capsule.autoUpdateAttemptSourceSnapshotId) : undefined,
     updatedAt: now };
   return { capsuleId, source, capsule, snapshots, syncRuns, compatibilityRuns,
-    planRuns, reports, gitPlans, archiveCopies };
+    planRuns, reports, gitPlans, installConfigs, archiveCopies };
 }
 
 function requiredMap(map: ReadonlyMap<string, string>, id: string): string {

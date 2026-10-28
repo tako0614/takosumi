@@ -64,10 +64,15 @@ marks an all-destroyed or orphan Source disabled for the retirement sweeper,
 or splits each extra live app into a new Source. For a split it copies the
 app's adopted and referenced historical SourceSnapshots and their producer
 SourceSync/compatibility-check Runs, repoints that app's Capsule, PlanRuns,
-GitInstallPlans, compatibility reports, and preflight evidence, and records
+GitInstallPlans, InstallConfig snapshot pins, compatibility reports, and preflight evidence, and records
 `source.split` Activity. The retained owner's `defaultRef/defaultPath` is set
 from its adopted snapshot. A cloned Source's webhook verifier is disabled
 until the operator rotates its secret; the old verifier is never duplicated.
+The original compatibility report and producer Run remain as Source history,
+with their moved Capsule association cleared after the app-specific clone is
+created. Both resulting groups can be inventoried again without treating that
+history as a foreign Capsule reference. InstallConfig rows are guarded with
+the group and retain their other private fields.
 The CLI automatically resumes verified archive copies in bounded POST batches
 (at most 16 objects and 64 MiB per request) using a server-signed cursor bound
 to the exact dry-run. If the CLI exits during copying, rerun the same reviewed

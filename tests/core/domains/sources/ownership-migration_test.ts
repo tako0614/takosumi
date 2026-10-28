@@ -4,7 +4,7 @@ import type { Capsule, CapsuleCompatibilityReport } from "takosumi-contract/caps
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import type { StoredSource } from "../../../../core/domains/deploy-control/store.ts";
+import type { StoredInstallConfig, StoredSource } from "../../../../core/domains/deploy-control/store.ts";
 import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
 import { inventorySourceOwnershipGroup, migrateSourceOwnership, prepareSourceOwnershipMigration,
   type SourceOwnershipMigrationGroup, type SourceOwnershipMigrationMutation,
@@ -69,7 +69,9 @@ function gitPlan(id: string, capsuleId: string, sourceId: string, snapshotId: st
 function group(id: string, capsuleStates: readonly [string, Capsule["status"]][], ownerCapsuleId?: string): SourceOwnershipMigrationGroup {
   return { source: source(id, ownerCapsuleId),
     capsules: capsuleStates.map(([capsuleId, status]) => ({ capsule: capsule(capsuleId, id, status) })),
-    snapshots: [], syncRuns: [], compatibilityRuns: [], planRuns: [], reports: [], gitPlans: [], inFlightRunIds: [] };
+    snapshots: [], syncRuns: [], compatibilityRuns: [], planRuns: [], reports: [], gitPlans: [],
+    installConfigs: capsuleStates.map(([capsuleId]) => ({ id: `cfg_${capsuleId}`, workspaceId: "ws_1",
+      name: capsuleId, variableMapping: {} } satisfies StoredInstallConfig)), inFlightRunIds: [] };
 }
 
 class FixtureStore implements SourceOwnershipMigrationStore {
@@ -83,15 +85,22 @@ class FixtureStore implements SourceOwnershipMigrationStore {
     this.commits++;
     const retainedSnapshotMap = new Map(mutation.retainedSnapshots.map((snapshot) => [snapshot.id, snapshot]));
     const retainedSyncRunMap = new Map(mutation.retainedSyncRuns.map((run) => [run.id, run]));
+    const retainedCompatibilityRunMap = new Map(mutation.retainedCompatibilityRuns.map((run) => [run.id, run]));
+    const retainedReportMap = new Map(mutation.retainedReports.map((report) => [report.id, report]));
     this.groups.set(mutation.sourceId, { ...current, source: mutation.retainedSource,
       snapshots: current?.snapshots.map((snapshot) => retainedSnapshotMap.get(snapshot.id) ?? snapshot) ?? [],
-      syncRuns: current?.syncRuns.map((run) => retainedSyncRunMap.get(run.id) ?? run) ?? [] } as SourceOwnershipMigrationGroup);
+      syncRuns: current?.syncRuns.map((run) => retainedSyncRunMap.get(run.id) ?? run) ?? [],
+      compatibilityRuns: current?.compatibilityRuns.map((run) => retainedCompatibilityRunMap.get(run.id) ?? run) ?? [],
+      reports: current?.reports.map((report) => retainedReportMap.get(report.id) ?? report) ?? [] } as SourceOwnershipMigrationGroup);
     for (const split of mutation.splits) {
       this.groups.set(split.source.id, { source: split.source,
         capsules: [{ capsule: split.capsule }], snapshots: split.snapshots,
         syncRuns: split.syncRuns, compatibilityRuns: split.compatibilityRuns,
         planRuns: split.planRuns, reports: split.reports,
-        gitPlans: split.gitPlans, inFlightRunIds: [] });
+        gitPlans: split.gitPlans, installConfigs: [
+          ...split.installConfigs.map(({ config }) => config),
+          ...current?.installConfigs.filter((config) => config.id === split.capsule.installConfigId) ?? [],
+        ], inFlightRunIds: [] });
     }
     if (mutation.splits.length > 0 && current) {
       const moved = new Set(mutation.splits.map((split) => split.capsuleId));
@@ -136,11 +145,14 @@ describe("operator Source ownership migration", () => {
         { capsule: capsule("cap_a", "src_shared", "active", "cgr_shared"), adoptedSnapshotId: snap.id },
         { capsule: capsule("cap_b", "src_shared", "active", "cgr_shared"), adoptedSnapshotId: snap.id },
       ], snapshots: [snap], syncRuns: [syncRun("ssr_shared", "src_shared", snap.id)],
-      compatibilityRuns: [compatibilityRun("check_1", "src_shared", snap.id, "cgr_shared")],
+      compatibilityRuns: [{ ...compatibilityRun("check_1", "src_shared", snap.id, "cgr_shared"), capsuleId: "cap_b" }],
       planRuns: [plan("plan_a", "cap_a", snap.id, "cgr_shared"), plan("plan_b", "cap_b", snap.id, "cgr_shared")],
-      reports: [report("cgr_shared", "src_shared", snap.id)],
+      reports: [{ ...report("cgr_shared", "src_shared", snap.id), capsuleId: "cap_b" }],
       gitPlans: [gitPlan("git_a", "cap_a", "src_shared", snap.id, "ssr_shared", "cgr_shared"),
-        gitPlan("git_b", "cap_b", "src_shared", snap.id, "ssr_shared", "cgr_shared")] };
+        gitPlan("git_b", "cap_b", "src_shared", snap.id, "ssr_shared", "cgr_shared")],
+      installConfigs: original.installConfigs.map((config) => config.id === "cfg_cap_b"
+        ? { ...config, internal: { reason: "per_install_overrides", sourceSnapshotId: snap.id },
+          installExperience: { repositoryInstallUx: { status: "accepted" } } } : config) };
     const prepared = await prepareSourceOwnershipMigration(originalWithData, allocator, "2026-10-28T00:00:00.000Z");
     expect(prepared?.action).toBe("split");
     const split = prepared?.splits[0]!;
@@ -152,7 +164,11 @@ describe("operator Source ownership migration", () => {
     expect(split.snapshots[0]?.fetchedByRunId).toBe(split.syncRuns[0]?.id);
     expect(split.planRuns[0]?.sourceSnapshotId).toBe(split.snapshots[0]?.id);
     expect(split.reports[0]?.sourceSnapshotId).toBe(split.snapshots[0]?.id);
-    expect(split.reports[0]?.capsuleId).toBeUndefined();
+    expect(split.reports[0]?.capsuleId).toBe("cap_b");
+    expect(prepared?.retainedReports[0]?.capsuleId).toBeUndefined();
+    expect(prepared?.retainedCompatibilityRuns[0]?.capsuleId).toBeUndefined();
+    expect(split.installConfigs[0]?.config.internal?.sourceSnapshotId).toBe(split.snapshots[0]?.id);
+    expect(split.capsule.installConfigId).toBe(split.installConfigs[0]?.config.id);
     expect(split.capsule.compatibilityReportId).toBe(split.reports[0]?.id);
     expect(split.gitPlans[0]?.sourceId).toBe(split.source.id);
     expect(split.gitPlans[0]?.preflight?.sourceSnapshotId).toBe(split.snapshots[0]?.id);
@@ -167,6 +183,21 @@ describe("operator Source ownership migration", () => {
     expect(again).toEqual(prepared);
     expect(originalWithData.planRuns[0]?.sourceSnapshotId).toBe(snap.id);
     expect(originalWithData.compatibilityRuns[0]?.id).toBe("check_1");
+    const store = new FixtureStore();
+    store.groups.set(originalWithData.source.id, originalWithData);
+    const applied = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+      { apply: true, now: "2026-10-28T00:00:00.000Z" });
+    expect(applied[0]?.status).toBe("committed");
+    const retained = store.groups.get(originalWithData.source.id)!;
+    const moved = store.groups.get(split.source.id)!;
+    expect(retained.reports[0]?.capsuleId).toBeUndefined();
+    expect(retained.compatibilityRuns[0]?.capsuleId).toBeUndefined();
+    expect(moved.reports[0]?.capsuleId).toBe("cap_b");
+    expect(moved.compatibilityRuns[0]?.capsuleId).toBe("cap_b");
+    expect(moved.installConfigs[0]?.internal?.sourceSnapshotId).toBe(moved.snapshots[0]?.id);
+    expect(moved.snapshots[0]?.sourceId).toBe(moved.source.id);
+    const rerun = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} });
+    expect(rerun.map((result) => result.status)).toEqual(["unchanged", "unchanged"]);
   });
 
   test("in-flight work and broken snapshot provenance fail closed", async () => {
@@ -177,6 +208,53 @@ describe("operator Source ownership migration", () => {
         ? { ...entry, adoptedSnapshotId: "snap_missing" } : entry) };
     expect(prepareSourceOwnershipMigration(withMissing, allocator, "2026-10-28T00:00:00.000Z"))
       .rejects.toThrow("missing_snapshot");
+  });
+
+  test("generic snapshot pins remap and sealed recovery provenance blocks a split", async () => {
+    const base = group("src_config_provenance", [["cap_a", "active"], ["cap_b", "active"]]);
+    const snap = snapshot("snap_config", base.source.id, "ssr_config");
+    const generic: SourceOwnershipMigrationGroup = { ...base, snapshots: [snap],
+      syncRuns: [syncRun("ssr_config", base.source.id, snap.id)],
+      installConfigs: base.installConfigs.map((config) => config.id === "cfg_cap_b"
+        ? { ...config, internal: { reason: "per_install_overrides",
+          genericOpenTofuSourceSnapshotId: snap.id,
+          genericOpenTofuVariableContractDigest: `sha256:${"a".repeat(64)}` } } : config) };
+    const prepared = await prepareSourceOwnershipMigration(generic, allocator, "2026-10-28T00:00:00.000Z");
+    expect(prepared?.splits[0]?.installConfigs[0]?.config.internal?.genericOpenTofuSourceSnapshotId)
+      .toBe(prepared?.splits[0]?.snapshots[0]?.id);
+    const sealed: SourceOwnershipMigrationGroup = { ...generic,
+      installConfigs: generic.installConfigs.map((config) => config.id === "cfg_cap_b"
+        ? { ...config, internal: { reason: "per_install_overrides", migrationRestore: {
+          bundleDigest: "digest", migrationId: "migration", idempotencyKeyHash: "hash",
+          requestDigest: "digest", sourceSnapshotId: snap.id, compatibilityCheckRunId: "check",
+          compatibilityReportId: "report", actorSubject: "operator" } } } : config) };
+    expect(inventorySourceOwnershipGroup(sealed)).toMatchObject({ action: "blocked",
+      reason: "install_config_sealed_provenance" });
+  });
+
+  test("standalone Capsule compatibility evidence moves together without an install plan", async () => {
+    const base = group("src_standalone_check", [["cap_a", "active"], ["cap_b", "active"]]);
+    const snap = snapshot("snap_standalone", base.source.id, "ssr_standalone");
+    const observed: SourceOwnershipMigrationGroup = { ...base, snapshots: [snap],
+      syncRuns: [syncRun("ssr_standalone", base.source.id, snap.id)],
+      compatibilityRuns: [{ ...compatibilityRun("check_standalone", base.source.id,
+        snap.id, "report_standalone"), capsuleId: "cap_b" }],
+      reports: [{ ...report("report_standalone", base.source.id, snap.id), capsuleId: "cap_b" }] };
+    const store = new FixtureStore();
+    store.groups.set(base.source.id, observed);
+    const [result] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+      { apply: true, now: "2026-10-28T00:00:00.000Z" });
+    expect(result?.status).toBe("committed");
+    const retained = store.groups.get(base.source.id)!;
+    const moved = [...store.groups.values()].find((entry) => entry.source.ownerCapsuleId === "cap_b")!;
+    expect(retained.compatibilityRuns[0]?.capsuleId).toBeUndefined();
+    expect(retained.reports[0]?.capsuleId).toBeUndefined();
+    expect(moved.compatibilityRuns[0]?.capsuleId).toBe("cap_b");
+    expect(moved.compatibilityRuns[0]?.compatibilityReportId).toBe(moved.reports[0]?.id);
+    expect(moved.compatibilityRuns[0]?.sourceSnapshotId).toBe(moved.snapshots[0]?.id);
+    expect(moved.reports[0]?.capsuleId).toBe("cap_b");
+    expect((await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }))
+      .map((entry) => entry.status)).toEqual(["unchanged", "unchanged"]);
   });
 
   test("foreign archive refs are copied into each retained Source before mark for retirement", async () => {

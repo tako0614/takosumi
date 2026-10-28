@@ -16,7 +16,9 @@ const group: SourceOwnershipMigrationGroup = {
     slug: "app", sourceId: "src_legacy", installConfigId: "cfg_1", environment: "production",
     currentStateGeneration: 0, status: "active", createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z" } }],
-  snapshots: [], syncRuns: [], compatibilityRuns: [], planRuns: [], reports: [], gitPlans: [], inFlightRunIds: [],
+  snapshots: [], syncRuns: [], compatibilityRuns: [], planRuns: [], reports: [], gitPlans: [],
+  installConfigs: [{ id: "cfg_1", workspaceId: "ws_1", name: "config", variableMapping: {} }],
+  inFlightRunIds: [],
 };
 
 class FixtureStore implements SourceOwnershipMigrationStore {
