@@ -60,6 +60,31 @@ test("active link pins provider and limits binding to requested intersect approv
   await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).rejects.toThrow("grant not found");
 });
 
+test("a provider outage after grant creation is cleaned up as retryable and recovers on sign-in", async () => {
+  const f = await fixture();
+  await f.link();
+  const createBinding = f.service.createBinding.bind(f.service);
+  f.service.createBinding = async (...args) => {
+    const binding = await createBinding(...args);
+    // The first provider availability check has passed; fail the Capsule
+    // before the post-create check validates the new binding.
+    f.capsules.get("provider_a")!.status = "error";
+    return binding;
+  };
+
+  await f.ensure("alice");
+  const cleanup = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  expect(cleanup.status.phase).toBe("Revoked");
+  expect(cleanup.status.conditions?.[0]?.reason).toBe("Superseded");
+
+  f.capsules.get("provider_a")!.status = "active";
+  f.service.createBinding = createBinding;
+  await f.ensure("alice");
+  const ready = (await f.service.listBindings(f.providers[0]!.metadata.id)).filter((binding) => binding.status.phase === "Ready");
+  expect(ready).toHaveLength(1);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+});
+
 test("authorized binding list reads one link and each Capsule once", async () => {
   const f = await fixture();
   await f.link();

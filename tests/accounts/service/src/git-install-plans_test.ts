@@ -2745,8 +2745,8 @@ test("provider loss or a sibling link after Capsule creation fails permanently",
   }
 });
 
-test("discard revokes the never-applied consumer's Interface links and repairs a lost revocation acknowledgement", async () => {
-  const fixture = interfaceAttemptFixture({ loseInterfaceRevokeAckOnce: true });
+test("discard retries link revocation after Capsule commit and before the first revoke", async () => {
+  const fixture = interfaceAttemptFixture({ failInterfaceRevokeOnce: true });
   addInterfaceProvider(fixture, "one");
   const planId = await startAttempt(fixture);
   const paused = await reconcileUntilIdle(fixture, planId);
@@ -2759,7 +2759,9 @@ test("discard revokes the never-applied consumer's Interface links and repairs a
   expect(fixture.interfaceLinks.size).toBe(1);
   const interrupted = await discard(fixture, planId, reviewable.installPlan.generation);
   expect(interrupted.status).toBe(500);
-  expect([...fixture.interfaceLinks.values()].every((link) => link.revoked)).toBe(true);
+  expect([...fixture.interfaceLinks.values()].every((link) => link.revoked)).toBe(false);
+  expect(fixture.capsules.find((capsule) => capsule.id === reviewable.installPlan.capsuleId)?.status).toBe("destroyed");
+  await fixture.beginDrain();
   const current = await fixture.planStore.get(planId);
   const retried = await discard(fixture, planId, current!.generation);
   expect(retried.status).toBe(200);
@@ -3043,7 +3045,7 @@ test("discarding an attempt abandons its never-applied Capsule and keeps the Sou
     userAction: { kind: "none" },
   });
   expect(fixture.abandonedCapsules).toEqual([reviewable.installPlan.capsuleId]);
-  expect(fixture.capsules[0]?.status).toBe("destroyed");
+  expect(fixture.capsules.find((capsule) => capsule.id === reviewable.installPlan.capsuleId)?.status).toBe("destroyed");
   // The Source is never deleted; polling this attempt enabled is turned off.
   expect(fixture.deletedSources).toEqual([]);
   const attemptSourceId = sourceIdForPlanId(planId);
@@ -3659,7 +3661,7 @@ function installFixture(
   options: {
     readonly interfaceCandidates?: readonly Interface[];
     readonly loseInterfaceLinkAckOnce?: boolean;
-    readonly loseInterfaceRevokeAckOnce?: boolean;
+    readonly failInterfaceRevokeOnce?: boolean;
     readonly loseAckOnce?: readonly LostAckMutation[];
     readonly retryablePlanErrorOnce?: boolean;
     readonly repositoryManifest?: SourceSnapshot["repositoryManifest"];
@@ -3723,7 +3725,7 @@ function installFixture(
     revoked: boolean;
   }>();
   let loseInterfaceLinkAck = options.loseInterfaceLinkAckOnce === true;
-  let loseInterfaceRevokeAck = options.loseInterfaceRevokeAckOnce === true;
+  let failInterfaceRevoke = options.failInterfaceRevokeOnce === true;
   let interfaceLinkEnsureCalls = 0;
   let beforeInterfaceLinkWrite: (() => Promise<void>) | undefined;
   const runs = new Map<string, Run>();
@@ -3829,12 +3831,12 @@ function installFixture(
         if (!capsules.some((capsule) => capsule.id === capsuleId)) {
           throw new Error("consumer Capsule not found");
         }
+        if (failInterfaceRevoke) {
+          failInterfaceRevoke = false;
+          throw new Error("Interface revocation failed before writing");
+        }
         for (const link of interfaceLinks.values()) {
           if (link.capsuleId === capsuleId) link.revoked = true;
-        }
-        if (loseInterfaceRevokeAck) {
-          loseInterfaceRevokeAck = false;
-          throw new Error("lost Interface revocation acknowledgement");
         }
       },
     },
@@ -4207,6 +4209,11 @@ function installFixture(
         _reason: string,
         authority?: WorkspaceManagementAuthority,
       ) => {
+        const existing = capsules.find((candidate) => candidate.id === id);
+        if (existing?.status === "destroyed") {
+          await operations.interfaces?.revokeCapsuleInterfaceLinks?.(WORKSPACE.id, id);
+          return existing;
+        }
         if (!managementValidator.isWorkspaceManagementAdmissionAllowed(WORKSPACE.id, authority)) {
           throw new OpenTofuControllerError("failed_precondition", "management");
         }
