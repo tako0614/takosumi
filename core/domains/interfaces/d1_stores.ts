@@ -27,6 +27,7 @@ import type {
 import { isCurrentInterfaceLink, isValidInterfaceLinkReplacement, isValidInterfaceLinkUpdate } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 import { registerIdentityPrincipalStorage } from "../identity-reconciliation/storage-identity.ts";
+import { InterfaceServiceError } from "./service.ts";
 
 interface JsonRow {
   readonly record_json: string;
@@ -398,12 +399,46 @@ class D1InterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
-class D1InterfaceLinkStore implements InterfaceLinkStore {
-  readonly #table = names.interfaceLinks;
+// The additive table is unavailable until the operator applies v76. Share one
+// probe across both readers, coalesce concurrent probes, and retry absence after
+// a short interval so a warm isolate can observe the fenced schema rollout.
+class D1InterfaceLinkSchema {
+  #available = false;
+  #retryAfter = 0;
+  #pending: Promise<boolean> | undefined;
 
   constructor(readonly db: D1Like) {}
 
+  async available(): Promise<boolean> {
+    if (this.#available) return true;
+    if (Date.now() < this.#retryAfter) return false;
+    this.#pending ??= Promise.resolve().then(async () => {
+      const row = await this.db.prepare(
+        `select 1 as available from schema_migrations
+         where version=76 and name='d1_interface_links'
+           and exists (select 1 from sqlite_master where type='table' and name='interface_links') limit 1`,
+      ).first<{ readonly available: number }>();
+      this.#available = row?.available === 1;
+      this.#retryAfter = this.#available ? 0 : Date.now() + 1_000;
+      return this.#available;
+    }).finally(() => { this.#pending = undefined; });
+    return this.#pending;
+  }
+
+  async require(): Promise<void> {
+    if (!await this.available()) {
+      throw new InterfaceServiceError("failed_precondition", "Interface links require Control schema v76");
+    }
+  }
+}
+
+class D1InterfaceLinkStore implements InterfaceLinkStore {
+  readonly #table = names.interfaceLinks;
+
+  constructor(readonly db: D1Like, readonly schema: D1InterfaceLinkSchema) {}
+
   async create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    await this.schema.require();
     if (record.generation !== 1 || !isCurrentInterfaceLink(record)) return false;
     const parameters = [...linkParameters(record), record.consumerCapsuleId, record.requirementKey];
     const managementClause = d1LinkManagementClause(parameters, guard);
@@ -417,6 +452,7 @@ class D1InterfaceLinkStore implements InterfaceLinkStore {
   }
 
   async get(id: string): Promise<InterfaceLink | undefined> {
+    if (!await this.schema.available()) return undefined;
     const row = await this.db.prepare(`select record_json from ${this.#table} where id=? limit 1`).bind(id).first<JsonRow>();
     return row ? JSON.parse(row.record_json) as InterfaceLink : undefined;
   }
@@ -430,6 +466,7 @@ class D1InterfaceLinkStore implements InterfaceLinkStore {
   }
 
   async #find(key: InterfaceLinkKey, current: boolean): Promise<InterfaceLink | undefined> {
+    if (!await this.schema.available()) return undefined;
     const row = await this.db.prepare(
       `select record_json from ${this.#table} where consumer_capsule_id=? and requirement_key=?
        ${current ? "and state in ('pending_approval','active')" : ""} order by generation desc limit 1`,
@@ -442,11 +479,13 @@ class D1InterfaceLinkStore implements InterfaceLinkStore {
   listByProviderCapsule(id: string): Promise<readonly InterfaceLink[]> { return this.#list("provider_capsule_id", id); }
 
   async #list(column: string, id: string): Promise<readonly InterfaceLink[]> {
+    if (!await this.schema.available()) return [];
     const rows = await this.db.prepare(`select record_json from ${this.#table} where ${column}=? order by created_at asc, id asc`).bind(id).all<JsonRow>();
     return (rows.results ?? []).map((row) => JSON.parse(row.record_json) as InterfaceLink);
   }
 
   async compareAndSet(record: InterfaceLink, expectedGeneration: number, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    await this.schema.require();
     const prior = await this.get(record.id);
     if (!prior || prior.generation !== expectedGeneration || !isValidInterfaceLinkUpdate(record, prior)) return false;
     const parameters: unknown[] = [record.generation, record.state, JSON.stringify(record), record.updatedAt,
@@ -460,6 +499,7 @@ class D1InterfaceLinkStore implements InterfaceLinkStore {
   }
 
   async replace(input: InterfaceLinkReplacement, management?: WorkspaceManagementAuthority): Promise<boolean> {
+    await this.schema.require();
     if (!isValidInterfaceLinkReplacement(input)) return false;
     const { record, expected, revoked } = input;
     const guard = `exists (select 1 from ${this.#table} where id=? and generation=? and record_json=?)
@@ -515,9 +555,7 @@ function d1LinkManagementClause(parameters: unknown[], guard?: WorkspaceManageme
 class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
   readonly #interfaces = names.interfaces;
   readonly #bindings = names.interfaceBindings;
-  #linksAvailable: Promise<boolean> | undefined;
-
-  constructor(readonly db: D1Like) {}
+  constructor(readonly db: D1Like, readonly schema: D1InterfaceLinkSchema) {}
 
   async listPage(
     input: InterfaceAuthorizationPageInput,
@@ -531,10 +569,7 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     }
     // The existing v71-v75 runtime bridge keeps ordinary grants available.
     // Only the v76 receipt enables SQL that references the additive link table.
-    this.#linksAvailable ??= this.db.prepare(
-      "select 1 as available from schema_migrations where version=76 and name='d1_interface_links' limit 1",
-    ).first<{ readonly available: number }>().then((row) => row?.available === 1);
-    const linksAvailable = await this.#linksAvailable;
+    const linksAvailable = await this.schema.available();
     const clauses = ["i.workspace_id = ?", "i.phase = 'Resolved'"];
     clauses.push(
       `not exists (
@@ -613,7 +648,8 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
             coalesce(json_extract(b.record_json, '$.metadata.materializedFrom.source'), '') <> 'capsule_required_interface'
             or ${linksAvailable ? `exists (
               select 1 from ${names.interfaceLinks} consent
-              where consent.id = json_extract(b.record_json, '$.metadata.materializedFrom.linkId')
+              where (json_extract(b.record_json, '$.metadata.materializedFrom.linkId') is null
+                or consent.id = json_extract(b.record_json, '$.metadata.materializedFrom.linkId'))
                 and consent.state = 'active'
                 and consent.provider_interface_id = i.id
                 and i.owner_kind = 'Capsule' and consent.provider_capsule_id = i.owner_id
@@ -762,12 +798,13 @@ function d1MaterializationAuthorityClause(
 }
 
 export function createD1InterfaceStores(db: D1Like): InterfaceStores {
+  const schema = new D1InterfaceLinkSchema(db);
   return {
     persistence: "durable",
     interfaces: new D1InterfaceStore(db),
     bindings: new D1InterfaceBindingStore(db),
-    links: new D1InterfaceLinkStore(db),
-    authorized: new D1InterfaceAuthorizationQuery(db),
+    links: new D1InterfaceLinkStore(db, schema),
+    authorized: new D1InterfaceAuthorizationQuery(db, schema),
   };
 }
 

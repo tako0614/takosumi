@@ -231,7 +231,9 @@ export async function runControlD1SchemaCli(
 
   let plan: ControlD1SchemaPlan;
   try {
-    plan = await (dependencies.buildSchemaPlan ?? buildControlD1SchemaPlan)();
+    plan = await (dependencies.buildSchemaPlan ?? buildControlD1SchemaPlan)(
+      productionTransition ? { throughMigrationVersion: productionTransition.target } : undefined,
+    );
     if (
       productionTransition &&
       plan.migrations.at(-1)?.version !== productionTransition.target
