@@ -307,8 +307,9 @@ test("D1 link schema probe retries failures and shares availability with authori
     batch: db.batch.bind(db),
   };
   const stores = createD1InterfaceStores(wrapped);
-  await expect(stores.links.get("missing")).rejects.toThrow("temporary probe failure");
+  const authorized = () => stores.authorized.listPage({ filter: { workspaceId: "workspace" }, subjectId: "subject", permission: "read", params: { limit: 20 } });
+  await expect(authorized()).rejects.toThrow("temporary probe failure");
+  expect(await authorized()).toEqual({ items: [] });
   expect(await stores.links.get("missing")).toBeUndefined();
-  expect(await stores.authorized.listPage({ filter: { workspaceId: "workspace" }, subjectId: "subject", permission: "read", params: { limit: 20 } })).toEqual({ items: [] });
   expect(probes).toBe(2);
 });
