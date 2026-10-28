@@ -26,8 +26,10 @@ service. Cloudflare's exact `/cdn-cgi/rum` Browser Insights route is excluded
 from Worker Version evidence because it is edge telemetry rather than a Worker
 response.
 
-`bun run check` invokes this gate through `check:dashboard-browser` after the
-dashboard build. The fixture deliberately fails on missing build output,
+The local full gate, `bun run check`, invokes this gate through
+`check:dashboard-browser` after the dashboard build. CI runs the dashboard
+browser check in its own job after the static-check job. Both paths use the same
+portable fixture. The fixture deliberately fails on missing build output,
 missing auth cookie, unknown API routes, and browser runtime errors; it is not a
 network-skipped test. The root Bun unit-test command excludes this directory so
 the Playwright runner remains the only owner of these browser tests.
