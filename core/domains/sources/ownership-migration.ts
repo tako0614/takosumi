@@ -321,8 +321,10 @@ async function prepareSplit(
     if (run.snapshotId && !snapshotIds.has(run.snapshotId)) throw new Error(`source_ownership_migration_unmapped_run_snapshot:${run.id}`);
     return { ...run, id: runIds.get(run.id)!, sourceId: newSourceId, archiveRef,
       snapshotId: run.snapshotId ? requiredMap(snapshotIds, run.snapshotId) : undefined,
-      requestedSnapshotId: run.requestedSnapshotId ? snapshotIds.get(run.requestedSnapshotId) ??
-        await deterministicId("snap", run.requestedSnapshotId, capsuleId, "split") : undefined };
+      // This synthetic terminal Run adopts the copied archive directly. The
+      // old unuploaded allocation is not part of the new Source's history.
+      requestedSnapshotId: canonical || allocated ? undefined : run.requestedSnapshotId
+        ? await deterministicId("snap", run.requestedSnapshotId, capsuleId, "split") : undefined };
   }));
   const reportIds = new Map(await Promise.all(originalReports.map(async (report) =>
     [report.id, await deterministicId("cgr", report.id, capsuleId, "split")] as const)));
