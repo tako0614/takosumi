@@ -82,6 +82,7 @@ OAuth について: access token の既定の有効期間は 5 分で、既定�
 | `uninstall.blockedReason` | 理由 |
 | --- | --- |
 | `pre_destroy_export_incomplete` | データの書き出しを始めたまま、15 分たっても結果が記録されません |
+| `dependency_retired` | 削除の Plan が Capsule に残る旧 Dependency 設定のため拒否されました。database operator に残存設定の保守を依頼し、予約を取り消してから新しく予約します |
 | `destroy_plan_cancelled` | 削除の Plan を誰かが取り消しました |
 | `destroy_plan_failed` | 削除の Plan が、合わせて 3 回の試行で完了しませんでした |
 | `destroy_plan_missing` | 記録した削除の Plan が見つかりません（試行の上限に達したとき、または削除のデプロイに進む段階で）。Plan の作成が一時的な理由で拒否された場合も、試行を 1 回と数えます |

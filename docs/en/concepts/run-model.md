@@ -152,6 +152,11 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-upd
 Approval can be given for the group at once through
 `/api/v1/run-groups/{runGroupId}/approve`. The record of each individual Run is kept.
 
+A Capsule that still has retired Dependency configuration is refused with
+`dependency_retired`. Workspace updates and drift checks record the failure in the
+RunGroup and continue with other Capsules; no Run is created for the refused Capsule.
+Ask a database operator to maintain the remaining configuration, then create a new plan.
+
 ## When a Run fails
 
 A failed Run does not by itself show whether provider changes were rolled back. A provider

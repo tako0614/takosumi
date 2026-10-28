@@ -91,6 +91,13 @@ function respond(
   };
 }
 
+function inIntegration(response: GitInstallPlanResponse): GitInstallPlanResponse {
+  return {
+    ...response,
+    installPlan: { ...response.installPlan, capsule: { ...response.installPlan.capsule, environment: "integration" } },
+  };
+}
+
 const requirement = {
   provider: "registry.opentofu.org/cloudflare/cloudflare",
   moduleLocalName: "cloudflare",
@@ -204,6 +211,59 @@ describe("install attempt controller", () => {
     expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
     page.dispose();
   });
+
+  test("editing a reopened integration Plan recreates it in integration", async () => {
+    const SECOND = "gip_00000000000000b2";
+    reset({
+      getGitInstallPlan: async () => inIntegration(respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 7)),
+      discardGitInstallAttempt: async () => inIntegration(respond({ kind: "none" }, 8, "discarded")),
+      createGitInstallAttempt: async () => inIntegration(respond(inputs(), 0, undefined, SECOND)),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "review", "the reopened integration Plan");
+      page.attempt.changeVersion("v2.0.0");
+      expect(page.attempt.outdated()).toBe(true);
+      await until(() => page.attempt.response()?.installPlan.id === SECOND, "the replacement attempt");
+      expect(calls.filter(({ name }) => name === "createGitInstallAttempt").map(({ args }) => args.slice(0, 2))).toEqual([
+        ["ws_alpha", {
+          mode: "attempt",
+          source: { url: URL_, ref: "v2.0.0" },
+          capsule: { name: "office", environment: "integration" },
+        }],
+      ]);
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(1);
+    } finally {
+      page.dispose();
+    }
+  });
+
+  for (const invalidated of [false, true]) {
+    test(`Restart of a reopened ${invalidated ? "invalidated" : "failed"} integration attempt retains integration`, async () => {
+      const SECOND = "gip_00000000000000b2";
+      const failed = inIntegration(respond({ kind: "retry", code: invalidated ? "install_attempt_expired" : "source_sync_failed", restart: true }, 4, "failed"));
+      reset({
+        getGitInstallPlan: async () => invalidated ? { ...failed, invalidated: "install_attempt_expired" } : failed,
+        discardGitInstallAttempt: async () => inIntegration(respond({ kind: "none" }, 5, "discarded")),
+        createGitInstallAttempt: async () => inIntegration(respond(inputs(), 0, undefined, SECOND)),
+      });
+      const page = mount(ID);
+      try {
+        await until(() => page.attempt.view().primary === "restart", "Restart");
+        expect(await page.attempt.restart()).toBe(true);
+        expect(calls.filter(({ name }) => name === "createGitInstallAttempt").map(({ args }) => args.slice(0, 2))).toEqual([
+          ["ws_alpha", {
+            mode: "attempt",
+            source: { url: URL_, ref: "HEAD" },
+            capsule: { name: "office", environment: "integration" },
+          }],
+        ]);
+        expect(page.attemptId()).toBe(SECOND);
+      } finally {
+        page.dispose();
+      }
+    });
+  }
 
   test("an attempt opened before the workspace is chosen waits for it, then reads the attempt", async () => {
     reset({ getGitInstallPlan: async () => respond(inputs(), 1) });
@@ -844,7 +904,7 @@ describe("install attempt controller", () => {
       {
         mode: "attempt",
         source: { url: URL_ },
-        capsule: { name: "office" },
+        capsule: { name: "office", environment: "production" },
         options: { modulePath: "deploy", providerBindings: [{ provider: requirement.provider, moduleLocalName: "cloudflare", connectionId: "conn_b" }] },
       },
     ]);

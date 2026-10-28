@@ -119,8 +119,8 @@ export class RunGroupsService {
       createdAt: this.#now(),
     };
     await this.#store.putRunGroup(runGroup);
-    // Activity (§27 / §34): a workspace_update RunGroup was created. Member ids +
-    // run ids only.
+    // Activity (§27 / §34): preserve the graph's membership, successful run ids,
+    // and pre-plan failure reasons using identifier/reason metadata only.
     await this.#activity.record({
       workspaceId,
       ...(this.#actor ? { actorId: this.#actor } : {}),
@@ -131,6 +131,7 @@ export class RunGroupsService {
         type: runGroup.type,
         memberCapsuleIds: [...members],
         runIds: Object.values(runs),
+        failures,
       },
     });
     return { runGroup, runs: memberRuns };
@@ -212,6 +213,7 @@ export class RunGroupsService {
         type: runGroup.type,
         memberCapsuleIds: capsuleIds,
         runIds: Object.values(runs),
+        failures,
       },
     });
     return { runGroup, runs: memberRuns };

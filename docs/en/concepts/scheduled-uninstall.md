@@ -89,6 +89,7 @@ it is running, the export is recorded as `failed` and the deletion goes on.
 | `uninstall.blockedReason` | Reason |
 | --- | --- |
 | `pre_destroy_export_incomplete` | A data export started but has recorded no result after 15 minutes |
+| `dependency_retired` | The deletion Plan was refused because the Capsule still has retired Dependency configuration. Ask a database operator to maintain the remaining configuration, cancel the request, and schedule it again |
 | `destroy_plan_cancelled` | Someone cancelled the deletion Plan |
 | `destroy_plan_failed` | The deletion Plan did not complete within 3 attempts in total |
 | `destroy_plan_missing` | The recorded deletion Plan cannot be found (when the attempts run out, or when moving on to the deletion apply). A Plan creation refused for a temporary reason also counts as an attempt |

@@ -619,7 +619,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.creates[1]).toEqual({
         mode: "attempt",
         source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
-        capsule: { name: "cloudflare-service" },
+        capsule: { name: "cloudflare-service", environment: "production" },
         options: { modulePath: ".", providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_only" }] },
       });
       const continues = f.attempts.log.answers.filter((answer) => (answer as { continue?: boolean }).continue === true);
