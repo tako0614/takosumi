@@ -37,6 +37,8 @@ export default function AppLinkedSection(props: {
   };
   const rowKey = (row: CapsuleAppLink) => `${row.consumerCapsuleId}:${row.requirementKey}`;
   const name = (row: CapsuleAppLink) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.requirementKey;
+  const accessibleName = (row: CapsuleAppLink, incoming: boolean, index: number) =>
+    `${row.otherApp ? name(row) : t("app.links.title")} · ${t(incoming ? "app.links.usedBy" : "app.links.uses")} ${index + 1}`;
   const startChoosing = async (row: CapsuleAppLink) => {
     if (busy() || loading()) return;
     setEditing(rowKey(row));
@@ -98,7 +100,7 @@ export default function AppLinkedSection(props: {
   };
   const rows = (values: readonly CapsuleAppLink[], incoming: boolean) => (
     <ul class="ap-list">
-      <For each={values}>{(row) => (
+      <For each={values}>{(row, index) => (
         <li class="ap-list-row" data-testid={incoming ? "app-link-used-by" : "app-link-use"} data-requirement={row.requirementKey}>
           <AppFace name={name(row)} iconUrl={row.otherApp?.iconUrl} class="ap-linked-face" />
           <div class="ap-list-main">
@@ -115,12 +117,12 @@ export default function AppLinkedSection(props: {
           <Show when={row.canManage}>
             <div class="ap-row-actions">
               <Show when={!incoming}>
-                <Button type="button" variant="secondary" aria-label={t(row.state === "active" ? "app.links.changeNamed" : "app.links.chooseNamed", { name: name(row) })} disabled={busy() || loading()} onClick={() => void startChoosing(row)}>
+                <Button type="button" variant="secondary" aria-label={t(row.state === "active" ? "app.links.changeNamed" : "app.links.chooseNamed", { name: accessibleName(row, false, index()) })} disabled={busy() || loading()} onClick={() => void startChoosing(row)}>
                   {t(row.state === "active" ? "app.links.change" : "app.links.choose")}
                 </Button>
               </Show>
               <Show when={row.state === "active" || row.state === "pending_approval"}>
-                <Button type="button" variant="ghost" aria-label={t("app.links.revokeNamed", { name: name(row) })} disabled={busy()} onClick={() => void revoke(row)}>{t("app.links.revoke")}</Button>
+                <Button type="button" variant="ghost" aria-label={t("app.links.revokeNamed", { name: accessibleName(row, incoming, index()) })} disabled={busy()} onClick={() => void revoke(row)}>{t("app.links.revoke")}</Button>
               </Show>
             </div>
           </Show>
@@ -128,7 +130,7 @@ export default function AppLinkedSection(props: {
             <div class="ap-linked-choice" data-testid="app-link-choice">
               <Show when={!loading()} fallback={<Spinner size={18} />}>
                 <Show when={candidates().length > 0} fallback={<p>{t("app.links.noCandidates")}</p>}>
-                  <Select aria-label={t("app.links.selectNamed", { name: name(row) })} value={choice()} disabled={busy()} onChange={(event) => setChoice(event.currentTarget.value)}>
+                  <Select aria-label={t("app.links.selectNamed", { name: accessibleName(row, false, index()) })} value={choice()} disabled={busy()} onChange={(event) => setChoice(event.currentTarget.value)}>
                     <option value="" disabled>{t("installStore.interfaces.choose")}</option>
                     <For each={candidates()}>{(candidate) => <option value={candidate.interfaceId}>{candidate.providerCapsuleName} · {candidate.interfaceName}</option>}</For>
                   </Select>
