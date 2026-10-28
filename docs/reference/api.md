@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 89 件です。
+次の 92 件です。
 
 ### Account views
 
@@ -382,6 +382,37 @@ Run は必ず計画の作成から始まります。
 | POST     | `/api/v1/capsules/{capsuleId}/destroy-plan` | 破棄計画 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
 | POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
+
+### Interface links
+
+| メソッド | パス | 説明 |
+| -------- | ---- | ---- |
+| GET | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates` | requirement に合う提供元と、現在の連携の generation を読む |
+| PUT | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | generation CAS で提供元を選び直す |
+| DELETE | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | 利用側または提供側の管理者として連携を解除する |
+
+候補取得の応答は `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`
+です。`generation` はその consumer と requirement key の最新記録の値で、履歴がなければ 0 です。
+PUT の本文は `{ interfaceId, expectedGeneration }`、DELETE は `{ expectedGeneration }` です。
+どちらも成功時は `{ link: InterfaceLink }` を返します。選び直しに Plan は不要です。
+新しい提供元への Binding を用意してから、旧提供元への Binding を取り消します。
+
+InterfaceLink は consumer Capsule と requirement key、正確な type/version、要求・承認した
+permissions、選んだ提供元の Interface / Capsule、`state`、`selection`、`generation` を記録します。
+`state` は `pending_approval|active|declined|revoked`、`selection` は `explicit|auto_single` です。
+提供元がアンインストールされても選択や state を書き換えず、アプリの読み取り時に健康状態を計算します。
+active な連携だけを実行時の認可に使い、連携の値や認証情報を OpenTofu に渡しません。
+連携がなくても OIDC のサインインは続き、その連携の Binding を作りません。
+
+GET は利用側の read アクセス、PUT は利用側の write アクセス、DELETE は利用側または提供側の
+write アクセスを確かめます。
+権限不足は 403、不正な入力は 400、generation の競合は 409、利用不可の提供元は 412 です。
+承認判断は policy port が持ち、現在の Workspace 構成では同じ Workspace の連携を即時承認します。
+
+永続化先は D1 の `interface_links`（migration v76 `d1_interface_links`）と PostgreSQL の
+`takosumi_interface_links`（migration v122 `runtime_interfaces.links.create`）です。追加のみの
+schema で、資格情報を保存しません。この変更で本番 DDL の適用・本番 rollout は行っていません。
+本番への適用は別途承認と検証を経る作業です。
 
 ### Source
 

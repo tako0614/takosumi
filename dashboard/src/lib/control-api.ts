@@ -2059,6 +2059,38 @@ export async function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> 
   return app;
 }
 
+export interface InterfaceLinkCandidate {
+  readonly interfaceId: string;
+  readonly providerCapsuleId: string;
+  readonly providerCapsuleName: string;
+  readonly interfaceName: string;
+}
+
+const interfaceLinkPath = (capsuleId: string, requirementKey: string) =>
+  `${BASE}/capsules/${encodeURIComponent(capsuleId)}/interface-links/${encodeURIComponent(requirementKey)}`;
+
+export function getInterfaceLinkCandidates(capsuleId: string, requirementKey: string): Promise<{
+  readonly candidates: readonly InterfaceLinkCandidate[];
+  readonly generation: number;
+}> {
+  return controlFetch(`${interfaceLinkPath(capsuleId, requirementKey)}/candidates`);
+}
+
+export function setInterfaceLink(capsuleId: string, requirementKey: string, input: {
+  readonly interfaceId: string;
+  readonly expectedGeneration: number;
+}): Promise<{ readonly link: import("takosumi-contract").InterfaceLink }> {
+  return controlFetch(interfaceLinkPath(capsuleId, requirementKey), { method: "PUT", body: input });
+}
+
+export function revokeInterfaceLink(capsuleId: string, requirementKey: string, expectedGeneration: number): Promise<{
+  readonly link: import("takosumi-contract").InterfaceLink;
+}> {
+  return controlFetch(interfaceLinkPath(capsuleId, requirementKey), {
+    method: "DELETE", body: { expectedGeneration },
+  });
+}
+
 /**
  * Advances an install attempt bound to a never-applied app through its own
  * reconciliation until it asks for a review (`continue_install`), so the app

@@ -1437,6 +1437,8 @@ export async function createTakosumiService(
   let interfaceService: InterfaceService;
   interfaceService = new InterfaceService({
     stores: interfaceStores,
+    capsules: capsulesService,
+    captureLinkWriteAuthority: (workspaceId) => workspacesService.captureManagementAuthority(workspaceId),
     resolver: new OutputBackedInterfaceInputResolver({
       opentofu: sharedOpenTofuStore,
     }),

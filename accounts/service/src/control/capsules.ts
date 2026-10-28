@@ -143,6 +143,7 @@ import {
   handleCapsuleInstallConfigReAdoption,
 } from "./install-config-re-adoptions.ts";
 import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
+import { handleCapsuleInterfaceLinks } from "./interface-links.ts";
 import { handleCapsuleApp, handleCapsuleRuns } from "./capsule-app.ts";
 import {
   WorkspaceManagementAdmissionConflictError,
@@ -159,6 +160,7 @@ export async function handleCapsules(
   if (segments[0] === "capsules" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
     const capsule = await operations.capsules.getCapsule(capsuleId);
+    if (segments[2] === "interface-links") return handleCapsuleInterfaceLinks(ctx, capsule, segments, method);
     // Once the Capsule identifies its Workspace, retain the original epoch
     // across authorization. A stop/resume must not authorize an older request.
     const lifecycleMutation = (method === "PATCH" && segments.length === 2) ||

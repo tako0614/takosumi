@@ -719,3 +719,16 @@ test("UserInfo uses the current role and refresh revokes the chain after members
   // other active Workspace members.
   expect(store.findOidcClient(clientId)).toBeDefined();
 });
+
+test("required Interface domain unavailability permits sign-in while infrastructure failure returns 503", async () => {
+  const { InterfaceServiceError } = await import("../../../../core/domains/interfaces/service.ts");
+  for (const [failure, status] of [[new InterfaceServiceError("failed_precondition", "provider unavailable"), 302], [new InterfaceServiceError("not_found", "link missing"), 302], [new Error("Interface store unavailable"), 503]] as const) {
+    const { store, operations, installConfig } = await liveGrantFixture();
+    installConfig.requiredInterfaces = [{ key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } }];
+    const currentClient = store.findOidcClient(clientId)!;
+    store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+    operations.interfaces!.ensureCapsuleRequiredInterfaces = async () => { throw failure; };
+    const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
+    expect(response.status).toBe(status);
+  }
+});

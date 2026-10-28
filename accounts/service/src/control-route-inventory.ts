@@ -16,6 +16,9 @@ export interface PublicSessionControlEndpoint {
  */
 export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndpoint[] =
   [
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates", summary: "List manageable providers for one app requirement", auth: "account-session" },
+    { method: "PUT", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Select one provider with generation CAS", auth: "account-session" },
+    { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Revoke a link as consumer or provider manager", auth: "account-session" },
     {
       method: "GET",
       path: "/api/v1/dashboard/bootstrap",

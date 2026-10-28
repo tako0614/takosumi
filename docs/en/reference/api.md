@@ -222,7 +222,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 89
+`accounts/service/src/control-route-inventory.ts`; it currently contains 92
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -353,6 +353,39 @@ the cancel and schedule commands' own admission rules.
 
 `GET /api/v1/capsules/{capsuleId}/runs` pages newest first with `limit`
 (default 50, at most 100) and `cursor`; repeat `type` to filter by Run type.
+
+### Interface links
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates` | Read matching providers and the current link generation |
+| PUT | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | Select a provider with generation CAS |
+| DELETE | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | Unlink as a consumer or provider manager |
+
+The candidate response is `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`.
+`generation` is the latest record for this consumer and requirement key, or 0 when none
+exists. PUT takes `{ interfaceId, expectedGeneration }`; DELETE takes `{ expectedGeneration }`.
+Both return `{ link: InterfaceLink }` on success. Selecting a provider needs no Plan. It
+prepares the new provider's Binding before revoking the old provider's Binding.
+
+An InterfaceLink records the consumer Capsule and requirement key, exact type/version,
+requested and approved permissions, selected provider Interface and Capsule, `state`,
+`selection`, and `generation`. `state` is `pending_approval|active|declined|revoked`;
+`selection` is `explicit|auto_single`. Uninstalling a provider does not rewrite the choice
+or state: the app read computes its health. Only active links authorize runtime use.
+Interface values and credentials do not enter OpenTofu. An absent link does not prevent
+OIDC sign-in; it creates no Binding for that link.
+
+GET requires consumer read access; PUT requires consumer write access; DELETE also permits
+provider write access. Insufficient access returns 403, invalid input 400, a generation conflict 409,
+and an unavailable provider 412. An approval policy port owns the decision; the current
+Workspace composition approves same-Workspace links immediately.
+
+Storage uses D1 `interface_links` (migration v76 `d1_interface_links`) and PostgreSQL
+`takosumi_interface_links` (migration v122 `runtime_interfaces.links.create`). These are
+additive schema changes and store no credentials. This change has not applied production
+DDL or rolled out to production. Production application requires separate approval and
+verification.
 
 ### Sources
 
