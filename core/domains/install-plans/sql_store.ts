@@ -133,15 +133,19 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
-  async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+  async hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
     const result = await this.#client.query<{ readonly present: boolean }>(
       `select exists (
          select 1 from ${TABLE}
-          where record_json ->> 'operation' = 'revision'
+          where workspace_id = $2
+            and record_json ->> 'operation' = 'revision'
             and record_json ->> 'capsuleId' = $1
             and phase not in ('failed', 'reviewable')
        ) as present`,
-      [capsuleId],
+      [capsuleId, workspaceId],
     );
     return result.rows[0]?.present === true;
   }

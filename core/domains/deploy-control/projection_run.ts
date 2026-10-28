@@ -29,6 +29,7 @@ import type {
   RunType,
 } from "takosumi-contract/runs";
 import { normalizePlanResourceScope, type JsonValue } from "takosumi-contract";
+import { projectPlanRunPolicyReasons } from "./policy_reasons.ts";
 
 /** Persisted approval gate, including the pre-waiting_approval representation. */
 export function planRunAwaitsApproval(planRun: PlanRun): boolean {
@@ -184,6 +185,7 @@ export function projectPlanRun(
       : runTypeForOperation(planRun.operation, "plan");
   const errorCode =
     planRun.status === "failed" ? errorCodeFromPlan(planRun) : undefined;
+  const policyReasons = projectPlanRunPolicyReasons(planRun);
   return {
     id: planRun.id,
     ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
@@ -234,6 +236,7 @@ export function projectPlanRun(
       : {}),
     ...runEnvironmentEvidence(planRun),
     policyStatus: policyStatusFor(planRun.policy.status),
+    ...(policyReasons ? { policyReasons } : {}),
     ...(planRun.requiresApproval === true || type === "destroy_plan"
       ? { requiresApproval: true }
       : {}),

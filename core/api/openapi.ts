@@ -1,6 +1,11 @@
 import { PUBLIC_PROVIDER_RESOLUTION_STATUSES } from "takosumi-contract/provider-resolution";
 import { SOURCE_GIT_CONNECTION_KINDS } from "takosumi-contract/sources";
 import {
+  RUN_POLICY_LAYERS,
+  RUN_POLICY_REASON_CODES,
+  RUN_POLICY_REASON_LIMIT,
+} from "takosumi-contract/runs";
+import {
   type ApiEndpoint,
   endpointTag,
   mountedEndpoints,
@@ -4319,6 +4324,11 @@ function runSchemas(): Record<string, Record<string, unknown>> {
           items: ref("RunPlanResource"),
         },
         policyStatus: { enum: ["pass", "warn", "deny"] },
+        policyReasons: {
+          type: "array",
+          maxItems: RUN_POLICY_REASON_LIMIT,
+          items: ref("RunPolicyReason"),
+        },
         providerResolutions: {
           type: "array",
           items: ref("ProviderResolution"),
@@ -4393,6 +4403,19 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         sourceCommit: { type: "string" },
         providerLockDigest: { type: "string" },
         resolvedProviderBindingsDigest: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    RunPolicyReason: {
+      type: "object",
+      description:
+        "Structured, value-free reason a policy blocked a plan or made it wait for approval. Codes and layers are a closed set; clients never parse prose.",
+      required: ["code", "layer"],
+      properties: {
+        code: { enum: [...RUN_POLICY_REASON_CODES] },
+        layer: { enum: [...RUN_POLICY_LAYERS] },
+        provider: { type: "string" },
+        resourceType: { type: "string" },
       },
       additionalProperties: false,
     },

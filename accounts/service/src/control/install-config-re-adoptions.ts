@@ -231,6 +231,7 @@ export async function handleCapsuleInstallConfigReAdoption(
     current.status === "disabled" ||
     (await ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
       current.id,
+      current.workspaceId,
     ))
   ) {
     return errorJson(

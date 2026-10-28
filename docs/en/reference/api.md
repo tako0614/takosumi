@@ -222,7 +222,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 91
+`accounts/service/src/control-route-inventory.ts`; it currently contains 93
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -277,6 +277,8 @@ Add, role change, and remove responses carry neither field.
 | DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
 | POST | `/api/v1/capsules/{capsuleId}/uninstall` | Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy |
 | POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall` | Cancel a scheduled uninstall during its grace period |
+| GET | `/api/v1/capsules/{capsuleId}/app` | Read the server-computed installed-app view: state, primary action, problems, screens, version and uninstall terms |
+| GET | `/api/v1/capsules/{capsuleId}/runs` | List the Capsule's Runs newest first with a keyset cursor |
 | GET | `/api/v1/capsules/{capsuleId}/outputs` | Read the Capsule's current public Output projection |
 | GET | `/api/v1/capsules/{capsuleId}/current-resource-inventory` | Read the Capsule's current recorded OpenTofu resource inventory |
 | GET | `/api/v1/capsules/{capsuleId}/usage-summary` | Read the Capsule's showback usage aggregate |
@@ -293,6 +295,39 @@ Add, role change, and remove responses carry neither field.
 | POST | `/api/v1/capsules/{capsuleId}/destroy-plan` | Create a Capsule destroy plan Run |
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
+
+`GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
+The control plane computes `state` and `primaryAction` from the Capsule, this
+Capsule's newest plan/apply Run, the revision coordinator, its
+ProviderConnections and its screen materialization ledger. It does not rely on
+a window of Workspace-wide Runs.
+
+- `state`: `installing` / `installed` / `updating` / `needs_attention` /
+  `stopped` / `uninstall_scheduled` / `uninstalling` / `uninstalled`
+- `primaryAction`: `open` / `view_resources` / `review` / `retry` /
+  `retry_screen` / `fix_connection` / `continue_install` / `cancel_uninstall` /
+  `uninstall_now` / `reinstall` / `none`
+- `problems[].code`, in priority order: `connection_unavailable` /
+  `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
+  `capsule_error` / `install_incomplete` / `screen_unavailable` /
+  `uninstall_scheduled` (warning)
+
+The view also lists every launchable screen (`screens`), the adopted version and
+the newest snapshot of the same ref (`version.current`, `version.latest`,
+`updateAvailable`, `stale`, `autoUpdate`), in-progress work (`progress`), the
+newest Run (`latestRun`) and the uninstall terms (`uninstall.mode`, the
+`graceDays` that apply before anything is scheduled, and
+`scheduled.deleteAfter` once scheduled). It carries no secret, no Output value
+and no Interface input other than a screen's checked launch URL. Parts that a
+supporting read could not load are named in `incomplete`.
+An uninstall record counts only while the Capsule is `uninstalled`, or while it
+is `error` after a provider-reached teardown failure and its newest Run is still
+a removal. A recorded `blockedReason` yields `uninstall_blocked` in either
+phase. `cancel_uninstall`, `uninstall.mode` and `scheduled.cancellable` follow
+the cancel and schedule commands' own admission rules.
+
+`GET /api/v1/capsules/{capsuleId}/runs` pages newest first with `limit`
+(default 50, at most 100) and `cursor`; repeat `type` to filter by Run type.
 
 ### Sources
 
@@ -343,6 +378,12 @@ Add, role change, and remove responses carry neither field.
 | POST | `/api/v1/run-groups/{runGroupId}/approve` | Approve a grouped Run |
 | GET | `/api/v1/state-versions/{stateVersionId}` | Read a StateVersion projection |
 | POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | Create a StateVersion rollback plan |
+
+A plan Run that policy blocked or that requires approval carries
+`policyReasons`: `{ code, layer, provider?, resourceType? }` items whose `code`
+and `layer` come from a closed set (for example `provider_not_allowed` /
+`provider`, `approval_required_change` / `action`). The prose reasons are not
+returned; a reason this build does not recognize stays as `unclassified`.
 
 ### Credentials and Output sharing
 

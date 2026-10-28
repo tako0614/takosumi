@@ -87,6 +87,8 @@ import { validateCapsuleProviderBindings } from "../connections/mod.ts";
 import {
   advancedUninstallRecord,
   CAPSULE_UNINSTALL_REASONS,
+  capsuleUninstallCancelRefusal,
+  capsuleUninstallScheduleRefusal,
   DEFAULT_UNINSTALL_GRACE_DAYS,
   isUninstallRestorableStatus,
   scheduledUninstallRecord,
@@ -308,6 +310,22 @@ export class CapsulesService {
   /** Grace period, in whole days, applied to new uninstall requests. */
   get uninstallGraceDays(): number {
     return this.#uninstallGraceDays;
+  }
+
+  /**
+   * Read-only: whether scheduling and cancelling an uninstall would pass the
+   * same state admission the commands apply right now. Authorization,
+   * credential kind and Workspace management fences stay the commands' own.
+   */
+  async uninstallAdmission(
+    capsule: Capsule,
+  ): Promise<{ readonly schedule: boolean; readonly cancel: boolean }> {
+    let safety: ReturnType<OpenTofuControlStore["getCapsuleRuntimeSafety"]> | undefined;
+    const read = () => (safety ??= this.#store.getCapsuleRuntimeSafety(capsule.id));
+    const schedule = capsule.status === "uninstalled" ||
+      (await capsuleUninstallScheduleRefusal(capsule, read)) === undefined;
+    const cancel = (await capsuleUninstallCancelRefusal(capsule, read)) === undefined;
+    return { schedule, cancel };
   }
 
   /**
@@ -883,37 +901,17 @@ export class CapsulesService {
     const schedule = async (): Promise<Capsule> => {
       const current = prepared.capsule;
       if (current.status === "uninstalled") return current;
-      if (current.status === "destroyed") {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `capsule ${id} is already destroyed`,
-          { reason: CAPSULE_UNINSTALL_REASONS.unavailable },
-        );
+      const refusal = await capsuleUninstallScheduleRefusal(
+        current,
+        () => this.#store.getCapsuleRuntimeSafety(id),
+      );
+      if (refusal) {
+        throw new OpenTofuControllerError("failed_precondition", refusal.message, {
+          reason: refusal.reason,
+        });
       }
       if (!isUninstallRestorableStatus(current.status)) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `capsule ${id} is ${current.status}; only an active, stale, or error Capsule can be uninstalled`,
-          { reason: CAPSULE_UNINSTALL_REASONS.unavailable },
-        );
-      }
-      if (!current.currentStateVersionId && current.currentStateGeneration === 0) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `capsule ${id} was never applied; abandon it instead`,
-          { reason: CAPSULE_UNINSTALL_REASONS.notApplied },
-        );
-      }
-      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(id);
-      if (
-        runtimeSafety?.phase === "terminating" ||
-        runtimeSafety?.phase === "retired"
-      ) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `capsule ${id} is already being deleted`,
-          { reason: CAPSULE_UNINSTALL_REASONS.destroyStarted },
-        );
+        throw new Error("uninstall schedule admission accepted a non-restorable status");
       }
       const uninstall = scheduledUninstallRecord({
         id: this.#newId("uninstall"),
@@ -1005,37 +1003,24 @@ export class CapsulesService {
     const cancel = async (): Promise<Capsule> => {
       const current = prepared.capsule;
       const record = current.uninstall;
-      if (current.status !== "uninstalled" || record === undefined) {
-        if (
-          record?.phase === "cancelled" &&
-          current.status === record.previousStatus
-        ) {
-          return current;
-        }
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `capsule ${id} is not uninstalled`,
-          { reason: CAPSULE_UNINSTALL_REASONS.notUninstalled },
-        );
+      if (
+        (current.status !== "uninstalled" || record === undefined) &&
+        record?.phase === "cancelled" &&
+        current.status === record.previousStatus
+      ) {
+        return current;
       }
       // A teardown that is queued or running (including one the owner started
-      // with "delete now") cannot be undone by restoring the status. Once the
-      // finalizer is `destroying`, cancel is possible only if it blocked and
-      // nothing of the teardown reached the provider.
-      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(id);
-      const teardownInFlight = runtimeSafety?.phase === "terminating" ||
-        runtimeSafety?.phase === "retired";
-      const blockedBeforeDispatch = record.phase === "destroying" &&
-        record.blockedReason !== undefined &&
-        (runtimeSafety === undefined || runtimeSafety.phase === "safe");
-      if (
-        teardownInFlight ||
-        (record.phase !== "scheduled" && !blockedBeforeDispatch)
-      ) {
+      // with "delete now") cannot be undone by restoring the status.
+      const refusal = await capsuleUninstallCancelRefusal(
+        current,
+        () => this.#store.getCapsuleRuntimeSafety(id),
+      );
+      if (refusal || record === undefined) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `capsule ${id} teardown has already started and cannot be cancelled`,
-          { reason: CAPSULE_UNINSTALL_REASONS.destroyStarted },
+          refusal?.message ?? `capsule ${id} is not uninstalled`,
+          { reason: refusal?.reason ?? CAPSULE_UNINSTALL_REASONS.notUninstalled },
         );
       }
       const uninstall = advancedUninstallRecord(record, {
