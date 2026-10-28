@@ -17,6 +17,12 @@
  *   出さない。
  */
 export const ja = {
+  "installStore.applyWait.interfaces": "連携するアプリを選ぶか、あとで連携することを選んでください。",
+  "installStore.interfaces.title": "連携するアプリ",
+  "installStore.interfaces.none": "連携できるアプリがありません。あとでアプリの画面から連携できます。",
+  "installStore.interfaces.choose": "連携するアプリを選択",
+  "installStore.interfaces.later": "あとで連携する",
+  "installStore.interfaces.automatic": "自動選択",
   "installStore.title": "アプリをインストール",
   "installStore.browseTitle": "アプリを探す",
   "installStore.manual": "Gitリポジトリからインストール",

@@ -21,6 +21,9 @@ import type {
   CreateGitInstallAttemptRequest,
   GitInstallPlan,
   GitInstallPlanConnectionRequirement,
+  GitInstallPlanInterfaceChoice,
+  GitInstallPlanInterfaceLinkRequest,
+  GitInstallPlanInterfaceRequirement,
   GitInstallPlanInvalidation,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
@@ -160,7 +163,7 @@ export function attemptCreateRequest(
 export function restartRequest(
   plan: GitInstallPlan,
 ): CreateGitInstallAttemptRequest {
-  return attemptCreateRequest({
+  const base = attemptCreateRequest({
     url: plan.source.url,
     ref: plan.source.ref,
     sourcePath: plan.source.path,
@@ -171,6 +174,9 @@ export function restartRequest(
       ? { authConnectionId: plan.source.authConnectionId }
       : {}),
   });
+  return plan.options.interfaceLinks !== undefined
+    ? { ...base, options: { ...base.options, interfaceLinks: [...plan.options.interfaceLinks] } }
+    : base;
 }
 
 /**
@@ -449,6 +455,82 @@ export function overridesForBindings(
   return overrides;
 }
 
+// --- Linked apps ---------------------------------------------------------------
+
+/** A live Interface choice. Compatibility and permissions belong to the coordinator. */
+export function selectedInterfaceCandidate(requirement: GitInstallPlanInterfaceRequirement) {
+  const choice = requirement.choice;
+  return choice?.kind === "interface"
+    ? requirement.candidates.find((candidate) => candidate.id === choice.interfaceId)
+    : undefined;
+}
+
+export function missingInterfaces(
+  interfaces: readonly GitInstallPlanInterfaceRequirement[],
+): readonly GitInstallPlanInterfaceRequirement[] {
+  return interfaces.filter((requirement) => requirement.choice?.kind !== "later" && !selectedInterfaceCandidate(requirement));
+}
+
+/** Full explicit answer; automatic choices remain the coordinator's responsibility. */
+export function interfaceLinksWith(
+  interfaces: readonly GitInstallPlanInterfaceRequirement[],
+  requirementKey: string,
+  choice: GitInstallPlanInterfaceChoice | undefined,
+  explicitLinks: readonly GitInstallPlanInterfaceLinkRequest[] = [],
+): GitInstallPlanInterfaceLinkRequest[] {
+  return interfaces.flatMap((requirement) => {
+    const chosen = requirement.requirementKey === requirementKey
+      ? choice
+      : retainedInterfaceLinks([requirement], explicitLinks)[0]?.choice;
+    return chosen ? [{ requirementKey: requirement.requirementKey, choice: chosen }] : [];
+  });
+}
+
+export type InterfaceOverrides = Readonly<Record<string, GitInstallPlanInterfaceChoice | undefined>>;
+
+export function withInterfaceOverrides(
+  interfaces: readonly GitInstallPlanInterfaceRequirement[],
+  overrides: InterfaceOverrides,
+): readonly GitInstallPlanInterfaceRequirement[] {
+  return interfaces.map((requirement) => Object.hasOwn(overrides, requirement.requirementKey)
+    ? { ...requirement, choice: overrides[requirement.requirementKey], autoSelected: false }
+    : requirement);
+}
+
+export function retainedInterfaceLinks(
+  interfaces: readonly GitInstallPlanInterfaceRequirement[],
+  explicitLinks: readonly GitInstallPlanInterfaceLinkRequest[] = [],
+): GitInstallPlanInterfaceLinkRequest[] {
+  return interfaces.flatMap((requirement) => requirement.choice && !requirement.autoSelected && (
+    requirement.choice.kind !== "later" || requirement.candidates.length > 0 ||
+    explicitLinks.some((link) => link.requirementKey === requirement.requirementKey)
+  )
+    ? [{ requirementKey: requirement.requirementKey, choice: requirement.choice }]
+    : []);
+}
+
+export function sameInterfaceLinks(
+  left: readonly GitInstallPlanInterfaceLinkRequest[],
+  right: readonly GitInstallPlanInterfaceLinkRequest[],
+): boolean {
+  const keys = (links: readonly GitInstallPlanInterfaceLinkRequest[]) => links.map(({ requirementKey, choice }) =>
+    JSON.stringify([requirementKey, choice.kind, choice.kind === "interface" ? choice.interfaceId : ""])).sort();
+  const a = keys(left);
+  const b = keys(right);
+  return a.length === b.length && a.every((key, index) => key === b[index]);
+}
+
+export function overridesForInterfaceLinks(
+  interfaces: readonly GitInstallPlanInterfaceRequirement[],
+  links: readonly GitInstallPlanInterfaceLinkRequest[],
+): InterfaceOverrides {
+  return Object.fromEntries(interfaces.flatMap((requirement) => {
+    const chosen = links.find((link) => link.requirementKey === requirement.requirementKey);
+    return chosen || (!requirement.autoSelected && !(requirement.choice?.kind === "later" && requirement.candidates.length === 0))
+      ? [[requirement.requirementKey, chosen?.choice]] : [];
+  }));
+}
+
 /** What the install keeps when it is prepared again after a change. */
 export interface RetainedAnswers {
   /** The app name the person wants. */
@@ -457,6 +539,7 @@ export interface RetainedAnswers {
   readonly ref: string;
   readonly modulePath?: string;
   readonly providerBindings: readonly GitInstallPlanProviderBindingRequest[];
+  readonly interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[];
 }
 
 /**
@@ -481,10 +564,14 @@ export function replanRequest(
       ? { authConnectionId: plan.source.authConnectionId }
       : {}),
   });
-  return answers.providerBindings.length > 0
+  return answers.providerBindings.length > 0 || answers.interfaceLinks !== undefined
     ? {
         ...base,
-        options: { ...base.options, providerBindings: [...answers.providerBindings] },
+        options: {
+          ...base.options,
+          ...(answers.providerBindings.length > 0 ? { providerBindings: [...answers.providerBindings] } : {}),
+          ...(answers.interfaceLinks !== undefined ? { interfaceLinks: [...answers.interfaceLinks] } : {}),
+        },
       }
     : base;
 }
@@ -589,6 +676,8 @@ export type ApplyBlock =
   | "module"
   /** A provider still has no connection. */
   | "connections"
+  /** An app link still needs a provider or an explicit later answer. */
+  | "interfaces"
   /** A required setting is empty. */
   | "settings"
   /** A setting or the app name is not valid. */
@@ -663,6 +752,7 @@ export interface InstallView {
   /** "Stop installing" is offered (it is refused while a request is in flight). */
   readonly canDiscard: boolean;
   readonly missingConnections: readonly GitInstallPlanConnectionRequirement[];
+  readonly missingInterfaces: readonly GitInstallPlanInterfaceRequirement[];
   readonly missingVariables: readonly string[];
   readonly invalidVariables: readonly string[];
   /** The name is taken or not a valid app name. */
@@ -679,8 +769,8 @@ export interface InstallView {
 
 const NOTHING: Pick<
   InstallView,
-  "missingConnections" | "missingVariables" | "invalidVariables" | "readyToConfirm"
-> = { missingConnections: [], missingVariables: [], invalidVariables: [], readyToConfirm: false };
+  "missingConnections" | "missingInterfaces" | "missingVariables" | "invalidVariables" | "readyToConfirm"
+> = { missingConnections: [], missingInterfaces: [], missingVariables: [], invalidVariables: [], readyToConfirm: false };
 
 function workingProgress(phase: GitInstallPlan["phase"]): InstallProgress {
   switch (phase) {
@@ -745,6 +835,8 @@ function deriveStage(
     case "provide_inputs": {
       const resubmitting = awaitingResubmission(action);
       const missing = resubmitting ? [] : missingConnections(action.connections);
+      const missingLinks = resubmitting ? [] : missingInterfaces(action.interfaces);
+      const linksIncomplete = missingLinks.length > 0 || (!resubmitting && action.missing.includes("interfaces"));
       const values = continueVariables(action, local.drafts ?? {});
       const typed = resubmitting ? undefined : local.name?.trim();
       const nameProblem = typed !== undefined && typed !== action.name.current
@@ -752,13 +844,14 @@ function deriveStage(
         : action.name.conflict && !resubmitting
           ? "conflict"
           : undefined;
-      const complete = missing.length === 0 && values.ok && nameProblem === undefined;
+      const complete = missing.length === 0 && !linksIncomplete && values.ok && nameProblem === undefined;
       return {
         stage: "provide_inputs",
         primary: missing.length > 0 ? "connect" : "review",
         primaryBlocked: mutating || (missing.length === 0 && !complete),
         canDiscard: discardable,
         missingConnections: missing,
+        missingInterfaces: missingLinks,
         missingVariables: values.ok ? [] : values.missing,
         invalidVariables: values.ok ? [] : values.invalid,
         ...(nameProblem ? { nameProblem } : {}),
@@ -829,6 +922,7 @@ export function deriveInstallView(
       return { ...view, applyBlock: "module" };
     case "provide_inputs": {
       if (view.missingConnections.length > 0) return { ...view, applyBlock: "connections" };
+      if (view.missingInterfaces.length > 0 || (response?.userAction.kind === "provide_inputs" && !awaitingResubmission(response.userAction) && response.userAction.missing.includes("interfaces"))) return { ...view, applyBlock: "interfaces" };
       if (view.missingVariables.length > 0) return { ...view, applyBlock: "settings" };
       if (view.invalidVariables.length > 0 || view.nameProblem) return { ...view, applyBlock: "invalid" };
       // Complete: a reopened attempt waits for the person; otherwise the

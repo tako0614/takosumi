@@ -7,6 +7,7 @@ import type {
 } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract";
 import type { CapsuleResourceSummary } from "takosumi-contract/capsules";
+import type { CapsuleRequiredInterface } from "takosumi-contract/interfaces";
 import {
   assertWorkspaceFreezeExpectation,
   assertWorkspaceManagementAuthorityInput,
@@ -55,6 +56,12 @@ export interface GitInstallAttemptFacts {
     readonly resources: readonly CapsuleResourceSummary[];
     readonly requirements: readonly GitInstallAttemptRequirement[];
     readonly variables: readonly GitInstallPlanVariablePresentation[];
+    readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
+    /** Sole providers observed when this sheet was opened; reads never change it. */
+    readonly autoInterfaceCandidates?: readonly {
+      readonly requirementKey: string;
+      readonly interfaceId: string;
+    }[];
     readonly providerPolicy?: GitInstallAttemptProviderPolicy;
   };
 }
@@ -91,6 +98,8 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
   readonly creationAttempted?: true;
   /** Set only when this attempt itself turned on polling for its Source. */
   readonly sourcePollingEnabledByAttempt?: true;
+  /** Implicit choices frozen at confirmation, including `later` with no provider. */
+  readonly autoSelectedInterfaceKeys?: readonly string[];
   /** Private attempt facts; projected only through `userAction`. */
   readonly attemptFacts?: GitInstallAttemptFacts;
   /** Private create-only configuration retained until atomic initial creation. */
@@ -789,6 +798,7 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     transientVariableNames: _transientVariableNames,
     creationAttempted: _creationAttempted,
     sourcePollingEnabledByAttempt: _sourcePollingEnabledByAttempt,
+    autoSelectedInterfaceKeys: _autoSelectedInterfaceKeys,
     attemptFacts: _attemptFacts,
     ...publicPlan
   } = plan;

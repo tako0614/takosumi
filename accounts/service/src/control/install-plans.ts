@@ -4,6 +4,8 @@ import type {
   GitInstallPlan,
   GitInstallPlanDiagnostic,
   GitInstallPlanInvalidation,
+  GitInstallPlanInterfaceLinkRequest,
+  GitInstallPlanInterfaceRequirement,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanSourceRequest,
@@ -65,6 +67,9 @@ import {
   deterministicInitialCapsuleId,
   deterministicInstallSourceId,
   effectiveProviderBindings,
+  effectiveInterfaceLinks,
+  interfaceRequirements,
+  interfacesReady,
   moduleCandidates,
   nameProposal,
   proposedAppName,
@@ -557,7 +562,7 @@ async function checkAbandonableCapsule(
     const capsule = capsuleId
       ? await getCapsuleIfPresent(ctx.operations, capsuleId)
       : undefined;
-    if (!capsule || capsule.status === "destroyed") return { ok: true };
+    if (!capsule) return { ok: true };
     if (
       capsule.workspaceId !== plan.workspaceId ||
       capsule.installingPrincipalId !== plan.createdBy ||
@@ -570,6 +575,7 @@ async function checkAbandonableCapsule(
         message: "The Capsule does not belong to this install attempt.",
       };
     }
+    if (capsule.status === "destroyed") return { ok: true, capsule };
     if (capsuleHasAppliedState(capsule)) {
       return {
         ok: false,
@@ -700,7 +706,7 @@ async function discardAttemptRecord(
     check = await checkAbandonableCapsule(ctx, current, capsuleId);
     if (!check.ok) return check;
   }
-  if (check.capsule) {
+  if (check.capsule && check.capsule.status !== "destroyed") {
     try {
       await ctx.operations.capsules.abandonUnappliedCapsule(
         check.capsule.id,
@@ -712,6 +718,15 @@ async function discardAttemptRecord(
       if (refusal) return refusal;
       throw error;
     }
+  }
+  if (check.capsule) {
+    // Also repair a prior discard that abandoned the Capsule before its link
+    // revocation acknowledgement was received.
+    await ctx.operations.interfaces?.revokeCapsuleInterfaceLinks?.(
+      observed.workspaceId,
+      check.capsule.id,
+      "install_discarded",
+    );
   }
   const completedAt = new Date().toISOString();
   const {
@@ -910,7 +925,7 @@ async function answerInstallAttempt(
   if (!patch) {
     return errorJson(
       "invalid_request",
-      "The answer must contain expectedGeneration and only modulePath, capsuleName, providerBindings, continue, and variables (variables only with continue).",
+      "The answer must contain expectedGeneration and only modulePath, capsuleName, providerBindings, interfaceLinks, continue, and variables (variables only with continue).",
       400,
       ctx.request,
     );
@@ -934,7 +949,8 @@ async function answerInstallAttempt(
   if (
     observed.creationAttempted === true &&
     (!patch.continue || patch.modulePath !== undefined ||
-      patch.capsuleName !== undefined || patch.providerBindings !== undefined)
+      patch.capsuleName !== undefined || patch.providerBindings !== undefined ||
+      patch.interfaceLinks !== undefined)
   ) {
     // The confirmed Capsule may already exist and will be adopted as it was
     // created; accepting new answers here would silently ignore them.
@@ -989,7 +1005,11 @@ async function answerInstallAttempt(
       ...rest
     } = next;
     // Connection answers name module-bound provider identities.
-    const { providerBindings: _bindings, ...options } = next.options;
+    const {
+      providerBindings: _bindings,
+      interfaceLinks: _interfaceLinks,
+      ...options
+    } = next.options;
     next = {
       ...rest,
       options: { ...options, modulePath: selection.modulePath },
@@ -1023,6 +1043,25 @@ async function answerInstallAttempt(
     next = {
       ...next,
       options: { ...next.options, providerBindings: patch.providerBindings },
+    };
+  }
+  if (patch.interfaceLinks !== undefined) {
+    const requirements = next.attemptFacts?.inputs?.requiredInterfaces;
+    if (
+      next.phase !== "awaiting_input" || next.awaitingInput !== "inputs" ||
+      patch.interfaceLinks.some((answer) =>
+        !requirements?.some((requirement) => requirement.key === answer.requirementKey)
+      )
+    ) {
+      return invalid(
+        "interface_link_invalid",
+        "Each Interface answer must name one requirement of the analyzed module.",
+      );
+    }
+    next = {
+      ...next,
+      options: { ...next.options, interfaceLinks: patch.interfaceLinks },
+      autoSelectedInterfaceKeys: undefined,
     };
   }
   if (patch.continue) {
@@ -1120,7 +1159,20 @@ async function continueInstallAttempt(
     );
   }
   if (!resubmitting) {
-    const rows = await connectionRequirements(ctx.operations, next);
+    const [rows, interfaces] = await Promise.all([
+      connectionRequirements(ctx.operations, next),
+      interfaceRequirements(ctx.operations, next),
+    ]);
+    if (facts?.autoInterfaceCandidates?.some((captured) => {
+      if (next.options.interfaceLinks?.some((answer) =>
+        answer.requirementKey === captured.requirementKey
+      )) return false;
+      const row = interfaces.find((entry) => entry.requirementKey === captured.requirementKey);
+      return row !== undefined &&
+        !row.candidates.some((candidate) => candidate.id === captured.interfaceId);
+    })) {
+      return await refreshChangedInterfaceCandidates(ctx, observed, next, interfaces);
+    }
     if (!connectionsReady(rows)) {
       return errorJson(
         "install_inputs_incomplete",
@@ -1129,6 +1181,23 @@ async function continueInstallAttempt(
         ctx.request,
         {},
         { reason: "provider_connection_required" },
+      );
+    }
+    if (!interfacesReady(interfaces)) {
+      const unavailable = interfaces.some((row) => {
+        const choice = row.choice;
+        return choice?.kind === "interface" &&
+          !row.candidates.some((candidate) => candidate.id === choice.interfaceId);
+      });
+      return errorJson(
+        unavailable ? "interface_candidate_unavailable" : "install_inputs_incomplete",
+        unavailable
+          ? "A selected Interface provider is no longer available; choose another provider or configure it later."
+          : "Choose an Interface provider or configure it later before continuing.",
+        409,
+        ctx.request,
+        {},
+        { reason: unavailable ? "interface_candidate_unavailable" : "interface_choice_required" },
       );
     }
     const name = await nameProposal(ctx.operations, next);
@@ -1144,7 +1213,22 @@ async function continueInstallAttempt(
     }
     next = {
       ...next,
-      options: { ...next.options, providerBindings: effectiveProviderBindings(rows) },
+      options: {
+        ...next.options,
+        providerBindings: effectiveProviderBindings(rows),
+        ...(interfaces.length > 0 || next.options.interfaceLinks !== undefined
+          ? { interfaceLinks: effectiveInterfaceLinks(interfaces) }
+          : {}),
+      },
+      ...(interfaces.length > 0
+        ? {
+            autoSelectedInterfaceKeys: interfaces.filter((row) =>
+              !next.options.interfaceLinks?.some((answer) =>
+                answer.requirementKey === row.requirementKey
+              )
+            ).map((row) => row.requirementKey),
+          }
+        : {}),
     };
   }
   const variableNames = Object.keys(variables).sort();
@@ -1207,6 +1291,59 @@ async function continueInstallAttempt(
   return await runTransientCreation(ctx, result.plan, leaseToken, variables);
 }
 
+function autoInterfaceCandidateSnapshot(rows: readonly GitInstallPlanInterfaceRequirement[]) {
+  return rows.flatMap((row) => row.autoSelected && row.choice?.kind === "interface"
+    ? [{ requirementKey: row.requirementKey, interfaceId: row.choice.interfaceId }]
+    : []);
+}
+
+/** A changed automatic choice is acknowledged once, then the fresh sheet can proceed. */
+async function refreshChangedInterfaceCandidates(
+  ctx: ControlDispatchContext,
+  observed: StoredGitInstallPlan,
+  answered: StoredGitInstallPlan,
+  rows: readonly GitInstallPlanInterfaceRequirement[],
+): Promise<Response> {
+  let result;
+  try {
+    result = await ctx.operations.gitInstallPlans.transitionUnleased({
+      id: observed.id,
+      expectedGeneration: observed.generation,
+      expectedPhase: observed.phase,
+      plan: {
+        ...answered,
+        attemptFacts: {
+          ...answered.attemptFacts,
+          inputs: {
+            ...answered.attemptFacts!.inputs!,
+            autoInterfaceCandidates: autoInterfaceCandidateSnapshot(rows),
+          },
+        },
+      },
+      at: answered.updatedAt,
+      expectedWorkspaceManagementAuthority: observed.workspaceManagementAuthority!,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceManagementAdmissionConflictError) {
+      return await discardInvalidAttempt(ctx, observed, "workspace_management_changed");
+    }
+    throw error;
+  }
+  if (result.status === "not_found") return errorJson("not_found", "Install plan not found.", 404);
+  if (result.status === "conflict") return generationConflict(ctx);
+  if (result.status === "busy") {
+    return errorJson("reconcile_in_progress", "Another reconciler currently owns this install plan.", 409, ctx.request);
+  }
+  return errorJson(
+    "interface_candidate_unavailable",
+    "An automatically selected Interface provider is no longer available; review the updated choices and continue again.",
+    409,
+    ctx.request,
+    {},
+    { reason: "interface_candidate_unavailable" },
+  );
+}
+
 async function runTransientCreation(
   ctx: ControlDispatchContext,
   claimed: StoredGitInstallPlan,
@@ -1246,6 +1383,7 @@ async function runTransientCreation(
 
 /** Diagnostics that reopen an attempt's sheet instead of failing it. */
 const ATTEMPT_INPUT_DIAGNOSTICS: ReadonlySet<string> = new Set([
+  "interface_candidate_unavailable",
   "provider_binding_invalid",
   "capsule_name_conflict",
   "generic_opentofu_variable_invalid",
@@ -1272,10 +1410,21 @@ function reopenUserFixableFailure(plan: StoredGitInstallPlan): StoredGitInstallP
     completedAt: _completedAt,
     transientVariableNames: _names,
     creationAttempted: _creationAttempted,
+    autoSelectedInterfaceKeys: _autoSelectedInterfaceKeys,
     ...rest
   } = plan;
   return {
     ...rest,
+    options: {
+      ...rest.options,
+      ...(rest.options.interfaceLinks !== undefined
+        ? {
+            interfaceLinks: rest.options.interfaceLinks.filter((answer) =>
+              !plan.autoSelectedInterfaceKeys?.includes(answer.requirementKey)
+            ),
+          }
+        : {}),
+    },
     phase: "awaiting_input",
     awaitingInput: "inputs",
     expiresAt: attemptExpiry(plan.updatedAt),
@@ -1760,10 +1909,10 @@ async function prepareInstallCompilation(
         repositoryManifest: false,
       });
       if (!facts.ok) return failedPlan(plan, facts);
-      return pauseForInput(
+      return await pauseForAttemptInputs(
         progressed(plan, analyzed),
-        "inputs",
-        { inputs: facts.facts },
+        operations,
+        facts.facts,
       );
     }
     return progressed(plan, { ...analyzed, phase: "creating_capsule" });
@@ -1909,15 +2058,35 @@ async function analyzeAndCompileInstall(
       repositoryManifest: true,
     });
     if (!facts.ok) return failedPlan(plan, facts);
-    return pauseForInput(
+    return await pauseForAttemptInputs(
       progressed(plan, { installConfigId: preview.installConfig.id }),
-      "inputs",
-      { inputs: facts.facts },
+      operations,
+      facts.facts,
     );
   }
   return progressed(plan, {
     installConfigId: preview.installConfig.id,
     phase: "creating_capsule",
+  });
+}
+
+/** Persist one value-free auto-selection observation when entering the sheet. */
+async function pauseForAttemptInputs(
+  plan: StoredGitInstallPlan,
+  operations: ControlPlaneOperations,
+  facts: NonNullable<GitInstallAttemptFacts["inputs"]>,
+): Promise<StoredGitInstallPlan> {
+  const interfaces = await interfaceRequirements(operations, {
+    ...plan,
+    attemptFacts: { inputs: facts },
+  });
+  return pauseForInput(plan, "inputs", {
+    inputs: {
+      ...facts,
+      ...(interfaces.length > 0
+        ? { autoInterfaceCandidates: autoInterfaceCandidateSnapshot(interfaces) }
+        : {}),
+    },
   });
 }
 
@@ -1955,7 +2124,7 @@ async function createCapsule(
     // lost. Adopt that exact Capsule by its deterministic id before any
     // create; never re-create authority without the values it was created
     // with.
-    const adopted = await adoptCommittedInitialCapsule(plan, operations);
+    const adopted = await adoptCommittedInitialCapsule(plan, ctx);
     if (adopted) return adopted;
     if (
       transientVariables === undefined &&
@@ -2031,6 +2200,28 @@ async function createCapsule(
     createdAt: plan.createdAt,
     updatedAt: plan.createdAt,
   };
+  if ((plan.options.interfaceLinks?.length ?? 0) > 0) {
+    const requirements = installConfig.requiredInterfaces ?? [];
+    if (plan.options.interfaceLinks!.some((answer) =>
+      !requirements.some((requirement) => requirement.key === answer.requirementKey)
+    )) {
+      return failedPlan(plan, {
+        code: "interface_link_invalid",
+        message: "An Interface choice no longer names a requirement of this app.",
+      });
+    }
+    const interfaces = await interfaceRequirements(operations, plan, requirements);
+    if (interfaces.some((row) => {
+      const choice = row.choice;
+      return choice?.kind === "interface" &&
+        !row.candidates.some((candidate) => candidate.id === choice.interfaceId);
+    })) {
+      return failedPlan(plan, {
+        code: "interface_candidate_unavailable",
+        message: "A selected Interface provider is no longer available; choose another provider or configure it later.",
+      });
+    }
+  }
   const requestedBindings = requestedProviderBindings(plan);
   const resolved = await resolveProviderBindings(
     operations,
@@ -2098,18 +2289,14 @@ async function createCapsule(
     capsuleId: created.capsule.id,
   };
   assertCapsuleMatches(created.capsule, completedPlan);
-  return progressed(completedPlan, {
-    initialVariables: undefined,
-    initialConfiguration: undefined,
-    transientVariableNames: undefined,
-    phase: "planning",
-  });
+  return await finishInitialInterfaceLinks(completedPlan, ctx);
 }
 
 async function adoptCommittedInitialCapsule(
   plan: StoredGitInstallPlan,
-  operations: ControlPlaneOperations,
+  ctx: ControlDispatchContext,
 ): Promise<StoredGitInstallPlan | undefined> {
+  const operations = ctx.operations;
   const capsule = await getCapsuleIfPresent(
     operations,
     deterministicInitialCapsuleId(plan.id),
@@ -2121,7 +2308,76 @@ async function adoptCommittedInitialCapsule(
     capsuleId: capsule.id,
   };
   assertCapsuleMatches(capsule, adopted);
-  return progressed(adopted, {
+  return await finishInitialInterfaceLinks(adopted, ctx);
+}
+
+/** A committed Capsule is adopted before repairing its exact frozen links. */
+async function finishInitialInterfaceLinks(
+  plan: StoredGitInstallPlan,
+  ctx: ControlDispatchContext,
+): Promise<StoredGitInstallPlan> {
+  const operations = ctx.operations;
+  const selections = (plan.options.interfaceLinks ?? []).flatMap((answer) =>
+    answer.choice.kind === "interface"
+      ? [{
+          requirementKey: answer.requirementKey,
+          interfaceId: answer.choice.interfaceId,
+          selection: plan.autoSelectedInterfaceKeys?.includes(answer.requirementKey)
+            ? "auto_single" as const
+            : "explicit" as const,
+        }]
+      : []
+  );
+  if (selections.length > 0) {
+    try {
+      const config = await operations.capsules.getInstallConfig(plan.installConfigId!);
+      if (!operations.interfaces?.ensureCapsuleInterfaceLinks) {
+        throw new Error("Interface link service is unavailable");
+      }
+      await operations.interfaces.ensureCapsuleInterfaceLinks({
+        workspaceId: plan.workspaceId,
+        capsuleId: plan.capsuleId!,
+        requirements: config.requiredInterfaces ?? [],
+        selections,
+      }, { actorAccountId: plan.createdBy, roles: [], requestId: plan.id }, {
+        assertCurrent: async () => {
+          const auth = await requireWorkspaceAccess({
+            operations,
+            store: ctx.store,
+            session: ctx.session,
+            workspaceId: plan.workspaceId,
+          });
+          if (!auth.ok) {
+            throw new OpenTofuControllerError("permission_denied", "Interface link access is no longer available.");
+          }
+          const authority = await operations.workspaces.captureManagementAuthority(plan.workspaceId);
+          if (authority.managementEpoch !== plan.workspaceManagementAuthority?.managementEpoch) {
+            throw new OpenTofuControllerError("failed_precondition", "Interface link management authority changed.");
+          }
+          const current = await operations.gitInstallPlans.get(plan.id);
+          if (
+            !current || current.generation !== plan.generation ||
+            current.phase !== "creating_capsule" ||
+            Date.now() >= Date.parse(plan.updatedAt) + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS
+          ) {
+            throw new OpenTofuControllerError("failed_precondition", "Interface link install lease is no longer current.");
+          }
+          return authority;
+        },
+      });
+    } catch (error) {
+      // Initial authority is known committed. Keep it reconcileable without
+      // asking for values that will never be used to recreate that Capsule.
+      return progressed(plan, {
+        phase: "creating_capsule",
+        initialVariables: undefined,
+        initialConfiguration: undefined,
+        transientVariableNames: undefined,
+        diagnostic: retryableDiagnostic(plan, error),
+      });
+    }
+  }
+  return progressed(plan, {
     initialVariables: undefined,
     initialConfiguration: undefined,
     transientVariableNames: undefined,
@@ -2638,6 +2894,7 @@ function parseCreateRequest(
       !hasOnlyKeys(body.options, [
         "modulePath",
         "providerBindings",
+        "interfaceLinks",
       ])
     ) {
       return undefined;
@@ -2665,9 +2922,12 @@ function parseCreateRequest(
     if (body.options.providerBindings !== undefined && !providerBindings) {
       return undefined;
     }
+    const interfaceLinks = interfaceLinkRequests(body.options.interfaceLinks);
+    if (body.options.interfaceLinks !== undefined && !interfaceLinks) return undefined;
     options = {
       ...(modulePath !== undefined ? { modulePath } : {}),
       ...(providerBindings !== undefined ? { providerBindings } : {}),
+      ...(interfaceLinks !== undefined ? { interfaceLinks } : {}),
     };
   }
   let preflight: CreateGitInstallPlanRequest["preflight"];
@@ -2866,16 +3126,19 @@ function optionsValue(
   value: unknown,
 ): NonNullable<CreateGitInstallPlanRequest["options"]> | undefined {
   if (value === undefined) return {};
-  if (!isRecord(value) || !hasOnlyKeys(value, ["modulePath", "providerBindings"])) {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["modulePath", "providerBindings", "interfaceLinks"])) {
     return undefined;
   }
   const modulePath = canonicalModulePathAnswer(value.modulePath);
   if (value.modulePath !== undefined && modulePath === undefined) return undefined;
   const providerBindings = providerBindingRequests(value.providerBindings);
   if (value.providerBindings !== undefined && !providerBindings) return undefined;
+  const interfaceLinks = interfaceLinkRequests(value.interfaceLinks);
+  if (value.interfaceLinks !== undefined && !interfaceLinks) return undefined;
   return {
     ...(modulePath !== undefined ? { modulePath } : {}),
     ...(providerBindings !== undefined ? { providerBindings } : {}),
+    ...(interfaceLinks !== undefined ? { interfaceLinks } : {}),
   };
 }
 
@@ -2896,6 +3159,7 @@ function parsePatchRequest(
       "modulePath",
       "capsuleName",
       "providerBindings",
+      "interfaceLinks",
       "variables",
       "continue",
     ])
@@ -2913,6 +3177,8 @@ function parsePatchRequest(
   ) return undefined;
   const providerBindings = providerBindingRequests(body.providerBindings);
   if (body.providerBindings !== undefined && !providerBindings) return undefined;
+  const interfaceLinks = interfaceLinkRequests(body.interfaceLinks);
+  if (body.interfaceLinks !== undefined && !interfaceLinks) return undefined;
   if (body.continue !== undefined && typeof body.continue !== "boolean") {
     return undefined;
   }
@@ -2927,9 +3193,37 @@ function parsePatchRequest(
     ...(modulePath !== undefined ? { modulePath } : {}),
     ...(capsuleName !== undefined ? { capsuleName } : {}),
     ...(providerBindings !== undefined ? { providerBindings } : {}),
+    ...(interfaceLinks !== undefined ? { interfaceLinks } : {}),
     ...(variables !== undefined ? { variables } : {}),
     ...(body.continue === true ? { continue: true } : {}),
   };
+}
+
+/** Choices contain identities only; repository requirements own permissions. */
+function interfaceLinkRequests(value: unknown): readonly GitInstallPlanInterfaceLinkRequest[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 100) return undefined;
+  const keys = new Set<string>();
+  const answers: GitInstallPlanInterfaceLinkRequest[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, ["requirementKey", "choice"])) return undefined;
+    const requirementKey = boundedPlainString(entry.requirementKey, 128);
+    if (!requirementKey || keys.has(requirementKey) || !isRecord(entry.choice)) return undefined;
+    keys.add(requirementKey);
+    if (entry.choice.kind === "later" && hasOnlyKeys(entry.choice, ["kind"])) {
+      answers.push({ requirementKey, choice: { kind: "later" } });
+    } else if (
+      entry.choice.kind === "interface" &&
+      hasOnlyKeys(entry.choice, ["kind", "interfaceId"])
+    ) {
+      const interfaceId = boundedPlainString(entry.choice.interfaceId, 132);
+      if (!interfaceId) return undefined;
+      answers.push({ requirementKey, choice: { kind: "interface", interfaceId } });
+    } else return undefined;
+  }
+  return answers.sort((left, right) =>
+    left.requirementKey < right.requirementKey ? -1 : left.requirementKey > right.requirementKey ? 1 : 0
+  );
 }
 
 function reviewedVariablesValue(

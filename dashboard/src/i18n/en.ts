@@ -6,6 +6,12 @@ import type { ja } from "./ja.ts";
  * here is a type error, so the locales cannot drift.
  */
 export const en: Record<keyof typeof ja, string> = {
+  "installStore.applyWait.interfaces": "Choose an app to link, or choose to link later.",
+  "installStore.interfaces.title": "Linked apps",
+  "installStore.interfaces.none": "No compatible apps are available. You can link an app later from its page.",
+  "installStore.interfaces.choose": "Choose an app",
+  "installStore.interfaces.later": "Link later",
+  "installStore.interfaces.automatic": "Selected automatically",
   "installStore.title": "Install an app",
   "installStore.browseTitle": "Find apps",
   "installStore.manual": "Install from a Git repository",

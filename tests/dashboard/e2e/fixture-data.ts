@@ -7,6 +7,12 @@
  * launcher projection without deploying anything.
  */
 
+import type {
+  GitInstallPlanInterfaceChoice,
+  GitInstallPlanInterfaceLinkRequest,
+  GitInstallPlanInterfaceRequirement,
+} from "../../../contract/install-plans.ts";
+
 const CREATED_AT = "2026-08-01T00:00:00.000Z";
 
 export const PORTABLE_SESSION_COOKIE = "takosumi_session=portable-e2e";
@@ -235,6 +241,7 @@ export function portableCapsuleApp(capsule: PortableCapsule) {
     state: "installed",
     primaryAction: launcher ? "open" : "view_resources",
     problems: [],
+    links: { uses: [], usedBy: [] },
     screens: launcher
       ? [{
           interfaceId: launcher.metadata.id,
@@ -253,7 +260,7 @@ export function portableCapsuleApp(capsule: PortableCapsule) {
       createdAt: latestRun.createdAt,
       finishedAt: latestRun.finishedAt,
     },
-    uninstall: { mode: "scheduled", graceDays: 7 },
+    uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
     observedAt: CREATED_AT,
   };
 }
@@ -326,6 +333,8 @@ export interface InstallAttemptFixtureOptions {
   readonly modules?: readonly { readonly path: string; readonly providers: readonly string[] }[];
   readonly resources?: readonly { readonly type: string; readonly count?: number; readonly allowed: boolean }[];
   readonly requirements?: readonly InstallAttemptFixtureRequirement[];
+  /** Declared app requirements; candidates are projected without any values. */
+  readonly interfaces?: readonly Omit<GitInstallPlanInterfaceRequirement, "choice" | "autoSelected">[];
   /** Live Provider Connections, read again for every projection. */
   readonly connections?: () => readonly InstallAttemptFixtureConnection[];
   readonly variables?: readonly InstallAttemptFixtureVariable[];
@@ -345,7 +354,7 @@ interface StoredAttempt {
   createdBy: string;
   source: { name: string; url: string; ref: string; path: string; authConnectionId?: string };
   capsule: { name: string; environment: string };
-  options: { modulePath?: string; providerBindings?: readonly Record<string, unknown>[] };
+  options: { modulePath?: string; providerBindings?: readonly Record<string, unknown>[]; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] };
   phase: AttemptPhase;
   awaitingInput?: "module" | "inputs";
   generation: number;
@@ -443,6 +452,20 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
     return { current: attempt.capsule.name, proposed, conflict };
   };
 
+  const interfaceRows = (attempt: StoredAttempt): readonly GitInstallPlanInterfaceRequirement[] =>
+    (options.interfaces ?? []).map((requirement) => {
+      const answer = attempt.options.interfaceLinks?.find((entry) => entry.requirementKey === requirement.requirementKey);
+      const choice: GitInstallPlanInterfaceChoice | undefined = answer?.choice ?? (
+        requirement.candidates.length === 0 ? { kind: "later" } :
+        requirement.candidates.length === 1 ? { kind: "interface", interfaceId: requirement.candidates[0]!.id } : undefined
+      );
+      return {
+        ...requirement,
+        ...(choice ? { choice } : {}),
+        autoSelected: answer === undefined && choice?.kind === "interface",
+      };
+    });
+
   const userAction = (attempt: StoredAttempt) => {
     if (attempt.invalidated) return { kind: "retry", code: attempt.invalidated, restart: true };
     switch (attempt.phase) {
@@ -455,16 +478,19 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
           };
         }
         const connections = requirementRows(attempt);
+        const interfaces = interfaceRows(attempt);
         const name = nameFacts(attempt);
         return {
           kind: "provide_inputs",
           modulePath: attempt.options.modulePath ?? modules[0]?.path ?? ".",
           resources: options.resources ?? [],
           connections,
+          interfaces,
           variables: options.variables ?? [],
           name,
           missing: [
             ...(connections.every((row) => row.candidates.some((c) => c.id === row.selectedConnectionId)) ? [] : ["connections"]),
+            ...(interfaces.every((row) => row.choice?.kind === "later" || row.candidates.some((candidate) => row.choice?.kind === "interface" && candidate.id === row.choice.interfaceId)) ? [] : ["interfaces"]),
             ...(name.conflict ? ["name"] : []),
           ],
         };
@@ -596,6 +622,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
       options: {
         ...(typeof optionsBody?.modulePath === "string" ? { modulePath: optionsBody.modulePath } : {}),
         ...(bindings ? { providerBindings: bindings } : {}),
+        ...(Array.isArray(optionsBody?.interfaceLinks) ? { interfaceLinks: optionsBody.interfaceLinks as unknown as readonly GitInstallPlanInterfaceLinkRequest[] } : {}),
       },
       phase: "syncing_source",
       generation: 0,
@@ -640,6 +667,9 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
     if (Array.isArray(body.providerBindings)) {
       attempt.options = { ...attempt.options, providerBindings: body.providerBindings as Record<string, unknown>[] };
     }
+    if (Array.isArray(body.interfaceLinks)) {
+      attempt.options = { ...attempt.options, interfaceLinks: body.interfaceLinks as unknown as readonly GitInstallPlanInterfaceLinkRequest[] };
+    }
     if (body.continue === true) {
       const action = userAction(attempt) as { missing?: readonly string[] };
       if (action.missing?.includes("connections")) {
@@ -647,6 +677,9 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
       }
       if (action.missing?.includes("name")) {
         return attemptError(409, "install_inputs_incomplete", "Another app uses this name.", "capsule_name_conflict");
+      }
+      if (action.missing?.includes("interfaces")) {
+        return attemptError(409, "install_inputs_incomplete", "Choose an app or link it later.", "interface_selection_required");
       }
       const values = (body.variables ?? {}) as Record<string, unknown>;
       const missingVariables = (options.variables ?? [])

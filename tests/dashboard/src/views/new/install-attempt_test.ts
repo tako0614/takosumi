@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import type {
   GitInstallPlan,
   GitInstallPlanConnectionRequirement,
+  GitInstallPlanInterfaceRequirement,
   GitInstallPlanResponse,
   GitInstallPlanUserAction,
 } from "takosumi-contract";
@@ -24,6 +25,10 @@ import {
   installAttemptId,
   legacyCapsuleLocator,
   missingConnections,
+  interfaceLinksWith,
+  missingInterfaces,
+  retainedInterfaceLinks,
+  withInterfaceOverrides,
   openAttemptStatusKey,
   progressSignature,
   replanRequest,
@@ -96,6 +101,7 @@ function inputs(overrides: Partial<ProvideInputs> = {}): ProvideInputs {
     modulePath: ".",
     resources: [{ type: "cloudflare_workers_script", allowed: true }],
     connections: [],
+    interfaces: [],
     variables: [],
     name: { current: "office", proposed: "office", conflict: false },
     missing: [],
@@ -104,6 +110,53 @@ function inputs(overrides: Partial<ProvideInputs> = {}): ProvideInputs {
 }
 
 const candidate = { id: "conn_a", displayName: "My Cloudflare", status: "verified", scope: "workspace" } as const;
+
+const linkedApp = { id: "if_a", name: "Chat", capsuleId: "cap_chat", capsuleName: "chat" } as const;
+const interfaceRequirement: GitInstallPlanInterfaceRequirement = {
+  requirementKey: "chat", type: "chat", version: "1", permissions: ["send"],
+  candidates: [linkedApp], choice: { kind: "interface", interfaceId: "if_a" }, autoSelected: true,
+};
+
+describe("linked app answers", () => {
+  test("each row needs a live choice or later, including the coordinator's missing flag", () => {
+    const unselected = { ...interfaceRequirement, candidates: [linkedApp, { ...linkedApp, id: "if_b" }], choice: undefined, autoSelected: false };
+    expect(missingInterfaces([unselected])).toEqual([unselected]);
+    expect(missingInterfaces([interfaceRequirement, { ...unselected, choice: { kind: "later" } }])).toEqual([]);
+    expect(missingInterfaces([{ ...interfaceRequirement, candidates: [] }])).toHaveLength(1);
+    expect(deriveInstallView(respond(inputs({ interfaces: [unselected], missing: ["interfaces"] })), { armed: true }))
+      .toMatchObject({ readyToConfirm: false, applyBlock: "interfaces", primaryBlocked: true });
+    expect(deriveInstallView(respond(inputs({ missing: ["interfaces"] })), { armed: true }).readyToConfirm).toBe(false);
+  });
+
+  test("a full replacement keeps explicit answers and leaves automatic rows automatic", () => {
+    const second = { ...interfaceRequirement, requirementKey: "mail", autoSelected: false, choice: { kind: "later" } as const };
+    expect(interfaceLinksWith([interfaceRequirement, second], "mail", { kind: "interface", interfaceId: "if_a" }))
+      .toEqual([{ requirementKey: "mail", choice: { kind: "interface", interfaceId: "if_a" } }]);
+    expect(retainedInterfaceLinks(withInterfaceOverrides([interfaceRequirement, second], { chat: { kind: "later" } })))
+      .toEqual([{ requirementKey: "chat", choice: { kind: "later" } }, { requirementKey: "mail", choice: { kind: "later" } }]);
+    const implicitLater = { ...second, requirementKey: "no-candidate", candidates: [] };
+    expect(interfaceLinksWith([interfaceRequirement, implicitLater, second], "mail", { kind: "later" }))
+      .toEqual([{ requirementKey: "mail", choice: { kind: "later" } }]);
+    expect(retainedInterfaceLinks([interfaceRequirement, implicitLater])).toEqual([]);
+    expect(retainedInterfaceLinks([implicitLater], [{ requirementKey: "no-candidate", choice: { kind: "later" } }]))
+      .toEqual([{ requirementKey: "no-candidate", choice: { kind: "later" } }]);
+  });
+
+  test("restart and replan retain exact app choices and later without setting values", () => {
+    const interfaceLinks = [{ requirementKey: "chat", choice: { kind: "later" } as const }];
+    expect(restartRequest(plan({ options: { interfaceLinks } })).options?.interfaceLinks).toEqual(interfaceLinks);
+    expect(replanRequest(plan(), { name: "office", ref: COMMIT, providerBindings: [], interfaceLinks }).options?.interfaceLinks).toEqual(interfaceLinks);
+  });
+
+  test("progress includes linked app candidates, answers, and permissions", () => {
+    const base = respond(inputs({ interfaces: [interfaceRequirement] }));
+    for (const row of [
+      { ...interfaceRequirement, choice: { kind: "later" } as const },
+      { ...interfaceRequirement, candidates: [] },
+      { ...interfaceRequirement, permissions: ["read"] },
+    ]) expect(progressSignature(respond(inputs({ interfaces: [row] })))).not.toBe(progressSignature(base));
+  });
+});
 
 describe("one primary action per state", () => {
   const cases: [string, GitInstallPlanResponse | undefined, Parameters<typeof deriveInstallView>[1], string, InstallPrimary][] = [

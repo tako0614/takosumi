@@ -77,8 +77,8 @@ function appView(capsuleId: string, name: string, patch: Record<string, unknown>
   return {
     kind: "takosumi.capsule-app@v1", capsuleId, workspaceId: "ws_alpha", projectId: "prj_alpha", name,
     environment: "production", status: "active", applied: true, state: "installed", primaryAction: "open",
-    problems: [], screens: [], version: { updateAvailable: false, stale: false, autoUpdate: false },
-    progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
+    problems: [], screens: [], links: { uses: [], usedBy: [] }, version: { updateAvailable: false, stale: false, autoUpdate: false },
+    progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
     observedAt: "2026-10-28T00:00:00.000Z", ...patch,
   };
 }
@@ -280,7 +280,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // The sections follow keeping an app, and nothing is folded away. The
       // uninstall section states the grace period before anything is scheduled.
       await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
-      await expect(app.getByTestId("app-linked")).toHaveCount(0);
+      await expect(app.getByTestId("app-linked")).toContainText("No apps are linked.");
       const sections = ["app-version", "app-settings", "app-created", "app-history", "app-uninstall"];
       const tops: number[] = [];
       for (const id of sections) {
@@ -937,7 +937,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             },
             nextAction: "none",
             userAction: {
-              kind: "provide_inputs", modulePath: ".", resources: [], connections: [], variables: [],
+              kind: "provide_inputs", modulePath: ".", resources: [], connections: [], interfaces: [], variables: [],
               name: { current: "state-echo", proposed: "state-echo", conflict: false }, missing: [],
             },
             links: { self: "/api/v1/install-plans/gip_00000000005ea7e5" },

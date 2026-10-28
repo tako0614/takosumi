@@ -20,6 +20,7 @@ import { createEffect, createMemo, createResource, createSignal, For, Match, Sho
 import { ExternalLink, PlugZap } from "lucide-solid";
 import type {
   GitInstallPlanConnectionRequirement,
+  GitInstallPlanInterfaceRequirement,
   GitInstallPlanUserAction,
   GitInstallPlanVariablePresentation,
 } from "takosumi-contract";
@@ -48,6 +49,7 @@ import {
   connectionKey,
   continueVariables,
   selectedCandidate,
+  selectedInterfaceCandidate,
   sheetVariables,
   variableInitialText,
   type ApplyBlock,
@@ -76,6 +78,7 @@ const APPLY_WAIT_TEXT: Readonly<Record<ApplyBlock, MessageKey>> = {
   paused: "installStore.applyWait.paused",
   module: "installStore.applyWait.module",
   connections: "installStore.applyWait.connections",
+  interfaces: "installStore.applyWait.interfaces",
   settings: "installStore.applyWait.settings",
   invalid: "installStore.applyWait.invalid",
   checking: "installStore.applyWait.checking",
@@ -440,6 +443,58 @@ export function InstallScreen(props: {
   const rowKeys = createMemo(() => rows().map(connectionKey), [], { equals: sameKeys });
   const requirementFor = (key: string) => rows().find((requirement) => connectionKey(requirement) === key);
   const missingRows = () => rows().filter((requirement) => !selectedCandidate(requirement)).length;
+  const interfaces = () => props.attempt.interfaceRows();
+  const interfaceKeys = createMemo(() => interfaces().map((requirement) => requirement.requirementKey), [], { equals: sameKeys });
+  const interfaceFor = (key: string) => interfaces().find((requirement) => requirement.requirementKey === key);
+
+  const InterfaceRow = (rowProps: { readonly requirement: GitInstallPlanInterfaceRequirement }) => {
+    const requirement = () => rowProps.requirement;
+    const selected = () => selectedInterfaceCandidate(requirement());
+    const selectedValue = () => requirement().choice?.kind === "later" ? "later" : selected()?.id ?? "";
+    return (
+      <article
+        class="iv-connection-row"
+        data-testid="install-required-interface"
+        data-requirement-key={requirement().requirementKey}
+        data-interface-state={selected() ? "selected" : requirement().choice?.kind === "later" ? "later" : "missing"}
+      >
+        <div class="iv-connection-head">
+          <strong>{requirement().requirementKey}</strong>
+          <Show when={requirement().autoSelected && selected()}>
+            <Badge tone="ok">{t("installStore.interfaces.automatic")}</Badge>
+          </Show>
+        </div>
+        <p class="iv-muted">{requirement().type} {requirement().version}</p>
+        <Show when={requirement().permissions.length > 0}>
+          <p class="iv-muted">{requirement().permissions.join(", ")}</p>
+        </Show>
+        <Show when={requirement().candidates.length > 0} fallback={<p class="iv-muted">{t("installStore.interfaces.none")}</p>}>
+          <FormField label={t("installStore.interfaces.choose")} required>
+            <Select
+              value={selectedValue()}
+              disabled={busy() || resubmitting() || !connectionsEditable()}
+              data-testid="install-interface-choice"
+              data-requirement-key={requirement().requirementKey}
+              onChange={async (event) => {
+                const element = event.currentTarget;
+                const value = element.value;
+                const choice = value === "later" ? { kind: "later" as const }
+                  : value ? { kind: "interface" as const, interfaceId: value } : undefined;
+                await attempt().chooseInterface(requirement(), choice);
+                element.value = selectedValue();
+              }}
+            >
+              <option value="" disabled selected={selectedValue() === ""}>{t("installStore.interfaces.choose")}</option>
+              <For each={requirement().candidates}>
+                {(candidate) => <option value={candidate.id} selected={selectedValue() === candidate.id}>{candidate.capsuleName} — {candidate.name}</option>}
+              </For>
+              <option value="later" selected={selectedValue() === "later"}>{t("installStore.interfaces.later")}</option>
+            </Select>
+          </FormField>
+        </Show>
+      </article>
+    );
+  };
 
   const ConnectionRow = (rowProps: { readonly requirement: GitInstallPlanConnectionRequirement }) => {
     const requirement = () => rowProps.requirement;
@@ -789,6 +844,15 @@ export function InstallScreen(props: {
                 {(requirement) => <ConnectionRow requirement={requirement()} />}
               </Show>
             )}
+          </For>
+        </section>
+      </Show>
+
+      <Show when={interfaces().length > 0}>
+        <section class="iv-sheet-block" aria-labelledby="iv-interfaces-title" data-testid="install-interfaces">
+          <h3 id="iv-interfaces-title">{t("installStore.interfaces.title")}</h3>
+          <For each={interfaceKeys()}>
+            {(key) => <Show when={interfaceFor(key)}>{(requirement) => <InterfaceRow requirement={requirement()} />}</Show>}
           </For>
         </section>
       </Show>

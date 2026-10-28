@@ -24,6 +24,9 @@ import type {
   CreateGitInstallAttemptRequest,
   GitInstallPlan,
   GitInstallPlanConnectionRequirement,
+  GitInstallPlanInterfaceChoice,
+  GitInstallPlanInterfaceLinkRequest,
+  GitInstallPlanInterfaceRequirement,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanUserAction,
@@ -63,18 +66,24 @@ import {
   bindingsWith,
   canAdvance,
   connectionKey,
+  interfaceLinksWith,
   continueVariables,
   deriveInstallView,
   INSTALL_SCREEN_STAGES,
   overridesForBindings,
+  overridesForInterfaceLinks,
   progressSignature,
   replanRequest,
   restartRequest,
   retainedBindings,
+  retainedInterfaceLinks,
   sameBindings,
+  sameInterfaceLinks,
   sheetVariables,
   withConnectionOverrides,
+  withInterfaceOverrides,
   type ConnectionOverrides,
+  type InterfaceOverrides,
   type InstallCandidate,
   type InstallView,
   type VariableDrafts,
@@ -197,6 +206,7 @@ export function installErrorMessage(cause: unknown): string {
       case "install_attempt_invalid":
         return t(attemptProblemKey(cause.reason));
       case "install_inputs_incomplete":
+        if (cause.reason === "interface_choice_required") return t("installStore.applyWait.interfaces");
         return cause.reason === "capsule_name_conflict"
           ? t("installStore.problem.nameTaken")
           : t("installStore.error.connectionsMissing");
@@ -208,6 +218,8 @@ export function installErrorMessage(cause: unknown): string {
         return t("installStore.error.discardRefused");
       case "provider_binding_invalid":
         return t("installStore.problem.connection");
+      case "interface_candidate_unavailable":
+        return t("installStore.applyWait.interfaces");
       case "install_module_unavailable":
       case "install_module_required":
         return t("installStore.problem.module");
@@ -262,6 +274,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [sheet, setSheet] = createSignal<ProvideInputs>();
   /** Connections chosen after the sheet went behind; the next attempt uses them. */
   const [overrides, setOverrides] = createSignal<ConnectionOverrides>({});
+  /** Linked app edits made after the Plan, kept until the replacement receives them. */
+  const [interfaceOverrides, setInterfaceOverrides] = createSignal<InterfaceOverrides>({});
+  const [interfaceLinksToSend, setInterfaceLinksToSend] = createSignal<readonly GitInstallPlanInterfaceLinkRequest[]>();
+  /** A failed answer waits for Continue or another choice, never an automatic retry. */
+  const [interfaceSendBlocked, setInterfaceSendBlocked] = createSignal(false);
   /** A version typed for the next attempt (a version is read by a new attempt). */
   const [refDraft, setRefDraft] = createSignal<string>();
   /** Bumped by every edit the person makes. */
@@ -390,6 +407,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const retained = sheet();
     return retained ? withConnectionOverrides(retained.connections, overrides()) : [];
   });
+  const interfaceRows = createMemo(() => {
+    const retained = sheet();
+    return retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
+  });
 
   const clearCaches = (workspaceId: string) => {
     clearCapsuleListCache(workspaceId);
@@ -410,6 +431,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     forgetInputs();
     setSheet(undefined);
     setOverrides({});
+    setInterfaceOverrides({});
+    setInterfaceLinksToSend(undefined);
+    setInterfaceSendBlocked(false);
     setRefDraft(undefined);
     setPlanVersion(undefined);
     setReplanning(false);
@@ -463,6 +487,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       // Connections chosen but not yet received stay shown until they are.
       const unsent = untrack(bindingsToSend);
       setOverrides(unsent ? overridesForBindings(next.userAction.connections, unsent) : {});
+      const pendingLinks = untrack(interfaceLinksToSend);
+      const requirementKeys = new Set(next.userAction.interfaces.map((requirement) => requirement.requirementKey));
+      const unsentLinks = pendingLinks?.filter((link) => requirementKeys.has(link.requirementKey));
+      if (pendingLinks && unsentLinks && !sameInterfaceLinks(pendingLinks, unsentLinks)) setInterfaceLinksToSend(unsentLinks);
+      setInterfaceOverrides(unsentLinks ? overridesForInterfaceLinks(next.userAction.interfaces, unsentLinks) : {});
       // A field the new sheet no longer has can never be left: stop waiting for it.
       const names = new Set(sheetVariables(next.userAction).map((variable) => variable.name));
       setSettingsEditing((current) => {
@@ -713,6 +742,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     unconfirmedPlanVersion = undefined;
     attemptBaseVersion = untrack(editVersion);
     setResponse(created);
+    // An idempotent start may return the attempt after it already reached
+    // its sheet. Adopt that sheet just as a later GET or PATCH response.
+    if (created.userAction.kind === "provide_inputs") accept(created, expected);
     setLoadFailed(false);
     setArmed(true);
     options.onStarted(created.installPlan.id);
@@ -767,6 +799,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const resume = () => {
     if (mutating()) return;
     setArmed(true);
+    if (interfaceLinksToSend() !== undefined && response()?.userAction.kind === "provide_inputs") {
+      setInterfaceSendBlocked(false);
+      return;
+    }
     if (replanStalled()) {
       void replan();
       return;
@@ -856,6 +892,49 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     // repository is read again there is no sheet to answer yet.
     if (!sheet() || !attemptPastInputs(current?.installPlan.phase)) return false;
     setOverrides((overridden) => ({ ...overridden, [connectionKey(requirement)]: connectionId }));
+    edited();
+    return true;
+  };
+
+  /** Send a full linked app answer; any failed send keeps the choice for Continue. */
+  const sendInterfaceLinks = async (): Promise<boolean> => {
+    const links = interfaceLinksToSend();
+    const current = response();
+    if (!links || mutating() || current?.userAction.kind !== "provide_inputs" || awaitingResubmission(current.userAction)) return false;
+    setInterfaceSendBlocked(true);
+    const next = await answer({ interfaceLinks: [...links] }, "answer");
+    if (next) {
+      const pending = interfaceLinksToSend();
+      if (pending && sameInterfaceLinks(pending, links)) {
+        setInterfaceLinksToSend(undefined);
+        setInterfaceOverrides({});
+      }
+      setInterfaceSendBlocked(false);
+      if (canAdvance(next)) drive();
+      return true;
+    }
+    setArmed(false);
+    return false;
+  };
+
+  /** One inline app choice; after a Plan it prepares the install again. */
+  const chooseInterface = async (
+    requirement: GitInstallPlanInterfaceRequirement,
+    choice: GitInstallPlanInterfaceChoice | undefined,
+  ): Promise<boolean> => {
+    if (locked()) return false;
+    const current = response();
+    if (current?.userAction.kind === "provide_inputs") {
+      if (mutating() || awaitingResubmission(current.userAction)) return false;
+      const links = interfaceLinksWith(interfaceRows(), requirement.requirementKey, choice, current.installPlan.options.interfaceLinks);
+      setInterfaceSendBlocked(true);
+      setInterfaceOverrides((held) => ({ ...held, [requirement.requirementKey]: choice }));
+      setInterfaceLinksToSend(links);
+      edited();
+      return await sendInterfaceLinks();
+    }
+    if (!sheet() || !attemptPastInputs(current?.installPlan.phase)) return false;
+    setInterfaceOverrides((held) => ({ ...held, [requirement.requirementKey]: choice }));
     edited();
     return true;
   };
@@ -999,8 +1078,10 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setConfirming(true);
     try {
       while (answerRun) await answerRun.catch(() => undefined);
+      if (interfaceLinksToSend() !== undefined) return;
       const current = response();
       if (current?.userAction.kind !== "provide_inputs") return;
+      if (!view().readyToConfirm) return;
       const action = current.userAction;
       const values = continueVariables(action, drafts());
       if (!values.ok) {
@@ -1060,6 +1141,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const plan = latest.installPlan;
       const retained = sheet();
       const rows = retained ? withConnectionOverrides(retained.connections, overrides()) : [];
+      const linkedRows = retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
       let replacement = pendingReplan;
       if (!replacement || replacement.workspaceId !== plan.workspaceId) {
         const typed = nameDraft()?.trim();
@@ -1084,6 +1166,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           ref,
           ...(retained ? { modulePath: retained.modulePath } : {}),
           providerBindings: retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
+          ...(linkedRows.length > 0 || plan.options.interfaceLinks !== undefined
+            ? { interfaceLinks: retained ? retainedInterfaceLinks(linkedRows, plan.options.interfaceLinks) : plan.options.interfaceLinks }
+            : {}),
         });
         if (plan.phase !== "discarded" && replanDiscarded !== plan.id) {
           await discardInstallAttempt(plan.id, plan.generation, wait);
@@ -1097,6 +1182,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const expected = ++epoch;
       pendingReplan = replacement;
       const created = await postAttempt(replacement.workspaceId, replacement.request);
+      const latestLinkedRows = retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
       if (!adoptNewAttempt(created, expected, { keepAnswers: true })) return false;
       pendingReplan = undefined;
       replanDiscarded = undefined;
@@ -1108,16 +1194,32 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           setBindingsToSend(chosen);
         }
       }
+      // Read again after the await: a choice made while the replacement
+      // POST was in flight belongs to its first sheet, never its old Plan.
+      if (retained) {
+        const requirementKeys = created.userAction.kind === "provide_inputs"
+          ? new Set(created.userAction.interfaces.map((requirement) => requirement.requirementKey)) : undefined;
+        const chosen = retainedInterfaceLinks(latestLinkedRows, plan.options.interfaceLinks)
+          .filter((link) => !requirementKeys || requirementKeys.has(link.requirementKey));
+        if (!sameInterfaceLinks(chosen, replacement.request.options?.interfaceLinks ?? [])) {
+          setInterfaceLinksToSend(chosen);
+          setInterfaceSendBlocked(false);
+        }
+      }
       // The new attempt starts with these answers; until its own sheet
       // arrives the screen keeps showing them.
-      if (retained) {
+      if (retained && created.userAction.kind !== "provide_inputs") {
         setSheet({
           ...retained,
           connections: rows,
+          interfaces: latestLinkedRows,
           name: { ...retained.name, current: replacement.name, conflict: false },
         });
       }
       setOverrides({});
+      const unsentLinks = interfaceLinksToSend();
+      setInterfaceOverrides(created.userAction.kind === "provide_inputs" && unsentLinks
+        ? overridesForInterfaceLinks(created.userAction.interfaces, unsentLinks) : {});
       if (nameDraft()?.trim() === replacement.name) setNameDraftSignal(undefined);
       if (refDraft() === replacement.refText) setRefDraft(undefined);
       return true;
@@ -1143,6 +1245,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   // answer (before any confirmation).
   createEffect(() => {
     const current = response();
+    if (interfaceLinksToSend() === undefined || interfaceSendBlocked() || current?.userAction.kind !== "provide_inputs" || mutating() || confirming()) return;
+    void sendInterfaceLinks();
+  });
+
+  createEffect(() => {
+    const current = response();
     const unsent = bindingsToSend();
     if (!unsent || current?.userAction.kind !== "provide_inputs" || mutating() || confirming()) return;
     setBindingsToSend(undefined);
@@ -1161,7 +1269,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const version = editVersion();
     if (current?.userAction.kind !== "provide_inputs" || !ready) return;
     if (!armed() || mutating() || confirming() || editing() || nameInvalid() || outdated()) return;
-    if (bindingsToSend() !== undefined) return;
+    if (bindingsToSend() !== undefined || interfaceLinksToSend() !== undefined) return;
     const key = `${current.installPlan.id}:${version}`;
     if (autoSentFor === key) return;
     const timer = setTimeout(() => {
@@ -1319,6 +1427,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     resolvedVersion,
     sheet,
     connectionRows,
+    interfaceRows,
     refDraft,
     outdated,
     replanning,
@@ -1328,6 +1437,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     resume,
     chooseModule,
     chooseConnection,
+    chooseInterface,
     adoptConnection,
     saveName,
     changeVersion,
