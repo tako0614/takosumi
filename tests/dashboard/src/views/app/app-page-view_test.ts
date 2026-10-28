@@ -126,6 +126,13 @@ describe("installed app page", () => {
     // Open shows every screen; Install again goes to the app's install page.
     expect(page).toContain('<Match when={view().primaryAction === "open" && screens().length > 0}>');
     expect(page).toContain("<OpenAppButton surfaces={screens()}");
+    // Screens the server still lists stay openable as a secondary action
+    // while another action is primary (an app needing attention may still
+    // serve its last successful version), except while it is removed.
+    expect(page).toContain('<OpenAppButton surfaces={screens()} appName={displayName()} variant="secondary" />');
+    const secondary = page.slice(page.indexOf("const secondaryScreens = "), page.indexOf("const showUpdate = "));
+    expect(secondary).toContain('view.primaryAction !== "open" && screens().length > 0');
+    expect(secondary).toContain('view.state !== "uninstalling" && view.state !== "uninstalled"');
     expect(page).toContain('<Match when={view().primaryAction === "reinstall"}>');
     expect(page).toContain("href={reinstallHref({");
     // A connection problem goes to the connections this app uses.

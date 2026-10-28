@@ -847,6 +847,10 @@ export default function AppManagePage(props: {
     const icon = app()?.screens[0]?.icon;
     return icon?.kind === "glyph" ? icon.glyph : undefined;
   };
+  /** Open as a secondary action: screens listed, primary is something else. */
+  const secondaryScreens = (view: CapsuleAppView) =>
+    view.primaryAction !== "open" && screens().length > 0 &&
+    view.state !== "uninstalling" && view.state !== "uninstalled";
   const showUpdate = (view: CapsuleAppView) =>
     managed() && revisionReady() && (view.version.updateAvailable || view.version.stale) &&
     view.state === "installed";
@@ -957,6 +961,12 @@ export default function AppManagePage(props: {
                       )}
                     </Match>
                   </Switch>
+                  {/* Screens the server still lists stay openable while
+                      another action is primary: an app that needs attention
+                      may keep serving its last successful version. */}
+                  <Show when={secondaryScreens(view())}>
+                    <OpenAppButton surfaces={screens()} appName={displayName()} variant="secondary" />
+                  </Show>
                   <Show when={appViewIncomplete(view(), "screens")}>
                     <Button
                       variant="secondary"

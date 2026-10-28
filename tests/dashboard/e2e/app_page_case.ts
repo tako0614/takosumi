@@ -407,6 +407,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(problem).toContainText("The last change couldn't be applied");
       await expect(header.getByRole("button", { name: "Review again", exact: true })).toBeVisible();
       await expect(problem.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
+      // The screen the server still lists stays openable beside the primary action.
+      await expect(header.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
       await expect(problem.getByRole("link", { name: "See reason and logs" })).toHaveAttribute("href", "/runs/run_failed_apply");
       await expect(page.getByTestId("app-state-sentence")).toContainText("Something needs your attention");
       await capture(page, "app-page-needs-attention");
@@ -825,11 +827,12 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // Older history: thirty-two applied changes, read twenty at a time.
       const olderRuns = Array.from({ length: 32 }, (_, index) =>
         lifecycleRun(`run_old_${String(index).padStart(2, "0")}`, "apply", "succeeded", new Date(Date.parse("2026-09-01T00:00:00.000Z") + index * 3_600_000).toISOString(), { capsuleId: ID }));
+      const screen = { interfaceId: "if_states_e", name: "app.launcher", title: NAME, url: "https://apps.example.test/state-echo" };
       const view = () => {
         switch (scene) {
           case "uninstall_scheduled":
             return appView(ID, NAME, {
-              status: "uninstalled", state: "uninstall_scheduled", primaryAction: "cancel_uninstall",
+              status: "uninstalled", state: "uninstall_scheduled", primaryAction: "cancel_uninstall", screens: [screen],
               problems: [{ code: "uninstall_scheduled", severity: "warning" }],
               uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false, preDestroyExport: { status: "skipped" } } },
             });
@@ -840,7 +843,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             });
           case "policy_blocked":
             return appView(ID, NAME, {
-              state: "needs_attention", primaryAction: "review",
+              state: "needs_attention", primaryAction: "review", screens: [screen, { ...screen, interfaceId: "if_states_docs", name: "app.docs", title: "Docs", url: "https://apps.example.test/state-echo-docs" }],
               problems: [{ code: "policy_blocked", severity: "error", runId: blockedPlan.id, runType: "plan" }],
             });
           case "installing":
@@ -853,7 +856,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return appView(ID, NAME, { incomplete: ["screens", "version"] });
           case "uninstalled":
             return appView(ID, NAME, {
-              status: "destroyed", applied: false, state: "uninstalled", primaryAction: "reinstall",
+              // A screen listed for a removed app is never offered.
+              status: "destroyed", applied: false, state: "uninstalled", primaryAction: "reinstall", screens: [screen],
               version: { repository: { url: "https://github.com/example/state-echo.git", defaultRef: "main" }, updateAvailable: false, stale: false, autoUpdate: false },
               uninstall: { mode: "none" },
             });
@@ -918,6 +922,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(scheduled).toContainText(`${NAME} will be uninstalled on`);
       await expect(scheduled).toContainText("This server can't export data");
       await expect(scheduled.getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
+      // During the grace period the app keeps running and stays openable.
+      await expect(header.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://apps.example.test/state-echo");
       await expect(app.getByTestId("app-uninstall")).toHaveCount(0);
       await expect(app.getByRole("navigation", { name: "Sections on this page" }).getByRole("link", { name: "Uninstall" })).toHaveCount(0);
       await capture(page, "app-page-uninstall-scheduled");
@@ -959,6 +965,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const blockedRow = historyList.locator('[data-history-kind="policy_blocked"]');
       await expect(blockedRow).toContainText("Stopped by a policy");
       await expect(blockedRow).toContainText("This kind of resource isn't allowed by policy.");
+      // Every screen stays reachable as a secondary action beside Review.
+      await expect(header.getByRole("link", { name: /^Open\b.*State Echo/u })).toHaveAttribute("href", "https://apps.example.test/state-echo");
+      await header.getByRole("button", { name: "Other screens" }).click();
+      await expect(header.getByRole("menuitem", { name: "Docs" })).toHaveAttribute("href", "https://apps.example.test/state-echo-docs");
+      await page.keyboard.press("Escape");
       await header.getByRole("button", { name: "Review", exact: true }).click();
       const review = problems.getByTestId("app-review");
       await expect(review).toContainText("This can't be applied");
@@ -989,6 +1000,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       scene = "uninstalled";
       await page.reload({ waitUntil: "domcontentloaded" });
       await expect(app).toHaveAttribute("data-app-state", "uninstalled");
+      await expect(header.getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
       const again = header.getByRole("link", { name: "Install again", exact: true });
       const target = new URL((await again.getAttribute("href"))!, "https://dashboard.test");
       expect(target.pathname).toBe("/new");
