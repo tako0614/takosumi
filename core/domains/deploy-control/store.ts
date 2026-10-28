@@ -1497,6 +1497,11 @@ export interface StoredSource extends Source {
   readonly createdByInstallPlanId?: string;
   /** Durable resume marker; a disabled Source with this marker cannot sync. */
   readonly retiringAt?: string;
+  /** Last fully deleted archive ref. Retirement retries resume after this key. */
+  readonly retirementArchiveCursor?: string;
+  /** Frozen census prevents a late historical row from escaping archive custody. */
+  readonly retirementSnapshotCount?: number;
+  readonly retirementSourceSyncRunCount?: number;
 }
 
 /** Existing Source owner and creator identities are immutable. */
@@ -4069,6 +4074,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   hasSourceSnapshotArchiveReference(archiveRef: string, sourceId?: string): Promise<boolean>;
   /** Historical cross-Source archive reuse must not let retirement delete foreign bytes. */
   hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean>;
+  /** Bounded, keyset-ordered retirement work and a complete row census. */
+  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[];
+    readonly hasMore: boolean;
+    readonly snapshotCount: number;
+    readonly sourceSyncRunCount: number;
+  }>;
+  /** Full-scope set preflight before any archive page is physically deleted. */
+  sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined>;
   /** Latest immutable observation for one exact Source lane, bounded to one row. */
   getLatestSourceSnapshotForLane(input: {
     readonly sourceId: string;
@@ -6316,7 +6330,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     const source = this.#sources.get(capsule.sourceId);
-    if (!source || source.workspaceId !== capsule.workspaceId) {
+    if (!source || source.workspaceId !== capsule.workspaceId ||
+        source.status !== "active" || source.retiringAt !== undefined) {
       try {
         assertWorkspaceManagementAdmission(
           this.#workspaces.has(capsule.workspaceId)
@@ -8026,6 +8041,32 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         return Promise.resolve(true);
     }
     return Promise.resolve(false);
+  }
+
+  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
+    readonly snapshotCount: number; readonly sourceSyncRunCount: number;
+  }> {
+    const snapshots = [...this.#sourceSnapshots.values()].filter((row) => row.sourceId === sourceId);
+    const runs = [...this.#runs.values()].filter(isSourceSyncRunRecord)
+      .filter((row) => row.sourceId === sourceId);
+    const refs = [...new Set([...snapshots.map((row) => row.archiveRef), ...runs.map((row) => row.archiveRef)])]
+      .filter((ref) => after === undefined || ref > after).sort();
+    const bounded = refs.slice(0, limit);
+    return Promise.resolve({ archiveRefs: bounded, hasMore: refs.length > limit,
+      snapshotCount: snapshots.length, sourceSyncRunCount: runs.length });
+  }
+
+  sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined> {
+    const refs = [
+      ...[...this.#sourceSnapshots.values()].map((row) => ({ sourceId: row.sourceId, ref: row.archiveRef })),
+      ...[...this.#runs.values()].filter(isSourceSyncRunRecord).map((row) => ({ sourceId: row.sourceId, ref: row.archiveRef })),
+    ];
+    if (refs.some((row) => row.sourceId === sourceId && !row.ref.startsWith(prefix)))
+      return Promise.resolve("outside_scope");
+    if (refs.some((row) => row.sourceId !== sourceId && row.ref.startsWith(prefix)))
+      return Promise.resolve("foreign_reference");
+    return Promise.resolve(undefined);
   }
 
   getLatestSourceSnapshotForLane(input: {

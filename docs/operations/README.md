@@ -39,6 +39,7 @@ Cloud 側のリポジトリで管理します。
 - [online migration](./online-db-migrations.md)
 - [backup と restore の訓練](./backup-restore-drills.md)
 - [disaster recovery](./disaster-recovery.md)
+- [Source polling と archive retirement](./source-maintenance.md)
 - [Resource state の取り込み](./resource-state-adoption.md)
 - [Output / Interface migration](./output-interface-migration.md)
 - [廃止済み Dependency のデータ保守](./retired-dependency-maintenance.md)

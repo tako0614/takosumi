@@ -61,11 +61,16 @@ function fixture(
   return { calls, dependencies };
 }
 
-test("source retirement sweep selects destroyed owners, terminal plans, expired attempts and stale orphans", async () => {
+test("source retirement sweep selects destroyed owners and explicit markers, preserving creator plan guards", async () => {
   const expiredAt = new Date(NOW.getTime() - 25 * 60 * 60 * 1000).toISOString();
   const rows = [
     source("src_destroyed", 1, { ownerCapsuleId: "cap_destroyed" }),
     source("src_live", 72, { ownerCapsuleId: "cap_live" }),
+    source("src_marked_live", 72, { ownerCapsuleId: "cap_live", retiringAt: NOW.toISOString() }),
+    source("src_missing_owner", 72, { ownerCapsuleId: "cap_missing" }),
+    source("src_marked", 1, { status: "disabled", retiringAt: NOW.toISOString() }),
+    source("src_marked_plan_live", 1, { status: "disabled", retiringAt: NOW.toISOString(),
+      createdByInstallPlanId: "plan_marked_live" }),
     source("src_discarded", 1, { createdByInstallPlanId: "plan_discarded" }),
     source("src_failed", 1, { createdByInstallPlanId: "plan_failed" }),
     source("src_expired", 48, { createdByInstallPlanId: "plan_expired" }),
@@ -80,6 +85,7 @@ test("source retirement sweep selects destroyed owners, terminal plans, expired 
     plan("plan_failed", "failed"),
     plan("plan_expired", "awaiting_input", { mode: "attempt", expiresAt: expiredAt }),
     plan("plan_open", "syncing_source"),
+    plan("plan_marked_live", "syncing_source", { sourceId: "src_marked_plan_live" }),
     plan("plan_public_preflight", "planning", { sourceId: "src_public_preflight" }),
     plan("plan_expired_public_preflight", "planning", {
       sourceId: "src_expired_public_preflight", expiresAt: expiredAt,
@@ -89,16 +95,16 @@ test("source retirement sweep selects destroyed owners, terminal plans, expired 
     { id: "cap_live", status: "active" } as Capsule,
   ]);
   const result = await sweepRetiredSources(dependencies);
-  expect(result).toEqual({ scanned: 10, attempted: 6, retired: 6, deferred: 0, failures: 0 });
+  expect(result).toEqual({ scanned: 14, attempted: 2, retired: 2, deferred: 0, failures: 0 });
   expect(calls.map((call) => call.split(":")[0]).sort()).toEqual([
-    "src_destroyed", "src_discarded", "src_failed", "src_expired",
-    "src_expired_public_preflight", "src_orphan",
+    "src_destroyed", "src_marked",
   ].sort());
 });
 
 test("source retirement sweep isolates one cleanup failure and keeps scanning", async () => {
   const { calls, dependencies } = fixture(
-    [source("src_one", 48), source("src_two", 48)],
+    [source("src_one", 48, { retiringAt: NOW.toISOString() }),
+      source("src_two", 48, { retiringAt: NOW.toISOString() })],
     [],
     [],
     async (id) => {
@@ -115,7 +121,7 @@ test("source retirement sweep isolates one cleanup failure and keeps scanning", 
 test("failed retirement stays bounded and daily rotation reaches later candidates", async () => {
   const ids = ["src_one", "src_two", "src_three", "src_four"];
   const { calls, dependencies } = fixture(
-    ids.map((id) => source(id, 48)), [], [],
+    ids.map((id) => source(id, 48, { retiringAt: NOW.toISOString() })), [], [],
     async () => { throw new Error("custody unavailable"); },
   );
   const first = await sweepRetiredSources(dependencies, { limit: 2 });

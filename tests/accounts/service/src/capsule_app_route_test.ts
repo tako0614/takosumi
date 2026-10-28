@@ -139,6 +139,9 @@ test("destroyed Capsule GET and Workspace list survive retired Source row with a
   const listed = (await list!.json()) as { capsules: readonly Record<string, unknown>[] };
   expect(listed.capsules[0]?.status).toBe("destroyed");
   expect(listed.capsules[0]?.adoptedSourceRevision).toBeUndefined();
+  const app = await h.app();
+  expect(app.version).toEqual({ uninstalled: true, updateAvailable: false, stale: false, autoUpdate: false });
+  expect(app.incomplete ?? []).not.toContain("version");
 });
 
 function planRun(id: string, createdAt: number, over: Partial<PlanRun> = {}): PlanRun {

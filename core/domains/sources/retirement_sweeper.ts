@@ -1,5 +1,5 @@
 import type { OpenTofuControlStore, StoredSource } from "../deploy-control/store.ts";
-import type { GitInstallPlanStore, StoredGitInstallPlan } from "../install-plans/store.ts";
+import type { GitInstallPlanStore } from "../install-plans/store.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
@@ -21,7 +21,8 @@ export interface SourceRetirementSweepDependencies {
 }
 
 /**
- * Daily retry owner for Sources left after a terminal app lifecycle. Reads
+ * Daily retry owner for app-owned Sources left after a terminal lifecycle and
+ * Sources explicitly marked for retirement. Reads
  * across all Workspaces, including archived ones. Candidate selection is
  * advisory: retirement itself rechecks Capsule/Run references atomically.
  */
@@ -78,30 +79,11 @@ async function retirementReason(
   if (await deps.plans.hasNonterminalPlanSourceReference(
     source.workspaceId, source.id, expiredBefore,
   )) return undefined;
-  if (source.retiringAt) return "retry pending source retirement";
   if (source.ownerCapsuleId) {
     const owner = await deps.store.getCapsule(source.ownerCapsuleId);
-    if (owner?.status === "destroyed") return "owner capsule destroyed";
-    if (owner) return undefined;
+    return owner?.status === "destroyed" ? "owner capsule destroyed" : undefined;
   }
-  const plan: StoredGitInstallPlan | undefined = source.createdByInstallPlanId
-    ? await deps.plans.get(source.createdByInstallPlanId)
-    : undefined;
-  if (plan && plan.workspaceId === source.workspaceId) {
-    if (plan.phase === "discarded") return "install attempt discarded";
-    if (plan.phase === "failed" && plan.mode !== "attempt") {
-      return "install plan failed";
-    }
-    if (
-      plan.expiresAt &&
-      Date.parse(plan.expiresAt) + DAY_MS <= now &&
-      plan.phase !== "reviewable"
-    ) return "install attempt expired past grace";
-    // A live coordinator still owns the Source even if its Capsule is absent.
-    return undefined;
-  }
-  if (Date.parse(source.createdAt) + DAY_MS <= now) {
-    return "unowned source unreferenced past grace";
-  }
-  return undefined;
+  // Old ownerless Sources include independent user repositories. Age and a
+  // terminal creator plan do not grant the sweeper deletion authority.
+  return source.retiringAt ? "retry pending source retirement" : undefined;
 }

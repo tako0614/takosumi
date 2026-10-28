@@ -6897,7 +6897,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     > => {
       const row = await this.#readD1StoredSourceRow(capsule.sourceId);
       const source = row ? sourceFromD1Row(row) : undefined;
-      if (!source || source.workspaceId !== capsule.workspaceId) return "conflict";
+      if (!source || source.workspaceId !== capsule.workspaceId ||
+        source.status !== "active" || source.retiringAt !== undefined) return "conflict";
       const other = await this.#orm.select({ id: schema.capsules.id })
         .from(schema.capsules)
         .where(and(
@@ -9931,6 +9932,51 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
            json_extract(run_json, '$.archiveObjectKey')) = ? limit 1`)
       .bind(sourceId, archiveRef, sourceId, archiveRef).first();
     return row !== null;
+  }
+
+  async sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined> {
+    await this.#ensureSchema();
+    const row = await this.db.prepare(`with refs as (
+      select source_id, coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+        from source_snapshots
+      union all
+      select source_id, coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+        from runs where type = 'source_sync'
+    ) select blocker from (
+      select 'outside_scope' as blocker, 0 as priority from refs
+        where source_id = ? and (ref is null or substr(ref, 1, length(?)) <> ?)
+      union all
+      select 'foreign_reference' as blocker, 1 as priority from refs
+        where source_id is not ? and substr(ref, 1, length(?)) = ?
+    ) order by priority limit 1`)
+      .bind(sourceId, prefix, prefix, sourceId, prefix, prefix)
+      .first<{ blocker: "outside_scope" | "foreign_reference" }>();
+    return row?.blocker;
+  }
+
+  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
+    readonly snapshotCount: number; readonly sourceSyncRunCount: number;
+  }> {
+    await this.#ensureSchema();
+    const bounded = Math.max(1, Math.min(32, Math.floor(limit)));
+    const counts = await this.db.prepare(`select
+      (select count(*) from source_snapshots where source_id = ?) as snapshots,
+      (select count(*) from runs where type = 'source_sync' and source_id = ?) as runs`)
+      .bind(sourceId, sourceId).first<{ snapshots: number; runs: number }>();
+    const refs = await this.db.prepare(`select distinct ref from (
+      select coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+        from source_snapshots where source_id = ?
+      union all
+      select coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+        from runs where type = 'source_sync' and source_id = ?
+    ) where ref is not null and (? is null or ref > ?) order by ref limit ?`)
+      .bind(sourceId, sourceId, after ?? null, after ?? null, bounded + 1)
+      .all<{ ref: string }>();
+    const rows = refs.results ?? [];
+    return { archiveRefs: rows.slice(0, bounded).map((row) => row.ref),
+      hasMore: rows.length > bounded,
+      snapshotCount: Number(counts?.snapshots ?? 0), sourceSyncRunCount: Number(counts?.runs ?? 0) };
   }
 
   async getLatestSourceSnapshotForLane(input: {
@@ -13910,6 +13956,8 @@ function d1CapsuleInitialAuthoritySourceClaimStmt(
     .where(and(
       eq(schema.sources.id, capsule.sourceId),
       eq(schema.sources.workspaceId, capsule.workspaceId),
+      eq(schema.sources.status, "active"),
+      sql`json_extract(${schema.sources.recordJson}, '$.retiringAt') IS NULL`,
       sql`json_valid(${schema.sources.recordJson}) = 1`,
       sql`json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}`,
       sql`json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}`,
@@ -13931,6 +13979,8 @@ function d1CapsuleInitialAuthoritySourceGuardStmt(
     .where(and(
       eq(schema.sources.id, capsule.sourceId),
       eq(schema.sources.workspaceId, capsule.workspaceId),
+      eq(schema.sources.status, "active"),
+      sql`json_extract(${schema.sources.recordJson}, '$.retiringAt') IS NULL`,
       sql`json_valid(${schema.sources.recordJson}) = 1`,
       sql`json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}`,
       sql`json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}`,

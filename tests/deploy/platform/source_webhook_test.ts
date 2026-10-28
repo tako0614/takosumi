@@ -51,7 +51,6 @@ import {
   pollAutoSyncSources,
   planStaleCapsuleUpdates,
   repairStaleOpenTofuRuns,
-  scheduledSourcePollEnabledForCron,
   scheduledSourcePollBatch,
   schedulePlatformSideEffect,
   summarizePrometheusMetrics,
@@ -312,6 +311,7 @@ function makeWebhookOps(
     },
     verifySourceHookSecret: (sourceId, secret) => {
       verifyCalls.push({ sourceId, secret });
+      if (overrides.missingSource) return Promise.reject(new OpenTofuControllerError("not_found", "missing source"));
       if (overrides.throwOnVerify) return Promise.reject(new Error("boom"));
       return Promise.resolve(overrides.valid ?? true);
     },
@@ -359,13 +359,14 @@ test("webhook rejects a wrong bearer (401) and does not trigger a sync", async (
   expect(syncCalls).toHaveLength(0);
 });
 
-test("webhook returns 404 for a retired Source with a bearer", async () => {
+test("webhook hides unknown and retired Source existence behind the same bearer rejection", async () => {
   const { ops, syncCalls, verifyCalls } = makeWebhookOps({ missingSource: true });
   const { request, url } = webhookRequest({}, { bearer: "old-hook-secret" });
   const response = await handleSourceWebhookRequest(request, url, ops);
-  expect(response.status).toBe(404);
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ error: "unauthenticated" });
   expect(syncCalls).toEqual([]);
-  expect(verifyCalls).toEqual([]);
+  expect(verifyCalls).toHaveLength(1);
 });
 
 test("webhook with a verify error is treated as unauthenticated (401)", async () => {
@@ -449,15 +450,7 @@ test("scheduled source poll batch is operator configurable with a bounded defaul
   ).toBe(25);
 });
 
-test("scheduled source polling runs only on the hourly source-poll cron", () => {
-  expect(scheduledSourcePollEnabledForCron("5 * * * *")).toBe(true);
-  expect(scheduledSourcePollEnabledForCron("0 * * * *")).toBe(true);
-  expect(scheduledSourcePollEnabledForCron("*/5 * * * *")).toBe(false);
-  expect(scheduledSourcePollEnabledForCron("* * * * *")).toBe(false);
-  expect(scheduledSourcePollEnabledForCron("3,18,33,48 * * * *")).toBe(
-    false,
-  );
-});
+
 
 test("stale Capsule auto-plan is opt-in", () => {
   const base = { TAKOSUMI_ACCOUNTS_DB: {} } as never;

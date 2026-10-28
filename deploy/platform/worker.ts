@@ -1,3 +1,4 @@
+import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
 // Operator-deployed Takosumi platform worker composition.
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
@@ -881,8 +882,8 @@ export default {
     }
     return accountsResponse;
   },
-  // Scheduled cron tick. Source polling runs only on its exact hourly schedule;
-  // other maintenance crons must never fan out SourceSyncRun Durable Objects.
+  // Scheduled cron tick. Source jobs claim persisted hourly/daily start markers
+  // from the existing five-minute tick or their dedicated cron expressions.
   // When the `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO
   // runs the current compatibility drift sweep for Workspaces with active
   // Capsules.
@@ -907,12 +908,13 @@ export default {
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
         : undefined;
-    if (scheduledSourcePollEnabledForCron(cron)) {
-      await runScheduledSourcePoll(env);
-    }
-    if (cron === "15 3 * * *") {
-      await runScheduledSourceRetirement(env);
-    }
+    await runSourceMaintenanceSchedule({
+      db: env.TAKOSUMI_CONTROL_DB,
+      cron,
+      retirementEnabled: env.TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED !== "0",
+      poll: () => runScheduledSourcePoll(env),
+      sweep: () => runScheduledSourceRetirement(env),
+    });
     await runScheduledOpenTofuRunRepair(env);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
@@ -4273,14 +4275,6 @@ export async function handleSourceWebhookRequest(
   if (!bearer) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
-  try {
-    await operations.getSource(sourceId);
-  } catch (error) {
-    if (error instanceof OpenTofuControllerError && error.code === "not_found") {
-      return Response.json({ error: "not found" }, { status: 404 });
-    }
-    throw error;
-  }
   let valid = false;
   try {
     valid = await operations.verifySourceHookSecret(sourceId, bearer);
@@ -4310,16 +4304,6 @@ function bearerFromAuthorization(header: string): string | undefined {
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
 const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 25;
-const SCHEDULED_SOURCE_POLL_CRONS = new Set([
-  "0 * * * *",
-  "5 * * * *",
-]);
-
-/** Source polling is hourly; webhook delivery owns low-latency updates. */
-export function scheduledSourcePollEnabledForCron(cron: unknown): boolean {
-  return typeof cron === "string" && SCHEDULED_SOURCE_POLL_CRONS.has(cron);
-}
-
 export function scheduledSourcePollBatch(env: DeployControlEnv): number {
   return positiveInteger(
     Number(env.TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH),

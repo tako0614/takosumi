@@ -73,10 +73,11 @@ export default {
         await bucket.put(input.key,new Uint8Array([9,8,7]),{customMetadata:{"takosumi-run-id":input.runId}});
         result = {ok:true};
       } else if(input.operation === "retire") {
+        let activeKey = input.key;
         const usage = {
           ...composition(env,owners).usage,
           async readStoredObject(ctx) {
-            const object = await buckets.source.head(input.key);
+            const object = await buckets.source.head(activeKey);
             return {workspaceId:ctx.workspaceId,revision:0,bytes:String(object?.size??0),versionDigest:object?await storedNativeVersion(object):null};
           },
           async prepareStoredObject(ctx) {
@@ -85,8 +86,8 @@ export default {
           },
           async confirmStoredObject() {},
         };
-        const bucket = runnerStoredServiceBucket(buckets.source,{usage,owners},env.DB,{bucketRole:"source",sourceRetirement:input.sourceRetirement});
-        await bucket.delete(input.key);
+        const bucket = runnerStoredServiceBucket(buckets.source,{usage,owners},env.DB,{bucketRole:"source",sourceRetirement:input.sourceRetirement,sourceRetirementBatch:input.sourceRetirementBatch});
+        for (const key of input.keys ?? [input.key]) { activeKey = key; await bucket.delete(key); }
         result = {ok:true};
       } else if(input.operation === "backup") {
         const context = createBackupStoredOwnerContext(new ObjectKeyArtifactReferenceAllocator(),composition(env,owners),env.BACKUPS);
@@ -253,6 +254,35 @@ test("native stored-service custody rechecks Source retirement before R2 deletio
     await db.prepare("delete from source_snapshots where id='snap_shared'").run();
     expect((await call(request)).status).toBe(200);
     expect(await bucket.head(key)).toBeNull();
+  } finally { await fixture.close(); }
+}, 30_000);
+
+test("native stored-service custody validates one bounded Source retirement batch", async () => {
+  const fixture = await nativeFixture();
+  try {
+    const { db, runtime, call } = fixture;
+    await db.prepare("alter table sources add column status text").run();
+    await db.prepare("alter table capsules add column source_id text").run();
+    await db.prepare("alter table capsules add column status text").run();
+    const workspaceId = "workspace_original", sourceId = "source_one";
+    const keys = ["snap_one", "snap_two"].map((id) =>
+      `workspaces/${workspaceId}/sources/${sourceId}/snapshots/${id}/source.tar.zst`);
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(sourceId, workspaceId, "disabled", JSON.stringify({ id: sourceId, workspaceId,
+        status: "disabled", autoSync: false, retiringAt: "2026-10-28T00:00:00.000Z" })).run();
+    for (let i = 0; i < keys.length; i++) {
+      const id = `snap_${i}`;
+      await db.prepare("insert into source_snapshots values(?,?,?)")
+        .bind(id, sourceId, JSON.stringify({ id, sourceId, workspaceId, archiveRef: keys[i] })).run();
+    }
+    const bucket = await runtime.getR2Bucket("SOURCE");
+    await bucket.put(keys[0]!, "source bytes");
+    await bucket.put(keys[1]!, "source bytes");
+    const request = { operation: "retire", key: keys[0], keys,
+      sourceRetirementBatch: { workspaceId, sourceId, archiveRefs: keys } };
+    expect((await call(request)).status).toBe(200);
+    expect(await bucket.head(keys[0]!)).toBeNull();
+    expect(await bucket.head(keys[1]!)).toBeNull();
   } finally { await fixture.close(); }
 }, 30_000);
 
