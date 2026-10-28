@@ -94,8 +94,40 @@ export interface InterfaceBinding
           readonly requirementKey: string;
           readonly interfaceType: string;
           readonly interfaceVersion: string;
+          /** Exact consent ledger; legacy rows without a link are not grants. */
+          readonly linkId?: string;
         };
   };
+}
+
+/** Durable consumer selection and provider consent; contains no credentials. */
+export interface InterfaceLink {
+  readonly id: string;
+  /** Monotonic revision across this consumer/requirement's retained lineage. */
+  readonly generation: number;
+  readonly consumerCapsuleId: string;
+  readonly requirementKey: string;
+  readonly interface: { readonly type: string; readonly version: string };
+  readonly requestedPermissions: readonly string[];
+  readonly approvedPermissions: readonly string[];
+  readonly deliveryType: string;
+  readonly providerInterfaceId: string;
+  readonly providerCapsuleId: string;
+  readonly state: "pending_approval" | "active" | "declined" | "revoked";
+  readonly selection: "explicit" | "auto_single";
+  readonly approval?: {
+    readonly kind: "requester_manages_provider" | "provider_approved";
+    readonly approvedBy: string;
+    readonly approvedAt: string;
+  };
+  readonly revoked?: {
+    readonly revokedBy: string;
+    readonly revokedAt: string;
+    readonly reason?: string;
+  };
+  readonly requestedBy: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 /**

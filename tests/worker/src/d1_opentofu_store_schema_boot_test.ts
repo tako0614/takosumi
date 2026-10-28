@@ -788,7 +788,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed qualification verification accepts only the exact current v75 ledger", async () => {
+test("predeployed qualification verification accepts complete v75 and v76 ledgers during the additive rollout", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -801,6 +801,11 @@ test("predeployed qualification verification accepts only the exact current v75 
       "workspaces_personal_bootstrap_owner_unique",
     ),
   ).toBe(false);
+
+  const v75 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(v75, { throughMigrationVersion: 75 });
+  await verifyD1OpenTofuLedgerSchemaPredeployed(v75);
+  expect((await tableNames(v75)).has("interface_links")).toBe(false);
 
   const current = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(current);
@@ -829,7 +834,7 @@ test("predeployed qualification verification accepts only the exact current v75 
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (76, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (77, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();
@@ -838,8 +843,8 @@ test("predeployed qualification verification accepts only the exact current v75 
   );
 });
 
-test("predeployed v71/v72/v73/v74/v75 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
-  for (const head of [71, 72, 73, 74, 75]) {
+test("predeployed v71/v72/v73/v74/v75/v76 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
+  for (const head of [71, 72, 73, 74, 75, 76]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: head });
     await prepareInactiveBridgeMaintenance(db);
@@ -874,7 +879,7 @@ test("predeployed v71/v72/v73/v74/v75 bridge keeps billing at v72 and identity a
     }
     if (head >= 73) {
       expect(await store.captureIdentityReconciliationInventory([workspace.ownerUserId])).toMatchObject({ accountIds: [workspace.ownerUserId], workspaces: [{ workspace }], members: [member], bindings: [], principalReferences: [], overflow: false });
-      if (head === 75) await verifyD1OpenTofuLedgerSchemaPredeployed(observed);
+      if (head >= 75) await verifyD1OpenTofuLedgerSchemaPredeployed(observed);
       else await expect(verifyD1OpenTofuLedgerSchemaPredeployed(observed)).rejects.toThrow();
     } else {
       const before = queries.length;
@@ -903,6 +908,7 @@ test("runtime bridge and qualification reject version-specific structural drift 
     { head: 73, index: "identity_reconciliation_events_mutation_unique" },
     { head: 74, index: "backups_created_by_run_id_idx" },
     { head: 74, index: "backups_legacy_created_by_run_text_idx" },
+    { head: 76, index: "interface_links_current_consumer_requirement_unique" },
   ]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: fixture.head });
@@ -912,7 +918,7 @@ test("runtime bridge and qualification reject version-specific structural drift 
     await expect(store.getWorkspace("absent")).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
     await expect(store.listWorkspacesForAccountPage("absent", { limit: 1 })).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
     if (fixture.head >= 73) await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db)).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
-    expect((await indexNames(db, fixture.index.startsWith("workspace_billing") ? "workspace_billing_bindings" : fixture.index.startsWith("identity_") ? "identity_reconciliation_events" : fixture.index.startsWith("backups_") ? "backups" : "workspaces")).has(fixture.index)).toBe(false);
+    expect((await indexNames(db, fixture.index.startsWith("workspace_billing") ? "workspace_billing_bindings" : fixture.index.startsWith("identity_") ? "identity_reconciliation_events" : fixture.index.startsWith("backups_") ? "backups" : fixture.index.startsWith("interface_links_") ? "interface_links" : "workspaces")).has(fixture.index)).toBe(false);
   }
 });
 

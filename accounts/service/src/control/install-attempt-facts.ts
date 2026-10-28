@@ -13,6 +13,8 @@
 import type {
   GitInstallPlanConnectionCandidate,
   GitInstallPlanConnectionRequirement,
+  GitInstallPlanInterfaceLinkRequest,
+  GitInstallPlanInterfaceRequirement,
   GitInstallPlanModuleCandidate,
   GitInstallPlanNameProposal,
   GitInstallPlanProviderBindingRequest,
@@ -34,6 +36,7 @@ import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connect
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { isSecretKey } from "takosumi-contract/redaction";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import type { CapsuleRequiredInterface } from "takosumi-contract/interfaces";
 import { accountsOidcModuleVariableProfile } from "../../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
 import type {
@@ -209,6 +212,9 @@ export function attemptInputFacts(input: {
       ),
       requirements,
       variables: variables.slice(0, MAX_FACT_VARIABLES),
+      ...(input.installConfig.requiredInterfaces?.length
+        ? { requiredInterfaces: input.installConfig.requiredInterfaces }
+        : {}),
       ...(repositoryAccountsOidcPublicUrlVariable !== undefined
         ? { repositoryAccountsOidcPublicUrlVariable }
         : {}),
@@ -449,6 +455,109 @@ export function bindingMatchesRequirement(
   );
 }
 
+/** Live providers accessible to this already-admitted install actor. */
+export async function interfaceRequirements(
+  operations: ControlPlaneOperations,
+  plan: Pick<
+    StoredGitInstallPlan,
+    "id" | "workspaceId" | "options" | "attemptFacts" | "autoSelectedInterfaceKeys"
+  >,
+  requirements: readonly CapsuleRequiredInterface[] =
+    plan.attemptFacts?.inputs?.requiredInterfaces ?? [],
+): Promise<readonly GitInstallPlanInterfaceRequirement[]> {
+  if (requirements.length === 0) return [];
+  const linkStoreUnavailable = operations.interfaces?.interfaceLinksAvailable
+    ? !await operations.interfaces.interfaceLinksAvailable()
+    : false;
+  const capsuleId = deterministicInitialCapsuleId(plan.id);
+  const capsules = new Map(
+    (await operations.capsules.listCapsules(plan.workspaceId))
+      .filter((capsule) => capsule.workspaceId === plan.workspaceId &&
+        capsule.status !== "destroyed" && capsule.status !== "uninstalled" &&
+        capsule.uninstall?.phase !== "scheduled" && capsule.id !== capsuleId)
+      .map((capsule) => [capsule.id, capsule]),
+  );
+  const rows = await Promise.all(requirements.map(async (requirement) => {
+    const offered = await operations.interfaces?.listInterfaceLinkCandidates?.({
+      workspaceId: plan.workspaceId,
+      capsuleId,
+      requirement,
+    }) ?? [];
+    const candidates = offered.filter((candidate) =>
+      candidate.metadata.workspaceId === plan.workspaceId &&
+      candidate.metadata.ownerRef.kind === "Capsule" &&
+      capsules.has(candidate.metadata.ownerRef.id) &&
+      candidate.status.phase === "Resolved" &&
+      candidate.spec.type === requirement.interface.type &&
+      candidate.spec.version === requirement.interface.version
+    ).map((candidate) => ({
+      id: candidate.metadata.id,
+      name: candidate.metadata.name,
+      capsuleId: candidate.metadata.ownerRef.id,
+      capsuleName: capsules.get(candidate.metadata.ownerRef.id)!.name,
+    })).sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+    const answer = plan.options.interfaceLinks?.find((entry) =>
+      entry.requirementKey === requirement.key
+    );
+    const onlyCandidate = candidates.length === 1 ? offered.find((candidate) =>
+      candidate.metadata.id === candidates[0]!.id
+    ) : undefined;
+    const choice = answer?.choice ?? (candidates.length === 1 &&
+      onlyCandidate?.spec.access.visibility !== "private"
+      ? { kind: "interface" as const, interfaceId: candidates[0]!.id }
+      : candidates.length === 0 ? { kind: "later" as const } : undefined);
+    return {
+      requirementKey: requirement.key,
+      type: requirement.interface.type,
+      version: requirement.interface.version,
+      permissions: requirement.permissions,
+      candidates,
+      ...(linkStoreUnavailable ? { linkStoreUnavailable: true as const } : {}),
+      ...(choice ? { choice } : {}),
+      autoSelected: answer === undefined
+        ? choice?.kind === "interface"
+        : choice?.kind === "interface" &&
+          plan.autoSelectedInterfaceKeys?.includes(requirement.key) === true,
+    };
+  }));
+  const used = new Set(rows.flatMap((row) =>
+    !row.autoSelected && row.choice?.kind === "interface" ? [row.choice.interfaceId] : []
+  ));
+  return rows.map((row) => {
+    if (!row.autoSelected || row.choice?.kind !== "interface") return row;
+    if (used.has(row.choice.interfaceId)) {
+      return { ...row, choice: undefined, autoSelected: false };
+    }
+    used.add(row.choice.interfaceId);
+    return row;
+  });
+}
+
+/** Missing choices block only when multiple providers need a user decision. */
+export function interfacesReady(rows: readonly GitInstallPlanInterfaceRequirement[]): boolean {
+  return !duplicateSelectedInterface(rows) && rows.every((row) => {
+    const choice = row.choice;
+    return choice?.kind === "later" || choice?.kind === "interface" &&
+      row.candidates.some((candidate) => candidate.id === choice.interfaceId);
+  });
+}
+
+/** A provider can back only one requirement of the same consumer Capsule. */
+export function duplicateSelectedInterface(rows: readonly GitInstallPlanInterfaceRequirement[]): boolean {
+  const selected = rows.flatMap((row) => row.choice?.kind === "interface" ? [row.choice.interfaceId] : []);
+  return new Set(selected).size !== selected.length;
+}
+
+/** Freeze the choices without persisting provider documents or grant material. */
+export function effectiveInterfaceLinks(
+  rows: readonly GitInstallPlanInterfaceRequirement[],
+): readonly GitInstallPlanInterfaceLinkRequest[] {
+  return rows.filter((row) => row.choice !== undefined).map((row) => ({
+    requirementKey: row.requirementKey,
+    choice: row.choice!,
+  }));
+}
+
 /** Live collision check against active Capsules in the default Project. */
 export async function nameProposal(
   operations: ControlPlaneOperations,
@@ -595,8 +704,9 @@ export async function userActionFor(
   // confirming request carried no variables.
   const resubmitting = plan.creationAttempted === true;
   const resubmit = plan.transientVariableNames ?? [];
-  const [connections, name] = await Promise.all([
+  const [connections, interfaces, name] = await Promise.all([
     connectionRequirements(operations, plan),
+    interfaceRequirements(operations, plan),
     nameProposal(operations, plan),
   ]);
   const variables = facts?.variables ??
@@ -612,10 +722,12 @@ export async function userActionFor(
       plan.options.modulePath ?? ".",
     resources: facts?.resources ?? [],
     connections,
+    interfaces,
     variables,
     name,
     missing: [
       ...(connectionsReady(connections) ? [] : ["connections" as const]),
+      ...(interfacesReady(interfaces) ? [] : ["interfaces" as const]),
       ...(name.conflict ? ["name" as const] : []),
     ],
     ...(resubmitting ? { resubmitVariables: [...resubmit] } : {}),

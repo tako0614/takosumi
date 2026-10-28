@@ -17,6 +17,7 @@ export const APP_PAGE_SECTIONS = {
   version: "version",
   settings: "settings",
   connections: "connections",
+  links: "links",
   created: "created",
   history: "history",
   danger: "danger",

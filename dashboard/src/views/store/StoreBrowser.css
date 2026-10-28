@@ -487,3 +487,29 @@
     background-position: -200% 0;
   }
 }
+
+.tcs-installed-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tg-s-2, 8px);
+  min-width: 0;
+  width: 100%;
+}
+.tcs-installed-label {
+  width: 100%;
+  color: var(--c-muted);
+  font-size: var(--tg-fs-xs, 0.78rem);
+  font-weight: 600;
+}
+.tcs-installed-choice a {
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.tcs-installed-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--c-muted);
+  font-size: var(--tg-fs-xs, 0.78rem);
+  line-height: 1.6;
+}

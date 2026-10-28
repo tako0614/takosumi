@@ -987,7 +987,7 @@ test("retired relationship roots return 404", async () => {
   }
 });
 
-test("Capsule dependency reads and writes are retired and graph edges are empty", async () => {
+test("Capsule dependency and empty Workspace graph reads are retired", async () => {
   const fixture = operationsFixture();
   const operations = {
     ...fixture.operations,
@@ -1006,13 +1006,10 @@ test("Capsule dependency reads and writes are retired and graph edges are empty"
     expect(response?.status).toBe(404);
   }
   const request = new Request("https://app.example.test/api/v1/workspaces/ws_owner/graph");
-  const response = await handleWorkspaces(
-    context(operations, request), ["workspaces", "ws_owner", "graph"], "GET",
-  );
-  expect(response?.status).toBe(200);
-  const graph = await response!.json();
-  expect(graph.nodes.length).toBeGreaterThan(0);
-  expect(graph.edges).toEqual([]);
+  const response = await handleAuthenticatedControlRoute({
+    ...context(operations, request), subject: "tsub_owner",
+  });
+  expect(response?.status).toBe(404);
 });
 
 test("account-plane control errors preserve structured reason details", async () => {
@@ -1087,13 +1084,22 @@ test("Capsule abandon action is idempotent and never falls through to a destroy 
   let capsule = await fixture.operations.capsules.getCapsule("cap_1");
   let abandonCalls = 0;
   let destroyPlanCalls = 0;
+  let revokeCalls = 0;
   const operations = {
     ...fixture.operations,
+    interfaces: {
+      revokeCapsuleInterfaceLinks: async (workspaceId: string, capsuleId: string) => {
+        expect(workspaceId).toBe(capsule.workspaceId);
+        expect(capsuleId).toBe(capsule.id);
+        revokeCalls += 1;
+      },
+    },
     capsules: {
       ...fixture.operations.capsules,
       getCapsule: async () => capsule,
       abandonUnappliedCapsule: async () => {
         abandonCalls += 1;
+        revokeCalls += 1;
         capsule = { ...capsule, status: "destroyed" as const };
         return capsule;
       },
@@ -1129,8 +1135,36 @@ test("Capsule abandon action is idempotent and never falls through to a destroy 
     alreadyDeleted: true,
     capsule: { id: "cap_1", status: "destroyed" },
   });
-  expect(abandonCalls).toBe(1);
+  expect(abandonCalls).toBe(2);
+  expect(revokeCalls).toBe(2);
   expect(destroyPlanCalls).toBe(0);
+});
+
+test("unapplied Capsule DELETE revokes links and replays revocation", async () => {
+  const fixture = operationsFixture();
+  let capsule = await fixture.operations.capsules.getCapsule("cap_1");
+  let revokeCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      getCapsule: async () => capsule,
+      abandonUnappliedCapsule: async () => {
+        revokeCalls += 1;
+        capsule = { ...capsule, status: "destroyed" as const };
+        return capsule;
+      },
+    },
+    interfaces: {
+      revokeCapsuleInterfaceLinks: async () => { revokeCalls += 1; },
+    },
+  } as ControlPlaneOperations;
+  const request = () => new Request("https://app.example.test/api/v1/capsules/cap_1", { method: "DELETE" });
+  for (const expectedStatus of [202, 200]) {
+    const response = await handleCapsules(context(operations, request()), ["capsules", "cap_1"], "DELETE");
+    expect(response?.status).toBe(expectedStatus);
+  }
+  expect(revokeCalls).toBe(2);
 });
 
 test("Capsule abandon action rejects an applied-state race without creating a destroy Plan", async () => {

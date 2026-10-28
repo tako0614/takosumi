@@ -1,4 +1,4 @@
-import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
+import type { Interface, InterfaceBinding, InterfaceLink } from "takosumi-contract/interfaces";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   pageSortedBy,
@@ -9,7 +9,9 @@ import { freezeClone } from "../../shared/freeze.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
 import {
   WorkspaceManagementAdmissionConflictError,
+  assertWorkspaceManagementAuthorityInput,
   type WorkspaceManagementAdmissionValidator,
+  type WorkspaceManagementAuthority,
 } from "../deploy-control/store.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
@@ -101,11 +103,142 @@ export interface InterfaceStores {
   readonly persistence: "durable" | "ephemeral";
   readonly interfaces: InterfaceStore;
   readonly bindings: InterfaceBindingStore;
+  readonly links: InterfaceLinkStore;
   /**
    * Read-only authorization projection. Durable implementations collapse the
    * Interface + current Principal Binding check into one bounded statement.
    */
   readonly authorized: InterfaceAuthorizationQuery;
+}
+
+export interface InterfaceLinkKey {
+  readonly consumerCapsuleId: string;
+  readonly requirementKey: string;
+}
+
+export interface InterfaceLinkReplacement {
+  readonly record: InterfaceLink;
+  readonly expected: InterfaceLink;
+  /** Required for a current link, omitted when replacing a terminal link. */
+  readonly revoked?: InterfaceLink;
+}
+
+export interface InterfaceLinkStore {
+  /** Whether link persistence is installed on this backing store. */
+  available?(): Promise<boolean>;
+  /** First selection only; subsequent selections use the atomic replacement. */
+  create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean>;
+  get(id: string): Promise<InterfaceLink | undefined>;
+  getCurrent(key: InterfaceLinkKey): Promise<InterfaceLink | undefined>;
+  getLatest(key: InterfaceLinkKey): Promise<InterfaceLink | undefined>;
+  listByConsumerCapsule(id: string): Promise<readonly InterfaceLink[]>;
+  listByProviderInterface(id: string): Promise<readonly InterfaceLink[]>;
+  listByProviderCapsule(id: string): Promise<readonly InterfaceLink[]>;
+  compareAndSet(record: InterfaceLink, expectedGeneration: number, guard?: WorkspaceManagementAuthority): Promise<boolean>;
+  /** Atomic exact-prior CAS, old revocation, and new selection insertion. */
+  replace(input: InterfaceLinkReplacement, guard?: WorkspaceManagementAuthority): Promise<boolean>;
+}
+
+export function isCurrentInterfaceLink(record: InterfaceLink): boolean {
+  return record.state === "pending_approval" || record.state === "active";
+}
+
+export function isValidInterfaceLinkUpdate(record: InterfaceLink, prior: InterfaceLink): boolean {
+  return isCurrentInterfaceLink(prior) && record.id === prior.id &&
+    Number.isSafeInteger(record.generation) && record.generation === prior.generation + 1 &&
+    record.consumerCapsuleId === prior.consumerCapsuleId && record.requirementKey === prior.requirementKey &&
+    record.providerInterfaceId === prior.providerInterfaceId && record.providerCapsuleId === prior.providerCapsuleId &&
+    record.interface.type === prior.interface.type && record.interface.version === prior.interface.version &&
+    JSON.stringify(record.requestedPermissions) === JSON.stringify(prior.requestedPermissions) &&
+    record.deliveryType === prior.deliveryType && record.selection === prior.selection &&
+    record.requestedBy === prior.requestedBy && record.createdAt === prior.createdAt;
+}
+
+export function isValidInterfaceLinkReplacement(input: InterfaceLinkReplacement): boolean {
+  const { record, expected, revoked } = input;
+  const current = isCurrentInterfaceLink(expected);
+  return record.id !== expected.id && isCurrentInterfaceLink(record) &&
+    record.consumerCapsuleId === expected.consumerCapsuleId && record.requirementKey === expected.requirementKey &&
+    Number.isSafeInteger(record.generation) && record.generation === expected.generation + (current ? 2 : 1) &&
+    (current ? !!revoked && revoked.state === "revoked" && isValidInterfaceLinkUpdate(revoked, expected) : revoked === undefined);
+}
+
+export class InMemoryInterfaceLinkStore implements InterfaceLinkStore {
+  readonly #records = new Map<string, InterfaceLink>();
+
+  constructor(private readonly workspaceManagementAuthority?: WorkspaceManagementAdmissionValidator) {}
+
+  #writeAllowed(guard?: WorkspaceManagementAuthority): boolean {
+    if (!guard) return true;
+    assertWorkspaceManagementAuthorityInput(guard, guard.workspaceId);
+    return this.workspaceManagementAuthority?.isWorkspaceManagementAdmissionAllowed(guard.workspaceId, guard) === true;
+  }
+
+  create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (!this.#writeAllowed(guard)) return Promise.resolve(false);
+    if (record.generation !== 1 || !isCurrentInterfaceLink(record) || this.#records.has(record.id) ||
+      this.#latest(record)) return Promise.resolve(false);
+    this.#records.set(record.id, freezeClone(record));
+    return Promise.resolve(true);
+  }
+
+  get(id: string): Promise<InterfaceLink | undefined> {
+    return Promise.resolve(this.#records.get(id));
+  }
+
+  getCurrent(key: InterfaceLinkKey): Promise<InterfaceLink | undefined> {
+    const record = this.#latest(key);
+    return Promise.resolve(record && isCurrentInterfaceLink(record) ? record : undefined);
+  }
+
+  getLatest(key: InterfaceLinkKey): Promise<InterfaceLink | undefined> {
+    return Promise.resolve(this.#latest(key));
+  }
+
+  listByConsumerCapsule(id: string): Promise<readonly InterfaceLink[]> {
+    return Promise.resolve(this.#list("consumerCapsuleId", id));
+  }
+
+  listByProviderInterface(id: string): Promise<readonly InterfaceLink[]> {
+    return Promise.resolve(this.#list("providerInterfaceId", id));
+  }
+
+  listByProviderCapsule(id: string): Promise<readonly InterfaceLink[]> {
+    return Promise.resolve(this.#list("providerCapsuleId", id));
+  }
+
+  compareAndSet(record: InterfaceLink, expectedGeneration: number, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (!this.#writeAllowed(guard)) return Promise.resolve(false);
+    const prior = this.#records.get(record.id);
+    if (!prior || prior.generation !== expectedGeneration || !isValidInterfaceLinkUpdate(record, prior)) {
+      return Promise.resolve(false);
+    }
+    this.#records.set(record.id, freezeClone(record));
+    return Promise.resolve(true);
+  }
+
+  replace(input: InterfaceLinkReplacement, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (!this.#writeAllowed(guard)) return Promise.resolve(false);
+    if (!isValidInterfaceLinkReplacement(input)) return Promise.resolve(false);
+    const { record, expected, revoked } = input;
+    const prior = this.#records.get(expected.id);
+    if (!prior || JSON.stringify(prior) !== JSON.stringify(expected) ||
+      this.#latest(expected)?.id !== expected.id || this.#records.has(record.id)) return Promise.resolve(false);
+    if (revoked) this.#records.set(revoked.id, freezeClone(revoked));
+    this.#records.set(record.id, freezeClone(record));
+    return Promise.resolve(true);
+  }
+
+  #latest(key: InterfaceLinkKey): InterfaceLink | undefined {
+    return this.#list("consumerCapsuleId", key.consumerCapsuleId)
+      .filter((record) => record.requirementKey === key.requirementKey)
+      .sort((left, right) => right.generation - left.generation)[0];
+  }
+
+  #list(key: "consumerCapsuleId" | "providerInterfaceId" | "providerCapsuleId", id: string): InterfaceLink[] {
+    return [...this.#records.values()].filter((record) => record[key] === id)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  }
 }
 
 export interface InterfaceAuthorizationPageInput {
@@ -436,13 +569,16 @@ export function createInMemoryInterfaceStores(options: {
     options.materializationAuthority,
     now,
   );
+  const links = new InMemoryInterfaceLinkStore(options.workspaceManagementAuthority);
   return {
     persistence: "ephemeral",
     interfaces,
     bindings,
+    links,
     authorized: new InMemoryInterfaceAuthorizationQuery(
       interfaces,
       bindings,
+      links,
     ),
   };
 }
@@ -453,6 +589,7 @@ class InMemoryInterfaceAuthorizationQuery
   constructor(
     private readonly interfaces: InterfaceStore,
     private readonly bindings: InterfaceBindingStore,
+    private readonly links: InterfaceLinkStore,
   ) {}
 
   async listPage(
@@ -478,17 +615,18 @@ class InMemoryInterfaceAuthorizationQuery
     const authorized: Interface[] = [];
     for (const iface of candidates) {
       const bindings = await this.bindings.listByInterface(iface.metadata.id);
-      if (
-        bindings.some((binding) =>
+      for (const binding of bindings) {
+        if (
           isCurrentPrincipalGrant(
             binding,
             iface,
             input.subjectId,
             input.permission,
-          ),
-        )
-      ) {
-        authorized.push(iface);
+          ) && await hasActiveRequiredInterfaceLink(binding, iface, this.links, input.permission)
+        ) {
+          authorized.push(iface);
+          break;
+        }
       }
     }
     authorized.sort(
@@ -501,6 +639,20 @@ class InMemoryInterfaceAuthorizationQuery
       id: iface.metadata.id,
     }));
   }
+}
+
+async function hasActiveRequiredInterfaceLink(binding: InterfaceBinding, iface: Interface, links: InterfaceLinkStore, permission: string): Promise<boolean> {
+  const source = binding.metadata.materializedFrom;
+  if (source?.source !== "capsule_required_interface") return true;
+  const link = source.linkId ? await links.get(source.linkId)
+    : await links.getCurrent({ consumerCapsuleId: source.capsuleId, requirementKey: source.requirementKey });
+  return !!link && link.state === "active" && link.providerInterfaceId === binding.spec.interfaceId &&
+    iface.metadata.ownerRef.kind === "Capsule" && link.providerCapsuleId === iface.metadata.ownerRef.id &&
+    link.consumerCapsuleId === source.capsuleId && link.requirementKey === source.requirementKey &&
+    link.interface.type === source.interfaceType && link.interface.version === source.interfaceVersion &&
+    link.interface.type === iface.spec.type && link.interface.version === iface.spec.version &&
+    link.deliveryType === binding.spec.delivery.type &&
+    link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission);
 }
 
 function hasUnownedCapsuleOutput(iface: Interface): boolean {

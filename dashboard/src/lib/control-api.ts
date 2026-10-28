@@ -55,6 +55,7 @@ import type {
   DiscardGitInstallPlanRequest,
   GitInstallPlanResponse,
   ListOpenGitInstallPlansResponse,
+  ListInstalledAppsResponse,
   PatchGitInstallPlanRequest,
   CreateGitRevisionPlanRequest,
   GitRevisionPlanResponse,
@@ -2029,6 +2030,17 @@ export type CapsuleAppView = ContractCapsuleAppView;
 export type RunPolicyReason = ContractRunPolicyReason;
 export type RunPlanOrigin = ContractRunPlanOrigin;
 
+/** Reads value-free installed app identities for matching Store listings. */
+export async function listInstalledApps(workspaceId: string): Promise<ListInstalledAppsResponse> {
+  const body = await controlFetch<ListInstalledAppsResponse>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/installed-apps`,
+  );
+  if (!Array.isArray(body.installedApps) || typeof body.complete !== "boolean") {
+    throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+  }
+  return body;
+}
+
 /** The view kind this dashboard build understands. */
 const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1";
 
@@ -2057,6 +2069,38 @@ export async function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> 
     );
   }
   return app;
+}
+
+export interface InterfaceLinkCandidate {
+  readonly interfaceId: string;
+  readonly providerCapsuleId: string;
+  readonly providerCapsuleName: string;
+  readonly interfaceName: string;
+}
+
+const interfaceLinkPath = (capsuleId: string, requirementKey: string) =>
+  `${BASE}/capsules/${encodeURIComponent(capsuleId)}/interface-links/${encodeURIComponent(requirementKey)}`;
+
+export function getInterfaceLinkCandidates(capsuleId: string, requirementKey: string): Promise<{
+  readonly candidates: readonly InterfaceLinkCandidate[];
+  readonly generation: number;
+}> {
+  return controlFetch(`${interfaceLinkPath(capsuleId, requirementKey)}/candidates`);
+}
+
+export function setInterfaceLink(capsuleId: string, requirementKey: string, input: {
+  readonly interfaceId: string;
+  readonly expectedGeneration: number;
+}): Promise<{ readonly link: import("takosumi-contract").InterfaceLink }> {
+  return controlFetch(interfaceLinkPath(capsuleId, requirementKey), { method: "PUT", body: input });
+}
+
+export function revokeInterfaceLink(capsuleId: string, requirementKey: string, expectedGeneration: number): Promise<{
+  readonly link: import("takosumi-contract").InterfaceLink;
+}> {
+  return controlFetch(interfaceLinkPath(capsuleId, requirementKey), {
+    method: "DELETE", body: { expectedGeneration },
+  });
 }
 
 /**

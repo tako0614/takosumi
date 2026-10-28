@@ -261,6 +261,8 @@ export interface CapsulesServiceDependencies {
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly projects?: ProjectsService;
+  /** Revoke Interface links as part of the canonical no-state abandonment. */
+  readonly revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>;
   /** Optional host-owned lease shared by every Capsule lifecycle transition. */
   readonly capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
   /**
@@ -289,6 +291,7 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder & Partial<IdempotentActivityRecorder>;
   readonly #projects: ProjectsService;
+  readonly #revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>;
   readonly #uninstallGraceDays: number;
   readonly #validateUninstallRequesterAt?: UninstallRequesterAtValidator;
   readonly #retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
@@ -302,6 +305,7 @@ export class CapsulesService {
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
+    this.#revokeCapsuleInterfaceLinks = deps.revokeCapsuleInterfaceLinks;
     this.#capsuleLifecycleAdmission = deps.capsuleLifecycleAdmission;
     this.#uninstallGraceDays =
       deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
@@ -1174,6 +1178,22 @@ export class CapsulesService {
     const suppliedAuthority = expectedWorkspaceManagementAuthority === undefined
       ? undefined
       : { ...expectedWorkspaceManagementAuthority };
+    // Terminal cleanup is retryable after Workspace management stops. It does
+    // not reopen the Capsule or admit a new lifecycle mutation.
+    const existing = await this.#requireCapsule(id);
+    if (existing.status === "destroyed") {
+      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(existing.id);
+      if (runtimeSafety || existing.currentStateVersionId || existing.currentStateGeneration > 0) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} has runtime state and must use the destroy flow`,
+          { reason: CAPSULE_RUNTIME_STATE_PRESENT_REASON },
+        );
+      }
+      await this.#revokeCapsuleInterfaceLinks?.(existing.workspaceId, existing.id);
+      await this.#retireAbandonedSource(existing);
+      return existing;
+    }
     const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
     const abandon = async (): Promise<Capsule> => {
       const current = prepared.capsule;
@@ -1212,10 +1232,6 @@ export class CapsulesService {
           prepared.expectedWorkspaceManagementAuthority,
         updatedAt: this.#now().toISOString(),
       });
-      if (result.kind === "unchanged") {
-        await this.#retireAbandonedSource(result.capsule);
-        return result.capsule;
-      }
       if (result.kind === "not-found") {
         throw new OpenTofuControllerError(
           "not_found",
@@ -1230,6 +1246,11 @@ export class CapsulesService {
         );
       }
       const updated = result.capsule;
+      await this.#revokeCapsuleInterfaceLinks?.(updated.workspaceId, updated.id);
+      if (result.kind === "unchanged") {
+        await this.#retireAbandonedSource(updated);
+        return updated;
+      }
       await this.#activity.record({
         workspaceId: updated.workspaceId,
         action: "capsule.abandoned",
