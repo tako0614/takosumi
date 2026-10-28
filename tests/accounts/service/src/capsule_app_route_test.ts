@@ -441,6 +441,10 @@ test("version facts compare the adopted commit with the newest snapshot of the s
   await h.ledger.putSourceSnapshot(
     snapshot("snap_older_main", "main", "0".repeat(40), "2026-06-01T00:00:00.000Z"),
   );
+  await h.ledger.putSourceSnapshot({
+    ...snapshot("snap_newer_other_path", "main", "9".repeat(40), "2026-06-09T00:00:00.000Z"),
+    path: "another/app",
+  });
   const unchanged = await h.app();
   expect(unchanged.version).toMatchObject({
     current: { sourceSnapshotId: "snap_app_route", ref: "main", path: ".", commit },
@@ -934,4 +938,16 @@ test("a full Workspace failure window without this app's entry is reported as in
     },
   });
   expect((await partial.app()).incomplete).toBeUndefined();
+});
+
+test("a destroyed app renders after its Source has retired", async () => {
+  const h = await fixture({ currentStateVersionId: "historical_state" });
+  const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+  await h.ledger.putCapsule({ ...capsule, status: "destroyed" });
+  await h.ledger.deleteSource(capsule.sourceId);
+  expect((await h.request("")).status).toBe(200);
+  const app = await h.app();
+  expect(app.status).toBe("destroyed");
+  expect(app.version.current).toBeUndefined();
+  expect(app.version.updateAvailable).toBe(false);
 });

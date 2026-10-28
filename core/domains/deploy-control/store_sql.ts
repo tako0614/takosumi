@@ -303,7 +303,6 @@ import {
   type CommittedPostApplyRecoveryRows,
 } from "./committed_post_apply_recovery.ts";
 import {
-  MAX_SOURCE_RECONCILIATION_CAPSULES,
   observeSourceSyncSettlement,
   sourceSyncSettlementCensusMatches,
   sourceSyncSettlementReadMatches,
@@ -3022,13 +3021,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           throw new SourceSyncSettlementConflictError();
         }
 
-        // Lock the complete Workspace Capsule census before resolving any
-        // adopted-source lineage. Normal Capsule admission and lifecycle
-        // writes take this Workspace-first lock, so the census cannot gain or
-        // lose a row while the settlement is being observed.
+        // Lock only the Source owner before resolving adopted lineage. Normal
+        // lifecycle writes share the outer Workspace lock.
         const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
           transaction,
           input.terminalRun.workspaceId,
+          input.terminalRun.sourceId,
         );
 
         // The Source cursor is part of this same settlement. Lock its exact
@@ -3071,10 +3069,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           lockedCapsules,
         );
 
-        // A complete physical Capsule census was locked above. Compare the
-        // normalized locked rows with the helper's domain census, then read
-        // the census again through the tx-bound store to detect any direct
-        // fixture/physical mutation that bypassed the normal lock seam.
+        // Revalidate the exact owning Capsule, including physical columns,
+        // before publishing its observation.
         if (
           !sourceSyncSettlementCensusMatches(
             lockedCapsules,
@@ -3086,6 +3082,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         const currentCapsules = await pgLockSourceSyncSettlementCapsules(
           transaction,
           input.terminalRun.workspaceId,
+          input.terminalRun.sourceId,
         );
         if (
           !sourceSyncSettlementCensusMatches(
@@ -9599,6 +9596,16 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         [source.id],
       );
       const currentRow = currentRows.rows[0];
+      if (input.expectedOwnerCapsule) {
+        const rows = await transaction.query<{ capsuleJson: unknown }>(
+          `select installation_json as "capsuleJson" from takosumi_capsules
+           where id = $1 and space_id = $2 for update`,
+          [input.expectedOwnerCapsule.id, source.workspaceId],
+        );
+        if (!rows.rows[0] || stableStringify(parseJson(rows.rows[0].capsuleJson)) !==
+          stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" as const };
+      }
+
 
       // A Source id is globally unique. An id physically owned by another
       // Workspace is a conflict and must never be rebound by the candidate.
@@ -11976,7 +11983,7 @@ interface PgSourceSyncSettlementCapsuleRow extends Record<string, unknown> {
 }
 
 /**
- * Lock and decode the complete non-destroyed Capsule census for a SourceSync
+ * Lock and decode the non-destroyed owning Capsule for a SourceSync
  * settlement. A coherent destroyed row is terminal history and is excluded;
  * any disagreement between its physical and canonical identity keeps it in
  * the census and fails closed below instead of silently hiding corruption.
@@ -11986,6 +11993,7 @@ interface PgSourceSyncSettlementCapsuleRow extends Record<string, unknown> {
 async function pgLockSourceSyncSettlementCapsules(
   transaction: SqlTransaction,
   workspaceId: string,
+  sourceId: string,
 ): Promise<readonly Capsule[]> {
   const rows = await transaction.query<PgSourceSyncSettlementCapsuleRow>(
     `select id,
@@ -12002,6 +12010,7 @@ async function pgLockSourceSyncSettlementCapsules(
             updated_at as "updatedAt"
       from takosumi_capsules
       where space_id = $1
+        and id = (select source_json ->> 'ownerCapsuleId' from takosumi_sources where id = $2 and space_id = $1)
         and not (
           status = 'destroyed'
           and coalesce(installation_json ->> 'status', '') = 'destroyed'
@@ -12009,9 +12018,8 @@ async function pgLockSourceSyncSettlementCapsules(
           and coalesce(installation_json ->> 'workspaceId', '') = space_id
         )
       order by created_at, id
-      limit ${MAX_SOURCE_RECONCILIATION_CAPSULES + 1}
       for update`,
-    [workspaceId],
+    [workspaceId, sourceId],
   );
   return rows.rows.map((row) => {
     const capsule = normalizeCapsuleRecord(
@@ -12118,6 +12126,8 @@ async function pgSourceSyncSettlementReadRecord(
       return await reader.getApplyRun(read.id);
     case "plan":
       return await reader.getPlanRun(read.id);
+    case "recovery":
+      return await reader.getStateRecoveryRun(read.id);
     case "restore":
       return await reader.getBackupRun(read.id);
     case "snapshot":

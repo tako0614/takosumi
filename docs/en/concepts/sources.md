@@ -41,6 +41,17 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `authConnectionId` | none         | The Connection used to read a private repository         |
 | `autoSync`         | `false` (installs enable it when their plan is reviewable) | The operator's scheduler checks the Git ref periodically |
 
+For an owned Source, `defaultRef` and `defaultPath` follow the app's adopted snapshot.
+Apply, Restore, state recovery, revision creation, and reconciliation converge this lane
+with an owner-and-state CAS. Public PATCH refuses lane changes with
+`source_lane_owned_by_app`; use the app's revision flow. Reconciliation observes one lane
+and settlement can mark only its owner stale. Backups also use the adopted snapshot.
+
+Discarding an install attempt, uninstalling, or abandoning its app retires the Source.
+Retirement stops sync admission and polling, waits for in-flight syncs, deletes its owned
+archives, then atomically removes snapshot rows and the Source with `source.retired` Activity.
+A daily sweep resumes interrupted cleanup. Destroyed apps remain readable after retirement.
+
 The Git URL, ref, and source subtree are the Source acquisition coordinate.
 There is no Takosumi-specific source catalog. `defaultPath` narrows the captured
 tree but does not select an executable module. Source sync scans tracked regular
@@ -131,7 +142,7 @@ excluded. Permanently invalid Git coordinates or applied lineage mark the Source
 and restore `active` to resume automatic polling.
 An app-owned Source is eligible only while its owner in the same Workspace has applied
 state and remains enabled. Missing, uninstalled, destroyed, disabled, and never-applied owners are
-excluded. Existing ownerless Sources retain their polling behavior.
+excluded. Ownerless preflight Sources are collected after 24 hours unless a non-terminal install plan references them.
 
 The dashboard reads that scan result and lets the user select a real module. A matching
 entry in `.well-known/takosumi.json` may add input presentation hints and requests for
@@ -144,7 +155,7 @@ A Capsule is one deployed unit. Where a Source says where the code comes from, a
 says what is running right now.
 
 Each new app owns a separate Source, including apps added from the same repository.
-Existing shared Sources are retained. Modules carry no credentials and no notion of
+Existing shared Sources must be split with the operator migration. Modules carry no credentials and no notion of
 environment, so development and production use separate Capsules with their own Sources
 and Connections (see [Credentials](./credentials.md)).
 

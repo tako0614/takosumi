@@ -253,16 +253,13 @@ class ReconciliationBarrierStore extends MutableWorkspaceManagementStore {
   readonly releaseEnumeration = deferred<void>();
   #pauseNextEnumeration = true;
 
-  override async listCapsulesPage(
-    workspaceId: string,
-    params: Parameters<InMemoryOpenTofuControlStore["listCapsulesPage"]>[1],
-  ) {
+  override async getCapsule(id: string) {
     if (this.#pauseNextEnumeration) {
       this.#pauseNextEnumeration = false;
       this.enumerationStarted.resolve();
       await this.releaseEnumeration.promise;
     }
-    return await super.listCapsulesPage(workspaceId, params);
+    return await super.getCapsule(id);
   }
 }
 
@@ -1420,7 +1417,7 @@ test("createSync propagates unknown management reads instead of treating them as
   }
 });
 
-test("reconciliation keeps one captured authority across default and adopted lanes", async () => {
+test("reconciliation keeps its captured authority while converging the owner lane", async () => {
   const dispatched: unknown[] = [];
   const store = new ReconciliationBarrierStore();
   const { service } = makeService({
@@ -1615,24 +1612,11 @@ test("permanent reconciliation preparation failure quarantines a Source", async 
   expect(await service.listAutoSyncSourcesDue(25)).toEqual([]);
 });
 
-test("a permanently unenumerable Source leaves the due queue instead of starving later Sources", async () => {
+test("reconciliation does not enumerate unrelated apps in a large Workspace", async () => {
   const { store, service } = makeService();
-  const { source } = await service.createSource({
-    workspaceId: "workspace_1", name: "over-limit", url: "https://github.com/a/b", autoSync: true,
-  });
-  for (let index = 0; index < 1_001; index += 1) {
-    await store.putCapsule({
-      id: `cap_limit_${index}`, workspaceId: "workspace_1", projectId: "prj_default_workspace_1",
-      name: `limit-${index}`, slug: `limit-${index}`, sourceId: source.id,
-      installConfigId: "cfg_unused", environment: "production", currentStateGeneration: 0,
-      status: "active", createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
-    });
-  }
-  await expect(service.createReconciliationSyncs(source.id)).rejects.toMatchObject({
-    code: "resource_exhausted", details: { reason: "source_reconciliation_capsule_limit" },
-  });
-  expect((await store.getSource(source.id))?.status).toBe("error");
-  expect(await service.listAutoSyncSourcesDue(1)).toEqual([]);
+  const { source } = await service.createSource({ workspaceId: "workspace_1", name: "preflight", url: "https://github.com/a/b" });
+  store.listCapsulesPage = async () => { throw new Error("workspace census is forbidden"); };
+  expect((await service.createReconciliationSyncs(source.id)).length).toBe(1);
 });
 
 test("missing platform archive allocator keeps a Source eligible after platform repair", async () => {

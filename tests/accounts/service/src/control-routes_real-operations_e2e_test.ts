@@ -1365,8 +1365,6 @@ async function putConfigurationFixtureRevisionRow(
         capsuleStateGeneration: capsule.currentStateGeneration,
         installConfigId: capsule.installConfigId,
         installConfigDigest: "sha256:config",
-        sourceDefaultRef: "main",
-        sourceDefaultPath: ".",
       },
     },
     sourceId: capsule.sourceId,

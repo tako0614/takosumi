@@ -200,8 +200,6 @@ export interface GitRevisionPlanBase {
   readonly capsuleStateVersionId?: string;
   readonly installConfigId: string;
   readonly installConfigDigest: string;
-  readonly sourceDefaultRef: string;
-  readonly sourceDefaultPath: string;
   readonly sourceAuthConnectionId?: string;
 }
 

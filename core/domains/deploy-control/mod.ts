@@ -2359,10 +2359,15 @@ export class OpenTofuController {
     );
   }
 
+  async convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse> {
+    return await this.#sources.convergeOwnedSourceLane(sourceId);
+  }
+
   async createSourceReconciliationSyncs(
     sourceId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): Promise<readonly CreateSourceSyncResponse[]> {
-    return await this.#sources.createSourceReconciliationSyncs(sourceId);
+    return await this.#sources.createSourceReconciliationSyncs(sourceId, options);
   }
 
   async listSourceSnapshots(

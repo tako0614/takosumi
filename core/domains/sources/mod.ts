@@ -23,7 +23,6 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
-  Capsule,
   CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -32,7 +31,6 @@ import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsul
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
 import {
-  MAX_PAGE_LIMIT,
   type PageParams,
 } from "takosumi-contract/pagination";
 import {
@@ -69,7 +67,7 @@ import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
 import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
-import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
+import { convergeOwnedSourceLane } from "./owned-lane.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
 // default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
@@ -353,6 +351,12 @@ export class SourcesService {
     patch: PatchSourceRequest,
   ): Promise<SourceResponse> {
     const stored = await this.#requireSource(id);
+    if (stored.ownerCapsuleId && (
+      (patch.defaultRef !== undefined && (nonEmpty(patch.defaultRef) ?? DEFAULT_REF) !== stored.defaultRef) ||
+      (patch.defaultPath !== undefined && (nonEmpty(patch.defaultPath) ?? DEFAULT_PATH) !== stored.defaultPath)
+    )) throw new OpenTofuControllerError("failed_precondition", "Change the app revision to change its Git lane.", {
+      reason: "source_lane_owned_by_app",
+    });
     const next: StoredSource = { ...stored };
     const shouldValidateAuthConnection =
       patch.authConnectionId !== undefined && patch.authConnectionId !== null;
@@ -614,133 +618,48 @@ export class SourcesService {
     );
   }
 
-  /**
-   * Enqueues observation runs for the shared Source default and every distinct
-   * Git ref/path lane currently adopted by one of its Capsules. The addresses
-   * are derived from applied StateVersion provenance; this never rewrites the
-   * Source defaults and is intentionally not exposed as caller-controlled HTTP
-   * input.
-   */
+  /** The Source follows exactly the owning app's adopted ref and subtree. */
+  async convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse> {
+    const source = await convergeOwnedSourceLane(this.#store, sourceId, this.#now);
+    if (!source) throw new OpenTofuControllerError("not_found", `source ${sourceId} not found`);
+    return { source: toPublicSource(source) };
+  }
+
+  /** A webhook observes the lane; only a scheduler advances the polling marker. */
   async createReconciliationSyncs(
     sourceId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): Promise<readonly CreateSourceSyncResponse[]> {
     let stored = await this.#requireSource(sourceId);
     try {
       const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
-      // Persist the attempt before lineage enumeration or archive allocation:
-      // either can fail before there is a Run to advance the polling cursor.
-      stored = await this.#writeSourceConfiguration({
-        source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
-        expectedSource: stored,
-        expectedWorkspaceManagementAuthority: authority,
-      });
-      return await this.#createReconciliationSyncs(stored, authority);
+      stored = await convergeOwnedSourceLane(this.#store, sourceId, this.#now) ?? stored;
+      if (options.scheduled) {
+        const result = await this.#store.writeSourceConfiguration({
+          source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
+          expectedSource: stored,
+          expectedWorkspaceManagementAuthority: authority,
+        });
+        // A marker is fairness bookkeeping. A concurrent sync/configuration
+        // write wins; read once rather than failing observation for this tick.
+        stored = result.status === "conflict" ? await this.#requireSource(sourceId) : result.source;
+      }
+      return [await this.#createSync(sourceId, { intent: "observe", dedupe: true },
+        { ref: stored.defaultRef, path: stored.defaultPath }, authority)];
     } catch (error) {
-      // Invalid durable configuration cannot make progress on another hourly
-      // poll. Quarantine permanent preparation/lineage failures; infrastructure
-      // errors remain retryable behind later Sources. CAS preserves a repair
-      // made while this attempt was preparing its lanes.
-      if (
-        error instanceof OpenTofuControllerError &&
-        (error.code === "invalid_argument" ||
-          structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON ||
-          structuredErrorReason(error) === "source_reconciliation_capsule_limit")
-      ) {
+      if (error instanceof OpenTofuControllerError &&
+        (error.code === "invalid_argument" || structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON)) {
         try {
           const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
           await this.#writeSourceConfiguration({
             source: { ...stored, status: "error", updatedAt: this.#now().toISOString() },
-            expectedSource: stored,
-            expectedWorkspaceManagementAuthority: authority,
+            expectedSource: stored, expectedWorkspaceManagementAuthority: authority,
           });
         } catch {
-          // A concurrent repair or management drain wins; report the original
-          // preparation failure and let a later eligible poll reconsider it.
+          // A concurrent repair or management drain wins.
         }
       }
       throw error;
-    }
-  }
-
-  async #createReconciliationSyncs(
-    stored: StoredSource,
-    workspaceManagementAuthority: WorkspaceManagementAuthority,
-  ): Promise<readonly CreateSourceSyncResponse[]> {
-    const sourceId = stored.id;
-    // Capture one immutable authority before asynchronous Capsule/lane
-    // enumeration. Every reconciliation lane must use this original tuple;
-    // taking a fresh epoch after a drain/resume could admit only a subset of
-    // the lanes from an obsolete reconciliation request.
-    const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
-    const addAddress = (ref: string, path: string) => {
-      addresses.set(JSON.stringify([ref, path]), { ref, path });
-    };
-    addAddress(stored.defaultRef, stored.defaultPath);
-
-    const capsules = await this.#listReconciliationCapsules(
-      stored.workspaceId,
-    );
-    for (const capsule of capsules) {
-      if (
-        capsule.sourceId !== stored.id ||
-        capsule.status === "destroyed" ||
-        capsule.status === "disabled" ||
-        !capsule.currentStateVersionId
-      ) {
-        continue;
-      }
-      const adopted = await getCapsuleAdoptedSourceSnapshot(
-        this.#store,
-        capsule,
-      );
-      if (!adopted) continue;
-      // An exact commit cannot advance. Its already-adopted immutable snapshot
-      // remains sufficient until the Capsule deliberately changes lane.
-      if (
-        isImmutableSourceRevision(adopted.ref) &&
-        sameGitRef(adopted.ref, adopted.resolvedCommit)
-      ) {
-        continue;
-      }
-      addAddress(adopted.ref, adopted.path);
-    }
-
-    const runs: CreateSourceSyncResponse[] = [];
-    for (const address of addresses.values()) {
-      runs.push(
-        await this.#createSync(
-          sourceId,
-          { intent: "observe", dedupe: true },
-          address,
-          workspaceManagementAuthority,
-        ),
-      );
-    }
-    return runs;
-  }
-
-  async #listReconciliationCapsules(
-    workspaceId: string,
-  ): Promise<readonly Capsule[]> {
-    const capsules: Capsule[] = [];
-    let cursor: string | undefined;
-    for (;;) {
-      const remaining = MAX_SOURCE_RECONCILIATION_CAPSULES - capsules.length;
-      const page = await this.#store.listCapsulesPage(workspaceId, {
-        limit: Math.min(MAX_PAGE_LIMIT, remaining),
-        ...(cursor ? { cursor } : {}),
-        includeDestroyed: false,
-      });
-      capsules.push(...page.items);
-      if (!page.nextCursor) return capsules;
-      if (capsules.length >= MAX_SOURCE_RECONCILIATION_CAPSULES) {
-        throw new OpenTofuControllerError(
-          "resource_exhausted",
-          `Source reconciliation exceeds ${MAX_SOURCE_RECONCILIATION_CAPSULES} Capsules in one Workspace`,
-          { reason: "source_reconciliation_capsule_limit" },
-        );
-      }
-      cursor = page.nextCursor;
     }
   }
 
