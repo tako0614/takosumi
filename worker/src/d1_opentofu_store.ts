@@ -9797,7 +9797,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
     if (current.ownerCapsuleId) {
       const owner = await this.getCapsule(current.ownerCapsuleId);
-      if (owner && owner.status !== "destroyed")
+      if (!owner || owner.id !== current.ownerCapsuleId ||
+        owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
+        owner.status !== "destroyed")
         return { status: "blocked", blockers: ["source_owner_not_destroyed"] };
     }
     const blockers = await this.#sourceDeleteBlockers(current.id, current.workspaceId);
@@ -9807,8 +9809,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       and json_extract(record_json, '$.retiringAt') is not null
       and exists (select 1 from workspaces where workspaces.id = sources.space_id
         and workspaces.management_state = 'active' and workspaces.management_epoch = ?)
-      and not exists (select 1 from capsules owner
-        where owner.id = json_extract(sources.record_json, '$.ownerCapsuleId') and owner.status <> 'destroyed')
+      and (nullif(json_extract(sources.record_json, '$.ownerCapsuleId'), '') is null
+        or exists (select 1 from capsules owner
+          where owner.id = json_extract(sources.record_json, '$.ownerCapsuleId')
+            and owner.space_id = sources.space_id and owner.source_id = sources.id
+            and owner.status = 'destroyed'
+            and json_extract(owner.record_json, '$.id') = owner.id
+            and json_extract(owner.record_json, '$.workspaceId') = owner.space_id
+            and json_extract(owner.record_json, '$.sourceId') = owner.source_id
+            and json_extract(owner.record_json, '$.status') = 'destroyed'))
       and not exists (select 1 from capsules where capsules.source_id = sources.id and capsules.status <> 'destroyed')
       and not exists (select 1 from runs where runs.source_id = sources.id and runs.status in ('queued', 'running'))
       and not exists (select 1 from runs where runs.installation_id in
@@ -9840,42 +9849,30 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return { status: "conflict" };
   }
 
+  async sourceLifecycleBlockers(sourceId: string, workspaceId: string): Promise<readonly string[]> {
+    await this.#ensureSchema();
+    const row = await this.db.prepare(`select
+      exists (select 1 from capsules c where c.space_id = ?
+        and (c.source_id = ? or json_extract(c.record_json, '$.sourceId') = ?)
+        and not coalesce((c.status = 'destroyed' and json_extract(c.record_json, '$.status') = 'destroyed'
+          and json_extract(c.record_json, '$.id') = c.id
+          and json_extract(c.record_json, '$.workspaceId') = c.space_id
+          and json_extract(c.record_json, '$.sourceId') = c.source_id), 0)) as live,
+      exists (select 1 from runs r where r.space_id = ?
+        and (r.status in ('queued','running') or json_extract(r.run_json, '$.status') in ('queued','running'))
+        and (r.source_id = ? or json_extract(r.run_json, '$.sourceId') = ?
+          or r.installation_id in (select c.id from capsules c
+            where c.source_id = ? or json_extract(c.record_json, '$.sourceId') = ?)
+          or json_extract(r.run_json, '$.capsuleId') in (select c.id from capsules c
+            where c.source_id = ? or json_extract(c.record_json, '$.sourceId') = ?))) as inflight`)
+      .bind(workspaceId, sourceId, sourceId, workspaceId, sourceId, sourceId,
+        sourceId, sourceId, sourceId, sourceId).first<{ live: number; inflight: number }>();
+    return [...(row?.live ? ["source_referenced_by_capsule"] : []),
+      ...(row?.inflight ? ["source_has_in_flight_run"] : [])];
+  }
+
   async #sourceDeleteBlockers(sourceId: string, workspaceId: string): Promise<string[]> {
-    const ref = await this.#orm.select({ id: schema.capsules.id })
-      .from(schema.capsules)
-      .where(and(eq(schema.capsules.sourceId, sourceId), ne(schema.capsules.status, "destroyed")))
-      .limit(1);
-    if (ref.length > 0) return ["source_referenced_by_capsule"];
-    const direct = await this.#orm.select({ id: schema.runs.id })
-      .from(schema.runs)
-      .where(and(eq(schema.runs.sourceId, sourceId),
-        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running"))))
-      .limit(1);
-    if (direct.length > 0) return ["source_has_in_flight_run"];
-    const capsuleIds = await this.#orm.select({ id: schema.capsules.id })
-      .from(schema.capsules)
-      .where(eq(schema.capsules.sourceId, sourceId));
-    for (const chunk of chunkD1InQueryValues(capsuleIds.map((row) => row.id))) {
-      if (chunk.length === 0) continue;
-      const bound = await this.#orm.select({ id: schema.runs.id })
-        .from(schema.runs)
-        .where(and(
-          inArray(schema.runs.capsuleId, [...chunk]),
-          or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
-        ))
-        .limit(1);
-      if (bound.length > 0) return ["source_has_in_flight_run"];
-    }
-    const workspaceSource = await this.#orm.select({ id: schema.runs.id })
-      .from(schema.runs)
-      .where(and(
-        eq(schema.runs.workspaceId, workspaceId),
-        eq(schema.runs.sourceId, sourceId),
-        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
-      ))
-      .limit(1);
-    if (workspaceSource.length > 0) return ["source_has_in_flight_run"];
-    return [];
+    return [...await this.sourceLifecycleBlockers(sourceId, workspaceId)];
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {
@@ -9927,24 +9924,66 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined> {
     await this.#ensureSchema();
     const row = await this.db.prepare(`with refs as (
-      select source_id, coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+      select source_id, json_extract(record_json, '$.sourceId') as json_source_id,
+        coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
         from source_snapshots
       union all
-      select source_id, coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+      select source_id, json_extract(run_json, '$.sourceId') as json_source_id,
+        coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
         from runs where type = 'source_sync'
-    ) select blocker from (
-      select 'outside_scope' as blocker, 0 as priority from refs
-        where source_id = ? and (ref is null or substr(ref, 1, length(?)) <> ?)
-      union all
-      select 'foreign_reference' as blocker, 1 as priority from refs
-        where source_id is not ? and substr(ref, 1, length(?)) = ?
-    ) order by priority limit 1`)
-      .bind(sourceId, prefix, prefix, sourceId, prefix, prefix)
+    ) select 'foreign_reference' as blocker from refs
+      where (refs.source_id is not ? or refs.json_source_id is not ?)
+        and substr(refs.ref, 1, length(?)) = ?
+        and not coalesce((
+          refs.source_id is not null and refs.source_id = refs.json_source_id
+          and (
+            exists (select 1 from sources s where s.id = refs.source_id
+              and s.status = 'disabled' and json_extract(s.record_json, '$.status') = 'disabled'
+              and json_extract(s.record_json, '$.id') = s.id
+              and json_extract(s.record_json, '$.workspaceId') = s.space_id
+              and json_extract(s.record_json, '$.autoSync') = 0
+              and nullif(json_extract(s.record_json, '$.retiringAt'), '') is not null
+              and (nullif(json_extract(s.record_json, '$.ownerCapsuleId'), '') is null
+                or exists (select 1 from capsules owner
+                  where owner.id = json_extract(s.record_json, '$.ownerCapsuleId')
+                    and owner.space_id = s.space_id and owner.source_id = s.id
+                    and owner.status = 'destroyed'
+                    and json_extract(owner.record_json, '$.id') = owner.id
+                    and json_extract(owner.record_json, '$.workspaceId') = owner.space_id
+                    and json_extract(owner.record_json, '$.sourceId') = owner.source_id
+                    and json_extract(owner.record_json, '$.status') = 'destroyed')))
+            or (not exists (select 1 from sources s where s.id = refs.source_id)
+              and exists (select 1 from audit_events a where a.action = 'source.retired'
+                and a.target_type = 'source' and a.target_id = refs.source_id))
+          )
+          and not exists (select 1 from capsules c
+            where (c.source_id = refs.source_id
+              or json_extract(c.record_json, '$.sourceId') = refs.source_id
+              or c.id = (select json_extract(s.record_json, '$.ownerCapsuleId')
+                from sources s where s.id = refs.source_id))
+              and not coalesce((c.status = 'destroyed' and json_extract(c.record_json, '$.status') = 'destroyed'
+                and json_extract(c.record_json, '$.id') = c.id
+                and json_extract(c.record_json, '$.workspaceId') = c.space_id
+                and json_extract(c.record_json, '$.sourceId') = refs.source_id
+                and c.source_id = refs.source_id), 0))
+          and not exists (select 1 from runs r
+            where (r.status in ('queued', 'running')
+              or json_extract(r.run_json, '$.status') in ('queued', 'running'))
+              and (r.source_id = refs.source_id
+                or json_extract(r.run_json, '$.sourceId') = refs.source_id
+                or r.installation_id in (select c.id from capsules c
+                  where c.source_id = refs.source_id
+                    or json_extract(c.record_json, '$.sourceId') = refs.source_id)
+                or json_extract(r.run_json, '$.capsuleId') in (select c.id from capsules c
+                  where c.source_id = refs.source_id
+                    or json_extract(c.record_json, '$.sourceId') = refs.source_id)))
+        ), 0) limit 1`)
+      .bind(sourceId, sourceId, prefix, prefix)
       .first<{ blocker: "outside_scope" | "foreign_reference" }>();
     return row?.blocker;
   }
 
-  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number, prefix: string): Promise<{
     readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
     readonly snapshotCount: number; readonly sourceSyncRunCount: number;
   }> {
@@ -9960,8 +9999,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       union all
       select coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
         from runs where type = 'source_sync' and source_id = ?
-    ) where ref is not null and (? is null or ref > ?) order by ref limit ?`)
-      .bind(sourceId, sourceId, after ?? null, after ?? null, bounded + 1)
+    ) where ref is not null and substr(ref, 1, length(?)) = ?
+      and (? is null or ref > ?) order by ref limit ?`)
+      .bind(sourceId, sourceId, prefix, prefix, after ?? null, after ?? null, bounded + 1)
       .all<{ ref: string }>();
     const rows = refs.results ?? [];
     return { archiveRefs: rows.slice(0, bounded).map((row) => row.ref),
