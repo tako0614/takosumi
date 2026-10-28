@@ -6910,7 +6910,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           normalized.ownershipEpoch ?? 0,normalized.managementState ?? "active",normalized.managementEpoch ?? 0,
           normalized.storageRoot ?? `apps/${normalized.id}`,normalized.id).run();
     }
-    return normalized;
+    return (await this.#withCapsuleOwnership(normalized)) ?? normalized;
   }
 
   async createCapsuleInitialAuthority(
