@@ -298,25 +298,6 @@ interface SourceArchiveRestore {
   readonly digest: string;
 }
 
-/**
- * Optional dispatch payload field locating a producer Capsule's encrypted
- * state in R2_STATE for a `remote_state` dependency (spec §15). The DO fetches
- * the ciphertext at the opaque `stateRef`, decrypts + verifies the recorded plaintext
- * `digest` (same StateArtifactCrypto path as its own state restore), and streams
- * the plaintext to the container which writes it READ-ONLY to
- * `/work/deps/<name>.tfstate` before init/plan/apply. The container never sees
- * the passphrase or the ciphertext. Mirrors the contract `DispatchDepState`;
- * kept local so the DO does not pull a contract import into the worker bundle.
- */
-interface DepState {
-  readonly name: string;
-  readonly capsuleId: string;
-  readonly environment: string;
-  readonly generation: number;
-  readonly stateRef: string;
-  readonly digest: string;
-}
-
 interface RestoreState {
   readonly stateVersionId: string;
   readonly workspaceId: string;
@@ -2327,6 +2308,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const inputRestoreReadinessStartedAt = monotonicNow();
     const bodyText = await request.text();
     const envelope = parseRunEnvelope(bodyText);
+    if ((envelope.action === "plan" || envelope.action === "apply" || envelope.action === "destroy") &&
+      hasRetiredDependencyInputs(envelope.request)) {
+      return Response.json({
+        status: "failed", errorCode: "dependency_retired", retryable: false,
+        phase: envelope.action,
+      }, { status: 409 });
+    }
     const releaseActivation = envelope.action === "release" ? recordField(envelope.request, "activation") : undefined;
     const releaseParent = releaseActivation ? Object.freeze({
       applyRunId: stringField(releaseActivation, "applyRunId") ?? "",
@@ -2372,7 +2360,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       throw new Error("stateAdoption requires a Resource stateScope");
     }
     const sourceArchive = parseSourceArchiveRestore(envelope.request);
-    const depStates = parseDepStates(envelope.request);
     const credentialRefreshOwner = envelope.action === "plan"
       ? { kind: "plan" as const, id: runId }
       : applyRunId
@@ -2607,11 +2594,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           url,
           request.signal,
         );
-      }
-      // remote_state dependencies (spec §15): fetch + decrypt each producer
-      // state and stream it to the container BEFORE init/plan/apply.
-      if (depStates.length > 0) {
-        await this.#restoreDepStates(runId, depStates, url);
       }
       if (envelope.action === "apply" || envelope.action === "destroy") {
         const savedPlanRunId = privateFileRefreshClaim
@@ -3202,61 +3184,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
     } finally {
       requestSignal.removeEventListener("abort", abortPreparation);
-    }
-  }
-
-  // remote_state dependency restore (spec §15): for each producer state descriptor
-  // fetch the encrypted object from R2_STATE, decrypt + verify its recorded
-  // plaintext digest (tamper check, same path as #restoreStateFromR2State), and
-  // stream the plaintext to the container's dep-state restore route. The DO
-  // path-jails the stateRef to the producer env's state prefix (defense against
-  // a crafted descriptor pointing at another tenant's object) and the container
-  // writes each as /work/deps/<name>.tfstate read-only. The container never sees
-  // the passphrase or the ciphertext.
-  async #restoreDepStates(
-    runId: string,
-    depStates: readonly DepState[],
-    baseUrl: URL,
-  ): Promise<void> {
-    const bucket = this.#r2State();
-    for (const depState of depStates) {
-      // The object key MUST stay inside the producer env's state prefix. A
-      // descriptor pointing elsewhere is a crafted cross-tenant read.
-      assertDepStateRef(depState);
-      const object = await bucket.get(depState.stateRef);
-      if (!object) {
-        throw new Error(
-          `dependency state object not found: ${depState.stateRef}`,
-        );
-      }
-      const ciphertext = await readBoundedR2ObjectBytes(
-        object,
-        "state",
-        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
-      );
-      const plaintext = await this.#stateCrypto().open(
-        ciphertext,
-        depState.digest,
-      );
-      assertArtifactSize(
-        "state",
-        this.#artifactLimits.state,
-        plaintext.byteLength,
-      );
-      await this.#ensureContainerReady(baseUrl);
-      const response = await this.#containerFetch(
-        new Request(depStateRestoreUrl(baseUrl, runId, depState.name), {
-          method: "PUT",
-          headers: { "content-type": STATE_ARTIFACT_CONTENT_TYPE },
-          body: toArrayBuffer(plaintext),
-        }),
-      );
-      if (!response.ok) {
-        throw new Error(
-          `container dependency state restore failed for ${depState.name}: ` +
-            `${response.status}`,
-        );
-      }
     }
   }
 
@@ -5572,19 +5499,6 @@ function sourceArchiveRestoreUrl(baseUrl: URL, runId: string): string {
   return url.toString();
 }
 
-// remote_state dependency restore route: the DO PUTs the decrypted producer
-// state and the runner server writes it read-only to /work/deps/<name>.tfstate.
-// The dep name is path-segment encoded so a single URL path segment carries it
-// (the runner re-validates it is a safe filename).
-function depStateRestoreUrl(baseUrl: URL, runId: string, name: string): string {
-  const url = new URL(baseUrl);
-  url.pathname = `/runs/${encodeURIComponent(runId)}/deps/${encodeURIComponent(
-    name,
-  )}/restore`;
-  url.search = "";
-  return url.toString();
-}
-
 function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
   const url = new URL(baseUrl);
   url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tfplan-json`;
@@ -6561,44 +6475,6 @@ function parseSourceArchiveRestore(
   return { ref, digest };
 }
 
-// Parse the optional remote_state dependency descriptors off the dispatch
-// request. Each entry must carry a name, stateRef, digest, environment,
-// capsuleId, and a numeric generation; a malformed entry fails the run closed
-// (a remote_state
-// edge cannot be silently dropped). Returns [] when the dispatch carries no
-// depStates.
-function parseDepStates(requestPayload: unknown): readonly DepState[] {
-  if (!isRecord(requestPayload)) return [];
-  const raw = requestPayload.depStates;
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) {
-    throw new Error("depStates must be an array");
-  }
-  return raw.map((entry) => {
-    if (!isRecord(entry)) throw new Error("depStates entry must be an object");
-    const name = stringField(entry, "name");
-    const capsuleId = stringField(entry, "capsuleId");
-    const environment = stringField(entry, "environment");
-    const stateRef = stringField(entry, "stateRef");
-    const digest = stringField(entry, "digest");
-    const generation = entry.generation;
-    if (
-      !name ||
-      !capsuleId ||
-      !environment ||
-      !stateRef ||
-      !digest ||
-      typeof generation !== "number"
-    ) {
-      throw new Error(
-        "depStates entry requires name, capsuleId, environment, " +
-          "stateRef, digest, and a numeric generation",
-      );
-    }
-    return { name, capsuleId, environment, generation, stateRef, digest };
-  });
-}
-
 function parseRestoreState(requestPayload: unknown): RestoreState | undefined {
   const restoreState = recordField(requestPayload, "restoreState");
   if (!restoreState) return undefined;
@@ -6649,33 +6525,6 @@ function assertRestoreStateRef(scope: StateScope, key: string): void {
   }
   if (!key.startsWith(`${stateScopePrefix(scope)}/`)) {
     throw new Error(`restore state object key escapes target prefix: ${key}`);
-  }
-}
-
-// Re-assert a dependency stateRef is a traversal-free R2_STATE key inside
-// the producer environment's state prefix (defense in depth against a crafted
-// descriptor pointing at another tenant's object). It must name the
-// descriptor's own Capsule and environment.
-function assertDepStateRef(depState: DepState): void {
-  const key = depState.stateRef;
-  if (
-    key.length === 0 ||
-    key.startsWith("/") ||
-    key.includes("..") ||
-    key.includes("\0") ||
-    key.includes("\\") ||
-    !key.startsWith("workspaces/") ||
-    !key.endsWith(".tfstate.enc")
-  ) {
-    throw new Error(`unsafe dependency state object key: ${key}`);
-  }
-  const expectedSuffix = `/capsules/${safeKeySegment(
-    depState.capsuleId,
-  )}/environments/${safeKeySegment(depState.environment)}/state-versions/`;
-  if (!key.includes(expectedSuffix)) {
-    throw new Error(
-      `dependency state object key escapes producer prefix: ${key}`,
-    );
   }
 }
 
@@ -7005,6 +6854,14 @@ function parseRunEnvelope(bodyText: string): {
     action: stringField(body, "action"),
     request: body.request,
   };
+}
+
+/** Reject retained dispatch fields even when empty, null, or malformed. */
+function hasRetiredDependencyInputs(requestPayload: unknown): boolean {
+  if (!isRecord(requestPayload)) return false;
+  if (Object.prototype.hasOwnProperty.call(requestPayload, "depStates")) return true;
+  const planRun = recordField(requestPayload, "planRun");
+  return !!planRun && Object.prototype.hasOwnProperty.call(planRun, "dependencySnapshotId");
 }
 
 function isRunnerMutationAction(

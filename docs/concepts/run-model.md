@@ -6,8 +6,10 @@ Run は Takosumi における実行の記録単位です。変更の確認（pla
 ## Plan と Apply は別の Run です
 
 `plan` は Plan Run を作り、`apply` は確認した Plan Run に `planRunId` で結びついた
-別の Apply Run を作ります。デプロイ時には plan の digest、source snapshot、依存関係の snapshot、
-state generation などを再検証するため、確認した計画からずれません。
+別の Apply Run を作ります。デプロイ時には plan の digest、source snapshot、compatibility evidence、state generation などを
+再検証するため、確認した計画からずれません。旧 Dependency snapshot を持つ Plan は拒否されます。
+アプリ独自の入力に移行し、別途レビューしたデータメンテナンスで旧 Dependency edge を処理してから、
+新しい plan を作ってください。[アプリごとの入力](./state-and-outputs.md#アプリごとに入力を管理する)も参照してください。
 
 **確認した計画と、デプロイされる内容が食い違わない**ように、Apply Run はこの plan に固定されます。
 runner は通常の Plan、破棄計画、保存済み Plan の Apply の前に、state にない resource を

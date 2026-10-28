@@ -2014,7 +2014,6 @@ test("a v2 preparation excludes every same-run workspace writer and unrelated ac
     "artifacts/tfstate",
     "artifacts/tfplan",
     "provider-lockfile/restore",
-    "deps/producer/restore",
   ]) {
     const stale = await handleRunnerRequestV2(new Request(`http://runner/runs/${runId}/${suffix}`, {
       method: "PUT",
@@ -2265,7 +2264,6 @@ test.each([
   "artifacts/tfstate",
   "artifacts/tfplan",
   "provider-lockfile/restore",
-  "deps/producer/restore",
 ])("local HTTP preparation transfer waits for the whole %s writer", async (suffix) => {
   const runId = `apply_stream_${crypto.randomUUID().replace(/-/g, "")}`;
   const request = { applyRun: { id: runId }, planRun: { id: "plan_stream" } };

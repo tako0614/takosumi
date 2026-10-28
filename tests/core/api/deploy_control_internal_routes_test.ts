@@ -10,9 +10,6 @@ import {
 import { sourceSyncRequiredError } from "../../../core/domains/deploy-control/errors.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
-import { OutputSharesService } from "../../../core/domains/output-shares/mod.ts";
-import type { Output as Output } from "takosumi-contract/outputs";
-import type { Workspace } from "takosumi-contract/workspaces";
 
 class ForeignControllerError extends Error {
   readonly code = "failed_precondition";
@@ -390,116 +387,30 @@ test("deploy_control_internal_routes — runner profile list is scoped", async (
   ).toEqual(["opentofu-default"]);
 });
 
-// --- OutputShares scoped-principal permission tests (§18) ---------------------
-
-const SHARE_TS = "2026-06-06T00:00:00.000Z";
-
-/**
- * Wires the internal routes over a store seeded with a producer Capsule in
- * `ws_allowed`, a consumer Workspace `ws_consume1`, and a latest
- * Output projecting `bucket_name`. The bearer `scoped-token` maps to a
- * principal scoped to `ws_allowed` only.
- */
-async function outputShareApp() {
-  const store = new InMemoryOpenTofuControlStore();
-  await seedCapsuleModel(store, {
-    workspaceId: "ws_allowed",
-    capsuleId: "cap_producer1",
-    name: "producer",
-  });
-  const consumer: Workspace = {
-    id: "ws_consume1",
-    handle: "consumer",
-    displayName: "Consumer",
-    type: "personal",
-    ownerUserId: "user_consumer",
-    createdAt: SHARE_TS,
-    updatedAt: SHARE_TS,
-  };
-  await store.putWorkspace(consumer);
-  const snapshot: Output = {
-    id: "out_scoped01",
-    workspaceId: "ws_allowed",
-    capsuleId: "cap_producer1",
-    stateGeneration: 1,
-    rawArtifactRef: "k",
-    publicOutputs: {},
-    workspaceOutputs: { bucket_name: "my-bucket" },
-    outputDigest: "sha256:o",
-    createdAt: SHARE_TS,
-  };
-  await store.putOutput(snapshot);
+test("retired Dependency and OutputShare routes stay unmounted", async () => {
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
       mountInternalLedgerRoutes: true,
-      controller: new OpenTofuController({ store, now: () => 1 }),
-      outputSharesService: new OutputSharesService({
-        store,
-        now: () => SHARE_TS,
-        newId: () => "oshare_scoped01",
-      }),
-      authorizeDeployControlBearer: ({ token }) =>
-        token === "scoped-token"
-          ? {
-              actor: "acct_123",
-              workspaceIds: ["ws_allowed"],
-              operations: ["create"],
-              runnerProfileIds: ["opentofu-default"],
-            }
-          : undefined,
+      controller: new OpenTofuController(),
+      getDeployControlToken: () => "operator-token",
     },
     requestCorrelation: false,
   });
-  return app;
-}
-
-test("output-shares create — scoped bearer allowed on its source Workspace (§18)", async () => {
-  const app = await outputShareApp();
-  const res = await app.request("/internal/v1/output-shares", {
-    method: "POST",
-    headers: {
-      authorization: "Bearer scoped-token",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      fromWorkspaceId: "ws_allowed",
-      toWorkspaceId: "ws_consume1",
-      producerCapsuleId: "cap_producer1",
-      outputs: [{ name: "bucket_name" }],
-    }),
-  });
-  expect(res.status).toEqual(201);
-  expect((await res.json()).share.status).toEqual("pending");
-});
-
-test("output-shares create — scoped bearer denied on a foreign source Workspace (§18)", async () => {
-  const app = await outputShareApp();
-  const res = await app.request("/internal/v1/output-shares", {
-    method: "POST",
-    headers: {
-      authorization: "Bearer scoped-token",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      fromWorkspaceId: "ws_denied",
-      toWorkspaceId: "ws_consume1",
-      producerCapsuleId: "cap_producer1",
-      outputs: [{ name: "bucket_name" }],
-    }),
-  });
-  expect(res.status).toEqual(403);
-  expect((await res.json()).error.code).toEqual("permission_denied");
-});
-
-test("output-shares list — scoped bearer denied on a foreign workspaceId (§18)", async () => {
-  const app = await outputShareApp();
-  // ws_denied01 is a valid id shape the scoped principal is NOT allowed.
-  const res = await app.request(
-    "/internal/v1/output-shares?workspaceId=ws_denied01",
-    {
-      headers: { authorization: "Bearer scoped-token" },
-    },
-  );
-  expect(res.status).toEqual(403);
+  const routes = [
+    ["GET", "/capsules/cap_consumer/dependencies"],
+    ["POST", "/capsules/cap_consumer/dependencies"],
+    ["DELETE", "/dependencies/dep_old"],
+    ["GET", "/output-shares?workspaceId=ws_owner"],
+    ["POST", "/output-shares"],
+    ["POST", "/output-shares/share_old/approve"],
+    ["POST", "/output-shares/share_old/revoke"],
+  ];
+  for (const [method, path] of routes) {
+    const response = await app.request(`/internal/v1${path}`, {
+      method,
+      headers: { authorization: "Bearer operator-token" },
+    });
+    expect(response.status).toBe(404);
+  }
 });

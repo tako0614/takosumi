@@ -222,7 +222,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 96
+`accounts/service/src/control-route-inventory.ts`; it currently contains 89
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -245,7 +245,7 @@ lightly edited for readers.
 | POST | `/api/v1/workspaces/{workspaceId}/members` | Add a Workspace member |
 | PATCH | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Change a Workspace member role |
 | DELETE | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Remove a Workspace member |
-| GET | `/api/v1/workspaces/{workspaceId}/graph` | Read the Workspace Capsule dependency graph |
+| GET | `/api/v1/workspaces/{workspaceId}/graph` | Read the Workspace Capsule inventory; the retired dependency edge list is empty |
 | GET | `/api/v1/workspaces/{workspaceId}/ui-surfaces` | List authorized Workspace UI surface Interfaces |
 | GET | `/api/v1/workspaces/{workspaceId}/activity` | List Workspace Activity |
 | GET | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | List Interface materialization failures, which contain no secret values |
@@ -283,9 +283,6 @@ Add, role change, and remove responses carry neither field.
 | GET | `/api/v1/capsules/{capsuleId}/current-resource-inventory` | Read the Capsule's current recorded OpenTofu resource inventory |
 | GET | `/api/v1/capsules/{capsuleId}/usage-summary` | Read the Capsule's showback usage aggregate |
 | GET | `/api/v1/capsules/{capsuleId}/state-versions` | List Capsule StateVersions |
-| GET | `/api/v1/capsules/{capsuleId}/dependencies` | List Capsule Dependencies |
-| POST | `/api/v1/capsules/{capsuleId}/dependencies` | Create a Capsule Dependency |
-| DELETE | `/api/v1/dependencies/{dependencyId}` | Delete a Dependency |
 | GET | `/api/v1/capsules/{capsuleId}/provider-bindings` | Read Capsule ProviderBinding selections |
 | GET | `/api/v1/workspaces/{workspaceId}/current-state-versions` | List current StateVersions for Workspace Capsules |
 | GET | `/api/v1/capsule-configs` | List Capsule creation configs visible to the caller |
@@ -461,7 +458,7 @@ update carries `origin` (`{ kind: "revision", ref }`,
 `{ kind: "update" }`), so a client retrying a failed change plans the same
 change again instead of the Source's default ref.
 
-### Credentials and Output sharing
+### Credentials
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -473,10 +470,6 @@ change again instead of the Source's default ref.
 | GET | `/api/v1/connections/oauth/{helperId}/callback` | Complete an installed credential OAuth helper |
 | GET | `/api/v1/provider-connections` | List ProviderConnections visible to a Workspace |
 | GET | `/api/v1/credential-recipes` | List optional guided Credential Recipes |
-| GET | `/api/v1/output-shares` | List OutputShares |
-| POST | `/api/v1/output-shares` | Create an OutputShare |
-| POST | `/api/v1/output-shares/{shareId}/approve` | Approve an OutputShare |
-| POST | `/api/v1/output-shares/{shareId}/revoke` | Revoke an OutputShare |
 
 ### Dashboard projections
 
@@ -751,8 +744,7 @@ and each ref/path lane adopted by a current Capsule StateVersion. The resolved
 commit is stored as a `SourceSnapshot`. An active Capsule becomes `stale`
 when the new snapshot is on its adopted ref/path lane and differs from its
 currently applied snapshot. Another lane never stales it or rewrites the Source
-default. An active Capsule also becomes `stale` when an Output of a Capsule it depends on
-changes ([Passing values to another Capsule](../concepts/state-and-outputs.md#passing-values-to-another-capsule)). Ordinary update plans also select the latest snapshot on the adopted
+default. Ordinary update plans also select the latest snapshot on the adopted
 lane. From there, the existing Workspace update /
 RunGroup flow creates a reviewable plan, and apply follows the normal Run
 approval path. Takosumi does not choose or fetch application artifacts outside

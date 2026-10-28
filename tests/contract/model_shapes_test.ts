@@ -26,13 +26,9 @@ import type {
   Capsule,
   CapsuleCompatibilityReport,
 } from "../../contract/capsules.ts";
-import type {
-  Dependency,
-  DependencySnapshot,
-} from "../../contract/dependencies.ts";
 import type { StateVersion } from "../../contract/state-versions.ts";
 import type { InstallConfig } from "../../contract/install-configs.ts";
-import type { OutputShare, Output } from "../../contract/outputs.ts";
+import type { Output } from "../../contract/outputs.ts";
 import type { Run, RunGroup } from "../../contract/runs.ts";
 import type {
   CredentialMintEvent,
@@ -322,55 +318,6 @@ test("ProviderConnection expiry shape", () => {
   expect(connection.expiresAt).toBe("2026-06-08T00:00:00Z");
 });
 
-test("Dependency + DependencySnapshot shape", () => {
-  const dependency: Dependency = {
-    id: "dep_1",
-    workspaceId: "space_1",
-    producerCapsuleId: "inst_core",
-    consumerCapsuleId: "inst_talk",
-    mode: "variable_injection",
-    outputs: {
-      base_domain: {
-        from: "base_domain",
-        to: "base_domain",
-        required: true,
-        type: "hostname",
-      },
-      member_issuer: {
-        from: "member_issuer",
-        to: "member_issuer",
-        required: true,
-        type: "url",
-      },
-    },
-    visibility: "space",
-    createdAt: "2026-06-06T00:00:00Z",
-  };
-  const snapshot: DependencySnapshot = {
-    id: "depsnap_1",
-    runId: "run_1",
-    dependencies: [
-      {
-        dependencyId: dependency.id,
-        producerCapsuleId: dependency.producerCapsuleId,
-        producerStateGeneration: 3,
-        producerStateVersionId: "state_3",
-        producerStateRef:
-          "workspaces/space_1/capsules/inst_core/environments/production/state-versions/00000003.tfstate.enc",
-        producerStateDigest: "sha256:state",
-        producerOutputId: "out_3",
-        producerOutputDigest: "sha256:abc",
-        valuesDigest: "sha256:def",
-        values: { base_domain: "shota.example.com" },
-      },
-    ],
-    mode: "strict",
-    createdAt: "2026-06-06T00:00:00Z",
-  };
-  expect(snapshot.mode).toBe("strict");
-  expect(snapshot.dependencies[0]?.producerStateGeneration).toBe(3);
-});
-
 test("Output projects raw -> Workspace/public lanes", () => {
   const snapshot: Output = {
     id: "out_1",
@@ -385,19 +332,6 @@ test("Output projects raw -> Workspace/public lanes", () => {
     createdAt: "2026-06-06T00:00:00Z",
   };
   expect(snapshot.rawArtifactRef.endsWith(".enc")).toBe(true);
-});
-
-test("OutputShare lifecycle states", () => {
-  const share: OutputShare = {
-    id: "share_1",
-    fromWorkspaceId: "space_company",
-    toWorkspaceId: "space_1",
-    producerCapsuleId: "inst_domain",
-    outputs: [{ name: "domain", sensitive: false }],
-    status: "pending",
-    createdAt: "2026-06-06T00:00:00Z",
-  };
-  expect(share.status).toBe("pending");
 });
 
 test("single Run table covers all run kinds", () => {
@@ -458,6 +392,10 @@ test("single Run table covers all run kinds", () => {
   expect(run.type).toBe("plan");
   expect(run.planResources?.[0]?.actions).toEqual(["delete", "create"]);
   expect(run.planResources?.[0]?.scope?.facts.account_id).toBe("acct_public");
+  // Historical Run rows retain the immutable reference even though the
+  // Dependency contract and lifecycle have been retired.
+  const roundTrippedRun = JSON.parse(JSON.stringify(run)) as Run;
+  expect(roundTrippedRun.dependencySnapshotId).toBe("depsnap_1");
   expect(run.providerResolutions?.[0]?.status).toBe(
     "resolved_provider_connection",
   );

@@ -20,9 +20,8 @@ export default function AppPage() {
   return (
     <Page title={t("app.pageTitle")}>
       {(session) => (
-        // Keyed by app: following a link to another app (linked apps, the
-        // uninstall impact list) mounts a fresh page, so no review, notice
-        // or read of the previous app can show under the next one.
+        // Keyed by app so no review, notice or read of the previous app can
+        // show under the next one.
         <Show when={params.id ?? ""} keyed>
           {(capsuleId) => (
             <AppManagePage

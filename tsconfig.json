@@ -56,7 +56,6 @@
         "./contract/provider-resolution.ts"
       ],
       "takosumi-contract/connections": ["./contract/connections.ts"],
-      "takosumi-contract/dependencies": ["./contract/dependencies.ts"],
       "takosumi-contract/deploy-control-errors": [
         "./contract/deploy-control-errors.ts"
       ],

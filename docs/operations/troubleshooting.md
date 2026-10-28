@@ -14,15 +14,15 @@
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | source_sync が失敗する                  | Run `failed` + source phase の git エラー                                                                  | Source URL / ref と auth Connection (token / SSH key) の status を確認                                                                                                      |
 | plan が policy で止まる                 | Run `policyStatus: deny` / `warn`                                                                          | plan JSON の policy 評価結果 (provider / resource allowlist / scope / secret-backed provider policy / egress) を確認                                                        |
-| apply が plan 検証で拒否される          | plan digest / source snapshot / compatibility report / dependency snapshot / state generation の検証エラー | re-plan して新しい saved plan を作る (apply は saved plan のみ)                                                                                                             |
-| 旧 saved plan が preparation 検証で拒否される | PlanRun に `executionInputsDigest` がない                                                                    | private inputs を推測・backfillせず、現在の Source / dependency / ProviderBinding から新しい Plan を作る                                                                    |
+| apply が plan 検証で拒否される          | plan digest / source snapshot / compatibility report / state generation の検証エラー | re-plan して新しい saved plan を作る (apply は saved plan のみ)                                                                                                             |
+| 旧 saved plan が preparation 検証で拒否される | PlanRun に `executionInputsDigest` がない                                                                    | private inputs を推測・backfillせず、現在の Source / ProviderBinding から新しい Plan を作る                                                                    |
+| Plan が `dependency_retired` で拒否される | Capsule に旧 Dependency edge が残っている、または Plan が旧 DependencySnapshot を固定している | アプリ独自の明示的な入力へ移行し、別途レビューしたデータメンテナンスで旧 edge を処理してから新しい Plan を作る |
 | 上限際の旧 saved plan が apply 前に拒否される | Apply が provider 実行前に失敗する (runner DO の応答は `artifact_size_limit_exceeded`)。修正前の PlanRun は `planArtifact.sizeBytes` に暗号文長を記録しており、平文が plan 上限に近い (v2 暗号化形式では差が 33 byte 以内、それより古い base64 形式ではさらに広い) | 新しい Plan を作る。旧 PlanRun の暗号文長は、認証済み object の長さと完全一致するときだけ受け入れる。読み込み前の検査は平文の上限のまま広げない |
 | plan が compatibility report で止まる   | `compatibility_report_module_path_mismatch`                                                                | report は分析した module path の証跡でしかない。InstallConfig の modulePath で compatibility check を取り直す                                                               |
 | approval 待ちで進まない                 | Run `waiting_approval`                                                                                     | approver に escalation。 destroy は destroy_plan → approval → destroy_apply の 2 段                                                                                         |
 | 同じ Capsule の run が進まない          | lease 取得待ち / Run `queued` のまま                                                                       | configured lease adapter の保持 run を確認、expired なら fenced takeover を待つ                                                                                             |
 | provider credential が拒否される        | plan/apply phase の provider エラー                                                                        | Connection を test、 revoked / expired なら rotate して再 mint                                                                                                              |
 | unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | declared-env CredentialRecipe、ProviderConnection status、runner profile provider allowlist、egress policy を確認                                                           |
-| producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                                                                                     |
 | runner が起動しない                     | dispatch timeout / runner infrastructure error                                                             | selected RunnerProfile / executor adapter / pool capacity を確認し、queue 使用時は DLQ を確認                                                                               |
 | install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。Run-scoped Cloudflare container は完了後に破棄されるため、keepalive を cold-start 対策にしない |
 | Cloudflare で Plan / Apply が約 13 分で止まる | Plan は failure code `run_deadline_exceeded`。Apply / Destroy は元の failure code に加えて warning の diagnostic `run_deadline_exceeded`、provider 実行後なら `providerExecutionFailure` 付きで部分 StateVersion が残る | 下記「Cloudflare composition の Run 実行時間の上限」を参照。上限は延ばせないので、遅い provider 側を直してから re-plan / apply、または destroy する |
@@ -36,13 +36,11 @@
    渡る credential が異なる (source → git のみ、 plan/apply →
    provider のみ) ので、 credential 系エラーは phase で原因が絞れる。
 3. **検証エラーは再 plan**: apply は saved plan のみを実行し、 plan digest /
-   source snapshot / dependency snapshot / state generation を検証する。 検証
+   source snapshot / compatibility evidence / state generation を検証する。 検証
    エラーは状態が進んだサイン。 ロールバック的な操作も retained
    StateVersion / source identity / Output evidence から Capsule rollback plan
    を作り、通常の Run として承認・適用し直す。
-4. **依存起因は graph で見る**: producer の outputs が変わると downstream は
-   stale になる。 単発で直すより Workspace update として DAG 順に流す。
-5. **遅さは phase timings で見る**: `source_clone` が長いなら Git/ref/path と
+4. **遅さは phase timings で見る**: `source_clone` が長いなら Git/ref/path と
    SourceSnapshot reuse、`tofu_init` が長いなら provider mirror/cache、
    `tofu_apply` が長いなら provider 側 API / resource 作成待ちを確認する。
    reviewed plan artifact は durable storage から Apply / Destroy の別 Run

@@ -255,8 +255,8 @@ export interface PlanRun {
   readonly runnerProfileId: string;
   readonly variablesDigest: string;
   /**
-   * Private digest of the exact PlanRunInputs plus optional
-   * DependencySnapshot committed before this Run became queue-visible. Current
+   * Private digest of the exact PlanRunInputs committed before this Run became
+   * queue-visible. Current
    * Plan writers always set it; absence is reserved for historical rows, which
    * are not safe to redispatch.
    */
@@ -384,14 +384,8 @@ export interface PlanRun {
    */
   readonly capsuleContext?: PlanRunCapsuleContext;
   /**
-   * Pinned DependencySnapshot id for a Capsule plan whose
-   * consumer Capsule declares Dependencies. Set at plan creation by the
-   * Capsule plan path; the apply consumer re-reads the snapshot to verify
-   * the producer state generations / pinned values before applying (invariant 9)
-   * and the successful Run carries it forward. Absent for plans whose
-   * consumer has no dependencies (or for the raw `/internal/v1/plan-runs`
-   * path). Projected
-   * onto the public Run `dependencySnapshotId`.
+   * Read-only historical DependencySnapshot reference. Current writers never set
+   * it; an unapplied plan carrying it is refused and must be re-planned.
    */
   readonly dependencySnapshotId?: string;
   /**
@@ -695,34 +689,6 @@ export interface DispatchStateAdoption {
  */
 export interface DispatchSourceArchive {
   readonly ref: string;
-  readonly digest: string;
-}
-
-/**
- * Remote-state dependency descriptor threaded onto a plan/apply run dispatch
- * using the `remote_state` Dependency mode. For each `remote_state` edge the
- * controller emits the StateVersion pinned in the PlanRun's DependencySnapshot;
- * the OpenTofu runner DO fetches + decrypts that producer state (the same
- * StateArtifactCrypto path as its own state restore), verifies the recorded
- * plaintext `digest`, and streams the bytes to the container which writes them
- * read-only to `/work/deps/<name>.tfstate` BEFORE init/plan/apply. `name` is the
- * producer Capsule name the consumer references via `terraform_remote_state`
- * (file backend over `/work/deps/<name>.tfstate`). The encrypted state bytes live
- * behind the configured state adapter; the runner never exposes the passphrase or the
- * ciphertext to the container. Absent for runs with no `remote_state` edges.
- */
-export interface DispatchDepState {
-  /** Producer Capsule name (the `/work/deps/<name>.tfstate` filename). */
-  readonly name: string;
-  /** Producer Capsule id (audit / cross-reference only). */
-  readonly capsuleId?: string;
-  /** Producer environment (locates the state-store prefix). */
-  readonly environment: string;
-  /** Producer pinned StateVersion generation (the restored state generation). */
-  readonly generation: number;
-  /** Opaque reference for the encrypted producer state at `generation`. */
-  readonly stateRef: string;
-  /** Recorded plaintext digest of the producer state (DO verifies on decrypt). */
   readonly digest: string;
 }
 

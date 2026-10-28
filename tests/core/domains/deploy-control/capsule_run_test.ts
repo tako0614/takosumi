@@ -8996,7 +8996,6 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
 
 test.each([
   ["success", "runner", "intact"],
-  ["success", "runner", "sealed"],
   ["exhausted", "runner", "intact"],
   ["dlq", "runner", "intact"],
   ["dlq", "runner", "tampered"],
@@ -9034,17 +9033,8 @@ test.each([
     ]),
   });
   const rated: Array<{ runId: string; quantity: number }> = [];
-  const testSealer: NonNullable<OpenTofuControllerDependencies["dependencyValueSealer"]> = {
-    seal: (values) => Promise.resolve({
-      ciphertext: btoa(JSON.stringify(values)),
-      contentDigest: "test-sidecar",
-      names: Object.keys(values),
-    }),
-    open: (sealed) => Promise.resolve(JSON.parse(atob(sealed.ciphertext))),
-  };
   const controller = controllerWith(store, runner, {
     defaultBillingSettings: { mode: "showback" },
-    dependencyValueSealer: testSealer,
     showbackRater: {
       ratePlan: () => Promise.resolve({ ratingStatus: "rated", usdMicros: 0 }),
       rateUsage: (context) => {
@@ -9077,15 +9067,6 @@ test.each([
     planRunId: destroyPlan.id,
     expected: applyExpectedGuardFromPlanRun(destroyPlan),
   });
-  if (integrity === "sealed") {
-    const inputs = (await store.getPlanRunInputs(destroyPlan.id))!;
-    await store.putPlanRunInputs({
-      planRunId: destroyPlan.id,
-      variables: {},
-      sealed: await testSealer.seal(JSON.parse(JSON.stringify(inputs))),
-    });
-    expect((await store.getPlanRunInputs(destroyPlan.id))?.lifecycleActions).toBeUndefined();
-  }
   const usage = async () =>
     (await store.listUsageEvents(destroyApply.applyRun.workspaceId)).filter(
       (event) => event.runId === destroyApply.applyRun.id && event.kind === "runner_minute",

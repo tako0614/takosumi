@@ -37,7 +37,6 @@ describe("installed app page", () => {
       "<AppVersionSection",
       "<AppSettingsSection",
       "<AppCreatedSection",
-      "<AppLinkedSection",
       "<AppHistorySection",
       'id="danger"',
     ].map((marker) => page.indexOf(marker));
@@ -50,6 +49,12 @@ describe("installed app page", () => {
     expect(settings).toContain('id="connections"');
     expect(created).toContain('id="created"');
     expect(history).toContain('id="history"');
+  });
+
+  test("app pages do not read or render retired app links", () => {
+    for (const retired of ["getWorkspaceGraph", "<AppLinkedSection", "linkedApps", "app-linked"]) {
+      expect({ retired, found: allAppSources.includes(retired) }).toEqual({ retired, found: false });
+    }
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
@@ -202,13 +207,13 @@ describe("installed app page", () => {
     expect(attention).toContain("appUninstallBanner(app(), props.displayName)");
   });
 
-  test("uninstall is one implementation: grace period stated first, cancellable, naming affected apps", () => {
+  test("uninstall is one implementation: grace period stated first and cancellable", () => {
     expect(page).toContain("await deleteCapsule(inst.id);");
     expect(page).toContain("await cancelCapsuleUninstall(capsuleId());");
     expect(page).toContain("deleteCapsule(capsuleId(), { immediate: true })");
-    expect(page).toContain("dependencyWarning(),");
-    expect(page).toContain("dependencyCheck(),");
-    expect(page).toContain('t("app.uninstall.impactTitle")');
+    expect(page).not.toContain("dependencyWarning");
+    expect(page).not.toContain("dependencyCheck");
+    expect(page).not.toContain("usedByApps");
     // The grace days the server reports are shown before anything is scheduled.
     expect(page).toContain('t("app.uninstall.bodyGrace", { name: displayName(), days: graceDays()! })');
     expect(page).toContain('t("app.uninstall.confirmGrace", { name: displayName(), days })');

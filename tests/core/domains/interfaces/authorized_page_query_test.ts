@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { Interface, InterfaceBinding } from "takosumi-contract";
 
 import {
   createD1InterfaceStores,
@@ -129,6 +130,169 @@ async function seedAuthorizedLaunchers(
   }
 }
 
+function legacyForeignAuthorizedInterface(input: {
+  readonly id?: string;
+  readonly ownerId?: string;
+  readonly capsuleId?: string | number;
+} = {}): {
+  readonly iface: Interface;
+  readonly binding: InterfaceBinding;
+} {
+  const createdAt = "2026-07-28T12:00:00.000Z";
+  const ifaceId = input.id ?? "if_legacy_foreign";
+  const workspaceId = "workspace_page";
+  const ownerId = input.ownerId ?? "capsule_owner";
+  const capsuleId = input.capsuleId ?? "capsule_foreign";
+  const iface: Interface = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "Interface",
+    metadata: {
+      id: ifaceId,
+      workspaceId,
+      name: "legacy-foreign-launcher",
+      ownerRef: { kind: "Capsule", id: ownerId },
+      generation: 1,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    spec: {
+      type: "interface.ui.surface",
+      version: "1",
+      document: { launcher: true },
+      inputs: {
+        url: {
+          source: "capsule_output",
+          capsuleId: capsuleId as string,
+          outputName: "url",
+        },
+      },
+      access: { visibility: "workspace" },
+    },
+    status: {
+      phase: "Resolved",
+      observedGeneration: 1,
+      resolvedRevision: 1,
+      resolvedInputs: { url: "cached-foreign-output" },
+    },
+  };
+  const binding: InterfaceBinding = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "InterfaceBinding",
+    metadata: {
+      id: `ifb_${ifaceId}`,
+      workspaceId,
+      generation: 1,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    spec: {
+      interfaceId: ifaceId,
+      subjectRef: { kind: "Principal", id: "principal_page" },
+      permissions: ["ui.open"],
+      delivery: { type: "none" },
+    },
+    status: {
+      phase: "Ready",
+      observedInterfaceRevision: 1,
+    },
+  };
+  return { iface, binding };
+}
+
+async function insertLegacyForeignD1(
+  db: CountingD1,
+  input?: Parameters<typeof legacyForeignAuthorizedInterface>[0],
+): Promise<void> {
+  const { iface, binding } = legacyForeignAuthorizedInterface(input);
+  await db
+    .prepare(
+      `insert into interfaces (
+         id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+         generation, resolved_revision, record_json, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      iface.metadata.id,
+      iface.metadata.workspaceId,
+      iface.metadata.ownerRef.kind,
+      iface.metadata.ownerRef.id,
+      iface.metadata.name,
+      iface.spec.type,
+      iface.status.phase,
+      iface.metadata.generation,
+      iface.status.resolvedRevision,
+      JSON.stringify(iface),
+      iface.metadata.createdAt,
+      iface.metadata.updatedAt,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into interface_bindings (
+         id, workspace_id, interface_id, subject_kind, subject_id, phase,
+         generation, record_json, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      binding.metadata.id,
+      binding.metadata.workspaceId,
+      binding.spec.interfaceId,
+      binding.spec.subjectRef.kind,
+      binding.spec.subjectRef.id,
+      binding.status.phase,
+      binding.metadata.generation,
+      JSON.stringify(binding),
+      binding.metadata.createdAt,
+      binding.metadata.updatedAt,
+    )
+    .run();
+}
+
+async function insertLegacyForeignPostgres(
+  client: PGliteSqlClient,
+  input?: Parameters<typeof legacyForeignAuthorizedInterface>[0],
+): Promise<void> {
+  const { iface, binding } = legacyForeignAuthorizedInterface(input);
+  await client.query(
+    `insert into takosumi_interfaces (
+       id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+       generation, resolved_revision, record_json, created_at, updated_at
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)`,
+    [
+      iface.metadata.id,
+      iface.metadata.workspaceId,
+      iface.metadata.ownerRef.kind,
+      iface.metadata.ownerRef.id,
+      iface.metadata.name,
+      iface.spec.type,
+      iface.status.phase,
+      iface.metadata.generation,
+      iface.status.resolvedRevision,
+      JSON.stringify(iface),
+      iface.metadata.createdAt,
+      iface.metadata.updatedAt,
+    ],
+  );
+  await client.query(
+    `insert into takosumi_interface_bindings (
+       id, workspace_id, interface_id, subject_kind, subject_id, phase,
+       generation, record_json, created_at, updated_at
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)`,
+    [
+      binding.metadata.id,
+      binding.metadata.workspaceId,
+      binding.spec.interfaceId,
+      binding.spec.subjectRef.kind,
+      binding.spec.subjectRef.id,
+      binding.status.phase,
+      binding.metadata.generation,
+      JSON.stringify(binding),
+      binding.metadata.createdAt,
+      binding.metadata.updatedAt,
+    ],
+  );
+}
+
 test("authorized UI-surface pages stay one read and clamp 1/50/100/over-limit", async () => {
   const db = new CountingD1();
   await ensureD1OpenTofuLedgerSchema(db);
@@ -163,6 +327,12 @@ test("authorized UI-surface pages stay one read and clamp 1/50/100/over-limit", 
       delivery: { type: "none" },
     });
   }
+  await insertLegacyForeignD1(db);
+  await insertLegacyForeignD1(db, {
+    id: "if_legacy_numeric",
+    ownerId: "123",
+    capsuleId: 123,
+  });
 
   for (const [requested, expected] of [
     [1, 1],
@@ -179,6 +349,13 @@ test("authorized UI-surface pages stay one read and clamp 1/50/100/over-limit", 
         { limit: requested },
       );
     expect(page.items).toHaveLength(expected);
+    expect(page.items.map((iface) => iface.metadata.id)).not.toContain(
+      "if_legacy_foreign",
+    );
+    expect(page.items.map((iface) => iface.metadata.id)).not.toContain(
+      "if_legacy_numeric",
+    );
+    expect(JSON.stringify(page)).not.toContain("cached-foreign-output");
     expect(page.nextCursor).toBeString();
     expect(db.prepareCount).toBe(1);
     expect(db.writeCount).toBe(0);
@@ -249,6 +426,8 @@ test("D1 large-Workspace authorization uses both cursor and current-Binding inde
   expect(db.prepareCount).toBe(1);
   expect(db.writeCount).toBe(0);
   expect(db.authorizedReadSql).not.toContain("owner_kind = 'Resource'");
+  expect(db.authorizedReadSql).toContain("not exists");
+  expect(db.authorizedReadSql).toContain("capsule_output");
   const plan = await db.authorizedReadPlan();
   expect(plan).toContain("interfaces_authorized_page_idx");
   expect(plan).toContain("interface_bindings_authorized_current_idx");
@@ -256,7 +435,7 @@ test("D1 large-Workspace authorization uses both cursor and current-Binding inde
   expect(plan).not.toMatch(/\bSCAN i\b/u);
 });
 
-test("Postgres large-Workspace authorization uses both cursor and current-Binding indexes", async () => {
+test("Postgres large-Workspace authorization uses indexed Interface and Binding reads", async () => {
   const base = await PGliteSqlClient.create();
   try {
     await base.exec(
@@ -298,6 +477,12 @@ test("Postgres large-Workspace authorization uses both cursor and current-Bindin
         `${prefix}_plan_${String(++sequence).padStart(4, "0")}`,
     });
     await seedAuthorizedLaunchers(service, 101, "pg-plan");
+    await insertLegacyForeignPostgres(base);
+    await insertLegacyForeignPostgres(base, {
+      id: "if_legacy_numeric",
+      ownerId: "123",
+      capsuleId: 123,
+    });
     await base.exec(
       `analyze takosumi_interfaces;
        analyze takosumi_interface_bindings;`,
@@ -311,18 +496,27 @@ test("Postgres large-Workspace authorization uses both cursor and current-Bindin
         { limit: 100 },
       );
     expect(page.items).toHaveLength(100);
+    expect(page.items.map((iface) => iface.metadata.id)).not.toContain(
+      "if_legacy_foreign",
+    );
+    expect(page.items.map((iface) => iface.metadata.id)).not.toContain(
+      "if_legacy_numeric",
+    );
+    expect(JSON.stringify(page)).not.toContain("cached-foreign-output");
     expect(page.nextCursor).toBeString();
     if (!client.authorizedRead) {
       throw new Error("Postgres authorized Interface read was not observed");
     }
     expect(client.authorizedRead.sql).not.toContain("owner_kind = 'Resource'");
+    expect(client.authorizedRead.sql).toContain("jsonb_each");
+    expect(client.authorizedRead.sql).toContain("capsule_output");
     const explained = await base.query<{ readonly "QUERY PLAN": string }>(
       `explain (costs off) ${client.authorizedRead.sql}`,
       client.authorizedRead.parameters,
     );
     const plan = explained.rows.map((row) => row["QUERY PLAN"]).join("\n");
     expect(plan).toContain(
-      "takosumi_interface_bindings_authorized_current_idx",
+      "takosumi_interface_bindings_workspace_subject_idx",
     );
     expect(plan).toContain("takosumi_interfaces_pkey");
     expect(plan).not.toMatch(/\bSeq Scan on takosumi_interfaces\b/u);

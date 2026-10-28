@@ -5,11 +5,11 @@
  * `source_sync` rows are Source-scoped before any Capsule exists.
  * Destroy is 2-phase (`destroy_plan` -> approval -> `destroy_apply`,
  * invariant 16). Apply-kind runs only ever execute a saved plan after
- * verifying plan digest / source snapshot / dependency snapshot / state
- * generation (invariants 6-10).
+ * verifying plan digest / source snapshot / state generation (invariants 6-10).
+ * Historical dependency-pinned plans are refused and must be re-planned.
  *
- * A RunGroup orders multiple Runs across the dependency DAG (e.g. a Workspace
- * update after stale propagation); `graphJson` records the planned order.
+ * A RunGroup groups independent Capsule plans for a Workspace update or drift
+ * check. `graphJson` contains the members with no dependency edges.
  */
 
 import type {
@@ -35,7 +35,7 @@ export type RunType =
   | "state_recovery"
   // `restore` is a destructive Backup-backed state restore. It is created in
   // `waiting_approval`; approval dispatches it to write a new StateVersion
-  // generation and mark downstream consumers stale. Service-data restore is
+  // generation for the owning Capsule. Service-data restore is
   // opt-in and succeeds only when the runner acknowledges the service-data
   // artifact restored.
   | "restore";
@@ -627,6 +627,7 @@ export interface Run {
   readonly type: RunType;
   readonly status: RunStatus;
   readonly sourceSnapshotId?: string;
+  /** Read-only historical reference; current Runs never create this link. */
   readonly dependencySnapshotId?: string;
   readonly compatibilityReportId?: string;
   readonly baseStateGeneration?: number;

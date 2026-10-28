@@ -245,7 +245,7 @@ runbooks for staging, replica, authorization, and production execution.
 - the affected Connection/Run/Interface path works with the new material;
 - old material stops working after revocation;
 - state, Outputs, audit events, failure diagnostics, and logs contain no secret;
-- saved plan, source snapshot, dependency snapshot, and state generation guards
+- saved plan, source snapshot, compatibility evidence, and state generation guards
   remain intact for the next affected Run.
 
 ## Rollback

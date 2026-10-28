@@ -138,7 +138,6 @@ function baseRequest(options: {
 async function cleanup(runId: string): Promise<void> {
   const workspace = workspaceForRun(runId);
   await rm(workspace.root, { recursive: true, force: true });
-  await rm(workspace.depsDir, { recursive: true, force: true });
 }
 
 test("run-scoped sensitive inputs reach tofu without entering any artifact", async () => {

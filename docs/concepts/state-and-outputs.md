@@ -65,108 +65,26 @@ Interface
 ことがあります。Takosumi は state 全体を暗号化して保存し、権限のある Run にだけ
 復号します。state を公開 Output や一般の export と同じものとして扱わないでください。
 
-## 値を別の Capsule に渡す
+## アプリごとに入力を管理する
 
-同じ Workspace 内なら依存関係で表します。受け取る側の Capsule の変更の確認（plan）を作る
-とき、Takosumi は渡す側の Capsule の Output を読み、受け取る側の OpenTofu 変数として
-渡します。
+インストールしたアプリは、それぞれ独立した OpenTofu root と state、plan を持ちます。
+Takosumi はあるアプリの Output を別のアプリの変数へ渡しません。`remote_state` も入力を
+つなぐ仕組みとしては使いません。値が必要なら、そのアプリ自身の Git 設定と確認済みの
+設定値で用意します。
 
-dashboard の **依存関係** では、つながりを見られます。作成と削除は API で行います。例の
-`$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ
-[発行した token](../reference/cli.md#トークンを発行する)を入れます。作成と削除ができるのは、
-Workspace の owner か admin だけです。
+リポジトリは `.well-known/takosumi.json` に任意のインストール補助情報を公開できます。
+このファイルは入力項目や Interface request を記述できますが、アプリ間の OpenTofu 入力を
+作ったり、実行権限を与えたりはしません。Interface は owner と lifecycle を持つ明示的な
+契約です。アプリ所有の機能を記述・公開できますが、複数アプリの OpenTofu state を接続する
+ものではありません。
 
-### 作り方
+旧 Dependency edge は廃止されています。Capsule に旧 edge が残っている間、新しい plan は
+`dependency_retired` で失敗します。アプリ独自の明示的な入力へ移行したうえで、別途レビューした
+データメンテナンスで旧 record を削除してから plan を作ってください。旧 dependency snapshot を
+固定した saved plan も拒否されるため、新しい plan に置き換える必要があります。
 
-1. 渡す側をデプロイし、渡したい Output があることを
-   [Output の一覧](#output-は明示的に公開した値だけです)で確かめます。`sensitive` の Output は
-   渡せません。
-2. 受け取る側の module に、受け取る値の `variable` を宣言します。宣言が無いと、値は渡されても
-   使われません。下の `required: false` で受け取る値には `default` を書きます。値が渡されず
-   `default` も無いと、変更の確認が失敗します。
-
-   ```hcl
-   variable "base_domain" {
-     type = string
-   }
-   ```
-
-3. 受け取る側の Capsule に依存関係を作ります。パスに書くのが受け取る側、
-   `producerCapsuleId` が渡す側です。
-
-   ```bash
-   curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_app/dependencies" \
-     -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
-     -H 'content-type: application/json' \
-     -d '{
-       "producerCapsuleId": "cap_dns",
-       "outputs": {
-         "base_domain": { "from": "base_domain", "to": "base_domain", "required": true }
-       }
-     }'
-   ```
-
-   `from` は渡す側の Output の名前、`to` は受け取る側の変数の名前です。`required` は省けず、
-   `true` か `false` を書きます。`false` の値は、渡す側に無ければ渡されません。成功すると `201`
-   と、`dependency.id` を含む結果が返ります。
-4. 受け取る側の **更新** タブの **サービスを更新** で **変更を確認** を押し、内容を確かめて
-   デプロイします。依存関係を作っただけでは、受け取る側の状態は変わりません。
-
-`required` が無い、`outputs` が空、自分自身への依存は `400` で、つながりが輪になる、渡す側が
-別の Workspace にあるものは `409` で拒否されます。一方、渡す側の Output があるかは作成のときに
-確かめません。同じつながりを 2 回作っても拒否されないため、作る前に一覧で確かめます。
-
-`required: true` の値を渡す側が出していない（まだデプロイしていない、その Output が無い、
-`sensitive` になっている）と、受け取る側の変更の確認は作られず、「連携しているサービスの値を
-いま取得できません。時間をおいてもう一度お試しください。」と表示されます
-（`dependency_outputs_unavailable`）。待っても変わらないので、先に渡す側を直してデプロイします。
-
-### 渡す側が変わったとき
-
-渡す側をデプロイして、その Output のどれかが変わると、その先の Capsule がすべて
-**更新があります** になります。受け取る側に渡していない Output が変わった場合も、間接的に
-依存している Capsule も同じです。対象は **デプロイ済み** の Capsule だけです。
-
-Takosumi が自動で変更の確認を作ることはありません。自動更新（`autoUpdate`）を有効にして
-いても、この場合は動きません。受け取る側で次のどちらかを行います。
-
-- **更新する** を押す。新しい値で変更の確認を作り、承認が要らず、既存リソースの削除や置き換えを
-  含まない変更ならそのままデプロイします
-  （[新しい版に更新する](../getting-started/after-adding.md#新しい版に更新する)）。
-- 内容を見てから進める場合は、**更新** タブの **サービスを更新** で **変更を確認** を押す。
-
-`environment` が `production` の Capsule（dashboard から追加したサービスはこれです）では、
-受け取る側の変更の確認を作ったあとで渡す側をデプロイすると、受け取る側のデプロイが止まり、
-「連携しているサービスが先に更新されました。もう一度変更を確認してください。」と表示されます
-（`dependency_snapshot_stale`）。渡す側の Output が変わらないデプロイでも同じで、受け取る側の
-状態は変わらないまま止まります。受け取る側の変更の確認を作り直します。
-
-### 見る、削除する
-
-```bash
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_app/dependencies" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-
-curl -X DELETE "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/dependencies/dep_example" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-```
-
-削除しても、受け取る側の状態は変わりません。次の変更の確認から、その値は渡されなく
-なります。Workspace 全体のつながりは `/api/v1/workspaces/{workspaceId}/graph` で読めます。
-
-### Workspace をまたぐとき
-
-Workspace をまたぐ場合は OutputShare を使います。**渡す側が作り、受け取る側が承認
-するまで有効になりません。** 失効させると以降の参照は止まり、すでに実行された Run の
-記録は残ります。
-
-```bash
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/output-shares/share_example/approve" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-```
-
-どちらの経路でも渡せるのは公開 Output だけです。**秘密を渡したい場合は Output では
-なく、Connection を両方の Capsule に割り当てます。**
+**アプリ間で secret を共有する場合は、同じ Connection を両方のアプリに割り当てます。**
+secret を Output として公開しないでください。
 
 ## 実物とずれたとき
 

@@ -63,12 +63,8 @@ export type {
   PublicOutput as Output,
   PublicOutput,
   OutputResponse,
-  OutputShare,
-  OutputShareEntry,
-  OutputShareStatus,
 } from "./outputs.ts";
 export * from "./connections.ts";
-export * from "./dependencies.ts";
 export type {
   TakosumiApiErrorCode,
   TakosumiApiErrorEnvelope,

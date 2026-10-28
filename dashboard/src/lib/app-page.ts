@@ -5,8 +5,8 @@
  * see what it created and what it costs, uninstall it. The control plane
  * computes the app's state, primary action and problems
  * (`GET /capsules/:id/app`); these helpers only choose the words for them and
- * turn the app's own ledgers (its Runs, StateVersions, resource inventory,
- * the graph) into that vocabulary without inventing anything the backend did
+ * turn the app's own ledgers (its Runs, StateVersions and resource inventory)
+ * into that vocabulary without inventing anything the backend did
  * not record.
  */
 import { untrack, type Resource } from "solid-js";
@@ -19,8 +19,6 @@ import type {
   CapsuleAppView,
   CapsuleCurrentResourceInventory,
   CapsuleUsageSummary,
-  GraphEdge,
-  GraphNode,
   ProviderBinding,
   PublicStateVersion,
   Run,
@@ -662,42 +660,6 @@ export function appCostState(
     usdMicros: summary.usdMicros,
     unratedEventCount: summary.unratedEventCount,
   };
-}
-
-// --- linked apps -------------------------------------------------------------------
-
-export interface LinkedApp {
-  readonly edgeId: string;
-  readonly capsuleId: string;
-  readonly name: string;
-}
-
-/** Apps this app uses (`uses`) or that use it (`usedBy`), from the graph. */
-export function linkedApps(
-  capsuleId: string,
-  graph:
-    | {
-        readonly nodes: readonly Pick<GraphNode, "capsuleId" | "name">[];
-        readonly edges: readonly Pick<
-          GraphEdge,
-          "id" | "producerCapsuleId" | "consumerCapsuleId"
-        >[];
-      }
-    | undefined,
-  side: "uses" | "usedBy",
-): readonly LinkedApp[] {
-  if (!graph) return [];
-  const names = new Map(graph.nodes.map((node) => [node.capsuleId, node.name]));
-  return graph.edges
-    .filter((edge) =>
-      side === "uses"
-        ? edge.consumerCapsuleId === capsuleId
-        : edge.producerCapsuleId === capsuleId,
-    )
-    .map((edge) => {
-      const other = side === "uses" ? edge.producerCapsuleId : edge.consumerCapsuleId;
-      return { edgeId: edge.id, capsuleId: other, name: names.get(other) ?? other };
-    });
 }
 
 // --- provider connections ------------------------------------------------------------

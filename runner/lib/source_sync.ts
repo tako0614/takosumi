@@ -1,6 +1,6 @@
 // runner/lib/source_sync.ts
 //
-// Source sync (LANE M1): git clone/archive/subtree, deterministic zstd, source/dep-state restore handlers, source materialization.
+// Source sync (LANE M1): git clone/archive/subtree, deterministic zstd, source materialization.
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
@@ -48,7 +48,6 @@ import {
   assertSafeArchiveObjectKey,
   assertSafeCredentialFileName,
   assertSafeCredentialFileMode,
-  safeDepName,
   assertSafeZstdTarArchive,
   assertResolvedHostNotBlocked,
   assertSafeGitSelector,
@@ -1237,63 +1236,6 @@ export async function handleSourceArchiveRestoreRequest(
     return Response.json(
       {
         error: "source archive restore failed",
-        detail: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 },
-    );
-  }
-}
-
-// remote_state DEPENDENCY STATE RESTORE (spec §15): the DO streams a decrypted
-// producer tfstate to this route. We write the bytes READ-ONLY (0444) as
-// <depsDir>/<name>.tfstate so the consumer's `terraform_remote_state` data
-// sources can read it during init/plan/apply. The dep name is path-jailed to a
-// single safe filename segment (no traversal, no separators) so the write stays
-// inside the deps dir. Read-only blocks any accidental write-back to a producer's
-// state (a remote_state read is one-directional).
-export async function handleDepStateRestoreRequest(
-  runId: string,
-  name: string,
-  request: Request,
-): Promise<Response> {
-  if (request.method !== "PUT") {
-    return Response.json(
-      { error: "method not allowed" },
-      { status: 405, headers: { allow: "PUT" } },
-    );
-  }
-  const workspace = workspaceForRun(runId);
-  try {
-    const safeName = safeDepName(name);
-    const target = join(workspace.depsDir, `${safeName}.tfstate`);
-    // Path-jail: the resolved target MUST stay inside the deps dir.
-    const resolvedTarget = resolve(target);
-    const resolvedDepsDir = resolve(workspace.depsDir);
-    if (
-      resolvedTarget !== join(resolvedDepsDir, `${safeName}.tfstate`) ||
-      !resolvedTarget.startsWith(`${resolvedDepsDir}/`)
-    ) {
-      throw new Error(`dependency state name escapes deps dir: ${name}`);
-    }
-    await mkdir(workspace.depsDir, { recursive: true });
-    const bytes = new Uint8Array(await request.arrayBuffer());
-    // Remove any prior (read-only) file from a re-restore of the same dep name in
-    // this run, then write + chmod 0444. writeFile honors umask on some
-    // platforms, so force the read-only mode after the bytes land.
-    await rm(target, { force: true });
-    await writeFile(target, bytes);
-    await chmod(target, 0o444);
-    return Response.json({
-      runId,
-      artifact: "dep-state-restore",
-      name: safeName,
-      digest: await digestBytes(bytes),
-      sizeBytes: bytes.byteLength,
-    });
-  } catch (error) {
-    return Response.json(
-      {
-        error: "dependency state restore failed",
         detail: error instanceof Error ? error.message : String(error),
       },
       { status: 500 },

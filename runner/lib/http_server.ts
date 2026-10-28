@@ -36,7 +36,6 @@ import {
   runStableSemverTagResolution,
   handleSourceArchiveArtifactRequest,
   handleSourceArchiveRestoreRequest,
-  handleDepStateRestoreRequest,
 } from "./source_sync.ts";
 import {
   handlePlanJsonArtifactRequest,
@@ -474,14 +473,6 @@ async function handleRunnerRequestBody(
       /^\/runs\/([^/]+)\/artifacts\/source-archive$/.exec(url.pathname);
     const sourceArchiveRestoreMatch =
       /^\/runs\/([^/]+)\/source-archive\/restore$/.exec(url.pathname);
-    const depStateRestoreMatch =
-      /^\/runs\/([^/]+)\/deps\/([^/]+)\/restore$/.exec(url.pathname);
-    if (depStateRestoreMatch) {
-      const runId = decodeURIComponent(depStateRestoreMatch[1]!);
-      return request.method === "PUT"
-        ? await guardedWorkspaceMutation(runId, () => handleDepStateRestoreRequest(runId, decodeURIComponent(depStateRestoreMatch[2]!), request))
-        : await handleDepStateRestoreRequest(runId, decodeURIComponent(depStateRestoreMatch[2]!), request);
-    }
     if (sourceArchiveRestoreMatch) {
       const runId = decodeURIComponent(sourceArchiveRestoreMatch[1]!);
       return request.method === "PUT"
@@ -538,6 +529,14 @@ async function handleRunnerRequestBody(
     registerRunBudget(request.signal, request.headers.get(RUNNER_RUN_BUDGET_MS_HEADER));
     const body = (await readJsonObject(request)) as RunRequest;
     const runId = decodeURIComponent(match[1]);
+    const action = parseAction(body.action);
+    if ((action === "plan" || action === "apply" || action === "destroy") &&
+      hasRetiredDependencyInputs(body.request)) {
+      return Response.json({
+        runId, action, status: "failed", errorCode: "dependency_retired",
+        retryable: false,
+      }, { status: 409 });
+    }
 
     // Source-sync (LANE M1) is a distinct job carried on the `request` field as
     // `{ action: "source_sync", source, credentials?, archiveRef }`. It
@@ -601,7 +600,6 @@ async function handleRunnerRequestBody(
       } }), request.signal);
     }
 
-    const action = parseAction(body.action);
     if (!action) {
       return Response.json(
         { error: "invalid OpenTofu action" },
@@ -782,6 +780,15 @@ function privateRunFileRefreshSequence(header: string | null): number {
     throw new Error("private Run file refresh sequence header is malformed");
   }
   return sequence;
+}
+
+/** Reject retained dispatch fields even when empty, null, or malformed. */
+function hasRetiredDependencyInputs(requestPayload: unknown): boolean {
+  if (!requestPayload || typeof requestPayload !== "object" || Array.isArray(requestPayload)) return false;
+  if (Object.prototype.hasOwnProperty.call(requestPayload, "depStates")) return true;
+  const planRun = (requestPayload as Record<string, unknown>).planRun;
+  return !!planRun && typeof planRun === "object" && !Array.isArray(planRun) &&
+    Object.prototype.hasOwnProperty.call(planRun, "dependencySnapshotId");
 }
 
 async function readBoundedJsonObject(

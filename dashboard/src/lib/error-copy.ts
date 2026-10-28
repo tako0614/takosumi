@@ -126,13 +126,7 @@ function truncate(message: string): string {
  */
 const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   state_generation_mismatch: "controlError.stateGenerationMismatch",
-  dependency_snapshot_stale: "controlError.dependencySnapshotStale",
-  dependency_snapshot_missing: "controlError.dependencySnapshotStale",
-  dependency_snapshot_tampered: "controlError.dependencySnapshotStale",
-  dependency_outputs_unavailable: "controlError.dependencyUnavailable",
-  dependency_state_unavailable: "controlError.dependencyUnavailable",
-  dependency_value_sealer_unavailable: "controlError.dependencyUnavailable",
-  sensitive_output_resolver_unavailable: "controlError.dependencyUnavailable",
+  dependency_retired: "controlError.dependencyRetired",
   source_ref_changed: "controlError.sourceChanged",
   source_revision_mismatch: "controlError.sourceRevisionMismatch",
   invalid_source_revision: "controlError.invalidSourceRevision",
@@ -153,7 +147,6 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   owner_slot_limit_reached: "controlError.slotLimitReached",
   capsule_not_found: "controlError.capsuleNotFound",
   install_config_not_found: "controlError.configNotFound",
-  output_share_revoked: "controlError.shareRevoked",
   // A second version change while one is still being prepared (409).
   revision_in_progress: "controlError.revisionInProgress",
 };

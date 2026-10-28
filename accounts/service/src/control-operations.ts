@@ -72,12 +72,6 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
-import type {
-  Dependency,
-  DependencyMode,
-  DependencyOutputMapping,
-  DependencyVisibility,
-} from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
@@ -97,8 +91,6 @@ import type {
 } from "takosumi-contract/provider-resolution";
 import type {
   Output,
-  OutputShare,
-  OutputShareEntry,
 } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
 import type {
@@ -455,30 +447,6 @@ export interface ControlPlaneOperations {
       environment: string,
     ): Promise<ProviderBindingSet | undefined>;
   };
-  // --- Dependencies (§14 / §15) ---
-  readonly dependencies: {
-    createDependency(request: {
-      readonly workspaceId: string;
-      readonly producerCapsuleId: string;
-      readonly consumerCapsuleId: string;
-      readonly mode: DependencyMode;
-      readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
-      readonly visibility: DependencyVisibility;
-    }): Promise<Dependency>;
-    getDependency(id: string): Promise<Dependency | undefined>;
-    listForCapsule(capsuleId: string): Promise<{
-      readonly asProducer: readonly Dependency[];
-      readonly asConsumer: readonly Dependency[];
-    }>;
-    deleteDependency(id: string): Promise<boolean>;
-  };
-  /**
-   * Workspace-wide dependency edge listing for the graph projection. Added to the
-   * facade in M10 (mirrors the store's `listDependenciesByWorkspace`).
-   */
-  listDependenciesByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]>;
   // --- RunGroups (§19 / §24) ---
   readonly runGroups: {
     createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRunsLike>;
@@ -563,27 +531,6 @@ export interface ControlPlaneOperations {
       workspaceId?: string,
     ): Promise<readonly ProviderConnection[]>;
     getProviderConnection?(id: string): Promise<ProviderConnection>;
-  };
-  // --- OutputShares (§18) ---
-  readonly outputShares: {
-    createShare(request: {
-      readonly fromWorkspaceId: string;
-      readonly toWorkspaceId: string;
-      readonly producerCapsuleId: string;
-      readonly outputs: readonly {
-        readonly name: string;
-        readonly alias?: string;
-        readonly sensitive?: boolean;
-      }[];
-    }): Promise<OutputShare>;
-    listForWorkspace(workspaceId: string): Promise<readonly OutputShare[]>;
-    listForWorkspacePage(
-      workspaceId: string,
-      params: PageParams,
-    ): Promise<Page<OutputShare>>;
-    getShare(id: string): Promise<OutputShare | undefined>;
-    approveShare(id: string): Promise<OutputShare>;
-    revokeShare(id: string): Promise<OutputShare>;
   };
   listConnections(
     workspaceId: string,
