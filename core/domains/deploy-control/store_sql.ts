@@ -1,3 +1,4 @@
+import { POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY } from "../../adapters/storage/source-archive-reference-query.ts";
 import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../workspaces/financial-source.ts";
 /**
  * SQL-backed OpenTofu deployment-control-plane ledger (core-spec.md §27).
@@ -10111,13 +10112,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
   async hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean> {
     const rows = await this.#client.query(
-      `select 1 from takosumi_source_snapshots
-        where source_id is distinct from $2 and snapshot_json ->> 'archiveRef' = $1
-       union all
-       select 1 from takosumi_runs
-        where kind = 'source_sync' and source_id is distinct from $2
-          and coalesce(run_json ->> 'archiveRef', run_json ->> 'archiveObjectKey') = $1
-       limit 1`, [archiveRef, sourceId],
+      POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY, [archiveRef, sourceId],
     );
     return rows.rows.length !== 0;
   }
