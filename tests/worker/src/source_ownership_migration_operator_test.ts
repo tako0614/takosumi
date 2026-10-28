@@ -163,3 +163,31 @@ test("operator POST resumes a large archive set with a bound copy receipt", asyn
   expect(copied).toBe(17);
   expect(store.commits).toBe(1);
 });
+
+test("failed archive readback prevents the DB group commit", async () => {
+  const store = new FixtureStore();
+  store.current = { ...structuredClone(group), source: { ...group.source, ownerCapsuleId: "cap_1" },
+    snapshots: [{ id: "snap_foreign", origin: "git", workspaceId: "ws_1", sourceId: "src_legacy",
+      url: "https://example.test/repo.git", ref: "main", path: ".", resolvedCommit: "abc",
+      archiveRef: "workspaces/ws_1/sources/src_other/snapshots/snap_foreign/source.tar.zst",
+      archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+      fetchedByRunId: "ssr_foreign", fetchedAt: "2026-10-01T00:00:00.000Z" }] };
+  const copier = { copyVerified: async () => { throw new Error("source_archive_copy_readback_missing"); } };
+  const dry = await handleSourceOwnershipMigrationOperatorRequest(new Request(`${origin}?sourceId=src_legacy`, {
+    headers: { authorization: `Bearer ${token}` },
+  }), env, { store, copier });
+  const body = await dry!.json() as { preparedAt: string; reportDigest: string };
+  const previousError = console.error;
+  console.error = () => {};
+  try {
+    const apply = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ sourceId: "src_legacy", preparedAt: body.preparedAt,
+        reportDigest: body.reportDigest }),
+    }), env, { store, copier });
+    expect(apply?.status).toBe(500);
+    expect(store.commits).toBe(0);
+  } finally {
+    console.error = previousError;
+  }
+});
