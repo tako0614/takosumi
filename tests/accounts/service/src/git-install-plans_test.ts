@@ -2234,6 +2234,121 @@ test("an initial Interface choice for a removed requirement is cleared when an a
   expect(fixture.interfaceLinkEnsureCalls).toBe(0);
 });
 
+test("observed automatic Interface choices fence initial-zero providers that disappear, change, or become ambiguous", async () => {
+  for (const change of ["removed", "replaced", "ambiguous"] as const) {
+    const fixture = interfaceAttemptFixture();
+    const planId = await startAttempt(fixture);
+    const paused = await reconcileUntilIdle(fixture, planId);
+    expect(paused.userAction.interfaces[0].choice).toEqual({ kind: "later" });
+    const provider = addInterfaceProvider(fixture, "observed");
+    const displayed = await readPlan(fixture, planId);
+    expect(displayed.userAction.interfaces[0].autoSelected).toBe(true);
+    expect(displayed.installPlan.generation).toBe(paused.installPlan.generation);
+    const observedInterfaces = [{ requirementKey: "storage", interfaceId: provider.metadata.id }];
+    if (change !== "ambiguous") fixture.interfaceCandidates.length = 0;
+    if (change !== "removed") addInterfaceProvider(fixture, "new");
+    const refused = await answer(fixture, planId, {
+      expectedGeneration: displayed.installPlan.generation,
+      observedInterfaces,
+      continue: true,
+      variables: { region: "eu" },
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.code).toBe("interface_candidate_unavailable");
+    expect(fixture.counts.capsule).toBe(0);
+    const refreshed = await readPlan(fixture, planId);
+    expect(refreshed.installPlan.generation).toBe(displayed.installPlan.generation + 1);
+    expect(await fixture.planStore.get(planId)).not.toHaveProperty("observedInterfaces");
+    expect((await fixture.planStore.get(planId))?.options).not.toHaveProperty("observedInterfaces");
+    const confirmed = await answer(fixture, planId, {
+      expectedGeneration: refreshed.installPlan.generation,
+      ...(change === "ambiguous"
+        ? {
+            interfaceLinks: [{ requirementKey: "storage", choice: { kind: "later" } }],
+            observedInterfaces,
+          }
+        : change === "replaced"
+          ? { observedInterfaces: [{ requirementKey: "storage", interfaceId: "if_providernew" }] }
+          : {}),
+      continue: true,
+      variables: { region: "eu" },
+    });
+    expect(confirmed.status).toBe(200);
+    expect((await confirmed.json()).installPlan.phase).toBe("planning");
+    expect(fixture.interfaceLinks.size).toBe(change === "replaced" ? 1 : 0);
+  }
+});
+
+test("matching observed Interfaces remain automatic and explicit choices override stale observations", async () => {
+  for (const explicit of [false, true]) {
+    const fixture = interfaceAttemptFixture();
+    const planId = await startAttempt(fixture);
+    const paused = await reconcileUntilIdle(fixture, planId);
+    const provider = addInterfaceProvider(fixture, "current");
+    const observedInterfaces = [{ requirementKey: "storage", interfaceId: explicit ? "if_previous" : provider.metadata.id }];
+    if (explicit) addInterfaceProvider(fixture, "other");
+    const confirmed = await answer(fixture, planId, {
+      expectedGeneration: paused.installPlan.generation,
+      ...(explicit
+        ? { interfaceLinks: [{ requirementKey: "storage", choice: { kind: "interface", interfaceId: provider.metadata.id } }] }
+        : {}),
+      observedInterfaces,
+      continue: true,
+      variables: { region: "eu" },
+    });
+    expect(confirmed.status).toBe(200);
+    const payload = await confirmed.json();
+    expect(payload.installPlan.phase).toBe("planning");
+    expect([...fixture.interfaceLinks.values()]).toMatchObject([{
+      interfaceId: provider.metadata.id,
+      selection: explicit ? "explicit" : "auto_single",
+    }]);
+    expect(payload.installPlan).not.toHaveProperty("observedInterfaces");
+    expect(payload.installPlan.options).not.toHaveProperty("observedInterfaces");
+    const stored = await fixture.planStore.get(planId);
+    expect(stored).not.toHaveProperty("observedInterfaces");
+    expect(stored?.options).not.toHaveProperty("observedInterfaces");
+  }
+});
+
+test("observed Interface input is bounded, unique, ids-only, and accepted only with continue", async () => {
+  const fixture = interfaceAttemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  const observation = { requirementKey: "storage", interfaceId: "if_observed" };
+  for (const body of [
+    { observedInterfaces: [] },
+    { continue: false, observedInterfaces: [observation] },
+    { continue: true, observedInterfaces: "invalid" },
+    { continue: true, observedInterfaces: [{ ...observation, permissions: ["admin"] }] },
+    { continue: true, observedInterfaces: [{ ...observation, choice: { kind: "later" } }] },
+    { continue: true, observedInterfaces: [observation, observation] },
+    { continue: true, observedInterfaces: [{ ...observation, requirementKey: "unknown" }] },
+    { continue: true, observedInterfaces: [{ ...observation, interfaceId: "" }] },
+    { continue: true, observedInterfaces: [{ ...observation, interfaceId: "x".repeat(133) }] },
+    { continue: true, observedInterfaces: Array.from({ length: 101 }, (_, i) => ({ ...observation, requirementKey: `key${i}` })) },
+  ]) {
+    const response = await answer(fixture, planId, {
+      expectedGeneration: paused.installPlan.generation,
+      ...(body.continue ? { variables: { region: "eu" } } : {}),
+      ...body,
+    });
+    expect(response.status).toBe(400);
+  }
+  expect((await fixture.planStore.get(planId))?.generation).toBe(paused.installPlan.generation);
+  expect(fixture.counts.capsule).toBe(0);
+  const forged = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    observedInterfaces: [observation],
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(forged.status).toBe(409);
+  expect((await forged.json()).error.code).toBe("interface_candidate_unavailable");
+  expect(fixture.counts.capsule).toBe(0);
+  expect(fixture.interfaceLinks.size).toBe(0);
+});
+
 test("a second Interface provider while paused removes auto-selection and requires a choice", async () => {
   const fixture = interfaceAttemptFixture();
   addInterfaceProvider(fixture, "one");

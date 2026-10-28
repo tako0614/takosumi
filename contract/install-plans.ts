@@ -180,6 +180,9 @@ export interface CreateGitInstallAttemptRequest {
  * - `interfaceLinks` replaces the complete explicit Interface selection;
  *   unanswered requirements auto-select their sole provider, defer when none
  *   exists, and otherwise need a provider choice or `later`.
+ * - `observedInterfaces` echoes the automatic choices shown by the client,
+ *   only with `continue: true`. It detects changed candidates and never grants
+ *   authority or changes the explicit answers stored in `options`.
  * - `continue: true` confirms the sheet: the coordinator validates the
  *   answers, creates the Capsule atomically and starts the Plan Run.
  * - `variables` are accepted only together with `continue: true`. They are
@@ -198,6 +201,11 @@ export interface PatchGitInstallPlanRequest {
   readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
   /** Replaces the complete explicit selection for this module's requirements. */
   readonly interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[];
+  /** Displayed automatic choices, checked only by the confirming request. */
+  readonly observedInterfaces?: readonly {
+    readonly requirementKey: string;
+    readonly interfaceId: string;
+  }[];
   readonly variables?: Readonly<Record<string, JsonValue>>;
   readonly continue?: boolean;
 }

@@ -457,6 +457,13 @@ allows later; one is selected automatically; several require a provider or later
 not the manifest. Immediately after Capsule creation, it becomes a pinned InterfaceLink
 and is never resolved again from the candidate set.
 
+To confirm displayed automatic choices, send
+`observedInterfaces: [{requirementKey,interfaceId}]` together with `continue: true`.
+An explicit `interfaceLinks` answer takes precedence for that requirement; otherwise,
+if the displayed ID is no longer the sole eligible candidate, the response is
+409 `interface_candidate_unavailable`. GET the fresh sheet and confirm it again.
+These observations contain IDs only, are never stored in `options`, and grant no authority.
+
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired
 attempt (`install_attempt_expired`) or one whose management epoch changed

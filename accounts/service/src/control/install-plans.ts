@@ -925,7 +925,7 @@ async function answerInstallAttempt(
   if (!patch) {
     return errorJson(
       "invalid_request",
-      "The answer must contain expectedGeneration and only modulePath, capsuleName, providerBindings, interfaceLinks, continue, and variables (variables only with continue).",
+      "The answer must contain expectedGeneration and only modulePath, capsuleName, providerBindings, interfaceLinks, observedInterfaces, continue, and variables (observedInterfaces and variables only with continue).",
       400,
       ctx.request,
     );
@@ -950,7 +950,7 @@ async function answerInstallAttempt(
     observed.creationAttempted === true &&
     (!patch.continue || patch.modulePath !== undefined ||
       patch.capsuleName !== undefined || patch.providerBindings !== undefined ||
-      patch.interfaceLinks !== undefined)
+      patch.interfaceLinks !== undefined || patch.observedInterfaces !== undefined)
   ) {
     // The confirmed Capsule may already exist and will be adopted as it was
     // created; accepting new answers here would silently ignore them.
@@ -1065,7 +1065,7 @@ async function answerInstallAttempt(
     };
   }
   if (patch.continue) {
-    return await continueInstallAttempt(ctx, observed, next, patch.variables ?? {});
+    return await continueInstallAttempt(ctx, observed, next, patch.variables ?? {}, patch.observedInterfaces ?? []);
   }
   if (next.phase === "awaiting_input" && next.diagnostic?.code !== undefined &&
     ATTEMPT_INPUT_DIAGNOSTICS.has(next.diagnostic.code)) {
@@ -1119,6 +1119,7 @@ async function continueInstallAttempt(
   observed: StoredGitInstallPlan,
   answered: StoredGitInstallPlan,
   variables: Readonly<Record<string, JsonValue>>,
+  observedInterfaces: NonNullable<PatchGitInstallPlanRequest["observedInterfaces"]>,
 ): Promise<Response> {
   if (observed.awaitingInput !== "inputs") {
     return errorJson(
@@ -1130,6 +1131,18 @@ async function continueInstallAttempt(
   }
   let next = answered;
   const facts = next.attemptFacts?.inputs;
+  if (observedInterfaces.some((entry) =>
+    !facts?.requiredInterfaces?.some((requirement) => requirement.key === entry.requirementKey)
+  )) {
+    return errorJson(
+      "invalid_request",
+      "Each observed Interface must name one requirement of the analyzed module.",
+      400,
+      ctx.request,
+      {},
+      { reason: "interface_observation_invalid" },
+    );
+  }
   const resubmitting = observed.creationAttempted === true;
   // While resubmitting: the values of the unconfirmed request, nothing else.
   // The answers that request carried are recorded and may be committed.
@@ -1163,6 +1176,15 @@ async function continueInstallAttempt(
       connectionRequirements(ctx.operations, next),
       interfaceRequirements(ctx.operations, next),
     ]);
+    if (observedInterfaces.some((entry) => {
+      if (next.options.interfaceLinks?.some((answer) =>
+        answer.requirementKey === entry.requirementKey
+      )) return false;
+      const row = interfaces.find((requirement) => requirement.requirementKey === entry.requirementKey)!;
+      return row.candidates.length !== 1 || row.candidates[0]!.id !== entry.interfaceId;
+    })) {
+      return await refreshChangedInterfaceCandidates(ctx, observed, next, interfaces);
+    }
     if (facts?.autoInterfaceCandidates?.some((captured) => {
       if (next.options.interfaceLinks?.some((answer) =>
         answer.requirementKey === captured.requirementKey
@@ -3160,6 +3182,7 @@ function parsePatchRequest(
       "capsuleName",
       "providerBindings",
       "interfaceLinks",
+      "observedInterfaces",
       "variables",
       "continue",
     ])
@@ -3179,6 +3202,9 @@ function parsePatchRequest(
   if (body.providerBindings !== undefined && !providerBindings) return undefined;
   const interfaceLinks = interfaceLinkRequests(body.interfaceLinks);
   if (body.interfaceLinks !== undefined && !interfaceLinks) return undefined;
+  const observedInterfaces = observedInterfaceRequests(body.observedInterfaces);
+  if (body.observedInterfaces !== undefined &&
+    (observedInterfaces === undefined || body.continue !== true)) return undefined;
   if (body.continue !== undefined && typeof body.continue !== "boolean") {
     return undefined;
   }
@@ -3194,9 +3220,29 @@ function parsePatchRequest(
     ...(capsuleName !== undefined ? { capsuleName } : {}),
     ...(providerBindings !== undefined ? { providerBindings } : {}),
     ...(interfaceLinks !== undefined ? { interfaceLinks } : {}),
+    ...(observedInterfaces !== undefined ? { observedInterfaces } : {}),
     ...(variables !== undefined ? { variables } : {}),
     ...(body.continue === true ? { continue: true } : {}),
   };
+}
+
+/** Read observations only fence auto-selection; they are never stored or grant inputs. */
+function observedInterfaceRequests(
+  value: unknown,
+): PatchGitInstallPlanRequest["observedInterfaces"] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 100) return undefined;
+  const keys = new Set<string>();
+  const observations: NonNullable<PatchGitInstallPlanRequest["observedInterfaces"]>[number][] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, ["requirementKey", "interfaceId"])) return undefined;
+    const requirementKey = boundedPlainString(entry.requirementKey, 128);
+    const interfaceId = boundedPlainString(entry.interfaceId, 132);
+    if (!requirementKey || !interfaceId || keys.has(requirementKey)) return undefined;
+    keys.add(requirementKey);
+    observations.push({ requirementKey, interfaceId });
+  }
+  return observations;
 }
 
 /** Choices contain identities only; repository requirements own permissions. */
