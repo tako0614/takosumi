@@ -446,8 +446,10 @@ after the sheet opened is accepted when it still matches at submission time.
 including a sole-candidate auto-selection or “configure later”. These observations contain
 IDs only, are never stored in `options`, and grant no authority.
 When Control D1 has not installed the Interface link store (schema before v76),
-the install sheet offers no candidates and saves no selection. Choosing “configure
-later” proceeds without attempting to create a link.
+the install sheet offers no candidates, returns `linkStoreUnavailable: true` with
+guidance, and saves no selection. Choosing “configure later” proceeds without
+attempting to create a link. An explicit choice of a pre-v76 candidate is refused
+before Capsule creation.
 
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired

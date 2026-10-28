@@ -1175,6 +1175,18 @@ export class CapsulesService {
       ? undefined
       : { ...expectedWorkspaceManagementAuthority };
     const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
+    if (prepared.capsule.status === "destroyed") {
+      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(prepared.capsule.id);
+      if (runtimeSafety || prepared.capsule.currentStateVersionId || prepared.capsule.currentStateGeneration > 0) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} has runtime state and must use the destroy flow`,
+          { reason: CAPSULE_RUNTIME_STATE_PRESENT_REASON },
+        );
+      }
+      await this.#revokeCapsuleInterfaceLinks?.(prepared.capsule.workspaceId, prepared.capsule.id);
+      return prepared.capsule;
+    }
     const abandon = async (): Promise<Capsule> => {
       const current = prepared.capsule;
       const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(current.id);

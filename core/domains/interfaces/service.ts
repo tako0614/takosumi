@@ -349,6 +349,10 @@ export class InterfaceService {
     this.#projectionSink = options.projectionSink;
   }
 
+  async interfaceLinksAvailable(): Promise<boolean> {
+    return this.#stores.links.available ? await this.#stores.links.available() : true;
+  }
+
   async create(
     request: CreateInterfaceRequest,
     actor?: ActorContext,

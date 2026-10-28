@@ -9,6 +9,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.applyWait.interfaces": "Choose an app to link, or choose to link later.",
   "installStore.interfaces.title": "Linked apps",
   "installStore.interfaces.none": "No compatible apps are available. You can link an app later from its page.",
+  "installStore.interfaces.storeUnavailable": "Interface linking is not available in this environment yet. Continue without linking, or configure it later from the app page.",
   "installStore.interfaces.choose": "Choose an app",
   "installStore.interfaces.type": "Interface type",
   "installStore.interfaces.permissions": "Requested permissions",

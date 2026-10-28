@@ -2500,7 +2500,6 @@ test("loss of the paused sheet's sole Interface provider returns 409 once and re
     expect(freshRead.installPlan.generation).toBe(paused.installPlan.generation);
     const refused = await answer(fixture, planId, {
       expectedGeneration: paused.installPlan.generation,
-      observedInterfaces: [{ requirementKey: "storage", candidateIds: ["if_providerone"] }],
       continue: true,
       variables: { region: "eu" },
     });
@@ -2520,6 +2519,73 @@ test("loss of the paused sheet's sole Interface provider returns 409 once and re
     expect(confirmed.status).toBe(200);
     expect((await confirmed.json()).installPlan.phase).toBe("planning");
     expect(fixture.interfaceLinks.size).toBe(replace ? 1 : 0);
+  }
+});
+
+test("an unobserved provider appearing after a zero-candidate sheet cannot be auto-selected", async () => {
+  const fixture = interfaceAttemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.interfaces[0].choice).toEqual({ kind: "later" });
+  addInterfaceProvider(fixture, "appeared");
+  const refused = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error.code).toBe("interface_candidate_unavailable");
+  expect(fixture.counts.capsule).toBe(0);
+});
+
+test("v75 D1 install sheet offers no link and permits configure-later before Capsule creation", async () => {
+  const { InterfaceService } = await import("../../../../core/domains/interfaces/service.ts");
+  const { createD1InterfaceStores } = await import("../../../../core/domains/interfaces/d1_stores.ts");
+  const { ensureD1OpenTofuLedgerSchema } = await import("../../../../worker/src/d1_opentofu_store.ts");
+  const { SqliteFakeD1 } = await import("../../../helpers/deploy-control/sqlite_fake_d1.ts");
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
+  const stores = createD1InterfaceStores(db);
+  const service = new InterfaceService({ stores });
+
+  for (const explicit of [false, true]) {
+    const fixture = interfaceAttemptFixture();
+    const provider = addInterfaceProvider(fixture, explicit ? "explicit" : "later");
+    await stores.interfaces.create(provider);
+    Object.assign(fixture.operations.interfaces!, {
+      listInterfaceLinkCandidates: service.listInterfaceLinkCandidates.bind(service),
+      interfaceLinksAvailable: service.interfaceLinksAvailable.bind(service),
+      ensureCapsuleInterfaceLinks: service.ensureCapsuleInterfaceLinks.bind(service),
+    });
+    const planId = await startAttempt(fixture);
+    const paused = await reconcileUntilIdle(fixture, planId);
+    expect(paused.userAction.interfaces).toEqual([expect.objectContaining({
+      requirementKey: "storage",
+      candidates: [],
+      choice: { kind: "later" },
+      linkStoreUnavailable: true,
+    })]);
+    const confirmed = await answer(fixture, planId, {
+      expectedGeneration: paused.installPlan.generation,
+      ...(explicit ? {
+        interfaceLinks: [{ requirementKey: "storage", choice: { kind: "interface", interfaceId: provider.metadata.id } }],
+      } : {
+        interfaceLinks: [{ requirementKey: "storage", choice: { kind: "later" } }],
+      }),
+      continue: true,
+      variables: { region: "eu" },
+    });
+    if (explicit) {
+      expect(confirmed.status).toBe(409);
+      expect((await confirmed.json()).error.code).toBe("interface_candidate_unavailable");
+      expect(fixture.counts.capsule).toBe(0);
+    } else {
+      expect(confirmed.status).toBe(200);
+      expect((await confirmed.json()).installPlan.phase).toBe("planning");
+      expect(fixture.counts.capsule).toBe(1);
+      expect(fixture.interfaceLinkEnsureCalls).toBe(0);
+    }
+    expect(await db.prepare("select name from sqlite_master where type='table' and name='interface_links'").first()).toBeNull();
   }
 });
 
@@ -4362,6 +4428,7 @@ function installFixture(
   }
 
   return {
+    operations,
     planStore,
     sources,
     syncRuns,

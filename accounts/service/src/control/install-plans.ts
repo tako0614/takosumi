@@ -1169,14 +1169,25 @@ async function continueInstallAttempt(
       connectionRequirements(ctx.operations, next),
       interfaceRequirements(ctx.operations, next),
     ]);
-    if (observedInterfaces.some((entry) => {
+    const changedObserved = observedInterfaces.some((entry) => {
       if (next.options.interfaceLinks?.some((answer) =>
         answer.requirementKey === entry.requirementKey
       )) return false;
       const row = interfaces.find((candidateRow) => candidateRow.requirementKey === entry.requirementKey);
       return !row || JSON.stringify(row.candidates.map((candidate) => candidate.id)) !==
         JSON.stringify(entry.candidateIds);
-    })) {
+    });
+    const changedUnobservedAutoSelection = facts?.autoInterfaceCandidates?.some((captured) => {
+      if (next.options.interfaceLinks?.some((answer) =>
+        answer.requirementKey === captured.requirementKey
+      )) return false;
+      const echoed = observedInterfaces.find((entry) => entry.requirementKey === captured.requirementKey);
+      const expectedIds = echoed?.candidateIds ?? captured.candidateIds;
+      const row = interfaces.find((candidateRow) => candidateRow.requirementKey === captured.requirementKey);
+      return !row || JSON.stringify(row.candidates.map((candidate) => candidate.id)) !==
+        JSON.stringify(expectedIds);
+    });
+    if (changedObserved || changedUnobservedAutoSelection) {
       return await refreshChangedInterfaceCandidates(ctx, observed, next, interfaces);
     }
     if (!connectionsReady(rows)) {

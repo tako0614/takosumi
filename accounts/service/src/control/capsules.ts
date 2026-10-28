@@ -242,7 +242,12 @@ export async function handleCapsules(
     if (leaf === "abandon" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       if (capsule.status === "destroyed") {
-        await operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
+        if (!capsuleHasAppliedState(capsule)) {
+          await operations.capsules.abandonUnappliedCapsule(
+            capsule.id,
+            "restart requested before first successful apply",
+          );
+        }
         return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
       }
       // This action is deliberately abandonment-only. The domain operation
@@ -577,7 +582,18 @@ async function deleteCapsule(
   expectedWorkspaceManagementAuthority: WorkspaceManagementAuthority | undefined,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
-    await operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
+    if (!capsuleHasAppliedState(capsule)) {
+      await operations.capsules.abandonUnappliedCapsule(
+        capsuleId,
+        "delete requested before first successful apply",
+        expectedWorkspaceManagementAuthority,
+      );
+    } else if (!capsuleHasAppliedState(capsule)) {
+      // A caller without lifecycle admission cannot re-enter the domain
+      // abandonment operation; keep the retry cleanup best-effort fenced by
+      // the Interface service's own authority checks.
+      await operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
+    }
     return jsonStatus(
       {
         capsule: publicCapsule(capsule),
@@ -640,7 +656,6 @@ async function abandonUnappliedCapsule(input: {
     input.reason,
     input.expectedWorkspaceManagementAuthority,
   );
-  await input.operations.interfaces?.revokeCapsuleInterfaceLinks?.(capsule.workspaceId, capsule.id);
   return jsonStatus(
     {
       capsule: publicCapsule(capsule),

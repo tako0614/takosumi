@@ -486,8 +486,9 @@ Source は削除しません。その試行自身が有効にした polling だ�
 受け付けます。`implicitInterfaceKeys` は確認 sheet で選択済みの暗黙選択（候補が一つのときの
 自動選択や「後で設定」）の requirement key を示します。この観測情報は ID だけで、`options` への
 保存や権限の付与は行いません。
-Control D1 が Interface link store の導入前（schema v76 未満）の場合は候補を表示せず、選択を保存しません。
-「後で設定」を選ぶと Capsule 作成前にリンクを作らずに進みます。
+Control D1 が Interface link store の導入前（schema v76 未満）の場合は候補を表示せず、
+`linkStoreUnavailable: true` と設定案内を返します。「後で設定」を選ぶと Capsule 作成前に
+リンクを作らずに進みます。導入前の候補 ID を明示しても Capsule 作成前に拒否します。
 
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の

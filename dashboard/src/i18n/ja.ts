@@ -20,6 +20,7 @@ export const ja = {
   "installStore.applyWait.interfaces": "連携するアプリを選ぶか、あとで連携することを選んでください。",
   "installStore.interfaces.title": "連携するアプリ",
   "installStore.interfaces.none": "連携できるアプリがありません。あとでアプリの画面から連携できます。",
+  "installStore.interfaces.storeUnavailable": "この環境ではインターフェース連携がまだ利用できません。連携せずに進むか、後でアプリの画面から設定してください。",
   "installStore.interfaces.choose": "連携するアプリを選択",
   "installStore.interfaces.type": "連携の種類",
   "installStore.interfaces.permissions": "要求する権限",
