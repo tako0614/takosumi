@@ -23,7 +23,7 @@ test("committed timing data is a non-empty Bun timing table", async () => {
 test("unsharded test preserves both original sweeps and exclusions", () => {
   expect(portableTestCommands()).toEqual([
     ["bun", "run", "test:workerd"],
-    ["bun", "test", "--only-failures", "./tests",
+    ["bun", "test", "--isolate", "--only-failures", "./tests",
       "--path-ignore-patterns=tests/dashboard/e2e/**",
       "--path-ignore-patterns=tests/runner/compatibility_check_test.ts",
       "--path-ignore-patterns=tests/core/domains/deploy-control/capsule_execution_authority_test.ts"],
