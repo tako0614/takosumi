@@ -375,6 +375,10 @@ Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources
 | POST | `/api/v1/sources/{sourceId}/compatibility-check` | Create a Compatibility Report |
 | GET | `/api/v1/compatibility-reports/{reportId}` | Read a Compatibility Report |
 
+Source deletion uses archive custody when the Source is owned, retiring, or has snapshot/sync history.
+It deletes archives first, then atomically removes snapshots and the Source with `source.retired`
+Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources use `source.deleted`.
+
 ### Git install plans
 
 | Method | Path | Description |
@@ -405,8 +409,9 @@ holder is working on the attempt, then abandons the never-applied Capsule it
 created and records the terminal `discarded` phase; if the abandonment stops,
 the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
 `DELETE` finishes it. It is refused once the app is applying or applied, and
-for plans that are not attempts. The Source is never deleted; only polling
-that the attempt itself turned on is turned off.
+for plans that are not attempts. Its dedicated Source is retired, polling and sync admission stop,
+and archives and snapshot rows are removed. The same DELETE or the daily sweep resumes
+an interrupted retirement.
 
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired
