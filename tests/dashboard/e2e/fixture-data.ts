@@ -320,6 +320,8 @@ export interface InstallAttemptFixtureOptions {
   readonly createdBy?: string;
   readonly capsuleId?: string;
   readonly planRunId?: string;
+  /** The Plan Run of the n-th attempt (1-based), when attempts must differ. */
+  readonly planRunIdFor?: (sequence: number) => string;
   /** Scanned roots; more than one (without a proven hint) asks for a choice. */
   readonly modules?: readonly { readonly path: string; readonly providers: readonly string[] }[];
   readonly resources?: readonly { readonly type: string; readonly count?: number; readonly allowed: boolean }[];
@@ -337,6 +339,7 @@ export interface InstallAttemptFixtureOptions {
 
 interface StoredAttempt {
   id: string;
+  sequence: number;
   idempotencyKey: string;
   workspaceId: string;
   createdBy: string;
@@ -520,7 +523,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
       else delete attempt.awaitingInput;
       if (phase === "reviewable") {
         attempt.capsuleId = options.capsuleId ?? "cap_provider_destination_e2e";
-        attempt.planRunId = options.planRunId ?? "run_provider_plan_e2e";
+        attempt.planRunId = options.planRunIdFor?.(attempt.sequence) ?? options.planRunId ?? "run_provider_plan_e2e";
       }
     }
     attempt.generation += 1;
@@ -570,8 +573,12 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
     sequence += 1;
     const id = `gip_${sequence.toString(16).padStart(16, "0")}`;
     const proposed = proposedAttemptName(source.url);
+    const bindings = Array.isArray(optionsBody?.providerBindings)
+      ? optionsBody.providerBindings as Record<string, unknown>[]
+      : undefined;
     const attempt: StoredAttempt = {
       id,
+      sequence,
       idempotencyKey: key,
       workspaceId,
       createdBy,
@@ -586,7 +593,10 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         name: typeof capsule?.name === "string" ? capsule.name : proposed,
         environment: typeof capsule?.environment === "string" ? capsule.environment : "production",
       },
-      options: typeof optionsBody?.modulePath === "string" ? { modulePath: optionsBody.modulePath } : {},
+      options: {
+        ...(typeof optionsBody?.modulePath === "string" ? { modulePath: optionsBody.modulePath } : {}),
+        ...(bindings ? { providerBindings: bindings } : {}),
+      },
       phase: "syncing_source",
       generation: 0,
       rounds: 0,

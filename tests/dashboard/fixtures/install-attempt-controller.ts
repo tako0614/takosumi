@@ -1,6 +1,6 @@
 /**
- * Behavior of the install page's attempt controller (TASK-0115 Phase 3b)
- * against a scripted coordinator. Invoked by
+ * Behavior of the install page's attempt controller (TASK-0115) against a
+ * scripted coordinator. Invoked by
  * tests/dashboard/src/views/new/install-attempt-controller_test.ts with
  * --conditions=browser so Solid's reactive build runs the effects.
  */
@@ -67,10 +67,11 @@ function respond(
   userAction: GitInstallPlanUserAction,
   generation: number,
   phase: string = userAction.kind === "wait" ? userAction.phase : userAction.kind === "review_run" ? "reviewable" : "awaiting_input",
+  id: string = ID,
 ): GitInstallPlanResponse {
   return {
     installPlan: {
-      id: ID,
+      id,
       workspaceId: "ws_alpha",
       createdBy: "sub_me",
       operation: "install",
@@ -134,7 +135,7 @@ async function until(condition: () => boolean, label: string): Promise<void> {
  * A page with a virtual clock: each pause between reconcile commands is
  * recorded and advances the clock at once (yielding to the event loop).
  */
-function mount(initialAttemptId?: string) {
+function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number } = {}) {
   let dispose!: () => void;
   const [attemptId, setAttemptId] = solid.createSignal<string | undefined>(initialAttemptId);
   const left: string[] = [];
@@ -158,6 +159,8 @@ function mount(initialAttemptId?: string) {
           return new Promise<void>((resolve) => setTimeout(resolve, 0));
         },
       },
+      // Tests that confirm by hand never race the page's own confirmation.
+      settleMs: mountOptions.settleMs ?? 60_000,
     });
   });
   return { attempt, dispose, attemptId, left, pauses, clock };
@@ -294,7 +297,10 @@ describe("install attempt controller", () => {
     ]);
     const elsewhere = calls.filter((call) => call !== answers[2]);
     expect(JSON.stringify(elsewhere)).not.toContain(SECRET);
-    // Once confirmed, the values are gone from the page's memory.
+    // The values stay in this page's memory only, so a change after the Plan
+    // can send them again, and are gone once the install is done.
+    expect(page.attempt.drafts()).toEqual({ api_token: { value: SECRET, touched: true } });
+    page.attempt.finish();
     expect(page.attempt.drafts()).toEqual({});
     page.dispose();
   });
@@ -545,7 +551,7 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
-  test("values typed for a confirmation whose answer was lost are dropped once it went through", async () => {
+  test("values typed for a confirmation whose answer was lost stay in memory only until the install ends", async () => {
     let confirmed = false;
     reset({
       getGitInstallPlan: async () =>
@@ -563,6 +569,8 @@ describe("install attempt controller", () => {
     page.attempt.setDraft("api_token", SECRET);
     await page.attempt.confirm();
     expect(page.attempt.view().stage).not.toBe("provide_inputs");
+    expect(page.attempt.drafts()).toEqual({ api_token: { value: SECRET, touched: true } });
+    page.attempt.finish();
     expect(page.attempt.drafts()).toEqual({});
     page.dispose();
   });
@@ -663,6 +671,192 @@ describe("install attempt controller", () => {
     const start = calls.find(({ name }) => name === "createGitInstallAttempt");
     expect(start?.args[1]).toEqual({ mode: "attempt", source: { url: URL_, ref: commit } });
     expect(page.attempt.resolvedVersion()).toEqual({ tag: "v1.4.2", commit });
+    page.dispose();
+  });
+  // --- Two decisions: the Plan is made on its own ---------------------------
+
+  const ready = () => inputs({
+    connections: [{ ...requirement, candidates: [requirement.candidates[0]], selectedConnectionId: "conn_a", autoSelected: true }],
+    variables: [],
+    missing: [],
+  });
+  const answerBodies = () =>
+    calls.filter(({ name }) => name === "answerGitInstallAttempt").map(({ args }) => args[1] as Record<string, unknown>);
+  const pause = (milliseconds: number) => new Promise((done) => setTimeout(done, milliseconds));
+
+  test("a complete sheet is confirmed on its own once edits settle, and only once", async () => {
+    let generation = 0;
+    reset({
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, generation),
+      reconcileGitInstallPlan: async () => {
+        generation += 1;
+        return generation === 1
+          ? respond(ready(), generation)
+          : respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, generation);
+      },
+      answerGitInstallAttempt: async () => {
+        generation += 1;
+        return respond({ kind: "wait", phase: "planning" }, generation);
+      },
+    });
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    await pause(30);
+    expect(answerBodies()).toEqual([{ expectedGeneration: 1, continue: true }]);
+    // Making the Plan never applies it.
+    expect(calls.some(({ name }) => /apply|approve/u.test(name))).toBe(false);
+    expect(page.attempt.view().applyBlock).toBeUndefined();
+    page.dispose();
+  });
+
+  test("nothing is confirmed while a connection or a required setting is missing", async () => {
+    let generation = 4;
+    const sheet = (selected: boolean) => inputs({
+      connections: [selected ? { ...requirement, selectedConnectionId: "conn_b" } : requirement],
+      missing: selected ? [] : ["connections"],
+    });
+    reset({
+      getGitInstallPlan: async () => respond(sheet(false), generation),
+      answerGitInstallAttempt: async (_id: never, body: never) => {
+        generation += 1;
+        return (body as { continue?: boolean }).continue
+          ? respond({ kind: "wait", phase: "planning" }, generation)
+          : respond(sheet(true), generation);
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, generation + 1),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.resume();
+    await pause(30);
+    expect(page.attempt.view().applyBlock).toBe("connections");
+    await page.attempt.chooseConnection(requirement, "conn_b");
+    await pause(30);
+    // The connection is there; the required secret is not.
+    expect(page.attempt.view().applyBlock).toBe("settings");
+    expect(answerBodies().filter((body) => body.continue)).toEqual([]);
+    page.attempt.setDraft("api_token", SECRET);
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    expect(answerBodies().filter((body) => body.continue)).toEqual([
+      { expectedGeneration: 5, continue: true, variables: { api_token: SECRET } },
+    ]);
+    page.dispose();
+  });
+
+  test("a reopened complete sheet is only read until the person continues", async () => {
+    reset({
+      getGitInstallPlan: async () => respond(ready(), 3),
+      answerGitInstallAttempt: async () => respond({ kind: "wait", phase: "planning" }, 4),
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 5),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    await pause(30);
+    expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
+    expect(page.attempt.view()).toMatchObject({ applyBlock: "paused", progress: "paused" });
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    expect(answerBodies()).toEqual([{ expectedGeneration: 3, continue: true }]);
+    page.dispose();
+  });
+
+  test("a confirmation that did not go through is not sent again on its own", async () => {
+    let refuse = true;
+    reset({
+      getGitInstallPlan: async () => respond(ready(), 3),
+      answerGitInstallAttempt: async () => {
+        if (refuse) throw new api.ControlApiError(409, "install_inputs_incomplete", "incomplete", "provider_connection_required");
+        return respond({ kind: "wait", phase: "planning" }, 4);
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 5),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.resume();
+    await until(() => answerBodies().length === 1, "the first confirmation");
+    await pause(40);
+    expect(answerBodies()).toHaveLength(1);
+    expect(page.attempt.error()).toBeTruthy();
+    expect(page.attempt.view().applyBlock).toBe("paused");
+    refuse = false;
+    page.attempt.resume();
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    expect(answerBodies()).toHaveLength(2);
+    page.dispose();
+  });
+
+  test("a change after the Plan prepares the install again once, with the same answers", async () => {
+    const SECOND = "gip_00000000000000b2";
+    let creates = 0;
+    const generations: Record<string, number> = { [ID]: 0, [SECOND]: 0 };
+    const id = () => (creates === 1 ? ID : SECOND);
+    const settingSheet = () => inputs({
+      connections: [{ ...requirement, selectedConnectionId: "conn_b" }],
+      variables: [{ name: "domain", type: "string", required: false, sensitive: false }],
+      missing: [],
+      modulePath: "deploy",
+    });
+    reset({
+      createGitInstallAttempt: async () => {
+        creates += 1;
+        return respond({ kind: "wait", phase: "syncing_source" }, 0, undefined, id());
+      },
+      reconcileGitInstallPlan: async (attemptId: never) => {
+        const current = attemptId as unknown as string;
+        generations[current] = (generations[current] ?? 0) + 1;
+        const generation = generations[current]!;
+        return generation === 1
+          ? respond(settingSheet(), generation, undefined, current)
+          : respond({ kind: "review_run", planRunId: `run_${current}`, capsuleId: "cap_office" }, generation, undefined, current);
+      },
+      answerGitInstallAttempt: async (attemptId: never) => {
+        const current = attemptId as unknown as string;
+        generations[current] = (generations[current] ?? 0) + 1;
+        return respond({ kind: "wait", phase: "planning" }, generations[current]!, undefined, current);
+      },
+      getGitInstallPlan: async (attemptId: never) => {
+        const current = attemptId as unknown as string;
+        return respond({ kind: "review_run", planRunId: `run_${current}`, capsuleId: "cap_office" }, generations[current]!, undefined, current);
+      },
+      discardGitInstallAttempt: async (attemptId: never) => {
+        const current = attemptId as unknown as string;
+        generations[current] = (generations[current] ?? 0) + 1;
+        return respond({ kind: "none" }, generations[current]!, "discarded", current);
+      },
+    });
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "review", "the first Plan");
+    page.attempt.setDraft("domain", "apps.example.com");
+    // The shown Plan is out of date at once: it can no longer be applied.
+    expect(page.attempt.outdated()).toBe(true);
+    expect(page.attempt.view().applyBlock).toBe("replanning");
+    await until(() => page.attempt.view().stage === "review" && page.attempt.response()?.installPlan.id === SECOND, "the new Plan");
+    await pause(40);
+
+    expect(calls.filter(({ name }) => name === "discardGitInstallAttempt").map(({ args }) => args[0])).toEqual([ID]);
+    const created = calls.filter(({ name }) => name === "createGitInstallAttempt").map(({ args }) => args[1]);
+    // The same repository (its default version), with the name, module and
+    // connection the person had.
+    expect(created).toEqual([
+      { mode: "attempt", source: { url: URL_ } },
+      {
+        mode: "attempt",
+        source: { url: URL_ },
+        capsule: { name: "office" },
+        options: { modulePath: "deploy", providerBindings: [{ provider: requirement.provider, moduleLocalName: "cloudflare", connectionId: "conn_b" }] },
+      },
+    ]);
+    // Values go only with each attempt's confirmation, never with a create.
+    expect(answerBodies()).toEqual([
+      { expectedGeneration: 1, continue: true },
+      { expectedGeneration: 1, continue: true, variables: { domain: "apps.example.com" } },
+    ]);
+    expect(JSON.stringify(created)).not.toContain("apps.example.com");
+    expect(page.attemptId()).toBe(SECOND);
+    expect(page.attempt.view().applyBlock).toBeUndefined();
+    expect(calls.some(({ name }) => /apply|approve/u.test(name))).toBe(false);
     page.dispose();
   });
 });

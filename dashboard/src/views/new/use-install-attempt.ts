@@ -1,13 +1,23 @@
 /**
- * The install page's one attempt (TASK-0115 Phase 3b): a thin client of the
- * install-plan coordinator.
+ * The install page's one attempt (TASK-0115): a thin client of the
+ * install-plan coordinator behind one install screen.
  *
  * The page asks the coordinator, follows the `userAction` it returns and
  * answers with PATCH. Nothing here decides compatibility, modules or
  * connections. Reading the attempt named by the URL is a GET only; the
  * coordinator is advanced (reconcile) only after the person starts or
- * continues in this page view. Setting values live in this controller's
- * memory and leave it only inside the confirming answer.
+ * continues in this page view.
+ *
+ * Two decisions only: 「インストール」 starts the attempt, and the review's
+ * 「許可してインストール」 applies. In between, a complete sheet is confirmed
+ * on its own once the person's edits settle, which only makes a Plan
+ * (nothing is created in the cloud). A change after that marks the Plan out
+ * of date and prepares the install again: the attempt is discarded and a new
+ * one starts with the same answers.
+ *
+ * Setting values live in this controller's memory and leave it only inside
+ * a confirming answer; they are forgotten when the install is stopped,
+ * finished or the page goes away.
  */
 import { createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 import type {
@@ -15,6 +25,7 @@ import type {
   GitInstallPlan,
   GitInstallPlanConnectionRequirement,
   GitInstallPlanResponse,
+  GitInstallPlanUserAction,
   PatchGitInstallPlanRequest,
 } from "takosumi-contract";
 import {
@@ -42,20 +53,29 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  appNameValue,
   attemptBelongsHere,
   attemptCreateRequest,
   attemptProblemKey,
   awaitingResubmission,
   bindingsWith,
   canAdvance,
+  connectionKey,
   continueVariables,
   deriveInstallView,
+  INSTALL_SCREEN_STAGES,
   progressSignature,
+  replanRequest,
   restartRequest,
+  retainedBindings,
+  withConnectionOverrides,
+  type ConnectionOverrides,
   type InstallCandidate,
   type InstallView,
   type VariableDrafts,
 } from "./install-attempt.ts";
+
+type ProvideInputs = Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>;
 
 /** Delay bounds between reconcile commands; see gitPlanReconcileDelayMs. */
 const RECONCILE_FLOOR_MS = 250;
@@ -73,12 +93,19 @@ const MAX_RECONCILE_FAILURES = 3;
  */
 const DISCARD_LEASE_WAITS_MS = [1_000, 2_000, 3_000, 4_000, 5_000] as const;
 
+/**
+ * How long edits must rest before the sheet is confirmed on its own, or an
+ * out-of-date Plan is prepared again.
+ */
+const SETTLE_MS = 900;
+
 export type InstallMutation =
   | "start"
   | "answer"
   | "continue"
   | "discard"
-  | "restart";
+  | "restart"
+  | "replan";
 
 export interface ResolvedStoreVersion {
   readonly tag: string;
@@ -200,6 +227,8 @@ export interface InstallAttemptOptions {
   /** Take the attempt out of the URL; the page shows the same app again. */
   readonly onLeft: (plan: GitInstallPlan) => void;
   readonly pacing?: InstallAttemptPacing;
+  /** How long edits rest before confirming or preparing again (tests shorten it). */
+  readonly settleMs?: number;
 }
 
 export function useInstallAttempt(options: InstallAttemptOptions) {
@@ -211,8 +240,31 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [confirming, setConfirming] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const [drafts, setDrafts] = createSignal<VariableDrafts>({});
-  const [nameDraft, setNameDraft] = createSignal<string>();
+  const [nameDraft, setNameDraftSignal] = createSignal<string>();
+  /** The name field has focus with typing not yet left (Enter or blur). */
+  const [nameEditing, setNameEditing] = createSignal(false);
   const [resolvedVersion, setResolvedVersion] = createSignal<ResolvedStoreVersion>();
+  /** The last sheet the coordinator asked for, kept while it moves past it. */
+  const [sheet, setSheet] = createSignal<ProvideInputs>();
+  /** Connections chosen after the sheet went behind; the next attempt uses them. */
+  const [overrides, setOverrides] = createSignal<ConnectionOverrides>({});
+  /** A version typed for the next attempt (a version is read by a new attempt). */
+  const [refDraft, setRefDraft] = createSignal<string>();
+  /** Bumped by every edit the person makes. */
+  const [editVersion, setEditVersion] = createSignal(0);
+  /** The person acted in this page view; a complete sheet may be confirmed. */
+  const [armed, setArmed] = createSignal(false);
+  /** `editVersion` when this attempt's Plan was asked for. */
+  const [planVersion, setPlanVersion] = createSignal<number>();
+  /** The install is being prepared again until its new Plan (or the person) is needed. */
+  const [replanning, setReplanning] = createSignal(false);
+  const settleMs = options.settleMs ?? SETTLE_MS;
+  /** The attempt and edit a confirmation was sent for on its own, never twice. */
+  let autoSentFor: string | undefined;
+  /** The edit the last preparation-again covered, never prepared twice. */
+  let replannedVersion = -1;
+  /** Whether this page view started the install from a Store listing. */
+  let startedFromStore = false;
 
   const now = options.pacing?.now ?? (() => Date.now());
   const wait = options.pacing?.wait ??
@@ -248,6 +300,17 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const awaitingLoad = () =>
     Boolean(options.attemptId()) && !response() && !loadFailed();
 
+  /**
+   * The Plan asked for no longer matches what the person chose: they changed
+   * something after it was asked for, or chose another version.
+   */
+  const outdated = createMemo(() => {
+    if (refDraft() !== undefined) return true;
+    const asked = planVersion();
+    return asked !== undefined && editVersion() > asked &&
+      response()?.userAction.kind !== "provide_inputs";
+  });
+
   const view = createMemo<InstallView>(() => {
     const current = mutating();
     return deriveInstallView(response(), {
@@ -259,7 +322,17 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       loadFailed: loadFailed(),
       drafts: drafts(),
       name: nameDraft(),
+      armed: armed(),
+      confirming: confirming() || current === "continue",
+      outdated: outdated(),
+      replanning: replanning(),
     });
+  });
+
+  /** The connection rows as the person last chose them. */
+  const connectionRows = createMemo(() => {
+    const retained = sheet();
+    return retained ? withConnectionOverrides(retained.connections, overrides()) : [];
   });
 
   const clearCaches = (workspaceId: string) => {
@@ -270,7 +343,26 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
 
   const forgetInputs = () => {
     setDrafts({});
-    setNameDraft(undefined);
+    setNameDraftSignal(undefined);
+    setNameEditing(false);
+  };
+
+  /** Everything this page view kept for one install, values included. */
+  const forgetSession = () => {
+    forgetInputs();
+    setSheet(undefined);
+    setOverrides({});
+    setRefDraft(undefined);
+    setPlanVersion(undefined);
+    setReplanning(false);
+    setArmed(false);
+    autoSentFor = undefined;
+  };
+
+  /** The person changed something: count it, and let the page act on it. */
+  const edited = () => {
+    setEditVersion((value) => value + 1);
+    setArmed(true);
   };
 
   /**
@@ -299,9 +391,14 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     if (next.installPlan.capsuleId && !held?.installPlan.capsuleId) {
       clearCaches(next.installPlan.workspaceId);
     }
-    // Once the sheet is behind it (confirmed, even when the confirmation's
-    // own answer was lost), typed values have no reason to stay in memory.
-    if (next.userAction.kind !== "provide_inputs") forgetInputs();
+    // The sheet is kept while the coordinator moves past it, so the screen
+    // keeps showing (and editing) what the person chose. A fresh sheet is
+    // the coordinator's word again: no Plan was asked for from it yet.
+    if (next.userAction.kind === "provide_inputs") {
+      setSheet(next.userAction);
+      setOverrides({});
+      setPlanVersion(undefined);
+    }
     setResponse(next);
     setLoadFailed(false);
     return next;
@@ -339,7 +436,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         epoch += 1;
         halt();
         setResponse(undefined);
-        forgetInputs();
+        forgetSession();
         setError(undefined);
         options.onLeft(held.installPlan);
         return;
@@ -350,7 +447,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setResponse(undefined);
       setLoadFailed(false);
       setError(undefined);
-      forgetInputs();
+      forgetSession();
       if (!attemptId) return;
       const expected = epoch;
       if (!workspaceId) {
@@ -511,7 +608,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
-  const adoptNewAttempt = (created: GitInstallPlanResponse, expected: number): boolean => {
+  const adoptNewAttempt = (
+    created: GitInstallPlanResponse,
+    expected: number,
+    adoptOptions: { readonly keepAnswers?: boolean } = {},
+  ): boolean => {
     if (disposed || expected !== epoch) return false;
     if (
       !attemptBelongsHere(created, {
@@ -523,9 +624,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setError(t("installStore.error.unavailable"));
       return false;
     }
-    forgetInputs();
+    // Preparing again keeps the person's answers (and the sheet they see)
+    // for the new attempt; anything else starts from nothing.
+    if (!adoptOptions.keepAnswers) forgetSession();
+    setPlanVersion(undefined);
     setResponse(created);
     setLoadFailed(false);
+    setArmed(true);
     options.onStarted(created.installPlan.id);
     drive();
     return true;
@@ -561,7 +666,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         if (expected === epoch) setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
       }
       const created = await postAttempt(workspaceId, attemptCreateRequest({ ...candidate, ref }));
-      adoptNewAttempt(created, expected);
+      if (adoptNewAttempt(created, expected)) startedFromStore = startOptions.fromStore;
     } catch (cause) {
       if (!disposed) setError(installErrorMessage(cause));
     } finally {
@@ -569,9 +674,22 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
-  /** Continue a paused attempt or try a step again: follow the coordinator. */
+  /**
+   * 「続ける」: continue a paused attempt, try a step again, or confirm a
+   * complete sheet that was waiting for the person (a reopened attempt, or a
+   * confirmation that did not go through).
+   */
   const resume = () => {
     if (mutating()) return;
+    setArmed(true);
+    const current = response();
+    if (current?.userAction.kind === "provide_inputs") {
+      if (view().readyToConfirm) {
+        autoSentFor = `${current.installPlan.id}:${editVersion()}`;
+        void confirm();
+      }
+      return;
+    }
     drive();
   };
 
@@ -614,33 +732,50 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
+  /** The repository has several apps: the person's choice, inline. */
   const chooseModule = async (modulePath: string): Promise<void> => {
+    edited();
     const next = await answer({ modulePath }, "answer");
     if (next) drive();
   };
 
+  /**
+   * Choose a row's connection. While the coordinator asks for the sheet the
+   * choice is its answer; once it moved past the sheet the choice is kept
+   * here and the install is prepared again with it.
+   */
   const chooseConnection = async (
     requirement: GitInstallPlanConnectionRequirement,
     connectionId: string,
   ): Promise<boolean> => {
     const current = response();
-    if (current?.userAction.kind !== "provide_inputs") return false;
-    const next = await answer(
-      { providerBindings: bindingsWith(current.userAction.connections, requirement, connectionId) },
-      "answer",
-    );
-    return Boolean(next);
+    if (current?.userAction.kind === "provide_inputs") {
+      edited();
+      const next = await answer(
+        { providerBindings: bindingsWith(current.userAction.connections, requirement, connectionId) },
+        "answer",
+      );
+      return Boolean(next);
+    }
+    if (!sheet() || mutating()) return false;
+    setOverrides((current) => ({ ...current, [connectionKey(requirement)]: connectionId }));
+    edited();
+    return true;
   };
 
   /**
-   * A connection made from the sheet is chosen for its row once the
+   * A connection made from the screen is chosen for its row once the
    * coordinator offers it there. A connection the install policy refuses is
-   * reported, never silently left unselected.
+   * reported, never silently left unselected. Once the coordinator moved
+   * past the sheet, the new attempt it prepares checks the choice.
    */
   const adoptConnection = async (
     requirement: GitInstallPlanConnectionRequirement,
     connectionId: string,
   ): Promise<"selected" | "not_offered" | "unavailable"> => {
+    if (response()?.userAction.kind !== "provide_inputs") {
+      return (await chooseConnection(requirement, connectionId)) ? "selected" : "unavailable";
+    }
     const fresh = await refresh();
     if (fresh?.userAction.kind !== "provide_inputs") return "unavailable";
     const row = fresh.userAction.connections.find(
@@ -657,26 +792,70 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     return (await chooseConnection(row, connectionId)) ? "selected" : "unavailable";
   };
 
-  /** Rename the app before it exists (sent when the field is left). */
-  const saveName = async (): Promise<void> => {
-    const current = response();
-    const typed = nameDraft()?.trim();
-    if (current?.userAction.kind !== "provide_inputs" || typed === undefined) return;
-    if (awaitingResubmission(current.userAction)) return;
-    if (typed === current.userAction.name.current) {
-      setNameDraft(undefined);
-      return;
-    }
-    if (view().nameProblem === "invalid") return;
-    const next = await answer({ capsuleName: typed }, "answer");
-    // A name typed while this rename was in flight is kept for the next one.
-    if (next && nameDraft()?.trim() === typed) setNameDraft(undefined);
+  /** The name the install uses now (before any typing is left). */
+  const currentName = (): string | undefined =>
+    sheet()?.name.current ?? response()?.installPlan.capsule.name;
+
+  /** Typing in the name field; it counts as a change once the field is left. */
+  const setNameDraft = (value: string | undefined) => {
+    setNameDraftSignal(value);
+    setNameEditing(value !== undefined);
   };
 
   /**
-   * 「内容を確認」: confirm the sheet; setting values leave memory only here.
-   * A sheet answer still in flight (leaving the name field starts one) is
-   * waited for first, so the click is never lost.
+   * The name field was left (blur or Enter). While the coordinator asks for
+   * the sheet the new name is its answer; after that the install is
+   * prepared again with it.
+   */
+  const saveName = async (): Promise<void> => {
+    setNameEditing(false);
+    const typed = nameDraft()?.trim();
+    if (typed === undefined) return;
+    const current = response();
+    if (current?.userAction.kind === "provide_inputs" && awaitingResubmission(current.userAction)) return;
+    if (typed === currentName()) {
+      setNameDraftSignal(undefined);
+      return;
+    }
+    if (!appNameValue(typed)) return;
+    edited();
+    if (current?.userAction.kind !== "provide_inputs") return;
+    const next = await answer({ capsuleName: typed }, "answer");
+    // A name typed while this rename was in flight is kept for the next one.
+    if (next && nameDraft()?.trim() === typed) setNameDraftSignal(undefined);
+  };
+
+  /** A setting typed in the screen; it stays in this page's memory only. */
+  const setDraft = (name: string, value: string) => {
+    setDrafts((current) => ({ ...current, [name]: { value, touched: true } }));
+    edited();
+  };
+
+  /**
+   * Another version: it is read by a new attempt, so the install is
+   * prepared again with it (empty means the default, or a Store listing's
+   * newest release).
+   */
+  const changeVersion = (text: string) => {
+    const current = response();
+    if (!current || mutating()) return;
+    const next = text.trim();
+    const shown = refDraft() ?? current.installPlan.source.ref;
+    if (next === shown || (next === "" && shown === "HEAD")) return;
+    const resolved = resolvedVersion();
+    if (resolved && next === resolved.tag && current.installPlan.source.ref === resolved.commit) {
+      setRefDraft(undefined);
+      return;
+    }
+    setRefDraft(next);
+    edited();
+  };
+
+  /**
+   * Confirm the sheet; setting values leave memory only here. A sheet answer
+   * still in flight (leaving the name field starts one) is waited for first.
+   * The page sends it on its own once the sheet is complete and edits
+   * settle; it only makes a Plan.
    */
   const confirm = async (): Promise<void> => {
     if (confirming()) return;
@@ -689,11 +868,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const values = continueVariables(action, drafts());
       if (!values.ok) {
         setError(t("installStore.error.settingsInvalid"));
+        setArmed(false);
         return;
       }
       const typed = nameDraft()?.trim();
       const rename = typed !== undefined && typed !== action.name.current &&
         !awaitingResubmission(action);
+      const version = untrack(editVersion);
       const next = await answer(
         {
           continue: true,
@@ -702,15 +883,137 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
         },
         "continue",
       );
-      if (!next) return;
-      if (rename && next.userAction.kind === "provide_inputs" && nameDraft()?.trim() === typed) {
-        setNameDraft(undefined);
+      if (!next) {
+        // Not sent again on its own: the person continues or changes something.
+        setArmed(false);
+        return;
       }
+      if (next.userAction.kind !== "provide_inputs") setPlanVersion(version);
+      if (rename && nameDraft()?.trim() === typed) setNameDraftSignal(undefined);
       drive();
     } finally {
       if (!disposed) setConfirming(false);
     }
   };
+
+  /**
+   * Prepare the install again after a change made once its Plan was asked
+   * for: discard the attempt (its unapplied app goes with it) and start a
+   * new one with the same repository, the person's name, version, module and
+   * connections. Setting values stay here and go with the new attempt's
+   * confirmation. Runs at most once per edit.
+   */
+  const replan = async (): Promise<boolean> => {
+    const current = response();
+    if (!current || mutating()) return false;
+    replannedVersion = untrack(editVersion);
+    setMutating("replan");
+    setReplanning(true);
+    setError(undefined);
+    try {
+      await stopDriving();
+      const latest = response() ?? current;
+      const plan = latest.installPlan;
+      const workspaceId = plan.workspaceId;
+      const retained = sheet();
+      const rows = retained ? withConnectionOverrides(retained.connections, overrides()) : [];
+      const typed = nameDraft()?.trim();
+      const name = typed && appNameValue(typed) ? typed : (currentName() ?? plan.capsule.name);
+      const refText = refDraft();
+      let ref = refText ?? plan.source.ref;
+      if (refText === "" && startedFromStore) {
+        const resolved = await resolveStableSourceTag(workspaceId, plan.source.url);
+        if (!isImmutableSourceRevision(resolved.commit)) {
+          throw new ControlApiError(
+            502,
+            "invalid_stable_source_tag_response",
+            "Stable source tag resolution did not return an immutable commit.",
+          );
+        }
+        ref = resolved.commit;
+        setResolvedVersion({ tag: resolved.tag, commit: resolved.commit });
+      }
+      const request = replanRequest(plan, {
+        name,
+        ref,
+        ...(retained ? { modulePath: retained.modulePath } : {}),
+        providerBindings: retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
+      });
+      if (plan.phase !== "discarded") {
+        await discardInstallAttempt(plan.id, plan.generation, wait);
+      }
+      if (disposed || currentWorkspaceId() !== workspaceId) return false;
+      clearCaches(workspaceId);
+      const expected = ++epoch;
+      const created = await postAttempt(workspaceId, request);
+      if (!adoptNewAttempt(created, expected, { keepAnswers: true })) return false;
+      // The new attempt starts with these answers; until its own sheet
+      // arrives the screen keeps showing them.
+      if (retained) {
+        setSheet({ ...retained, connections: rows, name: { ...retained.name, current: name, conflict: false } });
+      }
+      setOverrides({});
+      if (nameDraft()?.trim() === name) setNameDraftSignal(undefined);
+      if (refDraft() === refText) setRefDraft(undefined);
+      return true;
+    } catch (cause) {
+      if (!disposed) {
+        setError(installErrorMessage(cause));
+        setReplanning(false);
+        // The changed version is not retried on its own.
+        setRefDraft(undefined);
+        await refresh();
+      }
+      return false;
+    } finally {
+      if (!disposed) setMutating(undefined);
+    }
+  };
+
+  // A complete sheet is confirmed on its own once edits settle, at most once
+  // per attempt and edit, and only after the person acted in this page view.
+  createEffect(() => {
+    const current = response();
+    const ready = view().readyToConfirm;
+    const version = editVersion();
+    if (current?.userAction.kind !== "provide_inputs" || !ready) return;
+    if (!armed() || mutating() || confirming() || nameEditing() || outdated()) return;
+    const key = `${current.installPlan.id}:${version}`;
+    if (autoSentFor === key) return;
+    const timer = setTimeout(() => {
+      if (disposed || autoSentFor === key || untrack(editVersion) !== version) return;
+      autoSentFor = key;
+      void confirm();
+    }, settleMs);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  // An out-of-date Plan is prepared again once edits settle, once per edit.
+  createEffect(() => {
+    if (!outdated()) return;
+    const stage = view().stage;
+    const version = editVersion();
+    if (!INSTALL_SCREEN_STAGES.has(stage) || stage === "starting") return;
+    if (mutating() || confirming() || nameEditing() || version <= replannedVersion) return;
+    const timer = setTimeout(() => {
+      if (disposed || untrack(editVersion) !== version) return;
+      void replan();
+    }, settleMs);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  // Preparing again ends when the new Plan is there or the person is needed.
+  createEffect(() => {
+    if (!replanning() || mutating()) return;
+    const current = view();
+    if (
+      current.stage === "review" || current.stage === "choose_module" ||
+      (current.stage === "provide_inputs" && !current.readyToConfirm) ||
+      !INSTALL_SCREEN_STAGES.has(current.stage)
+    ) {
+      setReplanning(false);
+    }
+  });
 
   /** 「やめる」: throw the whole attempt away. Never alongside another request. */
   const discard = async (): Promise<boolean> => {
@@ -730,7 +1033,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       clearCaches(latest.installPlan.workspaceId);
       epoch += 1;
       setResponse(undefined);
-      forgetInputs();
+      forgetSession();
       setResolvedVersion(undefined);
       options.onLeft(discarded.installPlan);
       return true;
@@ -792,8 +1095,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
-  const setDraft = (name: string, value: string) =>
-    setDrafts((current) => ({ ...current, [name]: { value, touched: true } }));
+  /** The install is done: nothing typed for it stays in memory. */
+  const finish = () => {
+    halt();
+    forgetSession();
+  };
 
   return {
     response,
@@ -809,16 +1115,23 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     nameDraft,
     setNameDraft,
     resolvedVersion,
+    sheet,
+    connectionRows,
+    refDraft,
+    outdated,
+    replanning,
     start,
     resume,
     chooseModule,
     chooseConnection,
     adoptConnection,
     saveName,
+    changeVersion,
     confirm,
     discard,
     restart,
     reload,
+    finish,
   };
 }
 

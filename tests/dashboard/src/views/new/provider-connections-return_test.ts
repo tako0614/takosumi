@@ -34,8 +34,11 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("provider rows and their candidates come only from the coordinator", () => {
-    // The page does no compatibility analysis or connection matching itself.
-    expect(sheet).toContain("props.action.connections");
+    // The page does no compatibility analysis or connection matching itself:
+    // the rows are the coordinator's sheet, with the person's later choices
+    // applied on top.
+    expect(sheet).toContain("const rows = () => props.attempt.connectionRows();");
+    expect(controller).toContain("withConnectionOverrides(retained.connections, overrides())");
     expect(sheet).toContain("requirement().candidates");
     for (const source of [sheet, view, controller]) {
       expect(source).not.toContain("listProviderConnections");
@@ -52,7 +55,7 @@ describe("/new Provider Connections return context", () => {
     // A connection made in the sheet is chosen only once the coordinator offers it.
     const adopt = controller.slice(
       controller.indexOf("const adoptConnection = async"),
-      controller.indexOf("/** Rename the app before it exists"),
+      controller.indexOf("/** The name the install uses now"),
     );
     expect(adopt).toContain("await refresh()");
     expect(adopt).toContain('return "not_offered"');

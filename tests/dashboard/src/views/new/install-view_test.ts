@@ -1,6 +1,6 @@
 /**
- * Structural invariants of the attempt-driven install page (TASK-0115 Phase
- * 3b). The behavior of each state lives in install-attempt_test.ts and the
+ * Structural invariants of the attempt-driven install page (TASK-0115). The
+ * behavior of each state lives in install-attempt_test.ts and the
  * controller's requests in install-attempt-controller_test.ts; these checks
  * pin what must never come back into the page's sources.
  */
@@ -41,11 +41,18 @@ describe("attempt-driven install page", () => {
     expect(controller.match(/createGitInstallAttempt\(/gu)).toHaveLength(1);
     const post = between(controller, "const postAttempt = async", "const adoptNewAttempt =");
     expect(post).toContain("createGitInstallAttempt(workspaceId, request, key)");
-    // …is reached from the Install action and from starting over, nowhere else.
+    // …is reached from the Install action, from starting over and from
+    // preparing again after a change, nowhere else.
     const callers = controller.match(/await postAttempt\(/gu) ?? [];
-    expect(callers).toHaveLength(2);
+    expect(callers).toHaveLength(3);
     expect(between(controller, "const start = async", "const resume = () =>")).toContain("await postAttempt(");
     expect(between(controller, "const restart = async", "const reload = async")).toContain("await postAttempt(");
+    expect(between(controller, "const replan = async", "// A complete sheet is confirmed")).toContain("await postAttempt(");
+    // Preparing again runs only for an out-of-date Plan, once per edit.
+    expect(controller.match(/void replan\(\)/gu)).toHaveLength(1);
+    const replanEffect = between(controller, "// An out-of-date Plan is prepared again", "// Preparing again ends");
+    expect(replanEffect).toContain("if (!outdated()) return;");
+    expect(replanEffect).toContain("version <= replannedVersion");
     expect(view).toContain("void attempt.start(");
     expect(view.match(/attempt\.start\(/gu)).toHaveLength(1);
     // A workspace is created only on that same Install path.
@@ -59,11 +66,17 @@ describe("attempt-driven install page", () => {
       expect(source).not.toContain("approveRun");
       expect(source).not.toMatch(/auto=|autoApply|auto-apply/u);
     }
-    expect(view).toContain("<InstallExecution");
+    expect(sheet).toContain("<InstallExecution");
     const execution = read("dashboard/src/views/new/InstallExecution.tsx");
     const install = between(execution, "const install = async", "// Apply starts only from");
     expect(install).toContain("createApplyRun(runId()");
+    // An out-of-date Plan is never applied.
+    expect(install).toContain("if (props.blockedReason ||");
     expect(execution.match(/void install\(\)/gu)).toHaveLength(1);
+    // Before the Plan, 「許可してインストール」 is shown but cannot be pressed.
+    const preview = between(sheet, "function PlanPreview(", "function PlanReview(");
+    expect(preview).toContain('<Button type="button" variant="primary" size="lg" disabled>');
+    expect(preview).not.toContain("onClick");
   });
 
   test("inputs and secrets never reach the URL or browser storage", () => {
@@ -98,7 +111,7 @@ describe("attempt-driven install page", () => {
   });
 
   test("a reopened review asks the app where it stands before offering the apply", () => {
-    const review = between(view, "function InstallReview(", "/** A stopped attempt:");
+    const review = between(sheet, "function PlanReview(", "export function InstallScreen(");
     expect(review).toContain("getCapsuleApp(capsuleId)");
     expect(review.indexOf("<Show\n        when={!app.loading}")).toBeLessThan(review.indexOf("<InstallExecution"));
     expect(review).toContain("if (app()?.applied) props.onDone(props.action.capsuleId);");
@@ -108,7 +121,21 @@ describe("attempt-driven install page", () => {
 
   test("installed apps are linked at /apps/:id", () => {
     for (const source of pageSources) expect(source).not.toContain("/workloads/");
-    expect(view).toContain("navigate(appPageHref(capsuleId), { replace: true });");
+    expect(view).toContain("href={appPageHref(done().capsuleId)}");
+  });
+
+  test("only two decisions: the screen asks for no next click between them", () => {
+    // No separate review or module confirmation button remains.
+    expect(sheet).not.toContain("installStore.reviewChanges");
+    expect(sheet).not.toContain("installStore.moduleConfirm");
+    // The confirmation is sent on its own (once per attempt and edit) or by
+    // 「続ける」 on a paused install, never by another button.
+    expect(controller.match(/void confirm\(\)/gu)).toHaveLength(2);
+    const auto = between(controller, "// A complete sheet is confirmed", "// An out-of-date Plan is prepared again");
+    expect(auto).toContain("if (!armed() ||");
+    expect(auto).toContain("if (autoSentFor === key) return;");
+    expect(between(controller, "const resume = () =>", "/** One PATCH")).toContain("void confirm()");
+    expect(sheet.match(/\.confirm\(/gu)).toBeNull();
   });
 
   test("discarding never runs alongside another request", () => {
@@ -162,7 +189,7 @@ describe("attempt-driven install page", () => {
   });
 
   test("the not-installed page has one Install and lets the person choose the version", () => {
-    const candidate = between(view, '<Match when={stage() === "candidate"}>', "</Match>");
+    const candidate = between(view, '<Match when={stage() === "candidate" || stage() === "starting"}>', "</Match>");
     expect(candidate.match(/variant="primary"/gu)).toHaveLength(1);
     expect(candidate).toContain('t("installStore.install")');
     expect(candidate).toContain('t("installStore.startHint")');

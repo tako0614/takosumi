@@ -533,39 +533,27 @@ async function stubProviderDestinationFixture(
   return state;
 }
 
-/** The install sheet's own actions (Review / Connect, Stop installing). */
-function installSheetActions(page: Page) {
-  return page.getByTestId("install-configuration").locator(":scope > .iv-action-row");
-}
-
 /** Provider rows in the install sheet's connection block. */
 function installConnectionRows(page: Page) {
   return page.getByTestId("install-connections").getByTestId("install-required-connection");
 }
 
 /**
- * Press the app page's one Install button and wait for the install sheet. A
- * sheet whose only required field is the app name and whose connections are
- * ready goes straight to Review, which creates the Plan; it never applies it.
+ * Press the app page's one Install button and wait for the install screen.
+ * A sheet with nothing missing is confirmed on its own, which makes the Plan;
+ * it never applies it.
  */
 async function prepareInlineFixture(page: Page): Promise<void> {
   await page.getByRole("button", { name: /^(Install|インストール)$/u }).click();
   await expect.poll(async () =>
     await page.getByTestId("install-configuration").isVisible() ||
-    await page.getByTestId("install-module-chooser").isVisible() ||
     await page.locator(".iv-error, .iv-compat-warning").count() > 0,
   ).toBe(true);
-  const config = page.getByTestId("install-configuration");
-  if (!await config.isVisible()) return;
-  if (await config.getAttribute("data-install-state") === "ready" &&
-    await config.locator(".iv-sheet-block > .iv-fields").locator("input, select, textarea").count() === 1) {
-    await reviewInlineFixture(page);
-  }
 }
 
-/** Review creates the install Plan. Nothing is applied until Allow and install. */
-async function reviewInlineFixture(page: Page): Promise<void> {
-  await installSheetActions(page).getByRole("button", { name: /^(Review|内容を確認)$/u }).click();
+/** The Plan the screen made on its own once nothing was missing. */
+function installReview(page: Page) {
+  return page.getByTestId("install-review").locator(".iv-execution");
 }
 
 type ReadinessRouteHandler = (route: Route) => Promise<void>;
@@ -644,12 +632,10 @@ async function startReadinessBrowserFixture(
         { waitUntil: "domcontentloaded" },
       );
       await prepareInlineFixture(page);
-      await expect(page.locator(".iv-execution")).toBeVisible();
+      await expect(installReview(page)).toBeVisible();
       const installUrl = new URL(page.url());
       const originatingInstallPath = `${installUrl.pathname}${installUrl.search}`;
-      const allow = page
-        .locator(".iv-execution")
-        .getByRole("button", { name: "Allow and install", exact: true });
+      const allow = installReview(page).getByRole("button", { name: "Allow and install", exact: true });
       await expect(allow).toBeVisible();
       // A reviewed Plan never applies on its own.
       expect(applyPosts).toEqual([]);
@@ -1118,18 +1104,20 @@ test.describe("Takosumi dashboard browser surface", () => {
     await prepareInlineFixture(page);
     const sheet = page.getByTestId("install-configuration");
     await expect(sheet.getByRole("heading", { name: "Cloud connection" })).toBeVisible();
-    // Two candidates: the row asks for a choice and Review waits for it.
-    await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
-    await expect(installSheetActions(page).getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+    // Two candidates: the row asks for a choice and the Plan waits for it.
+    await expect(sheet).toHaveAttribute("data-install-state", "connections");
+    await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a connection to check it");
     await sheet.getByRole("combobox", { name: "Host / account" }).selectOption("pc_takosumi_cloud");
     await expect(installConnectionRows(page)).toHaveAttribute("data-connection-state", "connected");
     await expect(sheet.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
+    await expect(sheet).toHaveAttribute("data-install-state", "settings");
     await page.getByLabel("Region").fill("us-west-2");
-    await reviewInlineFixture(page);
-    await expect(page.getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
+    // Nothing else to press: the Plan is made once the setting is in.
+    await expect(installReview(page).getByRole("heading", { name: "What this app will create in your cloud" })).toBeVisible();
     const addButton = page.getByRole("button", { name: "Allow and install", exact: true });
     await expect(addButton).toBeDisabled();
-    // The connection choice is an answer; the setting travels only with Review.
+    // The connection choice is an answer; the setting travels only with the
+    // confirmation that made the Plan.
     expect(install.attempts.log.answers).toContainEqual(expect.objectContaining({
       providerBindings: [expect.objectContaining({
         provider: "registry.opentofu.org/cloudflare/cloudflare",

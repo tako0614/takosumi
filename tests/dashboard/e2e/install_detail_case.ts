@@ -203,14 +203,19 @@ async function detailFixture(
   };
 }
 
-/** The install sheet the attempt opens once the repository is read. */
+/** The one install screen 「インストール」 opens. */
 function installSheet(page: Page): Locator {
   return page.getByTestId("install-configuration");
 }
 
-/** The sheet's own actions (Review / Connect and Stop installing), not a row's. */
-function sheetActions(page: Page): Locator {
-  return installSheet(page).locator(":scope > .iv-action-row");
+/** Before the Plan: the preview, its disabled 「許可してインストール」 and 「やめる」. */
+function planPreview(page: Page): Locator {
+  return page.getByTestId("install-plan-preview");
+}
+
+/** The Plan the screen made on its own: resources, cost and the one apply click. */
+function planReview(page: Page): Locator {
+  return page.getByTestId("install-review").locator(".iv-execution");
 }
 
 /** One provider row in the sheet's connection block. */
@@ -225,10 +230,13 @@ async function openInstallSheet(page: Page): Promise<Locator> {
   return sheet;
 }
 
-/** Review confirms the sheet; Allow and install is the only Apply consent. */
-async function reviewPlan(page: Page): Promise<Locator> {
-  await sheetActions(page).getByRole("button", { name: "Review", exact: true }).click();
-  const review = page.locator(".iv-execution");
+/**
+ * Wait for the Plan: once nothing is missing the screen makes it on its own.
+ * Allow and install is the only Apply consent.
+ */
+async function waitForPlan(page: Page): Promise<Locator> {
+  const review = planReview(page);
+  await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(review.getByRole("heading", { name: "What this app will create in your cloud", exact: true })).toBeVisible();
   return review;
 }
@@ -289,11 +297,16 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations).toEqual([]);
 
       await page.getByRole("button", { name: "Install", exact: true }).click();
-      const reading = page.getByTestId("install-reading");
-      await expect(reading.getByRole("heading", { name: "Reading the repository", exact: true })).toBeVisible();
+      // One screen from here on: the progress is a line on it, and
+      // 「許可してインストール」 is there from the start, waiting with its reason.
+      const progress = installSheet(page).getByTestId("install-progress");
+      await expect(progress).toHaveText("Reading the repository");
       await expect(page).toHaveURL(/[?&]installPlan=gip_[0-9a-f]{16}/u);
+      await expect(planPreview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
+      await expect(page.getByTestId("install-apply-reason")).toHaveText("You can allow it once reading finishes");
+      await expect(planPreview(page).getByTestId("install-planned-resources")).toContainText("Shown here once the repository is read.");
+      await expect(planPreview(page).getByTestId("install-cost-pending")).toContainText("Not known yet.");
       await captureInstallState(page, "app-reading");
-      await expect(installSheet(page)).toBeVisible({ timeout: 15_000 });
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
       expect(f.attempts.log.creates).toEqual([{
         mode: "attempt",
@@ -301,7 +314,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         capsule: { name: "cloudflare-service" },
         options: { modulePath: "." },
       }]);
-      // Reading and the sheet never apply anything.
+      // Reading never applies anything (this coordinator reads slowly on
+      // purpose; the Plan itself is covered by the two-decision case).
+      await expect(installSheet(page).getByTestId("install-settings")).toBeVisible({ timeout: 30_000 });
       expect(f.mutations.some((m) => /\/(apply|approve)$/u.test(m))).toBe(false);
       expect(errors).toEqual([]);
     });
@@ -312,7 +327,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await page.goto(sourceUrl);
       await expect(installSheet(page)).toHaveCount(0);
       const sheet = await openInstallSheet(page);
-      await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
+      await expect(sheet).toHaveAttribute("data-install-state", "connections");
+      await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a connection to check it");
+      await expect(planPreview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("default.example.com");
       await sheet.getByRole("textbox", { name: domainField }).fill("chosen.example.com");
       expect(f.continued()).toBeUndefined();
@@ -331,11 +348,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const form = page.locator(`[id="${formId}"]`);
       await expect(form).toHaveCount(0);
       await captureInstallState(page, "app-sheet-missing-connection");
-      // While a connection is missing the sheet's primary action is Connect,
-      // and it opens that row instead of confirming the sheet.
-      // Opening the form must not suspend and remount the whole sheet.
+      // Connecting happens in the row itself; opening the form must not
+      // suspend and remount the whole screen.
       await sheet.evaluate((element) => element.setAttribute("data-e2e-mounted", "before-connect"));
-      await sheetActions(page).getByRole("button", { name: "Connect", exact: true }).click();
+      await toggle.click();
       await expect(form).toBeVisible();
       await expect(form.getByText("Connect account", { exact: true })).toBeVisible();
       await expect(sheet).toHaveAttribute("data-e2e-mounted", "before-connect");
@@ -375,13 +391,13 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // The form that held focus is gone; focus returns to the row toggle.
       await expect(toggle).toBeFocused();
       await expect(page.getByTestId("install-connections")).toContainText("Connected. Ready to install.");
-      await expect(sheet).toHaveAttribute("data-install-state", "ready");
       expect(f.mutations.filter((m) => m === "POST /api/v1/connections")).toHaveLength(1);
       expect(f.mutations.filter((m) => m === "POST /api/v1/connections/conn_inline_fixture/test")).toHaveLength(1);
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("chosen.example.com");
-      expect(f.continued()).toBeUndefined();
 
-      await reviewPlan(page);
+      // Nothing else to press: with the connection in place the Plan is made.
+      await waitForPlan(page);
+      await expect(sheet).toHaveAttribute("data-install-state", "review");
       // Only the edited value travels, and only in the confirming answer.
       expect(f.continued()?.variables).toEqual({ domain: "chosen.example.com" });
       expect(f.attempts.latest()?.options.providerBindings ?? []).toEqual([]);
@@ -402,16 +418,18 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const choice = row.getByRole("combobox", { name: /Host \/ account/u });
       await expect(choice).toHaveValue("");
       await expect(choice.locator("option")).toContainText(["Cloudflare account A", "Cloudflare account B"]);
-      await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
+      await expect(sheet).toHaveAttribute("data-install-state", "connections");
       await choice.selectOption("pc_account_b");
       await expect(row).toHaveAttribute("data-connection-state", "connected");
       await expect(row).toContainText("✓ Connected");
-      expect(f.attempts.log.answers).toEqual([{
-        expectedGeneration: expect.any(Number),
-        providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_account_b" }],
-      }]);
-      await reviewPlan(page);
-      expect(f.continued()).toEqual({ expectedGeneration: expect.any(Number), continue: true });
+      await waitForPlan(page);
+      expect(f.attempts.log.answers).toEqual([
+        {
+          expectedGeneration: expect.any(Number),
+          providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_account_b" }],
+        },
+        { expectedGeneration: expect.any(Number), continue: true },
+      ]);
     });
     test("OAuth keeps settings mounted and uses the verified returned connection", async ({ page, context }) => {
       const f = await detailFixture(page, base, true, true);
@@ -438,7 +456,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(page.getByTestId("install-connections")).toContainText("Connected. Ready to install.");
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("oauth-chosen.example.net");
       await expect(sheet.getByLabel("Custom domain", { exact: false })).toHaveValue("custom.example.org");
-      await reviewPlan(page);
+      await waitForPlan(page);
       expect(f.continued()?.variables).toEqual({ domain: "oauth-chosen.example.net", custom_domain: "custom.example.org" });
       expect(f.mutations.some((entry) => entry === "POST /api/v1/connections")).toBe(false);
       expect(f.mutations.some((entry) => entry.endsWith("/test"))).toBe(false);
@@ -475,7 +493,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(toggle).toHaveText("Connect");
       await expect(toggle).toBeFocused();
       await expect(sheet.getByRole("textbox", { name: domainField })).toHaveValue("retry.example.net");
-      await expect(sheet).toHaveAttribute("data-install-state", "provider-required");
+      await expect(sheet).toHaveAttribute("data-install-state", "connections");
       expect(f.continued()).toBeUndefined();
     });
     test("a secret setting is write-only and leaves the page only in the confirming answer", async ({ page }) => {
@@ -487,48 +505,112 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const secret = sheet.getByLabel(/^API token/u);
       await expect(secret).toHaveAttribute("type", "password");
       await expect(secret).toHaveValue("");
-      await expect(sheet).toContainText("Not saved. Sent only when you confirm the install.");
-      const review = sheetActions(page).getByRole("button", { name: "Review", exact: true });
-      await expect(review).toBeDisabled();
+      await expect(sheet).toContainText("Not saved. Sent only to check what will be created.");
+      // Until the setting is in, the preview shows what the definition
+      // declares, the cost as not known, and why the button waits.
+      const preview = planPreview(page);
+      await expect(preview.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
+      await expect(page.getByTestId("install-apply-reason")).toHaveText("Fill in the required settings");
+      const planned = preview.getByTestId("install-planned-resources");
+      await expect(planned.getByRole("heading", { name: "What this app will create (planned)" })).toBeVisible();
+      await expect(planned.locator('li[data-resource-type="cloudflare_workers_script"]')).toBeVisible();
+      await expect(planned.locator('li[data-resource-type="cloudflare_d1_database"]')).toContainText("×2");
+      await expect(preview.getByTestId("install-cost-pending")).toContainText("Not known yet.");
+      await page.waitForTimeout(1_500);
+      expect(f.continued()).toBeUndefined();
       await secret.fill("fixture-secret-value");
-      await expect(review).toBeEnabled();
-      await reviewPlan(page);
+      await waitForPlan(page);
       expect(f.continued()?.variables).toEqual({ api_token: "fixture-secret-value" });
       const carrying = f.attempts.log.answers.filter((answer) => JSON.stringify(answer).includes("fixture-secret-value"));
       expect(carrying).toEqual([f.continued()]);
       expect(JSON.stringify(f.attempts.log.creates)).not.toContain("fixture-secret-value");
       await expectNothingStored(page, "fixture-secret-value");
     });
-    test("installs inline after the explicit click and moves to the installed app's page", async ({ page, context }) => {
+    test("two decisions: Install, then Allow and install; the install finishes on the same screen", async ({ page, context }) => {
       const f = await detailFixture(page, base);
       const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(sourceUrl);
-      await openInstallSheet(page);
-      await reviewPlan(page);
-      await page.getByRole("button", { name: "Allow and install", exact: true }).click();
+      // Decision 1.
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      // Reading, the sheet and the Plan follow on their own: nothing to press.
+      const review = await waitForPlan(page);
+      await expect(installSheet(page).getByTestId("install-basics")).toBeVisible();
+      await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare Workers Script");
+      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
+      await captureInstallState(page, "app-two-step-review");
+      expect(f.mutations).not.toContain(applyMutation);
+      // Decision 2.
+      await review.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
-      await expect(page.locator(".iv-execution")).toContainText("Installing");
+      await expect(planReview(page)).toContainText("Installing");
       // A reload follows the Apply already started for this Plan; it never
       // offers Allow and install again.
       await page.reload();
-      await expect(page.locator(".iv-execution")).toContainText("Installing");
+      await expect(planReview(page)).toContainText("Installing");
       await expect(page.getByRole("button", { name: "Allow and install", exact: true })).toHaveCount(0);
       await page.getByText("Progress and logs", { exact: true }).click();
       await expect(page.getByTestId("install-run-logs")).toContainText("Installing fixture resources");
       f.finish();
-      // Once installed, the app's own page takes over: the same sections as
-      // everywhere else.
-      await expect(page).toHaveURL(new RegExp(`/(workloads|apps)/${capId}$`, "u"), { timeout: 20_000 });
-      const app = page.getByTestId("app-page");
-      await expect(app).toBeVisible();
-      await expect(page.getByTestId("install-app-header")).toHaveCount(0);
-      const open = page.getByTestId("app-header").getByRole("link", { name: "Open", exact: true });
+      // Installed: the same screen offers Open and the app's own page.
+      const complete = page.getByTestId("install-complete");
+      await expect(complete.getByRole("heading", { name: "Installed", exact: true })).toBeVisible({ timeout: 20_000 });
+      const open = complete.getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", "https://apps.example.test/inline-app");
+      await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       await captureInstallState(page, "app-installed");
       const popupPromise = context.waitForEvent("page"); await open.click(); const popup = await popupPromise;
       await expect(popup.getByRole("heading")).toHaveText("Installed application"); await popup.close();
+      await complete.getByRole("link", { name: "Manage app", exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));
+      await expect(page.getByTestId("app-page")).toBeVisible();
       expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
+      expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
+      expect(errors).toEqual([]);
+    });
+    test("a change after the Plan marks it out of date and prepares the install again with the same answers", async ({ page }) => {
+      const f = await detailFixture(page, base, true, false, "not_applicable", {
+        connections: () => [{ ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], id: "pc_only", displayName: "Only Cloudflare", status: "verified" }],
+        planRunIdFor: (sequence) => (sequence === 1 ? planId : `run_retry_fixture_replan${sequence}`),
+      });
+      const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(sourceUrl);
+      await page.getByRole("button", { name: "Install", exact: true }).click();
+      const first = await waitForPlan(page);
+      const firstAttempt = new URL(page.url()).searchParams.get("installPlan");
+      // The only connection was chosen on its own; the first Plan carries no values.
+      expect(f.continued()).toEqual({ expectedGeneration: expect.any(Number), continue: true });
+      // An edit marks the shown Plan out of date at once: it cannot be applied.
+      await installSheet(page).getByRole("textbox", { name: domainField }).fill("edited.example.com");
+      await expect(first.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
+      await expect(first.getByTestId("install-plan-outdated")).toHaveText("Preparing again with your change…");
+      await captureInstallState(page, "app-plan-outdated");
+      // Prepared again in place: the attempt is discarded and a new one starts
+      // with the same name, module and connection; the value goes only with
+      // its confirmation.
+      await expect(installSheet(page).getByTestId("install-progress")).toHaveText("Preparing the install again with your change");
+      await expect.poll(() => f.attempts.log.creates.length, { timeout: 15_000 }).toBe(2);
+      const review = await waitForPlan(page);
+      await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+      expect(new URL(page.url()).searchParams.get("installPlan")).not.toBe(firstAttempt);
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/install-plans/${firstAttempt}`)).toHaveLength(1);
+      expect(f.attempts.log.creates[1]).toEqual({
+        mode: "attempt",
+        source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
+        capsule: { name: "cloudflare-service" },
+        options: { modulePath: ".", providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_only" }] },
+      });
+      const continues = f.attempts.log.answers.filter((answer) => (answer as { continue?: boolean }).continue === true);
+      expect(continues).toEqual([
+        { expectedGeneration: expect.any(Number), continue: true },
+        { expectedGeneration: expect.any(Number), continue: true, variables: { domain: "edited.example.com" } },
+      ]);
+      expect(JSON.stringify(f.attempts.log.creates)).not.toContain("edited.example.com");
+      // Prepared once for one change; nothing applied without the click.
+      await page.waitForTimeout(1_500);
+      expect(f.attempts.log.creates).toHaveLength(2);
+      expect(f.mutations.some((m) => m.endsWith("/apply"))).toBe(false);
+      await expectNothingStored(page, "edited.example.com");
       expect(errors).toEqual([]);
     });
     for (const cost of ["rated_zero", "not_applicable", "unrated", "unavailable"] as const) {
@@ -536,13 +618,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         const f = await detailFixture(page, base, false, false, cost);
         const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
         await page.goto(sourceUrl);
-        const sheet = await openInstallSheet(page);
-        // Before any connection or Plan, the sheet previews the analyzed types.
-        const planned = sheet.getByTestId("install-planned-resources");
-        await expect(planned.getByRole("heading", { name: "What this app will create (planned)" })).toBeVisible();
-        await expect(planned.locator('li[data-resource-type="cloudflare_workers_script"]')).toBeVisible();
-        await expect(planned.locator('li[data-resource-type="cloudflare_d1_database"]')).toContainText("×2");
-        const review = await reviewPlan(page);
+        await openInstallSheet(page);
+        const review = await waitForPlan(page);
         const counts = review.getByRole("definition");
         await expect(counts).toHaveText(["2", "0", "0"]);
         const resources = review.getByTestId("install-plan-resources");
@@ -571,22 +648,23 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         expect(f.mutations).not.toContain(applyMutation);
         // A reload reopens the same review, read-only: no new attempt, no Apply.
         await page.reload();
-        await expect(page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+        await expect(planReview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
         expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
         expect(f.mutations).not.toContain(applyMutation);
-        await page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true }).click();
+        await planReview(page).getByRole("button", { name: "Allow and install", exact: true }).click();
         await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
-        await expect(page.locator(".iv-execution").getByRole("heading", { name: "Installing", exact: true })).toBeVisible();
+        await expect(planReview(page).getByRole("heading", { name: "Installing", exact: true })).toBeVisible();
         expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
         expect(errors).toEqual([]);
       });
     }
     test("Stop installing from the sheet discards the whole attempt and returns to the same app", async ({ page }) => {
-      const f = await detailFixture(page, base);
+      const f = await detailFixture(page, base, true);
       await page.goto(sourceUrl);
-      await openInstallSheet(page);
+      const sheet = await openInstallSheet(page);
+      await expect(sheet).toHaveAttribute("data-install-state", "connections");
       const attemptId = new URL(page.url()).searchParams.get("installPlan");
-      await sheetActions(page).getByRole("button", { name: "Stop installing", exact: true }).click();
+      await planPreview(page).getByRole("button", { name: "Stop installing", exact: true }).click();
       await expect(installSheet(page)).toHaveCount(0);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
       await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
@@ -608,9 +686,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const f = await detailFixture(page, base);
       await page.goto(sourceUrl);
       await openInstallSheet(page);
-      const review = await reviewPlan(page);
+      const review = await waitForPlan(page);
       await review.getByRole("button", { name: "Stop installing", exact: true }).click();
-      await expect(page.locator(".iv-execution")).toHaveCount(0);
+      await expect(installSheet(page)).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
       await expect(page).not.toHaveURL(/[?&]installPlan=/u);
       expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
@@ -620,10 +698,9 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 1_000 });
       await page.goto(sourceUrl);
       await page.getByRole("button", { name: "Install", exact: true }).click();
-      const reading = page.getByTestId("install-reading");
-      await expect(reading).toBeVisible();
+      await expect(installSheet(page).getByTestId("install-progress")).toHaveText("Reading the repository");
       await expect.poll(() => f.attempts.log.reconciles).toBeGreaterThan(0);
-      await reading.getByRole("button", { name: "Stop installing", exact: true }).click();
+      await planPreview(page).getByRole("button", { name: "Stop installing", exact: true }).click();
       await expect(page.getByRole("button", { name: "Install", exact: true })).toBeEnabled();
       // The user's own stop is not reported as a failure.
       await expect(page.locator(".iv-error")).toHaveCount(0);
@@ -639,19 +716,23 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const name = sheet.getByTestId("install-app-name");
       await expect(name).toHaveValue("cloudflare-service");
       await expect(sheet).toContainText("Another app in this workspace already uses this name.");
-      const review = sheetActions(page).getByRole("button", { name: "Review", exact: true });
-      await expect(review).toBeDisabled();
+      await expect(page.getByTestId("install-apply-reason")).toHaveText("Check what you entered");
       await name.fill("Not A Valid Name");
-      await expect(review).toBeDisabled();
+      await expect(sheet).toContainText("Use lowercase letters");
       await sheet.getByRole("button", { name: "Use “cloudflare-service-2”", exact: true }).click();
       await expect(name).toHaveValue("cloudflare-service-2");
-      await expect(review).toBeEnabled();
       expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), capsuleName: "cloudflare-service-2" });
-      // Typing a name and pressing Review at once is one click: leaving the
-      // field renames first and Review waits for it.
+      // The free name completes the sheet: the Plan is made with it.
+      await waitForPlan(page);
+      expect(f.attempts.latest()?.capsule.name).toBe("cloudflare-service-2");
+      // Renaming after the Plan prepares the install again under the new name.
       await name.fill("renamed-app");
-      await reviewPlan(page);
+      await name.press("Enter");
+      await expect.poll(() => f.attempts.log.creates.length, { timeout: 15_000 }).toBe(2);
+      await waitForPlan(page);
+      expect(f.attempts.log.creates[1]).toMatchObject({ capsule: { name: "renamed-app" } });
       expect(f.attempts.latest()?.capsule.name).toBe("renamed-app");
+      expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
       expect(f.mutations).not.toContain(applyMutation);
       await expectNothingStored(page, "renamed-app");
     });
@@ -661,11 +742,13 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       });
       await page.goto(`/new?git=${encodeURIComponent("https://github.com/example/cloudflare-service.git")}&name=cloudflare-service`);
       await page.getByRole("button", { name: "Install", exact: true }).click();
-      const chooser = page.getByTestId("install-module-chooser");
+      // The choice is part of the same screen, not a step of its own.
+      const chooser = installSheet(page).getByTestId("install-module-chooser");
       await expect(chooser.getByRole("heading", { name: "Choose a module" })).toBeVisible();
+      await expect(page.getByTestId("install-apply-reason")).toHaveText("Choose a module to check it");
       await chooser.getByRole("combobox").selectOption("apps/api");
-      await chooser.getByRole("button", { name: "Continue with this module", exact: true }).click();
-      await expect(installSheet(page)).toBeVisible();
+      await waitForPlan(page);
+      await expect(chooser).toHaveCount(0);
       expect(f.attempts.log.answers).toContainEqual({ expectedGeneration: expect.any(Number), modulePath: "apps/api" });
     });
     test("a failed attempt explains why and starts over as a new attempt", async ({ page }) => {
@@ -690,20 +773,21 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
       // A reopened attempt alone (as from the Store's unfinished list).
       await page.goto(`/new?installPlan=${attemptId}`);
-      const reading = page.getByTestId("install-reading");
-      await expect(reading.getByRole("heading", { name: "Reading paused", exact: true })).toBeVisible();
+      const progress = installSheet(page).getByTestId("install-progress");
+      await expect(progress).toHaveAttribute("data-progress", "paused");
+      await expect(progress).toContainText("Reading stopped partway.");
       const reconciles = f.attempts.log.reconciles;
       await page.waitForTimeout(1_000);
       expect(f.attempts.log.reconciles).toBe(reconciles);
       await expect(page.getByTestId("install-app-header")).toContainText("cloudflare-service");
-      await reading.getByRole("button", { name: "Continue", exact: true }).click();
-      await expect(installSheet(page)).toBeVisible();
+      await progress.getByRole("button", { name: "Continue", exact: true }).click();
+      await waitForPlan(page);
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
     });
     test("unfinished installs are listed on the Store page and can continue or stop", async ({ page }) => {
-      const f = await detailFixture(page, base);
+      const f = await detailFixture(page, base, true);
       await page.goto(sourceUrl);
-      await openInstallSheet(page);
+      await expect(await openInstallSheet(page)).toHaveAttribute("data-install-state", "connections");
       const attemptId = new URL(page.url()).searchParams.get("installPlan")!;
       await page.goto("/new");
       const open = page.getByTestId("install-open-attempts");
@@ -741,11 +825,11 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test("failed Apply offers a new reviewed Plan without abandoning partial state or replaying Apply", async ({ page }) => {
       const f = await detailFixture(page, base);
       await page.goto(sourceUrl); await openInstallSheet(page);
-      await reviewPlan(page);
+      await waitForPlan(page);
       await page.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === applyMutation).length).toBe(1);
       f.fail(true); f.failRetry(true);
-      const review = page.locator(".iv-execution");
+      const review = planReview(page);
       await expect(review.getByRole("button", { name: "Retry installation", exact: true })).toBeVisible({ timeout: 15_000 });
       await review.getByRole("button", { name: "Retry installation", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(1);
@@ -757,7 +841,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       let posts = 0;
       await page.route(`**/runs/${planId}/apply`, (route) => { posts += 1; return route.fulfill({ status: 503, json: { error: "fixture_indeterminate" } }); });
       await page.goto(sourceUrl); await openInstallSheet(page);
-      const review = await reviewPlan(page);
+      const review = await waitForPlan(page);
       expect(posts).toBe(0);
       await review.getByRole("button", { name: "Allow and install", exact: true }).click();
       await expect(review.getByRole("button", { name: "Allow and install", exact: true })).toBeDisabled();
@@ -766,7 +850,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(review.getByRole("button", { name: "Stop installing", exact: true })).toHaveCount(0);
       expect(posts).toBe(1);
       await page.reload();
-      await expect(page.locator(".iv-execution").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+      await expect(planReview(page).getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
       expect(posts).toBe(1);
     });
   });

@@ -129,6 +129,12 @@ interface Props {
    * page shows them above its review instead.
    */
   readonly showPolicyReasons?: boolean;
+  /**
+   * The reviewed Plan no longer matches what the person chose (they changed
+   * something and the install is being prepared again): the apply click is
+   * held and this says why.
+   */
+  readonly blockedReason?: string;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -491,7 +497,7 @@ export default function InstallExecution(props: Props) {
   };
 
   const install = async () => {
-    if (applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
+    if (props.blockedReason || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
     setApplying(true);
     setError(null);
     try {
@@ -759,13 +765,18 @@ export default function InstallExecution(props: Props) {
                   </div>
                 </div>
               </Show>
+              <Show when={props.blockedReason}>
+                {(reason) => (
+                  <p class="iv-apply-reason" data-testid="install-plan-outdated" role="status">{reason()}</p>
+                )}
+              </Show>
               <div class="iv-action-row">
                 <Button
                   type="button"
                   variant="primary"
                   size="lg"
                   busy={applying()}
-                  disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
+                  disabled={Boolean(props.blockedReason) || applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
                   onClick={() => void install()}
                 >
                   {t(copy().allow)}
