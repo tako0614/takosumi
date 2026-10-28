@@ -449,7 +449,8 @@ route はありません。
 試行が作った未適用の Capsule を abandon し、終端の `discarded` にします。abandon が途中で
 止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
 すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
-Source は削除しません。その試行自身が有効にした polling だけを止めます。
+試行専用の Source を退役させ、同期・polling を止めて archive と snapshot 行を削除します。
+途中失敗した退役は、同じ DELETE または日次の回収で再開します。
 
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の
