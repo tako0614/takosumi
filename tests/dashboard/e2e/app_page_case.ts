@@ -1170,6 +1170,10 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(problems.locator('[data-problem="review-waiting"]')).toBeVisible();
       await expect(header.getByRole("button", { name: "Update", exact: true })).toHaveCount(0);
       await expect(app.getByTestId("app-version").getByRole("button", { name: "Update", exact: true })).toBeDisabled();
+      // Settings wait too, and say why.
+      await expect(app.getByTestId("app-settings").locator("[data-settings-waits]"))
+        .toHaveText("Another change is under way or waiting for review. You can change settings after it finishes.");
+      await expect(app.getByTestId("app-settings").getByRole("button", { name: "Review", exact: true })).toBeDisabled();
 
       // An uninstalled app offers to install it again from its repository.
       scene = "uninstalled";

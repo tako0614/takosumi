@@ -126,9 +126,9 @@ export async function handleCapsuleRevisionPlans(
   }
   // One version change at a time per Capsule: while another revision
   // coordinator is still preparing its Plan (not stalled, and pinned to the
-  // current state generation), a second one would race it to a duplicate
-  // Plan. Its id is returned so the caller can follow it instead. An exact
-  // idempotent replay was answered above.
+  // current state generation and InstallConfig), a second one would race it
+  // to a duplicate Plan. Its id is returned so the caller can follow it
+  // instead. An exact idempotent replay was answered above.
   const preparing = await activeGitRevisionPreparation(
     ctx.operations.gitInstallPlans,
     capsule,

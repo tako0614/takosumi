@@ -92,8 +92,13 @@ async function seedD1(db: SqliteFakeD1, id: string): Promise<void> {
 }
 
 /** The Capsule the fixtures' revision rows were pinned to (generation 2). */
-function capsuleAt(id: string, workspaceId = "ws_one", currentStateGeneration = 2) {
-  return { id, workspaceId, currentStateGeneration };
+function capsuleAt(
+  id: string,
+  workspaceId = "ws_one",
+  currentStateGeneration = 2,
+  installConfigId = "cfg_revision",
+) {
+  return { id, workspaceId, currentStateGeneration, installConfigId };
 }
 
 async function expectWorkspaceScoped(label: string, store: GitInstallPlanStore): Promise<void> {
@@ -236,10 +241,12 @@ async function expectCoordinatorParity(
     workspaceId = "ws_one",
     includeInstall = true,
     currentStateGeneration = 2,
+    currentInstallConfigId = "cfg_revision",
   ) =>
     store.preparingCoordinatorForCapsule(capsuleId, workspaceId, {
       includeInstall,
       currentStateGeneration,
+      currentInstallConfigId,
     });
 
   // Open install rows without a Plan Run hold a never-applied Capsule in
@@ -273,11 +280,17 @@ async function expectCoordinatorParity(
     expect(await preparing(capsuleId), `${label} ${capsuleId}`).toBeUndefined();
   }
   // Revision rows count whether or not the Capsule was applied, while
-  // their base is the current state generation.
+  // their base is the current state generation and InstallConfig.
   expect(await preparing("cap_revision_open", "ws_one", false), label)
     .toEqual({ id: "rp_open", operation: "revision", phase: "syncing_source", actorSubject: "user_one", updatedAt: NOW });
   expect(await preparing("cap_revision_open", "ws_one", false, 3), `${label} moved base`)
     .toBeUndefined();
+  // A settings change rebinds the InstallConfig without a new generation.
+  expect(await preparing("cap_revision_open", "ws_one", false, 2, "cfg_rebound"), `${label} rebound`)
+    .toBeUndefined();
+  // Install rows carry no revision base.
+  expect((await preparing("cap_install_planning", "ws_one", true, 2, "cfg_rebound"))?.id, label)
+    .toBe("ip_planning");
   expect((await preparing("cap_revision_bases", "ws_one", false))?.id, label).toBe("rp_current_base");
   expect((await preparing("cap_revision_bases", "ws_one", false, 1))?.id, label).toBe("rp_moved_base");
   // JSON null authority reads as absent in every durable store.
@@ -297,14 +310,24 @@ async function expectCoordinatorParity(
   // The active revision (the one definition the app view, a second revision
   // and configuration changes share) adds only "still moving".
   const now = Date.parse(NOW);
-  const active = async (capsuleId: string, at = now, currentStateGeneration = 2) =>
-    (await activeGitRevisionPreparation(store, capsuleAt(capsuleId, "ws_one", currentStateGeneration), at))?.id;
+  const active = async (
+    capsuleId: string,
+    at = now,
+    currentStateGeneration = 2,
+    installConfigId = "cfg_revision",
+  ) =>
+    (await activeGitRevisionPreparation(
+      store,
+      capsuleAt(capsuleId, "ws_one", currentStateGeneration, installConfigId),
+      at,
+    ))?.id;
   expect(await active("cap_revision_open"), label).toBe("rp_open");
   expect(await active("cap_revision_open", now + GIT_REVISION_PREPARATION_STALL_AFTER_MS - 1), label)
     .toBe("rp_open");
   expect(await active("cap_revision_open", now + GIT_REVISION_PREPARATION_STALL_AFTER_MS), `${label} stalled`)
     .toBeUndefined();
   expect(await active("cap_revision_open", now, 3), `${label} moved base`).toBeUndefined();
+  expect(await active("cap_revision_open", now, 2, "cfg_rebound"), `${label} rebound`).toBeUndefined();
   for (const capsuleId of [
     "cap_revision_planned",
     "cap_revision_reviewable",
@@ -364,9 +387,10 @@ test("the D1 coordinator checks bind the Workspace predicate they filter on", as
     await store.preparingCoordinatorForCapsule("cap_scope", "ws_one", {
       includeInstall: true,
       currentStateGeneration: 4,
+      currentInstallConfigId: "cfg_now",
     }),
   ).toBeUndefined();
   expect(statements).toHaveLength(1);
   expect(statements[0]!.sql).toContain("where workspace_id = ?");
-  expect(statements[0]!.values).toEqual(["ws_one", "cap_scope", 4, 1]);
+  expect(statements[0]!.values).toEqual(["ws_one", "cap_scope", 4, "cfg_now", 1]);
 });

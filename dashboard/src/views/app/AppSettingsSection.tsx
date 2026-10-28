@@ -152,6 +152,8 @@ export default function AppSettingsSection(props: {
   readonly connections: readonly ProviderConnection[];
   readonly onConnectionsChanged: () => void;
   readonly reviewBusy: boolean;
+  /** Another change is under way or waiting for review, so settings wait. */
+  readonly changeWaits?: boolean;
   readonly starting: boolean;
   readonly error?: string;
   readonly notice?: string;
@@ -480,6 +482,9 @@ export default function AppSettingsSection(props: {
         </Show>
         <Show when={props.notice}>
           {(message) => <p class="ap-notice" role="status">{message()}</p>}
+        </Show>
+        <Show when={props.changeWaits}>
+          <p class="ap-muted" role="status" data-settings-waits>{t("app.settings.changeWaits")}</p>
         </Show>
         <div class="ap-row-actions">
           <Button

@@ -721,8 +721,9 @@ export interface CapsuleAppProgress {
    * stopped moving (its client went away). It no longer holds the app as
    * updating; `POST /api/v1/revision-plans/:id/reconcile` continues it, and
    * its Plan Run records the coordinator (`git-revision-plan:<id>`) as actor.
-   * A coordinator pinned to an older state generation (another change was
-   * applied since) can only fail and is not named.
+   * A coordinator pinned to an older state generation or InstallConfig
+   * (another change was applied, or settings rebound the app, since) can only
+   * fail and is not named.
    */
   readonly revisionPlanId?: string;
   /** The newest lifecycle Run, while it is queued or running. */

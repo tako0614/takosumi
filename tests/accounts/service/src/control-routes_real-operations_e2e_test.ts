@@ -1341,7 +1341,8 @@ async function putConfigurationFixtureRevisionRow(
   id: string,
   change: (row: StoredGitInstallPlan) => StoredGitInstallPlan = (row) => row,
 ): Promise<void> {
-  const capsule = fixture.seeded.capsule;
+  // The Capsule as it is now (the fixture rebinds its InstallConfig).
+  const capsule = await fixture.operations.capsules.getCapsule(fixture.seeded.capsule.id);
   const authority = await fixture.operations.workspaces.captureManagementAuthority(
     capsule.workspaceId,
   );
@@ -1418,6 +1419,15 @@ test("configuration changes wait only for a version change that is still being p
     revision: {
       ...row.revision!,
       base: { ...row.revision!.base, capsuleStateGeneration: row.revision!.base.capsuleStateGeneration - 1 },
+    },
+  }));
+  // A settings change rebound the Capsule since (same generation).
+  await putConfigurationFixtureRevisionRow(free.fixture, "rp_config_rebound", (row) => ({
+    ...row,
+    installConfigId: "icfg_before_settings",
+    revision: {
+      ...row.revision!,
+      base: { ...row.revision!.base, installConfigId: "icfg_before_settings" },
     },
   }));
   await putConfigurationFixtureRevisionRow(free.fixture, "rp_config_failed", (row) => ({
