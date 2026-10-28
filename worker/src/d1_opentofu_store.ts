@@ -43,7 +43,82 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import { alias, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
+import { alias, integer, real, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
+
+// Admission guard inserts deliberately target the pre-v77 column set. A
+// predeployed v75/v76 database must be able to reject an unsafe write without
+// the guard itself referencing columns that have not been migrated yet.
+const legacyCapsuleGuardTable = sqliteTable("capsules", {
+  id: text("id").primaryKey(),
+  workspaceId: text("space_id"),
+  projectId: text("project_id"),
+  name: text("name"),
+  slug: text("slug"),
+  sourceId: text("source_id"),
+  installConfigId: text("install_config_id"),
+  environment: text("environment"),
+  currentStateVersionId: text("current_state_version_id"),
+  currentStateGeneration: integer("current_state_generation"),
+  currentOutputId: text("current_output_snapshot_id"),
+  status: text("status"),
+  recordJson: text("record_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+  executionAuthorityEpoch: integer("execution_authority_epoch"),
+});
+
+// Connection admission guards also use INSERT SELECT. Keep their target at
+// the v75/v76 shape; the new nullable owner column must not change the
+// selected field count or make old D1 schema reads fail.
+const legacyConnectionGuardTable = sqliteTable("connections", {
+  id: text("id").primaryKey(),
+  workspaceId: text("space_id"),
+  provider: text("provider"),
+  status: text("status"),
+  connectionJson: text("connection_json"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+const legacyUsageEventsTable = sqliteTable("usage_events", {
+  id: text("id").primaryKey(), workspaceId: text("workspace_id"), capsuleId: text("capsule_id"),
+  runId: text("run_id"), meterId: text("meter_id"), resourceFamily: text("resource_family"),
+  resourceId: text("resource_id"), operation: text("operation"), resourceMetadataJson: text("resource_metadata_json"),
+  kind: text("kind"), quantity: real("quantity"), usdMicros: integer("usd_micros"),
+  ratingStatus: text("rating_status"), source: text("source"), idempotencyKey: text("idempotency_key"),
+  createdAt: text("created_at"),
+});
+
+const legacyCredentialMintEventsTable = sqliteTable("credential_mint_events", {
+  id: text("id").primaryKey(), runId: text("run_id"), workspaceId: text("space_id"),
+  capsuleId: text("installation_id"), sourceId: text("source_id"), connectionId: text("connection_id"),
+  phase: text("phase"), recordJson: text("record_json"), createdAt: text("created_at"),
+});
+
+const capsuleMembersWriteTable = sqliteTable("capsule_members", {
+  capsuleId: text("capsule_id"), accountId: text("account_id"),
+  status: text("status"), addedBy: text("added_by"),
+  createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
+const d1LegacyUsageSelect = {
+  id: schema.usageEvents.id,
+  workspaceId: schema.usageEvents.workspaceId,
+  capsuleId: schema.usageEvents.capsuleId,
+  runId: schema.usageEvents.runId,
+  meterId: schema.usageEvents.meterId,
+  resourceFamily: schema.usageEvents.resourceFamily,
+  resourceId: schema.usageEvents.resourceId,
+  operation: schema.usageEvents.operation,
+  resourceMetadataJson: schema.usageEvents.resourceMetadataJson,
+  kind: schema.usageEvents.kind,
+  quantity: schema.usageEvents.quantity,
+  usdMicros: schema.usageEvents.usdMicros,
+  ratingStatus: schema.usageEvents.ratingStatus,
+  source: schema.usageEvents.source,
+  idempotencyKey: schema.usageEvents.idempotencyKey,
+  createdAt: schema.usageEvents.createdAt,
+};
 import type {
   ApplyRun,
   ProviderConnection,
@@ -2550,6 +2625,80 @@ class D1RequestMaintenanceScope {
 }
 
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
+  async #v77Column(table: "capsules" | "connections" | "usage_events" | "credential_mint_events", column: string): Promise<boolean> {
+    const rows = await this.db.prepare(`pragma table_info(${table})`).all<{ name: string }>();
+    return (rows.results ?? []).some((row) => row.name === column);
+  }
+
+  async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {
+    if (!rows.length || !await this.#v77Column("connections", "owner_account_id")) return rows;
+    return await Promise.all(rows.map(async (connection) => {
+      const row = await this.db.prepare(`select owner_account_id from connections where id=?`).bind(connection.id)
+        .first<{ owner_account_id: string | null }>();
+      const { ownerAccountId: _ignored, ...record } = connection;
+      void _ignored;
+      return row?.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id } : record;
+    }));
+  }
+
+  async #connectionSnapshotMatches(current: ProviderConnection | undefined, expected: ProviderConnection): Promise<boolean> {
+    if (!current) return false;
+    if (JSON.stringify(current) === JSON.stringify(expected)) return true;
+    // A pre-v77 caller can still hold the just-registered JSON snapshot while
+    // the physical owner column has already been initialized. Only the exact
+    // immutable Workspace owner may account for that one additive difference.
+    if (!current.ownerAccountId || expected.ownerAccountId || !current.workspaceId ||
+      current.workspaceId !== expected.workspaceId) return false;
+    const workspace = await this.getWorkspace(current.workspaceId);
+    if (workspace?.ownerUserId !== current.ownerAccountId) return false;
+    const { ownerAccountId: _owner, ...legacy } = current;
+    void _owner;
+    return JSON.stringify(legacy) === JSON.stringify(expected);
+  }
+
+  async #initializeConnectionPhysicalOwner(connection: ProviderConnection): Promise<void> {
+    if (connection.scope === "operator" || !connection.workspaceId ||
+      !await this.#v77Column("connections", "owner_account_id")) return;
+    const owner = connection.ownerAccountId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId;
+    if (!owner) return;
+    await this.db.prepare(`update connections set owner_account_id=? where id=? and owner_account_id is null`)
+      .bind(owner, connection.id).run();
+  }
+
+  async #withUsagePayers(rows: readonly UsageEvent[]): Promise<readonly UsageEvent[]> {
+    if (!rows.length || !await this.#v77Column("usage_events", "payer_account_id")) return rows;
+    return await Promise.all(rows.map(async (event) => {
+      const row = await this.db.prepare(`select payer_account_id from usage_events where id=?`).bind(event.id)
+        .first<{ payer_account_id: string | null }>();
+      return row?.payer_account_id ? { ...event, payerAccountId: row.payer_account_id } : event;
+    }));
+  }
+
+  async #withCapsuleOwnership(capsule: Capsule | undefined): Promise<Capsule | undefined> {
+    if (!capsule) return undefined;
+    const legacyRoot = `workspaces/${capsule.workspaceId}/capsules/${capsule.id}`;
+    if (!await this.#v77Column("capsules", "owner_account_id")) {
+      return capsule.storageRoot && capsule.storageRoot !== legacyRoot
+        ? { ...capsule, storageRoot: legacyRoot } : capsule;
+    }
+    const row = await this.db.prepare(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from capsules where id=?`)
+      .bind(capsule.id).first<{ owner_account_id: string | null; ownership_epoch: number;
+        management_state: "active" | "draining" | "frozen"; management_epoch: number; storage_root: string | null }>();
+    if (!row) return undefined;
+    const { ownerAccountId: _owner, ownershipEpoch: _epoch, managementState: _state,
+      managementEpoch: _managementEpoch, storageRoot: _root, ...record } = capsule;
+    void _owner; void _epoch; void _state; void _managementEpoch; void _root;
+    const root = row.storage_root ?? (capsule.storageRoot && capsule.storageRoot !== legacyRoot ? legacyRoot : capsule.storageRoot);
+    return row.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id,
+      ownershipEpoch: row.ownership_epoch, managementState: row.management_state,
+      managementEpoch: row.management_epoch, ...(root ? { storageRoot: root } : {}) }
+      : { ...record, ...(root ? { storageRoot: root } : {}) };
+  }
+
+  async #withCapsuleOwnershipRows(rows: readonly Capsule[]): Promise<readonly Capsule[]> {
+    const projected = await Promise.all(rows.map((row) => this.#withCapsuleOwnership(row)));
+    return projected.filter((row): row is Capsule => row !== undefined);
+  }
   #financialSourceStore():SqlWorkspaceFinancialSource {
     const db=this.db;
     const port:FinancialSourceSqlPort={dialect:"d1",
@@ -6743,7 +6892,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async putCapsule(capsule: Capsule): Promise<Capsule> {
     const normalized = normalizeCapsuleRecord(capsule);
-    await this.#drizzleUpsert(schema.capsules, {
+    await this.#ensureSchema();
+    const ownershipColumnAvailable = await this.#v77Column("capsules", "owner_account_id");
+    const values = {
       id: normalized.id,
       workspaceId: normalized.workspaceId,
       projectId: normalized.projectId,
@@ -6759,7 +6910,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       recordJson: normalized,
       createdAt: normalized.createdAt,
       updatedAt: normalized.updatedAt,
-    });
+    };
+    if (ownershipColumnAvailable) await this.#drizzleUpsert(schema.capsules, values);
+    else await this.#drizzleUpsert(legacyCapsuleGuardTable, { ...values, recordJson: JSON.stringify(normalized), executionAuthorityEpoch: 1 });
+    if (normalized.ownerAccountId && ownershipColumnAvailable) {
+      await this.db.prepare(`update capsules set owner_account_id=coalesce(owner_account_id,?),
+        ownership_epoch=case when owner_account_id is null then ? else ownership_epoch end,
+        management_state=case when owner_account_id is null then ? else management_state end,
+        management_epoch=case when owner_account_id is null then ? else management_epoch end,
+        storage_root=coalesce(storage_root,?) where id=?`).bind(normalized.ownerAccountId,
+          normalized.ownershipEpoch ?? 0,normalized.managementState ?? "active",normalized.managementEpoch ?? 0,
+          normalized.storageRoot ?? `apps/${normalized.id}`,normalized.id).run();
+    }
     return normalized;
   }
 
@@ -6775,6 +6937,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     await this.#ensureSchema();
+    const ownershipColumnAvailable = await this.#v77Column("capsules", "owner_account_id");
     const binding = input.providerBindingSet;
     if (
       input.installConfig.id !== capsule.installConfigId ||
@@ -6930,7 +7093,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           createdAt: initialInstallConfig.createdAt,
           updatedAt: initialInstallConfig.updatedAt,
         }),
-        this.#orm.insert(schema.capsules).values({
+        this.#orm.insert(legacyCapsuleGuardTable).values({
           id: capsule.id,
           workspaceId: capsule.workspaceId,
           projectId: capsule.projectId,
@@ -6943,10 +7106,38 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           currentStateGeneration: capsule.currentStateGeneration,
           currentOutputId: null,
           status: capsule.status,
-          recordJson: capsule,
+          recordJson: JSON.stringify(capsule),
           createdAt: capsule.createdAt,
           updatedAt: capsule.updatedAt,
+          executionAuthorityEpoch: 1,
         }),
+        ...(ownershipColumnAvailable && capsule.ownerAccountId ? [
+          this.#orm.update(schema.capsules).set({
+            ownerAccountId: capsule.ownerAccountId,
+            ownershipEpoch: capsule.ownershipEpoch ?? 0,
+            managementState: capsule.managementState ?? "active",
+            managementEpoch: capsule.managementEpoch ?? 0,
+            storageRoot: capsule.storageRoot ?? `apps/${capsule.id}`,
+          }).where(eq(schema.capsules.id, capsule.id)),
+          this.#orm.insert(capsuleMembersWriteTable).select(
+            this.#orm.select({
+              capsuleId: sql<string>`${capsule.id}`.as("capsuleId"),
+              accountId: schema.workspaceMembers.accountId,
+              status: sql<string>`'active'`.as("status"),
+              addedBy: sql<string>`${capsule.ownerAccountId}`.as("addedBy"),
+              createdAt: sql<string>`${capsule.createdAt}`.as("createdAt"),
+              updatedAt: sql<string>`${capsule.createdAt}`.as("updatedAt"),
+            }).from(schema.workspaceMembers).where(and(
+              eq(schema.workspaceMembers.workspaceId, capsule.workspaceId),
+              eq(schema.workspaceMembers.status, "active"),
+              ne(schema.workspaceMembers.accountId, capsule.ownerAccountId),
+              sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = 'active'`,
+              sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
+              sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
+              sql`exists (select 1 from json_each(${schema.workspaceMembers.recordJson}, '$.roles') where value in ('owner', 'admin'))`,
+            )),
+          ).onConflictDoNothing(),
+        ] : []),
         this.#orm.insert(schema.providerBindingSets).values({
           id: binding.id,
           workspaceId: binding.workspaceId,
@@ -7667,13 +7858,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
-    return normalizeOptionalCapsuleRecord(
+    return await this.#withCapsuleOwnership(normalizeOptionalCapsuleRecord(
       await this.#drizzleFirstJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
         eq(schema.capsules.id, id),
       ),
-    );
+    ));
   }
 
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
@@ -7688,8 +7879,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         )),
       );
     }
+    const projected = await this.#withCapsuleOwnershipRows(rows);
     const byId = new Map(
-      rows.map((row) => {
+      projected.map((row) => {
         const value = normalizeCapsuleRecord(row);
         return [value.id, value] as const;
       }),
@@ -7704,7 +7896,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     name: string,
     environment: string,
   ): Promise<Capsule | undefined> {
-    return normalizeOptionalCapsuleRecord(
+    return await this.#withCapsuleOwnership(normalizeOptionalCapsuleRecord(
       await this.#drizzleFirstJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
@@ -7715,7 +7907,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           ne(schema.capsules.status, "destroyed"),
         ),
       ),
-    );
+    ));
   }
 
   async listDueCapsuleUninstalls(input: {
@@ -7725,7 +7917,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const scheduledDestroyAt =
       sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.scheduledDestroyAt')`;
     const nextAttemptAt = sql`coalesce(json_extract(${schema.capsules.recordJson}, '$.uninstall.lastFinalizeAttemptAt'), ${scheduledDestroyAt})`;
-    return (
+    return await this.#withCapsuleOwnershipRows((
       await this.#drizzleManyJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
@@ -7750,11 +7942,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           limit: Math.max(0, input.limit),
         },
       )
-    ).map(normalizeCapsuleRecord);
+    ).map(normalizeCapsuleRecord));
   }
 
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
-    return (
+    return await this.#withCapsuleOwnershipRows((
       await this.#drizzleManyJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
@@ -7766,7 +7958,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           orderBy: [asc(schema.capsules.createdAt), asc(schema.capsules.id)],
         },
       )
-    ).map(normalizeCapsuleRecord);
+    ).map(normalizeCapsuleRecord));
   }
 
   async listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
@@ -7819,7 +8011,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         jsonRecordFromD1Value(row.json) as unknown as Capsule,
       ),
     });
-    return capsules;
+    return await this.#withCapsuleOwnershipRows(capsules);
   }
 
   async listCapsulesPage(
@@ -7848,7 +8040,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
+    return pageFromProbe(await this.#withCapsuleOwnershipRows(rows.map(normalizeCapsuleRecord)), limit);
   }
 
   async getPublicHostReservation(
@@ -8728,7 +8920,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async putConnection(
     connection: ProviderConnection,
   ): Promise<ProviderConnection> {
-    await this.#drizzleUpsert(schema.connections, {
+    await this.#ensureSchema();
+    const ownershipColumnAvailable = await this.#v77Column("connections", "owner_account_id");
+    const values = {
       id: connection.id,
       workspaceId: connection.workspaceId ?? null,
       provider: connection.provider,
@@ -8736,7 +8930,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       connectionJson: connection,
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt,
-    });
+    };
+    if (ownershipColumnAvailable) await this.#drizzleUpsert(schema.connections, values);
+    else await this.#drizzleUpsert(legacyConnectionGuardTable, { ...values, connectionJson: JSON.stringify(connection) });
+    if (ownershipColumnAvailable) await this.#initializeConnectionPhysicalOwner(connection);
     return connection;
   }
 
@@ -8754,6 +8951,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     } = prepareConnectionRegistration(input);
     assertD1AtomicCommitBatch(this.db, "createConnectionRegistration");
     await this.#ensureSchema();
+    const ownershipColumnAvailable = await this.#v77Column("connections", "owner_account_id");
+    const connectionOwnerAccountId = connection.scope === "workspace" && connection.workspaceId
+      ? actorAuthority?.expectedWorkspace.ownerUserId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
+      : undefined;
 
     // Match the other durable adapters' classification order: an occupied
     // identity is only a create-only false result when the captured Workspace
@@ -8789,13 +8990,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
 
     const connectionInsert = this.#orm
-      .insert(schema.connections)
+      .insert(legacyConnectionGuardTable)
       .values({
         id: connection.id,
         workspaceId: connection.workspaceId ?? null,
         provider: connection.provider,
         status: connection.status,
-        connectionJson: connection,
+        connectionJson: JSON.stringify(connection),
         createdAt: connection.createdAt,
         updatedAt: connection.updatedAt,
       });
@@ -8825,6 +9026,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         secretBlob?.id,
       ),
       connectionInsert,
+      ...(ownershipColumnAvailable && connectionOwnerAccountId ? [
+        this.#orm.update(schema.connections).set({ ownerAccountId: connectionOwnerAccountId })
+          .where(eq(schema.connections.id, connection.id)),
+      ] : []),
       ...(secretBlob === undefined
         ? []
         : [
@@ -8873,19 +9078,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     connection: ProviderConnection,
   ): Promise<boolean> {
     await this.#ensureSchema();
+    const ownershipColumnAvailable = await this.#v77Column("connections", "owner_account_id");
     const inserted = await this.#orm
-      .insert(schema.connections)
+      .insert(ownershipColumnAvailable ? schema.connections : legacyConnectionGuardTable)
       .values({
         id: connection.id,
         workspaceId: connection.workspaceId ?? null,
         provider: connection.provider,
         status: connection.status,
-        connectionJson: connection,
+        connectionJson: ownershipColumnAvailable ? connection : JSON.stringify(connection),
         createdAt: connection.createdAt,
         updatedAt: connection.updatedAt,
       })
       .onConflictDoNothing({ target: schema.connections.id })
       .run();
+    if (changes(inserted as D1Result) > 0) await this.#initializeConnectionPhysicalOwner(connection);
     return changes(inserted as D1Result) > 0;
   }
 
@@ -8908,7 +9115,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(schema.connections.id, expected.id),
-          eq(schema.connections.connectionJson, expected),
+          d1ConnectionSnapshotJsonWhere(expected),
         ),
       )
       .run();
@@ -8959,10 +9166,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       return false;
     }
     const current = await this.getConnection(expectedConnection.id);
-    if (
-      current === undefined ||
-      JSON.stringify(current) !== JSON.stringify(expectedConnection)
-    ) {
+    if (!(await this.#connectionSnapshotMatches(current, expectedConnection))) {
       return false;
     }
 
@@ -9054,10 +9258,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       return false;
     }
     const current = await this.getConnection(expectedConnection.id);
-    if (
-      current === undefined ||
-      JSON.stringify(current) !== JSON.stringify(expectedConnection)
-    ) {
+    if (!(await this.#connectionSnapshotMatches(current, expectedConnection))) {
       return false;
     }
     const currentBlob = (await this.getSecretBlob(expectedConnection.id)) ?? null;
@@ -9131,17 +9332,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getConnection(id: string): Promise<ProviderConnection | undefined> {
-    return await this.#drizzleFirstJson<ProviderConnection>(
+    const connection = await this.#drizzleFirstJson<ProviderConnection>(
       schema.connections,
       schema.connections.connectionJson,
       eq(schema.connections.id, id),
     );
+    return connection ? (await this.#withConnectionOwners([connection]))[0] : undefined;
   }
 
   async listConnections(
     workspaceId: string,
   ): Promise<readonly ProviderConnection[]> {
-    return await this.#drizzleManyJson<ProviderConnection>(
+    return await this.#withConnectionOwners(await this.#drizzleManyJson<ProviderConnection>(
       schema.connections,
       schema.connections.connectionJson,
       {
@@ -9151,7 +9353,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           asc(schema.connections.id),
         ],
       },
-    );
+    ));
   }
 
   async listConnectionsPage(
@@ -9176,7 +9378,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbe(rows, limit);
+    return pageFromProbe(await this.#withConnectionOwners(rows), limit);
   }
 
   async listOperatorConnections(): Promise<readonly ProviderConnection[]> {
@@ -10726,7 +10928,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async putCredentialMintEvent(
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent> {
-    await this.#drizzleUpsert(schema.credentialMintEvents, {
+    const ownershipColumns = await this.#v77Column("credential_mint_events", "actor_account_id");
+    const values = {
       id: event.id,
       runId: event.runId,
       // Physical columns space_id / installation_id are frozen; the contract
@@ -10738,7 +10941,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       phase: event.phase,
       recordJson: event,
       createdAt: event.createdAt,
-    });
+    };
+    if (ownershipColumns) {
+      await this.#drizzleUpsert(schema.credentialMintEvents, {
+        ...values,
+        actorAccountId: event.actorAccountId ?? null,
+        connectionOwnerAccountId: event.connectionOwnerAccountId ?? null,
+        ownershipEpoch: event.ownershipEpoch ?? null,
+      });
+    } else {
+      await this.#drizzleUpsert(legacyCredentialMintEventsTable, {
+        ...values,
+        recordJson: JSON.stringify(event),
+      });
+    }
     return event;
   }
 
@@ -10810,28 +11026,41 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
     if (existing) return existing;
     await this.#ensureSchema();
+    const payerAccountId = event.payerAccountId ??
+      (event.capsuleId ? (await this.getCapsule(event.capsuleId))?.ownerAccountId : undefined) ??
+      (await this.getWorkspace(event.workspaceId))?.ownerUserId;
+    const storedEvent = payerAccountId ? { ...event, payerAccountId } : event;
+    const payerColumn = await this.#v77Column("usage_events", "payer_account_id");
+    const values = {
+      id: event.id,
+      workspaceId: event.workspaceId,
+      capsuleId: event.capsuleId ?? null,
+      runId: event.runId ?? null,
+      meterId: event.meterId ?? null,
+      resourceFamily: event.resourceFamily ?? null,
+      resourceId: event.resourceId ?? null,
+      operation: event.operation ?? null,
+      kind: event.kind,
+      quantity: event.quantity,
+      usdMicros: event.usdMicros,
+      ratingStatus: event.ratingStatus,
+      source: event.source,
+      idempotencyKey: event.idempotencyKey,
+      createdAt: event.createdAt,
+    };
     try {
-      await this.#orm
-        .insert(schema.usageEvents)
-        .values({
-          id: event.id,
-          workspaceId: event.workspaceId,
-          capsuleId: event.capsuleId ?? null,
-          runId: event.runId ?? null,
-          meterId: event.meterId ?? null,
-          resourceFamily: event.resourceFamily ?? null,
-          resourceId: event.resourceId ?? null,
-          operation: event.operation ?? null,
+      if (payerColumn) {
+        await this.#orm.insert(schema.usageEvents).values({
+          ...values,
           resourceMetadataJson: event.resourceMetadata ?? null,
-          kind: event.kind,
-          quantity: event.quantity,
-          usdMicros: event.usdMicros,
-          ratingStatus: event.ratingStatus,
-          source: event.source,
-          idempotencyKey: event.idempotencyKey,
-          createdAt: event.createdAt,
-        })
-        .run();
+          payerAccountId: storedEvent.payerAccountId ?? null,
+        }).run();
+      } else {
+        await this.#orm.insert(legacyUsageEventsTable).values({
+          ...values,
+          resourceMetadataJson: event.resourceMetadata ? JSON.stringify(event.resourceMetadata) : null,
+        }).run();
+      }
     } catch (error) {
       const raced = await this.#usageEventByIdempotencyKey(
         event.idempotencyKey,
@@ -10839,17 +11068,17 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       if (raced && isD1UsageEventIdempotencyError(error)) return raced;
       throw error;
     }
-    return event;
+    return storedEvent;
   }
 
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     await this.#ensureSchema();
     const rows = await this.#orm
-      .select()
+      .select(d1LegacyUsageSelect)
       .from(schema.usageEvents)
       .where(eq(schema.usageEvents.workspaceId, workspaceId))
       .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id));
-    return rows.map(usageEventFromRow);
+    return await this.#withUsagePayers(rows.map(usageEventFromRow));
   }
 
   async getCapsuleUsageTotals(
@@ -10876,7 +11105,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
     const limit = clampPageLimit(params.limit);
     const rows = await this.#orm
-      .select()
+      .select(d1LegacyUsageSelect)
       .from(schema.usageEvents)
       .where(
         d1KeysetWhereDesc(
@@ -10888,7 +11117,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .orderBy(desc(schema.usageEvents.createdAt), desc(schema.usageEvents.id))
       .limit(limit + 1);
-    return pageFromProbe(rows.map(usageEventFromRow), limit);
+    return pageFromProbe(await this.#withUsagePayers(rows.map(usageEventFromRow)), limit);
   }
 
   async #usageEventByIdempotencyKey(
@@ -10896,11 +11125,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<UsageEvent | undefined> {
     await this.#ensureSchema();
     const row = await this.#orm
-      .select()
+      .select(d1LegacyUsageSelect)
       .from(schema.usageEvents)
       .where(eq(schema.usageEvents.idempotencyKey, idempotencyKey))
       .get();
-    return row ? usageEventFromRow(row) : undefined;
+    return row ? (await this.#withUsagePayers([usageEventFromRow(row)]))[0] : undefined;
   }
 
   // -- backups (§33 layer 1 / §26 R2_BACKUPS) ----------------------------------
@@ -12783,7 +13012,7 @@ function d1CapsuleApplyRunAdmissionFenceGuardStmt(
   );
   const existing = orm.select({ one: sql`1` }).from(schema.runs)
     .where(eq(schema.runs.id, runId));
-  return orm.insert(capsule).select(
+  return orm.insert(legacyCapsuleGuardTable).select(
     orm.select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as capsule_apply_admission_guard_source`)
       .where(and(notExists(current), notExists(existing))),
@@ -12806,7 +13035,7 @@ function d1CapsuleStateGuardStmt(
         status === undefined ? undefined : eq(schema.capsules.status, status),
       ),
     );
-  return orm.insert(schema.capsules).select(
+  return orm.insert(legacyCapsuleGuardTable).select(
     orm
       .select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as guard_source`)
@@ -12840,7 +13069,7 @@ function d1CapsuleRestoredStateGuardStmt(
         status === undefined ? undefined : eq(schema.capsules.status, status),
       ),
     );
-  return orm.insert(schema.capsules).select(
+  return orm.insert(legacyCapsuleGuardTable).select(
     orm
       .select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as guard_source`)
@@ -12866,7 +13095,7 @@ function d1CapsuleStateVersionGuardStmt(
         status === undefined ? undefined : eq(schema.capsules.status, status),
       ),
     );
-  return orm.insert(schema.capsules).select(
+  return orm.insert(legacyCapsuleGuardTable).select(
     orm
       .select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as guard_source`)
@@ -12911,7 +13140,7 @@ function d1CapsulePlanCreationFenceGuardStmt(
     .select({ one: sql`1` })
     .from(schema.runs)
     .where(eq(schema.runs.id, planRunId));
-  return orm.insert(schema.capsules).select(
+  return orm.insert(legacyCapsuleGuardTable).select(
     orm
       .select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as configuration_plan_guard_source`)
@@ -13265,7 +13494,7 @@ function d1ConnectionActorAuthorityGuardStmt(
     : authority.expectedActor === undefined
       ? sql`0`
       : d1WorkspaceMemberSnapshotExists(orm, authority.expectedActor);
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionActorGuardRow())
       .from(sql`(select 1) as connection_actor_guard_source`)
@@ -13336,7 +13565,7 @@ function d1ConnectionRegistrationWorkspaceGuardStmt(
     workspaceId,
     expected,
   );
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(
         d1InvalidConnectionRegistrationGuardRow(
@@ -13386,7 +13615,7 @@ function d1ConnectionRegistrationIdentityGuardStmt(
           ),
         ]),
   ];
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(
         d1InvalidConnectionRegistrationGuardRow(
@@ -13439,9 +13668,18 @@ function d1ConnectionRevocationSnapshotWhere(
       : eq(schema.connections.workspaceId, expectedConnection.workspaceId),
     eq(schema.connections.provider, expectedConnection.provider),
     eq(schema.connections.status, expectedConnection.status),
-    eq(schema.connections.connectionJson, expectedConnection),
+    d1ConnectionSnapshotJsonWhere(expectedConnection),
     eq(schema.connections.createdAt, expectedConnection.createdAt),
     eq(schema.connections.updatedAt, expectedConnection.updatedAt),
+  )!;
+}
+
+function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
+  if (!expected.ownerAccountId) return eq(schema.connections.connectionJson, expected);
+  const { ownerAccountId, ...legacy } = expected;
+  return and(
+    sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
+    eq(schema.connections.ownerAccountId, ownerAccountId),
   )!;
 }
 
@@ -13463,7 +13701,7 @@ function d1ConnectionRevocationWorkspaceGuardStmt(
           : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
       ),
     );
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(
         d1InvalidConnectionRevocationGuardRow("workspace"),
@@ -13486,7 +13724,7 @@ function d1ConnectionRevocationSnapshotGuardStmt(
     .select({ one: sql`1` })
     .from(schema.connections)
     .where(d1ConnectionRevocationSnapshotWhere(expectedConnection));
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionRevocationGuardRow("snapshot"))
       .from(sql`(select 1) as connection_revocation_snapshot_guard_source`)
@@ -13568,7 +13806,7 @@ function d1ConnectionTestResultSnapshotGuardStmt(
         expectedSecretBlob === null ? notExists(blob) : exists(blob),
       ),
     );
-  return orm.insert(schema.connections).select(
+  return orm.insert(legacyConnectionGuardTable).select(
     orm
       .select(d1InvalidConnectionTestResultGuardRow())
       .from(sql`(select 1) as connection_test_result_guard_source`)
@@ -13888,7 +14126,7 @@ function d1CapsuleInitialAuthorityWorkspaceGuardStmt(
           : eq(schema.workspaces.managementEpoch, expected.managementEpoch),
       ),
     );
-  return orm.insert(schema.capsules).select(
+  return orm.insert(legacyCapsuleGuardTable).select(
     orm
       .select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as capsule_initial_authority_guard_source`)
@@ -16006,6 +16244,39 @@ const D1_INTERFACE_LINK_STATEMENTS = [
     on interface_links (consumer_capsule_id, requirement_key, generation)`,
   `create index if not exists interface_links_provider_interface_idx on interface_links (provider_interface_id)`,
   `create index if not exists interface_links_provider_capsule_idx on interface_links (provider_capsule_id)`,
+] as const;
+
+// TASK-0118 Phase 3 expansion. Existing rows are backfilled separately; no
+// owner/slug uniqueness is safe until collision resolution in Phase 9.
+const D1_APP_OWNERSHIP_STATEMENTS = [
+  `alter table capsules add column owner_account_id text`,
+  `alter table capsules add column ownership_epoch integer not null default 0`,
+  `alter table capsules add column management_state text not null default 'active'`,
+  `alter table capsules add column management_epoch integer not null default 0`,
+  `alter table capsules add column storage_root text`,
+  `create table capsule_members (
+    capsule_id text not null,
+    account_id text not null,
+    status text not null check (status in ('active', 'invited')),
+    added_by text,
+    created_at text not null,
+    updated_at text not null,
+    primary key (capsule_id, account_id)
+  )`,
+  `create index capsule_members_account_status_idx on capsule_members (account_id, status)`,
+  `alter table connections add column owner_account_id text`,
+  `alter table usage_events add column payer_account_id text`,
+  `alter table credential_mint_events add column actor_account_id text`,
+  `alter table credential_mint_events add column connection_owner_account_id text`,
+  `alter table credential_mint_events add column ownership_epoch integer`,
+  `create table account_billing_bindings (
+    account_id text primary key,
+    billing_authority text not null,
+    billing_ref text not null,
+    organization_ref text,
+    created_at text not null,
+    updated_at text not null
+  )`,
 ] as const;
 
 const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [
@@ -19438,6 +19709,13 @@ ${D1_INTERFACE_LINK_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_INTERFACE_LINK_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_INTERFACE_LINK_STATEMENTS); },
   },
+  {
+    version: 77,
+    name: "d1_app_ownership",
+    checksumSource: () => `expand: TASK-0118 Phase 3 per-Capsule ownership. Nullable owner/payer columns permit bounded backfill; no owner slug uniqueness or historical rewrite. No cascade FK.\n${D1_APP_OWNERSHIP_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_APP_OWNERSHIP_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_APP_OWNERSHIP_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -20383,12 +20661,13 @@ const D1_BACKUP_OWNER_INDEX_PROJECTION = `(select json_group_array(${D1_RUNTIME_
 
 /** Cold readiness co-reads structures; warm Workspace reads stay one statement. */
 const D1_RUNTIME_STRUCTURE_PROJECTION = `(
-  select json_group_array(json_object('name', master.name,
-    'columns', (select json_group_array(json_object('name', name, 'type', type, 'notnull', "notnull", 'pk', pk)) from pragma_table_xinfo(master.name)),
+  select json_group_array(json_object('name', master.name, 'sql', master.sql,
+    'columns', (select json_group_array(json_object('name', name, 'type', type, 'notnull', "notnull", 'pk', pk, 'defaultValue', dflt_value)) from pragma_table_xinfo(master.name)),
     'indexes', (select json_group_array(${D1_RUNTIME_INDEX_PROJECTION}) from pragma_index_list(master.name) indexes),
     'foreignKeys', (select count(*) from pragma_foreign_key_list(master.name))))
   from sqlite_master master where master.type = 'table' and master.name in (
     'workspaces', 'workspace_members', 'interface_bindings', 'interface_links', 'scheduled_sweep_cursors',
+    'capsules', 'capsule_members', 'connections', 'usage_events', 'credential_mint_events', 'account_billing_bindings',
     'workspace_billing_intents', 'workspace_billing_bindings',
     'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups',
     'workspace_financial_sources','workspace_financial_events','workspace_financial_materializations','workspace_financial_receipts')
@@ -20404,7 +20683,8 @@ type D1RuntimeIndex = {
 };
 type D1RuntimeStructure = {
   readonly name: string;
-  readonly columns: readonly { readonly name: string; readonly type: string; readonly notnull: number; readonly pk: number }[];
+  readonly sql: string | null;
+  readonly columns: readonly { readonly name: string; readonly type: string; readonly notnull: number; readonly pk: number; readonly defaultValue: string | null }[];
   readonly indexes: readonly D1RuntimeIndex[];
   readonly foreignKeys: number;
 };
@@ -20460,7 +20740,7 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
       const column = table.columns.find((item) => item.name === columnName);
       return !column || column.type.toLowerCase() !== type || column.notnull !== required || column.pk !== pk;
     }) || indexes.some(([indexName, columns, partial = 0]) => !table.indexes.some((index) => index.name === indexName && index.unique === 1 && index.partial === partial && stableStringify(index.columns) === stableStringify(columns))) ||
-      ((name === "interface_links" || name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+      ((name === "interface_links" || name === "capsule_members" || name === "account_billing_bindings" || name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
   };
   check("workspaces", [["id", "text", 0, 1], ["handle", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1],
     ["owner_user_id", "text", 0], ["workspace_type", "text", 0], ["personal_bootstrap_owner_id", "text", 0], ["management_state", "text", 1], ["management_epoch", "integer", 1]],
@@ -20490,6 +20770,32 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
         throw new Error("D1 OpenTofu predeployed schema verification failed");
       }
     }
+  }
+  if (head >= 77) {
+    const hasColumns = (name: string, expected: readonly Column[]) => {
+      const table = tables.get(name);
+      if (!table || expected.some(([columnName, type, required, pk = 0]) => {
+        const column = table.columns.find(item => item.name === columnName);
+        return !column || column.type.toLowerCase() !== type || column.notnull !== required || column.pk !== pk;
+      })) throw new Error("D1 OpenTofu predeployed schema verification failed");
+    };
+    hasColumns("capsules", [["owner_account_id", "text", 0], ["ownership_epoch", "integer", 1], ["management_state", "text", 1], ["management_epoch", "integer", 1], ["storage_root", "text", 0]]);
+    hasColumns("connections", [["owner_account_id", "text", 0]]);
+    hasColumns("usage_events", [["payer_account_id", "text", 0]]);
+    hasColumns("credential_mint_events", [["actor_account_id", "text", 0], ["connection_owner_account_id", "text", 0], ["ownership_epoch", "integer", 0]]);
+    check("capsule_members", [["capsule_id", "text", 1, 1], ["account_id", "text", 1, 2], ["status", "text", 1], ["added_by", "text", 0], ["created_at", "text", 1], ["updated_at", "text", 1]]);
+    check("account_billing_bindings", [["account_id", "text", 0, 1], ["billing_authority", "text", 1], ["billing_ref", "text", 1], ["organization_ref", "text", 0], ["created_at", "text", 1], ["updated_at", "text", 1]]);
+    for (const [name, statement] of [["capsule_members", D1_APP_OWNERSHIP_STATEMENTS[5]], ["account_billing_bindings", D1_APP_OWNERSHIP_STATEMENTS[12]]] as const) {
+      if (normalizedD1IndexSql(tables.get(name)?.sql ?? null) !== normalizedD1IndexSql(statement)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+    for (const [name, column, expected] of [
+      ["capsules", "ownership_epoch", "0"], ["capsules", "management_state", "'active'"], ["capsules", "management_epoch", "0"],
+    ] as const) {
+      if (tables.get(name)?.columns.find(item => item.name === column)?.defaultValue !== expected) throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+    const memberIndex = tables.get("capsule_members")!.indexes.find(index => index.name === "capsule_members_account_status_idx");
+    if (!memberIndex || memberIndex.unique !== 0 || memberIndex.partial !== 0 || stableStringify(memberIndex.columns) !== stableStringify(["account_id", "status"]) ||
+      normalizedD1IndexSql(memberIndex.sql) !== normalizedD1IndexSql(D1_APP_OWNERSHIP_STATEMENTS[6])) throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
   check("scheduled_sweep_cursors", [["lane", "text", 0, 1], ["generation", "integer", 1], ["cursor_created_at", "text", 0], ["cursor_id", "text", 0], ["upper_created_at", "text", 0], ["upper_id", "text", 0]]);
   if (head >= 72) {
@@ -20547,7 +20853,7 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
 }
 
 /** Runtime floors never weaken complete catalog and physical qualification. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76): Promise<void> {
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   let structures: string | null;
@@ -20577,11 +20883,11 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion:
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 = 76,
+  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 = 76,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76 && head !== 77) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
   const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

@@ -278,9 +278,9 @@ export function isWorkspaceBindableOperatorConnection(
  */
 export interface ProviderConnection {
   readonly id: string;
-  readonly workspaceId?: string;
-  /** Personal owner; absent on operator connections and pre-v77 records. */
+  /** Personal connection owner; absent for operator connections or pre-v77 rows. */
   readonly ownerAccountId?: string;
+  readonly workspaceId?: string;
   readonly provider: string;
   readonly providerSource: string;
   /** Canonical credential materialization authority for provider connections. */

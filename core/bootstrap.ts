@@ -76,10 +76,8 @@ import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
-import type { AppAccessResolver } from "../contract/app-access.ts";
 import { sqlAccountResourceReader, type AccountResourceReader } from "./domains/account-resources/read.ts";
 import { SqlAppAuthorizationStore, type AppAuthorizationMutations } from "./domains/app-authorization/store.ts";
-import { createWorkspaceAppAccessResolver } from "./adapters/app-access/workspace.ts";
 import {
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";
@@ -109,6 +107,8 @@ import {
   type RetryCapsuleInterfaceMaterializationFailureInput,
 } from "./domains/interfaces/materialization_intent_failures.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
+import { InMemoryAppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "./domains/app-ownership/store.ts";
+import type { AppAccessResolver } from "takosumi-contract/app-access";
 import {
   type BackupArtifactStore,
   type BackupObjectReader,
@@ -495,6 +495,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /** Durable Takosumi-managed runtime Interface declarations and bindings. */
   readonly interfaceStores?: InterfaceStores;
+  readonly appOwnershipStore?: AppOwnershipStore;
   /** Recoverable host materialization of canonical Interface/Binding state. */
   readonly interfaceProjectionSink?: InterfaceProjectionSink;
   /**
@@ -661,6 +662,7 @@ export interface TakosumiOperations {
   readonly appAccess: AppAccessResolver;
   readonly accountResources?: AccountResourceReader;
   readonly appAuthorization?: AppAuthorizationMutations;
+  readonly appOwnership: AppOwnershipStore;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
@@ -1093,6 +1095,10 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
+  const appOwnershipStore = options.appOwnershipStore ??
+    (options.sqlClient
+      ? new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore)
+      : new InMemoryAppOwnershipStore(durableOpenTofuStore));
   const operatorInstallConfigs = options.operatorInstallConfigs ?? [];
   const defaultInstallConfigOverrides = operatorInstallConfigs.filter(
     (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -1171,18 +1177,7 @@ export async function createTakosumiService(
   // resolution + credential mint). Without either, the controller fails closed on
   // every provider-using run (this is what the shipped worker was previously
   // missing — provider plan/apply + private-git source_sync had no vault to mint).
-  const appAccess = options.appAccessResolver ?? createWorkspaceAppAccessResolver({
-    getCapsule: (id) => sharedOpenTofuStore.getCapsule(id),
-    getWorkspace: (id) => sharedOpenTofuStore.getWorkspace(id),
-    getWorkspaceMember: (workspaceId, accountId) => sharedOpenTofuStore.getWorkspaceMember(workspaceId, accountId),
-    listWorkspacesForAccount: async (accountId) => {
-      const owned = await sharedOpenTofuStore.listWorkspacesByOwner(accountId);
-      const memberships = await sharedOpenTofuStore.listWorkspaceMembersByAccount(accountId);
-      const memberWorkspaces = await sharedOpenTofuStore.listWorkspacesByIds(memberships.filter((member) => member.status === "active").map((member) => member.workspaceId));
-      return [...new Map([...owned, ...memberWorkspaces].map((workspace) => [workspace.id, workspace])).values()];
-    },
-    listCapsules: (workspaceId) => sharedOpenTofuStore.listCapsules(workspaceId),
-  });
+  const appAccess = options.appAccessResolver ?? appOwnershipStore;
   const opentofuConnectionVault =
     options.opentofuConnectionVault ??
     (options.secretCrypto
@@ -1792,7 +1787,7 @@ export async function createTakosumiService(
         }
       : undefined,
     deployControlInternalRouteOptions: {
-      controller: opentofuController,
+        controller: opentofuController,
       ...(options.buildConnectionSetupRequest
         ? { buildConnectionSetupRequest: options.buildConnectionSetupRequest }
         : {}),
@@ -1865,6 +1860,7 @@ export async function createTakosumiService(
     ...(options.accountResourceReader || options.sqlClient ? {
       accountResources: options.accountResourceReader ?? sqlAccountResourceReader(options.sqlClient!),
     } : {}),
+    appOwnership: appOwnershipStore,
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,

@@ -141,13 +141,13 @@ export interface CapsuleUninstall {
  * public Capsule reads; dashboard output reads go through safe Output projections.
  */
 export interface Capsule {
-  /** App ownership fields are absent only before schema v77 expansion. */
+  readonly id: string;
+  /** Materialized app owner; absent only on pre-v77 rows awaiting backfill. */
   readonly ownerAccountId?: string;
   readonly ownershipEpoch?: number;
   readonly managementState?: "active" | "draining" | "frozen";
   readonly managementEpoch?: number;
   readonly storageRoot?: string;
-  readonly id: string;
   readonly workspaceId: string;
   /**
    * Owning Project. Capsules live under a Project; a default Project

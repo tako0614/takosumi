@@ -247,9 +247,9 @@ export class RunnerArtifactSizeLimitError extends Error {
  * owns; the DO only writes the object at the derived key and returns its digest.
  * Mirrors the contract `DispatchStateScope` ({ workspaceId, subject,
  * environment, generation, stateRef }); kept as a local interface so the DO
- * does not pull a contract import into the worker bundle. Current R2 keys use
- * canonical Workspace/Capsule/Resource vocabulary. Historical state refs used
- * by an explicit adoption request remain opaque read-only coordinates.
+ * does not pull a contract import into the worker bundle. New Capsule keys use
+ * the allocated apps root, while legacy Capsule and Resource keys retain their
+ * Workspace roots. Historical adoption refs remain opaque read-only coordinates.
  */
 interface StateScope {
   readonly workspaceId: string;
@@ -4248,15 +4248,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertRequestNotAborted(signal);
     const identity = restoreScopeIdentityFromKey(expected.scopeKey);
     if (!identity) throw new Error("Restore acknowledged scope is invalid");
+    const workspaceId = identity.workspaceId ?? await this.#restoreWorkspaceId(expected.runId, identity.capsuleId);
     const object = await this.#r2State(expected.runId, {
-      workspaceId: identity.workspaceId,
+      workspaceId,
       subjectKind: "capsule", subjectId: identity.capsuleId,
       environment: identity.environment,
       generation: expected.generation,
       stateRef: expected.logicalTargetStateRef,
     }, expected.stateRef, undefined, expectedLeaseToken).head(expected.stateRef);
     assertRequestNotAborted(signal);
-    if (!object || !isExactRestoreAckObject(object, expected)) {
+    if (!object || object.customMetadata?.["takosumi-workspace-id"] !== workspaceId ||
+      !isExactRestoreAckObject(object, expected)) {
       throw new Error("Restore acknowledged state object is missing or changed");
     }
     const current = parseRunnerRestoreAuthorityRecord(
@@ -4294,6 +4296,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       },
       200,
     );
+  }
+
+  async #restoreWorkspaceId(runId: string, capsuleId: string): Promise<string> {
+    const database = this.env.TAKOSUMI_CONTROL_DB;
+    const primary = "withSession" in database && typeof database.withSession === "function"
+      ? database.withSession("first-primary") : database;
+    const result = await primary.prepare("select space_id, installation_id from runs where id = ? limit 2").bind(runId).all() as {
+      success?: boolean;
+      results: Array<{ space_id: string; installation_id: string }>;
+    };
+    if (result.success === false || result.results.length !== 1 || result.results[0]?.installation_id !== capsuleId || !result.results[0]?.space_id) {
+      throw new Error("Restore acknowledged Run owner is invalid");
+    }
+    return result.results[0].space_id;
   }
 
   async #abandonRestoreClaim(claim: RunnerRestoreClaim): Promise<void> {
@@ -5550,18 +5566,23 @@ function planJsonArtifactMaxBytes(env: CloudflareWorkerEnv): number {
 
 // ===========================================================================
 // R2_STATE keys (spec §20 / §26):
-//   workspaces/{workspaceId}/capsules/{capsuleId}/environments/{environment}/state-versions/{NNNNNNNN}.tfstate.enc
-//   workspaces/{workspaceId}/capsules/{capsuleId}/environments/{environment}/state-versions/current.json
+//   {persisted Capsule root}/environments/{environment}/state-versions/{NNNNNNNN}.tfstate.enc
+//   {persisted Capsule root}/environments/{environment}/state-versions/current.json
 // The generation is owned by the controller (other lane); the DO formats it as
 // an 8-digit, zero-padded segment for the object key.
 // ===========================================================================
 
 function stateScopePrefix(scope: StateScope): string {
-  const collection =
-    scope.subjectKind === "resource" ? "resources" : "capsules";
-  return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
-    scope.subjectId,
-  )}/environments/${safeKeySegment(scope.environment)}/state-versions`;
+  return `${stateSubjectRoot(scope)}/environments/${safeKeySegment(scope.environment)}/state-versions`;
+}
+
+function stateSubjectRoot(scope: StateScope): string {
+  const legacy = `workspaces/${safeKeySegment(scope.workspaceId)}/${scope.subjectKind === "resource" ? "resources" : "capsules"}/${safeKeySegment(scope.subjectId)}`;
+  if (scope.subjectKind !== "capsule") return legacy;
+  const app = `apps/${safeKeySegment(scope.subjectId)}`;
+  const suffix = `/environments/${safeKeySegment(scope.environment)}/state-versions/${formatGeneration(scope.generation)}.tfstate.enc`;
+  if (scope.subjectId === safeKeySegment(scope.subjectId) && scope.stateRef === `${app}${suffix}`) return app;
+  return legacy;
 }
 
 function currentStateKey(scope: StateScope): string {
@@ -5584,7 +5605,7 @@ function logicalStateScopeKey(scope: StateScope): string {
 
 function restoreScopeIdentityFromKey(scopeKey: string):
   | {
-      readonly workspaceId: string;
+      readonly workspaceId?: string;
       readonly capsuleId: string;
       readonly environment: string;
     }
@@ -5593,12 +5614,9 @@ function restoreScopeIdentityFromKey(scopeKey: string):
     /^workspaces\/([a-zA-Z0-9._-]+)\/capsules\/([a-zA-Z0-9._-]+)\/environments\/([a-zA-Z0-9._-]+)\/state-versions$/u.exec(
       scopeKey,
     );
-  if (!match) return undefined;
-  return {
-    workspaceId: match[1]!,
-    capsuleId: match[2]!,
-    environment: match[3]!,
-  };
+  if (match) return { workspaceId: match[1]!, capsuleId: match[2]!, environment: match[3]! };
+  const app = /^apps\/([a-zA-Z0-9._-]+)\/environments\/([a-zA-Z0-9._-]+)\/state-versions$/u.exec(scopeKey);
+  return app ? { capsuleId: app[1]!, environment: app[2]! } : undefined;
 }
 
 function hasExactRestoreScopeMetadata(
@@ -5608,7 +5626,9 @@ function hasExactRestoreScopeMetadata(
   const identity = restoreScopeIdentityFromKey(scopeKey);
   return Boolean(
     identity &&
-      metadata?.["takosumi-workspace-id"] === identity.workspaceId &&
+      typeof metadata?.["takosumi-workspace-id"] === "string" &&
+      metadata["takosumi-workspace-id"]!.length > 0 &&
+      (identity.workspaceId === undefined || metadata["takosumi-workspace-id"] === identity.workspaceId) &&
       metadata?.["takosumi-capsule-id"] === identity.capsuleId &&
       metadata?.["takosumi-environment"] === identity.environment,
   );
@@ -5653,11 +5673,7 @@ function assertRawOutputRefForScope(
   runId: string,
   ref: string,
 ): void {
-  const collection =
-    scope.subjectKind === "resource" ? "resources" : "capsules";
-  const expected = `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
-    scope.subjectId,
-  )}/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
+  const expected = `${stateSubjectRoot(scope)}/runs/${safeKeySegment(runId)}/outputs.raw.json.enc`;
   if (ref !== expected) {
     throw new Error(
       "allocated rawOutputRef does not match this R2 artifact storage binding",
@@ -6697,11 +6713,7 @@ function nonNegativeIntegerField(
 
 function planArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
-    const collection =
-      scope.subjectKind === "resource" ? "resources" : "capsules";
-    return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
-      scope.subjectId,
-    )}/runs/${safeKeySegment(runId)}/plan.bin`;
+    return `${stateSubjectRoot(scope)}/runs/${safeKeySegment(runId)}/plan.bin`;
   }
   return `opentofu-plan-runs/${runId.replace(/[^a-zA-Z0-9._-]+/g, "_")}/tfplan`;
 }
@@ -6711,11 +6723,7 @@ function providerLockfileArtifactKey(
   scope?: StateScope,
 ): string {
   if (scope) {
-    const collection =
-      scope.subjectKind === "resource" ? "resources" : "capsules";
-    return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
-      scope.subjectId,
-    )}/runs/${safeKeySegment(runId)}/provider-lockfile.hcl`;
+    return `${stateSubjectRoot(scope)}/runs/${safeKeySegment(runId)}/provider-lockfile.hcl`;
   }
   return `opentofu-plan-runs/${runId.replace(
     /[^a-zA-Z0-9._-]+/g,
@@ -6725,11 +6733,7 @@ function providerLockfileArtifactKey(
 
 function planJsonArtifactKey(runId: string, scope?: StateScope): string {
   if (scope) {
-    const collection =
-      scope.subjectKind === "resource" ? "resources" : "capsules";
-    return `workspaces/${safeKeySegment(scope.workspaceId)}/${collection}/${safeKeySegment(
-      scope.subjectId,
-    )}/runs/${safeKeySegment(runId)}/plan.json.zst`;
+    return `${stateSubjectRoot(scope)}/runs/${safeKeySegment(runId)}/plan.json.zst`;
   }
   return `opentofu-plan-runs/${runId.replace(
     /[^a-zA-Z0-9._-]+/g,

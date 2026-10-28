@@ -2,6 +2,7 @@
  * metadata select records; neither is an ownership authority by itself. */
 import type { D1Database, R2Bucket, R2Object } from "./bindings.ts";
 import { storedDigest, storedObjectReference, StoredServiceUsageError, type StoredBucketRole, type StoredObjectOwnerPort, type StoredServiceUsagePort } from "./stored-service-usage.ts";
+import { storedCapsuleArtifactRoot } from "./stored-capsule-root.ts";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
@@ -51,12 +52,18 @@ export function createStoredObjectOwnerResolver(options: {
         if (owners.length === 0 && key.endsWith("/current.json")) {
           // Verify an exact canonical allocation from a retained StateVersion;
           // replacing its filename is not an inference from a Workspace prefix.
-          const match = /^workspaces\/[^/]+\/capsules\/([^/]+)\/environments\/([^/]+)\/state-versions\/current\.json$/u.exec(key);
+          const match = /^(?:workspaces\/[^/]+\/capsules\/|apps\/)([^/]+)\/environments\/([^/]+)\/state-versions\/current\.json$/u.exec(key);
           const candidates = match ? await rows(db, `select space_id, installation_id, environment, generation, object_key
             from state_versions where installation_id = ? and environment = ? order by generation desc limit 1`, [match[1], match[2]]) : [];
           for (const row of candidates) {
             if (typeof row.space_id !== "string" || typeof row.installation_id !== "string" || typeof row.environment !== "string" || !Number.isSafeInteger(row.generation) || (row.generation as number) < 0) throw new StoredServiceUsageError();
-            const prefix = `workspaces/${row.space_id}/capsules/${row.installation_id}/environments/${row.environment}/state-versions/`;
+            const objectKey = row.object_key;
+            if (typeof objectKey !== "string") throw new StoredServiceUsageError();
+            const suffix = `/environments/${row.environment}/state-versions/${String(row.generation).padStart(8, "0")}.tfstate.enc`;
+            const legacyRoot = `workspaces/${row.space_id}/capsules/${row.installation_id}`;
+            const appRoot = `apps/${row.installation_id}`;
+            const root = objectKey === `${appRoot}${suffix}` ? appRoot : legacyRoot;
+            const prefix = `${root}/environments/${row.environment}/state-versions/`;
             if (row.object_key !== `${prefix}${String(row.generation).padStart(8, "0")}.tfstate.enc` || key !== `${prefix}current.json`) throw new StoredServiceUsageError();
             add(row.space_id);
           }
@@ -78,7 +85,8 @@ export function createStoredObjectOwnerResolver(options: {
               const context = nested(run.capsuleContext);
               const capsuleId = run.capsuleId;
               if (typeof capsuleId !== "string" || !ID.test(capsuleId) || plan && (context.workspaceId !== run.workspaceId || context.capsuleId !== capsuleId)) continue;
-              const prefix = `workspaces/${run.workspaceId}/capsules/${capsuleId}/runs/${selector}/`;
+              const root = await storedCapsuleArtifactRoot(db, run.workspaceId as string, capsuleId);
+              const prefix = `${root}/runs/${selector}/`;
               const suffixes = plan ? ["plan.bin.enc", "provider-lockfile.hcl.enc", "plan.json.zst.enc"] : apply ? ["outputs.raw.json.enc"] : [];
               if (suffixes.some(suffix => key === prefix + suffix)) add(run.workspaceId);
             }

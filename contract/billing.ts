@@ -140,6 +140,8 @@ export interface CapsuleUsageSummary {
 
 export interface UsageEvent {
   readonly id: string;
+  /** Account billed for this event; absent only on pre-v77 rows awaiting backfill. */
+  readonly payerAccountId?: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly runId?: string;

@@ -221,7 +221,8 @@ test("native generation write requires canonical Plan, Capsule epoch and Run lea
   try {
     const { db, runtime, call } = fixture;
     const workspaceId = "workspace_original", capsuleId = "capsule_one";
-    const capsule = { id: capsuleId, workspaceId, environment: "live", currentStateGeneration: 0 };
+    // v75/v76 has no storage_root column, even if a newer JSON writer included it.
+    const capsule = { id: capsuleId, workspaceId, environment: "live", currentStateGeneration: 0, storageRoot: `apps/${capsuleId}` };
     await db.prepare("insert into capsules values(?,?,'live',0,null,1,?)").bind(capsuleId, workspaceId, JSON.stringify(capsule)).run();
     const plan = { id: "plan_one", workspaceId, capsuleId, status: "succeeded", capsuleCurrentStateVersionId: null, capsuleExecutionAuthorityEpoch: 1, capsuleContext: { workspaceId, capsuleId, environment: "live" } };
     await db.prepare("insert into runs(id,space_id,installation_id,type,status,run_json) values(?,?,?,'plan','succeeded',?)").bind(plan.id, workspaceId, capsuleId, JSON.stringify(plan)).run();
@@ -239,6 +240,38 @@ test("native generation write requires canonical Plan, Capsule epoch and Run lea
     await db.prepare("update capsules set execution_authority_epoch=2").run();
     expect((await call({ ...request, key: key + ".execution-evidence.json" })).status).toBe(503);
     expect(await (await runtime.getR2Bucket("STATE")).head(key + ".execution-evidence.json")).toBeNull();
+  } finally { await fixture.close(); }
+}, 30_000);
+
+test("v77 persisted apps root controls Runner writes and retained pointer reads", async () => {
+  const fixture = await nativeFixture();
+  try {
+    const { db, runtime, call } = fixture;
+    const workspaceId = "workspace_original", capsuleId = "capsule_app";
+    const storageRoot = `apps/${capsuleId}`;
+    await db.prepare("alter table capsules add column storage_root text").run();
+    const capsule = { id: capsuleId, workspaceId, environment: "live", currentStateGeneration: 0, storageRoot };
+    await db.prepare("insert into capsules(id,space_id,environment,current_state_generation,current_state_version_id,execution_authority_epoch,record_json,storage_root) values(?,?,'live',0,null,1,?,?)")
+      .bind(capsuleId, workspaceId, JSON.stringify(capsule), storageRoot).run();
+    const plan = { id: "plan_app", workspaceId, capsuleId, status: "succeeded", capsuleCurrentStateVersionId: null, capsuleExecutionAuthorityEpoch: 1, capsuleContext: { workspaceId, capsuleId, environment: "live" } };
+    await db.prepare("insert into runs(id,space_id,installation_id,type,status,run_json) values(?,?,?,'plan','succeeded',?)").bind(plan.id, workspaceId, capsuleId, JSON.stringify(plan)).run();
+    const apply = { id: "apply_app", workspaceId, capsuleId, planRunId: plan.id, status: "running", expected: { planRunId: plan.id, currentStateVersionId: null, capsuleExecutionAuthorityEpoch: 1 } };
+    await db.prepare("insert into runs(id,space_id,installation_id,type,status,lease_token,run_json) values(?,?,?,'apply','running','lease_one',?)").bind(apply.id, workspaceId, capsuleId, JSON.stringify(apply)).run();
+    const key = `${storageRoot}/environments/live/state-versions/00000001.tfstate.enc`;
+    const scope = { workspaceId, subjectKind: "capsule", subjectId: capsuleId, environment: "live", generation: 1, stateRef: key };
+    expect((await call({ operation: "runner", bucketRole: "state", runId: apply.id, expectedLeaseToken: "lease_one", key: `workspaces/${workspaceId}/capsules/${capsuleId}/environments/live/state-versions/00000001.tfstate.enc`, scope })).status).toBe(503);
+    expect((await call({ operation: "runner", bucketRole: "state", runId: apply.id, expectedLeaseToken: "lease_one", key, scope })).status).toBe(200);
+    await db.prepare("insert into state_versions values('state_app',?,?, 'live',1,?)").bind(workspaceId, capsuleId, key).run();
+    const pointer = `${storageRoot}/environments/live/state-versions/current.json`;
+    await (await runtime.getR2Bucket("STATE")).put(pointer, "pointer");
+    expect((await call({ operation: "resolve", bucketRole: "state", key: pointer })).body.result).toEqual({ workspaceId });
+    const sidecar = `${storageRoot}/runs/${plan.id}/plan.json.zst.enc`;
+    await (await runtime.getR2Bucket("ARTIFACTS")).put(sidecar, "sidecar", { customMetadata: { "takosumi-plan-run-id": plan.id } });
+    expect((await call({ operation: "resolve", bucketRole: "artifacts", key: sidecar })).body.result).toEqual({ workspaceId });
+    await db.prepare("update capsules set storage_root='apps/forged'").run();
+    expect((await call({ operation: "runner", bucketRole: "artifacts", runId: apply.id, expectedLeaseToken: "lease_one", key: `${storageRoot}/runs/${apply.id}/outputs.raw.json.enc`, scope })).status).toBe(503);
+    await db.prepare("delete from capsules where id=?").bind(capsuleId).run();
+    expect((await call({ operation: "resolve", bucketRole: "state", key: pointer })).body.result).toEqual({ workspaceId });
   } finally { await fixture.close(); }
 }, 30_000);
 
