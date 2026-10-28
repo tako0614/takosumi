@@ -262,6 +262,18 @@ describe("installed app page", () => {
     expect(continueInstall).toContain("if (!attempt) return extractRunId(await planCapsule(capsuleId()));");
   });
 
+  test("a stalled version change is continued through its own coordinator; updates wait while one is under way", () => {
+    const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
+    expect(continueRevision).toContain("(await advanceGitRevisionPlan(revisionPlanId)).revisionPlan.planRunId");
+    expect(continueRevision).toContain('"update",');
+    expect(attention).toContain("props.actions.continueRevision(revisionPlanId())");
+    // Update, check, choose a version and go back all wait.
+    expect(page).toContain("reviewBusy={reviewBusy() || versionChangeBusy(view())}");
+    expect(page).toContain('view.state === "installed" && !versionChangeBusy(view);');
+    // An attempt waiting for input says whose input it needs.
+    expect(attention).toContain('who() === "viewer" ? t("app.progress.awaitingYourInput") : t("app.progress.awaitingStarterInput")');
+  });
+
   test("a re-plan of the installed version is labelled as such, not as a retry of the failed change", () => {
     expect(page).toContain('return preview?.kind === "installed" && !preview.recorded');
     expect(page).toContain('if (!primaryProblem(view)?.runId) return "app.problem.retryInstalled";');

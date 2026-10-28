@@ -669,7 +669,12 @@ test("a Capsule restored to active after a failed teardown is not stuck uninstal
 /** An install coordinator row bound to the fixture Capsule. */
 async function putInstallAttempt(
   h: Awaited<ReturnType<typeof fixture>>,
-  over: { readonly phase?: "awaiting_input" | "planning"; readonly planRunId?: string; readonly updatedAt?: string } = {},
+  over: {
+    readonly phase?: "awaiting_input" | "planning";
+    readonly planRunId?: string;
+    readonly updatedAt?: string;
+    readonly actorSubject?: string;
+  } = {},
 ): Promise<void> {
   const at = over.updatedAt ?? new Date().toISOString();
   const authority = {
@@ -683,8 +688,8 @@ async function putInstallAttempt(
       id: "ip_app_route",
       workspaceId: WORKSPACE,
       workspaceManagementAuthority: authority,
-      createdBy: OWNER,
-      actorSubject: OWNER,
+      createdBy: over.actorSubject ?? OWNER,
+      actorSubject: over.actorSubject ?? OWNER,
       idempotencyKeyHash: "key_app_route",
       requestDigest: "digest_app_route",
       source: { name: "app", url: "https://git.example.com/example/app.git", ref: "main", path: "." },
@@ -741,15 +746,30 @@ test("a first install whose attempt is still preparing is installing, and a stal
     applied: false,
     state: "installing",
     primaryAction: "none",
-    progress: { revisionPreparing: true, installPlanId: "ip_app_route" },
+    // Only the person who started the attempt can answer it.
+    progress: { revisionPreparing: true, installPlanId: "ip_app_route", installPlanAwaitingInput: "viewer" },
   });
   expect(app.problems.map((problem) => problem.code)).not.toContain("install_incomplete");
+});
+
+test("an attempt someone else started waits for them, and never stalls into a continue that cannot advance", async () => {
+  const h = await fixture();
+  await makeUnapplied(h, 3 * 60 * 60 * 1000);
+  await putInstallAttempt(h, {
+    actorSubject: "user_teammate",
+    updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+  });
+  expect(await h.app()).toMatchObject({
+    state: "installing",
+    primaryAction: "none",
+    progress: { revisionPreparing: true, installPlanId: "ip_app_route", installPlanAwaitingInput: "other" },
+  });
 });
 
 test("an install attempt that stopped moving offers continue_install through that attempt", async () => {
   const h = await fixture();
   await makeUnapplied(h, 3 * 60 * 60 * 1000);
-  await putInstallAttempt(h, { updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() });
+  await putInstallAttempt(h, { phase: "planning", updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() });
   expect(await h.app()).toMatchObject({
     state: "needs_attention",
     primaryAction: "continue_install",
@@ -781,6 +801,63 @@ test("an install attempt left in planning after its Plan Run exists does not hol
     primaryAction: "retry",
     problems: [{ code: "run_failed", runId: "plan_first" }],
     progress: { revisionPreparing: false },
+  });
+});
+
+/** A revision coordinator row for the applied fixture Capsule. */
+async function putRevisionRow(h: Awaited<ReturnType<typeof fixture>>, updatedAt: string): Promise<void> {
+  const authority = { workspaceId: WORKSPACE, managementState: "active" as const, managementEpoch: 1 };
+  const created = await h.core.gitInstallPlans.create(
+    {
+      id: "rp_app_route",
+      workspaceId: WORKSPACE,
+      workspaceManagementAuthority: authority,
+      createdBy: OWNER,
+      actorSubject: OWNER,
+      idempotencyKeyHash: "key_revision_route",
+      requestDigest: "digest_revision_route",
+      operation: "revision",
+      source: { name: "app", url: "https://git.example.com/example/app.git", ref: "v2", path: "." },
+      capsule: { name: "app", environment: "production" },
+      options: {},
+      revision: {
+        targetRef: "v2",
+        base: {
+          capsuleStateGeneration: 1,
+          installConfigId: "cfg_app_route",
+          installConfigDigest: "sha256:config",
+          sourceDefaultRef: "main",
+          sourceDefaultPath: ".",
+        },
+      },
+      sourceId: "src_app_route",
+      capsuleId: CAPSULE,
+      installConfigId: "cfg_app_route",
+      installConfigBaseId: "cfg_app_route",
+      installConfigBaseDigest: "sha256:config",
+      installModulePath: ".",
+      phase: "syncing_source",
+      generation: 0,
+      createdAt: updatedAt,
+      updatedAt,
+    },
+    authority,
+  );
+  expect(created.status).toBe("created");
+}
+
+test("a version change being prepared holds the app; one that stopped moving is offered to continue", async () => {
+  const fresh = await fixture();
+  await putRevisionRow(fresh, new Date().toISOString());
+  expect(await fresh.app()).toMatchObject({ state: "updating", primaryAction: "none", progress: { revisionPreparing: true } });
+  expect((await fresh.app()).progress.revisionPlanId).toBeUndefined();
+  // The client's deadline passed during the Source sync: the row stays
+  // without a Plan Run. The app reads as installed and names the row.
+  const stalled = await fixture();
+  await putRevisionRow(stalled, new Date(Date.now() - 20 * 60 * 1000).toISOString());
+  expect(await stalled.app()).toMatchObject({
+    state: "installed",
+    progress: { revisionPreparing: false, revisionPlanId: "rp_app_route" },
   });
 });
 

@@ -30,6 +30,8 @@ export interface AttentionActions {
   readonly cancelUninstall: () => void;
   readonly uninstallNow: () => void;
   readonly openReview: (runId: string, runType: RunType) => void;
+  /** Continues a revision coordinator that stopped moving. */
+  readonly continueRevision: (revisionPlanId: string) => void;
 }
 
 const CONNECTION_STATUS: Readonly<Record<string, MessageKey>> = {
@@ -88,7 +90,7 @@ export default function AppAttentionSection(props: {
   /** A review or change is being started, so other changes wait. */
   readonly busy: boolean;
   /** Which action is starting right now, for its busy spinner. */
-  readonly startingAction?: CapsuleAppAction;
+  readonly startingAction?: CapsuleAppAction | "continue_revision";
   readonly uninstallBusy: boolean;
   readonly uninstallError?: string;
   readonly screenRetryBusy: boolean;
@@ -122,14 +124,19 @@ export default function AppAttentionSection(props: {
       ? review
       : undefined;
   };
+  const awaitingInput = () => app().progress.installPlanAwaitingInput;
   const preparing = () =>
     app().progress.revisionPreparing && !app().progress.run && !app().progress.review &&
-    props.reviewRunId === undefined;
+    !awaitingInput() && props.reviewRunId === undefined;
+  // A version change whose preparation stopped (its client went away).
+  const stalledRevision = () =>
+    props.reviewRunId === undefined ? app().progress.revisionPlanId : undefined;
   const screenProblemsUnknown = () => appViewIncomplete(app(), "screen_problems");
   const hasError = () => app().problems.some((problem) => problem.severity === "error");
   const visible = () =>
     app().state !== "uninstalled" &&
     (cards().length > 0 || showUninstallCard() || Boolean(pendingReview()) || preparing() ||
+      Boolean(awaitingInput()) || Boolean(stalledRevision()) ||
       screenProblemsUnknown() || props.reviewRunId !== undefined ||
       Boolean(props.error) || Boolean(props.notice));
 
@@ -375,6 +382,34 @@ export default function AppAttentionSection(props: {
 
           <Show when={preparing()}>
             <p class="ap-notice" role="status" data-progress="preparing">{t("app.progress.preparing")}</p>
+          </Show>
+
+          <Show when={awaitingInput()}>
+            {(who) => (
+              <p class="ap-notice" role="status" data-progress="awaiting-input">
+                {who() === "viewer" ? t("app.progress.awaitingYourInput") : t("app.progress.awaitingStarterInput")}
+              </p>
+            )}
+          </Show>
+
+          <Show when={stalledRevision()}>
+            {(revisionPlanId) => (
+              <article class="ap-problem ap-problem-info" data-problem="revision-stalled">
+                <strong>{t("app.progress.revisionStalled")}</strong>
+                <p>{t("app.progress.revisionStalledHint")}</p>
+                <div class="ap-row-actions">
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    busy={props.startingAction === "continue_revision"}
+                    disabled={props.busy}
+                    onClick={() => props.actions.continueRevision(revisionPlanId())}
+                  >
+                    {t("app.progress.continueRevision")}
+                  </Button>
+                </div>
+              </article>
+            )}
           </Show>
 
           <Show when={props.error}>
