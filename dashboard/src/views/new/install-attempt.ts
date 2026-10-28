@@ -384,28 +384,12 @@ export function canAdvance(response: GitInstallPlanResponse): boolean {
 }
 
 /**
- * What counts as progress while following the coordinator. The generation is
- * left out on purpose: every successful reconcile claim bumps it, so it
- * changes even while the coordinator only waits on a sync or Plan Run.
+ * What counts as progress while following the coordinator (shared with the
+ * app page's reconcile loop). The generation is left out on purpose: every
+ * successful reconcile claim bumps it, so it changes even while the
+ * coordinator only waits on a sync or Plan Run.
  */
-export function progressSignature(response: GitInstallPlanResponse): string {
-  const plan = response.installPlan;
-  const action = response.userAction;
-  return JSON.stringify([
-    plan.phase,
-    plan.awaitingInput ?? "",
-    action.kind,
-    action.kind === "wait" ? action.phase : "",
-    plan.sourceSyncRunId ?? "",
-    plan.sourceSnapshotId ?? "",
-    plan.compatibilityCheckRunId ?? "",
-    plan.installConfigId ?? "",
-    plan.capsuleId ?? "",
-    plan.planRunId ?? "",
-    plan.diagnostic?.code ?? "",
-    response.invalidated ?? "",
-  ]);
-}
+export { gitPlanProgressSignature as progressSignature } from "../../lib/git-plan-progress.ts";
 
 // --- The view -------------------------------------------------------------------
 

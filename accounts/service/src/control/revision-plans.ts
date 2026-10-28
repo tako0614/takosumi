@@ -28,8 +28,8 @@ import {
 } from "../../../../core/domains/deploy-control/errors.ts";
 import { evaluateCompatibilityReportAgainstPolicy } from "../../../../core/domains/deploy-control/provider_policy.ts";
 import {
+  activeGitRevisionPreparation,
   GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
-  GIT_REVISION_PREPARATION_STALL_AFTER_MS,
   publicGitInstallPlan,
   type StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
@@ -125,18 +125,16 @@ export async function handleCapsuleRevisionPlans(
     );
   }
   // One version change at a time per Capsule: while another revision
-  // coordinator is still preparing its Plan (and has not stalled), a second
-  // one would race it to a duplicate Plan. Its id is returned so the caller
-  // can follow it instead. An exact idempotent replay was answered above.
-  const preparing = await ctx.operations.gitInstallPlans.preparingCoordinatorForCapsule(
-    capsule.id,
-    capsule.workspaceId,
-    { includeInstall: false },
+  // coordinator is still preparing its Plan (not stalled, and pinned to the
+  // current state generation), a second one would race it to a duplicate
+  // Plan. Its id is returned so the caller can follow it instead. An exact
+  // idempotent replay was answered above.
+  const preparing = await activeGitRevisionPreparation(
+    ctx.operations.gitInstallPlans,
+    capsule,
+    Date.now(),
   );
-  if (
-    preparing?.operation === "revision" &&
-    Date.now() - Date.parse(preparing.updatedAt) < GIT_REVISION_PREPARATION_STALL_AFTER_MS
-  ) {
+  if (preparing) {
     return errorJson(
       "failed_precondition",
       "Another version change for this app is still being prepared.",

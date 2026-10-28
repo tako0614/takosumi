@@ -21,6 +21,7 @@ import {
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { activeGitRevisionPreparation } from "../../../../core/domains/install-plans/store.ts";
 import {
   errorJson,
   json,
@@ -229,10 +230,11 @@ export async function handleCapsuleInstallConfigReAdoption(
   if (
     current.status === "destroyed" ||
     current.status === "disabled" ||
-    (await ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
-      current.id,
-      current.workspaceId,
-    ))
+    (await activeGitRevisionPreparation(
+      ctx.operations.gitInstallPlans,
+      current,
+      Date.now(),
+    )) !== undefined
   ) {
     return errorJson(
       "failed_precondition",

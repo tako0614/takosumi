@@ -28,6 +28,7 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { evaluateCompatibilityReportAgainstPolicy } from "../../../../core/domains/deploy-control/provider_policy.ts";
+import { activeGitRevisionPreparation } from "../../../../core/domains/install-plans/store.ts";
 import {
   providerBindingSetAuthorityDigest,
   type WorkspaceManagementAuthority,
@@ -176,10 +177,11 @@ export async function handleCapsuleConfigurationPlans(
   if (
     authority.capsule.status === "destroyed" ||
     authority.capsule.status === "disabled" ||
-    (await ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
-      authority.capsule.id,
-      authority.capsule.workspaceId,
-    ))
+    (await activeGitRevisionPreparation(
+      ctx.operations.gitInstallPlans,
+      authority.capsule,
+      Date.now(),
+    )) !== undefined
   ) {
     return errorJson(
       "failed_precondition",
@@ -587,10 +589,11 @@ async function finishConfigurationPlan(input: {
     if (
       authority.capsule.status === "destroyed" ||
       authority.capsule.status === "disabled" ||
-      (await input.ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
-        authority.capsule.id,
-        authority.capsule.workspaceId,
-      ))
+      (await activeGitRevisionPreparation(
+        input.ctx.operations.gitInstallPlans,
+        authority.capsule,
+        Date.now(),
+      )) !== undefined
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -679,10 +682,11 @@ async function finishConfigurationPlan(input: {
     if (
       authority.capsule.status === "destroyed" ||
       authority.capsule.status === "disabled" ||
-      (await input.ctx.operations.gitInstallPlans.hasInFlightRevisionForCapsule(
-        authority.capsule.id,
-        authority.capsule.workspaceId,
-      ))
+      (await activeGitRevisionPreparation(
+        input.ctx.operations.gitInstallPlans,
+        authority.capsule,
+        Date.now(),
+      )) !== undefined
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",

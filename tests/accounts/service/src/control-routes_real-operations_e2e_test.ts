@@ -53,6 +53,10 @@ import {
   type OpenTofuControlStore,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import {
+  GIT_REVISION_PREPARATION_STALL_AFTER_MS,
+  type StoredGitInstallPlan,
+} from "../../../../core/domains/install-plans/store.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
@@ -1329,6 +1333,112 @@ test("capsule configuration Plan atomically preserves authority and replays one 
       (run) => run.type === "plan",
     ),
   ).toHaveLength(1);
+});
+
+/** A revision coordinator row for a configuration fixture's Capsule. */
+async function putConfigurationFixtureRevisionRow(
+  fixture: Awaited<ReturnType<typeof reAdoptionRouteFixture>>,
+  id: string,
+  change: (row: StoredGitInstallPlan) => StoredGitInstallPlan = (row) => row,
+): Promise<void> {
+  const capsule = fixture.seeded.capsule;
+  const authority = await fixture.operations.workspaces.captureManagementAuthority(
+    capsule.workspaceId,
+  );
+  const now = new Date().toISOString();
+  const row: StoredGitInstallPlan = {
+    id,
+    workspaceId: capsule.workspaceId,
+    workspaceManagementAuthority: authority,
+    createdBy: "user_test",
+    actorSubject: "user_test",
+    idempotencyKeyHash: `key_${id}`,
+    requestDigest: `digest_${id}`,
+    operation: "revision",
+    source: { name: "app", url: "https://git.example.com/takos/app.git", ref: "v2", path: "." },
+    capsule: { name: capsule.name, environment: capsule.environment },
+    options: {},
+    revision: {
+      targetRef: "v2",
+      base: {
+        capsuleStateGeneration: capsule.currentStateGeneration,
+        installConfigId: capsule.installConfigId,
+        installConfigDigest: "sha256:config",
+        sourceDefaultRef: "main",
+        sourceDefaultPath: ".",
+      },
+    },
+    sourceId: capsule.sourceId,
+    capsuleId: capsule.id,
+    installConfigId: capsule.installConfigId,
+    phase: "syncing_source",
+    generation: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  expect((await fixture.operations.gitInstallPlans.create(change(row), authority)).status)
+    .toBe("created");
+}
+
+test("configuration changes wait only for a version change that is still being prepared", async () => {
+  const busy = await configurationPlanRouteFixture("configuration-plan-revision-preparing");
+  await putConfigurationFixtureRevisionRow(busy.fixture, "rp_config_preparing");
+  const refused = await controlJson<{
+    readonly error: { readonly code: string; readonly details?: { readonly reason?: string } };
+  }>(
+    {
+      operations: busy.fixture.operations,
+      store: busy.fixture.accountStore,
+      cookie: busy.fixture.cookie,
+      method: "POST",
+      path: busy.path,
+      headers: { "idempotency-key": "configuration-plan-revision-preparing" },
+      body: busy.body,
+    },
+    409,
+  );
+  expect(refused.error.details?.reason).toBe("capsule_install_config_rebind_busy");
+
+  // Rows that can no longer create a Plan, or already created one, are what
+  // the app page shows as not updating; none of them blocks a settings change.
+  const free = await configurationPlanRouteFixture("configuration-plan-revision-left-behind");
+  const idle = new Date(Date.now() - GIT_REVISION_PREPARATION_STALL_AFTER_MS - 60_000).toISOString();
+  await putConfigurationFixtureRevisionRow(free.fixture, "rp_config_planned", (row) => ({
+    ...row,
+    phase: "planning",
+    planRunId: "plan_left_in_planning",
+  }));
+  await putConfigurationFixtureRevisionRow(free.fixture, "rp_config_idle", (row) => ({
+    ...row,
+    createdAt: idle,
+    updatedAt: idle,
+  }));
+  await putConfigurationFixtureRevisionRow(free.fixture, "rp_config_moved_base", (row) => ({
+    ...row,
+    revision: {
+      ...row.revision!,
+      base: { ...row.revision!.base, capsuleStateGeneration: row.revision!.base.capsuleStateGeneration - 1 },
+    },
+  }));
+  await putConfigurationFixtureRevisionRow(free.fixture, "rp_config_failed", (row) => ({
+    ...row,
+    phase: "failed",
+    diagnostic: { code: "revision_identity_changed", message: "The pinned base changed." },
+    completedAt: row.updatedAt,
+  }));
+  const planned = await controlJson<CapsuleConfigurationPlanResponse>(
+    {
+      operations: free.fixture.operations,
+      store: free.fixture.accountStore,
+      cookie: free.fixture.cookie,
+      method: "POST",
+      path: free.path,
+      headers: { "idempotency-key": "configuration-plan-revision-left-behind" },
+      body: free.body,
+    },
+    201,
+  );
+  expect(planned.configurationPlan.planRunId).toMatch(/^plan_/u);
 });
 
 test("completed configuration Plan replay ignores later Source deactivation and management drain", async () => {

@@ -154,6 +154,8 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   capsule_not_found: "controlError.capsuleNotFound",
   install_config_not_found: "controlError.configNotFound",
   output_share_revoked: "controlError.shareRevoked",
+  // A second version change while one is still being prepared (409).
+  revision_in_progress: "controlError.revisionInProgress",
 };
 
 const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {

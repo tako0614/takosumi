@@ -5,13 +5,13 @@ import {
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 // The coordinator reconcile loop used to sleep a flat 250 ms after every round
-// trip. Each round trip is a command that claims the coordinator lease and
-// advances one step, so a round that observes the same phase and the same CAS
-// generation advanced nothing: the coordinator is waiting on a Source sync Run,
-// a container-backed analysis, or a Plan Run. These tests use a virtual clock
-// and a counting fetch double to measure how many round trips the loop issues
-// for the same simulated run before and after the bounded, progress-aware
-// cadence.
+// trip. Each round trip is a command that claims the coordinator lease (which
+// bumps its CAS generation) and advances at most one step, so a round that
+// observes the same phase and evidence advanced nothing: the coordinator is
+// waiting on a Source sync Run, a container-backed analysis, or a Plan Run.
+// These tests use a virtual clock and a counting fetch double to measure how
+// many round trips the loop issues for the same simulated run before and
+// after the bounded, progress-aware cadence.
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -29,6 +29,8 @@ function revisionPlanResponse(input: {
   readonly generation: number;
   readonly nextAction: "reconcile" | "review_run";
   readonly phase?: string;
+  /** New evidence (a Source sync Run) per step that really advanced. */
+  readonly step?: number;
 }) {
   return {
     revisionPlan: {
@@ -54,6 +56,7 @@ function revisionPlanResponse(input: {
       generation: input.generation,
       createdAt: "2026-09-29T00:00:00.000Z",
       updatedAt: "2026-09-29T00:00:00.000Z",
+      ...(input.step ? { sourceSyncRunId: `ssr_${input.step}` } : {}),
       ...(input.nextAction === "review_run" ? { planRunId: "plan_1" } : {}),
     },
     nextAction: input.nextAction,
@@ -82,6 +85,8 @@ async function driveRevision(input: {
   const waits: number[] = [];
   let reconciles = 0;
   let generation = 1;
+  // Every claim bumps the generation; only new evidence is progress.
+  let step = 0;
   globalThis.fetch = (async (
     fetchInput: RequestInfo | URL,
     init?: RequestInit,
@@ -100,12 +105,14 @@ async function driveRevision(input: {
     if (method === "POST" && url.endsWith("/reconcile")) {
       reconciles += 1;
       if (virtualNowMs < input.budgetMs) {
-        if (input.progressPerRound) generation += 1;
+        generation += 1;
+        if (input.progressPerRound) step += 1;
         return json(
           revisionPlanResponse({
             phase: "syncing_source",
             generation,
             nextAction: "reconcile",
+            step,
           }),
         );
       }

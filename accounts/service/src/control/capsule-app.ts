@@ -46,7 +46,7 @@ import {
 import { encodeCursor } from "takosumi-contract/pagination";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
-  GIT_REVISION_PREPARATION_STALL_AFTER_MS,
+  gitRevisionPreparationStalled,
   type PreparingGitPlanCoordinator,
 } from "../../../../core/domains/install-plans/store.ts";
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
@@ -168,12 +168,17 @@ async function readCapsuleAppView(
     : await Promise.all([
         readLatestLifecycleRun(operations, capsule),
         // A coordinator row counts only until it creates its Plan Run (the
-        // Run then says what is happening), and an install row only while
-        // the Capsule was never applied.
+        // Run then says what is happening), a revision row only while its
+        // base is the current state generation (after another change was
+        // applied it can only fail), and an install row only while the
+        // Capsule was never applied.
         operations.gitInstallPlans.preparingCoordinatorForCapsule(
           capsule.id,
           capsule.workspaceId,
-          { includeInstall: !applied },
+          {
+            includeInstall: !applied,
+            currentStateGeneration: capsule.currentStateGeneration,
+          },
         ),
         readConnectionIssues(operations, capsule),
         readUninstallAdmission(operations, capsule, applied),
@@ -286,6 +291,7 @@ async function readCapsuleAppView(
  *   expires.)
  * - A revision row holds the app until it stops moving; after that the app
  *   reads as it is and the page offers to continue it (`revisionPlanId`).
+ *   A row pinned to an older state generation never reaches here.
  */
 export function coordinatorPreparation(
   coordinator: PreparingGitPlanCoordinator | undefined,
@@ -298,12 +304,12 @@ export function coordinatorPreparation(
   readonly revisionPlanId?: string;
 } {
   if (!coordinator) return { preparing: false };
-  const idleMs = now - Date.parse(coordinator.updatedAt);
   if (coordinator.operation === "revision") {
-    return idleMs >= GIT_REVISION_PREPARATION_STALL_AFTER_MS
+    return gitRevisionPreparationStalled(coordinator, now)
       ? { preparing: false, revisionPlanId: coordinator.id }
       : { preparing: true };
   }
+  const idleMs = now - Date.parse(coordinator.updatedAt);
   if (coordinator.phase === "awaiting_input") {
     return {
       preparing: true,

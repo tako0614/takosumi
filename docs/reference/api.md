@@ -352,12 +352,17 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 `progress.installPlanAwaitingInput` が `viewer`（呼び出した本人が始めた）か `other` になり、
 その間は reconcile しても進みません。版の更新処理が計画の Run を作らないまま止まった場合は
 `progress.revisionPlanId` に名前が入り、`POST /api/v1/revision-plans/{revisionPlanId}/reconcile`
-で続けられます。Workspace のメンバーなら誰でもこれらを reconcile できますが、作られる計画の Run の
+で続けられます。版の更新処理は、始めたときの状態の世代がいまの Capsule の世代と同じ間だけ数えます。
+その後にほかの変更が適用された処理は reconcile しても失敗するだけなので、準備中にも
+`revisionPlanId` にもなりません。Workspace のメンバーなら誰でもこれらを reconcile できますが、作られる計画の Run の
 作成者には、進めたメンバーではなく処理そのもの（`git-install-plan:<id>` /
 `git-revision-plan:<id>`）が記録されます。
-同じ Capsule の版の更新処理がまだ計画を準備している間（止まっていない間）は、別の
+同じ Capsule の版の更新処理がまだ計画を準備している間（`progress.revisionPreparing` と同じ条件:
+計画の Run がまだない、止まっていない、管理の権限を記録している、いまの世代に基づく）は、別の
 `POST /api/v1/capsules/{capsuleId}/revision-plans` は 409（`details.reason: "revision_in_progress"`、
 `details.revisionPlanId`）で断られます。同じ Idempotency-Key の再送はそのまま返ります。
+設定の変更（`configuration-plans`）と設定の再採用（`install-config-re-adoptions`）も、同じ条件の間だけ
+409（`details.reason: "capsule_install_config_rebind_busy"`）になります。
 削除の予約記録は、Capsule が `uninstalled` の間と、provider に届いた破棄が失敗して
 `error` になり、最新の Run がまだ破棄である間だけ有効と見なします。予約が猶予中でも
 破棄中でも、`blockedReason` が記録されていれば `uninstall_blocked` になります。

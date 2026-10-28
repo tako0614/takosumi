@@ -64,6 +64,7 @@ import type {
   RunPolicyReason as ContractRunPolicyReason,
 } from "takosumi-contract";
 import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
+import { gitPlanProgressSignature } from "./git-plan-progress.ts";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account
@@ -1571,8 +1572,9 @@ function gitPlanTimeout(kind: "install" | "revision"): ControlApiError {
  *
  * Every `reconcile` round trip is a command: it claims the coordinator lease
  * and advances the state machine one step (see the install-plan reconcile
- * route). A round that returns the same `phase` and the same CAS `generation`
- * therefore advanced nothing — the coordinator is waiting on work the browser
+ * route). A round whose phase, request and evidence are unchanged (see
+ * {@link gitPlanProgressSignature}; the claim bumps the CAS `generation` even
+ * then) advanced nothing — the coordinator is waiting on work the browser
  * does not drive, such as a Source sync Run, a container-backed compatibility
  * analysis, or a Plan Run. Repeating the command at a flat 4 Hz while it waits
  * only re-pages the same durable rows, so the delay doubles from the floor up
@@ -1655,12 +1657,6 @@ function resolveGitPlanPollCadence(
   };
 }
 
-/** The coordinator facts a round trip can advance. */
-interface GitPlanProgressObservation {
-  readonly phase: string;
-  readonly generation: number;
-}
-
 /**
  * Drives one Git plan coordinator until it stops asking for reconciliation.
  *
@@ -1674,12 +1670,13 @@ async function driveGitPlanReconcile<T>(input: {
   readonly cadence: ResolvedGitPlanPollCadence;
   readonly initial: T;
   readonly nextAction: (response: T) => GitInstallPlanResponse["nextAction"];
-  readonly observe: (response: T) => GitPlanProgressObservation;
+  /** {@link gitPlanProgressSignature} of a response. */
+  readonly progress: (response: T) => string;
   readonly reconcile: (response: T) => Promise<T>;
   readonly onProgress?: (response: T) => void;
 }): Promise<T> {
   let response = input.initial;
-  let observed = input.observe(response);
+  let observed = input.progress(response);
   let stalledRounds = 0;
   for (
     let attempt = 0;
@@ -1691,12 +1688,8 @@ async function driveGitPlanReconcile<T>(input: {
     }
     response = await input.reconcile(response);
     throwIfAborted(input.signal);
-    const nextObserved = input.observe(response);
-    stalledRounds =
-      nextObserved.phase !== observed.phase ||
-      nextObserved.generation !== observed.generation
-        ? 0
-        : stalledRounds + 1;
+    const nextObserved = input.progress(response);
+    stalledRounds = nextObserved !== observed ? 0 : stalledRounds + 1;
     observed = nextObserved;
     input.onProgress?.(response);
     if (input.nextAction(response) !== "reconcile") continue;
@@ -1773,10 +1766,7 @@ export async function createReviewableGitRevisionPlan(
       cadence,
       initial: first,
       nextAction: (current) => current.nextAction,
-      observe: (current) => ({
-        phase: current.revisionPlan.phase,
-        generation: current.revisionPlan.generation,
-      }),
+      progress: gitPlanProgressSignature,
       reconcile: (current) =>
         reconcileGitRevisionPlan(current.revisionPlan.id, { signal }),
     });
@@ -2196,10 +2186,7 @@ export async function advanceGitInstallPlan(
       cadence,
       initial: first,
       nextAction: (current) => current.nextAction,
-      observe: (current) => ({
-        phase: current.installPlan.phase,
-        generation: current.installPlan.generation,
-      }),
+      progress: gitPlanProgressSignature,
       reconcile: () => reconcileGitInstallPlan(installPlanId, { signal }),
     });
   });
@@ -2226,10 +2213,7 @@ export async function advanceGitRevisionPlan(
       cadence,
       initial: first,
       nextAction: (current) => current.nextAction,
-      observe: (current) => ({
-        phase: current.revisionPlan.phase,
-        generation: current.revisionPlan.generation,
-      }),
+      progress: gitPlanProgressSignature,
       reconcile: () => reconcileGitRevisionPlan(revisionPlanId, { signal }),
     });
   });
