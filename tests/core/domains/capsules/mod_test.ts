@@ -663,6 +663,29 @@ test("abandonUnappliedCapsule retries Interface revocation after commit acknowle
   expect(retired).toEqual([capsule.sourceId]);
 });
 
+test("raced unchanged abandonment revokes Interface links before retrying Source retirement", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const commit = store.commitCapsuleAbandonment.bind(store);
+  store.commitCapsuleAbandonment = async (input) => {
+    const result = await commit(input);
+    return result.kind === "updated" ? { ...result, kind: "unchanged" } : result;
+  };
+  const order: string[] = [];
+  const { service } = build(store,
+    async () => { order.push("retire"); },
+    async () => { order.push("revoke"); });
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_abandon_unchanged",
+    providerBindingSetId: "pbind_abandon_unchanged",
+    installConfig: initialInstallConfig("cfg_abandon_unchanged"),
+  });
+  expect((await service.abandonUnappliedCapsule(capsule.id, "race")).status).toBe("destroyed");
+  expect(order).toEqual(["revoke", "retire"]);
+  await service.abandonUnappliedCapsule(capsule.id, "retry destroyed");
+  expect(order).toEqual(["revoke", "retire", "revoke", "retire"]);
+});
+
 test("Capsule status patches cannot retire or resurrect a Capsule", async () => {
   const { store, service } = build();
   await seedWorkspaceAndSource(store);

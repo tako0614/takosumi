@@ -1497,6 +1497,11 @@ export interface StoredSource extends Source {
   readonly createdByInstallPlanId?: string;
   /** Durable resume marker; a disabled Source with this marker cannot sync. */
   readonly retiringAt?: string;
+  /** Last fully deleted archive ref. Retirement retries resume after this key. */
+  readonly retirementArchiveCursor?: string;
+  /** Frozen census prevents a late historical row from escaping archive custody. */
+  readonly retirementSnapshotCount?: number;
+  readonly retirementSourceSyncRunCount?: number;
 }
 
 /** Existing Source owner and creator identities are immutable. */
@@ -1570,7 +1575,8 @@ export function assertSourceHookSecretRotationInput(input: SourceHookSecretRotat
 
 export function assertSourceConfigurationWriteInput(input: SourceConfigurationWriteInput): void {
   if (input.expectedOwnerCapsule && (
-    !input.expectedSource || input.source.ownerCapsuleId !== input.expectedOwnerCapsule.id ||
+    !input.expectedSource ||
+    (input.source.ownerCapsuleId !== undefined && input.source.ownerCapsuleId !== input.expectedOwnerCapsule.id) ||
     input.expectedOwnerCapsule.sourceId !== input.source.id ||
     input.expectedOwnerCapsule.workspaceId !== input.source.workspaceId ||
     input.expectedOwnerCapsule.status === "destroyed"
@@ -3900,6 +3906,8 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     environment: string,
   ): Promise<Capsule | undefined>;
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]>;
+  /** Source-scoped legacy lane census; does not claim Source ownership. */
+  listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]>;
   /**
    * Internal scheduler read for the two-stage uninstall finalizer: Capsules in
    * `uninstalled` whose `uninstall.scheduledDestroyAt` is at or before `now`,
@@ -4069,6 +4077,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   hasSourceSnapshotArchiveReference(archiveRef: string, sourceId?: string): Promise<boolean>;
   /** Historical cross-Source archive reuse must not let retirement delete foreign bytes. */
   hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean>;
+  /** Bounded, keyset-ordered retirement work and a complete row census. */
+  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[];
+    readonly hasMore: boolean;
+    readonly snapshotCount: number;
+    readonly sourceSyncRunCount: number;
+  }>;
+  /** Full-scope set preflight before any archive page is physically deleted. */
+  sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined>;
   /** Latest immutable observation for one exact Source lane, bounded to one row. */
   getLatestSourceSnapshotForLane(input: {
     readonly sourceId: string;
@@ -4987,8 +5004,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const readCapsules = (): readonly Capsule[] => {
       const source = this.#sources.get(input.terminalRun.sourceId);
       const owner = source?.ownerCapsuleId ? this.#capsules.get(source.ownerCapsuleId) : undefined;
-      return owner && owner.workspaceId === input.terminalRun.workspaceId &&
+      if (!source) return [];
+      if (source.ownerCapsuleId) return owner && owner.workspaceId === input.terminalRun.workspaceId &&
         owner.status !== "destroyed" ? [owner] : [];
+      // Preserve legacy live apps until their Source ownership is backfilled.
+      return [...this.#capsules.values()].filter((capsule) =>
+        capsule.workspaceId === input.terminalRun.workspaceId &&
+        capsule.sourceId === source.id && capsule.status !== "destroyed");
     };
     const observation = await observeSourceSyncSettlement(
       this, committedSnapshot, terminalRun, readCapsules(),
@@ -6316,7 +6338,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     const source = this.#sources.get(capsule.sourceId);
-    if (!source || source.workspaceId !== capsule.workspaceId) {
+    if (!source || source.workspaceId !== capsule.workspaceId ||
+        source.status !== "active" || source.retiringAt !== undefined) {
       try {
         assertWorkspaceManagementAdmission(
           this.#workspaces.has(capsule.workspaceId)
@@ -6467,6 +6490,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           ) || a.id.localeCompare(b.id),
       );
     return Promise.resolve(due.slice(0, Math.max(0, input.limit)));
+  }
+
+  listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
+    return Promise.resolve([...this.#capsules.values()]
+      .filter((capsule) => capsule.workspaceId === workspaceId && capsule.sourceId === sourceId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)));
   }
 
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
@@ -7782,6 +7811,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const current = this.#sources.get(input.source.id);
     if (input.expectedOwnerCapsule && stableStringify(this.#capsules.get(input.expectedOwnerCapsule.id)) !==
       stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" };
+    if (input.expectedOwnerCapsule && input.expectedSource?.ownerCapsuleId === undefined &&
+      [...this.#capsules.values()].some((capsule) => capsule.id !== input.expectedOwnerCapsule!.id &&
+        capsule.workspaceId === input.source.workspaceId && capsule.sourceId === input.source.id &&
+        capsule.status !== "destroyed")) return { status: "conflict" };
 
     if (current && stableStringify(current) === stableStringify(input.source)) {
       return { status: "replayed", source: current };
@@ -8026,6 +8059,32 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         return Promise.resolve(true);
     }
     return Promise.resolve(false);
+  }
+
+  listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
+    readonly snapshotCount: number; readonly sourceSyncRunCount: number;
+  }> {
+    const snapshots = [...this.#sourceSnapshots.values()].filter((row) => row.sourceId === sourceId);
+    const runs = [...this.#runs.values()].filter(isSourceSyncRunRecord)
+      .filter((row) => row.sourceId === sourceId);
+    const refs = [...new Set([...snapshots.map((row) => row.archiveRef), ...runs.map((row) => row.archiveRef)])]
+      .filter((ref) => after === undefined || ref > after).sort();
+    const bounded = refs.slice(0, limit);
+    return Promise.resolve({ archiveRefs: bounded, hasMore: refs.length > limit,
+      snapshotCount: snapshots.length, sourceSyncRunCount: runs.length });
+  }
+
+  sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined> {
+    const refs = [
+      ...[...this.#sourceSnapshots.values()].map((row) => ({ sourceId: row.sourceId, ref: row.archiveRef })),
+      ...[...this.#runs.values()].filter(isSourceSyncRunRecord).map((row) => ({ sourceId: row.sourceId, ref: row.archiveRef })),
+    ];
+    if (refs.some((row) => row.sourceId === sourceId && !row.ref.startsWith(prefix)))
+      return Promise.resolve("outside_scope");
+    if (refs.some((row) => row.sourceId !== sourceId && row.ref.startsWith(prefix)))
+      return Promise.resolve("foreign_reference");
+    return Promise.resolve(undefined);
   }
 
   getLatestSourceSnapshotForLane(input: {

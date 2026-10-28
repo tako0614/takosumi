@@ -4,9 +4,9 @@
 - Base: `origin/main` `b6f9bb5ba`; branch `feature/app-source-retirement-20261028`.
 - Delivery order: retirement core and archive custody; lifecycle callers and daily recovery; one lane per owner; operator-only existing-data migration.
 - Retirement stops admission first, waits for source sync work, deletes only owned source archives, then atomically removes snapshot/Source rows and records `source.retired`. Rows remain the retry work list until object deletion succeeds.
-- Existing shared Sources must be split by an explicit dry-run-first operator migration. Normal reconciliation targets only `ownerCapsuleId`; no shared-Source compatibility path is retained.
+- Existing shared Sources must be split by an explicit dry-run-first operator migration. Normal reconciliation targets `ownerCapsuleId`; ownerless legacy Sources retain their applied-lane observation until explicit backfill.
 - Phase 4 owns Interface links, install-attempt interface inputs, and installed-store state. This task avoids those areas.
-- Validation: focused lifecycle/custody and memory/PostgreSQL/D1 parity tests for each change; `bun run check` for the final candidate. Operator migration fixtures include shared adopted snapshots and interrupted retries.
+- Validation: focused lifecycle/custody and memory/PostgreSQL/D1 parity tests and affected static phases locally; the complete portable gate runs in CI. The review-fix session must not run the local full gate or full suite because shared SSD capacity is limited; stop below 2 GB free. Operator migration fixtures include shared adopted snapshots and interrupted retries.
 - External report: `/root/dev/tmp/tk0118/phase2-report.md`.
 
 Implementation and focused regression coverage are complete. Complete-gate and CI evidence are recorded in `/root/dev/tmp/tk0118/phase2-report.md`.
@@ -14,6 +14,15 @@ Implementation and focused regression coverage are complete. Complete-gate and C
 ## Delivery
 
 - Retirement core: PR #646. New sync admission fences active Source state in the same storage boundary; historical cross-Source archive references defer retirement until operator normalization.
-- Lifecycle callers: PR #647. Discard, committed destroy and abandonment invoke retirement; the daily sweep bounds mutations and rotates candidates. Composed lifecycle and destroyed GET/list regressions pass.
+- Lifecycle callers: PR #647. Discard and abandonment invoke retirement; committed destroy leaves retirement to the sweep; the daily sweep bounds mutations and rotates candidates. Composed lifecycle and destroyed GET/list regressions pass.
 - Adopted lane: PR #648. Owner/state CAS and owner-only reconciliation, adopted backups and path-aware update facts are covered by focused parity tests.
 - Existing-data operator migration: PR #649. The tool uses exact dry-run digests, resumable verified archive copies and one atomic commit per Source group. No production mutation has been executed.
+
+## Independent review fixes (2026-10-28)
+
+- Scope remains takosumi only, on PRs #646–#649. Merge `origin/main` normally; preserve Phase 4 Interface link revocation before Source retirement on every lifecycle path.
+- Close initial Capsule claim admission atomically when the Source is disabled or has `retiringAt`. Preserve exact read-only replay.
+- Bound archive cleanup and resume across invocations; perform one foreign-reference census per Source, retaining custody checks.
+- Legacy ownerless retirement requires an operator mark after backup, dry-run and approval. Preserve ownerless live-app behavior until explicit backfill.
+- No deployment, merge, external database access, or changes to capsule ownership/members, vault, OIDC, dashboard sharing or billing are authorized here.
+- Review-fix report: `/root/dev/tmp/tk0118/phase2-fix-report.md`.

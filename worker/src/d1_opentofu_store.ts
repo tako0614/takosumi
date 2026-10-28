@@ -316,6 +316,7 @@ import {
 import {
   observeSourceSyncSettlement,
   SOURCE_SYNC_SETTLEMENT_READ_PATHS,
+  MAX_SOURCE_RECONCILIATION_CAPSULES,
   SourceSyncSettlementConflictError,
   type SourceSyncSettlementObservation,
   type SourceSyncSettlementReadKind,
@@ -3515,7 +3516,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(schema.capsules.workspaceId, input.terminalRun.workspaceId),
-          sql`${schema.capsules.id} = (select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId})`,
+          sql`(${schema.capsules.id} = (select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId})
+            or ((select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId}) is null
+              and (${schema.capsules.sourceId} = ${input.terminalRun.sourceId}
+                or json_extract(${schema.capsules.recordJson}, '$.sourceId') = ${input.terminalRun.sourceId})))`,
           not(
             sql.raw(
               d1SourceSyncSettlementCoherentDestroyedCapsuleSql("capsules"),
@@ -3524,7 +3528,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ),
       )
       .orderBy(asc(schema.capsules.createdAt), asc(schema.capsules.id))
-      .limit(1);
+      .limit(MAX_SOURCE_RECONCILIATION_CAPSULES + 1);
     const observedCapsules = capsuleRows.map(({ recordJson }) => {
       const parsed = typeof recordJson === "string"
         ? parseD1JsonColumn(recordJson)
@@ -6903,7 +6907,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     > => {
       const row = await this.#readD1StoredSourceRow(capsule.sourceId);
       const source = row ? sourceFromD1Row(row) : undefined;
-      if (!source || source.workspaceId !== capsule.workspaceId) return "conflict";
+      if (!source || source.workspaceId !== capsule.workspaceId ||
+        source.status !== "active" || source.retiringAt !== undefined) return "conflict";
       const other = await this.#orm.select({ id: schema.capsules.id })
         .from(schema.capsules)
         .where(and(
@@ -7766,6 +7771,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         },
       )
     ).map(normalizeCapsuleRecord);
+  }
+
+  async listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
+    return (await this.#drizzleManyJson<Capsule>(schema.capsules, schema.capsules.recordJson, {
+      where: and(eq(schema.capsules.workspaceId, workspaceId), eq(schema.capsules.sourceId, sourceId)),
+      orderBy: [asc(schema.capsules.createdAt), asc(schema.capsules.id)],
+    })).map(normalizeCapsuleRecord);
   }
 
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
@@ -9369,13 +9381,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
 
     const source = input.source;
-    const ownerMatches = input.expectedOwnerCapsule ? exists(this.#orm.select({ id: schema.capsules.id })
-      .from(schema.capsules).where(and(
+    const ownerMatches = input.expectedOwnerCapsule ? and(
+      exists(this.#orm.select({ id: schema.capsules.id }).from(schema.capsules).where(and(
         eq(schema.capsules.id, input.expectedOwnerCapsule.id),
         eq(schema.capsules.workspaceId, source.workspaceId),
         eq(schema.capsules.sourceId, source.id),
         eq(schema.capsules.recordJson, input.expectedOwnerCapsule),
-      ))) : undefined;
+      ))),
+      input.expectedSource?.ownerCapsuleId === undefined ? notExists(
+        this.#orm.select({ id: schema.capsules.id }).from(schema.capsules).where(and(
+          ne(schema.capsules.id, input.expectedOwnerCapsule.id),
+          d1CapsuleReferencesSourceWhere(source.workspaceId, source.id),
+          ne(schema.capsules.status, "destroyed"),
+        )),
+      ) : undefined,
+    ) : undefined;
     if (input.expectedOwnerCapsule && stableStringify(await this.getCapsule(input.expectedOwnerCapsule.id)) !==
       stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" };
     const currentRow = await this.#readD1StoredSourceRow(source.id);
@@ -9953,6 +9973,51 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
            json_extract(run_json, '$.archiveObjectKey')) = ? limit 1`)
       .bind(sourceId, archiveRef, sourceId, archiveRef).first();
     return row !== null;
+  }
+
+  async sourceRetirementArchiveBlocker(sourceId: string, prefix: string): Promise<"outside_scope" | "foreign_reference" | undefined> {
+    await this.#ensureSchema();
+    const row = await this.db.prepare(`with refs as (
+      select source_id, coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+        from source_snapshots
+      union all
+      select source_id, coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+        from runs where type = 'source_sync'
+    ) select blocker from (
+      select 'outside_scope' as blocker, 0 as priority from refs
+        where source_id = ? and (ref is null or substr(ref, 1, length(?)) <> ?)
+      union all
+      select 'foreign_reference' as blocker, 1 as priority from refs
+        where source_id is not ? and substr(ref, 1, length(?)) = ?
+    ) order by priority limit 1`)
+      .bind(sourceId, prefix, prefix, sourceId, prefix, prefix)
+      .first<{ blocker: "outside_scope" | "foreign_reference" }>();
+    return row?.blocker;
+  }
+
+  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+    readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
+    readonly snapshotCount: number; readonly sourceSyncRunCount: number;
+  }> {
+    await this.#ensureSchema();
+    const bounded = Math.max(1, Math.min(32, Math.floor(limit)));
+    const counts = await this.db.prepare(`select
+      (select count(*) from source_snapshots where source_id = ?) as snapshots,
+      (select count(*) from runs where type = 'source_sync' and source_id = ?) as runs`)
+      .bind(sourceId, sourceId).first<{ snapshots: number; runs: number }>();
+    const refs = await this.db.prepare(`select distinct ref from (
+      select coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+        from source_snapshots where source_id = ?
+      union all
+      select coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+        from runs where type = 'source_sync' and source_id = ?
+    ) where ref is not null and (? is null or ref > ?) order by ref limit ?`)
+      .bind(sourceId, sourceId, after ?? null, after ?? null, bounded + 1)
+      .all<{ ref: string }>();
+    const rows = refs.results ?? [];
+    return { archiveRefs: rows.slice(0, bounded).map((row) => row.ref),
+      hasMore: rows.length > bounded,
+      snapshotCount: Number(counts?.snapshots ?? 0), sourceSyncRunCount: Number(counts?.runs ?? 0) };
   }
 
   async getLatestSourceSnapshotForLane(input: {
@@ -11631,7 +11696,7 @@ function d1SourceSyncSettlementEnvelope(
   latestLaneRecordJson: string | undefined,
 ): D1SourceSyncSettlementEnvelope {
   if (
-    observation.capsules.length > 1 ||
+    observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
     new Set(observation.capsules.map((capsule) => capsule.id)).size !==
       observation.capsules.length
   ) {
@@ -11992,7 +12057,10 @@ function d1SourceSyncSettlementGuardSql(): string {
   const censusMismatch = `(
     (SELECT count(*) FROM capsules c
       WHERE c.space_id = json_extract(e.payload, '$.workspaceId')
-        AND c.id = (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+        AND (c.id = (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+          OR ((SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId')) IS NULL
+            AND (c.source_id = json_extract(e.payload, '$.terminalRun.sourceId')
+              OR json_extract(c.record_json, '$.sourceId') = json_extract(e.payload, '$.terminalRun.sourceId'))))
         AND NOT ${coherentDestroyed})
       <> (SELECT count(*) FROM observed_capsules)
     OR (SELECT count(*) FROM observed_capsules)
@@ -12003,7 +12071,9 @@ function d1SourceSyncSettlementGuardSql(): string {
         OR json_extract(o.capsule_json, '$.id') IS NOT o.id
         OR json_extract(o.capsule_json, '$.workspaceId') IS NOT
           json_extract(e.payload, '$.workspaceId')
-        OR o.id IS NOT (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+        OR NOT (o.id IS (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+          OR ((SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId')) IS NULL
+            AND json_extract(o.capsule_json, '$.sourceId') IS json_extract(e.payload, '$.terminalRun.sourceId')))
         OR json_extract(o.capsule_json, '$.status') IS 'destroyed'
         OR NOT EXISTS (
         SELECT 1 FROM capsules c
@@ -13932,6 +14002,8 @@ function d1CapsuleInitialAuthoritySourceClaimStmt(
     .where(and(
       eq(schema.sources.id, capsule.sourceId),
       eq(schema.sources.workspaceId, capsule.workspaceId),
+      eq(schema.sources.status, "active"),
+      sql`json_extract(${schema.sources.recordJson}, '$.retiringAt') IS NULL`,
       sql`json_valid(${schema.sources.recordJson}) = 1`,
       sql`json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}`,
       sql`json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}`,
@@ -13953,6 +14025,8 @@ function d1CapsuleInitialAuthoritySourceGuardStmt(
     .where(and(
       eq(schema.sources.id, capsule.sourceId),
       eq(schema.sources.workspaceId, capsule.workspaceId),
+      eq(schema.sources.status, "active"),
+      sql`json_extract(${schema.sources.recordJson}, '$.retiringAt') IS NULL`,
       sql`json_valid(${schema.sources.recordJson}) = 1`,
       sql`json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}`,
       sql`json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}`,

@@ -127,6 +127,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * operator load-shedding knob for runner-backed source_sync runs.
    */
   readonly TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH?: string;
+  /** Set to 0 to disable automatic Source archive retirement. */
+  readonly TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED?: string;
   /**
    * Local/private probe ingress opt-in for the `/internal/v1/*` HTTP seam.
    * Production edge deployments omit this so generic internal APIs stay 404.

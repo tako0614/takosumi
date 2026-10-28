@@ -268,7 +268,8 @@ export async function buildComposedServer(
   });
 
   startCapsuleUninstallFinalizer({ operations, log: structuredLog });
-  startSourceRetirementSweeper({ operations, log: structuredLog });
+  startSourceRetirementSweeper({ operations, log: structuredLog,
+    enabled: process.env.TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED !== "0" });
 
   const port = config.port;
   const hostname = config.bindHost;

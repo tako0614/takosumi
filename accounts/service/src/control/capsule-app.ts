@@ -197,10 +197,12 @@ export async function readCapsuleAppView(
 
   const [installConfig, source, adopted, screens, screenFailure] = await Promise.all([
     optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)),
-    optional(async () => (await operations.getSource(capsule.sourceId)).source),
+    destroyed
+      ? Promise.resolve<Optional<Source>>({ failed: false })
+      : optional(async () => (await operations.getSource(capsule.sourceId)).source),
     // Same rule as the Capsule read: provenance exists once a current
     // StateVersion does.
-    managed && capsule.currentStateVersionId
+    !destroyed && managed && capsule.currentStateVersionId
       ? optional(() => operations.getCapsuleAdoptedSourceRevision(capsule.id))
       : Promise.resolve<Optional<CapsuleAdoptedSourceRevision | undefined>>({
           failed: false,
@@ -789,12 +791,15 @@ async function readVersion(
     readonly onIncomplete: () => void;
   },
 ): Promise<CapsuleAppVersion> {
+  if (capsule.status === "destroyed") {
+    return { uninstalled: true, updateAvailable: false, stale: false, autoUpdate: false };
+  }
   const repositoryUrl = input.source
     ? credentialFreeRepositoryUrl(input.source.url)
     : undefined;
   const current = input.adopted;
   let latest: SourceSnapshot | undefined;
-  if (current && capsule.status !== "destroyed") {
+  if (current) {
     try {
       const scan = await newestSnapshotForRef(operations, capsule.sourceId, current);
       latest = scan.snapshot;

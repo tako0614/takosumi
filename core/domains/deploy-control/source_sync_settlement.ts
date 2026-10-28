@@ -13,6 +13,8 @@ import {
  * Source configuration and cursor are fenced; the scheduler attempt marker is excluded. Paths are trusted
  * source constants, shared by the JS and SQL read-set validators.
  */
+export const MAX_SOURCE_RECONCILIATION_CAPSULES = 1_000;
+
 export const SOURCE_SYNC_SETTLEMENT_READ_PATHS = {
   source: ["$"],
   state: ["$.id", "$.workspaceId", "$.capsuleId", "$.environment", "$.generation", "$.createdByRunId"],
@@ -34,7 +36,7 @@ export interface SourceSyncSettlementRead {
 export type SourceSyncSettlementReader = CapsuleSourceRevisionReader;
 
 export interface SourceSyncSettlementObservation {
-  /** The owning Capsule only, when it exists and is not destroyed. */
+  /** The owner, or live referencing legacy apps until ownership backfill. */
   readonly capsules: readonly Capsule[];
   readonly reads: readonly SourceSyncSettlementRead[];
   readonly changes: readonly {
@@ -112,7 +114,7 @@ export async function observeSourceSyncSettlement(
   }
   // Stores read only the Source owner. Other apps cannot affect this settlement.
   const capsules = structuredClone(observedCapsules);
-  if (capsules.length > 1 ||
+  if (capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
     new Set(capsules.map((capsule) => capsule.id)).size !== capsules.length ||
     capsules.some((capsule) => capsule.workspaceId !== terminalRun.workspaceId ||
       capsule.status === "destroyed")) {
@@ -143,8 +145,9 @@ export async function observeSourceSyncSettlement(
   };
   // Even an empty census must fence the Source whose cursor will be merged.
   const source = await tracked.getSource(terminalRun.sourceId);
-  if (capsules.some((capsule) => capsule.id !== source?.ownerCapsuleId ||
-    capsule.sourceId !== terminalRun.sourceId)) throw new SourceSyncSettlementConflictError();
+  if (capsules.some((capsule) =>
+      (source?.ownerCapsuleId !== undefined && capsule.id !== source.ownerCapsuleId) ||
+      capsule.sourceId !== terminalRun.sourceId)) throw new SourceSyncSettlementConflictError();
   const changes: SourceSyncSettlementObservation["changes"][number][] = [];
   for (const capsule of capsules) {
     if (capsule.sourceId !== terminalRun.sourceId ||
