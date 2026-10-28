@@ -98,6 +98,21 @@ class StubRunner {
   }
 }
 
+class ArchiveReferenceCountingStore extends InMemoryOpenTofuControlStore {
+  snapshotReferenceChecks = 0;
+  foreignReferenceChecks = 0;
+
+  override hasSourceSnapshotArchiveReference(archiveRef: string, sourceId?: string): Promise<boolean> {
+    this.snapshotReferenceChecks++;
+    return super.hasSourceSnapshotArchiveReference(archiveRef, sourceId);
+  }
+
+  override hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean> {
+    this.foreignReferenceChecks++;
+    return super.hasForeignSourceArchiveReference(archiveRef, sourceId);
+  }
+}
+
 class SettlementReplacementStore extends InMemoryOpenTofuControlStore {
   #replacement?: Capsule;
 
@@ -1119,7 +1134,8 @@ test("source_sync consumer does not mark Capsules stale when only the snapshot i
 });
 
 test("source_sync consumer reuses an unchanged SourceSnapshot archive", async () => {
-  const { store, sourcesService, runner, controller } = build();
+  const store = new ArchiveReferenceCountingStore();
+  const { sourcesService, runner, controller } = build({ store });
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
     name: "repo",
@@ -1184,7 +1200,15 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
   expect(reused?.archiveRef).toBe(previousArchiveKey);
   expect(reused?.archiveDigest).toBe(previousDigest);
   expect(reused?.archiveSizeBytes).toBe(2048);
+  expect(runner.cleanupCalls).toHaveLength(0);
+  expect(store.snapshotReferenceChecks).toBe(0);
+  expect(store.foreignReferenceChecks).toBe(0);
+  // A terminal redelivery lacks a persisted upload observation. It can still
+  // conservatively retry custody; the R2 host checks object existence first.
+  await controller.runQueuedSourceSync(run.id);
   expect(runner.cleanupCalls).toHaveLength(1);
+  expect(store.snapshotReferenceChecks).toBe(1);
+  expect(store.foreignReferenceChecks).toBe(1);
   runner.cleanupFailure = false;
   await controller.runQueuedSourceSync(run.id);
   expect(runner.cleanupCalls).toHaveLength(2);
