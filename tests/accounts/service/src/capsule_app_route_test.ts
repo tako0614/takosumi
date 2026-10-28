@@ -583,6 +583,7 @@ async function linkedFixture() {
 
 test("app links show exact current providers, permissions and value-free display metadata", async () => {
   const h = await linkedFixture();
+  h.core.interfaces!.listInterfaceLinkCandidates = async () => { throw new Error("App view must not enumerate candidates"); };
   const app = await h.app();
   expect(app.links).toEqual({
     uses: [{
@@ -604,7 +605,6 @@ test("app links show exact current providers, permissions and value-free display
         iconUrl: "https://assets.example.com/database.svg",
       },
       canManage: true,
-      candidateCount: 1,
     }],
     usedBy: [],
   });
@@ -667,7 +667,6 @@ test("incoming current consumers are included in uninstall impact while revoked 
     consumerCapsuleId: incoming.consumerCapsuleId,
     otherApp: { capsuleId: incoming.consumerCapsuleId, name: "consumer" },
     canManage: true,
-    candidateCount: 0,
     health: "ok",
   });
   expect(app.uninstall.impact.usedBy).toEqual(app.links.usedBy);
@@ -677,7 +676,7 @@ test("an unset requirement is visible and a link read failure is explicitly inco
   const h = await fixture({ requiredInterfaces: [LINK_REQUIREMENT] });
   const unset = await h.app();
   expect(unset.links.uses[0]).toMatchObject({
-    requirementKey: "data", state: "unset", generation: 0, candidateCount: 0,
+    requirementKey: "data", state: "unset", generation: 0,
   });
   expect(unset.problems).toMatchObject([{ code: "interface_link_unset", severity: "warning" }]);
   expect(unset.state).toBe("installed");
@@ -731,7 +730,9 @@ test("an Interface that becomes NotReady is unavailable without exposing its inp
   }, { generation: 1, resolvedRevision: 1, record: h.iface })).toBe(true);
   const app = await h.app();
   expect(app.links.uses[0].health).toBe("provider_not_ready");
-  expect(app.primaryAction).toBe("fix_interface_link");
+  expect(app.primaryAction).toBe("view_resources");
+  expect(app.state).toBe("installed");
+  expect(app.problems).toMatchObject([{ code: "interface_link_unavailable", severity: "warning" }]);
   expect(JSON.stringify(app)).not.toContain("must-not-be-projected");
 });
 
