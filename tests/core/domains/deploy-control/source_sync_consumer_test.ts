@@ -290,18 +290,27 @@ async function seedActiveCapsuleOnSnapshot(input: {
   readonly sourceId: string;
   readonly snapshot: SourceSnapshot;
 }): Promise<void> {
-  const source = await input.store.getSource(input.sourceId);
+  const existingSource = await input.store.getSource(input.sourceId);
   const { capsule } = await seedCapsuleModel(input.store, {
     workspaceId: "workspace_1",
     capsuleId: "capsule_active",
     sourceId: input.sourceId,
     snapshotId: input.snapshot.id,
     withoutSnapshot: true,
-    legacySharedSource: true,
   });
-  // Preserve the Source created by SourcesService after seeding the legacy
-  // shared-Source Capsule row, so its Git address remains authoritative.
-  if (source) await input.store.putSource(source);
+  // The model fixture claims this Source for its Capsule. Restore the exact
+  // reviewed Git and hook configuration from SourcesService without erasing
+  // the new immutable owner claim.
+  if (existingSource) {
+    const claimed = await input.store.getSource(input.sourceId);
+    if (claimed?.ownerCapsuleId !== capsule.id) {
+      throw new Error("fixture Source was not claimed by its Capsule");
+    }
+    await input.store.putSource({
+      ...existingSource,
+      ownerCapsuleId: claimed.ownerCapsuleId,
+    });
+  }
   await input.store.putSourceSnapshot(input.snapshot);
   const planRun: PlanRun = {
     id: "plan_prev",
@@ -836,30 +845,34 @@ test("source_sync continues stale finalization when the first auto-update gate r
     snapshot: previous,
   });
 
-  const originalSource = await store.getSource(source.id);
+  const secondSourceId = "src_second_app";
+  const secondSnapshot = sourceSnapshot({
+    ...previous,
+    id: "snap_second",
+    sourceId: secondSourceId,
+    archiveRef: `workspaces/workspace_1/sources/${secondSourceId}/snapshots/snap_second/source.tar.zst`,
+  });
   const { capsule: secondCapsule } = await seedCapsuleModel(store, {
     workspaceId: "workspace_1",
     capsuleId: "capsule_second",
-    sourceId: source.id,
-    snapshotId: previous.id,
+    sourceId: secondSourceId,
+    snapshotId: secondSnapshot.id,
     installConfigId: "cfg_fixture_second",
     name: "second",
     withoutSnapshot: true,
-    legacySharedSource: true,
   });
   const previousPlan = await store.getPlanRun("plan_prev");
   const previousApply = await store.getApplyRun("apply_prev");
   const previousState = await store.getStateVersion("state_prev");
-  if (!originalSource || !previousPlan || !previousApply || !previousState) {
+  if (!previousPlan || !previousApply || !previousState) {
     throw new Error("source_sync stale-finalization fixture is incomplete");
   }
-  // Restore the legacy shared Source and old Snapshot adopted by both Capsules.
-  await store.putSource(originalSource);
-  await store.putSourceSnapshot(previous);
+  await store.putSourceSnapshot(secondSnapshot);
   await store.putPlanRun({
     ...previousPlan,
     id: "plan_second",
     capsuleId: secondCapsule.id,
+    sourceSnapshotId: secondSnapshot.id,
   });
   await store.putApplyRun({
     ...previousApply,
@@ -910,12 +923,12 @@ test("source_sync continues stale finalization when the first auto-update gate r
   expect(await store.listSourceSnapshots(source.id)).toHaveLength(2);
   expect((await store.getSource(source.id))?.lastSeenCommit).toBe("new123");
   expect((await store.getCapsule("capsule_active"))?.status).toBe("stale");
-  expect((await store.getCapsule("capsule_second"))?.status).toBe("stale");
+  expect((await store.getCapsule("capsule_second"))?.status).toBe("active");
   expect(
     (await store.listActivityEvents("workspace_1", { limit: 10 }))
       .filter((event) => event.action === "capsule.stale")
       .map((event) => event.targetId),
-  ).toEqual(expect.arrayContaining(["capsule_active", "capsule_second"]));
+  ).toEqual(["capsule_active"]);
   // The opted-in Capsule whose management state was unknown must not receive
   // an automatic attempt; no follow-on Plan was admitted for either Capsule.
   expect(
@@ -1050,7 +1063,7 @@ test("a non-default ref sync only stales Capsules on that adopted lane and does 
   expect((await store.getSource(source.id))?.lastSeenCommit).toBeUndefined();
 });
 
-test("Source reconciliation enqueues the shared default plus each adopted Capsule lane", async () => {
+test("Source reconciliation converges its default to the owner adopted lane", async () => {
   const { store, sourcesService, controller } = build();
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -1071,9 +1084,9 @@ test("Source reconciliation enqueues the shared default plus each adopted Capsul
   const runs = await controller.createSourceReconciliationSyncs(source.id);
 
   expect(runs.map(({ run }) => [run.ref, run.path, run.intent])).toEqual([
-    ["main", ".", "observe"],
     ["refs/heads/release/v2", ".", "observe"],
   ]);
+  expect((await store.getSource(source.id))?.defaultRef).toBe("refs/heads/release/v2");
 });
 
 test("source_sync consumer does not mark Capsules stale when only the snapshot id changes for the same commit", async () => {
