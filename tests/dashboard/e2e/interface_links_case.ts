@@ -34,7 +34,7 @@ async function capture(page: Page, name: string): Promise<void> {
 function link(requirementKey: string, patch: Partial<CapsuleAppLink> = {}): CapsuleAppLink {
   return {
     requirementKey, consumerCapsuleId: ID, interfaceType: `example.${requirementKey}`, interfaceVersion: "1.0.0",
-    permissions: ["read"], state: "unset", generation: 0, health: "ok", canManage: true, candidateCount: 0,
+    permissions: ["read"], state: "unset", generation: 0, health: "ok", canManage: true,
     ...patch,
   };
 }
@@ -180,9 +180,9 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
         state: "active", generation: 4, otherApp: { capsuleId: "cap_wiki", name: "チームWiki" },
       });
       const fixture = await appFixture(page, [
-        link("files", { linkId: "il_files", state: "active", generation: 1, providerCapsuleId: "cap_files_a", providerInterfaceId: "if_files_a", otherApp: { capsuleId: "cap_files_a", name: "保管庫 A" }, candidateCount: 2 }),
+        link("files", { linkId: "il_files", state: "active", generation: 1, providerCapsuleId: "cap_files_a", providerInterfaceId: "if_files_a", otherApp: { capsuleId: "cap_files_a", name: "保管庫 A" } }),
         link("pending", { linkId: "il_pending", state: "pending_approval", generation: 3, canManage: false, otherApp: { capsuleId: "cap_calendar", name: "予定表" } }),
-        link("later", { candidateCount: 2 }),
+        link("later"),
         link("declined", { linkId: "il_declined", state: "declined", generation: 2, canManage: false }),
         link("revoked", { linkId: "il_revoked", state: "revoked", generation: 5, canManage: false }),
         link("unavailable", { linkId: "il_unavailable", state: "active", generation: 1, health: "provider_uninstall_scheduled", canManage: false, otherApp: { capsuleId: "cap_retiring", name: "旧保管庫" } }),

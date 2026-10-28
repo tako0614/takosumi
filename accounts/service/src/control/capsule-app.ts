@@ -310,12 +310,10 @@ async function readAppLinks(
     return { uses: [], usedBy: [] };
   }
   if (
-    !service.listCapsuleInterfaceLinks || !service.listProviderCapsuleInterfaceLinks ||
-    !service.listInterfaceLinkCandidates || !service.get
+    !service.listCapsuleInterfaceLinks || !service.listProviderCapsuleInterfaceLinks || !service.get
   ) throw new Error("Interface link reads are unavailable");
   const listOutgoing = service.listCapsuleInterfaceLinks.bind(service);
   const listIncoming = service.listProviderCapsuleInterfaceLinks.bind(service);
-  const listCandidates = service.listInterfaceLinkCandidates.bind(service);
   const getInterface = service.get.bind(service);
   const [outgoing, incoming] = await Promise.all([
     listOutgoing(capsule.id),
@@ -407,13 +405,6 @@ async function readAppLinks(
     const health = linkHealth(link, provider, iface, requirement);
     const canManage = await mayManage(capsule.workspaceId) ||
       (otherApp !== undefined && await mayManage(otherApp.workspaceId));
-    const candidates = direction === "uses" && capsule.status !== "destroyed"
-      ? await listCandidates({
-          workspaceId: capsule.workspaceId,
-          capsuleId: capsule.id,
-          requirement,
-        })
-      : [];
     return {
       ...(link ? {
         linkId: link.id,
@@ -430,7 +421,6 @@ async function readAppLinks(
       health,
       ...(otherApp ? { otherApp: await display(otherApp) } : {}),
       canManage,
-      candidateCount: candidates.length,
     };
   };
   const [uses, usedBy] = await Promise.all([
