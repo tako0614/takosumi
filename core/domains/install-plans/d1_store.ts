@@ -2,6 +2,7 @@ import {
   assertCompletionGeneration,
   assertGitInstallPlanDrainFailureInput,
   assertImmutableScope,
+  assertTransitionGitInstallPlanInput,
   gitInstallPlanForDrainFailure,
   gitInstallPlanManagementAuthority,
   type ClaimGitInstallPlanResult,
@@ -10,7 +11,10 @@ import {
   type FailUnclaimedGitInstallPlanInput,
   type GitInstallPlanScope,
   type GitInstallPlanStore,
+  type ListOpenGitInstallAttemptsInput,
   type StoredGitInstallPlan,
+  type TransitionGitInstallPlanInput,
+  type TransitionGitInstallPlanResult,
   isReconcileableGitInstallPlanPhase,
   isTerminalGitInstallPlanPhase,
 } from "./store.ts";
@@ -29,6 +33,7 @@ interface D1Result<T> {
 interface D1Statement {
   bind(...values: unknown[]): D1Statement;
   first<T>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<D1Result<T>>;
   run<T = Record<string, unknown>>(): Promise<D1Result<T>>;
 }
 
@@ -386,6 +391,123 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return latest
       ? { status: "conflict", plan: latest }
       : { status: "not_found" };
+  }
+
+  async transitionUnleased(
+    inputValue: TransitionGitInstallPlanInput,
+  ): Promise<TransitionGitInstallPlanResult> {
+    const input = structuredClone(inputValue);
+    const observedRow = await this.#getByIdRow(input.id);
+    if (!observedRow) return { status: "not_found" };
+    const observed = rowPlan(observedRow);
+    assertTransitionGitInstallPlanInput(observed, input);
+    const classify = (
+      row: GitInstallPlanD1Row,
+      plan: StoredGitInstallPlan,
+    ): TransitionGitInstallPlanResult | undefined => {
+      if (
+        plan.generation !== input.expectedGeneration ||
+        plan.phase !== input.expectedPhase ||
+        row.phase !== plan.phase
+      ) {
+        return { status: "conflict", plan };
+      }
+      if (leaseIsBusy(row, input.at)) return { status: "busy", plan };
+      return undefined;
+    };
+    const refused = classify(observedRow, observed);
+    if (refused) return refused;
+    const authority = input.expectedWorkspaceManagementAuthority === undefined
+      ? undefined
+      : gitInstallPlanManagementAuthority(
+          observed,
+          input.expectedWorkspaceManagementAuthority,
+        );
+    const next = input.plan;
+    // The exact observed row is the CAS fence. The optional admission
+    // predicate shares the statement so an answer can never start new work
+    // under a stopped or replaced management epoch.
+    const updatedRow = await this.#db
+      .prepare(
+        `update git_install_plans
+            set phase = ?, generation = cast(? as integer), record_json = ?,
+                updated_at = ?, reconcile_lease_token = ?,
+                reconcile_lease_expires_at = ?
+          where id = ? and workspace_id = ? and generation = ? and phase = ?
+            and record_json = ?
+            and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= ?)
+            ${authority === undefined ? "" : `and exists (
+              select 1 from workspaces as workspace
+               where workspace.id = git_install_plans.workspace_id
+                 and workspace.management_state = 'active'
+                 and workspace.management_epoch = ?
+            )`}
+          returning *`,
+      )
+      .bind(
+        next.phase,
+        next.generation,
+        JSON.stringify(next),
+        next.updatedAt,
+        input.lease?.token ?? null,
+        input.lease?.expiresAt ?? null,
+        observedRow.id,
+        observedRow.workspace_id,
+        input.expectedGeneration,
+        input.expectedPhase,
+        observedRow.record_json,
+        input.at,
+        ...(authority === undefined ? [] : [authority.managementEpoch]),
+      )
+      .first<GitInstallPlanD1Row>();
+    if (updatedRow) return { status: "updated", plan: rowPlan(updatedRow) };
+    const latestRow = await this.#getByIdRow(input.id);
+    if (!latestRow) return { status: "not_found" };
+    const latest = rowPlan(latestRow);
+    const latestRefusal = classify(latestRow, latest);
+    if (latestRefusal) return latestRefusal;
+    if (latestRow.record_json !== observedRow.record_json) {
+      return { status: "conflict", plan: latest };
+    }
+    if (authority !== undefined) {
+      throw new WorkspaceManagementAdmissionConflictError(observed.workspaceId);
+    }
+    return { status: "conflict", plan: latest };
+  }
+
+  async listOpenAttempts(
+    input: ListOpenGitInstallAttemptsInput,
+  ): Promise<readonly StoredGitInstallPlan[]> {
+    const limit = Math.max(1, Math.min(200, Math.trunc(input.limit)));
+    const result = await this.#db
+      .prepare(
+        `select * from git_install_plans
+          where workspace_id = ?
+            ${input.actorSubject === undefined ? "" : "and actor_subject = ?"}
+            and phase not in ('failed', 'discarded')
+            and json_valid(record_json) = 1
+            and json_extract(record_json, '$.mode') = 'attempt'
+            and coalesce(json_extract(record_json, '$.operation'), 'install') = 'install'
+            and (
+              phase <> 'reviewable'
+              or exists (
+                select 1 from capsules as capsule
+                 where capsule.id = json_extract(git_install_plans.record_json, '$.capsuleId')
+                   and capsule.status <> 'destroyed'
+                   and capsule.current_state_generation = 0
+                   and capsule.current_state_version_id is null
+              )
+            )
+          order by updated_at desc, id asc
+          limit ?`,
+      )
+      .bind(
+        input.workspaceId,
+        ...(input.actorSubject === undefined ? [] : [input.actorSubject]),
+        limit,
+      )
+      .all<GitInstallPlanD1Row>();
+    return (result.results ?? []).map(rowPlan);
   }
 
   async #getByScope(

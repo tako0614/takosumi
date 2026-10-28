@@ -30,6 +30,9 @@ import type {
 } from "../../../../contract/install-configs.ts";
 import type { GitInstallPlanProviderBindingRequest } from "../../../../contract/install-plans.ts";
 
+const ADMIN_SUBJECT = "tsub_admin";
+const VIEWER_SUBJECT = "tsub_viewer";
+
 const WORKSPACE = {
   id: "ws_install",
   handle: "install",
@@ -181,11 +184,25 @@ test("reviewed preflight creates exact initial authority atomically and only ret
   expect(
     (await fixture.planStore.get(planId))?.preflightInstallConfigDigest,
   ).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  // The public request digest covers variable names, never their values.
+  expect(firstPayload.installPlan.requestDigest).toBe(
+    await stableJsonDigest({
+      source: { name: "example", url: "https://github.com/takos/example", ref: "main", path: "." },
+      capsule: { name: "example", environment: "production" },
+      options: { modulePath: ".", providerBindings: [] },
+      preflight,
+      initialConfiguration: body.initialConfiguration,
+      variableNames: ["region"],
+    }),
+  );
 
   const createdAuthority = await fixture.reconcile(planId);
   expect(createdAuthority.status).toBe(200);
   const planning = await createdAuthority.clone().json();
   expect(planning.installPlan.phase).toBe("planning");
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(
+    "top-secret-reviewed-value",
+  );
   expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 1, plan: 0 });
   expect(fixture.compatibilityMutationCount).toBe(0);
   expect(fixture.installConfigMutationCount).toBe(1);
@@ -263,6 +280,11 @@ test("reviewed preflight fails closed when its pinned host authority changes bef
   });
   expect(fixture.counts).toEqual({ source: 0, sync: 0, capsule: 0, plan: 0 });
   expect(fixture.installConfigMutationCount).toBe(0);
+  // A terminal record never keeps reviewed values.
+  expect((await fixture.planStore.get(planId))?.initialVariables).toBeUndefined();
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(
+    "ap-northeast-1",
+  );
 
   const replay = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
@@ -1278,6 +1300,976 @@ type LostAckMutation =
   | "capsule"
   | "plan";
 
+const CLOUDFLARE = "registry.opentofu.org/cloudflare/cloudflare";
+const SECRET_VALUE = "super-secret-attempt-value";
+
+function attemptBody(
+  input: {
+    readonly capsuleName?: string;
+    readonly modulePath?: string;
+  } = {},
+) {
+  return {
+    mode: "attempt",
+    source: { url: "https://github.com/takos/example.git", ref: "main" },
+    ...(input.capsuleName ? { capsule: { name: input.capsuleName } } : {}),
+    ...(input.modulePath ? { options: { modulePath: input.modulePath } } : {}),
+  };
+}
+
+function attemptFixture(
+  options: Parameters<typeof installFixture>[0] = {},
+) {
+  return installFixture({
+    compatibilityRootProviderRequirements: [
+      {
+        source: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        credentialRequired: true,
+      },
+    ],
+    compatibilityResources: [
+      { type: "cloudflare_workers_script", count: 1, allowed: true },
+    ],
+    compatibilityRootModuleVariableDeclarations: [
+      { name: "region", type: "string", hasDefault: false },
+    ],
+    providerConnections: [providerConnection(CLOUDFLARE, "conn_cloudflare01")],
+    ...options,
+  });
+}
+
+async function startAttempt(
+  fixture: ReturnType<typeof installFixture>,
+  body: unknown = attemptBody(),
+  key = "attempt-one",
+  subject = WORKSPACE.ownerUserId,
+): Promise<string> {
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": key },
+    subject,
+  );
+  expect(created.status).toBe(201);
+  return (await created.json()).installPlan.id as string;
+}
+
+async function reconcileUntilIdle(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+  subject = WORKSPACE.ownerUserId,
+) {
+  // deno-lint-ignore no-explicit-any
+  let payload: any;
+  for (let step = 0; step < 8; step += 1) {
+    const response = await fixture.request(
+      `/api/v1/install-plans/${planId}/reconcile`,
+      "POST",
+      undefined,
+      {},
+      subject,
+    );
+    payload = await response.json();
+    if (payload.installPlan.sourceSyncRunId) fixture.succeedSourceSync();
+    if (payload.nextAction !== "reconcile") break;
+  }
+  return payload;
+}
+
+async function readPlan(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+  subject = WORKSPACE.ownerUserId,
+) {
+  const response = await fixture.request(
+    `/api/v1/install-plans/${planId}`,
+    "GET",
+    undefined,
+    {},
+    subject,
+  );
+  expect(response.status).toBe(200);
+  return await response.json();
+}
+
+function answer(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+  body: unknown,
+  subject = WORKSPACE.ownerUserId,
+) {
+  return fixture.request(
+    `/api/v1/install-plans/${planId}`,
+    "PATCH",
+    body,
+    {},
+    subject,
+  );
+}
+
+function discard(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+  expectedGeneration: number | undefined,
+  subject = WORKSPACE.ownerUserId,
+) {
+  return fixture.request(
+    `/api/v1/install-plans/${planId}`,
+    "DELETE",
+    expectedGeneration === undefined ? undefined : { expectedGeneration },
+    {},
+    subject,
+  );
+}
+
+test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const started = await readPlan(fixture, planId);
+  expect(started).toMatchObject({
+    installPlan: {
+      mode: "attempt",
+      phase: "syncing_source",
+      capsule: { name: "example", environment: "production" },
+      source: { name: "example", ref: "main", path: "." },
+    },
+    nextAction: "reconcile",
+    userAction: { kind: "wait", phase: "syncing_source" },
+  });
+  expect(Date.parse(started.installPlan.expiresAt)).toBeGreaterThan(Date.now());
+
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    sourceCreatedByAttempt: true,
+    installModulePath: ".",
+  });
+  expect(paused.installPlan.attemptFacts).toBeUndefined();
+  expect(paused.nextAction).toBe("none");
+  expect(paused.links.reconcile).toBeUndefined();
+  expect(paused.userAction).toEqual({
+    kind: "provide_inputs",
+    modulePath: ".",
+    resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
+    connections: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        candidates: [
+          {
+            id: "conn_cloudflare01",
+            displayName: "conn_cloudflare01",
+            status: "verified",
+            scope: "workspace",
+          },
+        ],
+        selectedConnectionId: "conn_cloudflare01",
+        autoSelected: true,
+      },
+    ],
+    variables: [
+      { name: "region", type: "string", required: true, sensitive: true },
+    ],
+    name: { current: "example", proposed: "example", conflict: false },
+    missing: [],
+  });
+  // Nothing was created in the cloud ledger yet.
+  expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 0, plan: 0 });
+  // The idle pause holds no lease and does not block Workspace management.
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+
+  const renamed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    capsuleName: "my-example",
+  });
+  expect(renamed.status).toBe(200);
+  const renamedPayload = await renamed.json();
+  expect(renamedPayload.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    capsule: { name: "my-example" },
+    source: { name: "example" },
+    generation: paused.installPlan.generation + 1,
+  });
+
+  const stale = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: SECRET_VALUE },
+  });
+  expect(stale.status).toBe(409);
+  expect((await stale.json()).error.code).toBe("install_plan_generation_conflict");
+
+  const valuesWithoutContinue = await answer(fixture, planId, {
+    expectedGeneration: renamedPayload.installPlan.generation,
+    variables: { region: SECRET_VALUE },
+  });
+  expect(valuesWithoutContinue.status).toBe(400);
+
+  const missingRequired = await answer(fixture, planId, {
+    expectedGeneration: renamedPayload.installPlan.generation,
+    continue: true,
+  });
+  expect(missingRequired.status).toBe(400);
+  expect((await missingRequired.json()).error.details.reason).toBe("install_variable_required");
+  expect(fixture.counts.capsule).toBe(0);
+
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: renamedPayload.installPlan.generation,
+    continue: true,
+    variables: { region: SECRET_VALUE },
+  });
+  expect(confirmed.status).toBe(200);
+  const confirmedText = await confirmed.text();
+  expect(confirmedText).not.toContain(SECRET_VALUE);
+  const planning = JSON.parse(confirmedText);
+  expect(planning.installPlan.capsuleId).toBe(fixture.capsules[0]!.id);
+  expect(planning.installPlan).toMatchObject({
+    phase: "planning",
+    options: {
+      providerBindings: [
+        {
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_cloudflare01",
+        },
+      ],
+    },
+  });
+  // Once the Capsule exists the attempt can no longer expire.
+  expect(planning.installPlan.expiresAt).toBeUndefined();
+  const stored = await fixture.planStore.get(planId);
+  expect(JSON.stringify(stored)).not.toContain(SECRET_VALUE);
+  expect(stored?.transientVariableNames).toBeUndefined();
+  expect(fixture.getInstallConfig(planning.installPlan.installConfigId)).toMatchObject({
+    variableMapping: { region: SECRET_VALUE },
+  });
+  expect(fixture.capsules[0]).toMatchObject({ name: "my-example", status: "pending" });
+  expect(fixture.getProviderBindingSet(fixture.capsules[0]!.id, "production")?.bindings)
+    .toEqual([
+      expect.objectContaining({ connectionId: "conn_cloudflare01" }),
+    ]);
+
+  // The coordinator enables polling for the Source it registered itself.
+  expect(fixture.sources[0]?.autoSync).toBe(false);
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable).toMatchObject({
+    installPlan: { phase: "reviewable" },
+    nextAction: "review_run",
+    userAction: {
+      kind: "review_run",
+      planRunId: reviewable.installPlan.planRunId,
+      capsuleId: reviewable.installPlan.capsuleId,
+    },
+  });
+  expect(fixture.sources[0]?.autoSync).toBe(true);
+  expect(fixture.sourcePatches).toEqual([{ id: "src_one", autoSync: true }]);
+  expect(JSON.stringify(reviewable)).not.toContain(SECRET_VALUE);
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+});
+
+test("install attempt asks for connections when no single candidate exists and validates answers", async () => {
+  const fixture = attemptFixture({
+    providerConnections: [
+      providerConnection(CLOUDFLARE, "conn_cloudflare01"),
+      providerConnection(CLOUDFLARE, "conn_cloudflare02"),
+    ],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction).toMatchObject({
+    kind: "provide_inputs",
+    connections: [
+      {
+        provider: CLOUDFLARE,
+        autoSelected: false,
+        candidates: [{ id: "conn_cloudflare01" }, { id: "conn_cloudflare02" }],
+      },
+    ],
+    missing: ["connections"],
+  });
+  expect(paused.userAction.connections[0].selectedConnectionId).toBeUndefined();
+
+  const notReady = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: SECRET_VALUE },
+  });
+  expect(notReady.status).toBe(409);
+  expect((await notReady.json()).error.details.reason).toBe("provider_connection_required");
+
+  const wrongTuple = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    providerBindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "other",
+        connectionId: "conn_cloudflare02",
+      },
+    ],
+  });
+  expect(wrongTuple.status).toBe(400);
+
+  const chosen = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    providerBindings: [
+      {
+        provider: CLOUDFLARE,
+        moduleLocalName: "cloudflare",
+        connectionId: "conn_cloudflare02",
+      },
+    ],
+  });
+  expect(chosen.status).toBe(200);
+  const chosenPayload = await chosen.json();
+  expect(chosenPayload.userAction).toMatchObject({
+    connections: [{ selectedConnectionId: "conn_cloudflare02", autoSelected: false }],
+    missing: [],
+  });
+
+  // Another app already uses the proposed name: the sheet reports it.
+  fixture.addCapsule({
+    id: "cap_existing00000001",
+    workspaceId: WORKSPACE.id,
+    projectId: "prj_default_ws_install",
+    name: "example",
+    slug: "example",
+    environment: "production",
+    sourceId: "src_other",
+    installConfigId: "cfg-default-opentofu-capsule",
+    installingPrincipalId: WORKSPACE.ownerUserId,
+    currentStateGeneration: 1,
+    status: "active",
+    createdAt: WORKSPACE.createdAt,
+    updatedAt: WORKSPACE.createdAt,
+  });
+  const conflicted = await readPlan(fixture, planId);
+  expect(conflicted.userAction).toMatchObject({
+    name: { current: "example", proposed: "example-2", conflict: true },
+    missing: ["name"],
+  });
+  const refused = await answer(fixture, planId, {
+    expectedGeneration: chosenPayload.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error.details.reason).toBe("capsule_name_conflict");
+  expect(fixture.counts.capsule).toBe(0);
+});
+
+test("install attempt asks to choose among scanned modules and restarts analysis for the choice", async () => {
+  const fixture = attemptFixture({
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        {
+          path: "apps/a",
+          providerPackages: [{ source: CLOUDFLARE }],
+          rootProviderRequirements: [],
+        },
+        {
+          path: "apps/b",
+          providerPackages: [],
+          rootProviderRequirements: [],
+        },
+      ],
+    },
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "module",
+  });
+  expect(paused.userAction).toEqual({
+    kind: "choose_module",
+    modules: [
+      { path: "apps/a", providers: [CLOUDFLARE] },
+      { path: "apps/b", providers: [] },
+    ],
+  });
+  expect(fixture.compatibilityMutationCount).toBe(0);
+
+  const continueEarly = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+  });
+  expect(continueEarly.status).toBe(409);
+
+  const missing = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    modulePath: "apps/missing",
+  });
+  expect(missing.status).toBe(400);
+  expect((await missing.json()).error.code).toBe("install_module_unavailable");
+
+  const chosen = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    modulePath: "apps/b",
+  });
+  expect(chosen.status).toBe(200);
+  const chosenPayload = await chosen.json();
+  expect(chosenPayload).toMatchObject({
+    installPlan: { phase: "compiling_install", options: { modulePath: "apps/b" } },
+    nextAction: "reconcile",
+    userAction: { kind: "wait" },
+  });
+  const analyzed = await reconcileUntilIdle(fixture, planId);
+  expect(analyzed.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    installModulePath: "apps/b",
+  });
+  expect(analyzed.userAction).toMatchObject({ kind: "provide_inputs", modulePath: "apps/b" });
+});
+
+test("install attempt with a repository manifest pauses after manifest analysis and creates from the reviewed preview", async () => {
+  const fixture = attemptFixture({
+    repositoryManifest: repositoryManifest(["."]),
+    providerConnections: [],
+    compatibilityRootProviderRequirements: [],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    installModulePath: ".",
+    compatibilityReportId: expect.any(String),
+  });
+  expect(paused.userAction).toMatchObject({
+    kind: "provide_inputs",
+    connections: [],
+    variables: [],
+    missing: [],
+  });
+  const unknown = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { undeclared: "value" },
+  });
+  expect(unknown.status).toBe(400);
+  expect((await unknown.json()).error.details.reason).toBe("install_variable_unknown");
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+  });
+  expect(confirmed.status).toBe(200);
+  expect((await confirmed.json()).installPlan.phase).toBe("planning");
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan.phase).toBe("reviewable");
+  expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 1, plan: 1 });
+});
+
+async function expireStoredAttempt(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+): Promise<number> {
+  const stored = (await fixture.planStore.get(planId))!;
+  const expired = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: stored.generation,
+    expectedPhase: stored.phase,
+    plan: {
+      ...stored,
+      generation: stored.generation + 1,
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    },
+    at: new Date().toISOString(),
+  });
+  expect(expired.status).toBe("updated");
+  return stored.generation + 1;
+}
+
+async function reachReviewable(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+) {
+  const paused = await reconcileUntilIdle(fixture, planId);
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(confirmed.status).toBe(200);
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan.phase).toBe("reviewable");
+  return reviewable;
+}
+
+test("discarding an attempt abandons its never-applied Capsule and keeps the Source with polling off", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  expect(fixture.sources[0]?.autoSync).toBe(true);
+
+  expect((await discard(fixture, planId, undefined)).status).toBe(400);
+  const stale = await discard(fixture, planId, reviewable.installPlan.generation - 1);
+  expect(stale.status).toBe(409);
+  expect((await stale.json()).error.code).toBe("install_plan_generation_conflict");
+  // A Workspace admin who did not start the attempt cannot answer or discard it.
+  expect((await discard(fixture, planId, reviewable.installPlan.generation, ADMIN_SUBJECT)).status)
+    .toBe(403);
+  expect(
+    (await answer(fixture, planId, { expectedGeneration: 0 }, ADMIN_SUBJECT)).status,
+  ).toBe(403);
+  expect((await readPlan(fixture, planId, ADMIN_SUBJECT)).installPlan.id).toBe(planId);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(
+    reviewable.installPlan.generation,
+  );
+
+  const discarded = await discard(fixture, planId, reviewable.installPlan.generation);
+  expect(discarded.status).toBe(200);
+  expect(await discarded.json()).toMatchObject({
+    installPlan: {
+      phase: "discarded",
+      generation: reviewable.installPlan.generation + 1,
+      diagnostic: { code: "install_attempt_discarded" },
+    },
+    nextAction: "none",
+    userAction: { kind: "none" },
+  });
+  expect(fixture.abandonedCapsules).toEqual([reviewable.installPlan.capsuleId]);
+  expect(fixture.capsules[0]?.status).toBe("destroyed");
+  // The Source is never deleted; polling this attempt enabled is turned off.
+  expect(fixture.deletedSources).toEqual([]);
+  expect(fixture.sources.map((source) => source.id)).toEqual(["src_one"]);
+  expect(fixture.sources[0]?.autoSync).toBe(false);
+  expect(fixture.sourcePatches).toEqual([
+    { id: "src_one", autoSync: true },
+    { id: "src_one", autoSync: false },
+  ]);
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+
+  // Discard is idempotent once terminal.
+  const again = await discard(fixture, planId, 0);
+  expect(again.status).toBe(200);
+  expect((await again.json()).installPlan.phase).toBe("discarded");
+});
+
+test("refused discards write nothing, legacy plans cannot be discarded here, and applied attempts leave the open list", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  fixture.applyCapsule(reviewable.installPlan.capsuleId);
+  const refused = await discard(fixture, planId, reviewable.installPlan.generation);
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error.code).toBe("install_attempt_applied");
+  const afterRefusal = (await fixture.planStore.get(planId))!;
+  expect(afterRefusal.phase).toBe("reviewable");
+  expect(afterRefusal.generation).toBe(reviewable.installPlan.generation);
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+  expect(fixture.abandonedCapsules).toEqual([]);
+  const listed = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  expect((await listed.json()).installPlans).toEqual([]);
+
+  const legacy = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings: [] }),
+    { "idempotency-key": "legacy-not-discardable" },
+  );
+  const legacyPlan = (await legacy.json()).installPlan;
+  const legacyDiscard = await discard(fixture, legacyPlan.id, legacyPlan.generation);
+  expect(legacyDiscard.status).toBe(409);
+  expect((await legacyDiscard.json()).error.code).toBe("install_plan_not_attempt");
+  const legacyAnswer = await answer(fixture, legacyPlan.id, {
+    expectedGeneration: legacyPlan.generation,
+    capsuleName: "renamed",
+  });
+  expect(legacyAnswer.status).toBe(409);
+  expect((await legacyAnswer.json()).error.code).toBe("install_plan_not_attempt");
+});
+
+test("discarding an attempt never removes a Source that a legacy install plan reuses", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    sourceId: "src_one",
+    sourceCreatedByAttempt: true,
+  });
+  // A legacy plan with the same Git address reuses the attempt's Source.
+  const legacy = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ providerBindings: [], capsuleName: "legacy-app" }),
+    { "idempotency-key": "legacy-shares-source" },
+  );
+  const legacyId = (await legacy.json()).installPlan.id as string;
+  const matched = await fixture.reconcile(legacyId);
+  expect((await matched.json()).installPlan.sourceId).toBe("src_one");
+
+  const discarded = await discard(fixture, planId, paused.installPlan.generation);
+  expect(discarded.status).toBe(200);
+  expect(fixture.deletedSources).toEqual([]);
+  expect(fixture.sources.map((source) => source.id)).toEqual(["src_one"]);
+  expect(fixture.sourcePatches).toEqual([]);
+
+  const legacyReviewable = await reconcileUntilIdle(fixture, legacyId);
+  expect(legacyReviewable.installPlan).toMatchObject({
+    phase: "reviewable",
+    sourceId: "src_one",
+  });
+});
+
+test("reads never settle an expired or epoch-changed attempt; only the creator's write discards it", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const adminPlanId = await startAttempt(
+    fixture,
+    attemptBody({ capsuleName: "admin-app" }),
+    "attempt-admin",
+    ADMIN_SUBJECT,
+  );
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan.phase).toBe("awaiting_input");
+  const generation = await expireStoredAttempt(fixture, planId);
+  const mutationsBefore = fixture.mutationCount();
+  const effectsBefore = JSON.stringify([
+    fixture.abandonedCapsules,
+    fixture.deletedSources,
+    fixture.sourcePatches,
+  ]);
+
+  for (const subject of [VIEWER_SUBJECT, ADMIN_SUBJECT, WORKSPACE.ownerUserId]) {
+    const read = await readPlan(fixture, planId, subject);
+    expect(read).toMatchObject({
+      installPlan: { phase: "awaiting_input", generation },
+      invalidated: "install_attempt_expired",
+      nextAction: "none",
+      userAction: { kind: "retry", code: "install_attempt_expired", restart: true },
+    });
+    expect(read.links.reconcile).toBeUndefined();
+  }
+  const ownerList = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  const ownerItems = (await ownerList.json()).installPlans;
+  expect(ownerItems.map((item: { installPlan: { id: string } }) => item.installPlan.id))
+    .toEqual([planId]);
+  expect(ownerItems[0].invalidated).toBe("install_attempt_expired");
+  const adminList = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+    "GET",
+    undefined,
+    {},
+    ADMIN_SUBJECT,
+  );
+  expect((await adminList.json()).installPlans.map(
+    (item: { installPlan: { id: string } }) => item.installPlan.id,
+  )).toEqual([adminPlanId]);
+  const reconciled = await fixture.reconcile(planId);
+  expect((await reconciled.json()).invalidated).toBe("install_attempt_expired");
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+  expect(fixture.mutationCount()).toBe(mutationsBefore);
+  expect(JSON.stringify([
+    fixture.abandonedCapsules,
+    fixture.deletedSources,
+    fixture.sourcePatches,
+  ])).toBe(effectsBefore);
+
+  // Only the creator's own write cleans up.
+  const answered = await answer(fixture, planId, {
+    expectedGeneration: generation,
+    capsuleName: "too-late",
+  });
+  expect(answered.status).toBe(409);
+  expect((await answered.json()).error).toMatchObject({
+    code: "install_attempt_invalid",
+    details: { reason: "install_attempt_expired" },
+  });
+  expect(await readPlan(fixture, planId, VIEWER_SUBJECT)).toMatchObject({
+    installPlan: {
+      phase: "discarded",
+      diagnostic: { code: "install_attempt_expired" },
+      capsule: { name: "example" },
+    },
+    userAction: { kind: "none" },
+  });
+  expect(fixture.deletedSources).toEqual([]);
+});
+
+test("an attempt with a Capsule never expires", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  expect(reviewable.installPlan.expiresAt).toBeUndefined();
+  const generation = await expireStoredAttempt(fixture, planId);
+  for (const subject of [VIEWER_SUBJECT, WORKSPACE.ownerUserId]) {
+    const read = await readPlan(fixture, planId, subject);
+    expect(read.invalidated).toBeUndefined();
+    expect(read.userAction).toMatchObject({ kind: "review_run" });
+  }
+  const listed = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  expect((await listed.json()).installPlans.map(
+    (item: { installPlan: { id: string } }) => item.installPlan.id,
+  )).toEqual([planId]);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+  expect(fixture.abandonedCapsules).toEqual([]);
+});
+
+test("an idle attempt does not block Workspace management; after a drain reads only report it and the creator's answer discards it", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  // An attempt with coordinator work pending is still a blocker.
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(true);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan.phase).toBe("awaiting_input");
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+
+  await fixture.beginDrain();
+  const viewed = await readPlan(fixture, planId, VIEWER_SUBJECT);
+  expect(viewed).toMatchObject({
+    installPlan: { phase: "awaiting_input", generation: paused.installPlan.generation },
+    invalidated: "workspace_management_changed",
+    userAction: { kind: "retry", code: "workspace_management_changed", restart: true },
+  });
+  expect((await fixture.planStore.get(planId))?.generation).toBe(
+    paused.installPlan.generation,
+  );
+  const refused = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    capsuleName: "renamed",
+  });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error).toMatchObject({
+    code: "install_attempt_invalid",
+    details: { reason: "workspace_management_changed" },
+  });
+  expect((await readPlan(fixture, planId)).installPlan).toMatchObject({
+    phase: "discarded",
+    diagnostic: { code: "workspace_management_changed" },
+    capsule: { name: "example" },
+  });
+  expect(fixture.counts.capsule).toBe(0);
+});
+
+test("the store admission fence refuses answers after an epoch change even when the route read looked current", async () => {
+  for (const body of [
+    { capsuleName: "renamed" },
+    { continue: true, variables: { region: "eu" } },
+  ]) {
+    const fixture = attemptFixture({ staleManagementCapture: true });
+    const planId = await startAttempt(fixture);
+    const paused = await reconcileUntilIdle(fixture, planId);
+    expect(paused.installPlan.phase).toBe("awaiting_input");
+    await fixture.beginDrain();
+    // The stale capture hides the drain from the route's read-only check.
+    expect((await readPlan(fixture, planId)).invalidated).toBeUndefined();
+    const refused = await answer(fixture, planId, {
+      expectedGeneration: paused.installPlan.generation,
+      ...body,
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toMatchObject({
+      code: "install_attempt_invalid",
+      details: { reason: "workspace_management_admission_conflict" },
+    });
+    expect((await fixture.planStore.get(planId))).toMatchObject({
+      phase: "discarded",
+      diagnostic: { code: "workspace_management_changed" },
+      capsule: { name: "example" },
+    });
+    expect(fixture.counts.capsule).toBe(0);
+    expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+  }
+});
+
+test("a confirming request whose creation acknowledgement is lost accepts only the same values and adopts the committed Capsule", async () => {
+  const fixture = attemptFixture({ loseAckOnce: ["capsule"] });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  const lost = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: SECRET_VALUE },
+  });
+  expect(lost.status).toBe(200);
+  const lostText = await lost.text();
+  expect(lostText).not.toContain(SECRET_VALUE);
+  expect(lostText).not.toContain("super-secret-mutation-value");
+  const lostPayload = JSON.parse(lostText);
+  expect(lostPayload.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    diagnostic: { code: "install_inputs_resubmission_required" },
+  });
+  // A Capsule may exist, so this pause never expires.
+  expect(lostPayload.installPlan.expiresAt).toBeUndefined();
+  expect(lostPayload.userAction.resubmitVariables).toEqual(["region"]);
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
+  expect(fixture.counts.capsule).toBe(1);
+
+  // A reconcile without the values never re-creates authority.
+  const reconciled = await fixture.reconcile(planId);
+  expect((await reconciled.json()).installPlan.phase).toBe("awaiting_input");
+  for (const change of [
+    { capsuleName: "renamed" },
+    { capsuleName: "renamed", continue: true, variables: { region: SECRET_VALUE } },
+    {
+      providerBindings: [
+        { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_cloudflare01" },
+      ],
+    },
+    { continue: true },
+  ]) {
+    const refused = await answer(fixture, planId, {
+      expectedGeneration: lostPayload.installPlan.generation,
+      ...change,
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.code).toBe("install_inputs_resubmission_only");
+  }
+  expect((await fixture.planStore.get(planId))?.generation).toBe(
+    lostPayload.installPlan.generation,
+  );
+
+  const resubmitted = await answer(fixture, planId, {
+    expectedGeneration: lostPayload.installPlan.generation,
+    continue: true,
+    variables: { region: SECRET_VALUE },
+  });
+  expect(resubmitted.status).toBe(200);
+  expect((await resubmitted.json()).installPlan).toMatchObject({
+    phase: "planning",
+    capsuleId: fixture.capsules[0]!.id,
+    capsule: { name: "example" },
+  });
+  expect(fixture.counts.capsule).toBe(1);
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
+});
+
+test("legacy reviewed-preflight rows keep their previous lifecycle across a lost acknowledgement", async () => {
+  const fixture = installFixture({ loseAckOnce: ["capsule"] });
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [{ name: "region", type: "string", hasDefault: false }],
+  });
+  const body = {
+    ...createBody({ modulePath: ".", providerBindings: [] }),
+    preflight,
+    variables: { region: SECRET_VALUE },
+  };
+  const first = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "preflight-lost-ack" },
+  );
+  expect(first.status).toBe(201);
+  const firstPayload = await first.json();
+  expect(firstPayload).toMatchObject({
+    installPlan: { phase: "creating_capsule" },
+    nextAction: "reconcile",
+    userAction: { kind: "wait", phase: "creating_capsule" },
+  });
+  expect(firstPayload.installPlan.mode).toBeUndefined();
+  expect(JSON.stringify(firstPayload)).not.toContain(SECRET_VALUE);
+  const planId = firstPayload.installPlan.id as string;
+
+  const lost = await fixture.reconcile(planId);
+  expect(lost.status).toBe(202);
+  const lostPayload = await lost.json();
+  expect(lostPayload).toMatchObject({
+    installPlan: {
+      phase: "creating_capsule",
+      diagnostic: { code: "install_plan_reconcile_retryable" },
+    },
+    nextAction: "reconcile",
+  });
+  expect(JSON.stringify(lostPayload)).not.toContain(SECRET_VALUE);
+  expect((await fixture.planStore.get(planId))?.initialVariables).toEqual({
+    region: SECRET_VALUE,
+  });
+
+  const recovered = await fixture.reconcile(planId);
+  expect((await recovered.json()).installPlan.phase).toBe("planning");
+  expect(fixture.counts.capsule).toBe(1);
+  expect((await fixture.planStore.get(planId))?.initialVariables).toBeUndefined();
+  expect(fixture.getInstallConfig(fixture.capsules[0]!.installConfigId)).toMatchObject({
+    variableMapping: { region: SECRET_VALUE },
+  });
+});
+
+test("a legacy row written with the value-bearing digest still replays and keeps its reviewed values", async () => {
+  const fixture = installFixture();
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [{ name: "region", type: "string", hasDefault: false }],
+  });
+  const body = {
+    ...createBody({ modulePath: ".", providerBindings: [] }),
+    preflight,
+    variables: { region: "legacy-region" },
+  };
+  // Seed the row exactly as the previous release wrote it: value-bearing
+  // request digest and stored initialVariables.
+  const template = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "template-only" },
+  );
+  const templateRecord = (await fixture.planStore.get(
+    (await template.json()).installPlan.id,
+  ))!;
+  const legacyDigest = await stableJsonDigest({
+    source: { name: "example", url: "https://github.com/takos/example", ref: "main", path: "." },
+    capsule: { name: "example", environment: "production" },
+    options: { modulePath: ".", providerBindings: [] },
+    preflight,
+    variables: { region: "legacy-region" },
+  });
+  expect(templateRecord.requestDigest).not.toBe(legacyDigest);
+  const legacyId = "gip_legacyrow000001";
+  const seeded = await fixture.planStore.create({
+    ...templateRecord,
+    id: legacyId,
+    idempotencyKeyHash: await stableJsonDigest("legacy-replay-key"),
+    requestDigest: legacyDigest,
+    initialVariables: { region: "legacy-region" },
+  });
+  expect(seeded.status).toBe("created");
+
+  const replay = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    body,
+    { "idempotency-key": "legacy-replay-key" },
+  );
+  expect(replay.status).toBe(200);
+  const replayPayload = await replay.json();
+  expect(replayPayload.installPlan).toMatchObject({ id: legacyId, phase: "creating_capsule" });
+  expect(JSON.stringify(replayPayload)).not.toContain("legacy-region");
+
+  const created = await fixture.reconcile(legacyId);
+  const planning = await created.json();
+  expect(planning.installPlan.phase).toBe("planning");
+  expect(fixture.getInstallConfig(planning.installPlan.installConfigId)).toMatchObject({
+    variableMapping: { region: "legacy-region" },
+  });
+  expect((await fixture.planStore.get(legacyId))?.initialVariables).toBeUndefined();
+
+  // Same key, different values: the digest covers names only, so it replays.
+  const differentValues = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    { ...body, variables: { region: "another-region" } },
+    { "idempotency-key": "template-only" },
+  );
+  expect(differentValues.status).toBe(200);
+  expect((await differentValues.json()).installPlan.id).toBe(templateRecord.id);
+});
+
 function installFixture(
   options: {
     readonly loseAckOnce?: readonly LostAckMutation[];
@@ -1289,10 +2281,14 @@ function installFixture(
     readonly compatibilityRunStatus?: "succeeded" | "failed";
     readonly compatibilityReportLevel?: CapsuleCompatibilityReport["level"];
     readonly compatibilityRootModuleVariableDeclarations?: CapsuleCompatibilityReport["rootModuleVariableDeclarations"];
+    readonly compatibilityRootProviderRequirements?: CapsuleCompatibilityReport["rootProviderRequirements"];
+    readonly compatibilityResources?: CapsuleCompatibilityReport["resources"];
     readonly omitCompatibilityRootModuleVariableDeclarations?: boolean;
     readonly providerValidationError?: OpenTofuControllerError;
     readonly pausePreparation?: boolean;
     readonly raceAfterClaimBeforeSourceSync?: boolean;
+    /** Capture keeps returning the first epoch, so only the store fence refuses. */
+    readonly staleManagementCapture?: boolean;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -1335,6 +2331,9 @@ function installFixture(
     ),
   ]);
   const counts = { source: 0, sync: 0, capsule: 0, plan: 0 };
+  const sourcePatches: { readonly id: string; readonly autoSync?: boolean }[] = [];
+  const deletedSources: string[] = [];
+  const abandonedCapsules: string[] = [];
   let compatibilityMutationCount = 0;
   let installConfigMutationCount = 0;
   let approvalCalls = 0;
@@ -1381,6 +2380,13 @@ function installFixture(
         return WORKSPACE;
       },
       captureManagementAuthority: async (workspaceId: string) => {
+        if (options.staleManagementCapture) {
+          return {
+            workspaceId,
+            managementState: "active" as const,
+            managementEpoch: 1,
+          };
+        }
         if (resumedManagementEpoch !== undefined) {
           return {
             workspaceId,
@@ -1392,7 +2398,16 @@ function installFixture(
       },
     },
     members: {
-      getMember: async () => undefined,
+      // One active admin who is not the Workspace owner, for actor isolation.
+      getMember: async (workspaceId: string, subject: string) =>
+        subject === ADMIN_SUBJECT || subject === VIEWER_SUBJECT
+          ? {
+              workspaceId,
+              accountId: subject,
+              status: "active",
+              roles: [subject === ADMIN_SUBJECT ? "admin" : "viewer"],
+            }
+          : undefined,
       listMembers: async () => [],
     },
     connections: {
@@ -1431,6 +2446,41 @@ function installFixture(
       const source = sources.find((candidate) => candidate.id === id);
       if (!source) throw new OpenTofuControllerError("not_found", "missing");
       return { source };
+    },
+    patchSource: async (id: string, patch: { readonly autoSync?: boolean }) => {
+      const index = sources.findIndex((candidate) => candidate.id === id);
+      if (index < 0) throw new OpenTofuControllerError("not_found", "missing");
+      sourcePatches.push({ id, ...patch });
+      sources[index] = {
+        ...sources[index]!,
+        ...(patch.autoSync !== undefined ? { autoSync: patch.autoSync } : {}),
+      };
+      return { source: sources[index]! };
+    },
+    deleteSource: async (
+      id: string,
+      _actor?: string,
+      authority?: WorkspaceManagementAuthority,
+    ) => {
+      if (!managementValidator.isWorkspaceManagementAdmissionAllowed(WORKSPACE.id, authority)) {
+        throw new OpenTofuControllerError("failed_precondition", "management");
+      }
+      const index = sources.findIndex((candidate) => candidate.id === id);
+      if (index < 0) throw new OpenTofuControllerError("not_found", "missing");
+      if (
+        capsules.some((capsule) =>
+          capsule.sourceId === id && capsule.status !== "destroyed"
+        )
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "referenced",
+          { reason: "source_referenced_by_capsule" },
+        );
+      }
+      const [removed] = sources.splice(index, 1);
+      deletedSources.push(id);
+      return { source: removed! };
     },
     createSourceSync: async (
       sourceId: string,
@@ -1524,7 +2574,9 @@ function installFixture(
         level: options.compatibilityReportLevel ?? "ready",
         findings: [],
         providers: [],
-        resources: [],
+        resources: options.compatibilityResources ?? [],
+        rootProviderRequirements:
+          options.compatibilityRootProviderRequirements ?? [],
         dataSources: [],
         provisioners: [],
         rootModuleVariables: [],
@@ -1585,6 +2637,27 @@ function installFixture(
         return config;
       },
       listCapsulesPage: async () => ({ items: capsules }),
+      listCapsules: async () => capsules,
+      abandonUnappliedCapsule: async (
+        id: string,
+        _reason: string,
+        authority?: WorkspaceManagementAuthority,
+      ) => {
+        if (!managementValidator.isWorkspaceManagementAdmissionAllowed(WORKSPACE.id, authority)) {
+          throw new OpenTofuControllerError("failed_precondition", "management");
+        }
+        const index = capsules.findIndex((candidate) => candidate.id === id);
+        if (index < 0) throw new OpenTofuControllerError("not_found", "missing");
+        if (capsules[index]!.currentStateGeneration > 0) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "applied state",
+          );
+        }
+        abandonedCapsules.push(id);
+        capsules[index] = { ...capsules[index]!, status: "destroyed" };
+        return capsules[index]!;
+      },
       getCapsule: async (id: string) => {
         const capsule = capsules.find((candidate) => candidate.id === id);
         if (!capsule) throw new OpenTofuControllerError("not_found", "missing");
@@ -1765,6 +2838,18 @@ function installFixture(
 
   return {
     planStore,
+    sources,
+    capsules,
+    sourcePatches,
+    deletedSources,
+    abandonedCapsules,
+    addCapsule(capsule: Capsule) {
+      capsules.push(capsule);
+    },
+    applyCapsule(id: string) {
+      const index = capsules.findIndex((candidate) => candidate.id === id);
+      capsules[index] = { ...capsules[index]!, currentStateGeneration: 1, status: "active" };
+    },
     preparationStarted,
     releasePreparation: () => releasePreparationGate?.(),
     async beginDrain() {

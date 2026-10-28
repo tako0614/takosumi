@@ -1621,6 +1621,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
   };
 
+  // Needed only by this reviewed-preflight path, where the page registered the
+  // Source itself. An install attempt (`mode: "attempt"`) registers the Source
+  // in the coordinator, which enables polling when the app becomes reviewable;
+  // repeating this idempotent PATCH there is a no-op. Phase 3 removes it.
   const enableInstallSourceAutoSync = async (workspace: string) => {
     const pendingAutoSyncSource = autoSyncSourceForInstall;
     if (

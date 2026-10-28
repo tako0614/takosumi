@@ -1,11 +1,15 @@
 import type {
+  CreateGitInstallAttemptRequest,
   CreateGitInstallPlanRequest,
   GitInstallPlan,
   GitInstallPlanDiagnostic,
+  GitInstallPlanInvalidation,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanSourceRequest,
   JsonValue,
+  ListOpenGitInstallPlansResponse,
+  PatchGitInstallPlanRequest,
 } from "takosumi-contract";
 import {
   normalizeInstallConfigSourceUrl,
@@ -38,10 +42,33 @@ import {
   structuredErrorReason,
 } from "../../../../core/domains/deploy-control/errors.ts";
 import {
+  WorkspaceManagementAdmissionConflictError,
+  type WorkspaceManagementAuthority,
+} from "../../../../core/domains/deploy-control/store.ts";
+import {
+  GIT_INSTALL_ATTEMPT_IDLE_TTL_MS,
+  GIT_INSTALL_ATTEMPT_LIST_LIMIT,
   GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
+  isReconcileableGitInstallPlanPhase,
   publicGitInstallPlan,
+  type GitInstallAttemptFacts,
   type StoredGitInstallPlan,
 } from "../../../../core/domains/install-plans/store.ts";
+import {
+  attemptCanExpire,
+  attemptInputFacts,
+  attemptIsExpired,
+  bindingMatchesRequirement,
+  checkAttemptVariables,
+  connectionRequirements,
+  connectionsReady,
+  deterministicInitialCapsuleId,
+  effectiveProviderBindings,
+  moduleCandidates,
+  nameProposal,
+  proposedAppName,
+  userActionFor,
+} from "./install-attempt-facts.ts";
 import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
@@ -89,13 +116,17 @@ const PROVIDER_SOURCE_PATTERN =
   /^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9_-]+\/[a-z0-9_-]+$/u;
 const MAX_PROVIDER_BINDINGS = 32;
 
-/** POST /api/v1/workspaces/:workspaceId/install-plans (Workspace auth is done by the parent handler). */
+/**
+ * POST/GET /api/v1/workspaces/:workspaceId/install-plans (Workspace auth is
+ * done by the parent handler). GET lists the caller's open attempts.
+ */
 export async function handleWorkspaceInstallPlans(
   ctx: ControlDispatchContext,
   workspaceId: string,
   method: string,
 ): Promise<Response> {
-  if (method !== "POST") return methodNotAllowed("POST");
+  if (method === "GET") return await listOpenInstallAttempts(ctx, workspaceId);
+  if (method !== "POST") return methodNotAllowed("GET, POST");
   const key = idempotencyKey(ctx.request.headers.get("idempotency-key"));
   if (!key) {
     return errorJson(
@@ -106,11 +137,16 @@ export async function handleWorkspaceInstallPlans(
     );
   }
   const body = await readJsonObject(ctx.request);
-  const parsed = body ? parseCreateRequest(body) : undefined;
-  if (!parsed) {
+  const attempt = body && body.mode !== undefined
+    ? parseCreateAttemptRequest(body)
+    : undefined;
+  const parsed = body && body.mode === undefined
+    ? parseCreateRequest(body)
+    : undefined;
+  if (!parsed && !attempt) {
     return errorJson(
       "invalid_request",
-      "The install plan must contain only a normalized Git Source, Capsule name/environment, and safe option references. Variable values are not accepted without an exact reviewed preflight.",
+      "The install plan must contain only a normalized Git Source, Capsule name/environment, and safe option references. Variable values are not accepted without an exact reviewed preflight; an install attempt (mode \"attempt\") accepts them only when it is confirmed.",
       400,
       ctx.request,
     );
@@ -119,8 +155,14 @@ export async function handleWorkspaceInstallPlans(
   // Observe an exact idempotency scope before capturing Workspace management
   // authority so a stopped Workspace can still return its existing record
   // without creating a successor or attempting new preparation.
-  const [requestDigest, idempotencyKeyHash] = await Promise.all([
-    stableJsonDigest(parsed),
+  //
+  // Variable values never enter the public request digest: only their names
+  // do. A replay is still recognized against digests written before values
+  // were excluded.
+  const variables = parsed?.variables;
+  const [requestDigest, legacyRequestDigest, idempotencyKeyHash] = await Promise.all([
+    stableJsonDigest(attempt ?? requestDigestInput(parsed!)),
+    variables ? stableJsonDigest(parsed) : Promise.resolve(undefined),
     stableJsonDigest(key),
   ]);
   const existing = await ctx.operations.gitInstallPlans.getByScope({
@@ -129,8 +171,12 @@ export async function handleWorkspaceInstallPlans(
     idempotencyKeyHash,
   });
   if (existing) {
-    if (existing.requestDigest === requestDigest) {
-      return installPlanJson(existing);
+    if (
+      existing.requestDigest === requestDigest ||
+      (legacyRequestDigest !== undefined &&
+        existing.requestDigest === legacyRequestDigest)
+    ) {
+      return await installPlanJson(ctx, existing);
     }
     return errorJson(
       "idempotency_conflict",
@@ -144,6 +190,46 @@ export async function handleWorkspaceInstallPlans(
   // drain -> active epoch cannot bless work prepared under the old epoch.
   const expectedWorkspaceManagementAuthority =
     await ctx.operations.workspaces.captureManagementAuthority(workspaceId);
+  const now = new Date().toISOString();
+  if (attempt) {
+    const attemptPlan: StoredGitInstallPlan = {
+      id: installPlanId(),
+      workspaceId,
+      createdBy: ctx.session.subject,
+      actorSubject: ctx.session.subject,
+      idempotencyKeyHash,
+      workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
+      requestDigest,
+      operation: "install",
+      mode: "attempt",
+      source: attempt.source,
+      capsule: attempt.capsule,
+      options: attempt.options,
+      phase: "syncing_source",
+      generation: 0,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: attemptExpiry(now),
+    };
+    const created = await ctx.operations.gitInstallPlans.create(
+      attemptPlan,
+      expectedWorkspaceManagementAuthority,
+    );
+    if (created.status === "conflict") {
+      return errorJson(
+        "idempotency_conflict",
+        "This Idempotency-Key was already used for a different install-plan request in the same Workspace and actor scope.",
+        409,
+        ctx.request,
+      );
+    }
+    return await installPlanJson(
+      ctx,
+      created.plan,
+      created.status === "created" ? 201 : 200,
+    );
+  }
+  const request = parsed!;
   let preflightAuthority:
     | {
         readonly installConfigDigest: string;
@@ -151,7 +237,7 @@ export async function handleWorkspaceInstallPlans(
         readonly baseInstallConfigDigest: string;
       }
     | undefined;
-  if (parsed.preflight) {
+  if (request.preflight) {
     const base = await resolveStoreBaseInstallConfig(ctx.operations);
     if (!base.ok) {
       return errorJson(
@@ -164,7 +250,7 @@ export async function handleWorkspaceInstallPlans(
       );
     }
     const reviewed = await ctx.operations.capsules.getInstallConfig(
-      parsed.preflight.installConfigId,
+      request.preflight.installConfigId,
     );
     if (
       reviewed.workspaceId !== undefined &&
@@ -183,7 +269,6 @@ export async function handleWorkspaceInstallPlans(
       baseInstallConfigDigest: await stableJsonDigest(base.installConfig),
     };
   }
-  const now = new Date().toISOString();
   const plan: StoredGitInstallPlan = {
     id: installPlanId(),
     workspaceId,
@@ -193,29 +278,32 @@ export async function handleWorkspaceInstallPlans(
     workspaceManagementAuthority: expectedWorkspaceManagementAuthority,
     requestDigest,
     operation: "install",
-    source: parsed.source,
-    capsule: parsed.capsule,
-    options: parsed.options ?? {},
-    ...(parsed.preflight
+    source: request.source,
+    capsule: request.capsule,
+    options: request.options ?? {},
+    ...(request.preflight
       ? {
-          preflight: parsed.preflight,
-          sourceId: parsed.preflight.sourceId,
-          sourceSnapshotId: parsed.preflight.sourceSnapshotId,
+          preflight: request.preflight,
+          sourceId: request.preflight.sourceId,
+          sourceSnapshotId: request.preflight.sourceSnapshotId,
           installConfigBaseId: preflightAuthority!.baseInstallConfigId,
           installConfigBaseDigest:
             preflightAuthority!.baseInstallConfigDigest,
           preflightInstallConfigDigest:
             preflightAuthority!.installConfigDigest,
           compatibilityCheckRunId:
-            parsed.preflight.compatibilityCheckRunId,
-          compatibilityReportId: parsed.preflight.compatibilityReportId,
+            request.preflight.compatibilityCheckRunId,
+          compatibilityReportId: request.preflight.compatibilityReportId,
         }
       : {}),
-    ...(parsed.variables ? { initialVariables: parsed.variables } : {}),
-    ...(parsed.initialConfiguration
-      ? { initialConfiguration: parsed.initialConfiguration }
+    // Legacy reviewed-preflight values keep their previous lifetime: private,
+    // never projected, consumed by atomic creation and scrubbed by every
+    // terminal transition. Install attempts never store values.
+    ...(variables ? { initialVariables: variables } : {}),
+    ...(request.initialConfiguration
+      ? { initialConfiguration: request.initialConfiguration }
       : {}),
-    phase: parsed.preflight ? "creating_capsule" : "syncing_source",
+    phase: request.preflight ? "creating_capsule" : "syncing_source",
     generation: 0,
     createdAt: now,
     updatedAt: now,
@@ -232,13 +320,36 @@ export async function handleWorkspaceInstallPlans(
       ctx.request,
     );
   }
-  return installPlanJson(
+  return await installPlanJson(
+    ctx,
     result.plan,
     result.status === "created" ? 201 : 200,
   );
 }
 
-/** GET/POST /api/v1/install-plans/:id[/reconcile]. GET performs no mutation. */
+/** The request digest input: variable names only, never values. */
+function requestDigestInput(
+  request: CreateGitInstallPlanRequest,
+): Record<string, unknown> {
+  const { variables, ...rest } = request;
+  return variables === undefined
+    ? rest
+    : { ...rest, variableNames: Object.keys(variables).sort() };
+}
+
+function attemptExpiry(now: string): string {
+  return new Date(Date.parse(now) + GIT_INSTALL_ATTEMPT_IDLE_TTL_MS)
+    .toISOString();
+}
+
+/**
+ * GET/PATCH/DELETE /api/v1/install-plans/:id and POST .../reconcile.
+ *
+ * GET never writes. An attempt that can no longer advance (it expired before
+ * its Capsule existed, or its management epoch was replaced) is only reported
+ * as `invalidated`; destructive cleanup happens solely in its creator's own
+ * DELETE, or in a creator PATCH that finds the attempt invalid.
+ */
 export async function handleInstallPlans(
   ctx: ControlDispatchContext,
   segments: readonly string[],
@@ -261,10 +372,10 @@ export async function handleInstallPlans(
   if (!auth.ok) return auth.response;
 
   if (segments.length === 2) {
-    if (method !== "GET") return methodNotAllowed("GET");
-    // Deliberately no claim, reconcile, canonical-resource write, or timestamp
-    // update here. Polling GET is a pure durable-record read.
-    return installPlanJson(plan);
+    if (method === "GET") return await installPlanJson(ctx, plan);
+    if (method === "PATCH") return await answerInstallAttempt(ctx, plan);
+    if (method === "DELETE") return await discardInstallAttempt(ctx, plan);
+    return methodNotAllowed("GET, PATCH, DELETE");
   }
   if (segments.length === 3 && segments[2] === "reconcile") {
     if (method !== "POST") return methodNotAllowed("POST");
@@ -273,12 +384,824 @@ export async function handleInstallPlans(
   return undefined;
 }
 
+/** GET /api/v1/workspaces/:id/install-plans?open=1 — the caller's attempts. */
+async function listOpenInstallAttempts(
+  ctx: ControlDispatchContext,
+  workspaceId: string,
+): Promise<Response> {
+  const open = ctx.url.searchParams.get("open");
+  if (open !== "1" && open !== "true") {
+    return errorJson(
+      "invalid_request",
+      "Only open install attempts can be listed; pass open=1.",
+      400,
+      ctx.request,
+    );
+  }
+  // The store applies the open filter (including never-applied Capsules)
+  // before its limit. A read-only listing never settles anything.
+  const candidates = await ctx.operations.gitInstallPlans.listOpenAttempts({
+    workspaceId,
+    actorSubject: ctx.session.subject,
+    limit: GIT_INSTALL_ATTEMPT_LIST_LIMIT,
+  });
+  const installPlans: GitInstallPlanResponse[] = [];
+  for (const plan of candidates) {
+    // Defense in depth for a store without a co-located Capsule reader.
+    if (
+      plan.phase === "reviewable" &&
+      (await attemptCapsuleState(ctx, plan)) !== "unapplied"
+    ) {
+      continue;
+    }
+    installPlans.push(await installPlanResponseFor(ctx, plan));
+  }
+  const body: ListOpenGitInstallPlansResponse = { installPlans };
+  return json(body, 200, { "cache-control": "no-store" });
+}
+
+/** Whether the attempt's Capsule is still a never-applied install. */
+async function attemptCapsuleState(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): Promise<"none" | "unapplied" | "applied" | "gone"> {
+  if (!plan.capsuleId) return "none";
+  const capsule = await getCapsuleIfPresent(ctx.operations, plan.capsuleId);
+  if (!capsule || capsule.status === "destroyed") return "gone";
+  return capsuleHasAppliedState(capsule) ? "applied" : "unapplied";
+}
+
+function capsuleHasAppliedState(capsule: Capsule): boolean {
+  return Boolean(
+    capsule.currentStateVersionId || capsule.currentStateGeneration > 0,
+  );
+}
+
+async function getCapsuleIfPresent(
+  operations: ControlPlaneOperations,
+  capsuleId: string,
+): Promise<Capsule | undefined> {
+  try {
+    return await operations.capsules.getCapsule(capsuleId);
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError && error.code === "not_found") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Read-only: why an attempt can no longer advance. Expiry applies only before
+ * the Capsule exists; a replaced management epoch matters only while the
+ * attempt idles in `awaiting_input` (any advance re-checks it atomically).
+ */
+async function attemptInvalidation(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): Promise<GitInstallPlanInvalidation | undefined> {
+  if (plan.mode !== "attempt") return undefined;
+  if (attemptIsExpired(plan, Date.now())) return "install_attempt_expired";
+  if (
+    plan.phase === "awaiting_input" &&
+    !(await originalAdmissionIsCurrent(ctx, plan))
+  ) {
+    return "workspace_management_changed";
+  }
+  return undefined;
+}
+
+const INVALIDATION_MESSAGES: Readonly<Record<GitInstallPlanInvalidation, string>> = {
+  install_attempt_expired:
+    "This install attempt expired before its app was created; discard it and start again.",
+  workspace_management_changed:
+    "Workspace management changed while this install attempt waited for input; discard it and start again.",
+};
+
+async function originalAdmissionIsCurrent(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): Promise<boolean> {
+  const original = plan.workspaceManagementAuthority;
+  if (!original) return false;
+  try {
+    const current = await ctx.operations.workspaces.captureManagementAuthority(
+      plan.workspaceId,
+    );
+    return current.managementEpoch === original.managementEpoch;
+  } catch (error) {
+    // Only a definite admission refusal proves the epoch is gone; any other
+    // failure is not evidence against the attempt.
+    if (error instanceof WorkspaceManagementAdmissionConflictError) return false;
+    return true;
+  }
+}
+
+type DiscardResult =
+  | { readonly ok: true; readonly plan: StoredGitInstallPlan }
+  | {
+      readonly ok: false;
+      readonly status: number;
+      readonly code: string;
+      readonly message: string;
+      readonly reason?: string;
+    };
+
+const INITIAL_PHASES_WITHOUT_CAPSULE: ReadonlySet<string> = new Set([
+  "syncing_source",
+  "compiling_install",
+  "analyzing_compatibility",
+]);
+
+/**
+ * Discards one install attempt on behalf of its creator. A refusal writes
+ * nothing (no generation bump, no lease). Otherwise a never-applied Capsule
+ * this attempt created is abandoned first (which retires its binding slot and
+ * leaves its per-install InstallConfig as unreferenced history), then one
+ * lease-free CAS records the terminal `discarded` phase and scrubs retained
+ * private inputs. A reconcile racing the abandonment is fenced by the Capsule
+ * lifecycle CAS and by this record CAS; the creator simply retries. The
+ * Source is never deleted here: a polling Source this attempt enabled is
+ * turned back off and kept.
+ */
+async function discardAttemptRecord(
+  ctx: ControlDispatchContext,
+  observed: StoredGitInstallPlan,
+  diagnostic: GitInstallPlanDiagnostic,
+): Promise<DiscardResult> {
+  if (observed.phase === "discarded") return { ok: true, plan: observed };
+  const capsuleId = observed.capsuleId ??
+    (INITIAL_PHASES_WITHOUT_CAPSULE.has(observed.phase)
+      ? undefined
+      : deterministicInitialCapsuleId(observed.id));
+  try {
+    const capsule = capsuleId
+      ? await getCapsuleIfPresent(ctx.operations, capsuleId)
+      : undefined;
+    if (capsule && capsule.status !== "destroyed") {
+      if (
+        capsule.workspaceId !== observed.workspaceId ||
+        capsule.installingPrincipalId !== observed.createdBy ||
+        (observed.sourceId !== undefined && capsule.sourceId !== observed.sourceId)
+      ) {
+        return {
+          ok: false,
+          status: 409,
+          code: "capsule_identity_conflict",
+          message: "The Capsule does not belong to this install attempt.",
+        };
+      }
+      if (capsuleHasAppliedState(capsule)) {
+        return {
+          ok: false,
+          status: 409,
+          code: "install_attempt_applied",
+          message:
+            "This app was already installed; uninstall it from its app page instead.",
+        };
+      }
+      await ctx.operations.capsules.abandonUnappliedCapsule(
+        capsule.id,
+        "install attempt discarded before first successful apply",
+        await ctx.operations.workspaces.captureManagementAuthority(
+          observed.workspaceId,
+        ),
+      );
+    }
+  } catch (error) {
+    if (
+      error instanceof OpenTofuControllerError ||
+      error instanceof WorkspaceManagementAdmissionConflictError
+    ) {
+      const reason = error instanceof OpenTofuControllerError
+        ? structuredErrorReason(error)
+        : "workspace_management_admission_conflict";
+      return {
+        ok: false,
+        status: 409,
+        code: "install_attempt_discard_refused",
+        message:
+          "Takosumi could not abandon the app this attempt created; it may be installing now.",
+        ...(reason && DIAGNOSTIC_TOKEN.test(reason) &&
+            reason.length <= MAX_DIAGNOSTIC_REASON
+          ? { reason }
+          : {}),
+      };
+    }
+    throw error;
+  }
+  const completedAt = new Date().toISOString();
+  const {
+    initialVariables: _initialVariables,
+    transientVariableNames: _transientVariableNames,
+    awaitingInput: _awaitingInput,
+    expiresAt: _expiresAt,
+    ...retained
+  } = observed;
+  const discarded: StoredGitInstallPlan = {
+    ...retained,
+    phase: "discarded",
+    generation: observed.generation + 1,
+    diagnostic: boundedDiagnostic(diagnostic),
+    updatedAt: completedAt,
+    completedAt,
+  };
+  const result = await ctx.operations.gitInstallPlans.transitionUnleased({
+    id: observed.id,
+    expectedGeneration: observed.generation,
+    expectedPhase: observed.phase,
+    plan: discarded,
+    at: completedAt,
+  });
+  if (result.status === "not_found") {
+    return { ok: false, status: 404, code: "not_found", message: "Install plan not found." };
+  }
+  if (result.status === "busy") {
+    return {
+      ok: false,
+      status: 409,
+      code: "reconcile_in_progress",
+      message: "Another reconciler currently owns this install plan; retry the discard.",
+    };
+  }
+  if (result.status === "conflict") {
+    return {
+      ok: false,
+      status: 409,
+      code: "install_plan_generation_conflict",
+      message: "The install plan changed; read it and retry explicitly.",
+    };
+  }
+  await stopAttemptSourcePolling(ctx, result.plan);
+  return { ok: true, plan: result.plan };
+}
+
+/**
+ * Best effort and never destructive: a Source this attempt registered and
+ * enabled for polling is turned back off unless an active app now uses it.
+ * The Source itself is always kept, because no store can prove atomically
+ * that no other install plan is about to reuse it.
+ */
+async function stopAttemptSourcePolling(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+): Promise<void> {
+  if (plan.sourceCreatedByAttempt !== true || !plan.sourceId) return;
+  try {
+    const { source } = await ctx.operations.getSource(plan.sourceId);
+    if (!source.autoSync) return;
+    const inUse = (await ctx.operations.capsules.listCapsules(plan.workspaceId))
+      .some((capsule) =>
+        capsule.sourceId === source.id && capsule.status !== "destroyed"
+      );
+    if (inUse) return;
+    await ctx.operations.patchSource(source.id, { autoSync: false });
+  } catch {
+    // The discarded record is already terminal; polling is only a preference.
+  }
+}
+
+function discardRefusal(
+  ctx: ControlDispatchContext,
+  result: Extract<DiscardResult, { ok: false }>,
+): Response {
+  return errorJson(
+    result.code,
+    result.message,
+    result.status,
+    ctx.request,
+    {},
+    result.reason ? { reason: result.reason } : undefined,
+  );
+}
+
+/** DELETE /api/v1/install-plans/:id — the creator discards an attempt. */
+async function discardInstallAttempt(
+  ctx: ControlDispatchContext,
+  stored: StoredGitInstallPlan,
+): Promise<Response> {
+  if (stored.mode !== "attempt") {
+    return errorJson(
+      "install_plan_not_attempt",
+      "Only install attempts can be discarded through this route.",
+      409,
+      ctx.request,
+    );
+  }
+  if (stored.actorSubject !== ctx.session.subject) {
+    return errorJson(
+      "forbidden",
+      "Only the member who started this install can discard it.",
+      403,
+      ctx.request,
+    );
+  }
+  const expectedGeneration = await discardExpectedGeneration(ctx.request, ctx.url);
+  if (expectedGeneration === undefined) {
+    return errorJson(
+      "invalid_request",
+      "Discarding an install plan requires its exact expectedGeneration.",
+      400,
+      ctx.request,
+    );
+  }
+  if (stored.phase === "discarded") return await installPlanJson(ctx, stored);
+  if (stored.generation !== expectedGeneration) {
+    return generationConflict(ctx);
+  }
+  const result = await discardAttemptRecord(ctx, stored, {
+    code: "install_attempt_discarded",
+    message: "The install attempt was discarded.",
+  });
+  if (!result.ok) return discardRefusal(ctx, result);
+  return await installPlanJson(ctx, result.plan);
+}
+
+async function discardExpectedGeneration(
+  request: Request,
+  url: URL,
+): Promise<number | undefined> {
+  const query = url.searchParams.get("expectedGeneration");
+  const text = await request.text();
+  if (text.trim() !== "") {
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+    if (
+      query !== null || !isRecord(body) ||
+      !hasOnlyKeys(body, ["expectedGeneration"])
+    ) return undefined;
+    return generationValue(body.expectedGeneration);
+  }
+  if (query === null || !/^(0|[1-9][0-9]{0,15})$/u.test(query)) return undefined;
+  return generationValue(Number(query));
+}
+
+function generationValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function generationConflict(ctx: ControlDispatchContext): Response {
+  return errorJson(
+    "install_plan_generation_conflict",
+    "The install plan changed; read it and answer again.",
+    409,
+    ctx.request,
+  );
+}
+
+/**
+ * The creator's write found the attempt can no longer advance: discard it
+ * (cleanup belongs to this request) and answer with the standard envelope.
+ */
+async function discardInvalidAttempt(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+  invalidation: GitInstallPlanInvalidation,
+  reason: string = invalidation,
+): Promise<Response> {
+  const discarded = await discardAttemptRecord(ctx, plan, {
+    code: invalidation,
+    message: INVALIDATION_MESSAGES[invalidation],
+  });
+  if (!discarded.ok) return discardRefusal(ctx, discarded);
+  return errorJson(
+    "install_attempt_invalid",
+    INVALIDATION_MESSAGES[invalidation],
+    409,
+    ctx.request,
+    {},
+    { reason },
+  );
+}
+
+/** PATCH /api/v1/install-plans/:id — answer an `awaiting_input` attempt. */
+async function answerInstallAttempt(
+  ctx: ControlDispatchContext,
+  observed: StoredGitInstallPlan,
+): Promise<Response> {
+  if (observed.mode !== "attempt") {
+    return errorJson(
+      "install_plan_not_attempt",
+      "Only install attempts accept answers.",
+      409,
+      ctx.request,
+    );
+  }
+  if (observed.actorSubject !== ctx.session.subject) {
+    return errorJson(
+      "forbidden",
+      "Only the member who started this install can answer it.",
+      403,
+      ctx.request,
+    );
+  }
+  const body = await readJsonObject(ctx.request);
+  const patch = body ? parsePatchRequest(body) : undefined;
+  if (!patch) {
+    return errorJson(
+      "invalid_request",
+      "The answer must contain expectedGeneration and only modulePath, capsuleName, providerBindings, continue, and variables (variables only with continue).",
+      400,
+      ctx.request,
+    );
+  }
+  if (observed.generation !== patch.expectedGeneration) {
+    return generationConflict(ctx);
+  }
+  if (observed.phase !== "awaiting_input") {
+    return errorJson(
+      "install_plan_not_awaiting_input",
+      "This install plan is not waiting for an answer.",
+      409,
+      ctx.request,
+    );
+  }
+  const invalidation = await attemptInvalidation(ctx, observed);
+  if (invalidation) return await discardInvalidAttempt(ctx, observed, invalidation);
+  const authority = observed.workspaceManagementAuthority!;
+  const invalid = (code: string, message: string) =>
+    errorJson(code, message, 400, ctx.request);
+  if (
+    (observed.transientVariableNames?.length ?? 0) > 0 &&
+    (!patch.continue || patch.modulePath !== undefined ||
+      patch.capsuleName !== undefined || patch.providerBindings !== undefined)
+  ) {
+    // The confirmed Capsule may already exist and will be adopted as it was
+    // created; accepting new answers here would silently ignore them.
+    return errorJson(
+      "install_inputs_resubmission_only",
+      "Only the same settings can be sent again now; discard the attempt to change anything else.",
+      409,
+      ctx.request,
+    );
+  }
+  const now = new Date().toISOString();
+  let next: StoredGitInstallPlan = {
+    ...observed,
+    generation: observed.generation + 1,
+    updatedAt: now,
+    expiresAt: attemptExpiry(now),
+  };
+  const currentModule = observed.attemptFacts?.inputs?.modulePath ??
+    observed.installModulePath;
+  if (
+    patch.modulePath !== undefined &&
+    (observed.awaitingInput === "module" || patch.modulePath !== currentModule)
+  ) {
+    if (patch.continue) {
+      return invalid(
+        "invalid_request",
+        "Choosing a module restarts the analysis; continue after it finishes.",
+      );
+    }
+    const snapshot = observed.sourceSnapshotId && observed.sourceId
+      ? await sourceSnapshotById(ctx.operations, observed.sourceId, observed.sourceSnapshotId)
+      : undefined;
+    const selection = resolveRepoOwnedInstallModulePath({
+      sourceSnapshot: snapshot,
+      modulePath: patch.modulePath,
+    });
+    if (!selection.ok) {
+      return invalid("install_module_unavailable", selection.diagnostic.message);
+    }
+    const {
+      installConfigBaseId: _baseId,
+      installConfigBaseDigest: _baseDigest,
+      installModulePath: _modulePath,
+      compatibilityRequestDigest: _requestDigest,
+      compatibilityCheckRunId: _checkRunId,
+      compatibilityReportId: _reportId,
+      installConfigId: _installConfigId,
+      attemptFacts: _facts,
+      awaitingInput: _awaiting,
+      diagnostic: _diagnostic,
+      ...rest
+    } = next;
+    // Connection answers name module-bound provider identities.
+    const { providerBindings: _bindings, ...options } = next.options;
+    next = {
+      ...rest,
+      options: { ...options, modulePath: selection.modulePath },
+      phase: "compiling_install",
+    };
+  } else if (observed.awaitingInput === "module" && patch.continue) {
+    return errorJson(
+      "install_module_required",
+      "Choose one module before continuing.",
+      409,
+      ctx.request,
+    );
+  }
+  if (patch.capsuleName !== undefined) {
+    next = { ...next, capsule: { ...next.capsule, name: patch.capsuleName } };
+  }
+  if (patch.providerBindings !== undefined) {
+    const facts = next.attemptFacts?.inputs;
+    if (
+      next.phase !== "awaiting_input" || next.awaitingInput !== "inputs" ||
+      !facts ||
+      patch.providerBindings.some((binding) =>
+        !bindingMatchesRequirement(facts, binding)
+      )
+    ) {
+      return invalid(
+        "provider_binding_invalid",
+        "Each connection answer must repeat one exact provider requirement of the analyzed module.",
+      );
+    }
+    next = {
+      ...next,
+      options: { ...next.options, providerBindings: patch.providerBindings },
+    };
+  }
+  if (patch.continue) {
+    return await continueInstallAttempt(ctx, observed, next, patch.variables ?? {});
+  }
+  if (next.phase === "awaiting_input" && next.diagnostic?.code !== undefined &&
+    ATTEMPT_INPUT_DIAGNOSTICS.has(next.diagnostic.code)) {
+    // A new answer supersedes the previous refusal.
+    next = { ...next, diagnostic: undefined };
+  }
+  let result;
+  try {
+    result = await ctx.operations.gitInstallPlans.transitionUnleased({
+      id: observed.id,
+      expectedGeneration: observed.generation,
+      expectedPhase: observed.phase,
+      plan: next,
+      at: next.updatedAt,
+      expectedWorkspaceManagementAuthority: authority,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceManagementAdmissionConflictError) {
+      return await discardInvalidAttempt(
+        ctx,
+        observed,
+        "workspace_management_changed",
+        "workspace_management_admission_conflict",
+      );
+    }
+    throw error;
+  }
+  if (result.status === "not_found") {
+    return errorJson("not_found", "Install plan not found.", 404);
+  }
+  if (result.status === "busy") {
+    return errorJson(
+      "reconcile_in_progress",
+      "Another reconciler currently owns this install plan.",
+      409,
+      ctx.request,
+    );
+  }
+  if (result.status === "conflict") return generationConflict(ctx);
+  return await installPlanJson(ctx, result.plan);
+}
+
+/**
+ * Confirms an `inputs` pause. Readiness is checked against live connections,
+ * app names and the captured variable presentation before anything is
+ * written; the claim then fences the record and the atomic creation receives
+ * the request's variables directly. Values never reach the record.
+ */
+async function continueInstallAttempt(
+  ctx: ControlDispatchContext,
+  observed: StoredGitInstallPlan,
+  answered: StoredGitInstallPlan,
+  variables: Readonly<Record<string, JsonValue>>,
+): Promise<Response> {
+  if (observed.awaitingInput !== "inputs") {
+    return errorJson(
+      "install_inputs_not_ready",
+      "This install attempt is not ready to continue.",
+      409,
+      ctx.request,
+    );
+  }
+  let next = answered;
+  const facts = next.attemptFacts?.inputs;
+  const resubmitting = (observed.transientVariableNames?.length ?? 0) > 0;
+  // While resubmitting: the values of the unconfirmed request, nothing else.
+  // The answers that request carried are recorded and may be committed.
+  if (
+    resubmitting &&
+    JSON.stringify(observed.transientVariableNames) !==
+      JSON.stringify(Object.keys(variables).sort())
+  ) {
+    return errorJson(
+      "install_inputs_resubmission_only",
+      "Send exactly the settings of the unconfirmed request again.",
+      409,
+      ctx.request,
+      {},
+      { reason: "install_variable_resubmission_mismatch" },
+    );
+  }
+  const check = checkAttemptVariables(facts, variables);
+  if (!check.ok) {
+    return errorJson(
+      "invalid_request",
+      `The settings are incomplete or invalid: ${check.names.slice(0, 8).join(", ")}.`,
+      400,
+      ctx.request,
+      {},
+      { reason: check.reason },
+    );
+  }
+  if (!resubmitting) {
+    const rows = await connectionRequirements(ctx.operations, next);
+    if (!connectionsReady(rows)) {
+      return errorJson(
+        "install_inputs_incomplete",
+        "Choose a connection for every provider this app needs before continuing.",
+        409,
+        ctx.request,
+        {},
+        { reason: "provider_connection_required" },
+      );
+    }
+    const name = await nameProposal(ctx.operations, next);
+    if (name.conflict) {
+      return errorJson(
+        "install_inputs_incomplete",
+        "Another app here already uses this name; choose a different name.",
+        409,
+        ctx.request,
+        {},
+        { reason: "capsule_name_conflict" },
+      );
+    }
+    next = {
+      ...next,
+      options: { ...next.options, providerBindings: effectiveProviderBindings(rows) },
+    };
+  }
+  const variableNames = Object.keys(variables).sort();
+  const {
+    awaitingInput: _awaitingInput,
+    diagnostic: _diagnostic,
+    transientVariableNames: _previousNames,
+    // An attempt that is creating its Capsule never expires again.
+    expiresAt: _expiresAt,
+    ...rest
+  } = next;
+  next = {
+    ...rest,
+    phase: "creating_capsule",
+    ...(variableNames.length > 0 ? { transientVariableNames: variableNames } : {}),
+  };
+  const claimedAt = new Date();
+  const leaseToken = `gipl_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  let result;
+  try {
+    result = await ctx.operations.gitInstallPlans.transitionUnleased({
+      id: observed.id,
+      expectedGeneration: observed.generation,
+      expectedPhase: observed.phase,
+      plan: { ...next, updatedAt: claimedAt.toISOString() },
+      at: claimedAt.toISOString(),
+      lease: {
+        token: leaseToken,
+        expiresAt: new Date(
+          claimedAt.getTime() + GIT_INSTALL_PLAN_RECONCILE_LEASE_MS,
+        ).toISOString(),
+      },
+      expectedWorkspaceManagementAuthority: observed.workspaceManagementAuthority!,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceManagementAdmissionConflictError) {
+      return await discardInvalidAttempt(
+        ctx,
+        observed,
+        "workspace_management_changed",
+        "workspace_management_admission_conflict",
+      );
+    }
+    throw error;
+  }
+  if (result.status === "not_found") {
+    return errorJson("not_found", "Install plan not found.", 404);
+  }
+  if (result.status === "busy") {
+    return errorJson(
+      "reconcile_in_progress",
+      "Another reconciler currently owns this install plan.",
+      409,
+      ctx.request,
+    );
+  }
+  if (result.status === "conflict") return generationConflict(ctx);
+  return await runTransientCreation(ctx, result.plan, leaseToken, variables);
+}
+
+async function runTransientCreation(
+  ctx: ControlDispatchContext,
+  claimed: StoredGitInstallPlan,
+  leaseToken: string,
+  variables: Readonly<Record<string, JsonValue>>,
+): Promise<Response> {
+  let outcome: StoredGitInstallPlan;
+  try {
+    outcome = await createCapsule(claimed, ctx, variables);
+  } catch (error) {
+    outcome = error instanceof PermanentInstallPlanError
+      ? failedPlan(claimed, error.diagnostic)
+      // The outcome of the atomic creation is unknown. The values are gone
+      // with this request, so the next attempt must bring them again; a
+      // committed Capsule is adopted by its deterministic id first.
+      : awaitingResubmission(claimed, retryableDiagnostic(claimed, error));
+  }
+  const completed = await ctx.operations.gitInstallPlans.completeReconcile({
+    id: claimed.id,
+    expectedGeneration: claimed.generation,
+    leaseToken,
+    plan: reopenUserFixableFailure(outcome),
+  });
+  if (completed.status === "not_found") {
+    return errorJson("not_found", "Install plan not found.", 404);
+  }
+  if (completed.status === "conflict") {
+    return errorJson(
+      "reconcile_conflict",
+      "The install plan advanced concurrently; read it and retry explicitly.",
+      409,
+      ctx.request,
+    );
+  }
+  return await installPlanJson(ctx, completed.plan);
+}
+
+/** Diagnostics that reopen an attempt's sheet instead of failing it. */
+const ATTEMPT_INPUT_DIAGNOSTICS: ReadonlySet<string> = new Set([
+  "provider_binding_invalid",
+  "capsule_name_conflict",
+  "generic_opentofu_variable_invalid",
+  "generic_opentofu_required_variable_missing",
+  "repository_install_ux_variable_value_unsupported",
+  "repository_install_ux_variable_value_type_mismatch",
+  "repository_install_ux_variable_value_missing",
+  "install_inputs_resubmission_required",
+]);
+
+/** Validation failures happen before any commit, so the attempt may expire again. */
+function reopenUserFixableFailure(plan: StoredGitInstallPlan): StoredGitInstallPlan {
+  if (
+    plan.mode !== "attempt" || plan.phase !== "failed" ||
+    !plan.attemptFacts?.inputs ||
+    !ATTEMPT_INPUT_DIAGNOSTICS.has(plan.diagnostic?.code ?? "")
+  ) {
+    return plan;
+  }
+  const { completedAt: _completedAt, transientVariableNames: _names, ...rest } = plan;
+  return {
+    ...rest,
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    expiresAt: attemptExpiry(plan.updatedAt),
+  };
+}
+
+/**
+ * Attempt mode only. The Capsule may already be committed, so this pause has
+ * no expiry; the creator re-sends the values or discards the attempt.
+ */
+function awaitingResubmission(
+  plan: StoredGitInstallPlan,
+  cause: GitInstallPlanDiagnostic,
+): StoredGitInstallPlan {
+  const { expiresAt: _expiresAt, ...rest } = plan;
+  return {
+    ...rest,
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    diagnostic: boundedDiagnostic({
+      code: "install_inputs_resubmission_required",
+      message:
+        "Takosumi could not confirm creating this app. Send the same settings again to continue.",
+      ...(cause.controllerCode ? { controllerCode: cause.controllerCode } : {}),
+      ...(cause.reason ? { reason: cause.reason } : {}),
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function reconcileInstallPlan(
   ctx: ControlDispatchContext,
   observed: StoredGitInstallPlan,
 ): Promise<Response> {
-  if (observed.phase === "reviewable" || observed.phase === "failed") {
-    return installPlanJson(observed);
+  if (
+    observed.phase === "reviewable" || observed.phase === "failed" ||
+    observed.phase === "awaiting_input" || observed.phase === "discarded" ||
+    // An expired attempt can no longer advance; only its creator discards it.
+    attemptIsExpired(observed, Date.now())
+  ) {
+    return await installPlanJson(ctx, observed);
   }
   // Rows written before management-epoch persistence are terminal-read
   // compatible only. Never recapture a newer authority for a nonterminal
@@ -348,11 +1271,16 @@ async function reconcileInstallPlan(
       };
     }
   }
+  const settled = reopenUserFixableFailure(outcome.plan);
   const completed = await ctx.operations.gitInstallPlans.completeReconcile({
     id: observed.id,
     expectedGeneration: acquired.plan.generation,
     leaseToken: acquired.leaseToken,
-    plan: outcome.plan,
+    // Coordinator activity keeps an attempt alive before its Capsule exists;
+    // only idleness expires it.
+    plan: attemptCanExpire(settled) && settled.expiresAt !== undefined
+      ? { ...settled, expiresAt: attemptExpiry(settled.updatedAt) }
+      : settled,
   });
   if (completed.status === "not_found") {
     return errorJson("not_found", "Install plan not found.", 404);
@@ -365,7 +1293,7 @@ async function reconcileInstallPlan(
       ctx.request,
     );
   }
-  return installPlanJson(completed.plan, outcome.retryable ? 202 : 200);
+  return await installPlanJson(ctx, completed.plan, outcome.retryable ? 202 : 200);
 }
 
 interface AdvanceOutcome {
@@ -394,14 +1322,16 @@ async function advanceInstallPlan(
         retryable: false,
       };
     case "creating_capsule":
-      return { plan: await createCapsule(plan, ctx), retryable: false };
+      return { plan: await createCapsule(plan, ctx, undefined), retryable: false };
     case "planning":
       return {
         plan: await createOrObservePlanRun(plan, ctx.operations),
         retryable: false,
       };
+    case "awaiting_input":
     case "reviewable":
     case "failed":
+    case "discarded":
       return { plan, retryable: false };
   }
 }
@@ -445,6 +1375,9 @@ async function advanceSource(
       }, plan.workspaceManagementAuthority);
       // `hookSecret` is deliberately discarded at the call boundary.
       sourceId = created.source.id;
+      if (plan.mode === "attempt") {
+        return progressed(plan, { sourceId, sourceCreatedByAttempt: true });
+      }
     }
     return progressed(plan, { sourceId });
   }
@@ -558,6 +1491,24 @@ async function prepareInstallCompilation(
     modulePath: plan.options.modulePath,
   });
   if (!moduleSelection.ok) {
+    const modules = moduleCandidates(snapshot);
+    if (
+      plan.mode === "attempt" && modules.length > 0 &&
+      moduleSelection.diagnostic.code !== "repository_install_module_index_unavailable"
+    ) {
+      // Several roots, or a requested path the scan cannot prove: the actor
+      // chooses one exact scanned module.
+      return pauseForInput(plan, "module", { modules }, {
+        ...(plan.options.modulePath !== undefined
+          ? {
+              diagnostic: boundedDiagnostic({
+                code: moduleSelection.diagnostic.code,
+                message: moduleSelection.diagnostic.message,
+              }),
+            }
+          : {}),
+      });
+    }
     return failedPlan(plan, {
       code: moduleSelection.diagnostic.code,
       message: moduleSelection.diagnostic.message,
@@ -665,7 +1616,7 @@ async function prepareInstallCompilation(
     if (!installConfig.ok) {
       return failedPlan(plan, installConfig.diagnostic);
     }
-    return progressed(plan, {
+    const analyzed = {
       installConfigId: installConfig.installConfig.id,
       installConfigBaseId: base.installConfig.id,
       installConfigBaseDigest,
@@ -673,8 +1624,23 @@ async function prepareInstallCompilation(
       compatibilityRequestDigest: evidence.requestDigest,
       compatibilityCheckRunId: evidence.runId,
       compatibilityReportId: evidence.reportId,
-      phase: "creating_capsule",
-    });
+    };
+    if (plan.mode === "attempt") {
+      const facts = attemptInputFacts({
+        modulePath: moduleSelection.modulePath,
+        report: compatibility.report,
+        installConfig: installConfig.installConfig,
+        baseConfig: base.installConfig,
+        repositoryManifest: false,
+      });
+      if (!facts.ok) return failedPlan(plan, facts);
+      return pauseForInput(
+        progressed(plan, analyzed),
+        "inputs",
+        { inputs: facts.facts },
+      );
+    }
+    return progressed(plan, { ...analyzed, phase: "creating_capsule" });
   }
   const installConfigBaseDigest = await stableJsonDigest(base.installConfig);
   const evidence = await installPlanCompatibilityEvidence({
@@ -788,6 +1754,9 @@ async function analyzeAndCompileInstall(
     compatibilityReport: compatibility.report,
     identityScope: plan.id,
     persist: false,
+    // An attempt collects user values at its pause; analysis only proves the
+    // manifest compiles for this exact snapshot.
+    ...(plan.mode === "attempt" ? { requireReviewedValues: false } : {}),
   });
   if (preview.status === "invalid") {
     return failedPlan(plan, preview.diagnostic);
@@ -798,17 +1767,74 @@ async function analyzeAndCompileInstall(
       message: "The pinned repository install manifest could not be compiled.",
     });
   }
+  if (plan.mode === "attempt") {
+    if (compatibility.run?.status !== "succeeded" || compatibility.report.level !== "ready") {
+      return failedPlan(plan, {
+        code: "generic_opentofu_compatibility_not_ready",
+        message:
+          "The OpenTofu compatibility analysis is not ready for installation.",
+      });
+    }
+    const facts = attemptInputFacts({
+      modulePath: moduleSelection.modulePath,
+      report: compatibility.report,
+      installConfig: preview.installConfig,
+      baseConfig: base.installConfig,
+      repositoryManifest: true,
+    });
+    if (!facts.ok) return failedPlan(plan, facts);
+    return pauseForInput(
+      progressed(plan, { installConfigId: preview.installConfig.id }),
+      "inputs",
+      { inputs: facts.facts },
+    );
+  }
   return progressed(plan, {
     installConfigId: preview.installConfig.id,
     phase: "creating_capsule",
   });
 }
 
+/** Enter `awaiting_input` with value-free facts; refreshes the expiry. */
+function pauseForInput(
+  plan: StoredGitInstallPlan,
+  awaitingInput: "module" | "inputs",
+  facts: GitInstallAttemptFacts,
+  patch: Partial<StoredGitInstallPlan> = {},
+): StoredGitInstallPlan {
+  const paused = progressed(plan, {
+    phase: "awaiting_input",
+    awaitingInput,
+    attemptFacts: facts,
+  });
+  return { ...paused, ...patch, expiresAt: attemptExpiry(paused.updatedAt) };
+}
+
+/**
+ * Atomic initial creation. `transientVariables` are the reviewed values of
+ * the request that started this step; they are passed straight into the
+ * materialized InstallConfig and never written to the coordinator record.
+ */
 async function createCapsule(
   plan: StoredGitInstallPlan,
   ctx: ControlDispatchContext,
+  transientVariables: Readonly<Record<string, JsonValue>> | undefined,
 ): Promise<StoredGitInstallPlan> {
   const operations = ctx.operations;
+  if ((plan.transientVariableNames?.length ?? 0) > 0) {
+    // A request that carried values may have committed before its
+    // acknowledgement was lost. Adopt that exact Capsule by its deterministic
+    // id; never re-create authority without the values it was created with.
+    const adopted = await adoptCommittedInitialCapsule(plan, operations);
+    if (adopted) return adopted;
+    if (transientVariables === undefined) {
+      return awaitingResubmission(plan, {
+        code: "install_inputs_resubmission_required",
+        message: "The reviewed values must be sent again.",
+      });
+    }
+  }
+  const reviewedVariables = transientVariables ?? plan.initialVariables;
   const source = (await operations.getSource(plan.sourceId!)).source;
   if (!sourceMatchesPlan(source, plan) || source.status !== "active") {
     throw permanent(
@@ -833,6 +1859,15 @@ async function createCapsule(
     source,
     snapshot,
   );
+  if (plan.mode === "attempt") {
+    const name = await nameProposal(operations, plan);
+    if (name.conflict) {
+      return failedPlan(plan, {
+        code: "capsule_name_conflict",
+        message: "Another app here already uses this name; choose a different name.",
+      });
+    }
+  }
   const materializedInstallConfig = plan.preflight
     ? await materializePreflightInitialInstallConfig({
         plan,
@@ -840,6 +1875,7 @@ async function createCapsule(
         source,
         snapshot,
         compatibilityReport: compatibility.report,
+        reviewedVariables: reviewedVariables ?? {},
       })
     : await materializeCoordinatorInitialInstallConfig({
         plan,
@@ -847,6 +1883,7 @@ async function createCapsule(
         source,
         snapshot,
         compatibilityReport: compatibility.report,
+        ...(reviewedVariables !== undefined ? { reviewedVariables } : {}),
       });
   const configuredInstallConfig = await applyInitialConfiguration(
     plan,
@@ -931,6 +1968,30 @@ async function createCapsule(
   return progressed(completedPlan, {
     initialVariables: undefined,
     initialConfiguration: undefined,
+    transientVariableNames: undefined,
+    phase: "planning",
+  });
+}
+
+async function adoptCommittedInitialCapsule(
+  plan: StoredGitInstallPlan,
+  operations: ControlPlaneOperations,
+): Promise<StoredGitInstallPlan | undefined> {
+  const capsule = await getCapsuleIfPresent(
+    operations,
+    deterministicInitialCapsuleId(plan.id),
+  );
+  if (!capsule) return undefined;
+  const adopted = {
+    ...plan,
+    installConfigId: capsule.installConfigId,
+    capsuleId: capsule.id,
+  };
+  assertCapsuleMatches(capsule, adopted);
+  return progressed(adopted, {
+    initialVariables: undefined,
+    initialConfiguration: undefined,
+    transientVariableNames: undefined,
     phase: "planning",
   });
 }
@@ -984,6 +2045,7 @@ async function materializePreflightInitialInstallConfig(input: {
   readonly source: Source;
   readonly snapshot: SourceSnapshot;
   readonly compatibilityReport: CapsuleCompatibilityReportResponse["report"];
+  readonly reviewedVariables: Readonly<Record<string, JsonValue>>;
 }): Promise<InstallConfig> {
   if (
     !input.plan.preflightInstallConfigDigest ||
@@ -1069,7 +2131,7 @@ async function materializePreflightInitialInstallConfig(input: {
       workspaceId: input.plan.workspaceId,
       installingPrincipalId: input.plan.createdBy,
       compatibilityReport: input.compatibilityReport,
-      reviewedVariables: input.plan.initialVariables ?? {},
+      reviewedVariables: input.reviewedVariables,
       requireReviewedValues: true,
       identityScope: input.plan.id,
       persist: false,
@@ -1094,7 +2156,7 @@ async function materializePreflightInitialInstallConfig(input: {
     );
   }
   assertReviewedVariablesMatchDeclarations(
-    input.plan.initialVariables ?? {},
+    input.reviewedVariables,
     baseConfig.variableMapping,
     declarations,
   );
@@ -1118,7 +2180,7 @@ async function materializePreflightInitialInstallConfig(input: {
     modulePath: selection.modulePath,
     rootProviderRequirements: selection.rootProviderRequirements,
     genericVariableContractDigest,
-    reviewedVariables: input.plan.initialVariables ?? {},
+    reviewedVariables: input.reviewedVariables,
   });
   if (!materialized.ok) {
     throw permanent(materialized.diagnostic.code, materialized.diagnostic.message);
@@ -1167,6 +2229,8 @@ async function materializeCoordinatorInitialInstallConfig(input: {
   readonly source: Source;
   readonly snapshot: SourceSnapshot;
   readonly compatibilityReport: CapsuleCompatibilityReportResponse["report"];
+  /** Attempt mode only: the confirming request's values. */
+  readonly reviewedVariables?: Readonly<Record<string, JsonValue>>;
 }): Promise<InstallConfig> {
   const base = await resolveStoreBaseInstallConfig(input.operations);
   if (!base.ok) throw permanent(base.diagnostic.code, base.diagnostic.message);
@@ -1202,6 +2266,9 @@ async function materializeCoordinatorInitialInstallConfig(input: {
       compatibilityReport: input.compatibilityReport,
       identityScope: input.plan.id,
       persist: false,
+      ...(input.reviewedVariables !== undefined
+        ? { reviewedVariables: input.reviewedVariables, requireReviewedValues: true }
+        : {}),
     });
     if (preview.status !== "accepted") {
       throw permanent(
@@ -1222,6 +2289,25 @@ async function materializeCoordinatorInitialInstallConfig(input: {
       "The successful compatibility declaration has no canonical variable contract.",
     );
   }
+  if (input.plan.mode === "attempt") {
+    const reviewed = input.reviewedVariables ?? {};
+    // Host-mapped values stay host-owned; an attempt never overrides them.
+    if (
+      Object.keys(reviewed).some((name) =>
+        Object.prototype.hasOwnProperty.call(base.installConfig.variableMapping, name)
+      )
+    ) {
+      throw permanent(
+        "generic_opentofu_variable_invalid",
+        "A reviewed variable is owned by the host configuration.",
+      );
+    }
+    assertReviewedVariablesMatchDeclarations(
+      reviewed,
+      base.installConfig.variableMapping,
+      declarations,
+    );
+  }
   const genericVariableContractDigest =
     await genericOpenTofuVariableContractDigest({
       declarations,
@@ -1236,6 +2322,9 @@ async function materializeCoordinatorInitialInstallConfig(input: {
     modulePath: selection.modulePath,
     rootProviderRequirements: selection.rootProviderRequirements,
     genericVariableContractDigest,
+    ...(input.reviewedVariables !== undefined
+      ? { reviewedVariables: input.reviewedVariables }
+      : {}),
   });
   if (!materialized.ok) {
     throw permanent(materialized.diagnostic.code, materialized.diagnostic.message);
@@ -1292,11 +2381,6 @@ async function applyInitialConfiguration(
   };
 }
 
-function deterministicInitialCapsuleId(planId: string): string {
-  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
-  return `cap_${suffix.padStart(16, "0")}`;
-}
-
 function deterministicInitialBindingSetId(planId: string): string {
   const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
   return `dpf_${suffix.padStart(16, "0")}`;
@@ -1337,6 +2421,9 @@ async function createOrObservePlanRun(
     });
   }
   if (run.status === "succeeded" || run.status === "waiting_approval") {
+    if (plan.mode === "attempt" && plan.sourceCreatedByAttempt === true) {
+      await enableAttemptSourcePolling(plan, operations);
+    }
     return progressed(plan, {
       planRunId: run.id,
       phase: "reviewable",
@@ -1344,6 +2431,21 @@ async function createOrObservePlanRun(
     });
   }
   return progressed(plan, { planRunId: run.id });
+}
+
+/**
+ * The Source an attempt registered itself follows its Git ref once the app is
+ * reviewable, as the installer previously did with a client PATCH. Idempotent;
+ * a failure is retryable and repeated by the next reconcile.
+ */
+async function enableAttemptSourcePolling(
+  plan: StoredGitInstallPlan,
+  operations: ControlPlaneOperations,
+): Promise<void> {
+  const { source } = await operations.getSource(plan.sourceId!);
+  // A Source someone changed meanwhile is no longer this attempt's to tune.
+  if (!sourceMatchesPlan(source, plan) || source.autoSync) return;
+  await operations.patchSource(source.id, { autoSync: true });
 }
 
 function parseCreateRequest(
@@ -1484,19 +2586,8 @@ function parseCreateRequest(
   }
   let variables: Readonly<Record<string, JsonValue>> | undefined;
   if (body.variables !== undefined) {
-    const parsedVariables = jsonRecordValue(body.variables);
-    if (
-      !parsedVariables ||
-      Object.keys(parsedVariables).length > 256 ||
-      Object.keys(parsedVariables).some(
-        (name) => !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name),
-      ) ||
-      new TextEncoder().encode(JSON.stringify(parsedVariables)).byteLength >
-        256 * 1024
-    ) {
-      return undefined;
-    }
-    variables = parsedVariables;
+    variables = reviewedVariablesValue(body.variables);
+    if (!variables) return undefined;
   }
   let initialConfiguration: CreateGitInstallPlanRequest["initialConfiguration"];
   if (body.initialConfiguration !== undefined) {
@@ -1570,6 +2661,155 @@ function parseCreateRequest(
     ...(variables ? { variables } : {}),
     ...(initialConfiguration ? { initialConfiguration } : {}),
   };
+}
+
+/**
+ * Normalized attempt request: every default is filled so the request digest
+ * is the same whether a client omits a default or states it.
+ */
+function parseCreateAttemptRequest(
+  body: Record<string, unknown>,
+):
+  | (CreateGitInstallAttemptRequest & {
+      readonly source: GitInstallPlanSourceRequest;
+      readonly capsule: StoredGitInstallPlan["capsule"];
+      readonly options: StoredGitInstallPlan["options"];
+    })
+  | undefined {
+  if (
+    body.mode !== "attempt" ||
+    !hasOnlyKeys(body, ["mode", "source", "capsule", "options"]) ||
+    !isRecord(body.source) ||
+    !hasOnlyKeys(body.source, ["name", "url", "ref", "path", "authConnectionId"]) ||
+    (body.capsule !== undefined &&
+      (!isRecord(body.capsule) ||
+        !hasOnlyKeys(body.capsule, ["name", "environment"])))
+  ) {
+    return undefined;
+  }
+  const rawUrl = boundedString(body.source.url, 2048);
+  if (!rawUrl || !sourceUrlIsSafeToPersist(rawUrl)) return undefined;
+  const url = normalizeInstallConfigSourceUrl(rawUrl);
+  const proposed = proposedAppName(url);
+  const sourceName = body.source.name === undefined
+    ? proposed
+    : boundedPlainString(body.source.name, 128);
+  const ref = boundedPlainString(body.source.ref ?? "HEAD", 256);
+  const parsedPath = modulePathValue(body.source.path ?? ".");
+  const authConnectionId = connectionReference(body.source.authConnectionId);
+  const capsule = isRecord(body.capsule) ? body.capsule : {};
+  const capsuleName = capsule.name === undefined
+    ? proposed
+    : boundedPlainString(capsule.name, 128);
+  const environment = capsule.environment === undefined
+    ? "production"
+    : boundedPlainString(capsule.environment, 128);
+  if (
+    !sourceName || !ref || parsedPath === undefined || !capsuleName ||
+    !/^[a-z0-9-]+$/u.test(capsuleName) || !environment ||
+    (body.source.authConnectionId !== undefined && !authConnectionId)
+  ) {
+    return undefined;
+  }
+  const options = optionsValue(body.options);
+  if (!options) return undefined;
+  return {
+    mode: "attempt",
+    source: {
+      name: sourceName,
+      url,
+      ref,
+      path: parsedPath === "" ? "." : parsedPath,
+      ...(authConnectionId ? { authConnectionId } : {}),
+    },
+    capsule: { name: capsuleName, environment },
+    options,
+  };
+}
+
+function optionsValue(
+  value: unknown,
+): NonNullable<CreateGitInstallPlanRequest["options"]> | undefined {
+  if (value === undefined) return {};
+  if (!isRecord(value) || !hasOnlyKeys(value, ["modulePath", "providerBindings"])) {
+    return undefined;
+  }
+  const modulePath = canonicalModulePathAnswer(value.modulePath);
+  if (value.modulePath !== undefined && modulePath === undefined) return undefined;
+  const providerBindings = providerBindingRequests(value.providerBindings);
+  if (value.providerBindings !== undefined && !providerBindings) return undefined;
+  return {
+    ...(modulePath !== undefined ? { modulePath } : {}),
+    ...(providerBindings !== undefined ? { providerBindings } : {}),
+  };
+}
+
+/** A module path must already be in canonical spelling (`.` for the root). */
+function canonicalModulePathAnswer(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const parsed = modulePathValue(value);
+  const modulePath = parsed === undefined ? undefined : parsed === "" ? "." : parsed;
+  return modulePath !== undefined && value === modulePath ? modulePath : undefined;
+}
+
+function parsePatchRequest(
+  body: Record<string, unknown>,
+): PatchGitInstallPlanRequest | undefined {
+  if (
+    !hasOnlyKeys(body, [
+      "expectedGeneration",
+      "modulePath",
+      "capsuleName",
+      "providerBindings",
+      "variables",
+      "continue",
+    ])
+  ) return undefined;
+  const expectedGeneration = generationValue(body.expectedGeneration);
+  if (expectedGeneration === undefined) return undefined;
+  const modulePath = canonicalModulePathAnswer(body.modulePath);
+  if (body.modulePath !== undefined && modulePath === undefined) return undefined;
+  const capsuleName = body.capsuleName === undefined
+    ? undefined
+    : boundedPlainString(body.capsuleName, 128);
+  if (
+    body.capsuleName !== undefined &&
+    (!capsuleName || !/^[a-z0-9-]+$/u.test(capsuleName))
+  ) return undefined;
+  const providerBindings = providerBindingRequests(body.providerBindings);
+  if (body.providerBindings !== undefined && !providerBindings) return undefined;
+  if (body.continue !== undefined && typeof body.continue !== "boolean") {
+    return undefined;
+  }
+  const variables = body.variables === undefined
+    ? undefined
+    : reviewedVariablesValue(body.variables);
+  if (body.variables !== undefined && (!variables || body.continue !== true)) {
+    return undefined;
+  }
+  return {
+    expectedGeneration,
+    ...(modulePath !== undefined ? { modulePath } : {}),
+    ...(capsuleName !== undefined ? { capsuleName } : {}),
+    ...(providerBindings !== undefined ? { providerBindings } : {}),
+    ...(variables !== undefined ? { variables } : {}),
+    ...(body.continue === true ? { continue: true } : {}),
+  };
+}
+
+function reviewedVariablesValue(
+  value: unknown,
+): Readonly<Record<string, JsonValue>> | undefined {
+  const parsed = jsonRecordValue(value);
+  if (
+    !parsed ||
+    Object.keys(parsed).length > 256 ||
+    Object.keys(parsed).some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) ||
+    new TextEncoder().encode(JSON.stringify(parsed)).byteLength > 256 * 1024
+  ) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function authorityId(value: unknown, prefix: string): string | undefined {
@@ -1955,8 +3195,14 @@ function failedPlan(
   diagnostic: GitInstallPlanDiagnostic,
 ): StoredGitInstallPlan {
   const now = new Date().toISOString();
+  // A terminal record never keeps legacy reviewed values.
+  const {
+    initialVariables: _initialVariables,
+    transientVariableNames: _transientVariableNames,
+    ...retained
+  } = plan;
   return {
-    ...plan,
+    ...retained,
     phase: "failed",
     diagnostic: boundedDiagnostic(diagnostic),
     updatedAt: now,
@@ -2018,6 +3264,9 @@ function retryableDiagnostic(
 function planCreationStage(
   phase: StoredGitInstallPlan["phase"],
 ): NonNullable<GitInstallPlanDiagnostic["planCreationStage"]> {
+  if (phase === "creating_capsule" || phase === "awaiting_input") {
+    return "preparation";
+  }
   if (phase === "syncing_source") return "source";
   if (phase === "planning" || phase === "reviewable") return "create";
   return "preparation";
@@ -2047,29 +3296,51 @@ function permanent(code: string, message: string): PermanentInstallPlanError {
   return new PermanentInstallPlanError({ code, message });
 }
 
-function installPlanJson(
+async function installPlanJson(
+  ctx: ControlDispatchContext,
   stored: StoredGitInstallPlan,
   status = 200,
-): Response {
-  return json(installPlanResponse(publicGitInstallPlan(stored)), status, {
+): Promise<Response> {
+  return json(await installPlanResponseFor(ctx, stored), status, {
     "cache-control": "no-store",
   });
 }
 
-function installPlanResponse(plan: GitInstallPlan): GitInstallPlanResponse {
+async function installPlanResponseFor(
+  ctx: ControlDispatchContext,
+  stored: StoredGitInstallPlan,
+): Promise<GitInstallPlanResponse> {
+  const invalidated = await attemptInvalidation(ctx, stored);
+  return installPlanResponse(
+    publicGitInstallPlan(stored),
+    invalidated
+      ? { kind: "retry", code: invalidated, restart: true }
+      : await userActionFor(ctx.operations, stored),
+    invalidated,
+  );
+}
+
+function installPlanResponse(
+  plan: GitInstallPlan,
+  userAction: GitInstallPlanResponse["userAction"],
+  invalidated: GitInstallPlanInvalidation | undefined,
+): GitInstallPlanResponse {
   const self = `/api/v1/install-plans/${encodeURIComponent(plan.id)}`;
-  const terminal = plan.phase === "reviewable" || plan.phase === "failed";
+  const reconcileable = invalidated === undefined &&
+    isReconcileableGitInstallPlanPhase(plan.phase);
   return {
     installPlan: plan,
     nextAction:
       plan.phase === "reviewable"
         ? "review_run"
-        : plan.phase === "failed"
-          ? "none"
-          : "reconcile",
+        : reconcileable
+          ? "reconcile"
+          : "none",
+    userAction,
+    ...(invalidated ? { invalidated } : {}),
     links: {
       self,
-      ...(!terminal ? { reconcile: `${self}/reconcile` } : {}),
+      ...(reconcileable ? { reconcile: `${self}/reconcile` } : {}),
       ...(plan.planRunId
         ? { run: `/api/v1/runs/${encodeURIComponent(plan.planRunId)}` }
         : {}),
