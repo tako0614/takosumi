@@ -355,7 +355,9 @@ export function deriveCapsuleAppStatus(facts: CapsuleAppFacts): CapsuleAppStatus
   if (inFlight || preparing) {
     return status(applied ? "updating" : "installing", "none", sorted);
   }
-  if (!applied && review) return status("installing", "review", sorted);
+  if (!applied && review && !sorted.some((problem) =>
+    problem.severity === "error" && !problem.code.startsWith("interface_link_")
+  )) return status("installing", "review", sorted);
   if (sorted.some((problem) => problem.severity === "error")) {
     return status(
       "needs_attention",

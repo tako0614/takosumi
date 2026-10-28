@@ -657,6 +657,7 @@ export interface CapsuleAppLinkedApp {
 
 export type CapsuleAppLinkHealth =
   | "ok"
+  | "reapproval_required"
   | "provider_not_ready"
   | "provider_uninstall_scheduled"
   | "provider_removed";

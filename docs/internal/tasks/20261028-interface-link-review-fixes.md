@@ -33,3 +33,18 @@
 - Reversal: revert the code changes without deleting retained link history.
   Operator backfill must record its dry-run and applied IDs; revocation repairs
   mistaken consent forward without restoring secret values or historical grants.
+
+## Second review round
+
+- Same six-PR stack and delivery boundary: normal predecessor merges and pushes;
+  no PR merge, deploy, backfill, or live schema/data mutation.
+- Repair orphaned required-Interface Binding cleanup at preparation and sign-in;
+  keep permission reorder/reduction compatible while requiring fresh consent for
+  increases. Health reports the increase as `reapproval_required`.
+- Keep installs safe before the v76 link store exists, compare candidate echoes
+  with current candidates, and revoke links in the domain abandon operation.
+- Preserve connection/Capsule errors ahead of review, report unknown installed
+  summaries, and correct API shapes and automatic-selection exceptions in docs.
+- Validate focused regressions, the complete local `bun run check`, and real
+  `check and test` success at all six final heads. Durable report:
+  `/root/dev/tmp/tk0118/phase4-fix2-report.md`.

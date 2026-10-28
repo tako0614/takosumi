@@ -33,6 +33,7 @@ export const ja = {
   "app.links.declined": "承認されませんでした",
   "app.links.revoked": "連携は取り消されています",
   "app.links.provider_not_ready": "提供元の機能を現在利用できません。",
+  "app.links.reapproval_required": "要求する権限が増えました。連携先を選び直して承認してください。",
   "app.links.provider_uninstall_scheduled": "提供元はアンインストール予定です。連携先を変更してください。",
   "app.links.provider_removed": "提供元はアンインストールされています。連携先を選び直してください。",
   "app.links.revokeTitle": "連携を取り消す",

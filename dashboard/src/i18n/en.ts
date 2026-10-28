@@ -22,6 +22,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.links.declined": "Declined",
   "app.links.revoked": "Link revoked",
   "app.links.provider_not_ready": "The provider's features are currently unavailable.",
+  "app.links.reapproval_required": "This app requests additional permissions. Choose the linked app again to approve them.",
   "app.links.provider_uninstall_scheduled": "The provider is scheduled for uninstall. Choose another app.",
   "app.links.provider_removed": "The provider was uninstalled. Choose another app.",
   "app.links.revokeTitle": "Revoke link",
