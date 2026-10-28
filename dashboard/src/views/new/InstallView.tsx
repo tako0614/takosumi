@@ -499,7 +499,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     </div>
                   </div>
                 </Show>
-                <Show when={installedApps.error}>
+                <Show when={installedApps.error || installedApps()?.complete === false}>
                   <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
                   <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
                 </Show>

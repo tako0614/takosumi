@@ -86,6 +86,7 @@ const STR = {
   install: { ja: "追加", en: "Add" },
   installAria: { ja: "追加: {name}", en: "Add {name}" },
   installedUnknown: { ja: "インストール状況を確認できません", en: "Install status unavailable" },
+  installedPartial: { ja: "確認できた範囲では{count}件インストール済み", en: "At least {count} installed" },
   installedUnknownHint: {
     ja: "既存アプリとの一致を確認できませんでした。続ける前にアプリ一覧を確認してください。",
     en: "Existing apps could not be checked. Review your apps before continuing.",
@@ -339,14 +340,24 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           <div class="tcs-installed-choice" data-testid="store-installed-unknown">
             <span class="tcs-installed-label">{s("installedUnknown", props.locale)}</span>
             <p class="tcs-installed-hint">{s("installedUnknownHint", props.locale)}</p>
-            <button type="button" class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"} onClick={() => props.onConfigure(listing)}>
+            <button
+              type="button"
+              class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
+              aria-label={s("installAria", props.locale).replace("{name}", pick(listing.name, props.locale))}
+              onClick={() => props.onConfigure(listing)}
+            >
               {s("install", props.locale)}
             </button>
           </div>
         </Show>
       }>
         <div class="tcs-installed-choice" data-testid="store-installed-choice">
-          <span class="tcs-installed-label">{installedLabel(installed().length)}</span>
+          <span class="tcs-installed-label">{props.installedAppsComplete === false
+            ? s("installedPartial", props.locale).replace("{count}", String(installed().length))
+            : installedLabel(installed().length)}</span>
+          <Show when={props.installedAppsComplete === false}>
+            <p class="tcs-installed-hint">{s("installedUnknownHint", props.locale)}</p>
+          </Show>
           <For each={installed()}>{(app) => (
             <a class="tcs-btn tcs-primary" href={appPageHref(app.capsuleId)} aria-label={`${s("open", props.locale)}: ${app.name}`}>
               {s("open", props.locale)}<Show when={installedFor(listing).length > 1}> · {app.name}</Show>
