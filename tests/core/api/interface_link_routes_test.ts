@@ -76,6 +76,18 @@ test("account-session provider manager can unlink a requirement removed from cur
   expect((await response.json()).link.state).toBe("revoked");
 });
 
+test("provider-authorized DELETE cannot revoke a newly repointed provider", async () => {
+  const f = await fixture();
+  f.capsules.set("foreign_provider", { ...f.capsules.get("provider")!, id: "foreign_provider", workspaceId: "other_ws" });
+  const foreign = await f.service.create({ workspaceId: "other_ws", name: "foreign-provider", ownerRef: { kind: "Capsule", id: "foreign_provider" }, spec: f.provider.spec });
+  const old = { id: "old_provider_link", generation: 1, consumerCapsuleId: "consumer", requirementKey: "tools", interface: requirement.interface, requestedPermissions: [...requirement.permissions], approvedPermissions: [...requirement.permissions], deliveryType: "none", providerInterfaceId: foreign.metadata.id, providerCapsuleId: "foreign_provider", state: "active" as const, selection: "explicit" as const, requestedBy: "original_actor", createdAt: "2026-07-13T12:00:00.000Z", updatedAt: "2026-07-13T12:00:00.000Z" };
+  expect(await f.stores.links.create(old)).toBe(true);
+  const authorized = { linkId: old.id, providerInterfaceId: old.providerInterfaceId, providerCapsuleId: old.providerCapsuleId };
+  const replacement = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.provider.metadata.id, expectedGeneration: old.generation });
+  await expect(f.service.revokeCapsuleInterfaceLink("consumer", "tools", replacement.generation, undefined, undefined, authorized)).rejects.toThrow("authorized Interface provider changed");
+  expect((await f.stores.links.get(replacement.id))?.state).toBe("active");
+});
+
 test("account route reauthorizes a revoked bearer after binding preparation before link CAS", async () => {
   const f = await fixture();
   const [old] = await f.service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [requirement], selections: [{ requirementKey: "tools", interfaceId: f.provider.metadata.id, selection: "explicit" }] });
