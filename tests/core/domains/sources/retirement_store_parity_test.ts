@@ -25,12 +25,13 @@ async function adapters(): Promise<readonly { name: string; store: OpenTofuContr
   ];
 }
 
-async function seed(store: OpenTofuControlStore): Promise<StoredSource> {
+async function seed(store: OpenTofuControlStore, ownerCapsuleId?: string): Promise<StoredSource> {
   await store.putWorkspace({ id: WS, handle: WS, displayName: WS, type: "personal",
     ownerUserId: "owner_retirement", createdAt: NOW, updatedAt: NOW });
   const source: StoredSource = { id: SRC, workspaceId: WS, name: "Retirement",
     url: "https://github.com/example/retirement.git", defaultRef: "main", defaultPath: ".",
-    status: "active", autoSync: true, hookSecretHash: "hash", createdAt: NOW, updatedAt: NOW };
+    status: "active", autoSync: true, hookSecretHash: "hash", createdAt: NOW, updatedAt: NOW,
+    ...(ownerCapsuleId ? { ownerCapsuleId } : {}) };
   await store.putSource(source);
   const snapshot: SourceSnapshot = { id: "snapshot_retirement", origin: "git", workspaceId: WS,
     sourceId: SRC, url: source.url, ref: "main", path: ".", resolvedCommit: "a".repeat(40),
@@ -72,6 +73,34 @@ test("retirement keeps its work list after custody failure, then resumes across 
       expect(await store.listSourceSnapshots(SRC), name).toEqual([]);
       expect((await store.listActivityEvents(WS)).filter((event) => event.action === "source.retired"), name)
         .toHaveLength(1);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("retirement requires a present destroyed owner before marking or atomic deletion", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      const source = await seed(store, "cap_missing");
+      let deleted = false;
+      const service = new SourcesService({ store, now: () => new Date(NOW),
+        deleteRetiredSourceArchives: async () => { deleted = true; } });
+      await expect(service.retireOwnedSource(SRC, "destroyed"), name).rejects.toMatchObject({
+        details: { reason: "source_owner_not_destroyed" },
+      });
+      expect(deleted, name).toBe(false);
+      expect(await store.getSource(SRC), name).toMatchObject({ status: "active", autoSync: true });
+      const marked = { ...source, status: "disabled" as const, autoSync: false, retiringAt: NOW };
+      await store.putSource(marked);
+      const result = await store.retireSource({ expectedSource: marked,
+        expectedWorkspaceManagementAuthority: { workspaceId: WS, managementState: "active", managementEpoch: 1 },
+        expectedSnapshotCount: 1, expectedSourceSyncRunCount: 1,
+        activity: { id: `act_missing_${name}`, workspaceId: WS, action: "source.retired",
+          targetType: "source", targetId: SRC, metadata: {}, createdAt: NOW } });
+      expect(result, name).toMatchObject({ status: "blocked", blockers: ["source_owner_not_destroyed"] });
+      expect(await store.getSource(SRC), name).toBeDefined();
     }
   } finally {
     await Promise.all(fixtures.map((fixture) => fixture.close()));
@@ -122,6 +151,8 @@ test("retirement defers an in-flight sync and leaves historically shared archive
       expect(deleted, name).toBe(false);
       expect(await store.listSourceSnapshots(SRC), name).toHaveLength(1);
       await store.putSourceSyncRun(originalRun);
+      await store.putSource({ ...(await store.getSource(SRC))!, id: "source_foreign",
+        name: "Live foreign Source", status: "active", autoSync: true, retiringAt: undefined });
       await store.putSourceSnapshot({ ...(await store.listSourceSnapshots(SRC))[0]!,
         id: "snapshot_foreign", sourceId: "source_foreign", fetchedByRunId: "sync_foreign" });
       await expect(service.retireOwnedSource(SRC, "destroyed"), name).rejects.toMatchObject({
@@ -137,7 +168,39 @@ test("retirement defers an in-flight sync and leaves historically shared archive
   }
 }, 30_000);
 
-test("retirement retains Source rows when a historical Run points outside its custody scope", async () => {
+test("mutually marked terminal Sources release each other's historical refs", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      const sourceA = await seed(store);
+      const sourceBId = "source_mutual";
+      const sourceBRef = `workspaces/${WS}/sources/${sourceBId}/snapshots/snapshot_mutual/source.tar.zst`;
+      await store.putSource({ ...sourceA, id: sourceBId, name: "Mutual" });
+      await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+        id: "snapshot_mutual", sourceId: sourceBId, archiveRef: sourceBRef,
+        fetchedByRunId: "sync_mutual" });
+      await store.putSourceSyncRun({ ...(await store.listSourceSyncRuns(SRC))[0]!,
+        id: "sync_mutual", sourceId: sourceBId, archiveRef: ref });
+      await store.putSourceSyncRun({ ...(await store.listSourceSyncRuns(SRC))[0]!, archiveRef: sourceBRef });
+      for (const id of [SRC, sourceBId]) {
+        await store.putSource({ ...(await store.getSource(id))!, status: "disabled", autoSync: false,
+          retiringAt: NOW });
+      }
+      const deleted: string[] = [];
+      const service = new SourcesService({ store, now: () => new Date(NOW),
+        deleteRetiredSourceArchives: async ({ archiveRefs }) => { deleted.push(...archiveRefs); } });
+      expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("retired");
+      expect(await service.retireOwnedSource(sourceBId, "destroyed"), name).toBe("retired");
+      expect(deleted, name).toEqual([ref, sourceBRef]);
+      expect((await store.listSourceSyncRuns(SRC))[0]?.archiveRef, name).toBe(sourceBRef);
+      expect((await store.listSourceSyncRuns(sourceBId))[0]?.archiveRef, name).toBe(ref);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("retirement preserves an external historical Run ref and deletes only its own archive", async () => {
   const fixtures = await adapters();
   try {
     for (const { name, store } of fixtures) {
@@ -149,21 +212,21 @@ test("retirement retains Source rows when a historical Run points outside its cu
       const service = new SourcesService({ store, now: () => new Date(NOW),
         deleteRetiredSourceArchives: async ({ archiveRefs }) => { removed = archiveRefs; },
       });
-      await expect(service.retireOwnedSource(SRC, "destroyed"), name).rejects.toMatchObject({
-        details: { reason: "source_archive_outside_custody_scope" },
-      });
-      expect(removed, name).toEqual([]);
-      expect(await store.getSource(SRC), name).toMatchObject({ status: "disabled", retiringAt: NOW });
-      expect(await store.listSourceSnapshots(SRC), name).toHaveLength(1);
+      expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("retired");
+      expect(removed, name).toEqual([ref]);
+      expect(await store.getSource(SRC), name).toBeUndefined();
+      expect(await store.listSourceSnapshots(SRC), name).toHaveLength(0);
       expect(await store.listSourceSyncRuns(SRC), name).toHaveLength(1);
-      expect(await store.listActivityEvents(WS), name).toEqual([]);
+      expect((await store.listSourceSyncRuns(SRC))[0]?.archiveRef, name).toBe(externalRef);
+      expect((await store.listActivityEvents(WS)).filter((event) => event.action === "source.retired"), name)
+        .toHaveLength(1);
     }
   } finally {
     await Promise.all(fixtures.map((fixture) => fixture.close()));
   }
 }, 30_000);
 
-test("cross-Source Run reuse blocks both retirements until migration normalizes the reference", async () => {
+test("terminal Source A releases its foreign Run ref so Source B can retire", async () => {
   const fixtures = await adapters();
   try {
     for (const { name, store } of fixtures) {
@@ -174,30 +237,25 @@ test("cross-Source Run reuse blocks both retirements until migration normalizes 
       await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
         id: "snapshot_foreign", sourceId: sourceBId,
         archiveRef: sourceBRef, fetchedByRunId: "sync_foreign" });
+      await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+        id: "snapshot_a_external", archiveRef: sourceBRef, fetchedByRunId: "sync_retirement" });
       const runA = (await store.listSourceSyncRuns(SRC))[0]!;
       await store.putSourceSyncRun({ ...runA, archiveRef: sourceBRef });
       const deleted: string[] = [];
       const service = new SourcesService({ store, now: () => new Date(NOW),
         deleteRetiredSourceArchives: async ({ archiveRefs }) => { deleted.push(...archiveRefs); },
       });
-      await expect(service.retireOwnedSource(SRC, "destroyed"), name).rejects.toMatchObject({
-        details: { reason: "source_archive_outside_custody_scope" },
-      });
       await expect(service.retireOwnedSource(sourceBId, "destroyed"), name).rejects.toMatchObject({
         details: { reason: "source_archive_shared_by_another_source" },
       });
-      expect(await store.getSource(SRC), name).toBeDefined();
-      expect(await store.getSource(sourceBId), name).toBeDefined();
-      expect(await store.listSourceSnapshots(SRC), name).toHaveLength(1);
-      expect(await store.listSourceSnapshots(sourceBId), name).toHaveLength(1);
-      expect(deleted, name).toEqual([]);
-
-      // The operator migration rehomes the historical Run before either
-      // retirement resumes. Both Source rows remain discoverable until then.
-      await store.putSourceSyncRun({ ...runA, archiveRef: runRef });
       expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("retired");
+      expect(await store.getSource(SRC), name).toBeUndefined();
+      expect(await store.getSource(sourceBId), name).toBeDefined();
+      expect(await store.listSourceSnapshots(SRC), name).toHaveLength(0);
+      expect(await store.listSourceSnapshots(sourceBId), name).toHaveLength(1);
+      expect((await store.listSourceSyncRuns(SRC))[0]?.archiveRef, name).toBe(sourceBRef);
       expect(await service.retireOwnedSource(sourceBId, "destroyed"), name).toBe("retired");
-      expect(deleted, name).toEqual([ref, runRef, sourceBRef]);
+      expect(deleted, name).toEqual([ref, sourceBRef]);
     }
   } finally {
     await Promise.all(fixtures.map((fixture) => fixture.close()));
@@ -270,3 +328,44 @@ test("foreign reuse in a later archive page blocks every physical deletion", asy
     await Promise.all(fixtures.map((fixture) => fixture.close()));
   }
 }, 30_000);
+
+test("D1 release refuses incoherent destroyed Capsule, mismatched ref identity, and missing owner", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  const original = await seed(store);
+  const foreignId = "source_foreign_corrupt";
+  await store.putSource({ ...original, id: foreignId, name: "Foreign", status: "disabled",
+    autoSync: false, retiringAt: NOW });
+  await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+    id: "snapshot_foreign_corrupt", sourceId: foreignId, archiveRef: ref });
+  const prefix = `workspaces/${WS}/sources/${SRC}/snapshots/`;
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBeUndefined();
+  await store.putCapsule({ id: "cap_foreign_corrupt", workspaceId: WS, projectId: "project_retirement",
+    name: "corrupt", slug: "corrupt", sourceId: foreignId, installConfigId: "config_retirement",
+    environment: "production", status: "destroyed", currentStateGeneration: 0,
+    createdAt: NOW, updatedAt: NOW });
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBeUndefined();
+  await db.prepare(`update capsules set record_json = json_set(record_json, '$.status', 'active') where id = ?`)
+    .bind("cap_foreign_corrupt").run();
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBe("foreign_reference");
+  await db.prepare(`update capsules set record_json = json_set(record_json, '$.status', 'destroyed') where id = ?`)
+    .bind("cap_foreign_corrupt").run();
+  await db.prepare(`update capsules set record_json = json_remove(record_json, '$.status', '$.id') where id = ?`)
+    .bind("cap_foreign_corrupt").run();
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBe("foreign_reference");
+  await db.prepare(`update capsules set record_json = json_set(record_json, '$.status', 'destroyed', '$.id', ?) where id = ?`)
+    .bind("cap_foreign_corrupt", "cap_foreign_corrupt").run();
+  await db.prepare(`update source_snapshots set record_json = json_set(record_json, '$.sourceId', 'source_other') where id = ?`)
+    .bind("snapshot_foreign_corrupt").run();
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBe("foreign_reference");
+  await db.prepare(`update source_snapshots set record_json = json_set(record_json, '$.sourceId', ?) where id = ?`)
+    .bind(foreignId, "snapshot_foreign_corrupt").run();
+  await db.prepare(`update source_snapshots set record_json = json_remove(record_json, '$.sourceId') where id = ?`)
+    .bind("snapshot_foreign_corrupt").run();
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBe("foreign_reference");
+  await db.prepare(`update source_snapshots set record_json = json_set(record_json, '$.sourceId', ?) where id = ?`)
+    .bind(foreignId, "snapshot_foreign_corrupt").run();
+  await db.prepare(`update sources set record_json = json_set(record_json, '$.ownerCapsuleId', 'cap_missing') where id = ?`)
+    .bind(foreignId).run();
+  expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBe("foreign_reference");
+});

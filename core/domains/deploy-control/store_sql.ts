@@ -10086,11 +10086,22 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       if (stableStringify(current) !== stableStringify(expectedSource) ||
         current.status !== "disabled" || current.autoSync || !current.retiringAt)
         return { status: "conflict" as const };
-      const owner = await transaction.query(
-        `select 1 from takosumi_capsules where id = $1 and status <> 'destroyed' limit 1`,
-        [current.ownerCapsuleId ?? ""],
-      );
-      if (owner.rows.length) return { status: "blocked" as const, blockers: ["source_owner_not_destroyed"] };
+      if (current.ownerCapsuleId) {
+        const owners = await transaction.query<{
+          id: string; workspaceId: string; sourceId: string | null; status: string; capsuleJson: unknown;
+        }>(`select id, space_id as "workspaceId", source_id as "sourceId", status,
+                   installation_json as "capsuleJson"
+              from takosumi_capsules where id = $1`, [current.ownerCapsuleId]);
+        const owner = owners.rows[0];
+        const record = owner ? parseJson(owner.capsuleJson) as Capsule : undefined;
+        if (!owner || !record || owner.id !== current.ownerCapsuleId ||
+          owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
+          owner.status !== "destroyed" || record.id !== owner.id ||
+          record.workspaceId !== owner.workspaceId || record.sourceId !== owner.sourceId ||
+          record.status !== owner.status) {
+          return { status: "blocked" as const, blockers: ["source_owner_not_destroyed"] };
+        }
+      }
       const live = await transaction.query(
         `select 1 from takosumi_capsules where source_id = $1 and status <> 'destroyed' limit 1`, [current.id],
       );
@@ -10204,7 +10215,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return rows.rows[0]?.blocker;
   }
 
-  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number): Promise<{
+  async listSourceRetirementArchiveRefsPage(sourceId: string, after: string | undefined, limit: number, prefix: string): Promise<{
     readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
     readonly snapshotCount: number; readonly sourceSyncRunCount: number;
   }> {
@@ -10215,7 +10226,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                 (select count(*) from takosumi_runs where kind = 'source_sync' and source_id = $1) as runs`, [sourceId]),
       this.#client.query<{ ref: string }>(
         POSTGRES_SOURCE_RETIREMENT_ARCHIVE_REFS_PAGE_QUERY,
-        [sourceId, after ?? null, bounded + 1]),
+        [sourceId, after ?? null, bounded + 1, prefix]),
     ]);
     return { archiveRefs: refs.rows.slice(0, bounded).map((row) => row.ref),
       hasMore: refs.rows.length > bounded,

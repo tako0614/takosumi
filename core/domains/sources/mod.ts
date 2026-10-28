@@ -601,7 +601,9 @@ export class SourcesService {
       const owner = source!.ownerCapsuleId
         ? await this.#store.getCapsule(source!.ownerCapsuleId)
         : undefined;
-      if (owner && owner.status !== "destroyed") {
+      if (source!.ownerCapsuleId && (!owner || owner.id !== source!.ownerCapsuleId ||
+        owner.workspaceId !== source!.workspaceId || owner.sourceId !== sourceId ||
+        owner.status !== "destroyed")) {
         throw new OpenTofuControllerError("failed_precondition",
           `Source ${sourceId} owner Capsule is not destroyed`,
           { reason: "source_owner_not_destroyed" });
@@ -641,19 +643,15 @@ export class SourcesService {
     if (await this.#hasInFlightSourceRun(source)) return "deferred";
     const scope = `workspaces/${source.workspaceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/sources/${sourceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/snapshots/`;
     const blocker = await this.#store.sourceRetirementArchiveBlocker(sourceId, scope);
-    if (blocker) {
+    if (blocker === "foreign_reference") {
       throw new OpenTofuControllerError("failed_precondition",
-        blocker === "outside_scope"
-          ? `Source ${sourceId} has an archive outside its custody scope`
-          : `Source ${sourceId} shares an archive with another Source`,
-        { reason: blocker === "outside_scope"
-          ? "source_archive_outside_custody_scope"
-          : "source_archive_shared_by_another_source" });
+        `Source ${sourceId} shares an archive with another live Source`,
+        { reason: "source_archive_shared_by_another_source" });
     }
     // Each invocation handles one bounded page. The cursor advances only after
     // idempotent physical deletion, so a crash resumes from retained rows.
     let page = await this.#store.listSourceRetirementArchiveRefsPage(
-      sourceId, source.retirementArchiveCursor, 32,
+      sourceId, source.retirementArchiveCursor, 32, scope,
     );
     if (source.retirementSnapshotCount === undefined ||
       source.retirementSourceSyncRunCount === undefined) {
@@ -664,7 +662,7 @@ export class SourcesService {
         expectedSource: source, expectedWorkspaceManagementAuthority: authority,
       });
       page = await this.#store.listSourceRetirementArchiveRefsPage(
-        sourceId, source.retirementArchiveCursor, 32,
+        sourceId, source.retirementArchiveCursor, 32, scope,
       );
     }
     if (page.snapshotCount !== source.retirementSnapshotCount ||
@@ -678,12 +676,10 @@ export class SourcesService {
           updatedAt: this.#now().toISOString() },
         expectedSource: source, expectedWorkspaceManagementAuthority: authority,
       });
-      page = await this.#store.listSourceRetirementArchiveRefsPage(sourceId, undefined, 32);
+      page = await this.#store.listSourceRetirementArchiveRefsPage(sourceId, undefined, 32, scope);
     }
     const archiveRefs = page.archiveRefs;
-    // Historical SourceSyncs can point to another Source's archive. Keep this
-    // Source's rows as the migration work list until those refs are normalized.
-    // Otherwise the surviving Run would indefinitely block the other Source.
+    // Only this Source's own prefix is in its physical deletion custody.
     if (archiveRefs.some((ref) => !ref.startsWith(scope))) {
       throw new OpenTofuControllerError("failed_precondition",
         `Source ${sourceId} has an archive outside its custody scope`,

@@ -316,6 +316,63 @@ export interface RetiredSourceArchiveAllocation {
   readonly archiveRef: string;
 }
 
+function unreleasedForeignSourceArchiveQuery(refPredicate: string): string {
+  return `with refs as (
+    select source_id, json_extract(record_json, '$.sourceId') as json_source_id,
+      coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+      from source_snapshots
+    union all
+    select source_id, json_extract(run_json, '$.sourceId') as json_source_id,
+      coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+      from runs where type = 'source_sync'
+  ) select 1 from refs where (refs.source_id is not ? or refs.json_source_id is not ?)
+    and ${refPredicate}
+    and not coalesce((
+      refs.source_id is not null and refs.source_id = refs.json_source_id
+      and (
+        exists (select 1 from sources s where s.id = refs.source_id
+          and s.status = 'disabled' and json_extract(s.record_json, '$.status') = 'disabled'
+          and json_extract(s.record_json, '$.id') = s.id
+          and json_extract(s.record_json, '$.workspaceId') = s.space_id
+          and json_extract(s.record_json, '$.autoSync') = 0
+          and nullif(json_extract(s.record_json, '$.retiringAt'), '') is not null
+          and (nullif(json_extract(s.record_json, '$.ownerCapsuleId'), '') is null
+            or exists (select 1 from capsules owner
+              where owner.id = json_extract(s.record_json, '$.ownerCapsuleId')
+                and owner.space_id = s.space_id and owner.source_id = s.id
+                and owner.status = 'destroyed'
+                and json_extract(owner.record_json, '$.id') = owner.id
+                and json_extract(owner.record_json, '$.workspaceId') = owner.space_id
+                and json_extract(owner.record_json, '$.sourceId') = owner.source_id
+                and json_extract(owner.record_json, '$.status') = 'destroyed')))
+        or (not exists (select 1 from sources s where s.id = refs.source_id)
+          and exists (select 1 from audit_events a where a.action = 'source.retired'
+            and a.target_type = 'source' and a.target_id = refs.source_id))
+      )
+      and not exists (select 1 from capsules c
+        where (c.source_id = refs.source_id
+          or json_extract(c.record_json, '$.sourceId') = refs.source_id
+          or c.id = (select json_extract(s.record_json, '$.ownerCapsuleId')
+            from sources s where s.id = refs.source_id))
+          and not coalesce((c.status = 'destroyed' and json_extract(c.record_json, '$.status') = 'destroyed'
+            and json_extract(c.record_json, '$.id') = c.id
+            and json_extract(c.record_json, '$.workspaceId') = c.space_id
+            and json_extract(c.record_json, '$.sourceId') = refs.source_id
+            and c.source_id = refs.source_id), 0))
+      and not exists (select 1 from runs r
+        where (r.status in ('queued', 'running')
+          or json_extract(r.run_json, '$.status') in ('queued', 'running'))
+          and (r.source_id = refs.source_id
+            or json_extract(r.run_json, '$.sourceId') = refs.source_id
+            or r.installation_id in (select c.id from capsules c
+              where c.source_id = refs.source_id
+                or json_extract(c.record_json, '$.sourceId') = refs.source_id)
+            or json_extract(r.run_json, '$.capsuleId') in (select c.id from capsules c
+              where c.source_id = refs.source_id
+                or json_extract(c.record_json, '$.sourceId') = refs.source_id)))
+    ), 0) limit 1`;
+}
+
 /** Re-check the persisted retirement fence before every R2 delete dispatch.
  * Another Source's historical reference means this object remains in custody. */
 export async function assertStoredRetiredSourceArchiveDeletion(
@@ -338,9 +395,15 @@ export async function assertStoredRetiredSourceArchiveDeletion(
     "select id from capsules where source_id = ? and status is not 'destroyed' limit 1", [input.sourceId]);
   if (capsules.length) throw new StoredServiceUsageError();
   if (typeof source.ownerCapsuleId === "string") {
-    const owners = await storedOwnerRows(db, "select id, space_id, source_id, status from capsules where id = ? limit 2", [source.ownerCapsuleId]);
-    if (owners.some(owner => owner.space_id !== input.workspaceId || owner.source_id !== input.sourceId ||
-      owner.status !== "destroyed")) throw new StoredServiceUsageError();
+    const owners = await storedOwnerRows(db,
+      "select id, space_id, source_id, status, record_json from capsules where id = ? limit 2", [source.ownerCapsuleId]);
+    if (owners.length !== 1) throw new StoredServiceUsageError();
+    const owner = owners[0]!, record = storedOwnerRecord(owner.record_json);
+    if (owner.id !== source.ownerCapsuleId || owner.space_id !== input.workspaceId ||
+      owner.source_id !== input.sourceId || owner.status !== "destroyed" ||
+      record.id !== owner.id || record.workspaceId !== owner.space_id ||
+      record.sourceId !== owner.source_id || record.status !== owner.status)
+      throw new StoredServiceUsageError();
   }
   const active = await storedOwnerRows(db,
     `select id from runs where type = 'source_sync' and status in ('queued', 'running')
@@ -371,17 +434,9 @@ export async function assertStoredRetiredSourceArchiveDeletion(
       runRow.type !== "source_sync" || run.kind !== "source_sync" || run.sourceId !== input.sourceId ||
       run.workspaceId !== input.workspaceId || run.archiveRef !== input.archiveRef) throw new StoredServiceUsageError();
   }
-  const foreignSnapshots = await storedOwnerRows(db,
-    `select id from source_snapshots where
-      (source_id is not ? or (case when json_valid(record_json) = 1 then json_extract(record_json, '$.sourceId') else null end) is not ?)
-      and (case when json_valid(record_json) = 1 then json_extract(record_json, '$.archiveRef') else null end) = ? limit 1`,
+  const foreign = await storedOwnerRows(db, unreleasedForeignSourceArchiveQuery("refs.ref = ?"),
     [input.sourceId, input.sourceId, input.archiveRef]);
-  const foreignRuns = await storedOwnerRows(db,
-    `select id from runs where type = 'source_sync'
-      and (source_id is not ? or (case when json_valid(run_json) = 1 then json_extract(run_json, '$.sourceId') else null end) is not ?)
-      and (case when json_valid(run_json) = 1 then json_extract(run_json, '$.archiveRef') else null end) = ? limit 1`,
-    [input.sourceId, input.sourceId, input.archiveRef]);
-  return !foreignSnapshots.length && !foreignRuns.length;
+  return foreign.length === 0;
 }
 
 /** One bounded DO dispatch validates the complete Source scope before R2 mutation. */
@@ -413,9 +468,14 @@ export async function assertStoredRetiredSourceArchiveDeletions(
   if (capsules.length) throw new StoredServiceUsageError();
   if (typeof source.ownerCapsuleId === "string") {
     const owners = await storedOwnerRows(db,
-      "select id, space_id, source_id, status from capsules where id = ? limit 2", [source.ownerCapsuleId]);
-    if (owners.some(owner => owner.space_id !== input.workspaceId || owner.source_id !== input.sourceId ||
-      owner.status !== "destroyed")) throw new StoredServiceUsageError();
+      "select id, space_id, source_id, status, record_json from capsules where id = ? limit 2", [source.ownerCapsuleId]);
+    if (owners.length !== 1) throw new StoredServiceUsageError();
+    const owner = owners[0]!, record = storedOwnerRecord(owner.record_json);
+    if (owner.id !== source.ownerCapsuleId || owner.space_id !== input.workspaceId ||
+      owner.source_id !== input.sourceId || owner.status !== "destroyed" ||
+      record.id !== owner.id || record.workspaceId !== owner.space_id ||
+      record.sourceId !== owner.source_id || record.status !== owner.status)
+      throw new StoredServiceUsageError();
   }
   const active = await storedOwnerRows(db,
     `select id from runs where type = 'source_sync' and status in ('queued', 'running')
@@ -440,15 +500,8 @@ export async function assertStoredRetiredSourceArchiveDeletions(
   if (Number(owned?.owned_count) !== refs.length)
     throw new StoredServiceUsageError();
   const blocker = await db.prepare(
-    `with refs as (
-      select source_id, coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
-        from source_snapshots
-      union all
-      select source_id, coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
-        from runs where type = 'source_sync'
-    ) select 1 from refs where (source_id is not ? and substr(ref, 1, length(?)) = ?)
-      or (source_id = ? and (ref is null or substr(ref, 1, length(?)) <> ?)) limit 1`,
-    ).bind(input.sourceId, prefix, prefix, input.sourceId, prefix, prefix).first();
+    unreleasedForeignSourceArchiveQuery("substr(refs.ref, 1, length(?)) = ?"),
+  ).bind(input.sourceId, input.sourceId, prefix, prefix).first();
   return blocker === null;
 }
 
