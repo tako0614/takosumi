@@ -921,6 +921,14 @@ export interface OpenTofuRunner {
    * ledger queued indefinitely.
    */
   sourceSync?(job: OpenTofuSourceSyncJob, control?: RunExecutionControl): Promise<OpenTofuSourceSyncResult>;
+  /** Remove only this SourceSync Run's unused host-allocated archive after canonical settlement. */
+  cleanupUnusedSourceArchive?(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRef: string;
+    readonly canonicalSnapshotId: string;
+  }): Promise<void>;
   /**
    * Expands an immutable SourceSnapshot archive in the Runner Container and
    * returns the OpenTofu source files needed by the Capsule Compatibility

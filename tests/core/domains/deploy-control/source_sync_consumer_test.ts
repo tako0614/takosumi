@@ -59,6 +59,8 @@ function deferred<T>(): {
 
 class StubRunner {
   readonly calls: OpenTofuSourceSyncJob[] = [];
+  readonly cleanupCalls: { runId: string; archiveRef: string; canonicalSnapshotId: string }[] = [];
+  cleanupFailure = false;
   result: OpenTofuSourceSyncResult = {
     resolvedCommit: "abc123def456",
     archiveDigest: "sha256:" + "a".repeat(64),
@@ -86,6 +88,14 @@ class StubRunner {
       ...this.result,
     };
   }
+  async cleanupUnusedSourceArchive(input: {
+    readonly runId: string;
+    readonly archiveRef: string;
+    readonly canonicalSnapshotId: string;
+  }): Promise<void> {
+    this.cleanupCalls.push(input);
+    if (this.cleanupFailure) throw new Error("cleanup failed");
+  }
 }
 
 class SettlementReplacementStore extends InMemoryOpenTofuControlStore {
@@ -102,6 +112,12 @@ class SettlementReplacementStore extends InMemoryOpenTofuControlStore {
     this.#replacement = undefined;
     if (replacement) await this.putCapsule(replacement);
     return await super.commitSourceSyncSuccess(input);
+  }
+}
+
+class NoSnapshotEnumerationStore extends InMemoryOpenTofuControlStore {
+  override listSourceSnapshots(): Promise<readonly SourceSnapshot[]> {
+    throw new Error("source consumer must use the bounded lane lookup");
   }
 }
 
@@ -412,6 +428,7 @@ test("source_sync consumer (public repo) records a snapshot and lastSeenCommit",
   expect(snapshots).toHaveLength(1);
   expect(snapshots[0].resolvedCommit).toBe("abc123def456");
   expect(snapshots[0].archiveRef).toBe(run.archiveRef);
+  expect(runner.cleanupCalls).toEqual([]);
 
   const stored = await store.getSource(source.id);
   expect(stored?.lastSeenCommit).toBe("abc123def456");
@@ -499,8 +516,9 @@ test("source_sync fails terminally when the selected runner lacks source-sync ca
   );
 });
 
-test("source_sync consumer marks active source Capsules stale when the resolved commit changes", async () => {
-  const { store, sourcesService, runner, controller } = build();
+test("source_sync consumer timestamps stale projections at terminal Run settlement", async () => {
+  const terminalTime = "2026-06-06T00:00:10.000Z";
+  const { store, sourcesService, runner, controller } = build({ now: () => Date.parse(terminalTime) });
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
     name: "repo",
@@ -510,8 +528,17 @@ test("source_sync consumer marks active source Capsules stale when the resolved 
   await seedActiveCapsuleOnSnapshot({
     store,
     sourceId: source.id,
-    snapshot: sourceSnapshot({ sourceId: source.id }),
+    snapshot: sourceSnapshot({ sourceId: source.id, fetchedAt: "2019-01-01T00:00:00.000Z" }),
   });
+  await store.putSourceSnapshot(sourceSnapshot({
+    id: "snap_reused",
+    sourceId: source.id,
+    resolvedCommit: "new123",
+    fetchedAt: "2020-01-01T00:00:00.000Z",
+    archiveRef: `workspaces/workspace_1/sources/${source.id}/snapshots/snap_reused/source.tar.zst`,
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  }));
   runner.result = {
     resolvedCommit: "new123",
     archiveDigest: "sha256:" + "c".repeat(64),
@@ -523,6 +550,10 @@ test("source_sync consumer marks active source Capsules stale when the resolved 
 
   const capsule = await store.getCapsule("capsule_active");
   expect(capsule?.status).toBe("stale");
+  expect(capsule?.updatedAt).toBe(terminalTime);
+  expect((await store.getSourceSyncRun(run.id))?.finishedAt).toBe(terminalTime);
+  expect((await store.getSourceSyncRun(run.id))?.snapshotId).toBe("snap_reused");
+  expect((await store.getSourceSnapshot("snap_reused"))?.fetchedAt).toBe("2020-01-01T00:00:00.000Z");
   const activity = await store.listActivityEvents("workspace_1", { limit: 10 });
   expect(activity).toContainEqual(
     expect.objectContaining({
@@ -536,6 +567,7 @@ test("source_sync consumer marks active source Capsules stale when the resolved 
       }),
     }),
   );
+  expect(activity.find((event) => event.action === "capsule.stale")?.createdAt).toBe(terminalTime);
 });
 
 test("source_sync finalizes a pre-drain claim but does not enqueue auto-update work after drain", async () => {
@@ -1117,6 +1149,7 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
       archiveRef: job.reuseSnapshot!.archiveRef,
     };
   };
+  runner.cleanupFailure = true;
   const { run } = await controller.createSourceSync(source.id);
 
   await controller.dispatchQueuedRun({
@@ -1137,9 +1170,85 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
   expect(reused?.archiveRef).toBe(previousArchiveKey);
   expect(reused?.archiveDigest).toBe(previousDigest);
   expect(reused?.archiveSizeBytes).toBe(2048);
+  expect(runner.cleanupCalls).toHaveLength(1);
+  runner.cleanupFailure = false;
+  await controller.runQueuedSourceSync(run.id);
+  expect(runner.cleanupCalls).toHaveLength(2);
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
 });
 
-test("source_sync consumer does not reuse a snapshot that predates repository metadata observation", async () => {
+test("source_sync consumer reads only the newest exact lane snapshot", async () => {
+  const store = new NoSnapshotEnumerationStore();
+  const { sourcesService, runner, controller } = build({ store });
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1", name: "repo", url: "https://github.com/acme/repo.git", defaultRef: "main",
+  });
+  const old = sourceSnapshot({ sourceId: source.id, id: "snap_old", resolvedCommit: "old123", fetchedAt: "2020-01-01T00:00:00.000Z" });
+  await store.putSourceSnapshot(old);
+  await store.putSourceSnapshot({ ...old, id: "snap_latest", resolvedCommit: "new123", fetchedAt: "2021-01-01T00:00:00.000Z" });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot?.id).toBe("snap_latest");
+    runner.result = { resolvedCommit: "new123", archiveDigest: job.reuseSnapshot!.archiveDigest,
+      archiveSizeBytes: job.reuseSnapshot!.archiveSizeBytes, archiveRef: job.reuseSnapshot!.archiveRef };
+  };
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+});
+
+test("source_sync preserves an allocated archive referenced by a sibling historical snapshot", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1", name: "repo", url: "https://github.com/acme/repo.git", defaultRef: "main",
+  });
+  const previous = sourceSnapshot({ sourceId: source.id,
+    resolvedCommit: runner.result.resolvedCommit, fetchedAt: "1970-01-01T00:00:00.000Z" });
+  await store.putSourceSnapshot(previous);
+  const { source: sibling } = await sourcesService.createSource({
+    workspaceId: "workspace_1", name: "sibling", url: "https://github.com/acme/other.git", defaultRef: "main",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+  await store.putSourceSnapshot(sourceSnapshot({ id: "snap_sibling", sourceId: sibling.id,
+    url: sibling.url, archiveRef: run.archiveRef, fetchedAt: "2020-01-01T00:00:00.000Z" }));
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot?.id).toBe(previous.id);
+    runner.result = { resolvedCommit: previous.resolvedCommit, archiveDigest: previous.archiveDigest,
+      archiveSizeBytes: previous.archiveSizeBytes, archiveRef: previous.archiveRef };
+  };
+  await controller.runQueuedSourceSync(run.id);
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  expect((await store.getSourceSyncRun(run.id))?.requestedSnapshotId).toBe(run.snapshotId);
+  expect(runner.cleanupCalls).toEqual([]);
+});
+
+test("source_sync keeps a new snapshot on a hinted archive when valid observations differ", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1", name: "repo", url: "https://github.com/acme/repo.git", defaultRef: "main",
+  });
+  const previous = sourceSnapshot({ sourceId: source.id, resolvedCommit: "same123" });
+  await store.putSourceSnapshot(previous);
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot?.id).toBe(previous.id);
+    runner.result = {
+      resolvedCommit: "same123", archiveDigest: previous.archiveDigest,
+      archiveSizeBytes: previous.archiveSizeBytes, archiveRef: previous.archiveRef,
+      repositoryModules: { status: "ready", scopePath: ".", modules: [{
+        path: ".", providerPackages: [], rootProviderRequirements: [],
+      }] },
+    };
+  };
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+  const terminal = await store.getSourceSyncRun(run.id);
+  expect(terminal?.status).toBe("succeeded");
+  expect(terminal?.snapshotId).toBe(run.snapshotId);
+  expect(terminal?.requestedSnapshotId).toBeUndefined();
+  expect((await store.getSourceSnapshot(run.snapshotId!))?.archiveRef).toBe(previous.archiveRef);
+  expect(runner.cleanupCalls).toEqual([]);
+});
+
+test("source_sync consumer repairs metadata on a reused old snapshot", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -1164,7 +1273,7 @@ test("source_sync consumer does not reuse a snapshot that predates repository me
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
   runner.onSourceSync = async (job) => {
-    expect(job.reuseSnapshot).toBeUndefined();
+    expect(job.reuseSnapshot?.id).toBe("snap_without_repository_metadata");
   };
 
   const { run } = await controller.createSourceSync(source.id);
@@ -1181,9 +1290,10 @@ test("source_sync consumer does not reuse a snapshot that predates repository me
     status: "absent",
   });
   expect(snapshots[0]?.archiveRef).not.toBe(run.archiveRef);
+  expect(runner.cleanupCalls).toEqual([expect.objectContaining({ runId: run.id, archiveRef: run.archiveRef, canonicalSnapshotId: snapshots[0]!.id })]);
 });
 
-test("source_sync consumer does not reuse a snapshot that predates repository manifest observation", async () => {
+test("source_sync consumer repairs manifest on a reused old snapshot", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -1209,7 +1319,7 @@ test("source_sync consumer does not reuse a snapshot that predates repository ma
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
   runner.onSourceSync = async (job) => {
-    expect(job.reuseSnapshot).toBeUndefined();
+    expect(job.reuseSnapshot?.id).toBe("snap_without_repository_install_ux");
   };
 
   const { run } = await controller.createSourceSync(source.id);
@@ -1223,9 +1333,10 @@ test("source_sync consumer does not reuse a snapshot that predates repository ma
     status: "absent",
   });
   expect(snapshots[0]?.archiveRef).not.toBe(run.archiveRef);
+  expect(runner.cleanupCalls).toHaveLength(1);
 });
 
-test("source_sync consumer does not reuse a snapshot that predates repository module discovery", async () => {
+test("source_sync consumer repairs modules on a reused old snapshot", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -1252,7 +1363,7 @@ test("source_sync consumer does not reuse a snapshot that predates repository mo
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
   runner.onSourceSync = async (job) => {
-    expect(job.reuseSnapshot).toBeUndefined();
+    expect(job.reuseSnapshot?.id).toBe("snap_without_repository_modules");
   };
 
   const { run } = await controller.createSourceSync(source.id);
@@ -1268,6 +1379,7 @@ test("source_sync consumer does not reuse a snapshot that predates repository mo
     modules: [],
   });
   expect(snapshots[0]?.archiveRef).not.toBe(run.archiveRef);
+  expect(runner.cleanupCalls).toHaveLength(1);
 });
 
 test("source_sync consumer does not reuse an archive from a sibling Source in the same Workspace", async () => {

@@ -68,7 +68,7 @@ import { evaluateSourceUrl } from "./url-policy.ts";
 import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
-import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
+import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
@@ -546,17 +546,26 @@ export class SourcesService {
   async createReconciliationSyncs(
     sourceId: string,
   ): Promise<readonly CreateSourceSyncResponse[]> {
-    const stored = await this.#requireSource(sourceId);
+    let stored = await this.#requireSource(sourceId);
     try {
-      return await this.#createReconciliationSyncs(stored);
+      const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+      // Persist the attempt before lineage enumeration or archive allocation:
+      // either can fail before there is a Run to advance the polling cursor.
+      stored = await this.#writeSourceConfiguration({
+        source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
+        expectedSource: stored,
+        expectedWorkspaceManagementAuthority: authority,
+      });
+      return await this.#createReconciliationSyncs(stored, authority);
     } catch (error) {
       // Invalid durable configuration cannot make progress on another hourly
-      // poll. Quarantine only permanent preparation failures; infrastructure
-      // errors and management fences remain retryable. CAS preserves a repair
+      // poll. Quarantine permanent preparation/lineage failures; infrastructure
+      // errors remain retryable behind later Sources. CAS preserves a repair
       // made while this attempt was preparing its lanes.
       if (
         error instanceof OpenTofuControllerError &&
         (error.code === "invalid_argument" ||
+          structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON ||
           structuredErrorReason(error) === "source_reconciliation_capsule_limit")
       ) {
         try {
@@ -577,14 +586,13 @@ export class SourcesService {
 
   async #createReconciliationSyncs(
     stored: StoredSource,
+    workspaceManagementAuthority: WorkspaceManagementAuthority,
   ): Promise<readonly CreateSourceSyncResponse[]> {
     const sourceId = stored.id;
     // Capture one immutable authority before asynchronous Capsule/lane
     // enumeration. Every reconciliation lane must use this original tuple;
     // taking a fresh epoch after a drain/resume could admit only a subset of
     // the lanes from an obsolete reconciliation request.
-    const workspaceManagementAuthority =
-      await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
     const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
     const addAddress = (ref: string, path: string) => {
       addresses.set(JSON.stringify([ref, path]), { ref, path });
@@ -1610,6 +1618,7 @@ export function toPublicSource(stored: StoredSource): Source {
   const {
     hookSecretHash: _hookSecretHash,
     lastSeenCommit: _lastSeenCommit,
+    lastAutoSyncAttemptAt: _lastAutoSyncAttemptAt,
     ...rest
   } = stored;
   return rest;

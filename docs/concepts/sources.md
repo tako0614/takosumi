@@ -108,11 +108,14 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources/src_example/sync" \
 `/api/v1/sources/{sourceId}/snapshots` に現れてから、互換性確認と計画に進みます。
 同じ Source の ref/path ごとの最新 snapshot と解決した commit が同じなら、その snapshot ID を
 再利用します。archive と取得元の記録は維持し、未記録または無効だった観測だけを補完します。
-有効な manifest や module の観測は書き換えません。別の Source の archive は流用しません。
+有効な manifest や module の観測が変わった場合は、元の snapshot を変更せず新しい snapshot を作ります。
+再利用によって不要になった今回の archive は、保存先の custody 経路で削除します。
+別の Source の archive は流用しません。
 Run が返した ID を使い、独自に古い snapshot を選び直さないでください。
 
-自動同期は、最後に作られた source_sync Run が古い Source から順に処理します。未同期が先で、
-既定では 1 回 25 件です。すでに観測済みの固定 commit は除外します。恒久的に不正な取得座標の
+自動同期は、最後の試行または source_sync Run が古い Source から順に処理します。
+Run 作成前の失敗も試行として記録します。未試行が先で、既定では 1 回 25 件です。
+Workspace が active でない Source と、すでに観測済みの固定 commit は除外します。恒久的に不正な取得座標や適用履歴の
 Source は `error` となり、設定を修復して `active` に戻すまで自動同期の対象から外れます。
 
 dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の
