@@ -375,7 +375,7 @@ describe("repository-owned install context mappings", () => {
 
     expect(result.status).toBe("accepted");
     if (result.status !== "accepted") return;
-    expect(result.installExperience.projections).toEqual(
+    expect(result.installExperience?.projections).toEqual(
       installExperience.projections?.filter(
         (projection) => projection.kind !== "oidc_client",
       ),
