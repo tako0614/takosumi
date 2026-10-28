@@ -371,6 +371,8 @@ export interface GitInstallPlanInterfaceRequirement {
   /** Explicit answer, sole candidate, or implicit `later` when none exists. */
   readonly choice?: GitInstallPlanInterfaceChoice;
   readonly autoSelected: boolean;
+  /** Link persistence is not installed, so candidates cannot be selected yet. */
+  readonly linkStoreUnavailable?: true;
 }
 
 /**

@@ -466,6 +466,9 @@ export async function interfaceRequirements(
     plan.attemptFacts?.inputs?.requiredInterfaces ?? [],
 ): Promise<readonly GitInstallPlanInterfaceRequirement[]> {
   if (requirements.length === 0) return [];
+  const linkStoreUnavailable = operations.interfaces?.interfaceLinksAvailable
+    ? !await operations.interfaces.interfaceLinksAvailable()
+    : false;
   const capsuleId = deterministicInitialCapsuleId(plan.id);
   const capsules = new Map(
     (await operations.capsules.listCapsules(plan.workspaceId))
@@ -509,6 +512,7 @@ export async function interfaceRequirements(
       version: requirement.interface.version,
       permissions: requirement.permissions,
       candidates,
+      ...(linkStoreUnavailable ? { linkStoreUnavailable: true as const } : {}),
       ...(choice ? { choice } : {}),
       autoSelected: answer === undefined
         ? choice?.kind === "interface"

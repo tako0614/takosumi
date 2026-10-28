@@ -226,6 +226,12 @@ test("model e2e: DELETE abandons an unapplied Capsule without a destroy plan", a
   expect((await operations.capsules.getCapsule(capsuleId)).status).toBe(
     "destroyed",
   );
+  const retryRes = await app.request(`/internal/v1/capsules/${capsuleId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  expect(retryRes.status).toBe(200);
+  expect((await retryRes.json()).alreadyDeleted).toBe(true);
 });
 
 test("model e2e: install-configs lists the workspace's configured install config", async () => {

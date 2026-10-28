@@ -1305,11 +1305,15 @@ export async function createTakosumiService(
       fallbackDays: uninstallGrace.days,
     });
   }
+  let interfaceService: InterfaceService;
   const capsulesService = new CapsulesService({
     store: sharedOpenTofuStore,
     activity: activityService,
     projects: projectsService,
     capsuleLifecycleAdmission,
+    revokeCapsuleInterfaceLinks: async (workspaceId, capsuleId) => {
+      await interfaceService.revokeCapsuleInterfaceLinks(workspaceId, capsuleId);
+    },
     uninstallGraceDays: uninstallGrace.days,
     validateUninstallRequesterAt: options.validateUninstallRequesterAt,
   });
@@ -1434,7 +1438,6 @@ export async function createTakosumiService(
     }
     identityReconciliation = new IdentityReconciliationService({ store: sharedOpenTofuStore, authority: options.identityReconciliationAuthority });
   }
-  let interfaceService: InterfaceService;
   interfaceService = new InterfaceService({
     stores: interfaceStores,
     capsules: capsulesService,
