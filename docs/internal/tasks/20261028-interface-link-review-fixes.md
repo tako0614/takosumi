@@ -25,6 +25,9 @@
   GitHub Actions `check and test` at every final PR head.
 - CI: quality checks every pull request base, including stacked feature bases;
   push checks remain limited to main. No deployment workflow is changed.
+- Test process: each portable test file uses Bun's fresh global isolation to
+  keep native host fixtures independent in the full sweep. File inventory,
+  six-shard partitioning and test deadlines remain unchanged.
 - Report: `/root/dev/tmp/tk0118/phase4-fix-report.md`, with exact heads, checks,
   finding dispositions and any unresolved limits.
 - Reversal: revert the code changes without deleting retained link history.
