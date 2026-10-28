@@ -134,7 +134,7 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
   test.describe("Interface app links", () => {
     test.skip(mode !== "portable", "deterministic app-link fixture; not production evidence");
 
-    test("install sheet handles zero, one and many app candidates and choosing later", async ({ page }) => {
+    test("install sheet handles zero, one and many candidates and answers later before debounced continue", async ({ page }) => {
       await page.clock.install();
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const errors = watchErrors(page);
@@ -157,6 +157,9 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await expect(one).toContainText("自動選択");
       await expect(many).toHaveAttribute("data-interface-state", "missing");
       await expect(many.getByRole("combobox")).toHaveValue("");
+      // No requirement choice is ready yet. Freeze timers before making it
+      // ready, so assertions and screenshots cannot consume the debounce.
+      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
       await capture(page, "interface-install-candidates");
       await many.getByTestId("install-interface-choice").selectOption("later");
       await expect(many).toHaveAttribute("data-interface-state", "later");
@@ -164,8 +167,11 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await expect(one.getByRole("combobox")).toHaveValue("if_one");
       await capture(page, "interface-install-later");
       await expect.poll(() => attempts.log.answers.some((body) => (body as { interfaceLinks?: unknown[] }).interfaceLinks?.some((entry) => JSON.stringify(entry) === JSON.stringify({ requirementKey: "many", choice: { kind: "later" } })))).toBe(true);
-      await page.clock.runFor(1_000);
       expect(attempts.log.answers.some((body) => (body as { continue?: boolean }).continue === true)).toBe(false);
+      // The ordinary debounced continuation is a separate request; it may
+      // prepare the Plan after the explicit later answer has been accepted.
+      await page.clock.runFor(1_000);
+      await expect.poll(() => attempts.log.answers.some((body) => (body as { continue?: boolean }).continue === true)).toBe(true);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
     });
