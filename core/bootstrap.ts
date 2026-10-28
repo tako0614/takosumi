@@ -75,6 +75,8 @@ import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
+import type { AppAccessResolver } from "../contract/app-access.ts";
+import { createWorkspaceAppAccessResolver } from "./adapters/app-access/workspace.ts";
 import {
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";
@@ -371,6 +373,8 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
+  /** Canonical ownership resolver; pre-v77 hosts use the temporary adapter. */
+  readonly appAccessResolver?: AppAccessResolver;
   /** Private Accounts proof/fence reader, selected only by owner composition. */
   readonly identityReconciliationAuthority?: ControlIdentityAuthorityReader;
   readonly validateUninstallRequester?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterValidator;
@@ -647,6 +651,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  * logic.
  */
 export interface TakosumiOperations {
+  readonly appAccess: AppAccessResolver;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
@@ -969,6 +974,7 @@ export interface TakosumiOperations {
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
@@ -1156,12 +1162,25 @@ export async function createTakosumiService(
   // resolution + credential mint). Without either, the controller fails closed on
   // every provider-using run (this is what the shipped worker was previously
   // missing — provider plan/apply + private-git source_sync had no vault to mint).
+  const appAccess = options.appAccessResolver ?? createWorkspaceAppAccessResolver({
+    getCapsule: (id) => sharedOpenTofuStore.getCapsule(id),
+    getWorkspace: (id) => sharedOpenTofuStore.getWorkspace(id),
+    getWorkspaceMember: (workspaceId, accountId) => sharedOpenTofuStore.getWorkspaceMember(workspaceId, accountId),
+    listWorkspacesForAccount: async (accountId) => {
+      const owned = await sharedOpenTofuStore.listWorkspacesByOwner(accountId);
+      const memberships = await sharedOpenTofuStore.listWorkspaceMembersByAccount(accountId);
+      const memberWorkspaces = await sharedOpenTofuStore.listWorkspacesByIds(memberships.filter((member) => member.status === "active").map((member) => member.workspaceId));
+      return [...new Map([...owned, ...memberWorkspaces].map((workspace) => [workspace.id, workspace])).values()];
+    },
+    listCapsules: (workspaceId) => sharedOpenTofuStore.listCapsules(workspaceId),
+  });
   const opentofuConnectionVault =
     options.opentofuConnectionVault ??
     (options.secretCrypto
       ? new StaticSecretConnectionVault({
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
+          appAccessResolver: appAccess,
           operatorProviderConnections: operatorProviderConnectionProjection,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
           credentialDrivers: credentialRecipeDrivers,
@@ -1827,6 +1846,7 @@ export async function createTakosumiService(
       }),
   };
   const operations: TakosumiOperations = {
+    appAccess,
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,
@@ -2098,11 +2118,12 @@ export async function createTakosumiService(
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
     rotateSourceHookSecret: (id, actorId) => opentofuController.rotateSourceHookSecret(id, actorId),
     deleteSource: (id, actorId, authority) => opentofuController.deleteSource(id, actorId, authority),
-    createSourceSync: (sourceId, opts, expectedWorkspaceManagementAuthority) =>
+    createSourceSync: (sourceId, opts, expectedWorkspaceManagementAuthority, actorAccountId) =>
       opentofuController.createSourceSync(
         sourceId,
         opts ?? {},
         expectedWorkspaceManagementAuthority,
+        actorAccountId,
       ),
     createSourceReconciliationSyncs: (sourceId) =>
       opentofuController.createSourceReconciliationSyncs(sourceId),

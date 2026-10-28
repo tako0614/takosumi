@@ -245,6 +245,8 @@ export interface PlanRun {
   readonly workspaceId: string;
   /** Exact server-owned actor that created this PlanRun. */
   readonly createdBy?: string;
+  /** App ownership generation captured before Plan dispatch. */
+  readonly ownershipEpoch?: number;
   readonly capsuleId?: string;
   readonly capsuleCurrentStateVersionId?: string | null;
   /** Private Capsule execution-authority epoch pinned before Plan dispatch. */

@@ -24,6 +24,9 @@ export interface CredentialMintEvent {
    */
   readonly providerCredentialEvidence?: readonly ProviderCredentialMintEvidence[];
   readonly actorId?: string;
+  readonly actorAccountId?: string;
+  readonly connectionOwnerAccountId?: string;
+  readonly ownershipEpoch?: number;
   readonly createdAt: string;
 }
 

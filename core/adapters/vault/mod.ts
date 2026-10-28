@@ -92,6 +92,7 @@ import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../domains/deploy-control/run_credential_context.ts";
 import { connectionCredentialIssuanceAttemptRef } from "../../domains/deploy-control/credential_issuance_attempt.ts";
+import type { AppAccessResolver } from "../../../contract/app-access.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
 const CREDENTIAL_VERIFICATION_KIND =
@@ -221,6 +222,9 @@ export interface MintRequest {
    * must reject a URL outside the connection's declared host scope.
    */
   readonly sourceUrl?: string;
+  /** Canonical Source id for app-owned source credential admission. */
+  readonly sourceId?: string;
+  readonly runId?: string;
   /**
    * Provider-binding connection pool for the tofu phases (spec §9). When
    * present, provider selection draws ONLY from these connections (each must
@@ -399,6 +403,7 @@ export type VaultFetch = CredentialDriverFetch;
 export interface StaticSecretConnectionVaultDependencies {
   readonly store: OpenTofuControlStore;
   readonly crypto: SecretBoundaryCrypto;
+  readonly appAccessResolver?: AppAccessResolver;
   /** Immutable, release-owned credentialless connections; never persisted here. */
   readonly operatorProviderConnections?: readonly ProviderConnection[];
   readonly fetch?: VaultFetch;
@@ -435,6 +440,7 @@ export interface StaticSecretConnectionVaultDependencies {
 export class StaticSecretConnectionVault implements ConnectionVault {
   readonly #store: OpenTofuControlStore;
   readonly #crypto: SecretBoundaryCrypto;
+  readonly #appAccessResolver?: AppAccessResolver;
   readonly #fetch: VaultFetch;
   readonly #now: () => Date;
   readonly #newId: () => string;
@@ -453,6 +459,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
     this.#crypto = deps.crypto;
+    this.#appAccessResolver = deps.appAccessResolver;
     this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
     this.#newId = deps.newId ?? defaultConnectionId;
@@ -989,6 +996,23 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable");
   }
 
+  async #requireCurrentAppAccess(
+    accountId: string | undefined,
+    capsuleId: string,
+    ownerAccountId: string,
+    ownershipEpoch: number,
+  ): Promise<void> {
+    if (!accountId?.trim() || !this.#appAccessResolver) {
+      throw new ConnectionVaultError("failed_precondition", "Current app access is unavailable");
+    }
+    const access = await this.#appAccessResolver.resolveAppAccess(accountId, capsuleId);
+    if (!access || access.ownerAccountId !== ownerAccountId || access.ownershipEpoch !== ownershipEpoch ||
+      (access.role !== "owner" && access.role !== "member")) {
+      throw new ConnectionVaultError("failed_precondition", "Run actor no longer has app access",
+        undefined, "app_access_denied");
+    }
+  }
+
   async rewrapConnectionSecret(
     connectionId: string,
     options: { readonly dryRun?: boolean } = {},
@@ -1360,6 +1384,40 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const env: Record<string, string> = {};
     const applyForBudget = options?.runId ? await this.#store.getApplyRun(options.runId) : undefined;
     const planForBudget = options?.runId ? await this.#store.getPlanRun(applyForBudget?.planRunId ?? options.runId) : undefined;
+    const capsuleForMint = options?.capsuleId ? await this.#store.getCapsule(options.capsuleId) : undefined;
+    if (options?.capsuleId && !capsuleForMint) {
+      throw new ConnectionVaultError("failed_precondition", "Capsule is unavailable for credential mint");
+    }
+    if (capsuleForMint?.ownerAccountId !== undefined) {
+      if (
+        !planForBudget ||
+        !Number.isSafeInteger(capsuleForMint.ownershipEpoch) ||
+        capsuleForMint.ownershipEpoch! < 0 ||
+        planForBudget.ownershipEpoch !== capsuleForMint.ownershipEpoch ||
+        capsuleForMint.managementState !== "active" ||
+        planForBudget.capsuleId !== capsuleForMint.id ||
+        (phase === "plan" && planForBudget.status !== "running") ||
+        (phase !== "plan" && (!applyForBudget || applyForBudget.status !== "running")) ||
+        (applyForBudget && applyForBudget.planRunId !== planForBudget.id)
+      ) {
+        throw new ConnectionVaultError("failed_precondition", "App ownership authority changed before credential mint");
+      }
+      await this.#requireCurrentAppAccess(planForBudget.createdBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      if (applyForBudget?.approval?.approvedBy) {
+        await this.#requireCurrentAppAccess(applyForBudget.approval.approvedBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      } else if (applyForBudget && (
+        applyForBudget.approval ||
+        planForBudget.requiresApproval === true ||
+        planForBudget.operation === "destroy"
+      )) {
+        throw new ConnectionVaultError("failed_precondition", "Apply approver is unavailable");
+      }
+    } else if (capsuleForMint && (
+      capsuleForMint.ownershipEpoch !== undefined ||
+      capsuleForMint.managementState !== undefined
+    )) {
+      throw new ConnectionVaultError("failed_precondition", "App ownership metadata is incomplete");
+    }
     const profileForBudget = planForBudget ? await this.#store.getRunnerProfile(planForBudget.runnerProfileId) : undefined;
     if (planForBudget && planForBudget.workspaceId !== workspaceId) throw connectionVerificationRaceError();
     const requiredRunLifetimeSeconds = (profileForBudget?.resourceLimits?.maxRunSeconds ?? 900) + 120;
@@ -1378,6 +1436,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           undefined,
           "provider_connection_setup_required",
         );
+      }
+      if (capsuleForMint?.ownerAccountId !== undefined &&
+        connection.ownerAccountId !== capsuleForMint.ownerAccountId &&
+        !isWorkspaceBindableOperatorConnection(connection)) {
+        throw new ConnectionVaultError("failed_precondition", "Connection is not owned by the app owner",
+          undefined, "connection_not_owned_by_app_owner");
       }
       if (
         connection.scope === "workspace" &&
@@ -1615,6 +1679,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         request.workspaceId,
         request.sourceConnectionId,
         request.sourceUrl,
+        request.sourceId,
+        request.runId,
       );
     }
 
@@ -1649,8 +1715,34 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     workspaceId: string,
     connectionId: string,
     sourceUrl: string | undefined,
+    sourceId: string | undefined,
+    runId: string | undefined,
   ): Promise<PhaseMintBundle> {
     const connection = await this.#requireConnection(connectionId);
+    if (sourceId) {
+      const source = await this.#store.getSource(sourceId);
+      if (!source || source.workspaceId !== workspaceId ||
+        source.authConnectionId !== connectionId || source.url !== sourceUrl) {
+        throw new ConnectionVaultError("failed_precondition", "Source credential authority changed");
+      }
+      if (source.ownerCapsuleId) {
+        const capsule = await this.#store.getCapsule(source.ownerCapsuleId);
+        const run = runId ? await this.#store.getSourceSyncRun(runId) : undefined;
+        if (!capsule || capsule.ownerAccountId === undefined ||
+          capsule.managementState !== "active" ||
+          !Number.isSafeInteger(capsule.ownershipEpoch) ||
+          connection.ownerAccountId !== capsule.ownerAccountId ||
+          !run || run.status !== "running" ||
+          run.sourceId !== source.id || run.workspaceId !== workspaceId ||
+          run.url !== source.url ||
+          run.ownershipEpoch !== capsule.ownershipEpoch) {
+          throw new ConnectionVaultError("failed_precondition", "Source app ownership authority changed");
+        }
+        await this.#requireCurrentAppAccess(
+          run.actorAccountId, capsule.id, capsule.ownerAccountId, capsule.ownershipEpoch!,
+        );
+      }
+    }
     if (
       connection.scope === "workspace" &&
       connection.workspaceId !== workspaceId

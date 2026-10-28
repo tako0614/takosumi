@@ -19,6 +19,7 @@ import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secre
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { connectionCredentialIssuanceAttemptRef } from "../../../../core/domains/deploy-control/credential_issuance_attempt.ts";
+import type { AppAccessResolver } from "../../../../contract/app-access.ts";
 
 const PROVIDER = "registry.example/operator/provider";
 const AUDIENCE = "extension.example.v1";
@@ -32,6 +33,68 @@ const RUN_ISSUANCE = {
 } as const;
 
 describe("Vault run-issued credential recipe", () => {
+  test("owner-tagged app mint checks epoch, live creator access, active state and operator binding", async () => {
+    let accessAllowed = true;
+    const appAccessResolver: AppAccessResolver = {
+      resolveAppAccess: async (accountId, capsuleId) =>
+        accessAllowed && accountId === "fixture-owner" && capsuleId === "capsule_1"
+          ? { capsuleId, role: "owner", ownerAccountId: "fixture-owner", ownershipEpoch: 2 }
+          : undefined,
+      listAccessibleApps: async () => ({ apps: [] }),
+    };
+    const { store, vault } = fixture(validDriver(), { appAccessResolver });
+    const connection = await verifiedConnection(store, vault);
+    await seedRunningPlan(store);
+    const capsule = (await store.getCapsule("capsule_1"))!;
+    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active" });
+    const originalPlan = (await store.getPlanRun("plan_1"))!;
+    await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 1 });
+    const request = () => vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    );
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 2 });
+    accessAllowed = false;
+    await expect(request()).rejects.toThrow(/no longer has app access/);
+    accessAllowed = true;
+    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "draining" });
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active" });
+    expect((await request()).env.RUN_CREDENTIAL_TOKEN).toBe("issued:plan_1");
+    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "frozen" });
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    await store.putCapsule({ ...capsule, ownerAccountId: undefined, ownershipEpoch: 2, managementState: "active" });
+    await expect(request()).rejects.toThrow(/ownership metadata is incomplete/);
+    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: undefined, managementState: "active" });
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active" });
+    await store.putConnection({ ...connection, status: "pending" });
+    await expect(request()).rejects.toMatchObject({ reason: "connection_not_owned_by_app_owner" });
+    await store.putConnection(connection);
+    await store.putApplyRun({ ...applyRun(), approval: { approvedBy: "removed-member", approvedAt: 1 } });
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "apply", capsuleId: "capsule_1", runId: "apply_1" },
+    )).rejects.toThrow(/no longer has app access/);
+    await store.putApplyRun({ ...applyRun(), approval: { approvedAt: 1 } });
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "apply", capsuleId: "capsule_1", runId: "apply_1" },
+    )).rejects.toThrow(/approver is unavailable/);
+    await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 2, requiresApproval: true });
+    await store.putApplyRun(applyRun());
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "apply", capsuleId: "capsule_1", runId: "apply_1" },
+    )).rejects.toThrow(/approver is unavailable/);
+    await store.putConnection({ ...connection, scope: "personal", ownerAccountId: "other-owner" });
+    await expect(request()).rejects.toMatchObject({ reason: "connection_not_owned_by_app_owner" });
+  });
   test("pins a renewable file protocol only from the installed recipe", async () => {
     const { store, vault } = fixture(issuingDriver(), {
       renewableEnv: {
@@ -602,6 +665,7 @@ function fixture(
   driver: CredentialRecipeRuntimeDriver,
   options: {
     readonly runCredentialIssuer?: CredentialRecipeRunCredentialIssuer | null;
+    readonly appAccessResolver?: AppAccessResolver;
     readonly operatorProviderConnections?: readonly ProviderConnection[];
     readonly renewableEnv?: {
       readonly sourceEnvName: string;
@@ -616,6 +680,7 @@ function fixture(
   const store = new InMemoryOpenTofuControlStore();
   const vault = new StaticSecretConnectionVault({
     store,
+    appAccessResolver: options.appAccessResolver,
     crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
     }),

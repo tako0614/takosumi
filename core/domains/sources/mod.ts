@@ -605,12 +605,14 @@ export class SourcesService {
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     return await this.#createSync(
       sourceId,
       options,
       undefined,
       expectedWorkspaceManagementAuthority,
+      actorAccountId,
     );
   }
 
@@ -706,6 +708,10 @@ export class SourcesService {
     }
 
     const runs: CreateSourceSyncResponse[] = [];
+    const ownerCapsule = stored.ownerCapsuleId
+      ? await this.#store.getCapsule(stored.ownerCapsuleId)
+      : undefined;
+    const reconciliationActor = ownerCapsule?.ownerAccountId;
     for (const address of addresses.values()) {
       runs.push(
         await this.#createSync(
@@ -713,6 +719,7 @@ export class SourcesService {
           { intent: "observe", dedupe: true },
           address,
           workspaceManagementAuthority,
+          reconciliationActor,
         ),
       );
     }
@@ -749,6 +756,7 @@ export class SourcesService {
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     trackedAddress?: { readonly ref: string; readonly path: string },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
     if (expectedWorkspaceManagementAuthority !== undefined) {
@@ -913,6 +921,16 @@ export class SourcesService {
     }
     const runId = coordinator?.runId ?? this.#newId("ssr");
     const snapshotId = coordinator?.snapshotId ?? this.#newId("snap");
+    const ownerCapsule = stored.ownerCapsuleId
+      ? await this.#store.getCapsule(stored.ownerCapsuleId)
+      : undefined;
+    if (stored.ownerCapsuleId && (!ownerCapsule || !actorAccountId?.trim() ||
+      ownerCapsule.ownerAccountId === undefined ||
+      !Number.isSafeInteger(ownerCapsule.ownershipEpoch))) {
+      throw new OpenTofuControllerError("failed_precondition",
+        "App-owned Source sync requires a trusted current actor and ownership epoch.",
+        { reason: "app_access_denied" });
+    }
     if (!this.#artifactReferenceAllocator) {
       throw new OpenTofuControllerError(
         "not_implemented",
@@ -932,6 +950,7 @@ export class SourcesService {
       kind: "source_sync",
       workspaceId: stored.workspaceId,
       sourceId,
+      ...(ownerCapsule ? { actorAccountId, ownershipEpoch: ownerCapsule.ownershipEpoch } : {}),
       url: stored.url,
       ref: runRef,
       path: runPath,

@@ -725,6 +725,9 @@ export class RunCredentialBroker {
     if (byConnection.length === 0) return;
     const createdAt = new Date(this.#now()).toISOString();
     const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
+    const capsule = capsuleId ? await this.#store.getCapsule(capsuleId) : undefined;
+    const applyRun = phase === "plan" ? undefined : await this.#store.getApplyRun(auditRunId);
+    const actorAccountId = applyRun?.approval?.approvedBy ?? planRun.createdBy;
     const evidenceByConnection = groupProviderCredentialEvidence(evidence);
     for (const entry of byConnection) {
       const providerCredentialEvidence =
@@ -735,6 +738,14 @@ export class RunCredentialBroker {
         workspaceId: planRun.workspaceId,
         ...(capsuleId ? { capsuleId } : {}),
         connectionId: entry.connectionId,
+        ...(capsule?.ownerAccountId !== undefined
+          ? {
+              actorAccountId,
+              connectionOwnerAccountId: resolved.find((candidate) =>
+                candidate.connection.id === entry.connectionId)?.connection.ownerAccountId,
+              ownershipEpoch: planRun.ownershipEpoch,
+            }
+          : {}),
         phase,
         capabilities: entry.capabilities,
         ...(providerCredentialEvidence.length > 0

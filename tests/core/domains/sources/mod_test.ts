@@ -680,6 +680,26 @@ test("createSync persists a queued run, allocates the archive ref, and enqueues"
   expect(stored?.id).toBe(run.id);
 });
 
+test("app-owned Source sync pins a trusted actor and ownership epoch", async () => {
+  const { store, service } = makeService();
+  const { capsule, source } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+  });
+  await store.putSource({ ...source, ownerCapsuleId: capsule.id });
+  await store.putCapsule({
+    ...capsule,
+    ownerAccountId: "user_1",
+    ownershipEpoch: 3,
+    managementState: "active",
+  });
+  await expect(service.createSync(source.id)).rejects.toMatchObject({
+    details: { reason: "app_access_denied" },
+  });
+  const { run } = await service.createSync(source.id, {}, undefined, "user_1");
+  expect(run.actorAccountId).toBe("user_1");
+  expect(run.ownershipEpoch).toBe(3);
+});
+
 test("createSync rejects a valid noncurrent Workspace management authority", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({
@@ -1520,6 +1540,9 @@ test("reconciliation keeps one captured authority across default and adopted lan
     currentStateVersionId: apply.stateVersionId,
     currentStateGeneration: 1,
     status: "active",
+    ownerAccountId: "user_1",
+    ownershipEpoch: 0,
+    managementState: "active",
   });
 
   const reconciling = service.createReconciliationSyncs(seeded.source.id);

@@ -11,6 +11,8 @@ import { REFERENCE_CREDENTIAL_RECIPE_COMPOSITION } from "../../../../providers/r
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import type { AppAccessResolver } from "../../../../contract/app-access.ts";
 
 function seedWorkspace(
   store: InMemoryOpenTofuControlStore,
@@ -32,6 +34,7 @@ function makeVault(
     fetch?: typeof fetch;
     store?: InMemoryOpenTofuControlStore;
     now?: () => Date;
+    appAccessResolver?: AppAccessResolver;
   } = {},
 ) {
   const store = overrides.store ?? new InMemoryOpenTofuControlStore();
@@ -39,6 +42,7 @@ function makeVault(
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
     store,
+    appAccessResolver: overrides.appAccessResolver,
     crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
     }),
@@ -359,6 +363,67 @@ test("rule 2a: source phase mints https git creds as env + askpass file", async 
   expect(response.files?.[0].content).toContain("git-bot");
   // The bundle never serializes its values.
   expect(JSON.stringify(bundle)).not.toContain("ghp_secret_token");
+});
+
+test("app-owned private Source refuses a mint without pinned run actor authority", async () => {
+  let accessAllowed = true;
+  const { store, vault } = makeVault({
+    appAccessResolver: {
+      resolveAppAccess: async (accountId, capsuleId) =>
+        accessAllowed && accountId === "fixture-owner"
+          ? { capsuleId, role: "owner", ownerAccountId: "fixture-owner", ownershipEpoch: 1 }
+          : undefined,
+      listAccessibleApps: async () => ({ apps: [] }),
+    },
+  });
+  const conn = await registerHttps(store, vault);
+  const { capsule, source } = await seedCapsuleModel(store, {
+    workspaceId: "space_1",
+    sourceUrl: HTTPS_REPO_URL,
+  });
+  await store.putSource({ ...source, ownerCapsuleId: capsule.id, authConnectionId: conn.id });
+  await store.putCapsule({
+    ...capsule,
+    ownerAccountId: conn.ownerAccountId,
+    ownershipEpoch: 1,
+    managementState: "active",
+  });
+  await expect(vault.mintForPhase({
+    workspaceId: "space_1",
+    phase: "source",
+    sourceConnectionId: conn.id,
+    sourceUrl: HTTPS_REPO_URL,
+    sourceId: source.id,
+    runId: "missing_run",
+  })).rejects.toThrow(/Source app ownership authority changed/);
+  await store.putSourceSyncRun({
+    id: "owned_sync",
+    kind: "source_sync",
+    workspaceId: "space_1",
+    sourceId: source.id,
+    actorAccountId: "fixture-owner",
+    ownershipEpoch: 1,
+    url: HTTPS_REPO_URL,
+    ref: "main",
+    path: ".",
+    archiveRef: "archive/owned",
+    status: "running",
+    createdAt: "2026-06-04T00:00:00.000Z",
+    updatedAt: "2026-06-04T00:00:00.000Z",
+    code: "running",
+    message: "",
+  });
+  const request = () => vault.mintForPhase({
+    workspaceId: "space_1",
+    phase: "source",
+    sourceConnectionId: conn.id,
+    sourceUrl: HTTPS_REPO_URL,
+    sourceId: source.id,
+    runId: "owned_sync",
+  });
+  expect((await request()).files).toHaveLength(1);
+  accessAllowed = false;
+  await expect(request()).rejects.toThrow(/no longer has app access/);
 });
 
 // The askpass script answers every host's credential prompt, so a Source on a

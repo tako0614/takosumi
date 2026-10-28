@@ -173,6 +173,66 @@ test("run credential mint is narrowed to the plan's declared providers", async (
   }]);
 });
 
+test("owner-tagged mint audit records current plan actor, apply approver, connection owner and epoch", async () => {
+  const owned = {
+    ...CLOUDFLARE,
+    connection: { ...CLOUDFLARE.connection, ownerAccountId: "account_owner" },
+  };
+  const { broker, store } = brokerFor([owned]);
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    capsuleId: "cap_1",
+  });
+  await store.putCapsule({
+    ...capsule,
+    ownerAccountId: "account_owner",
+    ownershipEpoch: 4,
+    managementState: "active",
+  });
+  const plan = {
+    ...planRun([owned.provider]),
+    createdBy: "account_creator",
+    ownershipEpoch: 4,
+  };
+  await broker.mintRunCredentials(plan, "plan", "plan_audit");
+  expect(await store.listCredentialMintEventsForRun("plan_audit")).toMatchObject([{
+    actorAccountId: "account_creator",
+    connectionOwnerAccountId: "account_owner",
+    ownershipEpoch: 4,
+  }]);
+  await store.putApplyRun({
+    id: "apply_audit",
+    planRunId: plan.id,
+    workspaceId: plan.workspaceId,
+    capsuleId: "cap_1",
+    operation: "update",
+    runnerProfileId: plan.runnerProfileId,
+    status: "running",
+    approval: { approvedBy: "account_approver", approvedAt: 1 },
+    expected: {
+      planRunId: plan.id,
+      capsuleId: "cap_1",
+      runnerProfileId: plan.runnerProfileId,
+      sourceDigest: plan.sourceDigest,
+      variablesDigest: plan.variablesDigest,
+      policyDecisionDigest: plan.policyDecisionDigest,
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:artifact",
+    },
+    stateBackend: { kind: "managed", ref: "state" },
+    stateLock: { status: "pending", backendRef: "state" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await broker.mintRunCredentials(plan, "apply", "apply_audit");
+  expect(await store.listCredentialMintEventsForRun("apply_audit")).toMatchObject([{
+    actorAccountId: "account_approver",
+    connectionOwnerAccountId: "account_owner",
+    ownershipEpoch: 4,
+  }]);
+});
+
 test("a credential-free provider set mints nothing at all", async () => {
   const { broker, mintedEntries } = brokerFor([CLOUDFLARE, AWS]);
   const credentials = await broker.mintRunCredentials(

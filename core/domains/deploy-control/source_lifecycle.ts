@@ -223,6 +223,8 @@ export class SourceLifecycleService {
           // The vault refuses to mint a git token for a host the connection is
           // not bound to, so the Source URL is part of the mint request.
           sourceUrl: stored.url,
+          sourceId: stored.id,
+          runId: run.id,
         });
         await this.#recordSourceCredentialMintEvent({
           runId: run.id,
@@ -656,12 +658,26 @@ export class SourceLifecycleService {
     readonly sourceId: string;
     readonly connectionId: string;
   }): Promise<void> {
+    const source = await this.#store.getSource(input.sourceId);
+    const capsule = source?.ownerCapsuleId
+      ? await this.#store.getCapsule(source.ownerCapsuleId)
+      : undefined;
+    const connection = await this.#store.getConnection(input.connectionId);
+    const run = await this.#store.getSourceSyncRun(input.runId);
     await this.#store.putCredentialMintEvent({
       id: this.#newId("credmint"),
       runId: input.runId,
       workspaceId: input.workspaceId,
       sourceId: input.sourceId,
       connectionId: input.connectionId,
+      ...(capsule?.ownerAccountId !== undefined
+        ? {
+            capsuleId: capsule.id,
+            actorAccountId: run?.actorAccountId,
+            connectionOwnerAccountId: connection?.ownerAccountId,
+            ownershipEpoch: capsule.ownershipEpoch,
+          }
+        : {}),
       phase: "source",
       capabilities: ["source"],
       createdAt: new Date(this.#now()).toISOString(),

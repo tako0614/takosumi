@@ -2467,6 +2467,9 @@ export class RunEngine {
       workspaceId,
       createdBy: context.actor ?? "system",
       ...(requestCapsuleId ? { capsuleId: requestCapsuleId } : {}),
+      ...(capsule?.ownerAccountId !== undefined
+        ? { ownershipEpoch: capsule.ownershipEpoch }
+        : {}),
       ...(capsule
         ? {
             capsuleCurrentStateVersionId: capsule.currentStateVersionId ?? null,

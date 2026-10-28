@@ -2351,11 +2351,13 @@ export class OpenTofuController {
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     return await this.#sources.createSourceSync(
       sourceId,
       options,
       expectedWorkspaceManagementAuthority,
+      actorAccountId,
     );
   }
 
