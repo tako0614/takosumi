@@ -84,6 +84,7 @@ const MAX_STEPS_PER_CAPSULE = 6;
 
 /** Stable `blockedReason` tokens. */
 export const SCHEDULED_DESTROY_BLOCKED_REASONS = {
+  dependencyRetired: "dependency_retired",
   planFailed: "destroy_plan_failed",
   planCancelled: "destroy_plan_cancelled",
   planRefused: "destroy_plan_refused",
@@ -488,7 +489,9 @@ async function createTeardownPlan(
       deps,
       marked,
       marked.uninstall,
-      SCHEDULED_DESTROY_BLOCKED_REASONS.planRefused,
+      isRetiredDependencyRefusal(error)
+        ? SCHEDULED_DESTROY_BLOCKED_REASONS.dependencyRetired
+        : SCHEDULED_DESTROY_BLOCKED_REASONS.planRefused,
     );
     return "blocked";
   }
@@ -584,7 +587,10 @@ async function startTeardown(
       deps,
       capsule,
       uninstall,
-      authorizationReason(error) ?? SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused,
+      authorizationReason(error) ??
+        (isRetiredDependencyRefusal(error)
+          ? SCHEDULED_DESTROY_BLOCKED_REASONS.dependencyRetired
+          : SCHEDULED_DESTROY_BLOCKED_REASONS.applyRefused),
     );
     return "blocked";
   }
@@ -677,6 +683,7 @@ function applyIsTerminalFailure(apply: ApplyRun): boolean {
 /** A typed refusal of this exact request that a later tick cannot change. */
 function isPermanentRefusal(error: unknown): boolean {
   if (!(error instanceof OpenTofuControllerError)) return false;
+  if (isRetiredDependencyRefusal(error)) return true;
   if (
     error.code !== "failed_precondition" &&
     error.code !== "invalid_argument" &&
@@ -686,6 +693,11 @@ function isPermanentRefusal(error: unknown): boolean {
   }
   const reason = errorReason(error);
   return reason === undefined || !TRANSIENT_REFUSAL_REASONS.has(reason);
+}
+
+function isRetiredDependencyRefusal(error: unknown): boolean {
+  return error instanceof OpenTofuControllerError &&
+    error.code === "dependency_retired";
 }
 
 function isTransientRefusal(error: unknown): boolean {

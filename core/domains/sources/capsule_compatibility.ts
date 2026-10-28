@@ -247,7 +247,7 @@ export function analyzeOpenTofuCapsuleFiles(
       code: "outputs_missing",
       message: "No output blocks were detected.",
       suggestion:
-        "Expose at least the public or dependency outputs expected by the InstallConfig outputAllowlist.",
+        "Expose the public outputs required by the InstallConfig outputAllowlist.",
     });
   }
 

@@ -26,6 +26,8 @@ export interface WorkspaceUpdateGraph {
   readonly order: readonly (readonly string[])[];
   /** Member capsule id -> the plan Run id created for it. */
   readonly runs: Readonly<Record<string, string>>;
+  /** Member capsule id -> pre-plan failure reason. Older graphs omit this. */
+  readonly failures?: Readonly<Record<string, "dependency_retired">>;
 }
 
 export interface RunGroupsServiceDependencies {
@@ -82,29 +84,37 @@ export class RunGroupsService {
     // the recorded group graph without reviving retired dependency ordering.
     const layers = [[...members]];
     const runs: Record<string, string> = {};
+    const failures: Record<string, "dependency_retired"> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
     for (const layer of layers) {
       for (const capsuleId of layer) {
-        const response = await this.#controller.createCapsulePlan(
-          capsuleId,
-          this.#actor ? { actor: this.#actor } : {},
-          // A Workspace update re-plans each app's tracked ref as configured;
-          // a retry of one member repeats exactly that.
-          { runGroupId, origin: { kind: "update" } },
-        );
+        let response;
+        try {
+          response = await this.#controller.createCapsulePlan(
+            capsuleId,
+            this.#actor ? { actor: this.#actor } : {},
+            // A Workspace update re-plans each app's tracked ref as configured;
+            // a retry of one member repeats exactly that.
+            { runGroupId, origin: { kind: "update" } },
+          );
+        } catch (error) {
+          if (!isRetiredDependencyError(error)) throw error;
+          failures[capsuleId] = "dependency_retired";
+          continue;
+        }
         runs[capsuleId] = response.planRun.id;
         memberRuns.push(await this.#controller.getRun(response.planRun.id));
       }
     }
-    const graph: WorkspaceUpdateGraph = { order: layers, runs };
+    const graph: WorkspaceUpdateGraph = { order: layers, runs, failures };
     const runGroup: RunGroup = {
       id: runGroupId,
       workspaceId,
       type: "workspace_update",
       // The persisted status is the creation-time snapshot; reads recompute it
       // from member runs. A fresh group with queued/running members is `running`.
-      status: computeGroupStatus(memberRuns),
+      status: computeGroupStatus(memberRuns, Object.keys(failures).length > 0),
       graphJson: JSON.stringify(graph),
       createdAt: this.#now(),
     };
@@ -159,27 +169,35 @@ export class RunGroupsService {
     );
     const layers = [capsuleIds];
     const runs: Record<string, string> = {};
+    const failures: Record<string, "dependency_retired"> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
 
     for (const layer of layers) {
       for (const capsuleId of layer) {
-        const response = await this.#controller.createCapsuleDriftCheck(
-          capsuleId,
-          this.#actor ? { actor: this.#actor } : {},
-          { runGroupId },
-        );
+        let response;
+        try {
+          response = await this.#controller.createCapsuleDriftCheck(
+            capsuleId,
+            this.#actor ? { actor: this.#actor } : {},
+            { runGroupId },
+          );
+        } catch (error) {
+          if (!isRetiredDependencyError(error)) throw error;
+          failures[capsuleId] = "dependency_retired";
+          continue;
+        }
         runs[capsuleId] = response.planRun.id;
         memberRuns.push(await this.#controller.getRun(response.planRun.id));
       }
     }
 
-    const graph: WorkspaceUpdateGraph = { order: layers, runs };
+    const graph: WorkspaceUpdateGraph = { order: layers, runs, failures };
     const runGroup: RunGroup = {
       id: runGroupId,
       workspaceId,
       type: "workspace_drift_check",
-      status: computeGroupStatus(memberRuns),
+      status: computeGroupStatus(memberRuns, Object.keys(failures).length > 0),
       graphJson: JSON.stringify(graph),
       createdAt: this.#now(),
     };
@@ -215,7 +233,7 @@ export class RunGroupsService {
     return {
       runGroup: {
         ...stored,
-        status: computeGroupStatus(memberRuns),
+        status: computeGroupStatus(memberRuns, hasRecordedFailures(graph)),
       },
       runs: memberRuns,
     };
@@ -276,13 +294,16 @@ function normalizePositiveLimit(limit: number | undefined): number {
  * Computes a RunGroup status from its member Runs (spec §19 / §24 decision):
  * queued/running if any member is non-terminal-and-not-waiting, waiting_approval
  * if any is waiting_approval (and none earlier), failed if any failed, cancelled
- * if any cancelled and none failed, succeeded when all succeeded. An empty
- * member set reads as `succeeded` (nothing left to run). The precedence order
- * below is the load-bearing part.
+ * if any cancelled and none failed, succeeded when all succeeded. Recorded
+ * pre-plan member failures count as failed Runs; an otherwise empty member set
+ * reads as `succeeded`. The precedence order below is the load-bearing part.
  */
-export function computeGroupStatus(runs: readonly Run[]): RunGroupStatus {
-  if (runs.length === 0) return "succeeded";
-  let anyFailed = false;
+export function computeGroupStatus(
+  runs: readonly Run[],
+  hasMemberFailure = false,
+): RunGroupStatus {
+  if (runs.length === 0) return hasMemberFailure ? "failed" : "succeeded";
+  let anyFailed = hasMemberFailure;
   let anyCancelled = false;
   let anyWaiting = false;
   let anyActive = false;
@@ -317,6 +338,15 @@ export function computeGroupStatus(runs: readonly Run[]): RunGroupStatus {
   return "succeeded";
 }
 
+function isRetiredDependencyError(error: unknown): error is OpenTofuControllerError {
+  return error instanceof OpenTofuControllerError &&
+    error.code === "dependency_retired";
+}
+
+function hasRecordedFailures(graph: WorkspaceUpdateGraph): boolean {
+  return Object.keys(graph.failures ?? {}).length > 0;
+}
+
 function parseWorkspaceUpdateGraph(graphJson: string): WorkspaceUpdateGraph {
   let parsed: unknown;
   try {
@@ -341,5 +371,11 @@ function parseWorkspaceUpdateGraph(graphJson: string): WorkspaceUpdateGraph {
       if (typeof value === "string") runs[key] = value;
     }
   }
-  return { order, runs };
+  const failures: Record<string, "dependency_retired"> = {};
+  if (record.failures && typeof record.failures === "object") {
+    for (const [key, value] of Object.entries(record.failures)) {
+      if (value === "dependency_retired") failures[key] = value;
+    }
+  }
+  return { order, runs, failures };
 }

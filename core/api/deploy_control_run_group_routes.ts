@@ -1,6 +1,6 @@
 /**
  * §19 / §24 RunGroup routes: the Workspace `plan-update` (creates a workspace_update
- * RunGroup re-planning every stale Capsule in topological order) plus the
+ * RunGroup re-planning each source-stale Capsule independently) plus the
  * RunGroup read / approve handlers. Owns its handlers and its slice of the
  * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
@@ -34,7 +34,7 @@ export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS: readonly DeployControlEndpoint[
       method: "POST",
       path: TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
       summary:
-        "Creates a workspace_update RunGroup: re-plans every stale Capsule (+ downstream) in topological order.",
+        "Creates a workspace_update RunGroup: re-plans each source-stale Capsule independently.",
       auth: "deploy-control-token",
       operationId: "createWorkspacePlanUpdate",
       openapi: {

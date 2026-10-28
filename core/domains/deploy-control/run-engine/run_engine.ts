@@ -2200,13 +2200,7 @@ export class RunEngine {
     }
     // Retained dependency rows are historical execution authority. A new
     // plan, including a destroy plan, must never silently drop those inputs.
-    if (await this.#store.hasRetiredDependenciesForConsumer(capsule.id)) {
-      throw new OpenTofuControllerError(
-        "dependency_retired",
-        `dependency_retired: Capsule ${capsule.id} has retired dependencies; remove them before re-planning`,
-        { reason: "dependency_retired" },
-      );
-    }
+    await this.#assertCapsuleHasNoRetiredDependencies(capsule.id);
     if (
       legacySourcelessDestroyRecovery &&
       (!capsule || capsule.sourceId || capsule.currentStateGeneration <= 0)
@@ -2777,6 +2771,9 @@ export class RunEngine {
     internal: CreateCapsulePlanInternal = {},
   ): Promise<PlanRunResponse> {
     requireNonEmptyString(capsuleId, "capsuleId");
+    // Refuse before compatibility checks, source/configuration preparation, or
+    // Run creation, including destroy/uninstall and drift-check plans.
+    await this.#assertCapsuleHasNoRetiredDependencies(capsuleId);
     // Capture before the first Capsule read: old compatibility evidence must
     // never be paired with an epoch obtained after an InstallConfig rebind.
     // Destroy does not select or project compatibility evidence.
@@ -3131,14 +3128,6 @@ export class RunEngine {
       capsuleId: capsule.id,
       environment: capsule.environment,
     };
-    // Reject before generic-root preparation so no retired consumer Run is created.
-    if (await this.#store.hasRetiredDependenciesForConsumer(capsule.id)) {
-      throw new OpenTofuControllerError(
-        "dependency_retired",
-        `dependency_retired: Capsule ${capsule.id} has retired dependencies; remove them before re-planning`,
-        { reason: "dependency_retired" },
-      );
-    }
     const selectedPlanRequest = runnerProfileId
       ? { ...planRequest, runnerProfileId }
       : planRequest;
@@ -5996,6 +5985,15 @@ export class RunEngine {
       );
     }
     return source;
+  }
+
+  async #assertCapsuleHasNoRetiredDependencies(capsuleId: string): Promise<void> {
+    if (!(await this.#store.hasRetiredDependenciesForConsumer(capsuleId))) return;
+    throw new OpenTofuControllerError(
+      "dependency_retired",
+      `dependency_retired: Capsule ${capsuleId} has retired dependencies; operator data maintenance is required before planning (including destroy/uninstall); see docs/operations/retired-dependency-maintenance.md`,
+      { reason: "dependency_retired" },
+    );
   }
 
   /** Refuses historical pins and retained dependency rows before execution. */
