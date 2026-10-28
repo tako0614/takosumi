@@ -3039,13 +3039,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
 
         const reader = new SqlOpenTofuControlStore({ client: transaction });
-        const latestLaneSnapshot = await reader.getLatestSourceSnapshotForLane({
+        const latestLane = await reader.#pgLatestSourceSnapshotLaneRow({
           sourceId: snapshot.sourceId,
           workspaceId: snapshot.workspaceId,
           url: snapshot.url,
           ref: snapshot.ref,
           path: snapshot.path,
         });
+        const latestLaneSnapshot = latestLane?.snapshot;
         const candidate = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
           ? latestLaneSnapshot : undefined;
         const mergedSnapshot = candidate
@@ -3053,7 +3054,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           : undefined;
         // Distinct ready observations of the same commit belong to distinct
         // snapshots. The merge helper returns undefined in that case.
-        const reusableSnapshot = mergedSnapshot ? candidate : undefined;
+        const reusableRow = mergedSnapshot ? latestLane : undefined;
+        const reusableSnapshot = reusableRow?.snapshot;
         const committedSnapshot: SourceSnapshot = mergedSnapshot ?? snapshot;
         const terminalRun = reusableSnapshot && reusableSnapshot.id !== input.terminalRun.snapshotId
           ? { ...input.terminalRun, requestedSnapshotId: input.terminalRun.snapshotId,
@@ -3118,13 +3120,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           input.leaseToken,
         );
         if (!terminalCommitted) return { won: false as const };
-        if (reusableSnapshot) {
+        if (reusableRow) {
           const updated = await db.update(pgSchema.sourceSnapshots)
             .set({ snapshotJson: committedSnapshot })
             .where(and(
-              eq(pgSchema.sourceSnapshots.id, reusableSnapshot.id),
-              eq(pgSchema.sourceSnapshots.sourceId, reusableSnapshot.sourceId),
-              eq(pgSchema.sourceSnapshots.snapshotJson, reusableSnapshot),
+              eq(pgSchema.sourceSnapshots.id, reusableRow.snapshot.id),
+              eq(pgSchema.sourceSnapshots.sourceId, reusableRow.snapshot.sourceId),
+              // The public snapshot is normalized on read. Match the exact
+              // persisted JSON, including legacy archive-reference aliases.
+              eq(pgSchema.sourceSnapshots.snapshotJson, reusableRow.rawJson),
             )).returning({ id: pgSchema.sourceSnapshots.id });
           if (!updated.length) throw new SourceSyncSettlementConflictError();
         } else {
@@ -9909,6 +9913,16 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     readonly ref: string;
     readonly path: string;
   }): Promise<SourceSnapshot | undefined> {
+    return (await this.#pgLatestSourceSnapshotLaneRow(input))?.snapshot;
+  }
+
+  async #pgLatestSourceSnapshotLaneRow(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<{ readonly snapshot: SourceSnapshot; readonly rawJson: SourceSnapshot } | undefined> {
     const snapshots = pgSchema.sourceSnapshots;
     const rows = await this.#db.select({ snapshotJson: snapshots.snapshotJson })
       .from(snapshots)
@@ -9921,9 +9935,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       ))
       .orderBy(desc(snapshots.fetchedAt), desc(snapshots.id))
       .limit(1);
-    return normalizeOptionalSourceSnapshotRecord(
-      parseJson(rows[0]?.snapshotJson) as SourceSnapshot | undefined,
-    );
+    if (!rows[0]) return undefined;
+    const rawJson = parseJson(rows[0].snapshotJson) as SourceSnapshot;
+    return { snapshot: normalizeSourceSnapshotRecord(rawJson), rawJson };
   }
 
   async hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean> {

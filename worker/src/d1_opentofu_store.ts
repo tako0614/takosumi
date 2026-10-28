@@ -3478,7 +3478,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       ref: snapshot.ref,
       path: snapshot.path,
     };
-    const latestLaneSnapshot = await this.getLatestSourceSnapshotForLane(snapshotLane);
+    const latestLane = await this.#readLatestSourceSnapshotForLane(snapshotLane);
+    const latestLaneSnapshot = latestLane?.snapshot;
     const mergeCandidate = latestLaneSnapshot?.resolvedCommit === snapshot.resolvedCommit
       ? latestLaneSnapshot : undefined;
     const mergedSnapshot = mergeCandidate
@@ -3533,6 +3534,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       committedSnapshot,
       observation,
       latestLaneSnapshot,
+      latestLane?.recordJson,
     );
     const observedSnapshot = reusableSnapshot ?? await this.getSourceSnapshot(snapshot.id);
     const exactGuardSnapshot =
@@ -3579,7 +3581,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       d1PreparedStatementFromDrizzle(
         this.db,
         reusableSnapshot
-          ? d1UpdateSourceSnapshotObservationStmt(this.#orm, reusableSnapshot, committedSnapshot)
+          ? d1UpdateSourceSnapshotObservationStmt(this.#orm, reusableSnapshot, latestLane!.recordJson, committedSnapshot)
           : d1InsertSourceSnapshotIfAbsentStmt(this.#orm, snapshot),
       ),
       d1PreparedStatementFromDrizzle(
@@ -3616,11 +3618,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           input.leaseToken,
         ) !== undefined) {
           if (!retriedLaneRace) {
-            const currentLaneSnapshot = await this.getLatestSourceSnapshotForLane(snapshotLane);
+            const currentLane = await this.#readLatestSourceSnapshotForLane(snapshotLane);
             if (
-              (currentLaneSnapshot === undefined) !== (latestLaneSnapshot === undefined) ||
-              (currentLaneSnapshot !== undefined && latestLaneSnapshot !== undefined &&
-                !sourceSnapshotsExactlyMatch(currentLaneSnapshot, latestLaneSnapshot))
+              currentLane?.recordJson !== latestLane?.recordJson ||
+              currentLane?.snapshot.id !== latestLaneSnapshot?.id ||
+              currentLane?.snapshot.fetchedAt !== latestLaneSnapshot?.fetchedAt
             ) {
               return await this.#commitSourceSyncSuccess(input, true);
             }
@@ -9737,8 +9739,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     readonly ref: string;
     readonly path: string;
   }): Promise<SourceSnapshot | undefined> {
+    return (await this.#readLatestSourceSnapshotForLane(input))?.snapshot;
+  }
+
+  async #readLatestSourceSnapshotForLane(input: {
+    readonly sourceId: string;
+    readonly workspaceId: string;
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+  }): Promise<{ snapshot: SourceSnapshot; recordJson: string } | undefined> {
     const row = await this.#orm
-      .select({ recordJson: schema.sourceSnapshots.recordJson })
+      .select({ recordJson: sql<string>`CAST(${schema.sourceSnapshots.recordJson} AS TEXT)` })
       .from(schema.sourceSnapshots)
       .where(and(
         eq(schema.sourceSnapshots.sourceId, input.sourceId),
@@ -9750,9 +9762,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .orderBy(desc(schema.sourceSnapshots.fetchedAt), desc(schema.sourceSnapshots.id))
       .limit(1)
       .get();
-    return normalizeOptionalSourceSnapshotRecord(
-      row?.recordJson as SourceSnapshot | undefined,
-    );
+    if (row === undefined) return undefined;
+    return {
+      snapshot: normalizeSourceSnapshotRecord(parseD1JsonColumn(row.recordJson) as SourceSnapshot),
+      recordJson: row.recordJson,
+    };
   }
 
   async listSourceSnapshots(
@@ -11391,6 +11405,7 @@ function d1SourceSyncSettlementEnvelope(
   snapshot: SourceSnapshot,
   observation: SourceSyncSettlementObservation,
   latestLaneSnapshot: SourceSnapshot | undefined,
+  latestLaneRecordJson: string | undefined,
 ): D1SourceSyncSettlementEnvelope {
   if (
     observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
@@ -11425,8 +11440,7 @@ function d1SourceSyncSettlementEnvelope(
       path: snapshot.path,
       latestId: latestLaneSnapshot?.id ?? null,
       latestFetchedAt: latestLaneSnapshot?.fetchedAt ?? null,
-      latestRecordJson: latestLaneSnapshot === undefined
-        ? null : JSON.stringify(latestLaneSnapshot),
+      latestRecordJson: latestLaneRecordJson ?? null,
     },
     capsules: observation.capsules.map((capsule) => ({
       id: capsule.id,
@@ -12145,6 +12159,7 @@ function d1UpdateSourceSyncCursorStmt(
 function d1UpdateSourceSnapshotObservationStmt(
   orm: DrizzleD1Database<typeof schema>,
   previous: SourceSnapshot,
+  previousRecordJson: string,
   replacement: SourceSnapshot,
 ) {
   return orm.update(schema.sourceSnapshots)
@@ -12152,7 +12167,7 @@ function d1UpdateSourceSnapshotObservationStmt(
     .where(and(
       eq(schema.sourceSnapshots.id, previous.id),
       eq(schema.sourceSnapshots.sourceId, previous.sourceId),
-      eq(schema.sourceSnapshots.recordJson, previous),
+      sql`${schema.sourceSnapshots.recordJson} = ${previousRecordJson}`,
       eq(schema.sourceSnapshots.fetchedAt, previous.fetchedAt),
     ));
 }

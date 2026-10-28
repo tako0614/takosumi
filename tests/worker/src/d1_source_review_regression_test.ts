@@ -135,3 +135,43 @@ test("D1 retries when the same lane snapshot gains repaired evidence", async () 
   expect((await store.listSourceSnapshots(sourceId)).map((row) => row.id))
     .toEqual([original.snapshot.id]);
 });
+
+test("D1 settles a legacy alias snapshot using its physical JSON guard", async () => {
+  const db = new InterleavedD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  await store.putWorkspace({
+    id: workspaceId, handle: "d1-lane-race", displayName: "D1 lane race",
+    type: "personal", ownerUserId: "owner_d1_lane_race",
+    createdAt: t0, updatedAt: t0,
+  });
+  await store.putSource({
+    id: sourceId, workspaceId, name: "repo", url, defaultRef: "main",
+    defaultPath: ".", status: "active", autoSync: true, hookSecretHash: "hash",
+    createdAt: t0, updatedAt: t0,
+  });
+  const original = await prepare(store, 1);
+  const originalWithInvalid = { ...original, snapshot: {
+    ...original.snapshot,
+    repositoryInstallMetadata: { status: "invalid", reason: "too_large" } as const,
+  } };
+  expect((await store.commitSourceSyncSuccess(originalWithInvalid)).won).toBe(true);
+  const { archiveRef, ...withoutArchiveRef } = originalWithInvalid.snapshot;
+  const legacyJson = JSON.stringify({
+    ...withoutArchiveRef, archiveObjectKey: archiveRef,
+  });
+  await db.prepare("update source_snapshots set record_json = ? where id = ?")
+    .bind(legacyJson, original.snapshot.id).run();
+
+  const repair = await prepare(store, 2);
+  const repairWithEvidence = { ...repair, snapshot: {
+    ...repair.snapshot,
+    repositoryInstallMetadata: { status: "present", text: "repaired" } as const,
+  } };
+  const settled = await store.commitSourceSyncSuccess(repairWithEvidence);
+  expect(settled.won).toBe(true);
+  expect(settled.run?.snapshotId).toBe(original.snapshot.id);
+  expect((await store.getSourceSnapshot(original.snapshot.id))?.repositoryInstallMetadata)
+    .toEqual({ status: "present", text: "repaired" });
+  expect((await store.listSourceSnapshots(sourceId)).map((row) => row.id))
+    .toEqual([original.snapshot.id]);
+});
