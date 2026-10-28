@@ -95,6 +95,12 @@ const legacyCredentialMintEventsTable = sqliteTable("credential_mint_events", {
   phase: text("phase"), recordJson: text("record_json"), createdAt: text("created_at"),
 });
 
+const capsuleMembersWriteTable = sqliteTable("capsule_members", {
+  capsuleId: text("capsule_id"), accountId: text("account_id"),
+  status: text("status"), addedBy: text("added_by"),
+  createdAt: text("created_at"), updatedAt: text("updated_at"),
+});
+
 const d1LegacyUsageSelect = {
   id: schema.usageEvents.id,
   workspaceId: schema.usageEvents.workspaceId,
@@ -7101,6 +7107,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             managementEpoch: capsule.managementEpoch ?? 0,
             storageRoot: capsule.storageRoot ?? `apps/${capsule.id}`,
           }).where(eq(schema.capsules.id, capsule.id)),
+          this.#orm.insert(capsuleMembersWriteTable).select(
+            this.#orm.select({
+              capsuleId: sql<string>`${capsule.id}`.as("capsuleId"),
+              accountId: schema.workspaceMembers.accountId,
+              status: sql<string>`'active'`.as("status"),
+              addedBy: sql<string>`${capsule.ownerAccountId}`.as("addedBy"),
+              createdAt: sql<string>`${capsule.createdAt}`.as("createdAt"),
+              updatedAt: sql<string>`${capsule.createdAt}`.as("updatedAt"),
+            }).from(schema.workspaceMembers).where(and(
+              eq(schema.workspaceMembers.workspaceId, capsule.workspaceId),
+              eq(schema.workspaceMembers.status, "active"),
+              ne(schema.workspaceMembers.accountId, capsule.ownerAccountId),
+              sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = 'active'`,
+              sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
+              sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
+              sql`exists (select 1 from json_each(${schema.workspaceMembers.recordJson}, '$.roles') where value in ('owner', 'admin'))`,
+            )),
+          ).onConflictDoNothing(),
         ] : []),
         this.#orm.insert(schema.providerBindingSets).values({
           id: binding.id,

@@ -7185,6 +7185,23 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       });
       await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
       await this.#initializeCapsulePhysicalOwner(capsule, transaction);
+      if (capsule.ownerAccountId &&
+        await this.#v77Column("takosumi_capsules", "owner_account_id", transaction)) {
+        await transaction.query(
+          `insert into takosumi_capsule_members
+             (capsule_id, account_id, status, added_by, created_at, updated_at)
+           select $1, member.account_id, 'active', $2, $3, $3
+             from takosumi_workspace_members as member
+            where member.workspace_id=$4 and member.status='active'
+              and member.account_id<>$2
+              and member.member_json ->> 'status'='active'
+              and member.member_json ->> 'workspaceId'=member.workspace_id
+              and member.member_json ->> 'accountId'=member.account_id
+              and (member.member_json -> 'roles' ? 'owner' or member.member_json -> 'roles' ? 'admin')
+           on conflict (capsule_id, account_id) do nothing`,
+          [capsule.id, capsule.ownerAccountId, capsule.createdAt, capsule.workspaceId],
+        );
+      }
       await db.insert(pgSchema.providerBindingSets).values({
         id: binding.id,
         workspaceId: binding.workspaceId,

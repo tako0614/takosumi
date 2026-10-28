@@ -22,6 +22,8 @@ export type ArtifactReferenceAllocation =
         | { readonly kind: "resource"; readonly id: string };
       readonly environment: string;
       readonly generation: number;
+      /** Trusted persisted Capsule root; absent for pre-v77 Capsules. */
+      readonly storageRoot?: string;
     }
   | {
       readonly kind: "raw_output";
@@ -30,6 +32,8 @@ export type ArtifactReferenceAllocation =
         | { readonly kind: "capsule"; readonly id: string }
         | { readonly kind: "resource"; readonly id: string };
       readonly runId: string;
+      /** Trusted persisted Capsule root; absent for pre-v77 Capsules. */
+      readonly storageRoot?: string;
     }
   | {
       readonly kind:
@@ -50,8 +54,9 @@ export interface ArtifactReferenceAllocator {
  *
  * These layouts are deliberately isolated in the storage adapter. The returned
  * values cross Core and runner contracts only as opaque `*Ref` strings. Current
- * allocations use canonical Workspace/Capsule/Resource vocabulary; historical
- * references already stored in immutable migration data remain opaque inputs.
+ * Capsule allocations follow the persisted root; legacy Capsule and Resource
+ * coordinates retain their Workspace prefix. Historical references already
+ * stored in immutable migration data remain opaque inputs.
  */
 export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAllocator {
   allocate(input: ArtifactReferenceAllocation): string {
@@ -66,7 +71,10 @@ export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAll
           input.subject.kind === "resource"
             ? `resources/${segment(input.subject.id)}`
             : `capsules/${segment(input.subject.id)}`;
-        return `workspaces/${segment(input.workspaceId)}/${owner}/environments/${segment(
+        const root = input.subject.kind === "capsule"
+          ? capsuleArtifactRoot(input.workspaceId, input.subject.id, input.storageRoot)
+          : `workspaces/${segment(input.workspaceId)}/${owner}`;
+        return `${root}/environments/${segment(
           input.environment,
         )}/state-versions/${generation}.tfstate.enc`;
       }
@@ -75,7 +83,10 @@ export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAll
           input.subject.kind === "resource"
             ? `resources/${segment(input.subject.id)}`
             : `capsules/${segment(input.subject.id)}`;
-        return `workspaces/${segment(input.workspaceId)}/${owner}/runs/${segment(
+        const root = input.subject.kind === "capsule"
+          ? capsuleArtifactRoot(input.workspaceId, input.subject.id, input.storageRoot)
+          : `workspaces/${segment(input.workspaceId)}/${owner}`;
+        return `${root}/runs/${segment(
           input.runId,
         )}/outputs.raw.json.enc`;
       }
@@ -89,6 +100,19 @@ export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAll
         return backupRef(input, "service-data.tar.zst.enc");
     }
   }
+}
+
+/** A persisted root is an exact Capsule identity, never a free-form R2 path. */
+export function capsuleArtifactRoot(
+  workspaceId: string,
+  capsuleId: string,
+  persistedRoot?: string,
+): string {
+  const legacy = `workspaces/${segment(workspaceId)}/capsules/${segment(capsuleId)}`;
+  if (persistedRoot === undefined || persistedRoot === legacy) return legacy;
+  const app = `apps/${segment(capsuleId)}`;
+  if (persistedRoot === app && capsuleId === segment(capsuleId)) return app;
+  throw new Error("persisted Capsule storageRoot is not canonical");
 }
 
 function backupRef(

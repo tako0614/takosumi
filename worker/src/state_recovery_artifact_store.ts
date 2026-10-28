@@ -5,6 +5,7 @@
  * the host's ArtifactReferenceAllocator.
  */
 import type { ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import { capsuleArtifactRoot } from "../../core/adapters/storage/artifact-references.ts";
 import {
   VERIFIED_RECOVERY_ARTIFACT_FORMAT,
   type RecoveryArtifactVerifier,
@@ -68,6 +69,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   readonly #allocator: ArtifactReferenceAllocator;
   readonly #storageUsage: ArtifactStorageUsagePort | undefined;
   readonly #storedService: StoredServiceComposition | undefined;
+  readonly #resolveStorageRoot: ((workspaceId: string, capsuleId: string) => Promise<string | undefined>) | undefined;
 
   constructor(input: {
     readonly bucket: R2Bucket;
@@ -76,6 +78,8 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     /** Trusted optional host capability; an HTTP caller cannot select it. */
     readonly storageUsage?: ArtifactStorageUsagePort;
     readonly storedService?: StoredServiceComposition;
+    /** Reads the Capsule's persisted root on each allocation, never from a request. */
+    readonly resolveStorageRoot?: (workspaceId: string, capsuleId: string) => Promise<string | undefined>;
   }) {
     if (input.storageUsage && input.storedService) throw recoveryArtifactError("recovery storage profiles are mutually exclusive");
     this.#bucket = input.bucket;
@@ -83,6 +87,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     this.#allocator = input.allocator;
     this.#storageUsage = input.storageUsage;
     this.#storedService = input.storedService;
+    this.#resolveStorageRoot = input.resolveStorageRoot;
   }
 
   async stage(input: StageRecoveryStateInput): Promise<StagedRecoveryStateArtifact> {
@@ -234,18 +239,22 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   async #allocate(scope: RecoveryStateArtifactScope, validate = true): Promise<string> {
     if (validate) validateScope(scope);
     let ref: string;
+    let root: string;
     try {
+      const persistedRoot = await this.#resolveStorageRoot?.(scope.workspaceId, scope.capsuleId);
+      root = capsuleArtifactRoot(scope.workspaceId, scope.capsuleId, persistedRoot);
       ref = await this.#allocator.allocate({
         kind: "state",
         workspaceId: scope.workspaceId,
         subject: { kind: "capsule", id: scope.capsuleId },
         environment: scope.environment,
         generation: 1,
+        ...(persistedRoot === undefined ? {} : { storageRoot: persistedRoot }),
       });
     } catch {
       throw recoveryArtifactError("recovery state allocation failed");
     }
-    const canonical = `workspaces/${safeSegment(scope.workspaceId)}/capsules/${safeSegment(scope.capsuleId)}/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
+    const canonical = `${root}/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
     if (ref !== canonical) throw recoveryArtifactError("recovery state allocation is not canonical");
     return ref;
   }

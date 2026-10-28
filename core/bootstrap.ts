@@ -104,6 +104,8 @@ import {
   type RetryCapsuleInterfaceMaterializationFailureInput,
 } from "./domains/interfaces/materialization_intent_failures.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
+import { InMemoryAppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "./domains/app-ownership/store.ts";
+import type { AppAccessResolver } from "takosumi-contract/app-access";
 import {
   type BackupArtifactStore,
   type BackupObjectReader,
@@ -484,6 +486,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /** Durable Takosumi-managed runtime Interface declarations and bindings. */
   readonly interfaceStores?: InterfaceStores;
+  readonly appOwnershipStore?: AppOwnershipStore;
   /** Recoverable host materialization of canonical Interface/Binding state. */
   readonly interfaceProjectionSink?: InterfaceProjectionSink;
   /**
@@ -647,6 +650,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  * logic.
  */
 export interface TakosumiOperations {
+  readonly appAccess: AppAccessResolver;
+  readonly appOwnership: AppOwnershipStore;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
@@ -1078,6 +1083,10 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
+  const appOwnershipStore = options.appOwnershipStore ??
+    (options.sqlClient
+      ? new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore)
+      : new InMemoryAppOwnershipStore(durableOpenTofuStore));
   const operatorInstallConfigs = options.operatorInstallConfigs ?? [];
   const defaultInstallConfigOverrides = operatorInstallConfigs.filter(
     (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -1763,7 +1772,7 @@ export async function createTakosumiService(
         }
       : undefined,
     deployControlInternalRouteOptions: {
-      controller: opentofuController,
+        controller: opentofuController,
       ...(options.buildConnectionSetupRequest
         ? { buildConnectionSetupRequest: options.buildConnectionSetupRequest }
         : {}),
@@ -1827,6 +1836,8 @@ export async function createTakosumiService(
       }),
   };
   const operations: TakosumiOperations = {
+    appAccess: appOwnershipStore,
+    appOwnership: appOwnershipStore,
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,
