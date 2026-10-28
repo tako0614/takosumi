@@ -44,6 +44,25 @@ import {
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
+
+const pgLegacyUsageSelect = {
+  id: pgSchema.usageEvents.id,
+  workspaceId: pgSchema.usageEvents.workspaceId,
+  capsuleId: pgSchema.usageEvents.capsuleId,
+  runId: pgSchema.usageEvents.runId,
+  meterId: pgSchema.usageEvents.meterId,
+  resourceFamily: pgSchema.usageEvents.resourceFamily,
+  resourceId: pgSchema.usageEvents.resourceId,
+  operation: pgSchema.usageEvents.operation,
+  resourceMetadataJson: pgSchema.usageEvents.resourceMetadataJson,
+  kind: pgSchema.usageEvents.kind,
+  quantity: pgSchema.usageEvents.quantity,
+  usdMicros: pgSchema.usageEvents.usdMicros,
+  ratingStatus: pgSchema.usageEvents.ratingStatus,
+  source: pgSchema.usageEvents.source,
+  idempotencyKey: pgSchema.usageEvents.idempotencyKey,
+  createdAt: pgSchema.usageEvents.createdAt,
+};
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type {
@@ -10979,7 +10998,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     idempotencyKey: string,
   ): Promise<UsageEvent | undefined> {
     const rows = await this.#db
-      .select()
+      .select(pgLegacyUsageSelect)
       .from(pgSchema.usageEvents)
       .where(eq(pgSchema.usageEvents.idempotencyKey, idempotencyKey))
       .limit(1);
@@ -10990,7 +11009,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
 
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
     const rows = await this.#db
-      .select()
+      .select(pgLegacyUsageSelect)
       .from(pgSchema.usageEvents)
       .where(eq(pgSchema.usageEvents.workspaceId, workspaceId))
       .orderBy(
@@ -11022,7 +11041,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   ): Promise<Page<UsageEvent>> {
     const limit = clampPageLimit(params.limit);
     const rows = await this.#db
-      .select()
+      .select(pgLegacyUsageSelect)
       .from(pgSchema.usageEvents)
       .where(
         pgKeysetWhereDesc(
