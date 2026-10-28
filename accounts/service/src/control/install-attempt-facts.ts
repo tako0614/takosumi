@@ -56,6 +56,12 @@ export function deterministicInitialCapsuleId(planId: string): string {
   return `cap_${suffix.padStart(16, "0")}`;
 }
 
+/** Deterministic Source id reserved for one install plan. */
+export function deterministicInstallSourceId(planId: string): string {
+  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
+  return `src_${suffix.padStart(16, "0")}`;
+}
+
 /** `https://github.com/o/my_App.git` → `my-app`; never empty. */
 export function proposedAppName(url: string): string {
   const last = url

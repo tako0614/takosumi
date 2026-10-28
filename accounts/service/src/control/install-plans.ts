@@ -63,6 +63,7 @@ import {
   connectionRequirements,
   connectionsReady,
   deterministicInitialCapsuleId,
+  deterministicInstallSourceId,
   effectiveProviderBindings,
   moduleCandidates,
   nameProposal,
@@ -106,7 +107,6 @@ import {
 } from "./shared.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
-const MAX_SOURCE_INVENTORY = 500;
 const MAX_DIAGNOSTIC_CODE = 64;
 const MAX_DIAGNOSTIC_MESSAGE = 256;
 const MAX_DIAGNOSTIC_REASON = 128;
@@ -308,6 +308,16 @@ export async function handleWorkspaceInstallPlans(
     createdAt: now,
     updatedAt: now,
   };
+  if (plan.preflight) {
+    try {
+      await assertLegacyPreflightSourceOwnership(plan, ctx.operations);
+    } catch (error) {
+      if (error instanceof PermanentInstallPlanError) {
+        return errorJson(error.diagnostic.code, error.diagnostic.message, 409, ctx.request);
+      }
+      throw error;
+    }
+  }
   const result = await ctx.operations.gitInstallPlans.create(
     plan,
     expectedWorkspaceManagementAuthority,
@@ -1358,9 +1368,16 @@ async function reconcileInstallPlan(
   try {
     outcome = await advanceInstallPlan(acquired.plan, ctx);
   } catch (error) {
+    const permanentControllerDiagnostic =
+      permanentInstallControllerDiagnostic(error);
     if (error instanceof PermanentInstallPlanError) {
       outcome = {
         plan: failedPlan(acquired.plan, error.diagnostic),
+        retryable: false,
+      };
+    } else if (permanentControllerDiagnostic) {
+      outcome = {
+        plan: failedPlan(acquired.plan, permanentControllerDiagnostic),
         retryable: false,
       };
     } else {
@@ -1447,44 +1464,26 @@ async function advanceSource(
 ): Promise<StoredGitInstallPlan> {
   let sourceId = plan.sourceId;
   if (!sourceId) {
-    const inventory = await operations.listSources(plan.workspaceId, {
-      limit: MAX_SOURCE_INVENTORY,
+    sourceId = deterministicInstallSourceId(plan.id);
+    const created = await operations.ensureOwnedSource({
+      id: sourceId,
+      workspaceId: plan.workspaceId,
+      name: plan.source.name,
+      ownerCapsuleId: deterministicInitialCapsuleId(plan.id),
+      createdByInstallPlanId: plan.id,
+      url: plan.source.url,
+      ref: plan.source.ref,
+      path: plan.source.path,
+      ...(plan.source.authConnectionId
+        ? { authConnectionId: plan.source.authConnectionId }
+        : {}),
+      createdAt: plan.createdAt,
+    }, plan.workspaceManagementAuthority);
+    assertInstallSourceMatchesPlan(created.source, plan, sourceId);
+    return progressed(plan, {
+      sourceId,
+      ...(plan.mode === "attempt" ? { sourceCreatedByAttempt: true } : {}),
     });
-    const matches = inventory.sources.filter((source) =>
-      sourceMatchesPlan(source, plan),
-    );
-    if (matches.length > 1) {
-      throw permanent(
-        "source_identity_ambiguous",
-        "More than one Source matches the immutable install-plan address.",
-      );
-    }
-    if (matches[0]) {
-      sourceId = matches[0].id;
-    } else {
-      if (inventory.nextCursor) {
-        throw permanent(
-          "source_inventory_incomplete",
-          "The bounded Source inventory cannot prove that creating another Source is safe.",
-        );
-      }
-      const created = await operations.createSource({
-        workspaceId: plan.workspaceId,
-        name: plan.source.name,
-        url: plan.source.url,
-        defaultRef: plan.source.ref,
-        defaultPath: plan.source.path,
-        ...(plan.source.authConnectionId
-          ? { authConnectionId: plan.source.authConnectionId }
-          : {}),
-      }, plan.workspaceManagementAuthority);
-      // `hookSecret` is deliberately discarded at the call boundary.
-      sourceId = created.source.id;
-      if (plan.mode === "attempt") {
-        return progressed(plan, { sourceId, sourceCreatedByAttempt: true });
-      }
-    }
-    return progressed(plan, { sourceId });
   }
 
   const { source } = await operations.getSource(sourceId);
@@ -1499,31 +1498,23 @@ async function advanceSource(
   if (plan.sourceSyncRunId) {
     sync = await operations.getSourceSyncRun(plan.sourceSyncRunId);
   } else {
-    const candidates = (await operations.listRuns(plan.workspaceId, {
-      limit: MAX_SOURCE_INVENTORY,
-    }))
-      .filter(
-        (run) =>
-          run.type === "source_sync" &&
-          run.sourceId === sourceId &&
-          run.ref === plan.source.ref &&
-          run.createdAt >= plan.createdAt,
-      )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    if (candidates[0]) {
-      sync = await operations.getSourceSyncRun(candidates[0].id);
-    } else {
-      sync = (
-        await operations.createSourceSync(
-          sourceId,
-          {
-            intent: "manual_plan",
-            dedupe: true,
+    const evidence = await installSourceSyncEvidence(plan, sourceId);
+    sync = (
+      await operations.createSourceSync(
+        sourceId,
+        {
+          intent: "manual_plan",
+          dedupe: true,
+          coordinator: {
+            ref: plan.source.ref,
+            path: plan.source.path,
+            runId: evidence.runId,
+            snapshotId: evidence.snapshotId,
           },
-          plan.workspaceManagementAuthority,
-        )
-      ).run;
-    }
+        },
+        plan.workspaceManagementAuthority,
+      )
+    ).run;
   }
   return sourceSyncProgress(plan, sync, operations);
 }
@@ -1533,15 +1524,22 @@ async function sourceSyncProgress(
   sync: SourceSyncRun,
   operations: ControlPlaneOperations,
 ): Promise<StoredGitInstallPlan> {
+  const sourceId = plan.sourceId!;
+  const evidence = await installSourceSyncEvidence(plan, sourceId);
+  const source = (await operations.getSource(sourceId)).source;
   if (
+    sync.id !== evidence.runId ||
+    (sync.requestedSnapshotId ?? sync.snapshotId) !== evidence.snapshotId ||
     sync.workspaceId !== plan.workspaceId ||
-    sync.sourceId !== plan.sourceId ||
+    sync.sourceId !== sourceId ||
+    sync.url !== source.url ||
     sync.ref !== plan.source.ref ||
-    sync.path !== plan.source.path
+    sync.path !== plan.source.path ||
+    sync.intent !== "manual_plan"
   ) {
     throw permanent(
-      "source_sync_scope_mismatch",
-      "The Source sync evidence does not match this install plan.",
+      "source_sync_identity_conflict",
+      "The deterministic Source sync identity is bound to different install-plan evidence.",
     );
   }
   if (sync.status === "queued" || sync.status === "running") {
@@ -1561,10 +1559,18 @@ async function sourceSyncProgress(
   }
   const snapshot = await sourceSnapshotById(
     operations,
-    plan.sourceId!,
+    sourceId,
     sync.snapshotId,
   );
-  if (!snapshotMatchesPlan(snapshot, plan)) {
+  if (
+    !snapshotMatchesPlan(snapshot, plan) ||
+    !sync.resolvedCommit ||
+    snapshot.resolvedCommit !== sync.resolvedCommit ||
+    !sync.archiveDigest ||
+    snapshot.archiveDigest !== sync.archiveDigest ||
+    sync.archiveSizeBytes === undefined ||
+    snapshot.archiveSizeBytes !== sync.archiveSizeBytes
+  ) {
     throw permanent(
       "source_snapshot_scope_mismatch",
       "The Source snapshot does not match this immutable install plan.",
@@ -1948,7 +1954,7 @@ async function createCapsule(
   }
   const reviewedVariables = transientVariables ?? plan.initialVariables;
   const source = (await operations.getSource(plan.sourceId!)).source;
-  if (!sourceMatchesPlan(source, plan) || source.status !== "active") {
+  if (!sourceMatchesPlan(source, plan, true) || source.status !== "active") {
     throw permanent(
       "source_identity_changed",
       "The canonical Source no longer matches this immutable install plan.",
@@ -2533,8 +2539,8 @@ async function createOrObservePlanRun(
     });
   }
   if (run.status === "succeeded" || run.status === "waiting_approval") {
-    if (plan.mode === "attempt" && plan.sourceCreatedByAttempt === true) {
-      if (await enableAttemptSourcePolling(plan, operations)) {
+    if (await enableInstallSourcePolling(plan, operations)) {
+      if (plan.mode === "attempt" && plan.sourceCreatedByAttempt === true) {
         plan = { ...plan, sourcePollingEnabledByAttempt: true };
       }
     }
@@ -2548,18 +2554,15 @@ async function createOrObservePlanRun(
 }
 
 /**
- * The Source an attempt registered itself follows its Git ref once the app is
- * reviewable, as the installer previously did with a client PATCH. Idempotent;
- * a failure is retryable and repeated by the next reconcile.
+ * The install-owned Source follows its Git ref once the app is reviewable.
+ * Only attempt mode tracks this for best-effort discard reversal.
  */
-async function enableAttemptSourcePolling(
+async function enableInstallSourcePolling(
   plan: StoredGitInstallPlan,
   operations: ControlPlaneOperations,
 ): Promise<boolean> {
-  if (plan.sourcePollingEnabledByAttempt === true) return false;
   const { source } = await operations.getSource(plan.sourceId!);
-  // A Source someone changed or already polls is not this attempt's to tune;
-  // only polling this attempt turned on is recorded and later reverted.
+  // Never tune a Source whose ownership or immutable Git address changed.
   if (!sourceMatchesPlan(source, plan) || source.autoSync) return false;
   await operations.patchSource(source.id, { autoSync: true });
   return true;
@@ -3172,16 +3175,110 @@ async function sourceSnapshotById(
 function sourceMatchesPlan(
   source: Source,
   plan: StoredGitInstallPlan,
+  allowUnclaimedPreflight = false,
 ): boolean {
   return (
+    source.id === plan.sourceId &&
     source.workspaceId === plan.workspaceId &&
-    source.name === plan.source.name &&
+    (source.ownerCapsuleId === deterministicInitialCapsuleId(plan.id) ||
+      (allowUnclaimedPreflight && plan.preflight !== undefined &&
+        source.ownerCapsuleId === undefined)) &&
     normalizeInstallConfigSourceUrl(source.url) === plan.source.url &&
     source.defaultRef === plan.source.ref &&
     source.defaultPath === plan.source.path &&
     (source.authConnectionId ?? undefined) ===
       (plan.source.authConnectionId ?? undefined)
   );
+}
+
+function assertInstallSourceMatchesPlan(
+  source: Source,
+  plan: StoredGitInstallPlan,
+  sourceId: string,
+): void {
+  if (
+    source.id !== sourceId ||
+    source.workspaceId !== plan.workspaceId ||
+    source.ownerCapsuleId !== deterministicInitialCapsuleId(plan.id) ||
+    normalizeInstallConfigSourceUrl(source.url) !== plan.source.url ||
+    source.defaultRef !== plan.source.ref ||
+    source.defaultPath !== plan.source.path ||
+    (source.authConnectionId ?? undefined) !==
+      (plan.source.authConnectionId ?? undefined)
+  ) {
+    throw permanent(
+      "source_identity_conflict",
+      "The deterministic Source id is bound to different install-plan ownership or Git address.",
+    );
+  }
+}
+
+async function assertLegacyPreflightSourceOwnership(
+  plan: StoredGitInstallPlan,
+  operations: ControlPlaneOperations,
+): Promise<void> {
+  const sourceId = plan.sourceId;
+  if (!sourceId || !plan.preflight) {
+    throw permanent(
+      "install_preflight_source_missing",
+      "The reviewed preflight has no Source identity.",
+    );
+  }
+  const { source } = await operations.getSource(sourceId);
+  const intendedCapsuleId = deterministicInitialCapsuleId(plan.id);
+  if (
+    source.id !== sourceId ||
+    source.workspaceId !== plan.workspaceId ||
+    normalizeInstallConfigSourceUrl(source.url) !== plan.source.url ||
+    source.defaultRef !== plan.source.ref ||
+    source.defaultPath !== plan.source.path ||
+    (source.authConnectionId ?? undefined) !==
+      (plan.source.authConnectionId ?? undefined)
+  ) {
+    throw permanent(
+      "source_identity_changed",
+      "The reviewed preflight Source no longer matches its immutable Git address.",
+    );
+  }
+  if (
+    source.ownerCapsuleId !== undefined &&
+    source.ownerCapsuleId !== intendedCapsuleId
+  ) {
+    throw permanent(
+      "source_owned_by_another_app",
+      "The reviewed preflight Source already belongs to another app.",
+    );
+  }
+}
+
+interface InstallSourceSyncEvidence {
+  readonly requestDigest: string;
+  readonly runId: string;
+  readonly snapshotId: string;
+}
+
+async function installSourceSyncEvidence(
+  plan: StoredGitInstallPlan,
+  sourceId: string,
+): Promise<InstallSourceSyncEvidence> {
+  const requestDigest = await stableJsonDigest({
+    kind: "git_install_source_sync_v1",
+    installPlanId: plan.id,
+    installRequestDigest: plan.requestDigest,
+    workspaceId: plan.workspaceId,
+    capsuleId: deterministicInitialCapsuleId(plan.id),
+    sourceId,
+    url: plan.source.url,
+    ref: plan.source.ref,
+    path: plan.source.path,
+    authConnectionId: plan.source.authConnectionId ?? null,
+  });
+  const suffix = requestDigest.replace(/^sha256:/u, "").slice(0, 16);
+  return {
+    requestDigest,
+    runId: `ssr_${suffix}`,
+    snapshotId: `snap_${suffix}`,
+  };
 }
 
 function snapshotMatchesPlan(
@@ -3376,6 +3473,32 @@ function retryableDiagnostic(
     ...(controllerCode ? { controllerCode } : {}),
     ...(reason ? { reason } : {}),
   };
+}
+
+function permanentInstallControllerDiagnostic(
+  error: unknown,
+): GitInstallPlanDiagnostic | undefined {
+  switch (structuredErrorReason(error)) {
+    case "source_identity_conflict":
+      return {
+        code: "source_identity_conflict",
+        message:
+          "The deterministic Source id is bound to different install-plan ownership or Git address.",
+      };
+    case "source_owned_by_another_app":
+      return {
+        code: "source_owned_by_another_app",
+        message: "This Source already belongs to another app.",
+      };
+    case "source_sync_identity_conflict":
+      return {
+        code: "source_sync_identity_conflict",
+        message:
+          "The deterministic Source sync identity is bound to different install-plan evidence.",
+      };
+    default:
+      return undefined;
+  }
 }
 
 function planCreationStage(

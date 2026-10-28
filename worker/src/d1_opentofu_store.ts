@@ -279,6 +279,7 @@ import {
   workspaceAccountAuthorityAllowed,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
+  SourceOwnershipConflictError,
   mergeReusableSourceSnapshotObservations,
   assertWorkspaceManagementAuthorityInput,
   assertWorkspaceFreezeExpectation,
@@ -6864,6 +6865,34 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         )
         .limit(1)
         .get();
+    const classifySourceOwner = async (): Promise<
+      "eligible" | "conflict" | "source_owned_by_another_app"
+    > => {
+      const row = await this.#readD1StoredSourceRow(capsule.sourceId);
+      const source = row ? sourceFromD1Row(row) : undefined;
+      if (!source || source.workspaceId !== capsule.workspaceId) return "conflict";
+      const other = await this.#orm.select({ id: schema.capsules.id })
+        .from(schema.capsules)
+        .where(and(
+          ne(schema.capsules.id, capsule.id),
+          d1CapsuleReferencesSourceWhere(capsule.sourceId),
+        )).limit(1).get();
+      return source.ownerCapsuleId !== undefined &&
+          source.ownerCapsuleId !== capsule.id || other
+        ? "source_owned_by_another_app"
+        : "eligible";
+    };
+    const sourceOwnership = await classifySourceOwner();
+    if (sourceOwnership === "conflict") {
+      await this.#assertWorkspaceManagementAdmission(
+        capsule.workspaceId,
+        input.expectedWorkspaceManagementAuthority,
+      );
+      return { status: "conflict" };
+    }
+    if (sourceOwnership === "source_owned_by_another_app") {
+      return { status: sourceOwnership };
+    }
     const existing = await classifyExisting();
     if (existing) return existing;
     const duplicate = await findDuplicateCapsule();
@@ -6876,6 +6905,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           capsule.id,
           input.expectedWorkspaceManagementAuthority,
         ),
+        d1CapsuleInitialAuthoritySourceClaimStmt(this.#orm, capsule),
+        d1CapsuleInitialAuthoritySourceGuardStmt(this.#orm, capsule),
         this.#orm.insert(schema.installConfigs).values({
           id: initialInstallConfig.id,
           workspaceId: initialInstallConfig.workspaceId ?? null,
@@ -6917,6 +6948,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       // outcome; only an exact durable unit is a replay, a durable collision is
       // a conflict, and an unexplained storage failure remains an error.
       const concurrent = await classifyExisting();
+      const afterOwnership = await classifySourceOwner();
+      if (afterOwnership !== "eligible") return { status: afterOwnership };
       if (concurrent) return concurrent;
       if (await findDuplicateCapsule()) return { status: "conflict" };
       if (isD1CapsuleStateGuardError(error)) {
@@ -9229,14 +9262,29 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   // -- Source (+ snapshots) ---------------------------------------------------
 
   async putSource(source: StoredSource): Promise<StoredSource> {
-    await this.#drizzleUpsert(schema.sources, {
+    await this.#ensureSchema();
+    const values = {
       id: source.id,
       workspaceId: source.workspaceId,
       status: source.status,
       recordJson: source,
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
-    });
+    };
+    const written = await this.#orm.insert(schema.sources).values(values)
+      .onConflictDoUpdate({
+        target: schema.sources.id,
+        set: values,
+        setWhere: sql`${schema.sources.workspaceId} = ${source.workspaceId}
+          AND json_valid(${schema.sources.recordJson}) = 1
+          AND json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}
+          AND json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}
+          AND json_extract(${schema.sources.recordJson}, '$.ownerCapsuleId') IS ${source.ownerCapsuleId ?? null}
+          AND json_extract(${schema.sources.recordJson}, '$.createdByInstallPlanId') IS ${source.createdByInstallPlanId ?? null}`,
+      }).run();
+    if (changes(written as D1Result) !== 1) {
+      throw new SourceOwnershipConflictError(source.id);
+    }
     return source;
   }
 
@@ -9294,6 +9342,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       // not agree with record_json is immutable corruption. Do not treat it as
       // missing (which could turn this into CREATE) or as a replay/admission
       // result that lets a caller repair ownership through this path.
+      return { status: "conflict" };
+    }
+    if (current && (current.ownerCapsuleId !== source.ownerCapsuleId ||
+      current.createdByInstallPlanId !== source.createdByInstallPlanId)) {
       return { status: "conflict" };
     }
 
@@ -13754,6 +13806,74 @@ function d1CapsuleInitialAuthorityWorkspaceGuardStmt(
       .select(d1InvalidCapsuleGuardRow(capsuleId))
       .from(sql`(select 1) as capsule_initial_authority_guard_source`)
       .where(notExists(workspace)),
+  );
+}
+
+/** Physical and valid JSON references both fence a Source, including destroyed Capsules. */
+function d1CapsuleReferencesSourceWhere(sourceId: string) {
+  return or(
+    eq(schema.capsules.sourceId, sourceId),
+    sql`CASE WHEN json_valid(${schema.capsules.recordJson}) = 1
+      THEN json_extract(${schema.capsules.recordJson}, '$.sourceId') = ${sourceId}
+      ELSE 0 END`,
+  );
+}
+
+/** Claim a previously unowned Source in the same D1 batch as initial authority. */
+function d1CapsuleInitialAuthoritySourceClaimStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  capsule: Capsule,
+) {
+  const other = orm.select({ one: sql`1` }).from(schema.capsules)
+    .where(and(
+      ne(schema.capsules.id, capsule.id),
+      d1CapsuleReferencesSourceWhere(capsule.sourceId),
+    ));
+  return orm.update(schema.sources)
+    .set({
+      recordJson: sql<StoredSource>`json_set(${schema.sources.recordJson}, '$.ownerCapsuleId', ${capsule.id})`,
+    })
+    .where(and(
+      eq(schema.sources.id, capsule.sourceId),
+      eq(schema.sources.workspaceId, capsule.workspaceId),
+      sql`json_valid(${schema.sources.recordJson}) = 1`,
+      sql`json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.status') = ${schema.sources.status}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.createdAt') = ${schema.sources.createdAt}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.updatedAt') = ${schema.sources.updatedAt}`,
+      sql`(json_extract(${schema.sources.recordJson}, '$.ownerCapsuleId') IS NULL
+        OR json_extract(${schema.sources.recordJson}, '$.ownerCapsuleId') = ${capsule.id})`,
+      notExists(other),
+    ));
+}
+
+/** Abort the whole batch if claim, Source identity, or exclusivity is absent. */
+function d1CapsuleInitialAuthoritySourceGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  capsule: Capsule,
+) {
+  const eligible = orm.select({ one: sql`1` }).from(schema.sources)
+    .where(and(
+      eq(schema.sources.id, capsule.sourceId),
+      eq(schema.sources.workspaceId, capsule.workspaceId),
+      sql`json_valid(${schema.sources.recordJson}) = 1`,
+      sql`json_extract(${schema.sources.recordJson}, '$.id') = ${schema.sources.id}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.workspaceId') = ${schema.sources.workspaceId}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.status') = ${schema.sources.status}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.createdAt') = ${schema.sources.createdAt}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.updatedAt') = ${schema.sources.updatedAt}`,
+      sql`json_extract(${schema.sources.recordJson}, '$.ownerCapsuleId') = ${capsule.id}`,
+    ));
+  const other = orm.select({ one: sql`1` }).from(schema.capsules)
+    .where(and(
+      ne(schema.capsules.id, capsule.id),
+      d1CapsuleReferencesSourceWhere(capsule.sourceId),
+    ));
+  return orm.insert(schema.capsules).select(
+    orm.select(d1InvalidCapsuleGuardRow(capsule.id))
+      .from(sql`(select 1) as capsule_initial_source_guard_source`)
+      .where(or(notExists(eligible), exists(other))),
   );
 }
 

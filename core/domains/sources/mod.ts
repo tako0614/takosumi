@@ -138,6 +138,20 @@ export type InstallPlanCompatibilityCheckRequest =
     readonly installPlanIdentity: InstallPlanCompatibilityIdentity;
   };
 
+/** Internal install coordinator input; never accepted by the public Source parser. */
+export interface EnsureOwnedSourceRequest {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly ownerCapsuleId: string;
+  readonly createdByInstallPlanId: string;
+  readonly url: string;
+  readonly ref: string;
+  readonly path: string;
+  readonly authConnectionId?: string;
+  readonly createdAt: string;
+}
+
 export interface SourcesServiceDependencies {
   readonly store: OpenTofuControlStore;
   /** Host authority for opaque durable source-archive references. */
@@ -243,6 +257,70 @@ export class SourcesService {
       expectedWorkspaceManagementAuthority: workspaceManagementAuthority,
     });
     return { source: toPublicSource(persisted), hookSecret };
+  }
+
+  /** Create or recover exactly one app-owned Source after a lost acknowledgement. */
+  async ensureOwnedSource(
+    request: EnsureOwnedSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<SourceResponse> {
+    request = structuredClone(request);
+    for (const key of ["id", "workspaceId", "name", "ownerCapsuleId", "createdByInstallPlanId", "url", "createdAt"] as const) {
+      requireNonEmptyString(request[key], key);
+    }
+    const url = request.url.trim();
+    const ref = boundedRequestedGitRef(request.ref);
+    const path = safeRequestedSourcePath(request.path);
+    if (!evaluateSourceUrl(url).ok || !ref || !path) {
+      throw new OpenTofuControllerError("invalid_argument", "Invalid owned Source Git address.");
+    }
+    if (expectedWorkspaceManagementAuthority !== undefined) {
+      assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, request.workspaceId);
+    }
+    const matches = (source: StoredSource) =>
+      source.id === request.id && source.workspaceId === request.workspaceId &&
+      source.ownerCapsuleId === request.ownerCapsuleId &&
+      source.createdByInstallPlanId === request.createdByInstallPlanId &&
+      source.url === url && source.defaultRef === ref && source.defaultPath === path &&
+      source.authConnectionId === request.authConnectionId;
+    const adopt = (source: StoredSource): SourceResponse => {
+      if (!matches(source)) throw sourceIdentityConflictError();
+      return { source: toPublicSource(source) };
+    };
+    const existing = await this.#store.getSource(request.id);
+    if (existing) return adopt(existing);
+    const authority = expectedWorkspaceManagementAuthority ??
+      await this.#captureWorkspaceManagementAuthority(request.workspaceId);
+    if (request.authConnectionId !== undefined) {
+      requireNonEmptyString(request.authConnectionId, "authConnectionId");
+      await this.#requireConnectionInWorkspace(request.authConnectionId, request.workspaceId);
+    }
+    const source: StoredSource = {
+      id: request.id, workspaceId: request.workspaceId, name: request.name,
+      ownerCapsuleId: request.ownerCapsuleId, createdByInstallPlanId: request.createdByInstallPlanId,
+      url, defaultRef: ref, defaultPath: path,
+      ...(request.authConnectionId === undefined ? {} : { authConnectionId: request.authConnectionId }),
+      status: "active", autoSync: false, createdAt: request.createdAt, updatedAt: request.createdAt,
+      hookSecretHash: await sha256HexOfStringAsync(this.#newHookSecret()),
+    };
+    try {
+      const result = await this.#store.writeSourceConfiguration({
+        source, expectedWorkspaceManagementAuthority: authority,
+      });
+      if (result.status !== "conflict") return adopt(result.source);
+    } catch (error) {
+      // A committed write may have lost its acknowledgement. Only its exact
+      // identity can be recovered; never rewrite a row occupying this id.
+      const committed = await this.#store.getSource(request.id);
+      if (committed) return adopt(committed);
+      if (error instanceof WorkspaceManagementAdmissionConflictError) {
+        throw workspaceManagementAdmissionErrorFor();
+      }
+      throw error;
+    }
+    const winner = await this.#store.getSource(request.id);
+    if (winner) return adopt(winner);
+    throw sourceIdentityConflictError();
   }
 
   async listSources(
@@ -1584,6 +1662,13 @@ function workspaceManagementAdmissionErrorFor(): OpenTofuControllerError {
   );
 }
 
+function sourceIdentityConflictError(): OpenTofuControllerError {
+  return new OpenTofuControllerError(
+    "failed_precondition", "Source identity is already bound to another app or install plan.",
+    { reason: "source_identity_conflict" },
+  );
+}
+
 function sourceConfigurationConflictError(): OpenTofuControllerError {
   return new OpenTofuControllerError(
     "failed_precondition",
@@ -1610,6 +1695,7 @@ export function toPublicSource(stored: StoredSource): Source {
   const {
     hookSecretHash: _hookSecretHash,
     lastSeenCommit: _lastSeenCommit,
+    createdByInstallPlanId: _createdByInstallPlanId,
     ...rest
   } = stored;
   return rest;

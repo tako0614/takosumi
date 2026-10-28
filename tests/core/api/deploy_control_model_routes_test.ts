@@ -310,6 +310,7 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
   const { app, operations } = await service();
   const workspaceId = await createWorkspace(app, "deps");
   const sourceId = await createSource(app, workspaceId);
+  const consumerSourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
   const producer = await createCapsule(
     operations,
@@ -321,7 +322,7 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
   const consumer = await createCapsule(
     operations,
     workspaceId,
-    sourceId,
+    consumerSourceId,
     installConfigId,
     "consumer",
   );

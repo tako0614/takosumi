@@ -1375,17 +1375,21 @@ describe("Capsule execution authority", () => {
         setLeaseToken: "source-management-lease",
         run: running,
       })).won).toBe(true);
+      const deniedSource = { ...source, id: "source-management-denied" };
+      await store.putSource(deniedSource);
       expect((await store.beginWorkspaceDraining(WORKSPACE_ID, authority)).status).toBe("started");
       expect(await store.createProjectRecord({ project })).toEqual({ status: "replayed", project });
       await expect(store.createProjectRecord({ project: { ...project, id: "project_native_denied", slug: "denied" } }))
         .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
       expect(await store.getProject("project_native_denied")).toBeUndefined();
       expect((await store.createCapsuleInitialAuthority(initial)).status).toBe("replayed");
-      await expect(store.writeSourceConfiguration({ source: { ...source, name: "after-drain" }, expectedSource: source }))
+      const currentSource = await store.getSource(source.id);
+      if (!currentSource) throw new Error("owned Source is missing");
+      await expect(store.writeSourceConfiguration({ source: { ...currentSource, name: "after-drain" }, expectedSource: currentSource }))
         .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
       await expect(store.createCapsuleInitialAuthority({
         installConfig: { ...initial.installConfig, id: "config_initial_denied" },
-        capsule: { ...initial.capsule, id: "capsule_initial_denied", name: "denied", slug: "denied", installConfigId: "config_initial_denied" },
+        capsule: { ...initial.capsule, id: "capsule_initial_denied", name: "denied", slug: "denied", installConfigId: "config_initial_denied", sourceId: deniedSource.id },
         providerBindingSet: { ...initial.providerBindingSet, id: "binding_initial_denied", capsuleId: "capsule_initial_denied" },
       })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
       expect(await store.getCapsule("capsule_initial_denied")).toBeUndefined();
@@ -1437,7 +1441,7 @@ describe("Capsule execution authority", () => {
           repositoryModules: { status: "ready", scopePath: ".", modules: [] },
         },
       })).won).toBe(true);
-      expect(await store.getSource(source.id)).toEqual({ ...source, lastSeenCommit: "native-commit" });
+      expect(await store.getSource(source.id)).toEqual({ ...source, ownerCapsuleId: "capsule_initial_native", lastSeenCommit: "native-commit" });
       // SourceSync terminal writes retain private original admission metadata
       // in the existing durable row, without exposing it from typed getters.
       expect(await database.prepare(

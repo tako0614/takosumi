@@ -56,6 +56,8 @@ export type SourceStatus = "active" | "disabled" | "error";
 export interface Source {
   readonly id: string;
   readonly workspaceId: string;
+  /** Exclusive app owner. Once assigned, it cannot be changed or removed. */
+  readonly ownerCapsuleId?: string;
   readonly name: string;
   readonly url: string;
   readonly defaultRef: string;

@@ -94,6 +94,7 @@ import type {
 } from "takosumi-contract/billing";
 import type {
   CompatibilityCheckManagementContext,
+  EnsureOwnedSourceRequest,
   SourcesService,
 } from "../sources/mod.ts";
 import { evaluateSourceUrl } from "../sources/url-policy.ts";
@@ -2387,6 +2388,13 @@ export class OpenTofuController {
       request,
       expectedWorkspaceManagementAuthority,
     );
+  }
+
+  async ensureOwnedSource(
+    request: EnsureOwnedSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<SourceResponse> {
+    return await this.#sources.ensureOwnedSource(request, expectedWorkspaceManagementAuthority);
   }
 
   async listSources(

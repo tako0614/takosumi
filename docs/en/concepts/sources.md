@@ -5,6 +5,15 @@ commit in some repository.
 
 ## Source
 
+Each new install creates a Source owned exclusively by its app. Installing the same repository
+again creates a different Source and sync Run. `ownerCapsuleId` identifies the owning app and
+cannot be changed or removed once assigned. Install-plan-derived IDs let retries recover the
+same Source after a lost acknowledgement.
+
+A Source registered through `POST /sources` for preflight starts unowned. Initial app creation
+claims it atomically; a Source owned or referenced by another app cannot be assigned to a new
+app. Both install modes enable automatic polling when their plan becomes reviewable.
+
 A Source declares that you want to follow this directory of this repository at this ref.
 
 Only three things are required: the Workspace, a name, and a URL.
@@ -30,7 +39,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `defaultRef`       | Git `HEAD`   | The branch, tag, or commit to track                      |
 | `defaultPath`      | `.`          | Repository subtree captured, archived, and scanned       |
 | `authConnectionId` | none         | The Connection used to read a private repository         |
-| `autoSync`         | `false` (the dashboard's add screen sets it to `true` right after creating the Source) | The operator's scheduler checks the Git ref periodically |
+| `autoSync`         | `false` (installs enable it when their plan is reviewable) | The operator's scheduler checks the Git ref periodically |
 
 The Git URL, ref, and source subtree are the Source acquisition coordinate.
 There is no Takosumi-specific source catalog. `defaultPath` narrows the captured

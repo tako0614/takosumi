@@ -108,6 +108,23 @@ function initialAuthority(suffix: string, workspaceId?: string): CapsuleInitialA
   return { installConfig: config, capsule: row, providerBindingSet };
 }
 
+async function seedCapsuleSource(store: OpenTofuControlStore, authority: CapsuleInitialAuthorityInput): Promise<void> {
+  const capsule = authority.capsule;
+  await store.putSource({
+    id: capsule.sourceId,
+    workspaceId: capsule.workspaceId,
+    name: capsule.name,
+    url: "https://example.com/acme/configuration.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    autoSync: false,
+    hookSecretHash: `hash_${capsule.sourceId}`,
+    createdAt: capsule.createdAt,
+    updatedAt: capsule.updatedAt,
+  });
+}
+
 async function configurationPlanPreparation(
   authority: CapsuleInitialAuthorityInput,
   suffix: string,
@@ -155,6 +172,7 @@ test("initial Capsule authority is one create-only atomic unit across every stor
   for (const [label, store] of await stores()) {
     const concurrent = initialAuthority(`${label}_concurrent`);
     await store.putWorkspace(workspace(concurrent.capsule.workspaceId));
+    await seedCapsuleSource(store, concurrent);
     const concurrentResults = await Promise.all([
       store.createCapsuleInitialAuthority(concurrent),
       store.createCapsuleInitialAuthority(concurrent),
@@ -166,6 +184,7 @@ test("initial Capsule authority is one create-only atomic unit across every stor
 
     const input = initialAuthority(label);
     await store.putWorkspace(workspace(input.capsule.workspaceId));
+    await seedCapsuleSource(store, input);
     expect(await store.createCapsuleInitialAuthority(input)).toEqual({
       status: "created",
       capsule: input.capsule,
@@ -205,6 +224,7 @@ test("initial Capsule authority is one create-only atomic unit across every stor
 
     const partial = initialAuthority(`${label}_partial`);
     await store.putWorkspace(workspace(partial.capsule.workspaceId));
+    await seedCapsuleSource(store, partial);
     await store.putInstallConfig(partial.installConfig);
     expect(await store.createCapsuleInitialAuthority(partial)).toEqual({
       status: "conflict",
@@ -222,6 +242,7 @@ test("initial Capsule authority is one create-only atomic unit across every stor
 
     const occupiedSlot = initialAuthority(`${label}_occupied_slot`);
     await store.putWorkspace(workspace(occupiedSlot.capsule.workspaceId));
+    await seedCapsuleSource(store, occupiedSlot);
     const occupyingAuthority: CapsuleInitialAuthorityInput = {
       ...occupiedSlot,
       providerBindingSet: {
@@ -260,19 +281,24 @@ test("Workspace drain refuses new initial authority without stranding exact repl
     const existing = initialAuthority(`${label}_management_existing`);
     const workspaceId = existing.capsule.workspaceId;
     await store.putWorkspace(workspace(workspaceId));
+    await seedCapsuleSource(store, existing);
     await store.createCapsuleInitialAuthority(existing);
     const management = { workspaceId, managementState: "active" as const, managementEpoch: 1 };
     const stale = initialAuthority(`${label}_management_stale`, workspaceId);
+    await seedCapsuleSource(store, stale);
     await expect(store.createCapsuleInitialAuthority({
       ...stale,
       expectedWorkspaceManagementAuthority: { ...management, managementEpoch: 2 },
     })).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
     expect(await store.getInstallConfig(stale.installConfig.id)).toBeUndefined();
-    await expect(store.createCapsuleInitialAuthority(initialAuthority(`${label}_missing_workspace`)))
+    const fresh = initialAuthority(`${label}_management_new`, workspaceId);
+    await seedCapsuleSource(store, fresh);
+    const missingWorkspace = initialAuthority(`${label}_missing_workspace`);
+    await seedCapsuleSource(store, missingWorkspace);
+    await expect(store.createCapsuleInitialAuthority(missingWorkspace))
       .rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
     await store.beginWorkspaceDraining(workspaceId, management);
     expect(await store.createCapsuleInitialAuthority(existing)).toMatchObject({ status: "replayed" });
-    const fresh = initialAuthority(`${label}_management_new`, workspaceId);
     const outcome = await store.createCapsuleInitialAuthority(fresh).then(
       (result) => result.status,
       (error) => error instanceof WorkspaceManagementAdmissionConflictError ? "refused" : "unexpected_error",
@@ -326,6 +352,7 @@ test("Workspace management fences Capsule InstallConfig rebind across adapters",
     );
     const workspaceId = existing.capsule.workspaceId;
     await store.putWorkspace(workspace(workspaceId));
+    await seedCapsuleSource(store, existing);
     expect(await store.createCapsuleInitialAuthority(existing), label).toMatchObject({
       status: "created",
     });
@@ -436,6 +463,7 @@ test("Workspace management fences Capsule InstallConfig rebind across adapters",
     );
     const replayWorkspaceId = replayExisting.capsule.workspaceId;
     await store.putWorkspace(workspace(replayWorkspaceId));
+    await seedCapsuleSource(store, replayExisting);
     expect(await store.createCapsuleInitialAuthority(replayExisting), label).toMatchObject({
       status: "created",
     });
@@ -511,6 +539,7 @@ test("configuration Plan preparation fences Capsule authority in every store", a
   for (const [label, store] of await stores()) {
     const authority = initialAuthority(`${label}_plan_fence`);
     await store.putWorkspace(workspace(authority.capsule.workspaceId));
+    await seedCapsuleSource(store, authority);
     expect(await store.createCapsuleInitialAuthority(authority)).toMatchObject({
       status: "created",
     });

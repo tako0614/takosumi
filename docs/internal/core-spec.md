@@ -88,6 +88,14 @@ or advanced details. Concrete environments remain Capsule-scoped.
 StateVersion storage and locking are part of the canonical Run lifecycle; they
 are not a separate Resource/Form ledger.
 
+New Git installs allocate a dedicated Source with a deterministic install-plan-derived id,
+an immutable `ownerCapsuleId`, and private `createdByInstallPlanId` provenance in existing JSON.
+Initial Capsule authority claims or verifies the Source in the same store commit; another
+Capsule's owner or reference is refused. An unowned preflight Source is claimed once. Existing
+historically shared Sources remain migration custody; no new install discovers Sources by name
+or borrows another plan's sync. Install and revision coordinators distinguish requested snapshot
+allocation from the canonical same-lane snapshot returned after deduplication.
+
 Per-Capsule Git tracking uses existing apply provenance:
 `Capsule.currentStateVersionId -> StateVersion.createdByRunId -> ApplyRun ->
 PlanRun.sourceSnapshotId`. Restore StateVersions follow their exact

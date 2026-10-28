@@ -3090,6 +3090,11 @@ export function sourceSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         id: { type: "string" },
         workspaceId: { type: "string" },
+        ownerCapsuleId: {
+          type: "string",
+          readOnly: true,
+          description: "Exclusive app owner, immutable once assigned during Source or initial app creation.",
+        },
         name: { type: "string" },
         url: { type: "string" },
         defaultRef: { type: "string" },

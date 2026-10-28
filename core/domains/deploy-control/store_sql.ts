@@ -268,6 +268,7 @@ import {
   sourceSyncRunSuccessIdentityMatches,
   storedCapsuleCompatibilityProviderGraph,
   SourceSnapshotConflictError,
+  SourceOwnershipConflictError,
   mergeReusableSourceSnapshotObservations,
   validateCommitRestoredStateInterfaceMaterialization,
   validateCommitRunStateInterfaceMaterializationIntent,
@@ -6912,16 +6913,45 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         transaction,
         capsule.workspaceId,
       );
+      // Keep Workspace -> Source -> Capsule-table lock order. The Source row
+      // cannot be rebound by another writer while the initial unit is made.
+      const sourceRows = await transaction.query<PgStoredSourceRow>(
+        `select id, space_id as "workspaceId", status,
+                source_json as "sourceJson", created_at as "createdAt",
+                updated_at as "updatedAt"
+           from takosumi_sources where id = $1 for update`,
+        [capsule.sourceId],
+      );
+      const sourceRow = sourceRows.rows[0];
+      const source = sourceRow ? sourceFromPgRow(sourceRow) : undefined;
+      if (!source || source.workspaceId !== capsule.workspaceId) {
+        assertWorkspaceManagementAdmission(
+          management,
+          capsule.workspaceId,
+          input.expectedWorkspaceManagementAuthority,
+        );
+        return { status: "conflict" as const };
+      }
       // Initial authority is rare and must be one exact create-or-replay CAS.
       // Serialize every candidate across the three tables so two concurrent
       // first-install requests cannot both observe absence and turn a unique
       // constraint into an indeterminate transport-style failure.
-    await transaction.query(
+      await transaction.query(
         `lock table takosumi_install_configs,
                     takosumi_capsules,
                     takosumi_provider_env_binding_sets
            in share row exclusive mode`,
       );
+      const otherReference = await transaction.query<{ readonly id: string }>(
+        `select id from takosumi_capsules
+          where id <> $1 and (source_id = $2 or installation_json ->> 'sourceId' = $2)
+          limit 1`,
+        [capsule.id, capsule.sourceId],
+      );
+      if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id ||
+        otherReference.rows.length > 0) {
+        return { status: "source_owned_by_another_app" as const };
+      }
       const [configRows, capsuleRows, bindingRows] = await Promise.all([
         db
           .select({ json: pgSchema.installConfigs.configJson })
@@ -7015,6 +7045,24 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         capsule.workspaceId,
         input.expectedWorkspaceManagementAuthority,
       );
+      if (source.ownerCapsuleId === undefined) {
+        const claimed = await transaction.query<{ readonly id: string }>(
+          `update takosumi_sources
+              set source_json = jsonb_set(source_json, '{ownerCapsuleId}', to_jsonb($1::text), true)
+            where id = $2 and space_id = $3 and source_json = $4::jsonb
+              and source_json ->> 'ownerCapsuleId' is null
+              and not exists (
+                select 1 from takosumi_capsules as other
+                 where other.id <> $1
+                   and (other.source_id = $2 or other.installation_json ->> 'sourceId' = $2)
+              )
+          returning id`,
+          [capsule.id, capsule.sourceId, capsule.workspaceId, JSON.stringify(source)],
+        );
+        if (claimed.rows.length !== 1) {
+          return { status: "source_owned_by_another_app" as const };
+        }
+      }
       await db.insert(pgSchema.installConfigs).values({
         id: installConfig.id,
         workspaceId: installConfig.workspaceId ?? null,
@@ -9468,14 +9516,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   // --- sources (public + internal hook-secret hash / lastSeenCommit) --------
 
   async putSource(source: StoredSource): Promise<StoredSource> {
-    await this.#pgUpsert(pgSchema.sources, {
+    const values = {
       id: source.id,
       workspaceId: source.workspaceId,
       status: source.status,
       sourceJson: source,
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
-    });
+    };
+    const written = await this.#db.insert(pgSchema.sources).values(values)
+      .onConflictDoUpdate({
+        target: pgSchema.sources.id,
+        set: values,
+        setWhere: sql`(${pgSchema.sources.workspaceId} = ${source.workspaceId}
+          and ${pgSchema.sources.sourceJson} ->> 'id' = ${pgSchema.sources.id}
+          and ${pgSchema.sources.sourceJson} ->> 'workspaceId' = ${pgSchema.sources.workspaceId}
+          and ${pgSchema.sources.sourceJson} ->> 'ownerCapsuleId' is not distinct from ${source.ownerCapsuleId ?? null}
+          and ${pgSchema.sources.sourceJson} ->> 'createdByInstallPlanId' is not distinct from ${source.createdByInstallPlanId ?? null})`,
+      }).returning({ id: pgSchema.sources.id });
+    if (written.length !== 1) throw new SourceOwnershipConflictError(source.id);
     return source;
   }
 
@@ -9568,6 +9627,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       if (currentRow && !current) {
         // Treat a physically/JSON-inconsistent row as an immutable conflict;
         // no caller payload is allowed to repair its ownership or identity.
+        return { status: "conflict" as const };
+      }
+      if (current && (current.ownerCapsuleId !== source.ownerCapsuleId ||
+        current.createdByInstallPlanId !== source.createdByInstallPlanId)) {
         return { status: "conflict" as const };
       }
 

@@ -1536,6 +1536,24 @@ export interface StoredSource extends Source {
   readonly hookSecretHash: string;
   readonly lastSeenCommit?: string;
   readonly autoSync: boolean;
+  /** Private deterministic creator identity for app-owned Source admission. */
+  readonly createdByInstallPlanId?: string;
+}
+
+/** Existing Source owner and creator identities are immutable. */
+export class SourceOwnershipConflictError extends Error {
+  override readonly name = "SourceOwnershipConflictError";
+  readonly reason = "source_owned_by_another_app";
+
+  constructor(readonly sourceId: string) {
+    super(`Source ${sourceId} owner or creator identity cannot be changed`);
+  }
+}
+
+function sourceOwnershipIdentityUnchanged(current: StoredSource, next: StoredSource): boolean {
+  return current.workspaceId === next.workspaceId &&
+    current.ownerCapsuleId === next.ownerCapsuleId &&
+    current.createdByInstallPlanId === next.createdByInstallPlanId;
 }
 
 /** Create one Workspace-owned Project without changing an occupied id or slug. */
@@ -2089,7 +2107,8 @@ export interface CapsuleInitialAuthorityInput {
 
 export type CapsuleInitialAuthorityResult =
   | { readonly status: "created" | "replayed"; readonly capsule: Capsule }
-  | { readonly status: "conflict" };
+  | { readonly status: "conflict" }
+  | { readonly status: "source_owned_by_another_app" };
 
 export interface CapsuleInstallConfigRebindInput {
   readonly capsuleId: string;
@@ -6304,6 +6323,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       providerBindingSet.environment === capsule.environment;
     if (!exact) return Promise.resolve({ status: "conflict" });
 
+    const source = this.#sources.get(capsule.sourceId);
+    if (!source || source.workspaceId !== capsule.workspaceId) {
+      try {
+        assertWorkspaceManagementAdmission(
+          this.#workspaces.has(capsule.workspaceId)
+            ? this.#workspaceManagement.get(capsule.workspaceId)
+            : undefined,
+          capsule.workspaceId,
+          input.expectedWorkspaceManagementAuthority,
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return Promise.resolve({ status: "conflict" });
+    }
+    if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id ||
+      [...this.#capsules.values()].some((other) =>
+        other.id !== capsule.id && other.sourceId === capsule.sourceId)) {
+      return Promise.resolve({ status: "source_owned_by_another_app" });
+    }
+
     const existingConfig = this.#installConfigs.get(installConfig.id);
     const existingCapsule = this.#capsules.get(capsule.id);
     const existingBinding = this.#providerBindingSets.get(providerBindingSet.id);
@@ -6348,6 +6388,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       );
     } catch (error) {
       return Promise.reject(error);
+    }
+    if (source.ownerCapsuleId === undefined) {
+      this.#sources.set(source.id, { ...source, ownerCapsuleId: capsule.id });
     }
     this.#installConfigs.set(installConfig.id, installConfig);
     this.#capsuleExecutionAuthorityEpochs.set(capsule.id, 1);
@@ -7760,6 +7803,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putSource(source: StoredSource): Promise<StoredSource> {
+    const current = this.#sources.get(source.id);
+    if (current && !sourceOwnershipIdentityUnchanged(current, source)) {
+      return Promise.reject(new SourceOwnershipConflictError(source.id));
+    }
     this.#sources.set(source.id, source);
     return Promise.resolve(source);
   }
@@ -7777,6 +7824,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       current.workspaceId !== input.source.workspaceId ||
       stableStringify(current) !== stableStringify(input.expectedSource)
     )) {
+      return { status: "conflict" };
+    }
+    if (current && !sourceOwnershipIdentityUnchanged(current, input.source)) {
       return { status: "conflict" };
     }
     assertWorkspaceManagementAdmission(

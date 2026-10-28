@@ -120,6 +120,19 @@ async function seedRebind(
     createdAt: NOW,
     updatedAt: NOW,
   });
+  await store.putSource({
+    id: row.sourceId,
+    workspaceId: row.workspaceId,
+    name: row.name,
+    url: "https://example.com/acme/rebind.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    autoSync: false,
+    hookSecretHash: `hash_${row.sourceId}`,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
   await store.putInstallConfig(target);
   await store.putInstallConfig(next);
   const initialBindingSet = initialBindingSuffix

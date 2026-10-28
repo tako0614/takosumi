@@ -90,7 +90,7 @@ import type {
   CapsulePlanCreationFence,
   WorkspaceManagementAuthority,
 } from "../../../core/domains/deploy-control/store.ts";
-import type { CompatibilityCheckManagementContext } from "../../../core/domains/sources/mod.ts";
+import type { CompatibilityCheckManagementContext, EnsureOwnedSourceRequest } from "../../../core/domains/sources/mod.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -807,6 +807,10 @@ export interface ControlPlaneOperations {
     request: CreateSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceResponse>;
+  ensureOwnedSource(
+    request: EnsureOwnedSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<SourceResponse>;
   listSources(
     workspaceId: string,
     params?: PageParams,

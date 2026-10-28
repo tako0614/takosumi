@@ -143,7 +143,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
-import type { CompatibilityCheckManagementContext } from "./domains/sources/mod.ts";
+import type { CompatibilityCheckManagementContext, EnsureOwnedSourceRequest } from "./domains/sources/mod.ts";
 import type { ProviderBindings } from "takosumi-contract/connections";
 import type { CreateRestoreRequest } from "takosumi-contract/backups";
 import type {
@@ -990,6 +990,10 @@ export interface TakosumiOperations {
     request: CreateSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<CreateSourceResponse>;
+  ensureOwnedSource(
+    request: EnsureOwnedSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<SourceResponse>;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -2148,6 +2152,7 @@ export async function createTakosumiService(
         request,
         expectedWorkspaceManagementAuthority,
       ),
+    ensureOwnedSource: (request, authority) => opentofuController.ensureOwnedSource(request, authority),
     listSources: (workspaceId, params) =>
       opentofuController.listSources(workspaceId, params),
     getSource: (id) => opentofuController.getSource(id),

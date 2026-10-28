@@ -242,8 +242,9 @@ export interface GitInstallPlan {
   /** Present only while `phase` is `awaiting_input`. */
   readonly awaitingInput?: GitInstallPlanAwaitingInput;
   /**
-   * True when this attempt registered `sourceId` itself. Only such a Source
-   * is enabled for polling on review and deleted on discard.
+   * True when this attempt registered `sourceId` itself. It is used only to
+   * reverse polling that the attempt enabled if the attempt is later discarded;
+   * the Source remains owned by the app.
    */
   readonly sourceCreatedByAttempt?: boolean;
   /**
@@ -257,8 +258,10 @@ export interface GitInstallPlan {
   readonly expiresAt?: string;
   /** Present only for `operation: "revision"`. */
   readonly revision?: GitRevisionPlanIntent;
+  /** Plan-scoped Source id; install plans never discover/reuse by Git address. */
   readonly sourceId?: string;
   readonly sourceSyncRunId?: string;
+  /** Canonical same-lane snapshot adopted by the deterministic sync. */
   readonly sourceSnapshotId?: string;
   /** Exact DB-owned policy/profile config selected before compatibility analysis. */
   readonly installConfigBaseId?: string;

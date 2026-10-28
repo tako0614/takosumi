@@ -7,6 +7,16 @@ Takosumi は Git を正とします。デプロイされているものの内容
 
 Source は「このリポジトリのこのディレクトリを、この ref で追う」という宣言です。
 
+新しいインストールは、アプリごとに専用の Source を作ります。同じリポジトリをもう一度
+インストールしても、Source と同期 Run を共有しません。`ownerCapsuleId` は所有するアプリを
+表し、一度設定されると変更・解除できません。インストール計画から作る ID は固定されるため、
+応答が失われても同じ Source を採用して再開できます。
+
+`POST /sources` で事前確認用に作った Source は所有者未設定で、最初のアプリ作成と同時に
+所有が確定します。他のアプリが所有・参照する Source を新しいアプリへ割り当てることはできません。
+自動同期は、通常のインストールと事前確認からのインストールのどちらも、計画の確認が可能に
+なった段階で有効になります。
+
 必須は Workspace、名前、URL の 3 つだけです。
 
 例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
@@ -29,7 +39,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `defaultRef`       | Git の `HEAD` | 追跡する branch / tag / commit                      |
 | `defaultPath`      | `.`           | sync/archive/scan の対象にする repository subtree  |
 | `authConnectionId` | なし          | 非公開リポジトリを読むための Connection             |
-| `autoSync`         | `false`（dashboard の追加画面は、作った直後に `true` にします） | operator の scheduler が Git ref を定期的に確認する |
+| `autoSync`         | `false`（インストール計画を確認できる段階で `true` にします） | operator の scheduler が Git ref を定期的に確認する |
 
 Git URL、ref、source subtree が Source の取得座標です。専用の source catalog はありません。
 `defaultPath` は取得範囲を狭めますが、実行 module を選びません。Source sync は exact
