@@ -910,6 +910,9 @@ export default {
     if (scheduledSourcePollEnabledForCron(cron)) {
       await runScheduledSourcePoll(env);
     }
+    if (cron === "15 3 * * *") {
+      await runScheduledSourceRetirement(env);
+    }
     await runScheduledOpenTofuRunRepair(env);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
@@ -4157,12 +4160,14 @@ const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
  * need. Kept narrow so the seam-level handlers are unit-testable with a stub.
  */
 export interface SourceWebhookOperations {
+  getSource(sourceId: string): Promise<unknown>;
   verifySourceHookSecret(
     sourceId: string,
     presentedSecret: string,
   ): Promise<boolean>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly { readonly run: { readonly id: string } }[]>;
 }
 
@@ -4268,6 +4273,14 @@ export async function handleSourceWebhookRequest(
   if (!bearer) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
+  try {
+    await operations.getSource(sourceId);
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError && error.code === "not_found") {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
+    throw error;
+  }
   let valid = false;
   try {
     valid = await operations.verifySourceHookSecret(sourceId, bearer);
@@ -4334,13 +4347,28 @@ export async function pollAutoSyncSources(
   const sources = await operations.controller.listAutoSyncSourcesDue(batch);
   for (const source of sources) {
     try {
-      await operations.createSourceReconciliationSyncs(source.id);
+      await operations.createSourceReconciliationSyncs(source.id, { scheduled: true });
     } catch {
       // Best-effort: one bad source must not abort the whole poll.
       console.warn("scheduled.source_poll_reconciliation_failed", {
         sourceCount: sources.length,
       });
     }
+  }
+}
+
+const SCHEDULED_SOURCE_RETIREMENT_LIMIT = 25;
+
+async function runScheduledSourceRetirement(env: DeployControlEnv): Promise<void> {
+  try {
+    const result = await (await deployControlSeam(env).operations())
+      .sweepRetiredSources({ limit: SCHEDULED_SOURCE_RETIREMENT_LIMIT });
+    console.log(JSON.stringify({ event: "source_retirement_sweep", ...result }));
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "source_retirement_sweep_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }));
   }
 }
 

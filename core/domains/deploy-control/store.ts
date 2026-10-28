@@ -829,6 +829,14 @@ export interface DeleteSourceWithActivityInput {
   readonly activity: ActivityEvent;
 }
 
+/** Final retirement boundary after archive custody has removed the referenced bytes. */
+export type RetireSourceInput = DeleteSourceWithActivityInput & {
+  /** Archive deletion covered this complete immutable snapshot census. */
+  readonly expectedSnapshotCount: number;
+  readonly expectedSourceSyncRunCount: number;
+};
+export type RetireSourceResult = DeleteSourceWithActivityResult;
+
 export type DeleteSourceWithActivityResult =
   | { readonly status: "deleted"; readonly source: StoredSource }
   | { readonly status: "not_found" }
@@ -1487,6 +1495,8 @@ export interface StoredSource extends Source {
   readonly autoSync: boolean;
   /** Private deterministic creator identity for app-owned Source admission. */
   readonly createdByInstallPlanId?: string;
+  /** Durable resume marker; a disabled Source with this marker cannot sync. */
+  readonly retiringAt?: string;
 }
 
 /** Existing Source owner and creator identities are immutable. */
@@ -4049,13 +4059,16 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
    * lost Activity cannot follow a committed delete.
    */
   deleteSourceWithActivity(input: DeleteSourceWithActivityInput): Promise<DeleteSourceWithActivityResult>;
+  retireSource(input: RetireSourceInput): Promise<RetireSourceResult>;
 
   // SourceSnapshot records (immutable archive snapshots).
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
   listSourceSnapshots(sourceId: string): Promise<readonly SourceSnapshot[]>;
   /** True when any retained SourceSnapshot still references these archive bytes. */
-  hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean>;
+  hasSourceSnapshotArchiveReference(archiveRef: string, sourceId?: string): Promise<boolean>;
+  /** Historical cross-Source archive reuse must not let retirement delete foreign bytes. */
+  hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean>;
   /** Latest immutable observation for one exact Source lane, bounded to one row. */
   getLatestSourceSnapshotForLane(input: {
     readonly sourceId: string;
@@ -5112,6 +5125,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       run.workspaceId,
       expectedWorkspaceManagementAuthority,
     );
+    // Admission and insertion share this synchronous in-memory boundary. A
+    // Source retired while the caller was allocating its archive cannot leave
+    // a new orphan SourceSyncRun behind. Exact existing replay above is read-only.
+    const source = this.#sources.get(run.sourceId);
+    if (!source || source.workspaceId !== run.workspaceId || source.status !== "active" || source.retiringAt) {
+      return { status: "conflict" };
+    }
     this.#runs.set(run.id, storeSourceSyncRun(run, expectedWorkspaceManagementAuthority));
     return { status: "created", run: publicStoredRun(run) };
   }
@@ -7920,6 +7940,46 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return { status: "deleted", source: current };
   }
 
+  async retireSource(input: RetireSourceInput): Promise<RetireSourceResult> {
+    const { expectedSource, expectedWorkspaceManagementAuthority, activity } = structuredClone(input);
+    assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedSource.workspaceId);
+    const current = this.#sources.get(expectedSource.id);
+    if (!current || current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" };
+    if (stableStringify(current) !== stableStringify(expectedSource) ||
+      current.status !== "disabled" || current.autoSync || !current.retiringAt) return { status: "conflict" };
+    try {
+      assertWorkspaceManagementAdmission(
+        this.#workspaces.has(current.workspaceId) ? this.#workspaceManagement.get(current.workspaceId) : undefined,
+        current.workspaceId, expectedWorkspaceManagementAuthority,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceManagementAdmissionConflictError) return { status: "conflict" };
+      throw error;
+    }
+    if (current.ownerCapsuleId && (() => {
+      const owner = this.#capsules.get(current.ownerCapsuleId);
+      return owner !== undefined && owner.status !== "destroyed";
+    })()) return { status: "blocked", blockers: ["source_owner_not_destroyed"] };
+    for (const capsule of this.#capsules.values()) {
+      if (capsule.sourceId !== current.id) continue;
+      if (capsule.status !== "destroyed")
+        return { status: "blocked", blockers: ["source_referenced_by_capsule"] };
+    }
+    if (this.#hasInFlightSourceRunSync(current))
+      return { status: "blocked", blockers: ["source_has_in_flight_run"] };
+    const snapshotCount = [...this.#sourceSnapshots.values()].filter((row) => row.sourceId === current.id).length;
+    const syncRunCount = [...this.#runs.values()].filter((row) => isSourceSyncRunRecord(row) && row.sourceId === current.id).length;
+    if (snapshotCount !== input.expectedSnapshotCount || syncRunCount !== input.expectedSourceSyncRunCount)
+      return { status: "conflict" };
+    if (this.#activityEvents.has(activity.id)) return { status: "conflict" };
+    for (const [id, snapshot] of this.#sourceSnapshots) {
+      if (snapshot.sourceId === current.id) this.#sourceSnapshots.delete(id);
+    }
+    this.#sources.delete(current.id);
+    this.#activityEvents.set(activity.id, activity);
+    return { status: "deleted", source: current };
+  }
+
   #hasInFlightSourceRunSync(stored: StoredSource): boolean {
     for (const run of this.#runs.values()) {
       if (!runIsInFlight(run.status)) continue;
@@ -7944,9 +8004,20 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(this.#sourceSnapshots.get(id));
   }
 
-  hasSourceSnapshotArchiveReference(archiveRef: string): Promise<boolean> {
+  hasSourceSnapshotArchiveReference(archiveRef: string, sourceId?: string): Promise<boolean> {
     for (const snapshot of this.#sourceSnapshots.values()) {
-      if (snapshot.archiveRef === archiveRef) return Promise.resolve(true);
+      if (snapshot.archiveRef === archiveRef && (sourceId === undefined || snapshot.sourceId === sourceId)) return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
+  }
+
+  hasForeignSourceArchiveReference(archiveRef: string, sourceId: string): Promise<boolean> {
+    for (const snapshot of this.#sourceSnapshots.values()) {
+      if (snapshot.archiveRef === archiveRef && snapshot.sourceId !== sourceId) return Promise.resolve(true);
+    }
+    for (const run of this.#runs.values()) {
+      if (isSourceSyncRunRecord(run) && run.archiveRef === archiveRef && run.sourceId !== sourceId)
+        return Promise.resolve(true);
     }
     return Promise.resolve(false);
   }

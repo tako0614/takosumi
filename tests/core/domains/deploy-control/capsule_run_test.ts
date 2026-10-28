@@ -12677,6 +12677,46 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
   ).toEqual([1, 2]);
 });
 
+test("committed destroy retires its owned Source and archive through the composed RunEngine", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store);
+  const archived: string[] = [];
+  const sourcesService = new SourcesService({
+    store,
+    deleteRetiredSourceArchives: async ({ archiveRefs }) => {
+      archived.push(...archiveRefs);
+    },
+  });
+  const profile = multiProviderRunnerProfile();
+  const createController = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+  const create = await createController.createCapsulePlan(seeded.capsule.id);
+  await createController.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const controller = controllerWith(store, runner, {
+    sourcesService,
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    newId: (prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`,
+  });
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  await controller.approveRun(destroy.planRun.id);
+  const result = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(result.applyRun.status).toBe("succeeded");
+  expect((await store.getCapsule(seeded.capsule.id))?.status).toBe("destroyed");
+  expect(await store.getSource(seeded.capsule.sourceId)).toBeUndefined();
+  expect(await store.listSourceSnapshots(seeded.capsule.sourceId)).toEqual([]);
+  expect(archived).toEqual([seeded.snapshot.archiveRef]);
+});
+
 test("a second successful apply preserves StateVersion history and advances the cursor", async () => {
   const { store, controller } = await seededController();
 

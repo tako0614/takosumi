@@ -29,6 +29,7 @@ import {
 } from "./handler.ts";
 import { buildComposedApp } from "./composed-app.ts";
 import { startCapsuleUninstallFinalizer } from "./capsule-uninstall-finalizer.ts";
+import { startSourceRetirementSweeper } from "./source-retirement-sweeper.ts";
 import { resolveStaticAssetsDir } from "./static-assets.ts";
 import { isSecretKey, redactString } from "takosumi-contract/redaction";
 
@@ -267,6 +268,7 @@ export async function buildComposedServer(
   });
 
   startCapsuleUninstallFinalizer({ operations, log: structuredLog });
+  startSourceRetirementSweeper({ operations, log: structuredLog });
 
   const port = config.port;
   const hostname = config.bindHost;

@@ -240,12 +240,6 @@ export interface GitInstallPlan {
   /** Present only while `phase` is `awaiting_input`. */
   readonly awaitingInput?: GitInstallPlanAwaitingInput;
   /**
-   * True when this attempt registered `sourceId` itself. It is used only to
-   * reverse polling that the attempt enabled if the attempt is later discarded;
-   * the Source remains owned by the app.
-   */
-  readonly sourceCreatedByAttempt?: boolean;
-  /**
    * Attempt mode, before the Capsule exists only: past this instant the
    * attempt is reported `invalidated: "install_attempt_expired"` and can no
    * longer advance. Reads never change it; the creator discards it. Refreshed

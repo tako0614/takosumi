@@ -103,8 +103,37 @@ async function fixture(options: {
     expect(response.status).toBe(200);
     return ((await response.json()) as { app: CapsuleAppView }).app;
   }
-  return { ledger, core, seeded, request, app, owner, stranger };
+  return { ledger, core, seeded, request, app, owner, stranger, accounts, operations };
 }
+
+test("destroyed Capsule GET and Workspace list survive retired Source row with a retained state cursor", async () => {
+  const h = await fixture({ currentStateVersionId: "sv_retained_destroy" });
+  await h.ledger.putCapsule({
+    ...h.seeded.capsule,
+    status: "destroyed",
+    currentStateVersionId: "sv_retained_destroy",
+    currentStateGeneration: 2,
+  });
+  expect(await h.ledger.deleteSource(h.seeded.capsule.sourceId)).toBe(true);
+
+  const get = await h.request("");
+  expect(get.status).toBe(200);
+  const got = (await get.json()) as { capsule: Record<string, unknown> };
+  expect(got.capsule.status).toBe("destroyed");
+  expect(got.capsule.adoptedSourceRevision).toBeUndefined();
+
+  const url = new URL(`${ORIGIN}/api/v1/workspaces/${WORKSPACE}/capsules`);
+  const list = await handleControlRoute({
+    request: new Request(url, { headers: { cookie: h.owner } }),
+    url,
+    store: h.accounts,
+    operations: h.operations,
+  });
+  expect(list?.status).toBe(200);
+  const listed = (await list!.json()) as { capsules: readonly Record<string, unknown>[] };
+  expect(listed.capsules[0]?.status).toBe("destroyed");
+  expect(listed.capsules[0]?.adoptedSourceRevision).toBeUndefined();
+});
 
 function planRun(id: string, createdAt: number, over: Partial<PlanRun> = {}): PlanRun {
   return {

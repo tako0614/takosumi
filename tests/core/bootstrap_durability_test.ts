@@ -27,6 +27,8 @@ function declaredDurableTestGitInstallPlanStore(): GitInstallPlanStore {
     preparingCoordinatorForCapsule: (id, workspaceId, options) =>
       store.preparingCoordinatorForCapsule(id, workspaceId, options),
     hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),
+    hasNonterminalPlanSourceReference: (workspaceId, sourceId, expiredBefore) =>
+      store.hasNonterminalPlanSourceReference(workspaceId, sourceId, expiredBefore),
     claimReconcile: (input) => store.claimReconcile(input),
     completeReconcile: (input) => store.completeReconcile(input),
     transitionUnleased: (input) => store.transitionUnleased(input),
@@ -156,4 +158,66 @@ test("service startup projects fixed operator connections without reconciling ru
 
   expect(createAttempts).toBe(0);
   expect(await store.getConnection("conn_releaseowned01")).toBeUndefined();
+});
+
+test("composed Capsule abandonment retires its owned Source after the ledger commit", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const now = "2026-10-28T00:00:00.000Z";
+  await store.putWorkspace({
+    id: "ws_retirement", handle: "retirement", displayName: "Retirement",
+    type: "personal", ownerUserId: "user_one", createdAt: now, updatedAt: now,
+  });
+  const service = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    context: localContext(),
+    opentofuControlStore: store,
+  });
+  const sourceId = "src_retirement0001";
+  const capsuleId = "cap_retirement0001";
+  await service.operations.ensureOwnedSource({
+    id: sourceId, workspaceId: "ws_retirement", name: "repo",
+    ownerCapsuleId: capsuleId, createdByInstallPlanId: "plan_retirement",
+    url: "https://example.com/repo.git", ref: "main", path: ".", createdAt: now,
+  });
+  await service.operations.capsules.createCapsuleInitialAuthority({
+    capsuleId, workspaceId: "ws_retirement", name: "retirement",
+    environment: "production", sourceId,
+    installingPrincipalId: "user_one", providerBindingSetId: "pbind_retirement0001",
+    providerBindings: [],
+    installConfig: {
+      id: "cfg_retirement0001", workspaceId: "ws_retirement", name: "retirement",
+      variableMapping: {}, outputAllowlist: {}, policy: {},
+      createdAt: now, updatedAt: now,
+    },
+  });
+  const abandoned = await service.operations.capsules.abandonUnappliedCapsule(
+    capsuleId, "user discarded install",
+  );
+  expect(abandoned.status).toBe("destroyed");
+  expect(await store.getSource(sourceId)).toBeUndefined();
+  expect(await store.getCapsule(capsuleId)).toMatchObject({ status: "destroyed" });
+});
+
+test("composed daily sweep retires an old orphan Source", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  await store.putWorkspace({
+    id: "ws_orphan", handle: "orphan", displayName: "Orphan",
+    type: "personal", ownerUserId: "user_one", createdAt, updatedAt: createdAt,
+  });
+  await store.putSource({
+    id: "src_orphan0001", workspaceId: "ws_orphan", name: "orphan",
+    url: "https://example.com/orphan.git", defaultRef: "main", defaultPath: ".",
+    status: "active", autoSync: false, hookSecretHash: "hash",
+    createdAt, updatedAt: createdAt,
+  });
+  const service = await createTakosumiService({
+    role: "takosumi-api", runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    context: localContext(), opentofuControlStore: store,
+  });
+  expect(await service.operations.sweepRetiredSources({ limit: 1 })).toMatchObject({
+    attempted: 1, retired: 1, failures: 0,
+  });
+  expect(await store.getSource("src_orphan0001")).toBeUndefined();
 });

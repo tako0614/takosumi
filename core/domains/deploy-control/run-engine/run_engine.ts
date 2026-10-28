@@ -11895,6 +11895,20 @@ export class RunEngine {
         return { applyRun: (await this.getApplyRun(running.id)).applyRun };
       }
       ledgerCommitted = true;
+      try {
+        await this.#sourcesService?.retireOwnedSource(
+          capsule.sourceId,
+          "capsule destroy committed",
+        );
+      } catch (error) {
+        // The terminal destroy ledger is authoritative. The daily Source
+        // retirement sweep retries incomplete archive and row cleanup.
+        log.warn("deploy_control.destroy_source_retirement_failed", {
+          capsuleId: capsule.id,
+          sourceId: capsule.sourceId,
+          message: errorMessage(error),
+        });
+      }
       await this.#retireModuleVariableMaterializationAfterDestroy({
         planRun,
         applyRun: completed,

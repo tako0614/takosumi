@@ -758,6 +758,7 @@ export interface ControlPlaneOperations {
     request: EnsureOwnedSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<SourceResponse>;
+  retireOwnedSource(sourceId: string, reason: string): Promise<"retired" | "already_retired" | "deferred">;
   listSources(
     workspaceId: string,
     params?: PageParams,
