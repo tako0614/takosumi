@@ -222,7 +222,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 89
+`accounts/service/src/control-route-inventory.ts`; it currently contains 92
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -245,7 +245,7 @@ lightly edited for readers.
 | POST | `/api/v1/workspaces/{workspaceId}/members` | Add a Workspace member |
 | PATCH | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Change a Workspace member role |
 | DELETE | `/api/v1/workspaces/{workspaceId}/members/{subject}` | Remove a Workspace member |
-| GET | `/api/v1/workspaces/{workspaceId}/graph` | Read the Workspace Capsule inventory; the retired dependency edge list is empty |
+| GET | `/api/v1/workspaces/{workspaceId}/installed-apps` | Read value-free installed-app summaries for store matching |
 | GET | `/api/v1/workspaces/{workspaceId}/ui-surfaces` | List authorized Workspace UI surface Interfaces |
 | GET | `/api/v1/workspaces/{workspaceId}/activity` | List Workspace Activity |
 | GET | `/api/v1/workspaces/{workspaceId}/interface-materialization-failures` | List Interface materialization failures, which contain no secret values |
@@ -262,6 +262,22 @@ account has one. `email` is returned only when the caller is an active owner or
 admin of that Workspace, and never for an address the identity provider marked
 unverified. Members and viewers do not receive other members' email addresses.
 Add, role change, and remove responses carry neither field.
+
+`GET /api/v1/workspaces/{workspaceId}/installed-apps` has no query parameters. With
+Workspace read access, it returns `{ installedApps: [...], complete: boolean }`, excluding destroyed apps.
+Each row has `capsuleId`, `name`, optional `displayName` (`{ja,en}`) and `iconUrl`, a light
+Capsule-derived `state`, and `installedFrom: {url,path,matchable?}`. The display URL contains no
+credentials, query, or fragment; `path` is the executable module's repository-relative directory.
+When removing a query or other content prevents exact comparison, the row includes
+`matchable: false` and is excluded from installed-app matching. Its app ID and summary are
+still returned. Never-applied apps do not match. If one app's config or source cannot be read,
+that row is omitted while the others remain. `complete: false` means that discovery could not
+finish, for example after a bulk config read failure or the bounded Source page limit.
+Returned matches remain useful; an unmatched listing cannot be assumed uninstalled.
+Matching ignores ref but preserves query as part
+of executable source identity. The store uses normalized Git URL and module to show the installed
+count, Open, and Install another. Installing another copy creates an independent app with separate
+data and settings.
 
 ### Projects and Capsules
 
@@ -302,19 +318,22 @@ a window of Workspace-wide Runs.
 - `state`: `installing` / `installed` / `updating` / `needs_attention` /
   `stopped` / `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` /
-  `retry_screen` / `fix_connection` / `continue_install` / `cancel_uninstall` /
-  `uninstall_now` / `reinstall` / `none`
+  `retry_screen` / `fix_connection` / `fix_interface_link` / `continue_install` /
+  `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
 - `problems[].code`, in priority order: `connection_unavailable` /
-  `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
+  `interface_link_unavailable` / `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
   `capsule_error` / `install_incomplete` / `screen_unavailable` /
-  `uninstall_scheduled` (warning)
+  `interface_link_degraded` / `interface_link_unset` / `uninstall_scheduled` (the last three are warnings)
 
 The view also lists every launchable screen (`screens`), the adopted version and
 the newest snapshot of the same ref (`version.current`, `version.latest`,
 `updateAvailable`, `stale`, `autoUpdate`), in-progress work (`progress`), the
 newest Run (`latestRun`) and the uninstall terms (`uninstall.mode`, the
 `graceDays` that apply before anything is scheduled, and
-`scheduled.deleteAfter` once scheduled). It carries no secret, no Output value
+`scheduled.deleteAfter` once scheduled). `links.uses` lists outgoing links and
+`links.usedBy` lists incoming links. `uninstall.impact.usedBy` identifies consumers
+affected by removal. Removing a provider leaves consumer apps in place and never
+selects a replacement automatically. The view carries no secret, no Output value
 and no Interface input other than a screen's checked launch URL. Parts that a
 supporting read could not load are named in `incomplete`.
 `progress.revisionPreparing` is true only while an install or revision
@@ -353,6 +372,41 @@ the cancel and schedule commands' own admission rules.
 
 `GET /api/v1/capsules/{capsuleId}/runs` pages newest first with `limit`
 (default 50, at most 100) and `cursor`; repeat `type` to filter by Run type.
+
+### Interface links
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates` | Read matching providers and the current link generation |
+| PUT | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | Select a provider with generation CAS |
+| DELETE | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | Unlink as a consumer or provider manager |
+
+The candidate response is `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`.
+`generation` is the latest record for this consumer and requirement key, or 0 when none
+exists. PUT takes `{ interfaceId, expectedGeneration }`; DELETE takes `{ expectedGeneration }`.
+Candidates are `Resolved` Interfaces owned by another Capsule in the same Workspace.
+Workspace-owned and operator-owned Interfaces are not link providers.
+Both return `{ link: InterfaceLink }` on success. Selecting a provider needs no Plan. It
+prepares the new provider's Binding before revoking the old provider's Binding.
+
+An InterfaceLink records the consumer Capsule and requirement key, exact type/version,
+requested and approved permissions, selected provider Interface and Capsule, `state`,
+`selection`, and `generation`. `state` is `pending_approval|active|declined|revoked`;
+`selection` is `explicit|auto_single`. Uninstalling a provider does not rewrite the choice
+or state: the app read computes its health. Only active links authorize runtime use.
+Interface values and credentials do not enter OpenTofu. An absent link does not prevent
+OIDC sign-in; it creates no Binding for that link.
+
+GET requires consumer read access; PUT requires consumer write access; DELETE also permits
+provider write access. Insufficient access returns 403, invalid input 400, a generation conflict 409,
+and an unavailable provider 412. An approval policy port owns the decision; the current
+Workspace composition approves same-Workspace links immediately.
+
+Storage uses D1 `interface_links` (migration v76 `d1_interface_links`) and PostgreSQL
+`takosumi_interface_links` (migration v122 `runtime_interfaces.links.create`). These are
+additive schema changes and store no credentials. This change has not applied production
+DDL or rolled out to production. Production application requires separate approval and
+verification.
 
 ### Sources
 
@@ -412,6 +466,34 @@ the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
 for plans that are not attempts. Its dedicated Source is retired, polling and sync admission stop,
 and archives and snapshot rows are removed. The same DELETE or the daily sweep resumes
 an interrupted retirement.
+
+For `userAction.kind: "provide_inputs"`, `interfaces` lists each `requirementKey`, exact
+type/version, permissions, value-free candidates, `choice`, and `autoSelected`. No candidates
+allows later. One is selected automatically only if it is not private and is not also a
+candidate for another requirement. Private providers, duplicates, and several candidates
+require an explicit provider or later choice. PATCH
+`interfaceLinks` replaces the complete answer list with entries shaped as
+`{requirementKey,choice:{kind:"interface",interfaceId}}` or
+`{requirementKey,choice:{kind:"later"}}`. The selected provider ID lives in this answer,
+not the manifest. Immediately after Capsule creation, it becomes a pinned InterfaceLink
+and is never resolved again from the candidate set.
+
+To confirm displayed choices, send
+`observedInterfaces: [{requirementKey,candidateIds}]` together with `continue: true`.
+An explicit `interfaceLinks` answer takes precedence for that requirement. The server
+compares the echoed candidate IDs with the current candidate set, so a set that changed
+after the sheet opened is accepted when it still matches at submission time.
+Different sets return 409 `interface_candidate_unavailable`. An omitted observation uses
+the captured sheet-open candidate set instead.
+The response's `installPlan.implicitInterfaceKeys` identifies implicit answers stored in
+`options.interfaceLinks`, including a sole-candidate auto-selection or “configure later”,
+so a restarted attempt can distinguish them from explicit choices. These observations contain
+IDs only, are never stored in `options`, and grant no authority.
+When Control D1 has not installed the Interface link store (schema before v76),
+the install sheet offers no candidates, returns `linkStoreUnavailable: true` with
+guidance, and saves no selection. Choosing “configure later” proceeds without
+attempting to create a link. An explicit choice of a pre-v76 candidate is refused
+before Capsule creation.
 
 Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
 Capsule never expires. GET and the open listing never write: an expired

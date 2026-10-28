@@ -2565,7 +2565,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         // The new capability always qualifies its actual global constraints
         // and hooks, including a warmed bootstrap handle. Historical ordinary
         // runtime and Backup floors do not call this source-only verifier.
-        await verifyD1OpenTofuLedgerSchemaPredeployed(db);
+        await verifyD1PredeployedSchemaEvidence(db, 75);
+        await assertWorkspaceFinancialD1Triggers(db);
         const result=await db.prepare(statement).bind(...parameters).all<Record<string,unknown>>();
         return result.results??[];
       },
@@ -2584,7 +2585,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const port:FinancialSourceSqlPort={dialect:"d1",
       query:async(statement,parameters=[])=>{
         await (this.#requestMaintenanceScope?.ensure(db) ?? assertControlD1MaintenanceInactive(db));
-        await verifyD1OpenTofuLedgerSchemaPredeployed(db);
+        await verifyD1PredeployedSchemaEvidence(db, 75);
+        await assertWorkspaceFinancialD1Triggers(db);
         if(!statement.trimStart().startsWith("select "))throw new Error("Financial original read requires SELECT");
         const result=await db.prepare(statement).bind(...parameters).all<Record<string,unknown>>();
         if(result.success!==true||!Array.isArray(result.results))throw new Error("Financial original read result unavailable");
@@ -15988,6 +15990,30 @@ const D1_OBSERVABILITY_INDEX_STATEMENTS = [
     on takosumi_observability_traces (start_time, id)`,
 ] as const;
 
+// Migration-only: table + receipt are created atomically by v76, never by boot
+// before its migration ledger row. Retained consent has no ephemeral FK/cascade.
+const D1_INTERFACE_LINK_STATEMENTS = [
+  `create table if not exists interface_links (
+    id text primary key,
+    generation integer not null check (generation >= 1),
+    consumer_capsule_id text not null,
+    requirement_key text not null,
+    provider_interface_id text not null,
+    provider_capsule_id text not null,
+    state text not null check (state in ('pending_approval', 'active', 'declined', 'revoked')),
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create unique index if not exists interface_links_current_consumer_requirement_unique
+    on interface_links (consumer_capsule_id, requirement_key)
+    where state in ('pending_approval', 'active')`,
+  `create index if not exists interface_links_consumer_lineage_idx
+    on interface_links (consumer_capsule_id, requirement_key, generation)`,
+  `create index if not exists interface_links_provider_interface_idx on interface_links (provider_interface_id)`,
+  `create index if not exists interface_links_provider_capsule_idx on interface_links (provider_capsule_id)`,
+] as const;
+
 const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [
   `create index if not exists interfaces_authorized_page_idx
     on interfaces (workspace_id, phase, created_at, id)`,
@@ -19407,6 +19433,17 @@ ${D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_WORKSPACE_FINANCIAL_SOURCE_STATEMENTS); },
   },
+  {
+    version: 76,
+    name: "d1_interface_links",
+    checksumSource: () => `expand: TASK-0118 Phase 4; retained consumer selection and provider consent.
+Unique constraint applies only to the new empty table; no existing Interface or Binding rewrite.
+Atomic exact-prior replacement and provider reverse lookup; no ephemeral FK/cascade.
+Forward repair retains the additive schema and uses a compatible artifact; no production down migration.
+${D1_INTERFACE_LINK_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_INTERFACE_LINK_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_INTERFACE_LINK_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -20357,7 +20394,7 @@ const D1_RUNTIME_STRUCTURE_PROJECTION = `(
     'indexes', (select json_group_array(${D1_RUNTIME_INDEX_PROJECTION}) from pragma_index_list(master.name) indexes),
     'foreignKeys', (select count(*) from pragma_foreign_key_list(master.name))))
   from sqlite_master master where master.type = 'table' and master.name in (
-    'workspaces', 'workspace_members', 'interface_bindings', 'scheduled_sweep_cursors',
+    'workspaces', 'workspace_members', 'interface_bindings', 'interface_links', 'scheduled_sweep_cursors',
     'workspace_billing_intents', 'workspace_billing_bindings',
     'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups',
     'workspace_financial_sources','workspace_financial_events','workspace_financial_materializations','workspace_financial_receipts')
@@ -20398,7 +20435,7 @@ function normalizedD1IndexSql(value: string | null): string | null {
       if (result && !result.endsWith(" ")) result += " ";
     } else result += character.toLowerCase();
   }
-  return result.trim().replace(/^create index if not exists /u, "create index ");
+  return result.trim().replace(/^create (unique )?index if not exists /u, "create $1index ");
 }
 
 function validateD1BackupOwnerIndexes(indexes: readonly D1RuntimeIndex[]): void {
@@ -20429,7 +20466,7 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
       const column = table.columns.find((item) => item.name === columnName);
       return !column || column.type.toLowerCase() !== type || column.notnull !== required || column.pk !== pk;
     }) || indexes.some(([indexName, columns, partial = 0]) => !table.indexes.some((index) => index.name === indexName && index.unique === 1 && index.partial === partial && stableStringify(index.columns) === stableStringify(columns))) ||
-      ((name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+      ((name === "interface_links" || name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
   };
   check("workspaces", [["id", "text", 0, 1], ["handle", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1],
     ["owner_user_id", "text", 0], ["workspace_type", "text", 0], ["personal_bootstrap_owner_id", "text", 0], ["management_state", "text", 1], ["management_epoch", "integer", 1]],
@@ -20439,6 +20476,27 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
   check("interface_bindings", [["id", "text", 0, 1], ["workspace_id", "text", 1], ["interface_id", "text", 1], ["subject_kind", "text", 1], ["subject_id", "text", 1],
     ["phase", "text", 1], ["generation", "integer", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1]],
     [["interface_bindings_active_subject_unique", ["interface_id", "subject_kind", "subject_id"], 1]]);
+  if (head >= 76) {
+    check("interface_links", [["id", "text", 0, 1], ["generation", "integer", 1], ["consumer_capsule_id", "text", 1], ["requirement_key", "text", 1],
+      ["provider_interface_id", "text", 1], ["provider_capsule_id", "text", 1], ["state", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1]],
+      [["interface_links_current_consumer_requirement_unique", ["consumer_capsule_id", "requirement_key"], 1]]);
+    const indexes = tables.get("interface_links")!.indexes;
+    for (const [position, name, columns, cids, unique, partial] of [
+      [1, "interface_links_current_consumer_requirement_unique", ["consumer_capsule_id", "requirement_key"], [2, 3], 1, 1],
+      [2, "interface_links_consumer_lineage_idx", ["consumer_capsule_id", "requirement_key", "generation"], [2, 3, 1], 0, 0],
+      [3, "interface_links_provider_interface_idx", ["provider_interface_id"], [4], 0, 0],
+      [4, "interface_links_provider_capsule_idx", ["provider_capsule_id"], [5], 0, 0],
+    ] as const) {
+      const found = indexes.filter((index) => index.name === name), index = found[0];
+      const xinfo = [...columns.map((column, offset) => ({ seqno: offset, cid: cids[offset], name: column, desc: 0, coll: "BINARY", key: 1 })),
+        { seqno: columns.length, cid: -1, name: null, desc: 0, coll: "BINARY", key: 0 }];
+      if (found.length !== 1 || !index || index.unique !== unique || index.partial !== partial ||
+        stableStringify(index.columns) !== stableStringify(columns) || stableStringify(index.xinfo) !== stableStringify(xinfo) ||
+        normalizedD1IndexSql(index.sql) !== normalizedD1IndexSql(D1_INTERFACE_LINK_STATEMENTS[position])) {
+        throw new Error("D1 OpenTofu predeployed schema verification failed");
+      }
+    }
+  }
   check("scheduled_sweep_cursors", [["lane", "text", 0, 1], ["generation", "integer", 1], ["cursor_created_at", "text", 0], ["cursor_id", "text", 0], ["upper_created_at", "text", 0], ["upper_id", "text", 0]]);
   if (head >= 72) {
     check("workspace_billing_intents", [["workspace_id", "text", 0, 1], ["intent_id", "text", 1], ["billing_authority", "text", 1], ["workspace_ref", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1]],
@@ -20484,8 +20542,8 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
 /**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
- * executes DDL or data migration. It requires the complete current migration
- * catalog with exact names/checksums before any store query is allowed.
+ * executes DDL or data migration. During the additive link rollout it accepts
+ * complete v75 or v76 catalogs with exact names/checksums and physical shape.
  */
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
@@ -20494,8 +20552,8 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   await assertWorkspaceFinancialD1Triggers(db);
 }
 
-/** Runtime floors never weaken qualification, which requires exact current v75. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75): Promise<void> {
+/** Runtime floors never weaken complete catalog and physical qualification. */
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   let structures: string | null;
@@ -20525,11 +20583,11 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion:
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  minimumVersion: 71 | 72 | 73 | 74 | 75 = 75,
+  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 = 76,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
   const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

@@ -12,7 +12,11 @@ import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
  * vocabulary and adds the legacy `defaultModule` hint. Version 2.2 adds
  * provider-neutral requests to consume a host Interface.
  * Version 2.3 adds an optional credential-free sourceBuild proposal per
- * module. Earlier versions remain closed and reject that field.
+ * module. Earlier versions remain closed and reject that field. Version 2.5
+ * adds explicit root-string current-context data sources. Its workspace_id
+ * source is deprecated at introduction for existing-app compatibility and is
+ * scheduled for removal in a later contract. Persisted mappings need explicit
+ * migration or retirement; capsule_id is not a Workspace identity alias.
  * Every declaration is still only a proposal until Takosumi validates and
  * compiles it into its DB-owned InstallConfig before a reviewed Plan can use it.
  */
@@ -29,6 +33,8 @@ export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 =
   "takosumi.com/v2.3" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 =
   "takosumi.com/v2.4" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5 =
+  "takosumi.com/v2.5" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
@@ -51,11 +57,24 @@ export interface RepositoryInstallUxText {
   readonly en: string;
 }
 
-export type RepositoryInstallUxInputSource =
+export type RepositoryLegacyInstallUxInputSource =
   | { readonly kind: "user" }
   | { readonly kind: "capsule_name" }
   | { readonly kind: "workspace_scoped_capsule_name" }
   | { readonly kind: "module_default" };
+
+/**
+ * Explicit v2.5 data sources, not grants or identity values. workspace_id is
+ * deprecated at introduction; apps needing Workspace semantics must migrate
+ * those semantics before removing it. capsule_id is not an equivalent value.
+ */
+export type RepositoryInstallContextInputSource =
+  | { readonly kind: "workspace_id" }
+  | { readonly kind: "capsule_id" };
+
+export type RepositoryInstallUxInputSource =
+  | RepositoryLegacyInstallUxInputSource
+  | RepositoryInstallContextInputSource;
 
 /**
  * Semantic role of one declared input. The role names what a field *is* so the
@@ -260,7 +279,11 @@ export interface RepositoryInstallUxModule {
 /** Module view parameterized by the OIDC binding slots of one API version. */
 export type RepositoryInstallUxModuleFor<
   BindingSlot extends RepositoryOidcSlot,
-> = Omit<RepositoryInstallUxModule, "requires"> & {
+  InputSource extends RepositoryInstallUxInputSource = RepositoryLegacyInstallUxInputSource,
+> = Omit<RepositoryInstallUxModule, "requires" | "inputs"> & {
+  readonly inputs: readonly (Omit<RepositoryInstallUxInput, "source"> & {
+    readonly source: InputSource;
+  })[];
   readonly requires?: readonly RepositoryRuntimeRequirementFor<BindingSlot>[];
 };
 
@@ -316,6 +339,18 @@ export type RepositoryInstallUxModuleV2_4 =
     readonly sourceBuild?: SourceBuildConfig;
   };
 
+/** v2.5 does not carry forward the retired Workspace-scoped naming source. */
+export type RepositoryInstallUxV25InputSource = Exclude<
+  RepositoryInstallUxInputSource,
+  { readonly kind: "workspace_scoped_capsule_name" }
+>;
+
+/** v2.5 retains v2.4 runtime delivery and adds explicit self-context data. */
+export type RepositoryInstallUxModuleV2_5 =
+  RepositoryInstallUxModuleFor<RepositoryOidcBindingSlot, RepositoryInstallUxV25InputSource> & {
+    readonly sourceBuild?: SourceBuildConfig;
+  };
+
 export interface RepositoryManifestInstallV2_3 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_3>>;
   /** @see RepositoryManifestInstallV2_1.defaultModule */
@@ -326,6 +361,10 @@ export interface RepositoryManifestInstallV2_4 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_4>>;
 }
 
+export interface RepositoryManifestInstallV2_5 {
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_5>>;
+}
+
 /** Compatibility alias for callers that only need the install envelope. */
 export type RepositoryManifestInstall =
   | RepositoryManifestInstallV1
@@ -333,7 +372,8 @@ export type RepositoryManifestInstall =
   | RepositoryManifestInstallV2_1
   | RepositoryManifestInstallV2_2
   | RepositoryManifestInstallV2_3
-  | RepositoryManifestInstallV2_4;
+  | RepositoryManifestInstallV2_4
+  | RepositoryManifestInstallV2_5;
 
 export interface RepositoryManifestDocumentV1 {
   readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
@@ -371,22 +411,30 @@ export interface RepositoryManifestDocumentV2_4 {
   readonly install: RepositoryManifestInstallV2_4;
 }
 
+export interface RepositoryManifestDocumentV2_5 {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstallV2_5;
+}
+
 export type RepositoryManifestDocument =
   | RepositoryManifestDocumentV1
   | RepositoryManifestDocumentV2
   | RepositoryManifestDocumentV2_1
   | RepositoryManifestDocumentV2_2
   | RepositoryManifestDocumentV2_3
-  | RepositoryManifestDocumentV2_4;
+  | RepositoryManifestDocumentV2_4
+  | RepositoryManifestDocumentV2_5;
 
 export type RepositoryManifestInterfaceApiVersion =
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
-  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4;
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5;
 
-/** v2.1 through v2.4 retain the full v2 provided-Interface wire. */
+/** v2.1 through v2.5 retain the full v2 provided-Interface wire. */
 export function isRepositoryManifestInterfaceCapableApiVersion(
   apiVersion: RepositoryManifestDocument["apiVersion"] | string,
 ): apiVersion is RepositoryManifestInterfaceApiVersion {
@@ -395,7 +443,8 @@ export function isRepositoryManifestInterfaceCapableApiVersion(
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5
   );
 }
 
@@ -435,10 +484,11 @@ export function parseRepositoryManifestText(
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
   ] as const);
   if (!apiVersion) {
     return invalid(
-      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5}`,
     );
   }
   if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
@@ -480,10 +530,15 @@ export function parseRepositoryManifestText(
       isRepositoryManifestInterfaceCapableApiVersion(apiVersion),
       apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
         apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
-        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
       apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 ||
-        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
-      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4,
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_4 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
+      // Deliberate compatibility window; do not inherit into a future version.
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_5,
     );
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
@@ -526,6 +581,7 @@ function parseModule(
   allowConsumedInterfaces: boolean,
   allowSourceBuild: boolean,
   allowRuntimeOidcBindings: boolean,
+  allowContextInputs: boolean,
 ): RepositoryInstallUxModule | string {
   const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
@@ -547,6 +603,7 @@ function parseModule(
     const parsed = parseInput(
       value.inputs[index],
       `${prefix}.inputs[${index}]`,
+      allowContextInputs,
     );
     if (typeof parsed === "string") return parsed;
     if (inputNames.has(parsed.name)) {
@@ -565,6 +622,13 @@ function parseModule(
   if (typeof requires === "string") return requires;
   const features = parseFeatures(value.features, prefix, inputNames);
   if (typeof features === "string") return features;
+
+  const contextNames = new Set(inputs.filter((input) =>
+    input.source.kind === "workspace_id" || input.source.kind === "capsule_id"
+  ).map((input) => input.name));
+  if (features?.some((feature) => feature.inputs.some((name) => contextNames.has(name)))) {
+    return `${prefix}.features must not claim current-context inputs`;
+  }
 
   const interfaces = allowInterfaces
     ? parseInterfaces(value.interfaces, prefix)
@@ -1015,6 +1079,7 @@ function parseInterfaceBindingRequests(
 function parseInput(
   value: unknown,
   prefix: string,
+  allowContextInputs: boolean,
 ): RepositoryInstallUxInput | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   const keys = exactKeys(value, [
@@ -1046,8 +1111,18 @@ function parseInput(
   if (name === "env" && value.secret === true) {
     return `${prefix}.secret must not target the plain env variable`;
   }
-  const source = parseInputSource(value.source, prefix);
+  const source = parseInputSource(value.source, prefix, allowContextInputs);
   if (typeof source === "string") return source;
+  if (source.kind === "workspace_id" || source.kind === "capsule_id") {
+    const contextKeys = exactKeys(value, ["name", "source", "type", "label"]);
+    if (contextKeys) return `${prefix}.${contextKeys}`;
+    if (["env", "__proto__", "constructor", "prototype"].includes(name)) {
+      return `${prefix}.name must identify an ordinary root string variable`;
+    }
+    if (value.type !== undefined && value.type !== "string") {
+      return `${prefix}.type must be string for current-context inputs`;
+    }
+  }
   const type =
     value.type === undefined
       ? undefined
@@ -1112,6 +1187,7 @@ function parseInput(
 function parseInputSource(
   value: unknown,
   prefix: string,
+  allowContextInputs: boolean,
 ): RepositoryInstallUxInputSource | string {
   if (!isPlainRecord(value)) return `${prefix}.source must be an object`;
   const keys = exactKeys(value, ["kind"]);
@@ -1119,8 +1195,9 @@ function parseInputSource(
   const kind = oneOf(value.kind, [
     "user",
     "capsule_name",
-    "workspace_scoped_capsule_name",
+    ...(!allowContextInputs ? ["workspace_scoped_capsule_name"] as const : []),
     "module_default",
+    ...(allowContextInputs ? ["workspace_id", "capsule_id"] as const : []),
   ] as const);
   return kind ? { kind } : `${prefix}.source.kind is unsupported`;
 }

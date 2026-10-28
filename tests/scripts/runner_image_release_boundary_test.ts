@@ -62,8 +62,8 @@ test("runner image release has one Takosumi-owned entrypoint, focused check, and
     "release_config_composition_test.ts",
   );
   expect(packageJson.scripts?.test).toBe("bun scripts/run-portable-tests.ts");
-  expect(portableTestCommands().at(-1)?.slice(0, 4)).toEqual([
-    "bun", "test", "--only-failures", "./tests",
+  expect(portableTestCommands().at(-1)?.slice(0, 5)).toEqual([
+    "bun", "test", "--isolate", "--only-failures", "./tests",
   ]);
   expect(portableGate).toContain('phase("tests", ["bun", "run", "test"])');
   expect(portableGate).not.toContain(

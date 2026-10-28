@@ -80,6 +80,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | 用語               | 意味                                                                                                      | 詳しい説明                             |
 | ------------------ | --------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | Interface          | デプロイしたものが何を提供しているかの宣言です。                                                          | [Interface](../concepts/interfaces.md) |
+| InterfaceLink      | 利用側 Capsule の requirement key と、選んだ提供元の Interface / Capsule、要求・承認した権限を固定する連携の記録です。 | [Interface](../concepts/interfaces.md) |
 | InterfaceBinding   | その Interface を誰がどの権限で使えるかの認可です。                                                       | [Interface](../concepts/interfaces.md) |
 | Principal          | Interface を使う側のうち、人やアカウントにあたる主体です。                                                | [Interface](../concepts/interfaces.md) |
 | ServiceAccount     | Interface を使う側のうち、人ではない主体です。                                                            | [Interface](../concepts/interfaces.md) |

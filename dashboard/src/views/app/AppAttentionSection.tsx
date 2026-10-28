@@ -32,6 +32,7 @@ export interface AttentionActions {
   readonly retry: (problem: CapsuleAppProblem) => void;
   readonly retryScreen: (problem: CapsuleAppProblem) => void;
   readonly fixConnection: () => void;
+  readonly fixInterfaceLink: () => void;
   readonly continueInstall: () => void;
   readonly cancelUninstall: () => void;
   readonly uninstallNow: () => void;
@@ -50,6 +51,9 @@ const CONNECTION_STATUS: Readonly<Record<string, MessageKey>> = {
 /** The action a problem card offers for its own problem. */
 const PROBLEM_ACTION: Readonly<Partial<Record<CapsuleAppProblem["code"], CapsuleAppAction>>> = {
   connection_unavailable: "fix_connection",
+  interface_link_unavailable: "fix_interface_link",
+  interface_link_degraded: "fix_interface_link",
+  interface_link_unset: "fix_interface_link",
   policy_blocked: "retry",
   run_failed: "retry",
   capsule_error: "retry",
@@ -72,6 +76,7 @@ export function problemKey(problem: CapsuleAppProblem): string {
     problem.provider ?? "",
     problem.connectionId ?? "",
     problem.screenFailure?.id ?? "",
+    problem.requirementKey ?? "",
   ].join("\u0000");
 }
 
@@ -187,6 +192,12 @@ export default function AppAttentionSection(props: {
     const action = PROBLEM_ACTION[problem.code];
     if (!action || isPrimary(problem, action)) return null;
     switch (action) {
+      case "fix_interface_link":
+        return (
+          <Button variant="secondary" type="button" onClick={() => props.actions.fixInterfaceLink()}>
+            {t("app.action.fixInterfaceLink")}
+          </Button>
+        );
       case "fix_connection":
         return (
           <Button variant="secondary" type="button" onClick={() => props.actions.fixConnection()}>
@@ -317,6 +328,15 @@ export default function AppAttentionSection(props: {
                   {(problem) => (
               <article class="ap-problem" data-problem={problem().code}>
                 <Switch>
+                  <Match when={problem().code === "interface_link_unavailable"}>
+                    <strong>{t("app.problem.interfaceLinkUnavailable")}</strong>
+                  </Match>
+                  <Match when={problem().code === "interface_link_degraded"}>
+                    <strong>{t("app.problem.interfaceLinkDegraded")}</strong>
+                  </Match>
+                  <Match when={problem().code === "interface_link_unset"}>
+                    <strong>{t("app.problem.interfaceLinkUnset")}</strong>
+                  </Match>
                   <Match when={problem().code === "connection_unavailable"}>
                     <strong>{t("app.problem.connection")}</strong>
                     <p>

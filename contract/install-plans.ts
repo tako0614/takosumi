@@ -74,6 +74,16 @@ export interface GitInstallPlanCapsuleRequest {
   readonly environment: string;
 }
 
+/** An exact provider choice, or an explicit decision to configure it later. */
+export type GitInstallPlanInterfaceChoice =
+  | { readonly kind: "interface"; readonly interfaceId: string }
+  | { readonly kind: "later" };
+
+export interface GitInstallPlanInterfaceLinkRequest {
+  readonly requirementKey: string;
+  readonly choice: GitInstallPlanInterfaceChoice;
+}
+
 export interface GitInstallPlanOptions {
   /**
    * Optional exact OpenTofu module path, relative to the SourceSnapshot
@@ -87,6 +97,8 @@ export interface GitInstallPlanOptions {
    * tuples for the same provider source.
    */
   readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
+  /** Exact Interface ids only; permissions come from the compiled configuration. */
+  readonly interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[];
 }
 
 /**
@@ -165,6 +177,12 @@ export interface CreateGitInstallAttemptRequest {
  * - `capsuleName` renames the app before the Capsule exists.
  * - `providerBindings` replaces the complete explicit connection selection;
  *   requirements left unanswered still auto-select their only candidate.
+ * - `interfaceLinks` replaces the complete explicit Interface selection;
+ *   unanswered requirements auto-select their sole non-private provider,
+ *   defer when none exists, and otherwise need a provider choice or `later`.
+ * - `observedInterfaces` echoes each implicit candidate set shown by the client,
+ *   only with `continue: true`. It detects changed candidates and never grants
+ *   authority or changes the explicit answers stored in `options`.
  * - `continue: true` confirms the sheet: the coordinator validates the
  *   answers, creates the Capsule atomically and starts the Plan Run.
  * - `variables` are accepted only together with `continue: true`. They are
@@ -181,6 +199,13 @@ export interface PatchGitInstallPlanRequest {
   readonly modulePath?: string;
   readonly capsuleName?: string;
   readonly providerBindings?: readonly GitInstallPlanProviderBindingRequest[];
+  /** Replaces the complete explicit selection for this module's requirements. */
+  readonly interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[];
+  /** Displayed implicit candidate sets, checked only by the confirming request. */
+  readonly observedInterfaces?: readonly {
+    readonly requirementKey: string;
+    readonly candidateIds: readonly string[];
+  }[];
   readonly variables?: Readonly<Record<string, JsonValue>>;
   readonly continue?: boolean;
 }
@@ -233,6 +258,8 @@ export interface GitInstallPlan {
   readonly source: GitInstallPlanSourceRequest;
   readonly capsule: GitInstallPlanCapsuleRequest;
   readonly options: GitInstallPlanOptions;
+  /** Implicit Interface answers in `options`, so restart keeps only choices the person made. */
+  readonly implicitInterfaceKeys?: readonly string[];
   /** Exact value-free preflight identity, when supplied by an installer. */
   readonly preflight?: GitInstallPlanPreflightAuthority;
   /** `"attempt"` when this record is a coordinator-owned install attempt. */
@@ -319,6 +346,27 @@ export interface GitInstallPlanConnectionRequirement {
   readonly autoSelected: boolean;
 }
 
+/** Value-free provider summary offered for an Interface requirement. */
+export interface GitInstallPlanInterfaceCandidate {
+  readonly id: string;
+  readonly name: string;
+  readonly capsuleId: string;
+  readonly capsuleName: string;
+}
+
+export interface GitInstallPlanInterfaceRequirement {
+  readonly requirementKey: string;
+  readonly type: string;
+  readonly version: string;
+  readonly permissions: readonly string[];
+  readonly candidates: readonly GitInstallPlanInterfaceCandidate[];
+  /** Explicit answer, sole candidate, or implicit `later` when none exists. */
+  readonly choice?: GitInstallPlanInterfaceChoice;
+  readonly autoSelected: boolean;
+  /** Link persistence is not installed, so candidates cannot be selected yet. */
+  readonly linkStoreUnavailable?: true;
+}
+
 /**
  * Value-free presentation of one install input. `sensitive` inputs are
  * write-only: no default or value is ever echoed. Generic OpenTofu variables
@@ -373,10 +421,11 @@ export type GitInstallPlanUserAction =
       /** Planned resources from the compatibility analysis. */
       readonly resources: readonly CapsuleResourceSummary[];
       readonly connections: readonly GitInstallPlanConnectionRequirement[];
+      readonly interfaces: readonly GitInstallPlanInterfaceRequirement[];
       readonly variables: readonly GitInstallPlanVariablePresentation[];
       readonly name: GitInstallPlanNameProposal;
       /** Answers that still block `continue`. */
-      readonly missing: readonly ("connections" | "name")[];
+      readonly missing: readonly ("connections" | "interfaces" | "name")[];
       /**
        * Present (possibly empty) once a confirming request started creation
        * and could not be confirmed: send `continue` again with exactly these

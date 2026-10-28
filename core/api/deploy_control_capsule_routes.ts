@@ -573,17 +573,22 @@ export function mountDeployControlCapsuleRoutes(
           }
         };
         const immediate = capsuleDeleteIsImmediate(new URL(c.req.url));
-        if (prepared.existing.capsule.status === "destroyed") {
-          return c.json({ ...capsuleResponse(prepared.existing.capsule), alreadyDeleted: true }, 200);
-        }
         if (!capsuleHasAppliedState(prepared.existing.capsule)) {
-          if (!prepared.authority.ok) throw prepared.authority.error;
+          if (prepared.existing.capsule.status !== "destroyed" && !prepared.authority.ok) {
+            throw prepared.authority.error;
+          }
           const capsule = await capsules.abandonUnappliedCapsule(
             idCheck.value,
             "delete requested before first successful apply",
-            prepared.authority.value,
+            prepared.authority.ok ? prepared.authority.value : undefined,
           );
+          if (prepared.existing.capsule.status === "destroyed") {
+            return c.json({ ...capsuleResponse(capsule), alreadyDeleted: true }, 200);
+          }
           return c.json({ ...capsuleResponse(capsule), abandoned: true }, 202);
+        }
+        if (prepared.existing.capsule.status === "destroyed") {
+          return c.json({ ...capsuleResponse(prepared.existing.capsule), alreadyDeleted: true }, 200);
         }
         if (!immediate) {
           throw new OpenTofuControllerError(

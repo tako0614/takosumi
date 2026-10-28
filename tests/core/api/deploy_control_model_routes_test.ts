@@ -1,7 +1,9 @@
+import { InMemoryGitInstallPlanStore } from "../../../core/domains/install-plans/store.ts";
 import { expect, test } from "bun:test";
 
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
+import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import type { CapsulesService } from "../../../core/domains/capsules/mod.ts";
 
 const TOKEN = "deploy-control-token";
@@ -10,9 +12,10 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, ...extra };
 }
 
-async function service() {
+async function service(opentofuControlStore?: InMemoryOpenTofuControlStore) {
   return await createTakosumiService({
     role: "takosumi-api",
+    opentofuControlStore,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
@@ -226,6 +229,12 @@ test("model e2e: DELETE abandons an unapplied Capsule without a destroy plan", a
   expect((await operations.capsules.getCapsule(capsuleId)).status).toBe(
     "destroyed",
   );
+  const retryRes = await app.request(`/internal/v1/capsules/${capsuleId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  expect(retryRes.status).toBe(200);
+  expect((await retryRes.json()).alreadyDeleted).toBe(true);
 });
 
 test("model e2e: install-configs lists the workspace's configured install config", async () => {
@@ -366,3 +375,34 @@ test("model e2e: unauthorized without the deploy-control bearer", async () => {
   const res = await app.request("/internal/v1/workspaces");
   expect(res.status).toBe(401);
 });
+
+for (const managementState of ["draining", "frozen"] as const) {
+  test(`model e2e: destroyed DELETE retries link cleanup while ${managementState}`, async () => {
+    const ledger = new InMemoryOpenTofuControlStore();
+    const { app, operations } = await service(ledger);
+    const workspaceId = await createWorkspace(app, "replay-cleanup");
+    const sourceId = await createSource(app, workspaceId);
+    const configId = await seedInstallConfig(operations, workspaceId);
+    const capsuleId = await createCapsule(operations, workspaceId, sourceId, configId, "retired");
+    await operations.capsules.abandonUnappliedCapsule(capsuleId, "test");
+    const authority = await operations.workspaces.captureManagementAuthority(workspaceId);
+    expect((await ledger.beginWorkspaceDraining(workspaceId, authority)).status).toBe("started");
+    if (managementState === "frozen") {
+      ledger.attachGitInstallPlanStore(new InMemoryGitInstallPlanStore(ledger));
+      expect((await ledger.freezeWorkspaceManagementIfQuiescent({
+        workspaceId, managementState: "draining", managementEpoch: authority.managementEpoch + 1,
+      })).status).toBe("frozen");
+    }
+    let revocations = 0;
+    operations.interfaces.revokeCapsuleInterfaceLinks = async (revokedWorkspaceId, revokedCapsuleId) => {
+      expect(revokedWorkspaceId).toBe(workspaceId);
+      expect(revokedCapsuleId).toBe(capsuleId);
+      revocations += 1;
+    };
+    const response = await app.request(`/internal/v1/capsules/${capsuleId}`, { method: "DELETE", headers: headers() });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ alreadyDeleted: true, capsule: { status: "destroyed" } });
+    expect(revocations).toBe(1);
+    expect(await ledger.listRunsByWorkspace(workspaceId)).toHaveLength(0);
+  });
+}

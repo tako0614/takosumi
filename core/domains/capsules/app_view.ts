@@ -18,6 +18,7 @@ import type {
   Capsule,
   CapsuleAppAction,
   CapsuleAppConnectionStatus,
+  CapsuleAppLink,
   CapsuleAppProblem,
   CapsuleAppProblemCode,
   CapsuleAppRunSummary,
@@ -70,6 +71,8 @@ export interface CapsuleAppFacts {
    */
   readonly revisionPreparing: boolean;
   readonly connectionIssues: readonly CapsuleAppConnectionIssue[];
+  /** Current outgoing requirements; absent when the supporting read failed. */
+  readonly interfaceLinks?: readonly CapsuleAppLink[];
   /** A dead-lettered screen materialization of the current generation. */
   readonly screenFailure?: CapsuleAppScreenFailure;
   /** Launchable screens; `undefined` when the screen read failed. */
@@ -92,6 +95,9 @@ const PROBLEM_ACTION: Readonly<
   >
 > = {
   connection_unavailable: "fix_connection",
+  interface_link_unavailable: "fix_interface_link",
+  interface_link_degraded: "fix_interface_link",
+  interface_link_unset: "fix_interface_link",
   uninstall_failed: "retry",
   policy_blocked: "review",
   run_failed: "retry",
@@ -176,6 +182,31 @@ function connectionProblems(
     ...(issue.connectionId ? { connectionId: issue.connectionId } : {}),
     connectionStatus: issue.status,
   }));
+}
+
+function interfaceLinkProblems(
+  links: readonly CapsuleAppLink[] | undefined,
+): CapsuleAppProblem[] {
+  return (links ?? []).flatMap((link): CapsuleAppProblem[] => {
+    const code = link.state !== "active"
+      ? "interface_link_unset"
+      : link.health === "provider_uninstall_scheduled"
+        ? "interface_link_degraded"
+        : link.health !== "ok"
+          ? "interface_link_unavailable"
+          : undefined;
+    return code
+      ? [{
+          code,
+          severity: code === "interface_link_unavailable" && link.health === "provider_removed"
+            ? "error"
+            : "warning",
+          requirementKey: link.requirementKey,
+          ...(link.linkId ? { interfaceLinkId: link.linkId } : {}),
+          ...(link.providerCapsuleId ? { providerCapsuleId: link.providerCapsuleId } : {}),
+        }]
+      : [];
+  });
 }
 
 function ordered(problems: readonly CapsuleAppProblem[]): CapsuleAppProblem[] {
@@ -290,7 +321,10 @@ export function deriveCapsuleAppStatus(facts: CapsuleAppFacts): CapsuleAppStatus
 
   const applied = capsuleIsApplied(capsule);
   const preparing = facts.revisionPreparing;
-  const problems: CapsuleAppProblem[] = connectionProblems(facts.connectionIssues);
+  const problems: CapsuleAppProblem[] = [
+    ...connectionProblems(facts.connectionIssues),
+    ...interfaceLinkProblems(facts.interfaceLinks),
+  ];
   if (latestFailed) problems.push(runProblem(latestFailed));
   if (capsule.status === "error" && !latestFailed) {
     problems.push({ code: "capsule_error", severity: "error" });
@@ -321,6 +355,9 @@ export function deriveCapsuleAppStatus(facts: CapsuleAppFacts): CapsuleAppStatus
   if (inFlight || preparing) {
     return status(applied ? "updating" : "installing", "none", sorted);
   }
+  if (!applied && review && !sorted.some((problem) =>
+    problem.severity === "error" && !problem.code.startsWith("interface_link_")
+  )) return status("installing", "review", sorted);
   if (sorted.some((problem) => problem.severity === "error")) {
     return status(
       "needs_attention",

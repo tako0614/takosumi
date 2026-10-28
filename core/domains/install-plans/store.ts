@@ -7,6 +7,7 @@ import type {
 } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract";
 import type { CapsuleResourceSummary } from "takosumi-contract/capsules";
+import type { CapsuleRequiredInterface } from "takosumi-contract/interfaces";
 import {
   assertWorkspaceFreezeExpectation,
   assertWorkspaceManagementAuthorityInput,
@@ -55,6 +56,12 @@ export interface GitInstallAttemptFacts {
     readonly resources: readonly CapsuleResourceSummary[];
     readonly requirements: readonly GitInstallAttemptRequirement[];
     readonly variables: readonly GitInstallPlanVariablePresentation[];
+    readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
+    /** Candidate sets observed when this sheet was opened; reads never change them. */
+    readonly autoInterfaceCandidates?: readonly {
+      readonly requirementKey: string;
+      readonly candidateIds: readonly string[];
+    }[];
     /** Name only; captured for the accepted repository OIDC endpoint input. */
     readonly repositoryAccountsOidcPublicUrlVariable?: string;
     readonly providerPolicy?: GitInstallAttemptProviderPolicy;
@@ -91,6 +98,10 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
    * Capsule was created.
    */
   readonly creationAttempted?: true;
+  /** Set only when this attempt itself turned on polling for its Source. */
+  readonly sourcePollingEnabledByAttempt?: true;
+  /** Implicit choices frozen at confirmation, including `later` with no provider. */
+  readonly autoSelectedInterfaceKeys?: readonly string[];
   /** Private attempt facts; projected only through `userAction`. */
   readonly attemptFacts?: GitInstallAttemptFacts;
   /** Private create-only configuration retained until atomic initial creation. */
@@ -801,13 +812,16 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     creationAttempted: _creationAttempted,
     sourcePollingEnabledByAttempt: _sourcePollingEnabledByAttempt,
     sourceCreatedByAttempt: _sourceCreatedByAttempt,
+    autoSelectedInterfaceKeys,
     attemptFacts: _attemptFacts,
     ...publicPlan
-  } = plan as StoredGitInstallPlan & {
-    readonly sourcePollingEnabledByAttempt?: true;
-    readonly sourceCreatedByAttempt?: boolean;
+  } = plan as StoredGitInstallPlan & { readonly sourceCreatedByAttempt?: boolean };
+  return {
+    ...publicPlan,
+    ...(autoSelectedInterfaceKeys !== undefined
+      ? { implicitInterfaceKeys: autoSelectedInterfaceKeys }
+      : {}),
   };
-  return publicPlan;
 }
 
 export function assertImmutableScope(

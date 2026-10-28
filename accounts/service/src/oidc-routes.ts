@@ -1,3 +1,4 @@
+import { InterfaceServiceError } from "../../../core/domains/interfaces/service.ts";
 import {
   TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES,
   type TakosumiSubject,
@@ -399,24 +400,15 @@ async function resolveOidcAuthorizationSubject(input: {
     if ((installConfig.requiredInterfaces?.length ?? 0) > 0) {
       const ensureRequiredInterfaces =
         input.operations.interfaces?.ensureCapsuleRequiredInterfaces;
-      if (!ensureRequiredInterfaces) {
-        return {
-          ok: false,
-          status: 503,
-          error: "temporarily_unavailable",
-          errorDescription:
-            "Capsule required Interface authorization is unavailable",
-        };
-      }
-      await ensureRequiredInterfaces.call(input.operations.interfaces, {
+      if (ensureRequiredInterfaces) await ensureRequiredInterfaces.call(input.operations.interfaces, {
         workspaceId: liveGrant.workspaceId!,
         capsuleId: liveGrant.capsuleId,
         principalId: pairwiseSubject,
         requirements: installConfig.requiredInterfaces!,
       });
     }
-  } catch {
-    return {
+  } catch (error) {
+    if (!(error instanceof InterfaceServiceError) || !["not_found", "failed_precondition", "conflict"].includes(error.code)) return {
       ok: false,
       status: 503,
       error: "temporarily_unavailable",
