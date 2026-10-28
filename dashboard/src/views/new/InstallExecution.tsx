@@ -129,6 +129,14 @@ interface Props {
    * page shows them above its review instead.
    */
   readonly showPolicyReasons?: boolean;
+  /**
+   * The reviewed Plan no longer matches what the person chose (they changed
+   * something and the install is being prepared again): the apply click is
+   * held and this says why.
+   */
+  readonly blockedReason?: string;
+  /** An Apply was started (or may have been): what it applies can no longer change. */
+  readonly onApplyStarted?: () => void;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -330,6 +338,9 @@ export default function InstallExecution(props: Props) {
   const [error, setError] = createSignal<string | null>(null);
   const [hasSeenApply, setHasSeenApply] = createSignal(false);
   createEffect(() => { if (isApplyRun(runLatest()?.type)) setHasSeenApply(true); });
+  createEffect(() => {
+    if (hasSeenApply() || applying() || applyUnconfirmed()) props.onApplyStarted?.();
+  });
 
   createEffect(() => {
     const id = runId();
@@ -468,6 +479,8 @@ export default function InstallExecution(props: Props) {
 
   const { confirm } = useConfirmDialog();
   const approve = async () => {
+    // An out-of-date Plan is never approved either.
+    if (props.blockedReason) return;
     // Approving a removal starts removing live resources: never one click.
     if (isRemoval()) {
       const ok = await confirm({
@@ -491,7 +504,7 @@ export default function InstallExecution(props: Props) {
   };
 
   const install = async () => {
-    if (applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
+    if (props.blockedReason || applying() || applyUnconfirmed() || !planReady() || (destructive() && !confirmed())) return;
     setApplying(true);
     setError(null);
     try {
@@ -724,12 +737,19 @@ export default function InstallExecution(props: Props) {
               </section>
             </Show>
 
+            <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
+              {(reason) => (
+                <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
+              )}
+            </Show>
             <Show when={current().status === "waiting_approval"}>
               <div class="iv-action-row">
                 <Button
                   type="button"
                   variant="primary"
                   busy={approving()}
+                  aria-disabled={props.blockedReason ? "true" : undefined}
+                  aria-describedby={props.blockedReason ? "iv-approve-outdated" : undefined}
                   onClick={() => void approve()}
                 >
                   {t("installStore.approve")}
@@ -759,6 +779,11 @@ export default function InstallExecution(props: Props) {
                   </div>
                 </div>
               </Show>
+              <Show when={props.blockedReason}>
+                {(reason) => (
+                  <p class="iv-apply-reason" id="iv-plan-outdated" data-testid="install-plan-outdated" role="status">{reason()}</p>
+                )}
+              </Show>
               <div class="iv-action-row">
                 <Button
                   type="button"
@@ -766,6 +791,11 @@ export default function InstallExecution(props: Props) {
                   size="lg"
                   busy={applying()}
                   disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
+                  // Held, not disabled, while the screen changed under it:
+                  // still focusable so the reason is read out; the click
+                  // does nothing (install() refuses).
+                  aria-disabled={props.blockedReason ? "true" : undefined}
+                  aria-describedby={props.blockedReason ? "iv-plan-outdated" : undefined}
                   onClick={() => void install()}
                 >
                   {t(copy().allow)}

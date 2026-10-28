@@ -13,23 +13,34 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
 2. Choose an app in the **Store**. Git URLs and app install links open the same app page.
 3. Check the description and source, then press **Install**. Nothing is created in your cloud yet.
-   Takosumi reads the Git version and shows **What this install does**: what the app will create
-   (planned), the connections it needs, and its settings. Store apps use the latest stable release,
-   and the page shows the exact version that was read. To use another version, enter a tag, branch,
-   or commit in the **Version** field before pressing Install.
+   Install opens **What this install does**, and everything from here happens on that one screen.
+   While Takosumi reads the Git version it says **Reading the repository**; then it shows what the
+   app will create (planned), the connections it needs, its settings, and its name and version, all
+   visible at once. Store apps use the latest stable release, and the screen shows the exact version
+   that was read. Another version can be entered as a tag, branch or commit in the **Version** field,
+   before pressing Install or on the screen afterwards.
 4. If a connection is missing, use **Connect** on that connection's row to create and verify it on
-   the same page. The app name and settings can be changed here too; declared defaults are filled in.
-5. **Review** shows what the app will create in your cloud (the create, update, replace and delete
-   list) and a cost estimate. When the cost can't be estimated, it says so. Nothing is applied until
-   you press **Allow and install**; changes that delete or replace something need an extra
-   confirmation. Nothing applies automatically, and reloading or opening a URL never grants consent.
+   the same screen. A connection with only one candidate is chosen for you. The app name and settings
+   can be changed here too; declared defaults are filled in. When the repository holds several apps,
+   the module is chosen on the same screen. Typed settings, the name and the version count once you
+   leave the field (or press Enter); while you type, checking and allowing wait.
+5. Once nothing is missing, Takosumi says **Checking what will be created** and shows what the app
+   will create in your cloud (the create, update, replace and delete list) and a cost estimate on its
+   own. This check creates nothing in your cloud. When the cost can't be estimated, it says so.
+   **Allow and install** is shown from the start; until it can be pressed, the reason is shown beside
+   it (for example "Choose a connection to check it", "Fill in the required settings", "Checking…").
+   Nothing is applied until you press **Allow and install**; changes that delete or replace something
+   need an extra confirmation. Nothing applies automatically, and reloading or opening a URL never
+   grants consent. Changing the name, version, a connection or a setting after the check marks the
+   shown result out of date (it can no longer be allowed) and checks again with your change,
+   saying **Preparing the install again with your change**.
    **Stop installing** throws the whole install attempt away, including the unapplied app it created.
    An install you leave without stopping is listed under **Unfinished installs** in the Store, where
-   you can continue or stop it; reopening it moves nothing forward. Secret settings are never saved:
-   they are sent only when you confirm.
-6. When the install finishes, the app's page opens. **Open** starts the app if it has
-   an authorized screen. Failures appear under **Needs attention** with the reason and the next step,
-   and can be retried with a new review without discarding partially created state.
+   you can continue or stop it; reopening it moves nothing forward until you press **Continue**.
+   Secret settings are never saved: they are sent only to check what will be created.
+6. When the install finishes, the same screen offers **Open** (when the app has an authorized screen)
+   and **Manage app** (the app's own page). Failures show the reason and the next step, and can be
+   retried with a new review without discarding partially created state.
 7. **Uninstall** asks for confirmation before scheduling it. The app and its data remain during the
    grace period, and **Cancel uninstall** brings it back. The confirmation names the other apps that
    use this one. Provider secrets and install inputs are not saved to browser storage.

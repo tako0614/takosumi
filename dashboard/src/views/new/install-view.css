@@ -110,3 +110,18 @@
 .iv-inline-connect .tg-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .iv-inline-connect .wc-form, .iv-inline-connect .wc-form-actions, .iv-inline-connect .wc-guided { min-width: 0; }
 .iv-name-proposal { margin-top: 0; }
+
+/* The one install screen: a progress line while the repository is read or
+   the Plan is made, and the reason the apply button waits. */
+.iv-progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2) var(--tg-s-3); padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); font-weight: 600; }
+.iv-progress > span { min-width: 0; overflow-wrap: anywhere; }
+.iv-progress .tg-btn { margin-left: auto; }
+.iv-sheet-block h4 { margin: 0; font-size: var(--tg-fs-base); }
+.iv-sheet > .iv-execution, .iv-plan-review { padding-top: var(--tg-s-4); border-top: 1px solid var(--tg-line); }
+.iv-plan-review > .iv-execution { padding-top: 0; border-top: 0; }
+.iv-execution h3 { margin: 0; font-size: var(--tg-fs-lg); letter-spacing: -0.01em; }
+.iv-apply-reason { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); font-weight: 600; }
+.iv-execution > .iv-apply-reason + .iv-action-row { margin-top: calc(-1 * var(--tg-s-2)); }
+@media (max-width: 39.99rem) {
+  .iv-progress .tg-btn { width: 100%; margin-left: 0; justify-content: center; }
+}

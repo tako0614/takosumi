@@ -1,16 +1,18 @@
 /**
- * Install attempt state (TASK-0115 Phase 3b) — pure: no JSX, no requests.
+ * Install attempt state (TASK-0115) — pure: no JSX, no requests.
  *
  * The install-plan coordinator owns the whole attempt and tells the page the
- * one next thing the person can do (`userAction`). This module turns that
- * answer plus the little the page keeps for itself (whether a request is in
- * flight, what the person typed) into what the page shows: one stage, one
- * primary action, and the requests it may send.
+ * one next thing it needs (`userAction`). This module turns that answer plus
+ * the little the page keeps for itself (whether a request is in flight, what
+ * the person typed, whether they changed something after the Plan) into what
+ * the one install screen shows: its progress line, why 「許可してインストール」
+ * cannot be pressed yet, and the requests the page may send.
  *
  * Invariants the page relies on:
  * - Opening a page sends nothing; the attempt starts only from Install.
- * - Applying is never a state of its own here: the review step owns the one
- *   "Allow and install" click.
+ * - Applying is never a state of its own here: the review owns the one
+ *   「許可してインストール」 click. A Plan is made on its own once nothing is
+ *   missing; it creates nothing in the cloud.
  * - Only the attempt id may enter the URL. Inputs, setting values and secret
  *   values never do, and are never written to browser storage.
  * - Setting values are sent only in the confirming answer (`continue`).
@@ -370,6 +372,111 @@ export function missingConnections(
   return connections.filter((requirement) => !selectedCandidate(requirement));
 }
 
+/** A connection the person chose after the sheet went behind (key → id; "" clears). */
+export type ConnectionOverrides = Readonly<Record<string, string>>;
+
+/**
+ * The rows as the person last chose them: the coordinator's selection, with
+ * any choice made after the Plan existed applied on top.
+ */
+export function withConnectionOverrides(
+  connections: readonly GitInstallPlanConnectionRequirement[],
+  overrides: ConnectionOverrides,
+): readonly GitInstallPlanConnectionRequirement[] {
+  return connections.map((requirement) => {
+    const key = connectionKey(requirement);
+    if (!Object.hasOwn(overrides, key)) return requirement;
+    const { selectedConnectionId: _selected, ...rest } = requirement;
+    const chosen = overrides[key];
+    return chosen
+      ? { ...rest, selectedConnectionId: chosen, autoSelected: false }
+      : { ...rest, autoSelected: false };
+  });
+}
+
+/**
+ * Every connection answer a new attempt starts with when the install is
+ * prepared again: each row's chosen connection, whether the person or the
+ * coordinator chose it.
+ */
+export function retainedBindings(
+  connections: readonly GitInstallPlanConnectionRequirement[],
+): GitInstallPlanProviderBindingRequest[] {
+  return connections.flatMap((requirement) =>
+    requirement.selectedConnectionId
+      ? [bindingFor(requirement, requirement.selectedConnectionId)]
+      : []
+  );
+}
+
+function bindingKey(binding: GitInstallPlanProviderBindingRequest): string {
+  return `${connectionKey(binding)}=${binding.connectionId}`;
+}
+
+/** Two connection answers name the same connection for the same rows. */
+export function sameBindings(
+  left: readonly GitInstallPlanProviderBindingRequest[],
+  right: readonly GitInstallPlanProviderBindingRequest[],
+): boolean {
+  const a = left.map(bindingKey).sort();
+  const b = right.map(bindingKey).sort();
+  return a.length === b.length && a.every((key, index) => key === b[index]);
+}
+
+/**
+ * The rows of a new sheet shown with a connection answer the attempt has
+ * not received yet (a row the answer leaves out shows as cleared).
+ */
+export function overridesForBindings(
+  connections: readonly GitInstallPlanConnectionRequirement[],
+  bindings: readonly GitInstallPlanProviderBindingRequest[],
+): ConnectionOverrides {
+  const overrides: Record<string, string> = {};
+  for (const requirement of connections) {
+    const key = connectionKey(requirement);
+    overrides[key] = bindings.find((binding) => connectionKey(binding) === key)?.connectionId ?? "";
+  }
+  return overrides;
+}
+
+/** What the install keeps when it is prepared again after a change. */
+export interface RetainedAnswers {
+  /** The app name the person wants. */
+  readonly name: string;
+  /** The version to read; the attempt's own when unchanged. */
+  readonly ref: string;
+  readonly modulePath?: string;
+  readonly providerBindings: readonly GitInstallPlanProviderBindingRequest[];
+}
+
+/**
+ * The value-free body of the attempt that replaces one whose Plan went out
+ * of date: the same repository and Git connection, with the name, version,
+ * module and connections as the person left them. Setting values are never
+ * part of it; they go with the new attempt's confirming answer.
+ */
+export function replanRequest(
+  plan: GitInstallPlan,
+  answers: RetainedAnswers,
+): CreateGitInstallAttemptRequest {
+  const base = attemptCreateRequest({
+    url: plan.source.url,
+    ref: answers.ref === "HEAD" ? "" : answers.ref,
+    sourcePath: plan.source.path,
+    modulePath: answers.modulePath ?? plan.options.modulePath ?? "",
+    name: answers.name,
+    ...(plan.source.authConnectionId
+      ? { authConnectionId: plan.source.authConnectionId }
+      : {}),
+  });
+  return answers.providerBindings.length > 0
+    ? {
+        ...base,
+        options: { ...base.options, providerBindings: [...answers.providerBindings] },
+      }
+    : base;
+}
+
 // --- Following the coordinator -----------------------------------------------------
 
 /**
@@ -400,7 +507,7 @@ export type InstallStage =
   | "loading"
   /** The starting request is in flight. */
   | "starting"
-  /** The coordinator is reading the repository and this page follows it. */
+  /** The coordinator works on its own (reading, planning) and this page follows it. */
   | "reading"
   /** The coordinator has work left, but this page is not following it. */
   | "paused"
@@ -418,6 +525,32 @@ export type InstallStage =
   /** The attempt could not be read here. */
   | "unavailable";
 
+/** The stages the one install screen shows (everything else is a problem card). */
+export const INSTALL_SCREEN_STAGES: ReadonlySet<InstallStage> = new Set([
+  "starting",
+  "reading",
+  "paused",
+  "choose_module",
+  "provide_inputs",
+  "review",
+]);
+
+/**
+ * Phases after the sheet was confirmed: a Plan was asked for (or failed).
+ * An edit made in one of them no longer reaches that Plan.
+ */
+const PAST_INPUT_PHASES: ReadonlySet<GitInstallPlan["phase"]> = new Set([
+  "creating_capsule",
+  "planning",
+  "reviewable",
+  "failed",
+]);
+
+/** The attempt moved past its sheet: a Plan was asked for from it. */
+export function attemptPastInputs(phase: GitInstallPlan["phase"] | undefined): boolean {
+  return phase !== undefined && PAST_INPUT_PHASES.has(phase);
+}
+
 /** The one primary action of a stage. */
 export type InstallPrimary =
   | "install"
@@ -431,6 +564,44 @@ export type InstallPrimary =
   | "reload"
   | "none";
 
+/**
+ * Why 「許可してインストール」 cannot be pressed yet, said beside it. Absent
+ * once the Plan is ready (the review then owns the button) or on a problem.
+ */
+export type ApplyBlock =
+  /** The attempt is starting or the repository is being read. */
+  | "reading"
+  /** Following stopped; Continue picks it up. */
+  | "paused"
+  /** The repository has several apps; one must be chosen. */
+  | "module"
+  /** A provider still has no connection. */
+  | "connections"
+  /** A required setting is empty. */
+  | "settings"
+  /** A setting or the app name is not valid. */
+  | "invalid"
+  /** The Plan is being made (or about to be). */
+  | "checking"
+  /** A field is being typed in; it counts once it is left. */
+  | "editing"
+  /** Something changed after the Plan: the install is prepared again. */
+  | "replanning"
+  /** Making the Plan failed; the person fixes something or tries again. */
+  | "failed";
+
+/** The inline progress line of the install screen. */
+export type InstallProgress =
+  | "reading"
+  | "analyzing"
+  | "planning"
+  | "replanning"
+  | "paused"
+  /** Preparing again did not go through; Continue tries it again. */
+  | "replanPaused"
+  /** Making the Plan failed; the reason, and Try again. */
+  | "failed";
+
 export interface InstallLocalState {
   /** The starting request is in flight and no attempt exists yet. */
   readonly starting?: boolean;
@@ -439,8 +610,8 @@ export interface InstallLocalState {
   /** A starting, confirming, discarding or restarting request is in flight. */
   readonly mutating?: boolean;
   /**
-   * A sheet answer (a connection, the name, a module) is in flight. The
-   * sheet's own Review may still be pressed: it waits for the answer.
+   * A sheet answer (a connection, the name, a module) is in flight. A
+   * confirmation waits for it rather than failing.
    */
   readonly answering?: boolean;
   /** The URL names an attempt that is still being read. */
@@ -450,6 +621,26 @@ export interface InstallLocalState {
   readonly drafts?: VariableDrafts;
   /** The name typed in the sheet, when it differs from the attempt's. */
   readonly name?: string;
+  /**
+   * The person acted in this page view (Install, Continue or an edit), so a
+   * complete sheet may be confirmed on its own. A reopened attempt is only
+   * read until then.
+   */
+  readonly armed?: boolean;
+  /** The confirming answer is in flight or about to be sent. */
+  readonly confirming?: boolean;
+  /** Something changed after the Plan was asked for; that Plan is out of date. */
+  readonly outdated?: boolean;
+  /** The install is being prepared again after such a change. */
+  readonly replanning?: boolean;
+  /** Preparing again failed and waits for Continue. */
+  readonly replanStalled?: boolean;
+  /** A field (name, version or a typed setting) is being typed in. */
+  readonly editing?: boolean;
+  /** The app name typed is not one the API accepts. */
+  readonly nameInvalid?: boolean;
+  /** The page still holds the person's answers (the sheet they saw). */
+  readonly answersKept?: boolean;
 }
 
 export interface InstallView {
@@ -466,18 +657,39 @@ export interface InstallView {
   readonly nameProblem?: "conflict" | "invalid";
   readonly retryCode?: string;
   readonly invalidated?: GitInstallPlanInvalidation;
+  /** Why 「許可してインストール」 waits; absent when the review owns it. */
+  readonly applyBlock?: ApplyBlock;
+  /** What the install screen says is under way. */
+  readonly progress?: InstallProgress;
+  /** The sheet is complete and may be confirmed (on its own, once armed). */
+  readonly readyToConfirm: boolean;
 }
 
 const NOTHING: Pick<
   InstallView,
-  "missingConnections" | "missingVariables" | "invalidVariables"
-> = { missingConnections: [], missingVariables: [], invalidVariables: [] };
+  "missingConnections" | "missingVariables" | "invalidVariables" | "readyToConfirm"
+> = { missingConnections: [], missingVariables: [], invalidVariables: [], readyToConfirm: false };
 
-/** What the page shows for one attempt answer and the page's own state. */
-export function deriveInstallView(
+function workingProgress(phase: GitInstallPlan["phase"]): InstallProgress {
+  switch (phase) {
+    case "compiling_install":
+    case "analyzing_compatibility":
+      return "analyzing";
+    case "awaiting_input":
+    case "creating_capsule":
+    case "planning":
+    case "reviewable":
+      return "planning";
+    default:
+      return "reading";
+  }
+}
+
+/** The stage, its primary action and what the sheet still needs. */
+function deriveStage(
   response: GitInstallPlanResponse | undefined,
-  local: InstallLocalState = {},
-): InstallView {
+  local: InstallLocalState,
+): Omit<InstallView, "applyBlock" | "progress"> {
   const mutating = local.mutating === true;
   const busy = mutating || local.answering === true;
   if (!response) {
@@ -528,17 +740,17 @@ export function deriveInstallView(
         : action.name.conflict && !resubmitting
           ? "conflict"
           : undefined;
+      const complete = missing.length === 0 && values.ok && nameProblem === undefined;
       return {
         stage: "provide_inputs",
         primary: missing.length > 0 ? "connect" : "review",
-        primaryBlocked:
-          mutating ||
-          (missing.length === 0 && (!values.ok || nameProblem !== undefined)),
+        primaryBlocked: mutating || (missing.length === 0 && !complete),
         canDiscard: discardable,
         missingConnections: missing,
         missingVariables: values.ok ? [] : values.missing,
         invalidVariables: values.ok ? [] : values.invalid,
         ...(nameProblem ? { nameProblem } : {}),
+        readyToConfirm: complete,
       };
     }
     case "review_run":
@@ -556,6 +768,64 @@ export function deriveInstallView(
       return response.installPlan.phase === "discarded"
         ? { ...NOTHING, stage: "discarded", primary: "reinstall", primaryBlocked: false, canDiscard: false }
         : { ...NOTHING, stage: "unavailable", primary: "reload", primaryBlocked: false, canDiscard: false };
+  }
+}
+
+/** What the page shows for one attempt answer and the page's own state. */
+export function deriveInstallView(
+  response: GitInstallPlanResponse | undefined,
+  local: InstallLocalState = {},
+): InstallView {
+  const view = deriveStage(response, local);
+  // A Plan that failed after the sheet stays on the screen with the
+  // person's answers: they fix something or try again.
+  const failedWithAnswers = view.stage === "failed" && local.answersKept === true;
+  if (!INSTALL_SCREEN_STAGES.has(view.stage) && !failedWithAnswers) return view;
+  if (local.outdated) {
+    // The shown Plan no longer matches the screen: never applicable, and
+    // prepared again only from valid, finished input.
+    if (local.nameInvalid) return { ...view, applyBlock: "invalid" };
+    if (local.editing) return { ...view, applyBlock: "editing" };
+    if (local.replanStalled) return { ...view, applyBlock: "paused", progress: "replanPaused" };
+    return { ...view, applyBlock: "replanning", progress: "replanning" };
+  }
+  if (local.replanStalled) return { ...view, applyBlock: "paused", progress: "replanPaused" };
+  // The attempt that replaces it reads the repository and plans as one
+  // step until its new Plan is ready or it needs the person again.
+  if (
+    local.replanning === true &&
+    view.stage !== "review" && view.stage !== "choose_module" && !failedWithAnswers &&
+    !(view.stage === "provide_inputs" && !view.readyToConfirm)
+  ) {
+    return { ...view, applyBlock: "replanning", progress: "replanning" };
+  }
+  if (failedWithAnswers) return { ...view, applyBlock: "failed", progress: "failed" };
+  if (local.editing && (view.stage === "review" || view.stage === "provide_inputs")) {
+    return { ...view, applyBlock: "editing" };
+  }
+  const phase = response?.installPlan.phase;
+  switch (view.stage) {
+    case "starting":
+      return { ...view, applyBlock: "reading", progress: "reading" };
+    case "reading": {
+      const progress = phase ? workingProgress(phase) : "reading";
+      return { ...view, applyBlock: progress === "planning" ? "checking" : "reading", progress };
+    }
+    case "paused":
+      return { ...view, applyBlock: "paused", progress: "paused" };
+    case "choose_module":
+      return { ...view, applyBlock: "module" };
+    case "provide_inputs": {
+      if (view.missingConnections.length > 0) return { ...view, applyBlock: "connections" };
+      if (view.missingVariables.length > 0) return { ...view, applyBlock: "settings" };
+      if (view.invalidVariables.length > 0 || view.nameProblem) return { ...view, applyBlock: "invalid" };
+      // Complete: a reopened attempt waits for the person; otherwise the
+      // Plan is being asked for.
+      if (!local.armed && !local.confirming) return { ...view, applyBlock: "paused", progress: "paused" };
+      return { ...view, applyBlock: "checking", progress: "planning" };
+    }
+    default:
+      return view;
   }
 }
 

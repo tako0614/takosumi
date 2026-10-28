@@ -1,32 +1,29 @@
 /**
  * `/new`: the Store and an app's page while it is not installed yet
- * (TASK-0115 Phase 3b).
+ * (TASK-0115).
  *
  * - `/new` lists the Store and this person's unfinished installs.
  * - `/new?tcsBase&tcsListing…`, `/new?git=…` (and `/install`, `/store`, which
  *   forward here) show one app, not installed. Opening it creates nothing.
- * - 「インストール」 starts one install attempt; the coordinator reads the
- *   repository and the page follows its `userAction`. Its id joins the URL
- *   (`installPlan=gip_…`) so a reload reopens the same attempt, read-only
+ * - 「インストール」 starts one install attempt and opens the one install
+ *   screen: everything the install needs, visible at once, while the
+ *   coordinator reads the repository and makes the Plan. Its id joins the
+ *   URL (`installPlan=gip_…`) so a reload reopens the same attempt, read-only
  *   until the person acts again.
- * - Nothing applies before 「許可してインストール」 in the review; after it the
- *   page moves to the installed app's own page.
+ * - Nothing applies before 「許可してインストール」; the install then finishes
+ *   on the same screen, which offers 「開く」 and the app's own page.
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { Navigate, useLocation, useNavigate } from "@solidjs/router";
-import { ArrowLeft, PackagePlus } from "lucide-solid";
-import type { GitInstallPlan, GitInstallPlanResponse, GitInstallPlanUserAction } from "takosumi-contract";
+import { ArrowLeft, ExternalLink, PackagePlus } from "lucide-solid";
+import type { GitInstallPlan, GitInstallPlanResponse } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
-import {
-  getCapsuleApp,
-  listConnections,
-  listOpenGitInstallAttempts,
-} from "../../lib/control-api.ts";
+import { listConnections, listOpenGitInstallAttempts } from "../../lib/control-api.ts";
 import { capsuleNameFromUrl, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import {
@@ -43,11 +40,11 @@ import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
-import InstallExecution from "./InstallExecution.tsx";
-import { InstallSheet, ModuleChooser } from "./InstallSheet.tsx";
+import { InstallScreen } from "./InstallSheet.tsx";
 import {
   appNameFromText,
   attemptProblemKey,
+  INSTALL_SCREEN_STAGES,
   installAttemptId,
   legacyCapsuleLocator,
   openAttemptStatusKey,
@@ -285,7 +282,12 @@ function AppInstallPage(props: { readonly principalId: string }) {
     setRef(prefill()?.ref ?? "");
     setSourceAuth("");
   }, { defer: true }));
-  const [completed, setCompleted] = createSignal<{ readonly capsuleId: string; readonly url?: string }>();
+  const [completed, setCompleted] = createSignal<{
+    readonly capsuleId: string;
+    readonly url?: string;
+    /** The bounded read for the app's screen is over (with or without one). */
+    readonly settled?: boolean;
+  }>();
   let disposed = false;
   onCleanup(() => { disposed = true; });
 
@@ -309,6 +311,9 @@ function AppInstallPage(props: { readonly principalId: string }) {
     onStarted: (attemptId) =>
       navigate(`${location.pathname}${withInstallAttempt(location.search, attemptId)}`, { replace: true }),
     onLeft: (plan) => navigate(`${location.pathname}${leaveSearch(plan)}`, { replace: true }),
+    // The page's own link says whether this app came from a Store listing,
+    // also when the attempt is opened again.
+    fromStore: () => Boolean(store()),
   });
   const plan = () => attempt.response()?.installPlan;
   const fromStore = () => Boolean(store());
@@ -364,17 +369,18 @@ function AppInstallPage(props: { readonly principalId: string }) {
       { fromStore: fromStore() },
     );
 
+  /**
+   * The install finished on this screen: offer 「開く」 once the app's screen
+   * is known (an app that sent the person here gets them back with it), and
+   * the app's own page.
+   */
   const finish = async (capsuleId: string) => {
+    if (completed()?.capsuleId === capsuleId) return;
     const workspaceId = plan()?.workspaceId ?? currentWorkspaceId();
     clearCapsuleListCache(workspaceId);
     clearCurrentStateVersionCache(workspaceId);
     clearDashboardOverviewCache(workspaceId);
-    const returnTo = handoff();
-    if (!returnTo) {
-      navigate(appPageHref(capsuleId), { replace: true });
-      return;
-    }
-    // An app that sent the person here gets them back with the new screen.
+    attempt.finish();
     setCompleted({ capsuleId });
     for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
       try {
@@ -382,7 +388,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
         if (disposed) return;
         const url = screens[0]?.url;
         if (url) {
-          setCompleted({ capsuleId, url });
+          setCompleted({ capsuleId, url, settled: true });
           return;
         }
       } catch {
@@ -391,12 +397,19 @@ function AppInstallPage(props: { readonly principalId: string }) {
       await new Promise((resolve) => setTimeout(resolve, SCREEN_READ_DELAY_MS));
       if (disposed || completed()?.capsuleId !== capsuleId) return;
     }
+    setCompleted({ capsuleId, settled: true });
   };
 
   const stage = () => attempt.view().stage;
-  // Each new stage moves focus to its own heading, so keyboard and screen
-  // reader users land where the page changed.
-  createEffect(on(stage, (current, previous) => {
+  // A Plan that failed after the sheet stays on the screen with the answers.
+  const onScreen = () =>
+    (INSTALL_SCREEN_STAGES.has(stage()) && stage() !== "starting") ||
+    (stage() === "failed" && attempt.sheet() !== undefined);
+  // Entering the install screen, a problem or the end moves focus to its
+  // heading, so keyboard and screen reader users land where the page
+  // changed. Moving within the screen keeps focus where the person types.
+  const place = () => (completed() ? "complete" : onScreen() ? "screen" : stage());
+  createEffect(on(place, (current, previous) => {
     if (previous === undefined || current === previous) return;
     queueMicrotask(() => {
       if (disposed) return;
@@ -435,7 +448,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
 
       <Show when={completed()} fallback={
         <Switch>
-          <Match when={stage() === "candidate"}>
+          <Match when={stage() === "candidate" || stage() === "starting"}>
             <section class="iv-workbench iv-start" data-testid="install-start">
               <Show when={attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
               <form
@@ -495,36 +508,15 @@ function AppInstallPage(props: { readonly principalId: string }) {
               <h2 data-stage-heading tabindex="-1">{t("common.loading")}</h2>
             </section>
           </Match>
-          <Match when={stage() === "starting" || stage() === "reading" || stage() === "paused"}>
-            <ReadingCard attempt={attempt} />
+          <Match when={onScreen()}>
+            <InstallScreen
+              attempt={attempt}
+              workspaceId={plan()?.workspaceId ?? currentWorkspaceId()}
+              fromStore={fromStore()}
+              onDone={(capsuleId) => void finish(capsuleId)}
+            />
           </Match>
-          <Match when={stage() === "choose_module" ? attempt.response()!.userAction : undefined}>
-            {(action) => (
-              <ModuleChooser
-                attempt={attempt}
-                action={action() as Extract<GitInstallPlanUserAction, { kind: "choose_module" }>}
-              />
-            )}
-          </Match>
-          <Match when={stage() === "provide_inputs" ? attempt.response()!.userAction : undefined}>
-            {(action) => (
-              <InstallSheet
-                attempt={attempt}
-                action={action() as Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>}
-                workspaceId={plan()?.workspaceId ?? currentWorkspaceId()}
-              />
-            )}
-          </Match>
-          <Match when={stage() === "review" ? attempt.response()!.userAction : undefined}>
-            {(action) => (
-              <InstallReview
-                attempt={attempt}
-                action={action() as Extract<GitInstallPlanUserAction, { kind: "review_run" }>}
-                onDone={(capsuleId) => void finish(capsuleId)}
-              />
-            )}
-          </Match>
-          <Match when={stage() !== "candidate"}>
+          <Match when={true}>
             <AttemptProblem
               attempt={attempt}
               onReinstall={() => {
@@ -541,136 +533,47 @@ function AppInstallPage(props: { readonly principalId: string }) {
         {(done) => (
           <section class="iv-workbench iv-centered" role="status" data-testid="install-complete">
             <h2 data-stage-heading tabindex="-1">{t("installStore.completeTitle")}</h2>
-            <p>{t("installStore.completeHint")}</p>
+            <p>{handoff() ? t("installStore.completeHint") : t("installStore.completeOpenHint")}</p>
             <div class="iv-action-row">
-              <Show when={handoff() && createAppHandoffConnectHref(handoff(), done().url)} fallback={
-                <Show when={!done().url}><Spinner size={18} /></Show>
-              }>
-                {(href) => (
-                  <Button href={href()} variant="primary">
-                    {t("run.appHandoff.open", { app: appHandoffProductLabel(handoff()!.product) })}
-                  </Button>
-                )}
+              <Show
+                when={handoff()}
+                fallback={
+                  <Show when={done().url} fallback={<Show when={!done().settled}><Spinner size={18} /></Show>}>
+                    {(url) => (
+                      <Button
+                        href={url()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        variant="primary"
+                        icon={<ExternalLink size={16} />}
+                      >
+                        {t("installStore.open")}
+                      </Button>
+                    )}
+                  </Show>
+                }
+              >
+                <Show when={createAppHandoffConnectHref(handoff(), done().url)} fallback={
+                  <Show when={!done().settled}><Spinner size={18} /></Show>
+                }>
+                  {(href) => (
+                    <Button href={href()} variant="primary">
+                      {t("run.appHandoff.open", { app: appHandoffProductLabel(handoff()!.product) })}
+                    </Button>
+                  )}
+                </Show>
               </Show>
-              <Button href={appPageHref(done().capsuleId)} variant="secondary">{t("installStore.manageApp")}</Button>
+              <Button
+                href={appPageHref(done().capsuleId)}
+                variant={done().settled && !done().url ? "primary" : "secondary"}
+              >
+                {t("installStore.manageApp")}
+              </Button>
             </div>
           </section>
         )}
       </Show>
     </main>
-  );
-}
-
-/** The coordinator works on its own: reading the repository or planning. */
-function ReadingCard(props: { readonly attempt: InstallAttempt }) {
-  const view = () => props.attempt.view();
-  const phase = () => props.attempt.response()?.installPlan.phase;
-  const hint = () => {
-    switch (phase()) {
-      case "compiling_install":
-      case "analyzing_compatibility":
-        return t("installStore.reading.analyzing");
-      case "creating_capsule":
-      case "planning":
-        return t("installStore.reading.planning");
-      default:
-        return t("installStore.reading.source");
-    }
-  };
-  return (
-    <section
-      class="iv-workbench iv-centered"
-      role="status"
-      aria-live="polite"
-      data-testid="install-reading"
-      data-install-phase={phase()}
-    >
-      <Show when={view().stage !== "paused"}><Spinner size={24} /></Show>
-      <h2 data-stage-heading tabindex="-1">
-        {view().stage === "paused" ? t("installStore.reading.pausedTitle") : t("installStore.reading.title")}
-      </h2>
-      <p>{view().stage === "paused" ? t("installStore.reading.pausedHint") : hint()}</p>
-      <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
-      <div class="iv-action-row">
-        <Show when={view().primary === "continue"}>
-          <Button type="button" variant="primary" disabled={view().primaryBlocked} onClick={() => props.attempt.resume()}>
-            {t("installStore.continue")}
-          </Button>
-        </Show>
-        <Show when={view().stage !== "starting"}>
-          <Button
-            type="button"
-            variant="ghost"
-            busy={props.attempt.mutating() === "discard"}
-            disabled={!view().canDiscard}
-            onClick={() => void props.attempt.discard()}
-          >
-            {t("installStore.discard")}
-          </Button>
-        </Show>
-      </div>
-    </section>
-  );
-}
-
-/** The Plan Run is ready: what the app creates, its cost, and the one apply click. */
-function InstallReview(props: {
-  readonly attempt: InstallAttempt;
-  readonly action: Extract<GitInstallPlanUserAction, { kind: "review_run" }>;
-  readonly onDone: (capsuleId: string) => void;
-}) {
-  // A reopened review first asks the app where it stands (GET
-  // /capsules/:id/app): an apply already running is followed instead of
-  // offering Allow and install again, and an app already installed opens its
-  // own page. A failed read falls back to the review; the Run routes still
-  // refuse a second apply.
-  const [app] = createResource(
-    () => props.action.capsuleId,
-    (capsuleId) => getCapsuleApp(capsuleId).catch(() => undefined),
-  );
-  createEffect(() => {
-    if (app()?.applied) props.onDone(props.action.capsuleId);
-  });
-  const entryRunId = () => {
-    const view = app();
-    const run = view?.progress.run ?? view?.latestRun;
-    return run && (run.type === "apply" || run.type === "plan") && run.id !== props.action.planRunId
-      ? run.id
-      : undefined;
-  };
-  return (
-    <section
-      class="iv-workbench iv-sheet"
-      data-testid="install-review"
-      data-stage-heading
-      tabindex="-1"
-      aria-label={t("installStore.reviewTitle")}
-    >
-      <Show when={props.attempt.error()}>{(message) => <div class="iv-error" role="alert">{message()}</div>}</Show>
-      <Show
-        when={!app.loading}
-        fallback={<div class="iv-status" role="status"><Spinner size={18} /><span>{t("common.loading")}</span></div>}
-      >
-        <Show when={!app()?.applied}>
-          <InstallExecution
-            showPolicyReasons
-            planRunId={props.action.planRunId}
-            initialRunId={entryRunId()}
-            capsuleId={props.action.capsuleId}
-            onDone={() => props.onDone(props.action.capsuleId)}
-            restartLabel={t("installStore.problem.restart")}
-            onRestart={async () => {
-              if (!(await props.attempt.restart())) {
-                throw new Error(props.attempt.error() ?? t("installStore.error.unavailable"));
-              }
-            }}
-            onDiscard={async () => {
-              await props.attempt.discard();
-            }}
-          />
-        </Show>
-      </Show>
-    </section>
   );
 }
 
@@ -750,6 +653,14 @@ function AttemptProblem(props: { readonly attempt: InstallAttempt; readonly onRe
         </Show>
         <Show when={view().stage === "unavailable" || view().stage === "discarded"}>
           <Button variant="ghost" href="/new">{t("installStore.chooseAnother")}</Button>
+        </Show>
+        {/* A failed Plan's reason and logs are on its run's page. */}
+        <Show when={view().stage === "failed" ? props.attempt.response()?.installPlan.planRunId : undefined}>
+          {(runId) => (
+            <Button variant="ghost" href={`/runs/${encodeURIComponent(runId())}`} icon={<ExternalLink size={16} />}>
+              {t("installStore.runDetails")}
+            </Button>
+          )}
         </Show>
       </div>
     </section>

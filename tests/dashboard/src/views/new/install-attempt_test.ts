@@ -1,7 +1,7 @@
 /**
- * The install page's state (TASK-0115 Phase 3b): what one attempt answer
- * from the install-plan coordinator plus the page's own state shows, and the
- * value-free requests the page may send.
+ * The install page's state (TASK-0115): what one attempt answer from the
+ * install-plan coordinator plus the page's own state shows on the one
+ * install screen, and the value-free requests the page may send.
  */
 import { describe, expect, test } from "bun:test";
 import type {
@@ -15,6 +15,7 @@ import {
   appNameValue,
   attemptBelongsHere,
   attemptCreateRequest,
+  attemptPastInputs,
   attemptProblemKey,
   bindingsWith,
   canAdvance,
@@ -25,8 +26,11 @@ import {
   missingConnections,
   openAttemptStatusKey,
   progressSignature,
+  replanRequest,
   repositoryLabel,
   restartRequest,
+  retainedBindings,
+  withConnectionOverrides,
   sheetVariables,
   variableInitialText,
   versionLabel,
@@ -388,5 +392,136 @@ describe("words", () => {
     expect(versionLabel(COMMIT)).toBe("0123456");
     expect(versionLabel("HEAD")).toBeUndefined();
     expect(versionLabel("v1.4.2")).toBe("v1.4.2");
+  });
+});
+
+describe("the one install screen", () => {
+  test("「許可してインストール」 waits with one reason until the Plan is ready", () => {
+    const missing = inputs({ connections: [requirement({ candidates: [candidate] })], missing: ["connections"] });
+    const secret = inputs({ variables: [{ name: "api_token", type: "string", required: true, sensitive: true }] });
+    const cases: [string, ReturnType<typeof deriveInstallView>, string | undefined, string | undefined][] = [
+      ["starting", deriveInstallView(undefined, { starting: true }), "reading", "reading"],
+      ["reading", deriveInstallView(respond({ kind: "wait", phase: "syncing_source" }, { phase: "syncing_source" }), { driving: true }), "reading", "reading"],
+      ["analyzing", deriveInstallView(respond({ kind: "wait", phase: "analyzing_compatibility" }, { phase: "analyzing_compatibility" }), { driving: true }), "reading", "analyzing"],
+      ["planning", deriveInstallView(respond({ kind: "wait", phase: "planning" }, { phase: "planning" }), { driving: true }), "checking", "planning"],
+      ["paused", deriveInstallView(respond({ kind: "wait", phase: "planning" }, { phase: "planning" })), "paused", "paused"],
+      ["module", deriveInstallView(respond({ kind: "choose_module", modules: [{ path: "a", providers: [] }, { path: "b", providers: [] }] })), "module", undefined],
+      ["connection", deriveInstallView(respond(missing), { armed: true }), "connections", undefined],
+      ["setting", deriveInstallView(respond(secret), { armed: true }), "settings", undefined],
+      ["invalid name", deriveInstallView(respond(inputs()), { armed: true, name: "Not Valid" }), "invalid", undefined],
+      ["complete", deriveInstallView(respond(inputs()), { armed: true }), "checking", "planning"],
+      ["confirming", deriveInstallView(respond(inputs()), { confirming: true }), "checking", "planning"],
+      ["review", deriveInstallView(respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_a" }, { phase: "reviewable" })), undefined, undefined],
+    ];
+    for (const [label, view, block, progress] of cases) {
+      expect({ label, block: view.applyBlock, progress: view.progress }).toEqual({ label, block, progress });
+    }
+  });
+
+  test("a reopened complete sheet waits for the person instead of being confirmed", () => {
+    const reopened = deriveInstallView(respond(inputs()));
+    expect(reopened).toMatchObject({ readyToConfirm: true, applyBlock: "paused", progress: "paused" });
+    expect(deriveInstallView(respond(inputs()), { armed: true })).toMatchObject({ readyToConfirm: true, applyBlock: "checking" });
+  });
+
+  test("only a complete sheet is ready to confirm", () => {
+    expect(deriveInstallView(respond(inputs())).readyToConfirm).toBe(true);
+    expect(deriveInstallView(respond(inputs({ connections: [requirement()], missing: ["connections"] }))).readyToConfirm).toBe(false);
+    expect(deriveInstallView(respond(inputs({ name: { current: "office", proposed: "office-2", conflict: true }, missing: ["name"] }))).readyToConfirm).toBe(false);
+    const secret = inputs({ variables: [{ name: "api_token", type: "string", required: true, sensitive: true }] });
+    expect(deriveInstallView(respond(secret)).readyToConfirm).toBe(false);
+    expect(deriveInstallView(respond(secret), { drafts: { api_token: { value: "s3cret", touched: true } } }).readyToConfirm).toBe(true);
+    expect(deriveInstallView(respond({ kind: "wait", phase: "planning" })).readyToConfirm).toBe(false);
+  });
+
+  test("a change after the Plan reads as preparing again until the new Plan or the person is needed", () => {
+    const review = respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_a" }, { phase: "reviewable" });
+    expect(deriveInstallView(review, { outdated: true })).toMatchObject({ stage: "review", applyBlock: "replanning", progress: "replanning" });
+    // The replacing attempt reads the repository and plans as one step…
+    const reading = respond({ kind: "wait", phase: "syncing_source" }, { phase: "syncing_source" });
+    expect(deriveInstallView(reading, { driving: true, replanning: true })).toMatchObject({ applyBlock: "replanning", progress: "replanning" });
+    expect(deriveInstallView(respond(inputs()), { armed: true, replanning: true })).toMatchObject({ applyBlock: "replanning" });
+    // …until it needs the person again or its Plan is ready.
+    const missing = inputs({ connections: [requirement()], missing: ["connections"] });
+    expect(deriveInstallView(respond(missing), { replanning: true })).toMatchObject({ applyBlock: "connections" });
+    expect(deriveInstallView(review, { replanning: true }).applyBlock).toBeUndefined();
+    // A problem is a problem, not a step.
+    const failed = respond({ kind: "retry", code: "plan_run_failed", restart: true }, { phase: "failed" });
+    expect(deriveInstallView(failed, { outdated: true, replanning: true })).toMatchObject({ stage: "failed" });
+    expect(deriveInstallView(failed, { outdated: true }).applyBlock).toBeUndefined();
+  });
+});
+
+describe("answers kept when the install is prepared again", () => {
+  const rows = [
+    requirement({ candidates: [candidate], selectedConnectionId: "conn_a", autoSelected: true }),
+    requirement({ moduleLocalName: "cloudflare", childAlias: "dns", rootAlias: "dns", candidates: [candidate, { ...candidate, id: "conn_b", displayName: "B" }] }),
+  ];
+
+  test("choices made after the Plan show on top of the coordinator's selection", () => {
+    const shown = withConnectionOverrides(rows, { [`${CLOUDFLARE}|cloudflare|dns|dns`]: "conn_b" });
+    expect(shown[0]).toEqual(rows[0]);
+    expect(shown[1]).toMatchObject({ selectedConnectionId: "conn_b", autoSelected: false });
+    const cleared = withConnectionOverrides(rows, { [`${CLOUDFLARE}|cloudflare||`]: "" });
+    expect(cleared[0]?.selectedConnectionId).toBeUndefined();
+    expect(missingConnections(cleared)).toHaveLength(2);
+  });
+
+  test("every chosen connection is carried as an exact provider tuple", () => {
+    const shown = withConnectionOverrides(rows, { [`${CLOUDFLARE}|cloudflare|dns|dns`]: "conn_b" });
+    expect(retainedBindings(shown)).toEqual([
+      { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_a" },
+      { provider: CLOUDFLARE, moduleLocalName: "cloudflare", childAlias: "dns", rootAlias: "dns", connectionId: "conn_b" },
+    ]);
+    expect(retainedBindings(rows)).toHaveLength(1);
+  });
+
+  test("the new attempt reads the same repository with the person's name, version, module and connections", () => {
+    const original = plan({ source: { name: "office", url: "https://github.com/example/office.git", ref: COMMIT, path: "apps", authConnectionId: "conn_git" } });
+    const bindings = [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_a" }];
+    expect(replanRequest(original, { name: "office-two", ref: COMMIT, modulePath: "deploy", providerBindings: bindings })).toEqual({
+      mode: "attempt",
+      source: { url: "https://github.com/example/office.git", ref: COMMIT, path: "apps", authConnectionId: "conn_git" },
+      capsule: { name: "office-two" },
+      options: { modulePath: "deploy", providerBindings: bindings },
+    });
+    // The repository default stays the default; no setting value is ever part of it.
+    const request = replanRequest(plan({ source: { ...original.source, ref: "HEAD", path: "." } }), { name: "office", ref: "HEAD", providerBindings: [] });
+    expect(request).toEqual({ mode: "attempt", source: { url: "https://github.com/example/office.git", authConnectionId: "conn_git" }, capsule: { name: "office" } });
+    expect(JSON.stringify(request)).not.toContain("variables");
+  });
+});
+
+describe("what holds 「許可してインストール」 after a change", () => {
+  const review = respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_a" }, { phase: "reviewable" });
+
+  test("only phases after the sheet date a Plan", () => {
+    for (const phase of ["creating_capsule", "planning", "reviewable", "failed"] as const) expect(attemptPastInputs(phase)).toBe(true);
+    for (const phase of ["syncing_source", "compiling_install", "analyzing_compatibility", "awaiting_input", "discarded"] as const) {
+      expect(attemptPastInputs(phase)).toBe(false);
+    }
+    expect(attemptPastInputs(undefined)).toBe(false);
+  });
+
+  test("a field being typed in holds the apply and the confirmation", () => {
+    expect(deriveInstallView(review, { editing: true }).applyBlock).toBe("editing");
+    expect(deriveInstallView(respond(inputs()), { armed: true, editing: true }).applyBlock).toBe("editing");
+    // Reading is reading, whatever is typed meanwhile.
+    expect(deriveInstallView(respond({ kind: "wait", phase: "syncing_source" }, { phase: "syncing_source" }), { driving: true, editing: true }).applyBlock).toBe("reading");
+  });
+
+  test("an out-of-date Plan is held: by an invalid name, by typing, or until preparing again is continued", () => {
+    expect(deriveInstallView(review, { outdated: true, nameInvalid: true })).toMatchObject({ applyBlock: "invalid" });
+    expect(deriveInstallView(review, { outdated: true, nameInvalid: true }).progress).toBeUndefined();
+    expect(deriveInstallView(review, { outdated: true, editing: true })).toMatchObject({ applyBlock: "editing" });
+    expect(deriveInstallView(review, { outdated: true, replanStalled: true })).toMatchObject({ applyBlock: "paused", progress: "replanPaused" });
+    expect(deriveInstallView(review, { outdated: true })).toMatchObject({ applyBlock: "replanning", progress: "replanning" });
+  });
+
+  test("a Plan that failed stays on the screen only while the answers are kept", () => {
+    const failed = respond({ kind: "retry", code: "plan_run_failed", restart: true }, { phase: "failed" });
+    expect(deriveInstallView(failed, { answersKept: true })).toMatchObject({ stage: "failed", applyBlock: "failed", progress: "failed", retryCode: "plan_run_failed" });
+    expect(deriveInstallView(failed, { answersKept: true, outdated: true })).toMatchObject({ applyBlock: "replanning" });
+    expect(deriveInstallView(failed).applyBlock).toBeUndefined();
   });
 });
