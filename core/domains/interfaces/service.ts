@@ -625,7 +625,6 @@ export class InterfaceService {
           }
           if (!(await this.#linkProviderAvailable(link, iface, workspaceId))) break;
           const permissions = requirement.permissions.filter((permission) => link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission));
-          if (permissions.length === 0) break;
           try {
             await this.#ensureLinkedPrincipalBinding(link, iface, principalId, permissions, requirement.delivery);
           } catch (error) {
@@ -968,6 +967,10 @@ export class InterfaceService {
     }
     if (explicitDeny) {
       return; // Explicit revocation remains a durable deny.
+    }
+    if (permissions.length === 0) {
+      if (existing) await this.revokeBinding(iface.metadata.id, existing.metadata.id, undefined, "Superseded");
+      return;
     }
     if (existing) {
       if (bindingMatches(existing)) return;
