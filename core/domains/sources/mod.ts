@@ -924,9 +924,14 @@ export class SourcesService {
     const ownerCapsule = stored.ownerCapsuleId
       ? await this.#store.getCapsule(stored.ownerCapsuleId)
       : undefined;
-    if (stored.ownerCapsuleId && (!ownerCapsule || !actorAccountId?.trim() ||
-      ownerCapsule.ownerAccountId === undefined ||
-      !Number.isSafeInteger(ownerCapsule.ownershipEpoch))) {
+    const appAuthorityRequired = ownerCapsule !== undefined && (
+      ownerCapsule.ownerAccountId !== undefined || ownerCapsule.ownershipEpoch !== undefined ||
+      ownerCapsule.managementState !== undefined);
+    // A Source is reserved before its initial Capsule exists. Legacy Capsules
+    // also retain their Workspace admission until the ownership expand lands.
+    if (appAuthorityRequired && (!actorAccountId?.trim() ||
+      ownerCapsule.ownerAccountId === undefined || ownerCapsule.managementState !== "active" ||
+      !Number.isSafeInteger(ownerCapsule.ownershipEpoch) || ownerCapsule.ownershipEpoch! < 0)) {
       throw new OpenTofuControllerError("failed_precondition",
         "App-owned Source sync requires a trusted current actor and ownership epoch.",
         { reason: "app_access_denied" });
@@ -950,7 +955,7 @@ export class SourcesService {
       kind: "source_sync",
       workspaceId: stored.workspaceId,
       sourceId,
-      ...(ownerCapsule ? { actorAccountId, ownershipEpoch: ownerCapsule.ownershipEpoch } : {}),
+      ...(appAuthorityRequired ? { actorAccountId, ownershipEpoch: ownerCapsule.ownershipEpoch } : {}),
       url: stored.url,
       ref: runRef,
       path: runPath,
