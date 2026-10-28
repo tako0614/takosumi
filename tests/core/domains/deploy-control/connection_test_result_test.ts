@@ -47,6 +47,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const row = connection();
       const material = blob(row);
       await store.createConnectionRegistration({ connection: row, secretBlob: material, expectedWorkspaceManagementAuthority: authority, actorAuthority: null });
+      const ownedRow = { ...row, ownerAccountId: "owner" };
       const verified: ProviderConnection = { ...row, status: "verified", verifiedAt: later, updatedAt: later };
       const input: CommitConnectionTestResultInput = {
         expectedConnection: row, expectedSecretBlob: material, replacement: verified,
@@ -59,10 +60,10 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const rotated = { ...material, ciphertext: "cm90YXRlZA==", rotatedAt: later };
       await store.putSecretBlob(rotated);
       expect(await store.commitConnectionTestResult(input)).toBe(false);
-      expect(await store.getConnection(row.id)).toEqual(row);
+      expect(await store.getConnection(row.id)).toEqual(ownedRow);
       expect(await store.getSecretBlob(row.id)).toEqual(rotated);
       expect(await store.commitConnectionTestResult({ ...input, expectedSecretBlob: rotated })).toBe(true);
-      expect(await store.getConnection(row.id)).toEqual(verified);
+      expect(await store.getConnection(row.id)).toEqual({ ...verified, ownerAccountId: "owner" });
       expect(await store.getSecretBlob(row.id)).toEqual(rotated);
       expect(await store.commitConnectionTestResult({ ...input, expectedSecretBlob: rotated })).toBe(false);
 
@@ -71,7 +72,8 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       expect(await store.commitConnectionTestResult(failedInput)).toBe(true);
       await store.beginWorkspaceDraining(authority.workspaceId, authority);
       const pending = (await store.getConnection(row.id))!;
-      const pausedInput = { ...input, expectedConnection: pending, expectedSecretBlob: rotated };
+      const pausedInput = { ...input, expectedConnection: pending, expectedSecretBlob: rotated,
+        replacement: { ...input.replacement, ownerAccountId: pending.ownerAccountId } };
       await expect(store.commitConnectionTestResult(pausedInput)).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
       expect(await store.getConnection(row.id)).toEqual(pending);
       expect(await store.getSecretBlob(row.id)).toEqual(rotated);
@@ -119,7 +121,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         replacement, replacementSecretBlob: renewed, expectedWorkspaceManagementAuthority: authority, actorAuthority: null };
       await expect(store.commitConnectionTestResult({ ...input, replacementSecretBlob: { ...renewed, connectionId: "another" } })).rejects.toThrow();
       expect(await store.commitConnectionTestResult(input)).toBe(true);
-      expect(await store.getConnection(row.id)).toEqual(replacement);
+      expect(await store.getConnection(row.id)).toEqual({ ...replacement, ownerAccountId: "owner" });
       expect(await store.getSecretBlob(row.id)).toEqual(renewed);
       expect(await store.commitConnectionTestResult(input)).toBe(false);
       expect(await store.getSecretBlob(row.id)).toEqual(renewed);
@@ -129,4 +131,35 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
     } finally { await pg?.close(); }
   });
 
+}
+
+for (const name of ["Postgres", "D1"] as const) {
+  test(`${name}: legacy Connection snapshot cannot mutate a changed physical owner`, async () => {
+    const pg = name === "Postgres" ? await PGliteSqlClient.create() : undefined;
+    const d1 = name === "D1" ? new SqliteFakeD1() : undefined;
+    const store: OpenTofuControlStore = pg
+      ? new SqlOpenTofuControlStore({ client: pg })
+      : new CloudflareD1OpenTofuControlStore(d1!);
+    try {
+      await store.putWorkspace({ id: authority.workspaceId, handle: "owner-drift", displayName: "Owner drift",
+        type: "personal", ownerUserId: "owner", createdAt: now, updatedAt: now });
+      const row = connection();
+      const material = blob(row);
+      expect(await store.createConnectionRegistration({ connection: row, secretBlob: material,
+        expectedWorkspaceManagementAuthority: authority, actorAuthority: null })).toBe(true);
+      if (pg) await pg.query("update takosumi_connections set owner_account_id = $2 where id = $1", [row.id, "other-owner"]);
+      if (d1) await d1.prepare("update connections set owner_account_id = ? where id = ?").bind("other-owner", row.id).run();
+      expect(await store.getConnection(row.id)).toMatchObject({ ownerAccountId: "other-owner" });
+      const replacement = { ...row, status: "verified" as const, updatedAt: later, verifiedAt: later };
+      expect(await store.replaceConnectionIfUnchanged(row, replacement)).toBe(false);
+      expect(await store.replaceConnectionIfUnchanged({ ...row, ownerAccountId: "owner" },
+        { ...replacement, ownerAccountId: "owner" })).toBe(false);
+      expect(await store.commitConnectionTestResult({ expectedConnection: row, expectedSecretBlob: material,
+        replacement, expectedWorkspaceManagementAuthority: authority, actorAuthority: null })).toBe(false);
+      expect(await store.revokeConnectionIfUnchanged({ expectedConnection: row,
+        expectedWorkspaceManagementAuthority: authority, actorAuthority: null })).toBe(false);
+      expect(await store.getSecretBlob(row.id)).toEqual(material);
+      expect(await store.getConnection(row.id)).toMatchObject({ status: "pending", ownerAccountId: "other-owner" });
+    } finally { await pg?.close(); }
+  });
 }
