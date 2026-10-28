@@ -197,7 +197,6 @@ for (const head of [67, 68, 69, 70, 71, 72, 73, 74, 75]) {
       expect(await db.prepare("select count(*) as count from workspace_billing_bindings").first()).toEqual({ count: 0 });
       const output: string[] = [];
       const deps = {
-        buildSchemaPlan: async () => await planPromise,
         sourceCommit: source, now: () => now,
         inspectSourceCheckout: async () => ({ head: source, clean: true }),
         createRemoteDatabase: async () => ({ database: db, configurationDigest: `sha256:${"b".repeat(64)}`, databaseId }),
@@ -233,7 +232,6 @@ test("production66to75 actual CLI keeps its internal admission guard and refuses
       "apply", "--environment", "production", "--confirm-manifest", (await planPromise).manifestDigest,
       "--retain-maintenance-fence",
     ], {}, (value) => output.push(value), {
-      buildSchemaPlan: async () => await planPromise,
       sourceCommit: source, inspectSourceCheckout: async () => ({ head: source, clean: true }),
       createRemoteDatabase: async () => ({ database: counted.database, configurationDigest: `sha256:${"b".repeat(64)}`, databaseId }),
     })).toBe(1);
@@ -303,3 +301,12 @@ test("native D1 quiescent fence atomically rejects a racing Run on insert and in
     }
   } finally { await runtime.dispose(); }
 }, 30_000);
+
+
+test("production66to75 default CLI plan stays pinned when the catalog advances", async () => {
+  const output: string[] = [];
+  expect(await runControlD1SchemaProductionV66V75Cli(["plan", "--environment", "production"], {}, (value) => output.push(value), {
+    sourceCommit: source,
+  })).toBe(0);
+  expect(JSON.parse(output[0]!).manifestDigest).toBe((await planPromise).manifestDigest);
+});

@@ -39,6 +39,7 @@ import type {
 } from "takosumi-contract/sources";
 
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { InterfaceServiceError } from "../../../../core/domains/interfaces/service.ts";
 import {
   OpenTofuControllerError,
   structuredErrorReason,
@@ -69,6 +70,7 @@ import {
   effectiveProviderBindings,
   effectiveInterfaceLinks,
   interfaceRequirements,
+  duplicateSelectedInterface,
   interfacesReady,
   moduleCandidates,
   nameProposal,
@@ -1180,18 +1182,15 @@ async function continueInstallAttempt(
       if (next.options.interfaceLinks?.some((answer) =>
         answer.requirementKey === entry.requirementKey
       )) return false;
-      const row = interfaces.find((requirement) => requirement.requirementKey === entry.requirementKey)!;
-      return row.candidates.length !== 1 || row.candidates[0]!.id !== entry.interfaceId;
-    })) {
-      return await refreshChangedInterfaceCandidates(ctx, observed, next, interfaces);
-    }
-    if (facts?.autoInterfaceCandidates?.some((captured) => {
+      const captured = facts?.autoInterfaceCandidates?.find((row) => row.requirementKey === entry.requirementKey);
+      return !captured || JSON.stringify(captured.candidateIds) !== JSON.stringify(entry.candidateIds);
+    }) || facts?.autoInterfaceCandidates?.some((captured) => {
       if (next.options.interfaceLinks?.some((answer) =>
         answer.requirementKey === captured.requirementKey
       )) return false;
       const row = interfaces.find((entry) => entry.requirementKey === captured.requirementKey);
-      return row !== undefined &&
-        !row.candidates.some((candidate) => candidate.id === captured.interfaceId);
+      return !row || JSON.stringify(row.candidates.map((candidate) => candidate.id)) !==
+        JSON.stringify(captured.candidateIds);
     })) {
       return await refreshChangedInterfaceCandidates(ctx, observed, next, interfaces);
     }
@@ -1206,6 +1205,7 @@ async function continueInstallAttempt(
       );
     }
     if (!interfacesReady(interfaces)) {
+      const duplicate = duplicateSelectedInterface(interfaces);
       const unavailable = interfaces.some((row) => {
         const choice = row.choice;
         return choice?.kind === "interface" &&
@@ -1215,6 +1215,8 @@ async function continueInstallAttempt(
         unavailable ? "interface_candidate_unavailable" : "install_inputs_incomplete",
         unavailable
           ? "A selected Interface provider is no longer available; choose another provider or configure it later."
+          : duplicate
+          ? "An Interface provider can serve only one requirement of this app; choose another provider or configure one later."
           : "Choose an Interface provider or configure it later before continuing.",
         409,
         ctx.request,
@@ -1314,9 +1316,10 @@ async function continueInstallAttempt(
 }
 
 function autoInterfaceCandidateSnapshot(rows: readonly GitInstallPlanInterfaceRequirement[]) {
-  return rows.flatMap((row) => row.autoSelected && row.choice?.kind === "interface"
-    ? [{ requirementKey: row.requirementKey, interfaceId: row.choice.interfaceId }]
-    : []);
+  return rows.map((row) => ({
+    requirementKey: row.requirementKey,
+    candidateIds: row.candidates.map((candidate) => candidate.id),
+  }));
 }
 
 /** A changed automatic choice is acknowledged once, then the fresh sheet can proceed. */
@@ -2233,6 +2236,12 @@ async function createCapsule(
       });
     }
     const interfaces = await interfaceRequirements(operations, plan, requirements);
+    if (duplicateSelectedInterface(interfaces)) {
+      return failedPlan(plan, {
+        code: "interface_choice_conflict",
+        message: "An Interface provider was selected for more than one requirement of this app.",
+      });
+    }
     if (interfaces.some((row) => {
       const choice = row.choice;
       return choice?.kind === "interface" &&
@@ -2388,6 +2397,14 @@ async function finishInitialInterfaceLinks(
         },
       });
     } catch (error) {
+      if (error instanceof InterfaceServiceError &&
+        (error.code === "conflict" || error.code === "failed_precondition")) {
+        return failedPlan(plan, {
+          code: "interface_link_unavailable",
+          message: "The selected Interface provider cannot be linked; choose another provider or configure it later.",
+          controllerCode: error.code,
+        });
+      }
       // Initial authority is known committed. Keep it reconcileable without
       // asking for values that will never be used to recreate that Capsule.
       return progressed(plan, {
@@ -3235,12 +3252,14 @@ function observedInterfaceRequests(
   const keys = new Set<string>();
   const observations: NonNullable<PatchGitInstallPlanRequest["observedInterfaces"]>[number][] = [];
   for (const entry of value) {
-    if (!isRecord(entry) || !hasOnlyKeys(entry, ["requirementKey", "interfaceId"])) return undefined;
+    if (!isRecord(entry) || !hasOnlyKeys(entry, ["requirementKey", "candidateIds"])) return undefined;
     const requirementKey = boundedPlainString(entry.requirementKey, 128);
-    const interfaceId = boundedPlainString(entry.interfaceId, 132);
-    if (!requirementKey || !interfaceId || keys.has(requirementKey)) return undefined;
+    if (!requirementKey || keys.has(requirementKey) || !Array.isArray(entry.candidateIds) ||
+      entry.candidateIds.length > 100) return undefined;
+    const candidateIds = entry.candidateIds.map((id) => boundedPlainString(id, 132));
+    if (candidateIds.some((id) => !id) || new Set(candidateIds).size !== candidateIds.length) return undefined;
     keys.add(requirementKey);
-    observations.push({ requirementKey, interfaceId });
+    observations.push({ requirementKey, candidateIds: (candidateIds as string[]).sort() });
   }
   return observations;
 }

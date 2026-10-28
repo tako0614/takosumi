@@ -5,6 +5,7 @@ import { registerInterfaceRoutes } from "../../../core/api/interface_routes.ts";
 import { InterfaceService, createInMemoryInterfaceStores } from "../../../core/domains/interfaces/mod.ts";
 import { handleCapsuleInterfaceLinks } from "../../../accounts/service/src/control/interface-links.ts";
 import type { ControlDispatchContext } from "../../../accounts/service/src/control/shared.ts";
+import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
 
 const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.invoke"], delivery: { type: "none" } } as const;
 async function fixture() {
@@ -31,8 +32,9 @@ test("Interface link routes return data-free candidates, use generation CAS and 
   const f = await fixture();
   const candidates = await f.request(`${f.path}/candidates`);
   expect(candidates.status).toBe(200);
-  expect(await candidates.json()).toEqual({ candidates: [{ interfaceId: f.provider.metadata.id, providerCapsuleId: "provider", providerCapsuleName: "provider app", interfaceName: "provider-mcp" }], generation: 0 });
+  expect(await candidates.json()).toEqual({ candidates: [{ interfaceId: f.provider.metadata.id, providerCapsuleId: "provider", providerCapsuleName: "provider app", interfaceName: "provider-mcp" }], generation: 0, requirementFingerprint: await stableJsonDigest({ permissions: requirement.permissions, delivery: requirement.delivery }) });
   expect((await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: -1 })).status).toBe(400);
+  expect((await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0, expectedRequirementFingerprint: await stableJsonDigest({ permissions: ["other"], delivery: requirement.delivery }) })).status).toBe(409);
   const selected = await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0 });
   expect(selected.status).toBe(200);
   expect((await selected.json()).link.state).toBe("active");
@@ -74,6 +76,37 @@ test("account-session provider manager can unlink a requirement removed from cur
   const response = await handleCapsuleInterfaceLinks(ctx, f.capsules.get("consumer")!, ["capsules", "consumer", "interface-links", "tools"], "DELETE");
   expect(response.status).toBe(200);
   expect((await response.json()).link.state).toBe("revoked");
+});
+
+test("provider-authorized DELETE cannot revoke a newly repointed provider", async () => {
+  const f = await fixture();
+  f.capsules.set("foreign_provider", { ...f.capsules.get("provider")!, id: "foreign_provider", workspaceId: "other_ws" });
+  const foreign = await f.service.create({ workspaceId: "other_ws", name: "foreign-provider", ownerRef: { kind: "Capsule", id: "foreign_provider" }, spec: f.provider.spec });
+  const old = { id: "old_provider_link", generation: 1, consumerCapsuleId: "consumer", requirementKey: "tools", interface: requirement.interface, requestedPermissions: [...requirement.permissions], approvedPermissions: [...requirement.permissions], deliveryType: "none", providerInterfaceId: foreign.metadata.id, providerCapsuleId: "foreign_provider", state: "active" as const, selection: "explicit" as const, requestedBy: "original_actor", createdAt: "2026-07-13T12:00:00.000Z", updatedAt: "2026-07-13T12:00:00.000Z" };
+  expect(await f.stores.links.create(old)).toBe(true);
+  const authorized = { linkId: old.id, providerInterfaceId: old.providerInterfaceId, providerCapsuleId: old.providerCapsuleId };
+  const replacement = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.provider.metadata.id, expectedGeneration: old.generation });
+  await expect(f.service.revokeCapsuleInterfaceLink("consumer", "tools", replacement.generation, undefined, undefined, authorized)).rejects.toThrow("authorized Interface provider changed");
+  expect((await f.stores.links.get(replacement.id))?.state).toBe("active");
+});
+
+test("provider DELETE route pins the authorized link before its service read", async () => {
+  const f = await fixture();
+  f.capsules.set("foreign_provider", { ...f.capsules.get("provider")!, id: "foreign_provider", workspaceId: "other_ws" });
+  const foreign = await f.service.create({ workspaceId: "other_ws", name: "foreign-provider", ownerRef: { kind: "Capsule", id: "foreign_provider" }, spec: f.provider.spec });
+  const old = { id: "old_route_link", generation: 1, consumerCapsuleId: "consumer", requirementKey: "tools", interface: requirement.interface, requestedPermissions: [...requirement.permissions], approvedPermissions: [...requirement.permissions], deliveryType: "none", providerInterfaceId: foreign.metadata.id, providerCapsuleId: "foreign_provider", state: "active" as const, selection: "explicit" as const, requestedBy: "original_actor", createdAt: "2026-07-13T12:00:00.000Z", updatedAt: "2026-07-13T12:00:00.000Z" };
+  expect(await f.stores.links.create(old)).toBe(true);
+  const original = f.service.getLatestCapsuleInterfaceLink.bind(f.service);
+  let replacementId = "";
+  f.service.getLatestCapsuleInterfaceLink = async (capsuleId, key) => {
+    const authorized = await original(capsuleId, key);
+    const replacement = await f.service.putCapsuleInterfaceLink({ capsuleId, requirementKey: key, interfaceId: f.provider.metadata.id, expectedGeneration: old.generation });
+    replacementId = replacement.id;
+    return authorized;
+  };
+  const response = await f.request(f.path, "DELETE", { expectedGeneration: 3 }, "foreign");
+  expect(response.status).toBe(403);
+  expect((await f.stores.links.get(replacementId))?.state).toBe("active");
 });
 
 test("account route reauthorizes a revoked bearer after binding preparation before link CAS", async () => {
