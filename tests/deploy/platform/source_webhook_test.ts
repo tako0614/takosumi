@@ -410,12 +410,12 @@ test("webhook rejects an unsupported source id shape (404)", async () => {
 });
 
 test("scheduled poll enqueues a deduped sync per autoSync source, capped", async () => {
-  const syncCalls: string[] = [];
+  const syncCalls: { sourceId: string; scheduled?: boolean }[] = [];
   const ops: SourcePollOperations = {
     getSource: async () => undefined,
     verifySourceHookSecret: () => Promise.resolve(true),
-    createSourceReconciliationSyncs: (sourceId) => {
-      syncCalls.push(sourceId);
+    createSourceReconciliationSyncs: (sourceId, options) => {
+      syncCalls.push({ sourceId, scheduled: options?.scheduled });
       return Promise.resolve([{ run: { id: `ssr_${sourceId}` } }]);
     },
     controller: {
@@ -424,7 +424,10 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
     },
   };
   await pollAutoSyncSources(ops, 50);
-  expect(syncCalls).toEqual(["src_a", "src_b"]);
+  expect(syncCalls).toEqual([
+    { sourceId: "src_a", scheduled: true },
+    { sourceId: "src_b", scheduled: true },
+  ]);
 });
 
 test("scheduled source poll batch is operator configurable with a bounded default", () => {
