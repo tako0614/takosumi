@@ -465,6 +465,14 @@ async function dispatchAuthenticatedControlRoute(
   const tail = url.pathname.slice(API_V1_PREFIX.length);
   const segments = normalizeControlRouteSegments(tail);
 
+  // App-bound tokens cannot enumerate or mutate account-wide resources. Keep
+  // this before Control initialization; app-resource handlers still intersect
+  // the exact app fence with live AppAccess after resolving their resource.
+  if (context.session.appIds !== undefined &&
+    !["apps", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
+    return appendServerTiming(errorJson("app_access_denied", "This credential is restricted to its apps.", 403, request), timings);
+  }
+
   // The account-wide Workspace inventory is intentionally unavailable to a
   // Workspace-scoped credential. Keep this fence before resolving the Control
   // operations facade: a rejected request must not initialize or otherwise
@@ -600,6 +608,7 @@ export async function handleControlRoute(
       current.auth.subject === initialAuth.subject &&
       current.auth.principalSubject === initialAuth.principalSubject &&
       current.auth.workspaceId === initialAuth.workspaceId &&
+      JSON.stringify(current.auth.appIds) === JSON.stringify(initialAuth.appIds) &&
       current.auth.credential === initialAuth.credential &&
       controlRouteRequiredScope(request) === requiredAccess;
   };
@@ -610,6 +619,7 @@ export async function handleControlRoute(
       session: {
         subject: bearer.auth.subject,
         uninstallRequester: bearer.auth.uninstallRequester,
+        ...(bearer.auth.appIds !== undefined ? { appIds: bearer.auth.appIds } : {}),
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
           : {}),

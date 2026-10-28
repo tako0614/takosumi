@@ -477,6 +477,30 @@ test("requireAccountsBearer resolves an arbitrary-prefix OAuth token by exact re
   }
 });
 
+test("installed-app OAuth bearer remains app-bound without a Workspace claim", async () => {
+  const store = new InMemoryAccountsStore();
+  for (const workspaceId of [undefined, "ws_compat"] as const) {
+    const token = `takat_installed_app_user_${workspaceId ?? "no_workspace"}`;
+    store.saveAccessToken(token, {
+      clientId: "oidc_installed_app", scope: "openid capsules:read capsules:write",
+      subject: "pairwise-installed-user", takosumiSubject: "tsub_installed_user",
+      capsuleId: "cap_installed", ...(workspaceId ? { workspaceId } : {}),
+      expiresAt: Date.now() + 60_000,
+    });
+    const result = await requireAccountsBearer({
+      request: new Request("https://accounts.example.test/api/v1/apps", {
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      store, scope: "read",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.auth.appIds).toEqual(["cap_installed"]);
+      expect(result.auth.workspaceId).toBe(workspaceId);
+    }
+  }
+});
+
 test("requireAccountsBearer resolves an arbitrary-prefix PAT and records use", async () => {
   const store = new InMemoryAccountsStore();
   const token = "opaque.personal-secret.without-a-type-prefix";

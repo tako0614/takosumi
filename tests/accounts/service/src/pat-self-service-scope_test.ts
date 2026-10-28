@@ -7,7 +7,7 @@ import {
   type ControlPlaneOperations,
   type AccountsStore,
 } from "../../../../accounts/service/src/mod.ts";
-import { bearerWorkspaceAllows } from "../../../../accounts/service/src/account-session.ts";
+import { bearerAppAllows, bearerWorkspaceAllows, resolveBearerAppAccess } from "../../../../accounts/service/src/account-session.ts";
 import { handleCreatePersonalAccessToken } from "../../../../accounts/service/src/pat-routes.ts";
 
 const ORIGIN = "https://accounts.example.test";
@@ -37,6 +37,73 @@ function createRequest(body: Record<string, unknown>): Request {
     body: JSON.stringify(body),
   });
 }
+
+test("app-bound PATs are minted only for live accessible apps and preserve their fence", async () => {
+  const store = seededStore();
+  const accessible = new Set(["cap_one"]);
+  const operations = {
+    appAccess: {
+      resolveAppAccess: async (subject: string, id: string) =>
+        accessible.has(id) ? { capsuleId: id, role: "member", ownerAccountId: "tsub_owner", ownershipEpoch: 0 } : undefined,
+    },
+  } as unknown as ControlPlaneOperations;
+
+  const denied = await handleCreatePersonalAccessToken({
+    request: createRequest({ name: "Automation", scopes: ["read", "write"], appIds: ["cap_one", "cap_two"] }),
+    store,
+    operations,
+  });
+  expect(denied.status).toBe(403);
+  expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(0);
+
+  accessible.add("cap_two");
+  const created = await handleCreatePersonalAccessToken({
+    request: createRequest({ name: "Automation", scopes: ["read", "write"], appIds: ["cap_one", "cap_two"] }),
+    store,
+    operations,
+  });
+  expect(created.status).toBe(201);
+  const body = await created.json() as { token: string; token_record: { appIds: string[]; app_ids: string[] } };
+  expect(body.token_record.appIds).toEqual(["cap_one", "cap_two"]);
+  expect(body.token_record.app_ids).toEqual(["cap_one", "cap_two"]);
+  const bearer = await requireAccountsBearer({
+    request: new Request(`${ORIGIN}/api/v1/apps`, { headers: { authorization: `Bearer ${body.token}` } }),
+    store,
+    scope: "write",
+  });
+  expect(bearer.ok).toBe(true);
+  if (bearer.ok) {
+    expect(bearer.auth.appIds).toEqual(["cap_one", "cap_two"]);
+    expect(bearerAppAllows(bearer.auth, "cap_one")).toBe(true);
+    expect(bearerAppAllows(bearer.auth, "cap_other")).toBe(false);
+    expect(await resolveBearerAppAccess({
+      auth: bearer.auth, capsuleId: "cap_one", action: "change_settings", resolver: operations.appAccess,
+    })).toMatchObject({ role: "member" });
+    expect(await resolveBearerAppAccess({
+      auth: bearer.auth, capsuleId: "cap_one", action: "manage_members", resolver: operations.appAccess,
+    })).toBeUndefined();
+    accessible.delete("cap_one");
+    expect(await resolveBearerAppAccess({
+      auth: bearer.auth, capsuleId: "cap_one", action: "change_settings", resolver: operations.appAccess,
+    })).toBeUndefined();
+    expect(await resolveBearerAppAccess({
+      auth: { ...bearer.auth, workspaceId: "ws_old" }, capsuleId: "cap_two",
+      action: "change_settings", resolver: operations.appAccess, capsuleWorkspaceId: "ws_other",
+    })).toBeUndefined();
+  }
+  const malformed = await handleCreatePersonalAccessToken({
+    request: createRequest({ name: "Malformed", scopes: ["read"], app_ids: ["cap_one", "cap_one"] }),
+    store,
+    operations,
+  });
+  expect(malformed.status).toBe(400);
+  const conflicting = await handleCreatePersonalAccessToken({
+    request: createRequest({ name: "Conflicting", scopes: ["read"], appIds: ["cap_one"], app_ids: ["cap_two"] }),
+    store,
+    operations,
+  });
+  expect(conflicting.status).toBe(400);
+});
 
 test("resources:read PAT creation is explicit, workspace-bound, and exact", async () => {
   const store = seededStore();

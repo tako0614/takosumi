@@ -158,6 +158,7 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
+  readonly appAccess?: import("../../../contract/app-access.ts").AppAccessResolver;
   /** Optional private owner-to-owner identity custody; no public caller admission. */
   readonly identityReconciliation?:import("../../../contract/identity-reconciliation.ts").ControlIdentityReconciliationPort;
   /** Durable, actor-scoped Git install/revision coordinator ledger. */
@@ -787,6 +788,7 @@ export interface ControlPlaneOperations {
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,

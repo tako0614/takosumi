@@ -42,6 +42,7 @@ import type {
   ControlPlaneOperations,
   ControlWorkspaceRole,
 } from "./control-operations.ts";
+import type { AppRole } from "../../../contract/app-access.ts";
 
 import { measureRequestPhaseOperation, type RequestPhaseObserver } from "./request-phase-diagnostics.ts";
 
@@ -397,11 +398,11 @@ async function resolveOidcAuthorizationSubject(input: {
     const installConfig = await input.operations.capsules.getInstallConfig(
       capsule.installConfigId,
     );
-    if ((installConfig.requiredInterfaces?.length ?? 0) > 0) {
+    if (liveGrant.role && (installConfig.requiredInterfaces?.length ?? 0) > 0) {
       const ensureRequiredInterfaces =
         input.operations.interfaces?.ensureCapsuleRequiredInterfaces;
       if (ensureRequiredInterfaces) await ensureRequiredInterfaces.call(input.operations.interfaces, {
-        workspaceId: liveGrant.workspaceId!,
+        workspaceId: capsule.workspaceId,
         capsuleId: liveGrant.capsuleId,
         principalId: pairwiseSubject,
         requirements: installConfig.requiredInterfaces!,
@@ -1016,6 +1017,7 @@ async function handleTokenUncached(input: {
         capsuleId: liveGrant.capsuleId,
         workspaceId: liveGrant.workspaceId,
         role: liveGrant.role,
+        appRole: liveGrant.appRole,
         nonce: record.nonce,
         refreshToken,
         chainRefreshToken: refreshToken,
@@ -1203,6 +1205,7 @@ async function handleRefreshToken(input: {
       capsuleId: liveGrant.capsuleId,
       workspaceId: liveGrant.workspaceId,
       role: liveGrant.role,
+      appRole: liveGrant.appRole,
       refreshToken: newRefreshToken,
       chainRefreshToken: newRefreshToken,
     }),
@@ -1238,6 +1241,7 @@ async function issueTokenResponse(input: {
   capsuleId?: string;
   workspaceId?: string;
   role?: string;
+  appRole?: AppRole;
   nonce?: string;
   refreshToken?: string;
   /** New or rotated refresh token whose chain root tracks issued access tokens. */
@@ -1260,6 +1264,7 @@ async function issueTokenResponse(input: {
           ...(input.capsuleId ? { capsule_id: input.capsuleId } : {}),
           ...(input.workspaceId ? { workspace_id: input.workspaceId } : {}),
           ...(input.role ? { role: input.role } : {}),
+          ...(input.appRole ? { app_role: input.appRole } : {}),
         }
       : undefined;
   // email_verified reflects the upstream identity provider's assertion,
@@ -1459,6 +1464,7 @@ async function handleUserInfoUncached(input: {
           ? { workspace_id: liveGrant.workspaceId }
           : {}),
         ...(liveGrant.role ? { role: liveGrant.role } : {}),
+        ...(liveGrant.appRole ? { app_role: liveGrant.appRole } : {}),
       };
       // Emit a flat `workspace_memberships` claim that installable apps, including
       // Installed Capsule surfaces read directly for their
@@ -1652,7 +1658,7 @@ async function handleIntrospectUncached(input: {
     } else if (accessRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
-    let liveRole: ControlWorkspaceRole | undefined;
+    let liveClaims: { workspaceId?: string; role?: ControlWorkspaceRole; appRole?: AppRole } | undefined;
     if (!interfaceOAuth) {
       const operations = await operationsForLiveGrant({
         operations: input.operations,
@@ -1671,9 +1677,9 @@ async function handleIntrospectUncached(input: {
         workspaceId: accessRecord.workspaceId,
       });
       if (!liveGrant.ok) return json({ active: false });
-      liveRole = liveGrant.role;
+      liveClaims = liveGrant;
     }
-    return json(introspectionBody(accessRecord, "oauth_access", liveRole));
+    return json(introspectionBody(accessRecord, "oauth_access", liveClaims));
   }
   const refreshRecord = await input.store.findRefreshToken(token);
   if (refreshRecord) {
@@ -1699,7 +1705,7 @@ async function handleIntrospectUncached(input: {
     });
     if (!liveGrant.ok) return json({ active: false });
     return json(
-      introspectionBody(refreshRecord, "refresh_token", liveGrant.role),
+      introspectionBody(refreshRecord, "refresh_token", liveGrant),
     );
   }
   if (auth.client.profile === "shared-account") return json({active:false});
@@ -1759,7 +1765,7 @@ async function isPkceVerifierValid(
 function introspectionBody(
   record: TokenRecord,
   ordinaryTokenUse: "oauth_access" | "refresh_token",
-  workspaceRole?: string,
+  liveClaims?: { workspaceId?: string; role?: string; appRole?: AppRole },
 ): Record<string, unknown> {
   if (record.expiresAt < Date.now()) {
     return { active: false };
@@ -1782,16 +1788,15 @@ function introspectionBody(
             interface_resolved_revision: record.interfaceResolvedRevision,
           },
         }
-      : record.capsuleId || record.workspaceId || workspaceRole
+      : record.capsuleId || liveClaims?.workspaceId
         ? {
             takosumi: {
               ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
-              ...(record.workspaceId
-                ? { workspace_id: record.workspaceId }
+              ...(liveClaims?.workspaceId
+                ? { workspace_id: liveClaims.workspaceId }
                 : {}),
-              ...((workspaceRole ?? record.role)
-                ? { role: workspaceRole ?? record.role }
-                : {}),
+              ...(liveClaims?.role ? { role: liveClaims.role } : {}),
+              ...(liveClaims?.appRole ? { app_role: liveClaims.appRole } : {}),
             },
           }
         : {}),

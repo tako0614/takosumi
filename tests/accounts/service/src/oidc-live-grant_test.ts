@@ -5,6 +5,7 @@ import type {
 } from "takosumi-contract/install-configs";
 import type { WorkspaceMemberStatus } from "takosumi-contract/workspaces";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import type { AppRole } from "../../../../contract/app-access.ts";
 import {
   handleAuthorize,
   handleToken,
@@ -48,11 +49,15 @@ async function liveGrantFixture() {
     memberStatus: WorkspaceMemberStatus;
     memberRoles: string[];
     executionAuthorityEpoch: number;
+    appRole: AppRole | undefined;
+    ownerAccountId: string | undefined;
   } = {
     capsuleStatus: "active",
     memberStatus: "active",
     memberRoles: ["member"],
     executionAuthorityEpoch: 1,
+    appRole: "member",
+    ownerAccountId: undefined,
   };
   const client: OidcClientRecord = {
     clientId,
@@ -94,6 +99,7 @@ async function liveGrantFixture() {
         installConfigId: installConfig.id,
         name: "live-app",
         status: state.capsuleStatus,
+        ownerAccountId: state.ownerAccountId,
       }),
       getInstallConfig: async () => installConfig,
       getCapsuleExecutionAuthorityEpoch: async () =>
@@ -114,6 +120,12 @@ async function liveGrantFixture() {
           roles: state.memberRoles,
         },
       ],
+    },
+    appAccess: {
+      resolveAppAccess: async (_subject: string, requestedCapsuleId: string) =>
+        requestedCapsuleId === capsuleId && state.appRole
+          ? { capsuleId, role: state.appRole, ownerAccountId: "tsub_other_owner", ownershipEpoch: 0 }
+          : undefined,
     },
     interfaces: {
       ensureCapsuleRequiredInterfaces: async (input: unknown) => {
@@ -194,6 +206,102 @@ test("authorize resolves a current Capsule grant and terminal status revokes its
   expect(await denied.json()).toMatchObject({ error: "unauthorized_client" });
   expect(store.findOidcClient(clientId)).toBeUndefined();
   expect(store.findOidcClientForCapsule(capsuleId)).toBeUndefined();
+});
+
+test("a nonmember can sign in to an installed app without management or Workspace claims", async () => {
+  const { store, state, operations, installConfig, requiredInterfaceCalls } = await liveGrantFixture();
+  state.memberStatus = "suspended";
+  state.appRole = undefined;
+  installConfig.requiredInterfaces = [{
+    key: "ai",
+    interface: { type: "takosumi.ai.gateway", version: "1" },
+    permissions: ["ai.chat"],
+    delivery: { type: "oauth2" },
+  }];
+  store.saveOidcClient({
+    ...store.findOidcClient(clientId)!,
+    activationDigest: await oidcClientActivationDigest({
+      workspaceId, capsuleId, executionAuthorityEpoch: 1,
+      installConfig: installConfig as InstallConfig,
+    }),
+  });
+  const verifier = "nonmember-app-sign-in-verifier";
+  const { url } = authorizeRequest();
+  url.searchParams.set("code_challenge", await pkceChallenge(verifier));
+  let idClaims: Record<string, unknown> | undefined;
+  const claimFlow = {
+    ...flow,
+    issueIdToken: async (claims: Record<string, unknown>) => {
+      idClaims = claims;
+      return "nonmember-id-token";
+    },
+  };
+  const authorized = await handleAuthorize({
+    url,
+    request: new Request(url, { headers: { "x-takosumi-account-session": "sess_live_grant" } }),
+    flow: claimFlow,
+    clients: new Map(),
+    store,
+    operations,
+  });
+  expect(authorized.status).toBe(302);
+  expect(requiredInterfaceCalls).toHaveLength(0);
+  const code = new URL(authorized.headers.get("location")!).searchParams.get("code");
+  const tokenResponse = await handleToken({
+    issuer,
+    request: new Request(`${issuer}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code", code: code!, redirect_uri: redirectUri,
+        client_id: clientId, code_verifier: verifier,
+      }),
+    }),
+    store,
+    flow: claimFlow,
+    clients: new Map(),
+    operations,
+  });
+  expect(tokenResponse.status).toBe(200);
+  expect(idClaims?.takosumi).toEqual({ capsule_id: capsuleId });
+  const token = await tokenResponse.json() as { access_token: string };
+  const userInfo = await handleUserInfo({
+    request: new Request(`${issuer}/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${token.access_token}` },
+    }),
+    store,
+    clients: new Map(),
+    operations,
+  });
+  expect(userInfo.status).toBe(200);
+  const body = await userInfo.json() as Record<string, unknown>;
+  expect(body.takosumi).toEqual({ capsule_id: capsuleId });
+  expect(body.workspace_memberships).toBeUndefined();
+});
+
+test("migrated app claims do not inherit former Workspace authority", async () => {
+  const { store, state, operations } = await liveGrantFixture();
+  state.ownerAccountId = "tsub_other_owner";
+  state.appRole = undefined;
+  state.memberRoles = ["owner"];
+  store.saveAccessToken("takat_migrated_workspace_member", {
+    clientId, scope: "openid profile", subject: "pairwise-member",
+    takosumiSubject: accountSubject, capsuleId, workspaceId, role: "owner",
+    expiresAt: Date.now() + 60_000,
+  });
+  const request = new Request(`${issuer}/oauth/userinfo`, {
+    headers: { authorization: "Bearer takat_migrated_workspace_member" },
+  });
+  const withoutAppAccess = await handleUserInfo({ request, store, clients: new Map(), operations });
+  expect(withoutAppAccess.status).toBe(200);
+  expect((await withoutAppAccess.json() as { takosumi: unknown }).takosumi).toEqual({ capsule_id: capsuleId });
+
+  state.appRole = "member";
+  const withAppAccess = await handleUserInfo({ request, store, clients: new Map(), operations });
+  expect(withAppAccess.status).toBe(200);
+  expect((await withAppAccess.json() as { takosumi: unknown }).takosumi).toEqual({
+    capsule_id: capsuleId, workspace_id: workspaceId, role: "member", app_role: "member",
+  });
 });
 
 test("an uninstalled Capsule pauses sign-in without revoking its client", async () => {
@@ -644,7 +752,7 @@ test("authorization-code denial logs only its closed diagnostic stage", async ()
   }
 });
 
-test("UserInfo uses the current role and refresh revokes the chain after membership loss", async () => {
+test("UserInfo uses current app and Workspace roles; Workspace loss does not revoke app sign-in", async () => {
   const { store, state, operations } = await liveGrantFixture();
   state.memberRoles = ["viewer"];
   store.saveAccessToken("takat_live_grant", {
@@ -682,6 +790,7 @@ test("UserInfo uses the current role and refresh revokes the chain after members
       capsule_id: capsuleId,
       workspace_id: workspaceId,
       role: "viewer",
+      app_role: "member",
     },
   });
 
@@ -702,9 +811,8 @@ test("UserInfo uses the current role and refresh revokes the chain after members
     clients: new Map(),
     operations,
   });
-  expect(refreshed.status).toBe(400);
-  expect(await refreshed.json()).toEqual({ error: "invalid_grant" });
-  expect(store.findRefreshToken("takrt_live_grant")).toBeUndefined();
+  expect(refreshed.status).toBe(200);
+  const refreshedBody = await refreshed.json() as { access_token: string };
 
   const staleUserInfo = await handleUserInfo({
     request: new Request(`${issuer}/oauth/userinfo`, {
@@ -714,9 +822,21 @@ test("UserInfo uses the current role and refresh revokes the chain after members
     clients: new Map(),
     operations,
   });
-  expect(staleUserInfo.status).toBe(401);
-  // Membership loss is user-specific, so the shared client grant remains for
-  // other active Workspace members.
+  expect(staleUserInfo.status).toBe(200);
+  const staleBody = await staleUserInfo.json() as Record<string, unknown>;
+  expect(staleBody.takosumi).toEqual({ capsule_id: capsuleId, app_role: "member" });
+  expect(staleBody.workspace_memberships).toBeUndefined();
+  const refreshedUserInfo = await handleUserInfo({
+    request: new Request(`${issuer}/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${refreshedBody.access_token}` },
+    }),
+    store,
+    clients: new Map(),
+    operations,
+  });
+  expect((await refreshedUserInfo.json() as { takosumi: unknown }).takosumi).toEqual({
+    capsule_id: capsuleId, app_role: "member",
+  });
   expect(store.findOidcClient(clientId)).toBeDefined();
 });
 

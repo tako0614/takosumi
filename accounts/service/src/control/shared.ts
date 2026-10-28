@@ -131,6 +131,7 @@ export interface ControlSession {
   /** Set only by the authenticated Accounts bearer dispatcher. */
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
+  readonly appIds?: readonly string[];
   /**
    * Authorization intent derived from the HTTP method at the authenticated
    * dispatch boundary. Workspace members may read; only owner/admin members
@@ -589,6 +590,9 @@ export async function canAccessWorkspace(input: {
   // read B's Capsules, Runs, and Outputs through every id-addressed route.
   // The restriction is applied before membership, never instead of it.
   if (!bearerWorkspaceAllows(input.session, input.workspaceId)) return false;
+  // App-bound credentials cannot authorize a Workspace-wide legacy read. The
+  // app routes intersect appIds with live AppAccess at the resource boundary.
+  if (input.session.appIds !== undefined) return false;
 
   const workspace =
     input.workspace ??
