@@ -41,7 +41,8 @@ export class PortableGateFailure extends Error {
 }
 
 /**
- * Keep the complete Takosumi owner gate serial. Each phase corresponds to one
+ * Keep the complete local Takosumi owner gate serial. CI selects disjoint
+ * subsets of this same inventory. Each phase corresponds to one
  * command from the package's original `check` script. Both TypeScript sweeps
  * precede tests and browser builds so type errors fail quickly; nested scripts
  * retain their own fail-fast behavior and no capability is skipped.
@@ -147,18 +148,56 @@ export function validatePortableGatePhases(
   }
 }
 
+/** Select only after validating the complete inventory; typos must fail closed. */
+export function selectPortableGatePhases(
+  args: readonly string[],
+  phases: readonly PortableGatePhase[] = PORTABLE_GATE_PHASES,
+): readonly PortableGatePhase[] {
+  const known = new Set(phases.map(({ name }) => name));
+  const selections = new Map<string, Set<string>>();
+  for (let index = 0; index < args.length; index += 2) {
+    const option = args[index]!;
+    if (option !== "--only" && option !== "--except") {
+      throw new Error(`unknown portable gate option: ${option}`);
+    }
+    if (selections.has(option)) {
+      throw new Error(`duplicate portable gate option: ${option}`);
+    }
+    const names = args[index + 1]?.split(",") ?? [];
+    if (names.length === 0 || names.some((name) => !name)) {
+      throw new Error(`${option} requires comma-separated phase names`);
+    }
+    const selected = new Set<string>();
+    for (const name of names) {
+      if (!known.has(name)) throw new Error(`unknown portable gate phase: ${name}`);
+      if (selected.has(name)) throw new Error(`duplicate portable gate phase: ${name}`);
+      selected.add(name);
+    }
+    selections.set(option, selected);
+  }
+  const only = selections.get("--only");
+  const except = selections.get("--except");
+  const selected = phases.filter(({ name }) =>
+    (!only || only.has(name)) && !except?.has(name)
+  );
+  if (selected.length === 0) throw new Error("portable gate selection is empty");
+  return selected;
+}
+
 export async function runPortableGate(
   runtime: PortableGateRuntime = {},
   phases: readonly PortableGatePhase[] = PORTABLE_GATE_PHASES,
+  args: readonly string[] = [],
 ): Promise<void> {
   validatePortableGatePhases(phases);
+  const selected = selectPortableGatePhases(args, phases);
   const cwd = runtime.cwd ?? resolve(import.meta.dir, "..");
   const now = runtime.now ?? (() => performance.now());
   const write = runtime.write ?? ((line: string) => console.error(line));
   const run = runtime.run ?? runCommand;
   const totalStartedAt = now();
 
-  for (const current of phases) {
+  for (const current of selected) {
     const startedAt = now();
     write(`[portable-check] ▶ ${current.name}: ${current.command.join(" ")}`);
     try {
@@ -234,7 +273,7 @@ async function runCommand(
 
 if (import.meta.main) {
   try {
-    await runPortableGate();
+    await runPortableGate({}, PORTABLE_GATE_PHASES, process.argv.slice(2));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[portable-check] failed: ${message}`);

@@ -37,7 +37,7 @@
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/platform/entry-worker.ts --outfile \"${TMPDIR:-/tmp}/takosumi-platform-worker-check.mjs\" && bun scripts/assert-worker-schema-bundle.ts \"${TMPDIR:-/tmp}/takosumi-platform-worker-check.mjs\" && bun run check:auth-staging-worker-build",
     "check:auth-staging-worker-build": "bun scripts/check-auth-staging-build.ts",
-    "test": "bun run test:workerd && bun test --only-failures ./tests --path-ignore-patterns=tests/dashboard/e2e/** --path-ignore-patterns=tests/runner/compatibility_check_test.ts --path-ignore-patterns=tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
+    "test": "bun scripts/run-portable-tests.ts",
     "test:workerd": "bun test --isolate tests/runner/compatibility_check_test.ts tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",

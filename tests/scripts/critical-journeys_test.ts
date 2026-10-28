@@ -7,6 +7,7 @@ import {
   validateCriticalJourneyInventory,
 } from "../../scripts/run-critical-journeys.ts";
 import { PORTABLE_GATE_PHASES } from "../../scripts/check-portable-gate.ts";
+import { portableTestCommands } from "../../scripts/run-portable-tests.ts";
 
 const root = resolve(import.meta.dir, "../..");
 
@@ -62,12 +63,14 @@ test("package exposes the focused command without changing the complete gate", a
   expect(packageJson.scripts?.["test:workerd"]).toBe(
     "bun test --isolate tests/runner/compatibility_check_test.ts tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
   );
-  expect(packageJson.scripts?.test).toContain("bun run test:workerd");
+  expect(packageJson.scripts?.test).toBe("bun scripts/run-portable-tests.ts");
+  const commands = portableTestCommands().map((command) => command.join(" "));
+  expect(commands[0]).toBe("bun run test:workerd");
   for (const isolatedWorkerdTest of [
     "tests/runner/compatibility_check_test.ts",
     "tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
   ]) {
-    expect(packageJson.scripts?.test).toContain(
+    expect(commands[1]).toContain(
       `--path-ignore-patterns=${isolatedWorkerdTest}`,
     );
   }

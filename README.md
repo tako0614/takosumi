@@ -90,9 +90,12 @@ Takos は別の製品です。Accounts / deploy-control / dashboard / runner を
 
 ```bash
 bun run check
-bun test
-bun run docs:build
 ```
+
+`bun run check` はローカルの完全ゲートです。format、static checks、tests、dashboard と
+browser checks、docs browser check、build checks を順番に実行します。CI では同じ検査を
+複数の job に分けます。構成と test shard の扱いは
+[CI の品質ゲート](docs/operations/ci-quality.md)を参照してください。
 
 主なディレクトリは、公開 contract の `contract/`、control plane の `core/`、画面の
 `dashboard/`、runner の `runner/`、配布構成の `deploy/`、ドキュメントの `docs/` です。
