@@ -298,11 +298,12 @@ test("D1 link schema probe retries failures and shares availability with authori
   let probes = 0;
   const wrapped = {
     prepare(query: string) {
+      const statement = db.prepare(query);
       if (query.includes("select 1 as available from schema_migrations")) {
         probes++;
-        if (probes === 1) throw new Error("synthetic temporary probe failure");
+        if (probes === 1) statement.first = async () => { throw new Error("synthetic temporary probe failure"); };
       }
-      return db.prepare(query);
+      return statement;
     },
     batch: db.batch.bind(db),
   };
