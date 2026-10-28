@@ -1729,19 +1729,31 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       if (source.ownerCapsuleId) {
         const capsule = await this.#store.getCapsule(source.ownerCapsuleId);
         const run = runId ? await this.#store.getSourceSyncRun(runId) : undefined;
-        if (!capsule || capsule.ownerAccountId === undefined ||
+        const appAuthorityRequired = capsule !== undefined && (
+          capsule.ownerAccountId !== undefined || capsule.ownershipEpoch !== undefined ||
+          capsule.managementState !== undefined);
+        if (capsule?.status === "destroyed") throw new ConnectionVaultError("failed_precondition", "Source app is unavailable");
+        if (appAuthorityRequired && (capsule.ownerAccountId === undefined ||
           capsule.managementState !== "active" ||
           !Number.isSafeInteger(capsule.ownershipEpoch) ||
           connection.ownerAccountId !== capsule.ownerAccountId ||
           !run || run.status !== "running" ||
           run.sourceId !== source.id || run.workspaceId !== workspaceId ||
           run.url !== source.url ||
-          run.ownershipEpoch !== capsule.ownershipEpoch) {
+          run.ownershipEpoch !== capsule.ownershipEpoch)) {
           throw new ConnectionVaultError("failed_precondition", "Source app ownership authority changed");
         }
-        await this.#requireCurrentAppAccess(
+        if (appAuthorityRequired) await this.#requireCurrentAppAccess(
           run.actorAccountId, capsule.id, capsule.ownerAccountId, capsule.ownershipEpoch!,
         );
+      }
+    }
+    if (connection.scope === "personal") {
+      const source = sourceId ? await this.#store.getSource(sourceId) : undefined;
+      const capsule = source?.ownerCapsuleId ? await this.#store.getCapsule(source.ownerCapsuleId) : undefined;
+      const expectedOwner = capsule?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
+      if (!expectedOwner || connection.ownerAccountId !== expectedOwner) {
+        throw new ConnectionVaultError("failed_precondition", "Source connection is not owned by the app owner", undefined, "connection_not_owned_by_app_owner");
       }
     }
     if (
