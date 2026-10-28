@@ -344,7 +344,9 @@ export function InstallSheet(props: {
   const fieldHint = (variable: GitInstallPlanVariablePresentation) => {
     const description = localizedText(variable.description, "");
     const note = variable.sensitive
-      ? t("installStore.secretHint")
+      ? variable.type === "json"
+        ? `${t("installStore.secretJsonHint")} ${t("installStore.secretHint")}`
+        : t("installStore.secretHint")
       : variable.derivedDefault
         ? t("installStore.derivedHint")
         : "";
@@ -389,13 +391,14 @@ export function InstallSheet(props: {
               <option value="false">{t("installStore.no")}</option>
             </Select>
           </Match>
-          {/* A JSON value needs lines; a write-only one is masked as typed. */}
-          <Match when={variable().type === "json"}>
+          {/* A JSON value gets lines to edit. A write-only one stays a
+              password field instead (one line: JSON needs no line breaks),
+              so no browser ever shows it as typed. */}
+          <Match when={variable().type === "json" && !variable().sensitive}>
             <Textarea
               value={draftText(variable())}
               spellcheck={false}
               autocomplete="off"
-              classList={{ "iv-secret-text": variable().sensitive }}
               data-variable-name={variable().name}
               onInput={(event) => update(event.currentTarget.value)}
             />

@@ -117,6 +117,7 @@ export const ja = {
     "このアプリをストアから取得できませんでした。",
   // --- install attempt (TASK-0115 Phase 3b) --------------------------------
   "installStore.secretHint": "入力した値は保存されません。インストールを確定するときにだけ送ります。",
+  "installStore.secretJsonHint": "JSON は1行で入力してください。入力中も表示されません。",
   "installStore.derivedHint": "空欄のときは、アプリ名から決まります。",
   "installStore.settingInvalid": "この形式では入力できません。",
   "installStore.settingsRequired": "必須の設定を入力すると「内容を確認」に進めます。",
@@ -163,8 +164,10 @@ export const ja = {
   "installStore.error.connectionsMissing": "必要な接続がまだそろっていません。",
   "installStore.error.alreadyInstalled": "このアプリはすでにインストールされています。アプリのページから管理してください。",
   "installStore.error.discardRefused": "いまは片付けられませんでした。インストールが進んでいる可能性があります。少し待ってからもう一度お試しください。",
+  "installStore.error.stillProcessing": "このインストールはまだ処理中です。少し待ってからもう一度お試しください。",
   "installStore.error.settingsInvalid": "設定の入力を確認してください。",
   "installStore.error.unavailable": "このインストールを確認できませんでした。",
+  "installStore.error.noWorkspace": "このインストールを開くスペースがありません。スペースを選ぶか作ってから、もう一度お試しください。",
   "installStore.error.continueUnconfirmed": "確定がサーバーに届いたか確認できませんでした。最新の状態を表示しています。",
   // --- common -------------------------------------------------------------
   "common.loading": "読み込み中…",

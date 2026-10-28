@@ -110,5 +110,3 @@
 .iv-inline-connect .tg-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .iv-inline-connect .wc-form, .iv-inline-connect .wc-form-actions, .iv-inline-connect .wc-guided { min-width: 0; }
 .iv-name-proposal { margin-top: 0; }
-/* A write-only JSON value is masked as it is typed (where the engine can). */
-.iv-secret-text { -webkit-text-security: disc; font-family: var(--tg-font-mono); }

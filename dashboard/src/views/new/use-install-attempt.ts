@@ -66,9 +66,12 @@ const STALL_LIMIT_MS = 120_000;
 const MAX_FOLLOW_ROUNDS = 240;
 /** Consecutive failed or retryable reconciles before the page stops and says so. */
 const MAX_RECONCILE_FAILURES = 3;
-/** How often a discard waits out a reconcile lease before giving up. */
-const DISCARD_ATTEMPTS = 5;
-const DISCARD_LEASE_WAIT_MS = 1_000;
+/**
+ * How long a discard waits out a reconcile lease (a command the page let go
+ * of may still be running on the server) before it says so: about fifteen
+ * seconds in all, growing between tries. The server lease itself is longer.
+ */
+const DISCARD_LEASE_WAITS_MS = [1_000, 2_000, 3_000, 4_000, 5_000] as const;
 
 export type InstallMutation =
   | "start"
@@ -107,10 +110,19 @@ function isAbort(cause: unknown): boolean {
   return cause instanceof Error && cause.name === "AbortError";
 }
 
+/** The server is still running a command for this attempt after the bounded wait. */
+class InstallAttemptStillProcessingError extends Error {
+  constructor() {
+    super("The install attempt is still being processed");
+    this.name = "InstallAttemptStillProcessingError";
+  }
+}
+
 /**
  * Discard one attempt. A newer generation (it moved on while the person
  * decided) is read again; a reconcile lease still held by an abandoned
- * command is waited out briefly. Anything else is refused as it came.
+ * command is waited out for a bounded time, after which the person is told
+ * it is still processing. Anything else is refused as it came.
  */
 export async function discardInstallAttempt(
   planId: string,
@@ -119,18 +131,21 @@ export async function discardInstallAttempt(
     new Promise((resolve) => setTimeout(resolve, milliseconds)),
 ): Promise<GitInstallPlanResponse> {
   let expected = generation;
-  for (let attempt = 1; ; attempt += 1) {
+  let leaseWaits = 0;
+  let conflicts = 0;
+  for (;;) {
     try {
       return await discardGitInstallAttempt(planId, expected);
     } catch (cause) {
       const code = errorCode(cause);
-      if (
-        attempt >= DISCARD_ATTEMPTS ||
-        (code !== "install_plan_generation_conflict" && code !== "reconcile_in_progress")
-      ) {
+      if (code === "reconcile_in_progress") {
+        const waitMs = DISCARD_LEASE_WAITS_MS[leaseWaits];
+        if (waitMs === undefined) throw new InstallAttemptStillProcessingError();
+        leaseWaits += 1;
+        await pause(waitMs);
+      } else if (code !== "install_plan_generation_conflict" || ++conflicts > DISCARD_LEASE_WAITS_MS.length) {
         throw cause;
       }
-      if (code === "reconcile_in_progress") await pause(DISCARD_LEASE_WAIT_MS);
       expected = (await getGitInstallPlan(planId)).installPlan.generation;
     }
   }
@@ -138,6 +153,9 @@ export async function discardInstallAttempt(
 
 /** Localized words for a failed install request. */
 export function installErrorMessage(cause: unknown): string {
+  if (cause instanceof InstallAttemptStillProcessingError) {
+    return t("installStore.error.stillProcessing");
+  }
   if (cause instanceof ControlApiError) {
     switch (cause.code) {
       case "install_plan_generation_conflict":
@@ -289,6 +307,29 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     return next;
   };
 
+  /**
+   * The workspace an attempt in the URL is read in. Until the shell has
+   * chosen one, it is resolved here from the person's workspaces (choosing
+   * it runs the read); with none to choose, the page says so instead of
+   * loading forever.
+   */
+  const resolveWorkspace = (expected: number): void => {
+    void listWorkspacesCached()
+      .then((workspaces) => {
+        if (disposed || expected !== epoch) return;
+        const resolved = selectAvailableWorkspaceId(untrack(currentWorkspaceId), workspaces);
+        if (resolved) {
+          setCurrentWorkspaceId(resolved);
+          return;
+        }
+        setError(t("installStore.error.noWorkspace"));
+        setLoadFailed(true);
+      })
+      .catch(() => {
+        if (!disposed && expected === epoch) setLoadFailed(true);
+      });
+  };
+
   // The URL names the attempt; reading it never advances or answers it.
   createEffect(
     on([options.attemptId, currentWorkspaceId], ([attemptId, workspaceId]) => {
@@ -310,8 +351,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setLoadFailed(false);
       setError(undefined);
       forgetInputs();
-      if (!attemptId || !workspaceId) return;
+      if (!attemptId) return;
       const expected = epoch;
+      if (!workspaceId) {
+        resolveWorkspace(expected);
+        return;
+      }
       setLoading(true);
       getGitInstallPlan(attemptId)
         .then((next) => {
@@ -680,7 +725,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const latest = response() ?? current;
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
-        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation);
+        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait);
       if (disposed) return false;
       clearCaches(latest.installPlan.workspaceId);
       epoch += 1;
@@ -711,7 +756,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const latest = response() ?? current;
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
-        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation);
+        : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait);
       const workspaceId = discarded.installPlan.workspaceId;
       if (disposed || currentWorkspaceId() !== workspaceId) return false;
       clearCaches(workspaceId);
@@ -730,8 +775,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const attemptId = options.attemptId();
     if (!attemptId || mutating()) return;
     const expected = epoch;
-    setLoading(true);
     setError(undefined);
+    if (!currentWorkspaceId()) {
+      setLoadFailed(false);
+      resolveWorkspace(expected);
+      return;
+    }
+    setLoading(true);
     try {
       const next = await getGitInstallPlan(attemptId);
       if (!disposed && expected === epoch && !accept(next, expected)) setLoadFailed(true);

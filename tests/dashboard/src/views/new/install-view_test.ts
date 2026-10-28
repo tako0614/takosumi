@@ -90,6 +90,11 @@ describe("attempt-driven install page", () => {
     // Secret fields are write-only and start empty.
     expect(sheet).toContain('type={variable().sensitive ? "password"');
     expect(sheet).toContain('autocomplete={variable().sensitive ? "new-password" : "off"}');
+    // A secret JSON value is a standard password field too, never a textarea
+    // masked by a non-standard style that some engines ignore.
+    expect(sheet).toContain('<Match when={variable().type === "json" && !variable().sensitive}>');
+    expect(pageSources.join("\n")).not.toContain("text-security");
+    expect(read("dashboard/src/views/new/install-view.css")).not.toContain("text-security");
   });
 
   test("a reopened review asks the app where it stands before offering the apply", () => {

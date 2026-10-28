@@ -49,9 +49,10 @@ mock.module(apiPath, () => ({
 
 const workspaceListPath = resolve(dashboard, "src/lib/workspace-list.ts");
 const workspaceList = await import(workspaceListPath);
+let workspaces: readonly { readonly id: string }[] = [{ id: "ws_alpha" }];
 mock.module(workspaceListPath, () => ({
   ...workspaceList,
-  listWorkspacesCached: async () => [{ id: "ws_alpha" }],
+  listWorkspacesCached: async () => workspaces,
 }));
 
 const { setCurrentWorkspaceId } = await import(resolve(dashboard, "src/lib/workspace-state.ts"));
@@ -201,6 +202,37 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("an attempt opened before the workspace is chosen waits for it, then reads the attempt", async () => {
+    reset({ getGitInstallPlan: async () => respond(inputs(), 1) });
+    setCurrentWorkspaceId("");
+    try {
+      const page = mount(ID);
+      expect(page.attempt.view().stage).toBe("loading");
+      await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+      expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
+      page.dispose();
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("an attempt opened with no workspace to read it in says so instead of loading forever", async () => {
+    reset({});
+    setCurrentWorkspaceId("");
+    workspaces = [];
+    try {
+      const { t } = await import(resolve(dashboard, "src/i18n/index.ts"));
+      const page = mount(ID);
+      await until(() => page.attempt.view().stage === "unavailable", "the refusal");
+      expect(page.attempt.error()).toBe(t("installStore.error.noWorkspace"));
+      expect(calls).toEqual([]);
+      page.dispose();
+    } finally {
+      workspaces = [{ id: "ws_alpha" }];
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
   test("Install starts one attempt and follows it to the sheet", async () => {
     let reconciles = 0;
     reset({
@@ -342,6 +374,43 @@ describe("install attempt controller", () => {
     expect(maxInFlight).toBe(1);
     expect(page.left).toEqual([ID]);
     expect(page.attempt.view().stage).toBe("candidate");
+    page.dispose();
+  });
+
+  test("a command still holding the attempt is waited out for a bounded time, then named as still processing", async () => {
+    reset({
+      getGitInstallPlan: async () => respond(inputs(), 1),
+      discardGitInstallAttempt: async () => {
+        throw new api.ControlApiError(409, "reconcile_in_progress", "busy");
+      },
+    });
+    const { t } = await import(resolve(dashboard, "src/i18n/index.ts"));
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    expect(await page.attempt.discard()).toBe(false);
+    // About fifteen seconds in all, growing between tries; never unbounded.
+    expect(page.pauses).toEqual([1_000, 2_000, 3_000, 4_000, 5_000]);
+    expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(6);
+    expect(page.attempt.error()).toBe(t("installStore.error.stillProcessing"));
+    expect(page.attempt.error()).not.toBe(t("installStore.error.changed"));
+    expect(page.left).toEqual([]);
+    page.dispose();
+  });
+
+  test("a lease released during the wait lets the discard go through", async () => {
+    let refusals = 2;
+    reset({
+      getGitInstallPlan: async () => respond(inputs(), 1),
+      discardGitInstallAttempt: async () => {
+        if (refusals-- > 0) throw new api.ControlApiError(409, "reconcile_in_progress", "busy");
+        return respond({ kind: "none" }, 2, "discarded");
+      },
+    });
+    const page = mount(ID);
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    expect(await page.attempt.discard()).toBe(true);
+    expect(page.pauses).toEqual([1_000, 2_000]);
+    expect(page.left).toEqual([ID]);
     page.dispose();
   });
 

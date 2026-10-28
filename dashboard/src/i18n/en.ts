@@ -106,6 +106,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This app is no longer available from the Store.",
   // --- install attempt (TASK-0115 Phase 3b) --------------------------------
   "installStore.secretHint": "Not saved. Sent only when you confirm the install.",
+  "installStore.secretJsonHint": "Enter the JSON on one line; it stays hidden as you type.",
   "installStore.derivedHint": "Left empty, it comes from the app name.",
   "installStore.settingInvalid": "This value isn't in the expected format.",
   "installStore.settingsRequired": "Fill in the required settings to review.",
@@ -152,8 +153,10 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.error.connectionsMissing": "Some connections this app needs are still missing.",
   "installStore.error.alreadyInstalled": "This app is already installed. Manage it from its page.",
   "installStore.error.discardRefused": "This install couldn't be stopped now; it may be installing. Wait a moment and try again.",
+  "installStore.error.stillProcessing": "This install is still being processed. Wait a moment and try again.",
   "installStore.error.settingsInvalid": "Check the settings you entered.",
   "installStore.error.unavailable": "This install couldn't be verified.",
+  "installStore.error.noWorkspace": "There's no workspace to open this install in. Choose or create a workspace, then try again.",
   "installStore.error.continueUnconfirmed": "We couldn't confirm that the server received this; showing the current state.",
   // --- common -------------------------------------------------------------
   "common.loading": "Loading…",
