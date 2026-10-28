@@ -327,6 +327,86 @@ test("Git install attempts transition, list and settle blockers with parity", as
   }
 });
 
+test("an unleased expired install attempt in a coordinator phase is not a management blocker", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace">;
+    readonly store: GitInstallPlanStore;
+  }[] = [
+    { label: "memory", control: memoryControl, store: new InMemoryGitInstallPlanStore(memoryControl) },
+    { label: "postgres", control: postgresControl, store: new SqlGitInstallPlanStore(postgres) },
+    { label: "d1", control: d1Control, store: new D1GitInstallPlanStore(d1) },
+  ];
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const future = new Date(Date.now() + 60 * 60_000).toISOString();
+  try {
+    for (const { label, control, store } of adapters) {
+      const cases: readonly {
+        readonly name: string;
+        readonly patch: Partial<StoredGitInstallPlan>;
+        readonly lease?: boolean;
+        readonly blocks: boolean;
+      }[] = [
+        { name: "expired", patch: { mode: "attempt", expiresAt: past }, blocks: false },
+        {
+          name: "expired_compiling",
+          patch: { mode: "attempt", expiresAt: past, phase: "compiling_install" },
+          blocks: false,
+        },
+        { name: "future", patch: { mode: "attempt", expiresAt: future }, blocks: true },
+        { name: "leased", patch: { mode: "attempt", expiresAt: past }, lease: true, blocks: true },
+        { name: "legacy", patch: { expiresAt: past }, blocks: true },
+        {
+          name: "planning",
+          patch: { mode: "attempt", expiresAt: past, phase: "planning" },
+          blocks: true,
+        },
+      ];
+      for (const item of cases) {
+        const workspaceId = `blk_${item.name}_${label}`;
+        await control.putWorkspace(workspace(workspaceId));
+        const authority: WorkspaceManagementAuthority = {
+          workspaceId,
+          managementState: "active",
+          managementEpoch: 1,
+        };
+        const row: StoredGitInstallPlan = {
+          ...plan(`blk_${item.name}_${label}`, `blk_digest_${item.name}_${label}`),
+          workspaceId,
+          workspaceManagementAuthority: authority,
+          idempotencyKeyHash: `blk_key_${item.name}_${label}`,
+          operation: "install",
+          ...item.patch,
+        };
+        expect((await store.create(row, authority)).status).toBe("created");
+        if (item.lease) {
+          const claimedAt = new Date();
+          expect((await store.claimReconcile({
+            id: row.id,
+            expectedGeneration: 0,
+            leaseToken: `lease_${item.name}_${label}`,
+            claimedAt: claimedAt.toISOString(),
+            leaseExpiresAt: new Date(claimedAt.getTime() + 30_000).toISOString(),
+            expectedWorkspaceManagementAuthority: authority,
+          })).status).toBe("claimed");
+        }
+        expect(
+          await store.hasWorkspaceManagementBlockers(workspaceId),
+          `${label} ${item.name}`,
+        ).toBe(item.blocks);
+      }
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("Git unclaimed plans settle during a Workspace drain", async () => {
   const postgres = await PGliteSqlClient.create();
   const d1 = new SqliteFakeD1();

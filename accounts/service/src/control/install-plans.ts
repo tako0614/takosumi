@@ -514,15 +514,137 @@ const INITIAL_PHASES_WITHOUT_CAPSULE: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Discards one install attempt on behalf of its creator. A refusal writes
- * nothing (no generation bump, no lease). Otherwise a never-applied Capsule
- * this attempt created is abandoned first (which retires its binding slot and
- * leaves its per-install InstallConfig as unreferenced history), then one
- * lease-free CAS records the terminal `discarded` phase and scrubs retained
- * private inputs. A reconcile racing the abandonment is fenced by the Capsule
- * lifecycle CAS and by this record CAS; the creator simply retries. The
- * Source is never deleted here: a polling Source this attempt enabled is
- * turned back off and kept.
+ * Phases in which a lease holder (a reconcile, or a confirming request) may
+ * be creating or planning on this attempt's Capsule.
+ */
+const LEASABLE_CAPSULE_PHASES: ReadonlySet<string> = new Set([
+  "creating_capsule",
+  "planning",
+  "awaiting_input",
+]);
+
+/** The deterministic or recorded Capsule this attempt may have created. */
+function attemptCapsuleCandidate(plan: StoredGitInstallPlan): string | undefined {
+  if (plan.capsuleId) return plan.capsuleId;
+  if (INITIAL_PHASES_WITHOUT_CAPSULE.has(plan.phase)) return undefined;
+  if (plan.phase === "awaiting_input" && plan.creationAttempted !== true) {
+    return undefined;
+  }
+  return deterministicInitialCapsuleId(plan.id);
+}
+
+type AbandonCheck =
+  | { readonly ok: true; readonly capsule?: Capsule; readonly authority?: WorkspaceManagementAuthority }
+  | Extract<DiscardResult, { ok: false }>;
+
+/** Read-only: whether the Capsule can be abandoned, without abandoning it. */
+async function checkAbandonableCapsule(
+  ctx: ControlDispatchContext,
+  plan: StoredGitInstallPlan,
+  capsuleId: string | undefined,
+): Promise<AbandonCheck> {
+  try {
+    const capsule = capsuleId
+      ? await getCapsuleIfPresent(ctx.operations, capsuleId)
+      : undefined;
+    if (!capsule || capsule.status === "destroyed") return { ok: true };
+    if (
+      capsule.workspaceId !== plan.workspaceId ||
+      capsule.installingPrincipalId !== plan.createdBy ||
+      (plan.sourceId !== undefined && capsule.sourceId !== plan.sourceId)
+    ) {
+      return {
+        ok: false,
+        status: 409,
+        code: "capsule_identity_conflict",
+        message: "The Capsule does not belong to this install attempt.",
+      };
+    }
+    if (capsuleHasAppliedState(capsule)) {
+      return {
+        ok: false,
+        status: 409,
+        code: "install_attempt_applied",
+        message:
+          "This app was already installed; uninstall it from its app page instead.",
+      };
+    }
+    return {
+      ok: true,
+      capsule,
+      authority: await ctx.operations.workspaces.captureManagementAuthority(
+        plan.workspaceId,
+      ),
+    };
+  } catch (error) {
+    const refusal = abandonRefusal(error);
+    if (refusal) return refusal;
+    throw error;
+  }
+}
+
+function abandonRefusal(
+  error: unknown,
+): Extract<DiscardResult, { ok: false }> | undefined {
+  if (
+    !(error instanceof OpenTofuControllerError) &&
+    !(error instanceof WorkspaceManagementAdmissionConflictError)
+  ) {
+    return undefined;
+  }
+  const reason = error instanceof OpenTofuControllerError
+    ? structuredErrorReason(error)
+    : "workspace_management_admission_conflict";
+  return {
+    ok: false,
+    status: 409,
+    code: "install_attempt_discard_refused",
+    message:
+      "Takosumi could not abandon the app this attempt created; it may be installing now.",
+    ...(reason && DIAGNOSTIC_TOKEN.test(reason) &&
+        reason.length <= MAX_DIAGNOSTIC_REASON
+      ? { reason }
+      : {}),
+  };
+}
+
+function casRefusal(
+  status: "busy" | "conflict" | "not_found",
+): Extract<DiscardResult, { ok: false }> {
+  if (status === "not_found") {
+    return { ok: false, status: 404, code: "not_found", message: "Install plan not found." };
+  }
+  return status === "busy"
+    ? {
+        ok: false,
+        status: 409,
+        code: "reconcile_in_progress",
+        message: "Another reconciler currently owns this install plan; retry the discard.",
+      }
+    : {
+        ok: false,
+        status: 409,
+        code: "install_plan_generation_conflict",
+        message: "The install plan changed; read it and retry explicitly.",
+      };
+}
+
+/**
+ * Discards one install attempt on behalf of its creator. Nothing is ever
+ * abandoned under a lease holder:
+ *
+ * 1. Read-only checks first; a refusal there writes nothing.
+ * 2. Where a lease holder could be creating or planning on the Capsule, a
+ *    lease-free CAS reserves the row by moving it to the terminal,
+ *    non-claimable `failed` phase (`install_attempt_discard_incomplete`). A
+ *    held lease or a newer generation refuses the reservation, and no later
+ *    claim can start. If the discard then stops, the creator discards again.
+ * 3. The never-applied Capsule is abandoned (which retires its binding slot
+ *    and leaves its per-install InstallConfig as unreferenced history).
+ * 4. One lease-free CAS records the terminal `discarded` phase and scrubs
+ *    retained private inputs.
+ *
+ * The Source is never deleted: polling this attempt turned on is turned off.
  */
 async function discardAttemptRecord(
   ctx: ControlDispatchContext,
@@ -530,65 +652,56 @@ async function discardAttemptRecord(
   diagnostic: GitInstallPlanDiagnostic,
 ): Promise<DiscardResult> {
   if (observed.phase === "discarded") return { ok: true, plan: observed };
-  const capsuleId = observed.capsuleId ??
-    (INITIAL_PHASES_WITHOUT_CAPSULE.has(observed.phase)
-      ? undefined
-      : deterministicInitialCapsuleId(observed.id));
-  try {
-    const capsule = capsuleId
-      ? await getCapsuleIfPresent(ctx.operations, capsuleId)
-      : undefined;
-    if (capsule && capsule.status !== "destroyed") {
-      if (
-        capsule.workspaceId !== observed.workspaceId ||
-        capsule.installingPrincipalId !== observed.createdBy ||
-        (observed.sourceId !== undefined && capsule.sourceId !== observed.sourceId)
-      ) {
-        return {
-          ok: false,
-          status: 409,
-          code: "capsule_identity_conflict",
-          message: "The Capsule does not belong to this install attempt.",
-        };
-      }
-      if (capsuleHasAppliedState(capsule)) {
-        return {
-          ok: false,
-          status: 409,
-          code: "install_attempt_applied",
-          message:
-            "This app was already installed; uninstall it from its app page instead.",
-        };
-      }
+  const store = ctx.operations.gitInstallPlans;
+  const capsuleId = attemptCapsuleCandidate(observed);
+  let check = await checkAbandonableCapsule(ctx, observed, capsuleId);
+  if (!check.ok) return check;
+  let current = observed;
+  if (capsuleId && LEASABLE_CAPSULE_PHASES.has(observed.phase)) {
+    const reservedAt = new Date().toISOString();
+    const {
+      initialVariables: _initialVariables,
+      transientVariableNames: _transientVariableNames,
+      awaitingInput: _awaitingInput,
+      expiresAt: _expiresAt,
+      ...retained
+    } = observed;
+    const reserved = await store.transitionUnleased({
+      id: observed.id,
+      expectedGeneration: observed.generation,
+      expectedPhase: observed.phase,
+      plan: {
+        ...retained,
+        phase: "failed",
+        generation: observed.generation + 1,
+        diagnostic: boundedDiagnostic({
+          code: "install_attempt_discard_incomplete",
+          message: "Discarding this install attempt did not finish; discard it again.",
+        }),
+        updatedAt: reservedAt,
+        completedAt: reservedAt,
+      },
+      at: reservedAt,
+    });
+    if (reserved.status !== "updated") return casRefusal(reserved.status);
+    current = reserved.plan;
+    // A crashed lease holder may have committed the Capsule after the first
+    // read; the reserved row is stable now, so read it again.
+    check = await checkAbandonableCapsule(ctx, current, capsuleId);
+    if (!check.ok) return check;
+  }
+  if (check.capsule) {
+    try {
       await ctx.operations.capsules.abandonUnappliedCapsule(
-        capsule.id,
+        check.capsule.id,
         "install attempt discarded before first successful apply",
-        await ctx.operations.workspaces.captureManagementAuthority(
-          observed.workspaceId,
-        ),
+        check.authority,
       );
+    } catch (error) {
+      const refusal = abandonRefusal(error);
+      if (refusal) return refusal;
+      throw error;
     }
-  } catch (error) {
-    if (
-      error instanceof OpenTofuControllerError ||
-      error instanceof WorkspaceManagementAdmissionConflictError
-    ) {
-      const reason = error instanceof OpenTofuControllerError
-        ? structuredErrorReason(error)
-        : "workspace_management_admission_conflict";
-      return {
-        ok: false,
-        status: 409,
-        code: "install_attempt_discard_refused",
-        message:
-          "Takosumi could not abandon the app this attempt created; it may be installing now.",
-        ...(reason && DIAGNOSTIC_TOKEN.test(reason) &&
-            reason.length <= MAX_DIAGNOSTIC_REASON
-          ? { reason }
-          : {}),
-      };
-    }
-    throw error;
   }
   const completedAt = new Date().toISOString();
   const {
@@ -597,56 +710,37 @@ async function discardAttemptRecord(
     awaitingInput: _awaitingInput,
     expiresAt: _expiresAt,
     ...retained
-  } = observed;
-  const discarded: StoredGitInstallPlan = {
-    ...retained,
-    phase: "discarded",
-    generation: observed.generation + 1,
-    diagnostic: boundedDiagnostic(diagnostic),
-    updatedAt: completedAt,
-    completedAt,
-  };
-  const result = await ctx.operations.gitInstallPlans.transitionUnleased({
-    id: observed.id,
-    expectedGeneration: observed.generation,
-    expectedPhase: observed.phase,
-    plan: discarded,
+  } = current;
+  const result = await store.transitionUnleased({
+    id: current.id,
+    expectedGeneration: current.generation,
+    expectedPhase: current.phase,
+    plan: {
+      ...retained,
+      phase: "discarded",
+      generation: current.generation + 1,
+      diagnostic: boundedDiagnostic(diagnostic),
+      updatedAt: completedAt,
+      completedAt,
+    },
     at: completedAt,
   });
-  if (result.status === "not_found") {
-    return { ok: false, status: 404, code: "not_found", message: "Install plan not found." };
-  }
-  if (result.status === "busy") {
-    return {
-      ok: false,
-      status: 409,
-      code: "reconcile_in_progress",
-      message: "Another reconciler currently owns this install plan; retry the discard.",
-    };
-  }
-  if (result.status === "conflict") {
-    return {
-      ok: false,
-      status: 409,
-      code: "install_plan_generation_conflict",
-      message: "The install plan changed; read it and retry explicitly.",
-    };
-  }
+  if (result.status !== "updated") return casRefusal(result.status);
   await stopAttemptSourcePolling(ctx, result.plan);
   return { ok: true, plan: result.plan };
 }
 
 /**
- * Best effort and never destructive: a Source this attempt registered and
- * enabled for polling is turned back off unless an active app now uses it.
- * The Source itself is always kept, because no store can prove atomically
- * that no other install plan is about to reuse it.
+ * Best effort and never destructive: polling that this attempt itself turned
+ * on is turned back off unless an active app now uses the Source. The Source
+ * is always kept, because no store can prove atomically that no other
+ * install plan is about to reuse it.
  */
 async function stopAttemptSourcePolling(
   ctx: ControlDispatchContext,
   plan: StoredGitInstallPlan,
 ): Promise<void> {
-  if (plan.sourceCreatedByAttempt !== true || !plan.sourceId) return;
+  if (plan.sourcePollingEnabledByAttempt !== true || !plan.sourceId) return;
   try {
     const { source } = await ctx.operations.getSource(plan.sourceId);
     if (!source.autoSync) return;
@@ -828,7 +922,7 @@ async function answerInstallAttempt(
   const invalid = (code: string, message: string) =>
     errorJson(code, message, 400, ctx.request);
   if (
-    (observed.transientVariableNames?.length ?? 0) > 0 &&
+    observed.creationAttempted === true &&
     (!patch.continue || patch.modulePath !== undefined ||
       patch.capsuleName !== undefined || patch.providerBindings !== undefined)
   ) {
@@ -846,7 +940,8 @@ async function answerInstallAttempt(
     ...observed,
     generation: observed.generation + 1,
     updatedAt: now,
-    expiresAt: attemptExpiry(now),
+    // Once creation started a Capsule may exist; such an attempt never expires.
+    ...(observed.creationAttempted === true ? {} : { expiresAt: attemptExpiry(now) }),
   };
   const currentModule = observed.attemptFacts?.inputs?.modulePath ??
     observed.installModulePath;
@@ -986,12 +1081,12 @@ async function continueInstallAttempt(
   }
   let next = answered;
   const facts = next.attemptFacts?.inputs;
-  const resubmitting = (observed.transientVariableNames?.length ?? 0) > 0;
+  const resubmitting = observed.creationAttempted === true;
   // While resubmitting: the values of the unconfirmed request, nothing else.
   // The answers that request carried are recorded and may be committed.
   if (
     resubmitting &&
-    JSON.stringify(observed.transientVariableNames) !==
+    JSON.stringify(observed.transientVariableNames ?? []) !==
       JSON.stringify(Object.keys(variables).sort())
   ) {
     return errorJson(
@@ -1054,6 +1149,8 @@ async function continueInstallAttempt(
   next = {
     ...rest,
     phase: "creating_capsule",
+    // Recorded with or without variables: from here a Capsule may exist.
+    creationAttempted: true,
     ...(variableNames.length > 0 ? { transientVariableNames: variableNames } : {}),
   };
   const claimedAt = new Date();
@@ -1158,7 +1255,15 @@ function reopenUserFixableFailure(plan: StoredGitInstallPlan): StoredGitInstallP
   ) {
     return plan;
   }
-  const { completedAt: _completedAt, transientVariableNames: _names, ...rest } = plan;
+  // These failures are pre-commit checks that run after the adoption probe in
+  // the same lease, so they prove no Capsule exists: answers and expiry apply
+  // again.
+  const {
+    completedAt: _completedAt,
+    transientVariableNames: _names,
+    creationAttempted: _creationAttempted,
+    ...rest
+  } = plan;
   return {
     ...rest,
     phase: "awaiting_input",
@@ -1821,13 +1926,20 @@ async function createCapsule(
   transientVariables: Readonly<Record<string, JsonValue>> | undefined,
 ): Promise<StoredGitInstallPlan> {
   const operations = ctx.operations;
-  if ((plan.transientVariableNames?.length ?? 0) > 0) {
-    // A request that carried values may have committed before its
-    // acknowledgement was lost. Adopt that exact Capsule by its deterministic
-    // id; never re-create authority without the values it was created with.
+  if (
+    plan.creationAttempted === true ||
+    (plan.transientVariableNames?.length ?? 0) > 0
+  ) {
+    // A confirming request may have committed before its acknowledgement was
+    // lost. Adopt that exact Capsule by its deterministic id before any
+    // create; never re-create authority without the values it was created
+    // with.
     const adopted = await adoptCommittedInitialCapsule(plan, operations);
     if (adopted) return adopted;
-    if (transientVariables === undefined) {
+    if (
+      transientVariables === undefined &&
+      (plan.transientVariableNames?.length ?? 0) > 0
+    ) {
       return awaitingResubmission(plan, {
         code: "install_inputs_resubmission_required",
         message: "The reviewed values must be sent again.",
@@ -2422,7 +2534,9 @@ async function createOrObservePlanRun(
   }
   if (run.status === "succeeded" || run.status === "waiting_approval") {
     if (plan.mode === "attempt" && plan.sourceCreatedByAttempt === true) {
-      await enableAttemptSourcePolling(plan, operations);
+      if (await enableAttemptSourcePolling(plan, operations)) {
+        plan = { ...plan, sourcePollingEnabledByAttempt: true };
+      }
     }
     return progressed(plan, {
       planRunId: run.id,
@@ -2441,11 +2555,14 @@ async function createOrObservePlanRun(
 async function enableAttemptSourcePolling(
   plan: StoredGitInstallPlan,
   operations: ControlPlaneOperations,
-): Promise<void> {
+): Promise<boolean> {
+  if (plan.sourcePollingEnabledByAttempt === true) return false;
   const { source } = await operations.getSource(plan.sourceId!);
-  // A Source someone changed meanwhile is no longer this attempt's to tune.
-  if (!sourceMatchesPlan(source, plan) || source.autoSync) return;
+  // A Source someone changed or already polls is not this attempt's to tune;
+  // only polling this attempt turned on is recorded and later reverted.
+  if (!sourceMatchesPlan(source, plan) || source.autoSync) return false;
   await operations.patchSource(source.id, { autoSync: true });
+  return true;
 }
 
 function parseCreateRequest(

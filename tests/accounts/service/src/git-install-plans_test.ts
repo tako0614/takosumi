@@ -2270,6 +2270,163 @@ test("a legacy row written with the value-bearing digest still replays and keeps
   expect((await differentValues.json()).installPlan.id).toBe(templateRecord.id);
 });
 
+test("discard never abandons a Capsule under a lease holder and finishes after a stopped discard", async () => {
+  const fixture = attemptFixture({ abandonErrorOnce: true });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  const planning = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  const planningPlan = (await planning.json()).installPlan;
+  expect(planningPlan.phase).toBe("planning");
+  const capsuleId = fixture.capsules[0]!.id;
+
+  // A reconcile holds the lease while it creates the Plan Run.
+  const claimedAt = new Date();
+  const claim = await fixture.planStore.claimReconcile({
+    id: planId,
+    expectedGeneration: planningPlan.generation,
+    leaseToken: "lease_planning_holder",
+    claimedAt: claimedAt.toISOString(),
+    leaseExpiresAt: new Date(claimedAt.getTime() + 30_000).toISOString(),
+    expectedWorkspaceManagementAuthority: {
+      workspaceId: WORKSPACE.id,
+      managementState: "active",
+      managementEpoch: 1,
+    },
+  });
+  expect(claim.status).toBe("claimed");
+  const leasedGeneration = planningPlan.generation + 1;
+  const busy = await discard(fixture, planId, leasedGeneration);
+  expect(busy.status).toBe(409);
+  expect((await busy.json()).error.code).toBe("reconcile_in_progress");
+  expect(fixture.abandonedCapsules).toEqual([]);
+  expect(fixture.capsules[0]?.status).toBe("pending");
+  expect((await fixture.planStore.get(planId))).toMatchObject({
+    phase: "planning",
+    generation: leasedGeneration,
+  });
+  // The lease holder finishes normally on its intact Capsule.
+  expect((await fixture.planStore.completeReconcile({
+    id: planId,
+    expectedGeneration: leasedGeneration,
+    leaseToken: "lease_planning_holder",
+    plan: (await fixture.planStore.get(planId))!,
+  })).status).toBe("completed");
+
+  // The reservation moves the row out of every claimable phase first; when
+  // the abandonment then stops, the row is a terminal, retryable failure.
+  const stopped = await discard(fixture, planId, leasedGeneration);
+  expect(stopped.status).toBe(409);
+  expect((await stopped.json()).error).toMatchObject({
+    code: "install_attempt_discard_refused",
+    details: { reason: "capsule_lifecycle_busy" },
+  });
+  const reserved = (await fixture.planStore.get(planId))!;
+  expect(reserved).toMatchObject({
+    phase: "failed",
+    generation: leasedGeneration + 1,
+    diagnostic: { code: "install_attempt_discard_incomplete" },
+  });
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+  const reconcileReserved = await fixture.reconcile(planId);
+  expect((await reconcileReserved.json()).installPlan.phase).toBe("failed");
+
+  const finished = await discard(fixture, planId, reserved.generation);
+  expect(finished.status).toBe(200);
+  expect((await finished.json()).installPlan).toMatchObject({
+    phase: "discarded",
+    diagnostic: { code: "install_attempt_discarded" },
+  });
+  expect(fixture.abandonedCapsules).toEqual([capsuleId]);
+});
+
+test("a started creation without variables is still protected and adopted after a lost acknowledgement", async () => {
+  const fixture = attemptFixture({
+    loseAckOnce: ["capsule"],
+    compatibilityRootModuleVariableDeclarations: [],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction.variables).toEqual([]);
+  const lost = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: {},
+  });
+  expect(lost.status).toBe(200);
+  const lostPayload = await lost.json();
+  expect(lostPayload.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    diagnostic: { code: "install_inputs_resubmission_required" },
+  });
+  expect(lostPayload.installPlan.expiresAt).toBeUndefined();
+  expect(lostPayload.userAction.resubmitVariables).toEqual([]);
+  expect(fixture.counts.capsule).toBe(1);
+
+  const renamed = await answer(fixture, planId, {
+    expectedGeneration: lostPayload.installPlan.generation,
+    capsuleName: "renamed",
+  });
+  expect(renamed.status).toBe(409);
+  expect((await renamed.json()).error.code).toBe("install_inputs_resubmission_only");
+  expect((await fixture.planStore.get(planId))?.expiresAt).toBeUndefined();
+
+  const resumed = await answer(fixture, planId, {
+    expectedGeneration: lostPayload.installPlan.generation,
+    continue: true,
+  });
+  expect(resumed.status).toBe(200);
+  expect((await resumed.json()).installPlan).toMatchObject({
+    phase: "planning",
+    capsuleId: fixture.capsules[0]!.id,
+    capsule: { name: "example" },
+  });
+  expect(fixture.counts.capsule).toBe(1);
+});
+
+test("an expired attempt in a coordinator phase stops blocking Workspace management", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(true);
+  const generation = await expireStoredAttempt(fixture, planId);
+  expect((await fixture.planStore.get(planId))).toMatchObject({
+    phase: "syncing_source",
+    generation,
+  });
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
+  // It cannot advance: reconcile refuses it without a write.
+  const reconciled = await fixture.reconcile(planId);
+  expect((await reconciled.json()).invalidated).toBe("install_attempt_expired");
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+  expect(fixture.counts.source).toBe(0);
+});
+
+test("discard reverts Source polling only when this attempt turned it on", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  // Someone else already enabled polling on the Source before review.
+  fixture.sources[0] = { ...fixture.sources[0]!, autoSync: true };
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect(confirmed.status).toBe(200);
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan.phase).toBe("reviewable");
+  expect(fixture.sourcePatches).toEqual([]);
+  expect((await fixture.planStore.get(planId))?.sourcePollingEnabledByAttempt)
+    .toBeUndefined();
+  const discarded = await discard(fixture, planId, reviewable.installPlan.generation);
+  expect(discarded.status).toBe(200);
+  expect(fixture.sourcePatches).toEqual([]);
+  expect(fixture.sources[0]?.autoSync).toBe(true);
+});
+
 function installFixture(
   options: {
     readonly loseAckOnce?: readonly LostAckMutation[];
@@ -2289,6 +2446,8 @@ function installFixture(
     readonly raceAfterClaimBeforeSourceSync?: boolean;
     /** Capture keeps returning the first epoch, so only the store fence refuses. */
     readonly staleManagementCapture?: boolean;
+    /** The next Capsule abandonment fails after the discard reserved the row. */
+    readonly abandonErrorOnce?: boolean;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -2334,6 +2493,7 @@ function installFixture(
   const sourcePatches: { readonly id: string; readonly autoSync?: boolean }[] = [];
   const deletedSources: string[] = [];
   const abandonedCapsules: string[] = [];
+  let abandonErrorPending = options.abandonErrorOnce === true;
   let compatibilityMutationCount = 0;
   let installConfigMutationCount = 0;
   let approvalCalls = 0;
@@ -2645,6 +2805,14 @@ function installFixture(
       ) => {
         if (!managementValidator.isWorkspaceManagementAdmissionAllowed(WORKSPACE.id, authority)) {
           throw new OpenTofuControllerError("failed_precondition", "management");
+        }
+        if (abandonErrorPending) {
+          abandonErrorPending = false;
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "lifecycle busy",
+            { reason: "capsule_lifecycle_busy" },
+          );
         }
         const index = capsules.findIndex((candidate) => candidate.id === id);
         if (index < 0) throw new OpenTofuControllerError("not_found", "missing");
