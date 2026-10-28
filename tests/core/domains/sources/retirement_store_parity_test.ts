@@ -369,3 +369,21 @@ test("D1 release refuses incoherent destroyed Capsule, mismatched ref identity, 
     .bind(foreignId).run();
   expect(await store.sourceRetirementArchiveBlocker(SRC, prefix)).toBe("foreign_reference");
 });
+
+
+test("retirement preflight never materializes complete Run or Capsule history", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      await seed(store);
+      store.listSourceSyncRuns = async () => { throw new Error("unbounded Source Run history"); };
+      store.listRunsByWorkspace = async () => { throw new Error("unbounded Workspace Run history"); };
+      store.listCapsules = async () => { throw new Error("unbounded Workspace Capsule history"); };
+      const service = new SourcesService({ store, deleteRetiredSourceArchives: async () => {} });
+      expect(await service.retireOwnedSource(SRC, "bounded preflight"), name).toBe("retired");
+      expect(await store.getSource(SRC), name).toBeUndefined();
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
