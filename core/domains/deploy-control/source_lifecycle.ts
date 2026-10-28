@@ -423,7 +423,12 @@ export class SourceLifecycleService {
           ? await this.#store.getSourceSnapshot(terminalRun.snapshotId)
           : undefined);
     if (!canonicalSnapshot) return terminalRun;
-    await this.#cleanupUnusedSourceArchive(terminalRun);
+    // The verified Runner result selected the prior immutable archive, so
+    // this Run's allocated archive was never uploaded. A later redelivery has
+    // no persisted upload observation and still takes the conservative path.
+    if (archiveRef === running.archiveRef) {
+      await this.#cleanupUnusedSourceArchive(terminalRun);
+    }
     await this.#notifySourceCapsulesStaleForNewSnapshot({
       running,
       snapshot: canonicalSnapshot,
