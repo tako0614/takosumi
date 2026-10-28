@@ -3,8 +3,9 @@
  * [bell + needs-attention badge] [profile menu] on the right. Brand and primary
  * nav live in the sidebar; this bar names where you are (important on mobile,
  * where the sidebar is hidden) and carries the global notifications / account
- * affordances (the profile avatar opens account, activity, and preferences).
- * Adding an app is owned by the store tab (shared nav model in `nav.ts`).
+ * affordances (the profile avatar opens the account page and preferences).
+ * On narrow screens the workspace switcher moves here, and like the sidebar copy
+ * it renders nothing until there are two or more workspaces.
  * The bell badge and the /notifications 要対応 banner derive the same failure
  * count from lib/notifications.ts. The bell refresh is Workspace-scoped and
  * TTL-throttled: ordinary navigation never lists every Workspace or fans out

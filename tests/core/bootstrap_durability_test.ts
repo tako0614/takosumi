@@ -24,10 +24,13 @@ function declaredDurableTestGitInstallPlanStore(): GitInstallPlanStore {
     create: (plan, authority) => store.create(plan, authority),
     get: (id) => store.get(id),
     getByScope: (scope) => store.getByScope(scope),
-    hasInFlightRevisionForCapsule: (id) => store.hasInFlightRevisionForCapsule(id),
+    hasInFlightRevisionForCapsule: (id, workspaceId) =>
+      store.hasInFlightRevisionForCapsule(id, workspaceId),
     hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),
     claimReconcile: (input) => store.claimReconcile(input),
     completeReconcile: (input) => store.completeReconcile(input),
+    transitionUnleased: (input) => store.transitionUnleased(input),
+    listOpenAttempts: (input) => store.listOpenAttempts(input),
   };
 }
 

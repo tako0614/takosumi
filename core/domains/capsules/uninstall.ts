@@ -135,10 +135,87 @@ export function advancedUninstallRecord(
   return next as unknown as CapsuleUninstall;
 }
 
-/** Whether the owner may still cancel this Capsule's uninstall. */
-export function capsuleUninstallCancellable(capsule: Capsule): boolean {
-  return (
-    capsule.status === "uninstalled" &&
-    capsule.uninstall?.phase === "scheduled"
-  );
+/** The part of a Capsule's runtime safety projection uninstall admission reads. */
+export type UninstallRuntimeSafety =
+  | { readonly phase: "safe" | "unknown" | "terminating" | "retired" }
+  | undefined;
+
+/** Why uninstall admission refuses, in the commands' own words. */
+export interface UninstallAdmissionRefusal {
+  readonly reason: string;
+  readonly message: string;
+}
+
+function teardownStarted(safety: UninstallRuntimeSafety): boolean {
+  return safety?.phase === "terminating" || safety?.phase === "retired";
+}
+
+/**
+ * State admission for scheduling a new uninstall, after the replay case (an
+ * already `uninstalled` Capsule returns unchanged). Shared by the schedule
+ * command and the read-only app view so both apply the same rules. The
+ * runtime safety projection is read only when the earlier rules pass.
+ */
+export async function capsuleUninstallScheduleRefusal(
+  capsule: Capsule,
+  readRuntimeSafety: () => Promise<UninstallRuntimeSafety>,
+): Promise<UninstallAdmissionRefusal | undefined> {
+  if (capsule.status === "destroyed") {
+    return {
+      reason: CAPSULE_UNINSTALL_REASONS.unavailable,
+      message: `capsule ${capsule.id} is already destroyed`,
+    };
+  }
+  if (!isUninstallRestorableStatus(capsule.status)) {
+    return {
+      reason: CAPSULE_UNINSTALL_REASONS.unavailable,
+      message: `capsule ${capsule.id} is ${capsule.status}; only an active, stale, or error Capsule can be uninstalled`,
+    };
+  }
+  if (!capsule.currentStateVersionId && capsule.currentStateGeneration === 0) {
+    return {
+      reason: CAPSULE_UNINSTALL_REASONS.notApplied,
+      message: `capsule ${capsule.id} was never applied; abandon it instead`,
+    };
+  }
+  if (teardownStarted(await readRuntimeSafety())) {
+    return {
+      reason: CAPSULE_UNINSTALL_REASONS.destroyStarted,
+      message: `capsule ${capsule.id} is already being deleted`,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * State admission for cancelling an uninstall, after the replay case (a
+ * cancel that already took effect). A queued or running teardown cannot be
+ * undone; once the finalizer is `destroying`, cancel is possible only if it
+ * blocked and nothing of the teardown reached the provider.
+ */
+export async function capsuleUninstallCancelRefusal(
+  capsule: Capsule,
+  readRuntimeSafety: () => Promise<UninstallRuntimeSafety>,
+): Promise<UninstallAdmissionRefusal | undefined> {
+  const record = capsule.uninstall;
+  if (capsule.status !== "uninstalled" || record === undefined) {
+    return {
+      reason: CAPSULE_UNINSTALL_REASONS.notUninstalled,
+      message: `capsule ${capsule.id} is not uninstalled`,
+    };
+  }
+  const runtimeSafety = await readRuntimeSafety();
+  const blockedBeforeDispatch = record.phase === "destroying" &&
+    record.blockedReason !== undefined &&
+    (runtimeSafety === undefined || runtimeSafety.phase === "safe");
+  if (
+    teardownStarted(runtimeSafety) ||
+    (record.phase !== "scheduled" && !blockedBeforeDispatch)
+  ) {
+    return {
+      reason: CAPSULE_UNINSTALL_REASONS.destroyStarted,
+      message: `capsule ${capsule.id} teardown has already started and cannot be cancelled`,
+    };
+  }
+  return undefined;
 }

@@ -26,11 +26,3 @@ export function capsuleInstallState(capsule: Capsule, run?: Run): InstallUiState
   if (run?.status === "failed" || run?.status === "cancelled" || run?.status === "expired" || capsule.status === "error") return "failed";
   return run ? "installing" : "configuring";
 }
-
-/** Only a known, non-destructive policy-pass Plan may continue automatically. */
-export function canAutoInstallRun(run: Run | undefined): boolean {
-  const summary = run?.summary;
-  return run?.type === "plan" && run.status === "succeeded" && run.policyStatus === "pass" &&
-    run.requiresApproval !== true && !!summary &&
-    [summary.add, summary.change, summary.destroy].every((n) => typeof n === "number" && Number.isInteger(n) && n >= 0) && summary.destroy === 0;
-}

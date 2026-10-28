@@ -8,25 +8,46 @@ apply, state, outputs, audit, usage, and prepaid credit together.
 > available. The Dashboard and the authenticated Takosumi catalog expose the
 > current `available` state.
 
-## Your first deployment
+## Your first install
 
 1. Sign in to the [dashboard](https://app.takosumi.com/) and select a workspace.
-2. Choose an app in the **Store**. Git URLs and app install links open the same app detail.
-3. Press **Install** to expand settings in place. Takosumi pins the Git revision,
-   checks its module, and displays only the required setup, with declared defaults filled in.
-   No app resources are created yet. Open advanced settings only when needed.
-4. If a cloud connection is needed, press **Connect**. The inline panel lets you choose
-   a verified connection or set up and verify a supported Provider. Closing it keeps app inputs.
-5. Press **Install** below the settings. A known, non-destructive, policy-pass Plan
-   requiring no additional approval continues to Apply. Other Plans stay in **Review installation**
-   for explicit confirmation. Expand progress and logs, or reload to inspect the existing run.
-   Reloading or opening a URL never grants Apply consent.
-6. After **Installed**, **Open service** opens the app's authorized launch URL, when it has one.
-   Otherwise use **Manage app**. Failures show recovery actions and can be retried with a new
-   Plan without discarding partially created state.
-7. **Uninstall** asks for confirmation before scheduling deletion. The service and its data
-   remain during the grace period. The same screen shows progress and permits cancellation
-   while the server allows it. Provider secrets and install inputs are not saved to browser storage.
+2. Choose an app in the **Store**. Git URLs and app install links open the same app page.
+3. Check the description and source, then press **Install**. Nothing is created in your cloud yet.
+   Takosumi reads the Git version and shows **What this install does**: what the app will create
+   (planned), the connections it needs, and its settings. Store apps use the latest stable release,
+   and the page shows the exact version that was read. To use another version, enter a tag, branch,
+   or commit in the **Version** field before pressing Install.
+4. If a connection is missing, use **Connect** on that connection's row to create and verify it on
+   the same page. The app name and settings can be changed here too; declared defaults are filled in.
+5. **Review** shows what the app will create in your cloud (the create, update, replace and delete
+   list) and a cost estimate. When the cost can't be estimated, it says so. Nothing is applied until
+   you press **Allow and install**; changes that delete or replace something need an extra
+   confirmation. Nothing applies automatically, and reloading or opening a URL never grants consent.
+   **Stop installing** discards the unapplied app this attempt created.
+6. When the install finishes, the same page becomes the app's page. **Open** starts the app if it has
+   an authorized screen. Failures appear under **Needs attention** with the reason and the next step,
+   and can be retried with a new review without discarding partially created state.
+7. **Uninstall** asks for confirmation before scheduling it. The app and its data remain during the
+   grace period, and **Cancel uninstall** brings it back. The confirmation names the other apps that
+   use this one. Provider secrets and install inputs are not saved to browser storage.
+
+## Keeping an installed app
+
+Home lists every installed app, including apps without a screen and apps still installing. Each app
+shows when it needs attention, has an update, or is installing; apps with a screen can be started
+with **Open**. Select an app's name to open its page.
+
+- **Needs attention**: a failed change, a screen that could not be opened, or a scheduled uninstall.
+- **Version**: the installed version (tag and commit), a newer version, **Update**, automatic
+  updates, going back to a previous version, and choosing a version.
+- **Settings**: change its values and the connection it uses for each cloud; connect in place.
+- **What it created**: the resources the last applied change created in your cloud, counted per
+  cloud, and the cost. An unknown cost is shown as unknown.
+- **Linked apps**, **History** (each event opens its reason and logs), and **Uninstall**.
+
+Updating, changing the version, and changing settings all follow the same steps on the page:
+**Review** → what will be created and the cost estimate → **Allow and update** / **Allow and apply**.
+Nothing applies automatically.
 
 ```text
 Git repository

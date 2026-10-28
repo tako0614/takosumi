@@ -7,11 +7,21 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { en } from "../../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../../dashboard/src/i18n/ja.ts";
 
 const source = readFileSync(
   resolve(
     import.meta.dir,
     "../../../../../../dashboard/src/views/workspace/tabs/ConnectionsTab.tsx",
+  ),
+  "utf8",
+);
+// The add flow is the extracted ConnectionCreateForm the tab renders.
+const formSource = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../../../../../dashboard/src/views/workspace/connections/ConnectionCreateForm.tsx",
   ),
   "utf8",
 );
@@ -72,23 +82,107 @@ describe("ConnectionsTab per-connection test state", () => {
 });
 
 describe("ConnectionsTab guided-first add flow", () => {
-  test("installed recipes are the default surface; BYOK is the advanced path", () => {
-    expect(source).toContain("providerSetupOptionsFromCredentialRecipes");
-    expect(source).toContain("setProvider(options[0].id)");
-    expect(source).not.toContain("PROVIDERS");
-    expect(source).not.toContain("providerDescriptor");
-    expect(source).not.toContain("tokenHelper");
-    // The quiet advanced entry into the raw env editor.
-    expect(source).toContain("const openByokEditor = ()");
-    expect(source).toContain('t("conn.add.genericEnvOption")');
-    // The old inverted IA (BYOK-first with a preset-shortcut intro) is gone.
-    expect(source).not.toContain("wc-preset-intro");
-    expect(source).not.toContain('t("conn.presets.body")');
-    expect(source).not.toContain('t("conn.byok.backToByok")');
+  test("installed recipes are the default surface; keys for an unlisted cloud are the other path", () => {
+    expect(source).toContain("<ConnectionCreateForm");
+    expect(formSource).toContain("providerSetupOptionsFromCredentialRecipes");
+    expect(formSource).toContain("setProvider(options[0].id)");
+    for (const current of [source, formSource]) {
+      expect(current).not.toContain("PROVIDERS");
+      expect(current).not.toContain("providerDescriptor");
+      expect(current).not.toContain("tokenHelper");
+      // The old inverted IA (BYOK-first with a preset-shortcut intro) is gone.
+      expect(current).not.toContain("wc-preset-intro");
+      expect(current).not.toContain('t("conn.presets.body")');
+      expect(current).not.toContain('t("conn.byok.backToByok")');
+    }
+    // The entry for a cloud missing from the list.
+    expect(formSource).toContain("const openByokEditor = ()");
+    expect(formSource).toContain('t("conn.add.genericEnvOption")');
+  });
+
+  test("a cloud without a guided method is phrased as the behavior, not env vars", () => {
+    for (const key of [
+      "conn.genericEnv.providerPlaceholder",
+      "conn.genericEnv.envNamePlaceholder",
+      "conn.genericEnv.invalidName",
+    ] as const) {
+      expect(ja[key]).not.toContain("example");
+      expect(ja[key]).not.toContain("EXAMPLE_");
+      expect(en[key]).not.toContain("examplecorp");
+      expect(en[key]).not.toContain("EXAMPLE_");
+    }
+    expect(ja["conn.genericEnv.envName"]).toBe("キーの名前");
+    expect(ja["conn.add.genericEnvOption"]).not.toContain("詳細");
+    // Without a key path the form says so instead of offering a dead form.
+    expect(formSource).toContain("const genericEnvAvailable = () =>");
+    expect(formSource).toContain('t("conn.byok.unavailable")');
+    // Optional fields and setup steps are shown, not folded away.
+    expect(formSource).not.toContain("<details");
   });
 
   test("the BYOK panel heading sits at h2 under the page h1", () => {
-    expect(source).toContain('<h2 class="wc-byok-title">');
+    expect(formSource).toContain('<h2 class="wc-byok-title">');
+    expect(formSource).not.toContain("<h4");
     expect(source).not.toContain("<h4");
+  });
+});
+
+describe("ConnectionsTab create-form wiring", () => {
+  test("the tab shares one recipe read and owns post-create state", () => {
+    expect(source).toContain("setupCatalog={credentialRecipes}");
+    expect(source).toContain("initialProviderSource={props.initialProviderSource}");
+    expect(source).toContain("onCreated={afterConnectionCreated}");
+    expect(source).toContain("verifyConnection={verifyCreatedConnection}");
+    // The first test still runs through the tab's per-connection runTest,
+    // even when the form closed itself in onCreated; only unmount skips it.
+    expect(source).toMatch(
+      /const verifyCreatedConnection = async \(id: string\) => \{\s*if \(!disposed\) await runTest\(id\);\s*\};/,
+    );
+    // The form never gates the callbacks on its own open/mounted state.
+    const saved = formSource.slice(
+      formSource.indexOf("const connectionSaved = async"),
+      formSource.indexOf("const connectOAuth = async"),
+    );
+    expect(saved).toContain("await props.onCreated(connection);");
+    expect(saved).toContain("await props.verifyConnection(connection.id);");
+    expect(saved).not.toContain("disposed");
+  });
+
+  test("typed-credential paths verify; the OAuth path arrives checked", () => {
+    expect(formSource.match(/await connectionSaved\(connection, true\);/g)).toHaveLength(2);
+    expect(formSource).toContain("await connectionSaved(connection, false);");
+    expect(formSource).toContain("connectProviderWithPopup");
+    expect(source).not.toContain("connectProviderWithPopup");
+  });
+
+  test("the OAuth callback relay stays on the Connections route", () => {
+    expect(source).toContain("takosumi.oauth.${flow}");
+    expect(formSource).not.toContain("connection_flow");
+  });
+});
+
+describe("接続 shows which apps use each connection", () => {
+  test("usage is read from app bindings outside the install review only", () => {
+    expect(source).toContain("props.embedded ? null : workspaceId()");
+    expect(source).toContain("(id) => loadConnectionUsage(id)");
+    expect(source).toContain('t("conn.apps.label")');
+    expect(source).toContain('t("conn.apps.none")');
+    expect(source).toContain('t("conn.apps.unknown")');
+    // Each app links to its page.
+    expect(source).toContain("href={`/workloads/${encodeURIComponent(app.capsuleId)}`}");
+    // An incomplete read never claims "no app uses this".
+    expect(source).toContain("apps.length === 0 && known.incomplete ? undefined : apps");
+  });
+
+  test("removal names the affected apps and what is kept", () => {
+    expect(source).toContain('t("conn.remove.affectsApps", { apps: appNames(apps) })');
+    expect(source).toContain('t("conn.remove.noApps")');
+    expect(source).toContain('t("conn.remove.appsUnknown")');
+    expect(source).toContain('t("conn.remove.keepsResources")');
+    expect(ja["conn.remove.affectsApps"]).toContain("{apps}");
+    // Operator-provided connections cannot be removed from here.
+    expect(source).toContain('connection.scope !== "operator"');
+    // One primary action per card: test is the action, remove is quiet.
+    expect(source).not.toContain('variant="danger"');
   });
 });

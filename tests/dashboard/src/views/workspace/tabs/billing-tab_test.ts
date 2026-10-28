@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { en } from "../../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../../dashboard/src/i18n/ja.ts";
 
 const source = readFileSync(
   resolve(
@@ -31,19 +33,40 @@ test("BillingTab is provider-neutral and keeps usage/showback visible", () => {
   expect(source).not.toContain("hasCommercialBillingCapability");
 });
 
-test("BillingTab keeps the raw usage ledger collapsed and lazy", () => {
-  expect(source).toContain("USAGE_LEDGER_PAGE_SIZE = 25");
-  expect(source).toContain("listWorkspaceUsagePage");
-  expect(source).toContain("usageDetailsOpen");
-  expect(source).toContain("handleUsageToggle");
-  expect(source).toContain("usageLoaded");
-  expect(source).toContain('class="wb-billing-disclosure"');
-  expect(source).not.toContain("onMount(() => void loadUsage(false))");
+test("BillingTab shows usage directly, as cards, with paging", () => {
+  // This section exists to show use: it reads on open instead of hiding the
+  // list behind a disclosure.
+  expect(source).toContain("USAGE_PAGE_SIZE = 25");
+  expect(source).toContain("onMount(() => void loadUsage(false))");
+  expect(source).not.toContain("<details");
+  expect(source).not.toContain("<DataTable");
+  expect(source).toContain('class="acct-row tg-card"');
   expect(source).toContain("usageCursor");
   expect(source).toContain("loadUsage(true)");
+  // Usage rows name the app, falling back for removed apps.
+  expect(source).toContain("createServiceNames(() => props.workspaceId)");
+  expect(source).toContain('t("billing.usage.removedApp")');
 });
 
-test("BillingTab distinguishes unrated usage from rated zero cost", () => {
+test("BillingTab distinguishes unpriced usage from a rated zero, and says unknown", () => {
   expect(source).toContain('event.ratingStatus === "rated"');
-  expect(source).toContain('t("billing.usage.unrated")');
+  expect(source).toContain('t("billing.usage.amountUnknown")');
+  expect(ja["billing.usage.amountUnknown"]).toContain("不明");
+});
+
+test("billing copy is plain: no showback, recording mode or provider-neutral jargon", () => {
+  for (const [key, value] of Object.entries(ja)) {
+    if (!key.startsWith("billing.") || key.startsWith("billing.commercial.")) continue;
+    expect({ key, value }).not.toEqual(
+      expect.objectContaining({ value: expect.stringMatching(/ショーバック|記録モード|プロバイダー非依存|ワークスペース/u) }),
+    );
+  }
+  for (const [key, value] of Object.entries(en)) {
+    if (!key.startsWith("billing.") || key.startsWith("billing.commercial.")) continue;
+    expect({ key, value }).not.toEqual(
+      expect.objectContaining({ value: expect.stringMatching(/showback|provider-neutral/iu) }),
+    );
+  }
+  // Members and viewers learn who can see charges instead of an error.
+  expect(source).toContain('t("billing.ownersOnly")');
 });

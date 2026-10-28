@@ -512,34 +512,6 @@
   }
 }
 
-/* ===== Members: invite form + action cell ===== */
-.wb-members-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  white-space: nowrap;
-}
-.wb-role-select {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
-  color: var(--tg-fg-muted);
-}
-.wb-invite-form {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(140px, 0.6fr) auto;
-  gap: var(--tg-s-3);
-  align-items: end;
-}
-@media (max-width: 640px) {
-  .wb-invite-form {
-    grid-template-columns: 1fr;
-  }
-}
-.wb-you-tag {
-  margin-left: var(--tg-s-2);
-}
-
 /* Backup-in-progress hint. */
 .wb-progress {
   display: inline-flex;

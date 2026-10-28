@@ -1,7 +1,7 @@
 /**
- * Primary navigation: a persistent left rail with the everyday consumer trio
- * (home / store / settings) from the shared nav model. Hosting management
- * lives behind 設定 > 管理 — nothing else competes for the rail.
+ * Primary navigation: a persistent left rail with the four behaviors (home /
+ * store / connections / account) from the shared nav model. The workspace
+ * switcher sits above them only when there are two or more workspaces.
  */
 import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft } from "lucide-solid";

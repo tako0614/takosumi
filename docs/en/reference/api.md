@@ -222,7 +222,7 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 91
+`accounts/service/src/control-route-inventory.ts`; it currently contains 96
 public route descriptors, listed below. The descriptions follow the inventory's summaries,
 lightly edited for readers.
 
@@ -257,6 +257,12 @@ lightly edited for readers.
 | POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Create a Workspace plan update Run |
 | POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Create a Workspace drift check Run |
 
+Each member list row carries the membership fields plus `displayName` when the
+account has one. `email` is returned only when the caller is an active owner or
+admin of that Workspace, and never for an address the identity provider marked
+unverified. Members and viewers do not receive other members' email addresses.
+Add, role change, and remove responses carry neither field.
+
 ### Projects and Capsules
 
 | Method | Path | Description |
@@ -271,6 +277,8 @@ lightly edited for readers.
 | DELETE | `/api/v1/capsules/{capsuleId}` | Schedule deletion of an applied Capsule after a grace period; `?immediate=true` creates a destroy Plan only, which still needs review and Apply |
 | POST | `/api/v1/capsules/{capsuleId}/uninstall` | Schedule a two-stage uninstall: keep resources and data through the grace period, then export and destroy |
 | POST | `/api/v1/capsules/{capsuleId}/cancel-uninstall` | Cancel a scheduled uninstall during its grace period |
+| GET | `/api/v1/capsules/{capsuleId}/app` | Read the server-computed installed-app view: state, primary action, problems, screens, version and uninstall terms |
+| GET | `/api/v1/capsules/{capsuleId}/runs` | List the Capsule's Runs newest first with a keyset cursor |
 | GET | `/api/v1/capsules/{capsuleId}/outputs` | Read the Capsule's current public Output projection |
 | GET | `/api/v1/capsules/{capsuleId}/current-resource-inventory` | Read the Capsule's current recorded OpenTofu resource inventory |
 | GET | `/api/v1/capsules/{capsuleId}/usage-summary` | Read the Capsule's showback usage aggregate |
@@ -287,6 +295,39 @@ lightly edited for readers.
 | POST | `/api/v1/capsules/{capsuleId}/destroy-plan` | Create a Capsule destroy plan Run |
 | POST | `/api/v1/capsules/{capsuleId}/drift-check` | Create a Capsule drift check Run |
 | POST | `/api/v1/capsules/{capsuleId}/backups` | Create a Capsule Backup |
+
+`GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
+The control plane computes `state` and `primaryAction` from the Capsule, this
+Capsule's newest plan/apply Run, the revision coordinator, its
+ProviderConnections and its screen materialization ledger. It does not rely on
+a window of Workspace-wide Runs.
+
+- `state`: `installing` / `installed` / `updating` / `needs_attention` /
+  `stopped` / `uninstall_scheduled` / `uninstalling` / `uninstalled`
+- `primaryAction`: `open` / `view_resources` / `review` / `retry` /
+  `retry_screen` / `fix_connection` / `continue_install` / `cancel_uninstall` /
+  `uninstall_now` / `reinstall` / `none`
+- `problems[].code`, in priority order: `connection_unavailable` /
+  `uninstall_failed` / `uninstall_blocked` / `policy_blocked` / `run_failed` /
+  `capsule_error` / `install_incomplete` / `screen_unavailable` /
+  `uninstall_scheduled` (warning)
+
+The view also lists every launchable screen (`screens`), the adopted version and
+the newest snapshot of the same ref (`version.current`, `version.latest`,
+`updateAvailable`, `stale`, `autoUpdate`), in-progress work (`progress`), the
+newest Run (`latestRun`) and the uninstall terms (`uninstall.mode`, the
+`graceDays` that apply before anything is scheduled, and
+`scheduled.deleteAfter` once scheduled). It carries no secret, no Output value
+and no Interface input other than a screen's checked launch URL. Parts that a
+supporting read could not load are named in `incomplete`.
+An uninstall record counts only while the Capsule is `uninstalled`, or while it
+is `error` after a provider-reached teardown failure and its newest Run is still
+a removal. A recorded `blockedReason` yields `uninstall_blocked` in either
+phase. `cancel_uninstall`, `uninstall.mode` and `scheduled.cancellable` follow
+the cancel and schedule commands' own admission rules.
+
+`GET /api/v1/capsules/{capsuleId}/runs` pages newest first with `limit`
+(default 50, at most 100) and `cursor`; repeat `type` to filter by Run type.
 
 ### Sources
 
@@ -309,9 +350,50 @@ lightly edited for readers.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| POST | `/api/v1/workspaces/{workspaceId}/install-plans` | Create or replay an idempotent Git install plan |
+| POST | `/api/v1/workspaces/{workspaceId}/install-plans` | Create or replay an idempotent Git install plan or install attempt |
+| GET | `/api/v1/workspaces/{workspaceId}/install-plans` | List the caller's open install attempts for resume (`open=1`) |
 | GET | `/api/v1/install-plans/{installPlanId}` | Read an install plan without advancing it |
+| PATCH | `/api/v1/install-plans/{installPlanId}` | Answer an install attempt that is waiting for input (generation CAS) |
+| DELETE | `/api/v1/install-plans/{installPlanId}` | Discard an install attempt and the never-applied app it created |
 | POST | `/api/v1/install-plans/{installPlanId}/reconcile` | Explicitly advance an install plan toward a reviewable Run |
+
+An install plan created with `mode: "attempt"` is owned end to end by the
+coordinator. It syncs the Source, scans modules, analyzes compatibility and
+matches Provider Connections itself, and pauses in the non-terminal
+`awaiting_input` phase whenever it needs the user (several module candidates,
+missing connections, required settings, a name collision) and once before it
+creates the Capsule. `userAction` names the single next step (`wait`,
+`choose_module`, `provide_inputs`, `review_run`, `retry` or `none`); a
+requirement with exactly one eligible connection is selected automatically.
+Only the member who started the attempt may `PATCH` or `DELETE` it. `PATCH`
+uses `expectedGeneration` as a CAS fence, and only the confirming
+`continue: true` request carries variable values, which go straight into the
+atomic initial creation and are never stored. Once a confirming request has
+started creation (with or without variables) a Capsule may exist, so when the
+outcome cannot be confirmed only the same values may be sent again and an
+already committed Capsule is adopted first. `DELETE` first makes sure no lease
+holder is working on the attempt, then abandons the never-applied Capsule it
+created and records the terminal `discarded` phase; if the abandonment stops,
+the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
+`DELETE` finishes it. It is refused once the app is applying or applied, and
+for plans that are not attempts. The Source is never deleted; only polling
+that the attempt itself turned on is turned off.
+
+Attempts carry `expiresAt` only until their Capsule exists; an attempt with a
+Capsule never expires. GET and the open listing never write: an expired
+attempt (`install_attempt_expired`) or one whose management epoch changed
+while it waited (`workspace_management_changed`) is reported through
+`invalidated` and `userAction: retry`, and cleaned up only by its creator's
+`DELETE` or by a creator `PATCH` that finds it invalid (409
+`install_attempt_invalid`). `awaiting_input` holds no lease and no execution
+authority, so it does not block Workspace management, and neither does an
+unleased attempt that expired before its Capsule existed, since it can no
+longer advance; every write that advances an attempt re-checks the original
+admission in the same statement.
+
+Idempotency: the request digest covers variable names but never their values,
+so reusing an Idempotency-Key with different values replays the first record
+(200) instead of returning a conflict. Use a new key for new values.
 
 ### Git revision plans
 
@@ -337,6 +419,12 @@ lightly edited for readers.
 | POST | `/api/v1/run-groups/{runGroupId}/approve` | Approve a grouped Run |
 | GET | `/api/v1/state-versions/{stateVersionId}` | Read a StateVersion projection |
 | POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | Create a StateVersion rollback plan |
+
+A plan Run that policy blocked or that requires approval carries
+`policyReasons`: `{ code, layer, provider?, resourceType? }` items whose `code`
+and `layer` come from a closed set (for example `provider_not_allowed` /
+`provider`, `approval_required_change` / `action`). The prose reasons are not
+returned; a reason this build does not recognize stays as `unclassified`.
 
 ### Credentials and Output sharing
 

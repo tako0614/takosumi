@@ -27,7 +27,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
+import { useNavigate, useParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
@@ -50,20 +50,16 @@ import {
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
   listRuns,
-  destroyPlanCapsule,
   openRunStream,
-  planCapsule,
-  planCapsuleUpdate,
   type ProviderConnection,
   type ProviderResolution,
   type Run,
   type RunAuditEvent,
-  type RunCostInfo,
   type RunDiagnostic,
   type RunLogs,
-  type RunPlanResource,
 } from "../../lib/control-api.ts";
-import { hasPlatformExtensionCapability } from "../../lib/runtime-capabilities.ts";
+import { readRunCost, runCostDisplayState } from "../../lib/run-cost.ts";
+import { isActionablePlanResource } from "../../lib/run-plan-resources.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import {
@@ -87,6 +83,7 @@ import {
 } from "../../lib/run-approval.ts";
 import { canCancelRun } from "../../lib/run-cancel.ts";
 import { initialPlanRetryReport } from "../../lib/initial-plan-retry.ts";
+import { retryPlanForRun } from "../../lib/run-retry.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
@@ -97,12 +94,6 @@ import {
   appHandoffFromSearch,
   appHandoffProductLabel,
 } from "../../lib/app-handoff.ts";
-import {
-  autoApplyModeFromParam,
-  autoApplyRunPath,
-  hasAutoApplyConsent,
-  type AutoApplyMode,
-} from "../../lib/auto-apply-consent.ts";
 import {
   diagnosticSeverityLabel,
   operationLabel,
@@ -122,7 +113,6 @@ import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
   formatEpochDateTime,
-  locale,
   setDocumentTitle,
   t,
 } from "../../i18n/index.ts";
@@ -139,6 +129,8 @@ import {
   StatusBadge,
   type Tone,
 } from "../../components/ui/index.ts";
+import CostSummary from "../../components/run/CostSummary.tsx";
+import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import {
   createLastGoodValue,
@@ -154,19 +146,6 @@ const SIBLING_RUNS_LIMIT = 200;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
-}
-
-function formatUsdMicros(value: number): string {
-  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: value % 10_000 === 0 ? 2 : 6,
-  }).format(value / 1_000_000);
-}
-
-function costEstimatedUsdMicros(cost: RunCostInfo): number {
-  return cost.estimatedUsdMicros;
 }
 
 function isRequestTimeout(error: unknown): boolean {
@@ -194,60 +173,6 @@ function latestApplyRunForPlan(
     if (candidate.capsuleId !== planRun.capsuleId) return false;
     return candidate.planRunId === planRun.id;
   });
-}
-
-function hasCostToShow(cost: RunCostInfo): boolean {
-  return (
-    cost.blocked ||
-    cost.ratingStatus === "unrated" ||
-    costEstimatedUsdMicros(cost) > 0 ||
-    cost.reasons.length > 0
-  );
-}
-
-/** Pre-apply cost / shortfall panel — backend-computed values only. */
-function CostNotice(props: { readonly cost: RunCostInfo }) {
-  const cost = () => props.cost;
-  const commercialBilling = () =>
-    hasPlatformExtensionCapability("billing.commercial.v1");
-  const estimatedUsdMicros = () => costEstimatedUsdMicros(cost());
-  return (
-    <div class={`wa-cost${cost().blocked ? " wa-cost-blocked" : ""}`}>
-      <Show when={cost().ratingStatus === "unrated"}>
-        <p class="wa-cost-line">{t("run.cost.unrated")}</p>
-      </Show>
-      <Show when={estimatedUsdMicros() > 0}>
-        <p class="wa-cost-line">
-          {t("run.cost.required", {
-            n: formatUsdMicros(estimatedUsdMicros()),
-          })}
-        </p>
-      </Show>
-      <Show when={cost().blocked}>
-        <p class="wa-error">{t("run.cost.capacityBlocked")}</p>
-        <Show when={cost().reasons.length > 0}>
-          <ul class="wa-cost-reasons">
-            <For each={cost().reasons}>{(reason) => <li>{reason}</li>}</For>
-          </ul>
-        </Show>
-        <Show
-          when={commercialBilling()}
-          fallback={
-            <>
-              <p class="muted">{t("run.cost.operatorHelp")}</p>
-              <Button variant="secondary" size="sm" href="/settings/billing">
-                {t("run.cost.quotaCta")}
-              </Button>
-            </>
-          }
-        >
-          <Button variant="secondary" size="sm" href="/settings/billing">
-            {t("run.cost.billingCta")}
-          </Button>
-        </Show>
-      </Show>
-    </div>
-  );
 }
 
 function diagnosticDisplayText(value: string | undefined): string | undefined {
@@ -566,131 +491,6 @@ function ProviderResolutionTable(props: {
   );
 }
 
-const PLAN_RESOURCE_REVIEW_LIMIT = 25;
-
-function isActionablePlanResource(resource: RunPlanResource): boolean {
-  return resource.actions.some((action) => action !== "no-op");
-}
-
-function planResourceTone(resource: RunPlanResource): Tone {
-  if (resource.actions.includes("delete")) return "danger";
-  if (
-    resource.actions.includes("create") &&
-    resource.actions.includes("delete")
-  )
-    return "danger";
-  if (resource.actions.includes("update")) return "warn";
-  if (resource.actions.includes("create")) return "ok";
-  return "muted";
-}
-
-function planResourceActionLabel(resource: RunPlanResource): string {
-  const actions = resource.actions;
-  if (actions.includes("delete") && actions.includes("create")) {
-    return t("run.resources.actionReplace");
-  }
-  if (actions.includes("delete")) return t("run.resources.actionDelete");
-  if (actions.includes("update")) return t("run.resources.actionUpdate");
-  if (actions.includes("create")) return t("run.resources.actionCreate");
-  return actions.join(" / ") || t("common.unknown");
-}
-
-function planResourceScopeLabel(
-  scope: RunPlanResource["scope"] | undefined,
-): string | undefined {
-  if (!scope) return undefined;
-  const parts = Object.entries(scope.facts)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([dimension, value]) => `${dimension}: ${String(value)}`);
-  return parts.length > 0 ? parts.join(" / ") : undefined;
-}
-
-function planResourceDisplayLabel(resource: RunPlanResource): string {
-  const tail = resource.type.trim().split(".").at(-1) ?? resource.type;
-  const words = tail
-    .split("_")
-    .map((word) => word.trim())
-    .filter(Boolean);
-  if (words.length === 0) return resource.type || resource.address;
-  return words
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
-function PlanResourceReview(props: {
-  readonly resources: readonly RunPlanResource[];
-}) {
-  const actionable = () => props.resources.filter(isActionablePlanResource);
-  const [expanded, setExpanded] = createSignal(false);
-  const visible = () =>
-    expanded()
-      ? actionable()
-      : actionable().slice(0, PLAN_RESOURCE_REVIEW_LIMIT);
-  const hiddenCount = () =>
-    expanded()
-      ? 0
-      : Math.max(0, actionable().length - PLAN_RESOURCE_REVIEW_LIMIT);
-  return (
-    <Show when={actionable().length > 0}>
-      <div class="wa-plan-resources">
-        <div class="wa-plan-resources-head">
-          <div>
-            <p class="wa-section-kicker">{t("run.resources.kicker")}</p>
-            {/* h2, not h3: the page h1 is the only heading above this one. */}
-            <h2>{t("run.resources.title")}</h2>
-          </div>
-          <Badge tone="muted">
-            {t("run.resources.count", { n: actionable().length })}
-          </Badge>
-        </div>
-        <div class="wa-plan-resource-list">
-          <For each={visible()}>
-            {(resource) => (
-              <div class="wa-plan-resource-row">
-                <Badge tone={planResourceTone(resource)}>
-                  {planResourceActionLabel(resource)}
-                </Badge>
-                <div class="wa-plan-resource-main">
-                  <strong>{planResourceDisplayLabel(resource)}</strong>
-                  <details class="wb-inline-details">
-                    <summary>{t("run.resources.identifiers")}</summary>
-                    <p>
-                      <span class="muted">{t("run.resources.address")}</span>{" "}
-                      <code>{resource.address}</code>
-                    </p>
-                    <p>
-                      <span class="muted">{t("run.resources.type")}</span>{" "}
-                      <code>{resource.type}</code>
-                    </p>
-                    <Show when={planResourceScopeLabel(resource.scope)}>
-                      {(scope) => (
-                        <p class="wa-plan-resource-scope">
-                          <span class="muted">{t("run.resources.scope")}</span>{" "}
-                          {scope()}
-                        </p>
-                      )}
-                    </Show>
-                  </details>
-                </div>
-              </div>
-            )}
-          </For>
-        </div>
-        <Show when={hiddenCount() > 0}>
-          <Button
-            variant="ghost"
-            size="sm"
-            type="button"
-            onClick={() => setExpanded(true)}
-          >
-            {t("run.resources.more", { n: hiddenCount() })}
-          </Button>
-        </Show>
-      </div>
-    </Show>
-  );
-}
-
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
@@ -698,32 +498,6 @@ function Inner() {
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
-  // The app detail may request a consent-gated one-tap update. Initial install
-  // stays on /new; this route remains the technical Run ledger and review view.
-  // Read ?auto REACTIVELY: this same component instance navigates run → run
-  // in place (plan → apply, retry → fresh plan), so a value captured once from
-  // location.search would leave stale install/update chrome on the next run.
-  const [searchParams] = useSearchParams();
-  // A URL parameter is never apply authority. ?auto only counts when THIS tab
-  // started the flow and minted the run-scoped consent token (lib/auto-apply-
-  // consent.ts): otherwise a crafted /runs/:id?auto=update link opened by a
-  // signed-in victim would apply their pending plan with no user action. With
-  // no token this falls through to the ordinary console + deploy button.
-  const autoMode = createMemo((): AutoApplyMode | null => {
-    const requested = autoApplyModeFromParam(searchParams.auto);
-    return requested && hasAutoApplyConsent(runId(), requested)
-      ? requested
-      : null;
-  });
-  const autoContinueEnabled = () => autoMode() === "update";
-  // Carry the flag across the plan→apply hop and any re-plan — and mint the
-  // consent for the run being navigated to, since the flag alone no longer
-  // authorizes the next screen's auto-apply.
-  const withAuto = (path: string, targetRunId: string) => {
-    const mode = autoMode();
-    return mode ? autoApplyRunPath(path, targetRunId, mode) : path;
-  };
-
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
     runId,
     getRun,
@@ -747,14 +521,11 @@ function Inner() {
     if (latest) setLogsSnapshot(latest);
   });
   const logData = (): RunLogs | undefined => logsSnapshot();
-  const [cost] = createResource(runId, async (id) => {
-    try {
-      return await getRunCostInfo(id);
-    } catch {
-      // Best-effort: absent cost info never breaks the deploy UI.
-      return undefined;
-    }
-  });
+  // Best-effort: a failed cost read never breaks the deploy UI, but it is kept
+  // as `unavailable` (shown as an unknown cost), never as "no cost".
+  const [cost] = createResource(runId, (id) =>
+    readRunCost(() => getRunCostInfo(id)),
+  );
   const providerConnectionRequest = createMemo(() => {
     const current = runLatest();
     const referencedConnectionIds = providerConnectionIdsFromResolutions(
@@ -1247,24 +1018,18 @@ function Inner() {
     const applyRunId = extractRunId(envelope);
     if (applyRunId && applyRunId !== runId()) {
       navigate(
-        withAuto(
-          appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
-            `/runs/${applyRunId}`,
-          applyRunId,
-        ),
+        appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
+          `/runs/${applyRunId}`,
       );
       return;
     }
     await Promise.all([refetchRun(), refetchLogs()]);
   });
 
-  // One-action update continues a clean update Plan only. Any approval,
-  // destructive, policy, or billing gate remains explicit in the console.
-  const [autoContinued, setAutoContinued] = createSignal(false);
   // Per-run UI state must reset when this SAME component instance navigates
-  // between runs (deploy → apply run, retry → fresh plan): stale `applied`
-  // would fake a デプロイしました summary on a never-applied plan and hide the
-  // deploy button; stale autoContinued would break the update re-plan loop.
+  // between runs (apply → apply run, retry → fresh plan): a stale `applied`
+  // would fake an applied summary on a never-applied plan and hide the apply
+  // button. Nothing on this page applies automatically.
   let lastRunId = runId();
   createEffect(() => {
     const id = runId();
@@ -1272,66 +1037,6 @@ function Inner() {
     lastRunId = id;
     setApplied(false);
     setNeedsConfirm(false);
-    setAutoContinued(false);
-  });
-  // Once-per-plan-run guard that survives a re-mount: Back / revisit of an
-  // ?auto=update plan URL must NOT silently re-fire the auto-apply.
-  const autoAppliedKey = () => `takosumi.auto-applied@${runId()}`;
-  const autoAppliedAlready = () => {
-    try {
-      return sessionStorage.getItem(autoAppliedKey()) === "1";
-    } catch {
-      return false;
-    }
-  };
-  createEffect(() => {
-    const r = runLatest();
-    if (
-      !autoContinueEnabled() ||
-      autoContinued() ||
-      applied() ||
-      deploy.busy() ||
-      !r
-    ) {
-      return;
-    }
-    // Revisited ?auto plan whose deploy approval a later apply already consumed
-    // (Back / fresh tab / a different session where the sessionStorage guard is
-    // absent): isDeployableRun is false, so neither the auto-apply nor the
-    // escape below would fire and the install screen would spin 追加中… forever.
-    // Drop to the honest console (it shows すでにデプロイ済み + a link to the app).
-    if (deployApprovalConsumed(r)) {
-      return;
-    }
-    // We already auto-applied this plan earlier this session and navigated on
-    // to the apply run. Landing back here (browser Back) must not strand the
-    // user on a never-advancing "追加中…" spinner — the guard blocks a re-apply
-    // but the install screen would still render progress. Drop to the real run
-    // console (deploy button OR the settled すでにデプロイ済み summary) so the
-    // screen is always actionable, deployable or not. Checked before the logs
-    // gate below because this path never auto-applies — it only escapes.
-    if (autoAppliedAlready()) {
-      return;
-    }
-    // Destructive-gate inputs must be SETTLED before auto-continuing: with no
-    // run.summary the gate reads log-derived counts, and right after the SSE
-    // terminal flip those logs are still being refetched — evaluating against
-    // the stale fetch would read a plan with deletes as 0 and auto-apply it.
-    // logs.loading is reactive, so this effect re-runs once the fetch lands.
-    if (!runHasChangeSummary(r) && logs.loading) return;
-    if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
-      // Never auto-apply past the billing/cost gate the manual deploy button
-      // enforces — wait for the check, and stop on a blocked estimate (the
-      // install screen shows the gate card instead).
-      if (cost.loading || costBlocked()) return;
-      setAutoContinued(true);
-      try {
-        sessionStorage.setItem(autoAppliedKey(), "1");
-      } catch {
-        /* private mode: fall back to the in-instance guard */
-      }
-      void deploy.run(false);
-    }
   });
 
   const { confirm } = useConfirmDialog();
@@ -1413,46 +1118,15 @@ function Inner() {
         t("controlError.sourceRevisionMismatch"),
       );
     }
-    const initialReport = initialPlanRetryReport(currentRun, capsule);
-    // The Plan's immutable base generation owns its retry mode. Another Apply
-    // must not turn an initial-source retry into an update from latest source.
-    const isUpdatedPlan =
-      (currentRun.baseStateGeneration ?? 0) > 0 &&
-      capsule.currentStateGeneration > 0;
-    if (
-      currentRun.type === "plan" &&
-      !isUpdatedPlan &&
-      !initialReport
-    ) {
-      throw new ControlApiError(
-        409,
-        "retry_plan_review_mismatch",
-        t("controlError.compatibilityStale"),
-      );
-    }
-    // Preserve the requested operation. A failed destroy must be retried as a
-    // destroy. A first-install retry must preserve the exact reviewed
-    // SourceSnapshot/CompatibilityReport pair; refreshing only the report
-    // would mismatch the InstallConfig-pinned snapshot. Deployed updates still
-    // sync and pin the latest source.
-    const envelope =
-      currentRun.type === "destroy_plan"
-        ? await destroyPlanCapsule(instId)
-        : capsule.currentStateGeneration === 0 &&
-            currentRun.compatibilityReportId
-          ? await planCapsule(instId, {
-              compatibilityReportId:
-                initialReport ?? currentRun.compatibilityReportId,
-            })
-          : await planCapsuleUpdate(instId);
+    // The same selector as the app page's problem card: a failed removal is
+    // retried as a removal, a first install keeps its reviewed pair, and an
+    // installed app's change re-reads the latest source.
+    const envelope = await retryPlanForRun(currentRun, capsule);
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(
-        withAuto(
-          appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
-            `/runs/${newRunId}`,
-          newRunId,
-        ),
+        appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
+          `/runs/${newRunId}`,
       );
     }
   });
@@ -1522,8 +1196,12 @@ function Inner() {
     return r !== undefined && canCancelRun(r);
   };
 
-  const costInfo = () => cost.latest;
-  const costBlocked = () => costInfo()?.blocked === true;
+  // `readRunCost` never rejects, so reading `.latest` cannot throw.
+  const costRead = () => cost.latest;
+  const costBlocked = () => {
+    const read = costRead();
+    return read?.status === "loaded" && read.cost.blocked;
+  };
   const appConnectHref = () =>
     createAppHandoffConnectHref(appHandoff, completedRunLaunchUrl());
 
@@ -1852,7 +1530,7 @@ function Inner() {
               when={capsuleId()}
               fallback={
                 <Button variant="ghost" href="/">
-                  {t("app.backToList")}
+                  {t("app.backHome")}
                 </Button>
               }
             >
@@ -1908,8 +1586,8 @@ function Inner() {
                 title={t("run.notFoundTitle")}
                 message={t("run.notFoundMessage")}
                 action={
-                  <Button variant="secondary" href="/runs">
-                    {t("nav.runs")}
+                  <Button variant="secondary" href="/">
+                    {t("app.backHome")}
                   </Button>
                 }
               />
@@ -1966,15 +1644,17 @@ function Inner() {
                     )}
                   </Show>
 
-                  {/* cost (backend values only) */}
+                  {/* cost (backend values only). A failed read is an explicit
+                      unknown-cost line, never silence; a rated-zero or
+                      billing-disabled cost renders nothing unless blocked. */}
                   <Show
                     when={(() => {
-                      const c = costInfo();
-                      if (!c || !isDeployableRun(r())) return undefined;
-                      return hasCostToShow(c) ? c : undefined;
+                      const read = costRead();
+                      if (!read || !isDeployableRun(r())) return undefined;
+                      return runCostDisplayState(read);
                     })()}
                   >
-                    {(c) => <CostNotice cost={c()} />}
+                    {(state) => <CostSummary state={state()} />}
                   </Show>
 
                   {/* primary action */}
@@ -2307,7 +1987,7 @@ function Inner() {
                 {/* ===== change detail — surfaced by default, not buried ===== */}
                 <Show when={planResources().some(isActionablePlanResource)}>
                   <Card>
-                    <PlanResourceReview resources={planResources()} />
+                    <PlanResourceList resources={planResources()} />
                   </Card>
                 </Show>
 

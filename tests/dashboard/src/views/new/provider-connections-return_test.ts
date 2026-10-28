@@ -11,8 +11,9 @@ const connections = read(
 
 describe("/new Provider Connections return context", () => {
   test("the single install view embeds connection setup without serializing configuration", () => {
-    expect(install).toContain("<ConnectionsTab");
-    expect(install).toContain("embedded initialProviderSource");
+    expect(install).not.toContain("<ConnectionsTab");
+    expect(install).toContain("<ConnectionCreateForm");
+    expect(install).toContain("initialProviderSource={row.provider}");
     expect(install).toContain("refreshProviderChoices()");
     expect(install).not.toContain("providerConnectionsHrefForInstallReturn");
     expect(install).not.toContain("sessionStorage");

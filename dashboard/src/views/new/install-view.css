@@ -105,3 +105,30 @@
 }
 .iv-configure-page .iv-workbench > .tg-btn { width: 100%; min-height: 3.25rem; justify-content: center; }
 .iv-handoff-actions { width: min(100%, 46rem); margin-inline: auto; }
+
+/* Provenance and the install sheet: what the app will create, the connections
+   it needs and its settings, in one place before anything is applied. */
+.iv-provenance { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--tg-s-1) var(--tg-s-2); margin: var(--tg-s-2) 0 0; }
+.iv-provenance code { font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); color: var(--tg-fg); overflow-wrap: anywhere; }
+.iv-start-actions { margin-top: 0; }
+.iv-start-hint { margin: var(--tg-s-3) 0 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }
+.iv-sheet { display: grid; gap: var(--tg-s-5); }
+.iv-sheet > .iv-section-head { margin-bottom: 0; }
+.iv-sheet-block { display: grid; gap: var(--tg-s-3); min-width: 0; padding-top: var(--tg-s-4); border-top: 1px solid var(--tg-line); }
+.iv-sheet-block h3 { margin: 0; font-size: var(--tg-fs-lg); letter-spacing: -0.01em; }
+.iv-sheet-block > .iv-muted { margin: 0; }
+.iv-sheet .iv-action-row { margin-top: 0; }
+.iv-planned-resources { display: grid; gap: var(--tg-s-2); margin: 0; padding: 0; list-style: none; }
+.iv-planned-resources li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); min-width: 0; }
+.iv-planned-resources code { padding: 0.2rem 0.4rem; border-radius: var(--tg-r-sm); background: var(--tg-bg-subtle); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); overflow-wrap: anywhere; }
+.iv-planned-count { color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); }
+.iv-connection-row { display: grid; gap: var(--tg-s-3); min-width: 0; padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); }
+.iv-connection-row[data-connection-state="missing"] { border-color: var(--tg-warn); }
+.iv-connection-row .iv-action-row, .iv-connection-row .iv-advanced { margin-top: 0; }
+.iv-connection-row .iv-advanced { padding-top: var(--tg-s-2); }
+.iv-connection-row .iv-advanced code { font-size: var(--tg-fs-xs); overflow-wrap: anywhere; }
+.iv-connection-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--tg-s-2); }
+.iv-connection-name { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.iv-inline-connect { min-width: 0; padding-top: var(--tg-s-3); border-top: 1px solid var(--tg-line); scroll-margin-top: calc(var(--tg-topbar-h) + var(--tg-s-4)); }
+.iv-inline-connect .tg-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.iv-inline-connect .wc-form, .iv-inline-connect .wc-form-actions, .iv-inline-connect .wc-guided { min-width: 0; }

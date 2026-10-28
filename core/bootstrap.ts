@@ -169,6 +169,7 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunType,
 } from "takosumi-contract/runs";
 import type { Output } from "takosumi-contract/outputs";
 import type { PageParams } from "takosumi-contract/pagination";
@@ -878,6 +879,16 @@ export interface TakosumiOperations {
     workspaceId: string,
     options?: { readonly limit?: number; readonly cursor?: string },
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
+  /** Keyset page of one Capsule's Runs; the caller authorizes the Capsule. */
+  listCapsuleRunsPage(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      readonly types?: readonly RunType[];
+    },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   /** Reads a Run's structured diagnostics + redacted audit trail (spec §30). */
   getRunLogs(id: string): Promise<RunLogsResponse>;
   /** Reads a Run's run-level audit event trail (spec §30). */
@@ -933,11 +944,16 @@ export interface TakosumiOperations {
     Record<
       string,
       {
+        readonly providerSource?: string;
+        readonly credentialRecipe?: { readonly id: string; readonly authMode: string };
+        readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
+        readonly browserBindingRequired?: boolean;
         start(input: {
           readonly subject: string;
           readonly workspaceId: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
+          readonly scopeHints?: import("takosumi-contract/connections").ConnectionScopeHints;
           /** Private Workspace admission tuple captured before OAuth awaits. */
           readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }): Promise<ConnectionOAuthStartResponse>;
@@ -1998,6 +2014,8 @@ export async function createTakosumiService(
       opentofuController.listRuns(workspaceId, options),
     listRunsPage: (workspaceId, options) =>
       opentofuController.listRunsPage(workspaceId, options),
+    listCapsuleRunsPage: (capsuleId, options) =>
+      opentofuController.listCapsuleRunsPage(capsuleId, options),
     getRunLogs: (id) => opentofuController.getRunLogs(id),
     getRunEvents: (id) => opentofuController.getRunEvents(id),
     getRunCost: (id) => opentofuController.getRunCost(id),
@@ -2073,6 +2091,10 @@ export async function createTakosumiService(
             Object.entries(connectionOAuthHelpers).map(([helperId, helper]) => [
               helperId,
               {
+                ...(helper.providerSource ? { providerSource: helper.providerSource } : {}),
+                ...(helper.browserBindingRequired ? { browserBindingRequired: true } : {}),
+                ...(helper.credentialRecipe ? { credentialRecipe: helper.credentialRecipe } : {}),
+                ...(helper.setupFields ? { setupFields: helper.setupFields } : {}),
                 start: (input) =>
                   helper.start({
                     helperId,
@@ -2085,6 +2107,7 @@ export async function createTakosumiService(
                       // Sign the authenticated subject INTO the OAuth state so the
                       // cross-site callback can authorize without a session cookie.
                       subject: input.subject,
+                      ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
                       ...(input.displayName
                         ? { displayName: input.displayName }
                         : {}),

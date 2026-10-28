@@ -23,7 +23,7 @@ export function capsuleUninstallBanner(capsule: Capsule, name = capsule.name): s
 }
 
 export function capsuleUninstallDependencyWarning(name: string, dependentNames: readonly string[]): string | undefined {
-  return dependentNames.length ? t("app.uninstall.dependencyWarning", { name, services: dependentNames.join(", ") }) : undefined;
+  return dependentNames.length ? t("app.uninstall.dependencyWarning", { name, apps: dependentNames.join(", ") }) : undefined;
 }
 
 export function uninstallDependencyReadWarning(status: "ready" | "loading" | "failed"): string | undefined {

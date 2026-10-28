@@ -570,12 +570,19 @@ async function startConnectionOAuth(
     // callback can authorize without depending on a session cookie.
     subject: session.subject,
     workspaceId,
+    ...(connectionScopeHints(body.scopeHints) ? { scopeHints: connectionScopeHints(body.scopeHints) } : {}),
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
     expectedWorkspaceManagementAuthority: managementAuthority(),
   });
-  return json(started);
+  const response = json(started);
+  if (helper.browserBindingRequired) {
+    const flow = (await stableJsonDigest(started.state)).slice(7);
+    response.headers.append("set-cookie", `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${flow}=1; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${url.protocol === "https:" ? "; Secure" : ""}`);
+  }
+  response.headers.set("cache-control", "no-store");
+  return response;
 }
 
 /**
@@ -599,6 +606,7 @@ export async function completeConnectionOAuth(
   store: AccountsStore,
   url: URL,
   helperId: string,
+  request?: Request,
 ): Promise<Response> {
   const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
@@ -606,6 +614,13 @@ export async function completeConnectionOAuth(
   const state = stringValue(url.searchParams.get("state") ?? undefined);
   if (!code || !state) {
     return redirectToConnections(url, { error: "missing_code" });
+  }
+  if (helper.browserBindingRequired) {
+    const name = `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${(await stableJsonDigest(state)).slice(7)}`;
+    const cookie = request?.headers.get("cookie") ?? "";
+    if (!cookie.split(";").some((item) => item.trim() === `${name}=1`)) {
+      return redirectToConnections(url, { error: "oauth_failed" });
+    }
   }
   const query: Record<string, string> = {};
   for (const [key, value] of url.searchParams.entries()) query[key] = value;
@@ -698,7 +713,7 @@ function connectionOAuthUnavailable(): Response {
  * status keys (`connected` / `connection_error`) and the public Connection id /
  * verification status ride the query — never the token or any error detail.
  */
-function redirectToConnections(
+async function redirectToConnections(
   url: URL,
   result: {
     readonly connected?: string;
@@ -706,8 +721,23 @@ function redirectToConnections(
     readonly connectionId?: string;
     readonly connectionStatus?: TestConnectionResponse["status"];
   },
-): Response {
+): Promise<Response> {
+  const state = url.searchParams.get("state");
+  // Correlate only this tab's attempt, without exposing state, code or tokens.
+  const flow = state ? await stableJsonDigest(state) : undefined;
+  if (url.searchParams.get("popup") === "1" && flow) {
+    const nonce = crypto.randomUUID();
+    const message = { kind: "connection-oauth", error: Boolean(result.error),
+      ...(result.connectionId ? { connectionId: result.connectionId, connectionStatus: result.connectionStatus } : {}) };
+    const script = `const c=new BroadcastChannel(${JSON.stringify(`takosumi.oauth.${flow}`)});c.postMessage(${JSON.stringify(message)});setTimeout(()=>{c.close();window.close()},200)`;
+    return new Response(`<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Takosumi</title><p>${result.error ? "Connection was not completed. Return to Takosumi to try again." : "Connection saved. Return to Takosumi."}</p><script nonce="${nonce}">${script}</script></html>`, {
+      headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer",
+        "set-cookie": `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${flow.slice(7)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${url.protocol === "https:" ? "; Secure" : ""}`,
+        "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'` },
+    });
+  }
   const target = new URL("/connections", url.origin);
+  if (flow) target.searchParams.set("connection_flow", flow);
   if (result.connected) target.searchParams.set("connected", "1");
   if (result.connectionId)
     target.searchParams.set("connection_id", result.connectionId);
@@ -716,6 +746,7 @@ function redirectToConnections(
   if (result.error) target.searchParams.set("connection_error", result.error);
   return new Response(null, {
     status: 303,
-    headers: { location: target.toString() },
+    headers: { location: target.toString(), "cache-control": "no-store", "referrer-policy": "no-referrer",
+      ...(flow ? { "set-cookie": `${url.protocol === "https:" ? "__Host-" : ""}takosumi_oauth_${flow.slice(7)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${url.protocol === "https:" ? "; Secure" : ""}` } : {}) },
   });
 }

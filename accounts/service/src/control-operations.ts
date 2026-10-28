@@ -121,6 +121,7 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunType,
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
@@ -437,6 +438,10 @@ export interface ControlPlaneOperations {
     ): Promise<Capsule>;
     /** Whole days the scheduled uninstall waits before it destroys. */
     readonly uninstallGraceDays?: number;
+    /** Read-only schedule/cancel state admission, matching the commands. */
+    uninstallAdmission?(
+      capsule: Capsule,
+    ): Promise<{ readonly schedule: boolean; readonly cancel: boolean }>;
     getCapsuleExecutionAuthorityEpoch(capsuleId: string): Promise<number>;
     getInstallConfigReAdoptionRecoveryProof?(
       capsuleId: string,
@@ -628,6 +633,10 @@ export interface ControlPlaneOperations {
     Record<
       string,
       {
+        readonly providerSource?: string;
+        readonly browserBindingRequired?: boolean;
+        readonly credentialRecipe?: { readonly id: string; readonly authMode: string };
+        readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
         /**
          * `subject` is the authenticated account subject of the cookie-gated
          * caller. The helper signs it INTO the OAuth state so the cross-site
@@ -639,6 +648,7 @@ export interface ControlPlaneOperations {
           readonly workspaceId: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
+          readonly scopeHints?: ConnectionScopeHints;
           /** Private Workspace admission tuple captured before OAuth awaits. */
           readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
         }): Promise<ConnectionOAuthStartResponse>;
@@ -670,6 +680,16 @@ export interface ControlPlaneOperations {
   listRunsPage?(
     workspaceId: string,
     options?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
+  /** Keyset page of one Capsule's Runs; absent on hosts without the seam. */
+  listCapsuleRunsPage?(
+    capsuleId: string,
+    options: {
+      readonly workspaceId: string;
+      readonly limit?: number;
+      readonly cursor?: string;
+      readonly types?: readonly RunType[];
+    },
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
   createCapsulePlan(
     capsuleId: string,

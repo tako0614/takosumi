@@ -1218,7 +1218,10 @@ export type ControlMembershipStatus = "active" | "invited" | "suspended";
  * `PublicWorkspaceMember`). `accountId` is the member's account subject — the same
  * value the session `/api/v1/account/session/me` returns for the signed-in caller —
  * so the view can match the caller against the roster to decide which mutation
- * controls to show. Carries no credential / email / PII beyond the handle.
+ * controls to show. The list read adds the member's account display name for
+ * every reader, and the member's email only when the caller is an active owner
+ * or admin of the Workspace (the server decides; members and viewers never
+ * receive another member's address). Mutation responses carry neither.
  */
 export interface PublicWorkspaceMember {
   readonly id: string;
@@ -1228,6 +1231,10 @@ export interface PublicWorkspaceMember {
   readonly status: ControlMembershipStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Account profile name; absent when the account has none. */
+  readonly displayName?: string;
+  /** Present only for owner/admin callers of the member list. */
+  readonly email?: string;
 }
 
 /**
@@ -2686,6 +2693,19 @@ export async function patchSource(
   const body = await controlFetch<unknown>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}`,
     { method: "PATCH", body: patch },
+  );
+  return decodeSourceEnvelope(body);
+}
+
+/**
+ * Deletes a Source. The server refuses a Source that a live Capsule still
+ * references and requires Workspace management authority, so callers treat a
+ * refusal as "kept", never as a failed install.
+ */
+export async function deleteSource(sourceId: string): Promise<Source> {
+  const body = await controlFetch<unknown>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}`,
+    { method: "DELETE" },
   );
   return decodeSourceEnvelope(body);
 }
@@ -4363,6 +4383,7 @@ export async function startConnectionOAuth(input: {
   readonly helperId: string;
   readonly workspaceId: string;
   readonly displayName?: string;
+  readonly scopeHints?: ConnectionScopeHints;
 }): Promise<ConnectionOAuthStart> {
   return await controlFetch<ConnectionOAuthStart>(
     `${BASE}/connections/oauth/${encodeURIComponent(input.helperId)}/start`,
@@ -4370,6 +4391,7 @@ export async function startConnectionOAuth(input: {
       method: "POST",
       body: {
         workspaceId: input.workspaceId,
+        ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
       },
     },
@@ -4389,10 +4411,25 @@ export function isOAuthUnavailable(error: unknown): boolean {
 export async function listCredentialRecipes(): Promise<
   readonly CredentialRecipe[]
 > {
+  return (await connectionSetupCatalog()).recipes;
+}
+
+export interface ConnectionOAuthSetup {
+  readonly id: string;
+  readonly providerSource: string;
+  readonly credentialRecipe: { readonly id: string; readonly authMode: string };
+  readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
+}
+
+export async function connectionSetupCatalog(): Promise<{
+  readonly recipes: readonly CredentialRecipe[];
+  readonly oauthHelpers: readonly ConnectionOAuthSetup[];
+}> {
   const body = await controlFetch<{
     recipes?: readonly CredentialRecipe[];
+    oauthHelpers?: readonly ConnectionOAuthSetup[];
   }>(`${BASE}/credential-recipes`);
-  return body.recipes ?? [];
+  return { recipes: body.recipes ?? [], oauthHelpers: body.oauthHelpers ?? [] };
 }
 
 // --- OutputShares ----------------------------------------------------------

@@ -12,6 +12,7 @@ import {
   ControlApiError,
   createApplyRun,
   getRun,
+  getRunCostInfo,
   getRunLogs,
   planCapsule,
   extractRunId,
@@ -20,28 +21,108 @@ import {
   openRunStream,
   type Run,
 } from "../../lib/control-api.ts";
-import { t } from "../../i18n/index.ts";
+import { type MessageKey, t } from "../../i18n/index.ts";
 import { Badge, Button, Checkbox, Spinner } from "../../components/ui/index.ts";
 import { fetchFailedMessage, friendlyError } from "../../lib/error-copy.ts";
 import { createLastGoodValue } from "../../lib/resource-read.ts";
+import {
+  formatUsdMicros,
+  readRunCost,
+  runCostDisplayHasContent,
+  runCostDisplayState,
+  type RunCostDisplayState,
+} from "../../lib/run-cost.ts";
+import CostSummary from "../../components/run/CostSummary.tsx";
+import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { runStatusLabel } from "../../lib/labels.ts";
 import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
 } from "../../lib/capsules-ui.ts";
-import { canAutoInstallRun } from "./install-lifecycle.ts";
 import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+
+/**
+ * Why this Plan is being reviewed. Every purpose shares the same review and
+ * apply rules (nothing applies before the explicit "Allow and …" click, no
+ * consent survives a reload or a URL); only the words change.
+ */
+export type ReviewPurpose = "install" | "update" | "apply" | "uninstall";
+
+interface ReviewCopy {
+  readonly title: MessageKey;
+  readonly hint: MessageKey;
+  readonly loading: MessageKey;
+  readonly loadingHint: MessageKey;
+  readonly allow: MessageKey;
+  readonly applying: MessageKey;
+  readonly applyingHint: MessageKey;
+  readonly blocked: MessageKey;
+  readonly failed: MessageKey;
+}
+
+const REVIEW_COPY: Readonly<Record<ReviewPurpose, ReviewCopy>> = {
+  install: {
+    title: "installStore.reviewTitle",
+    hint: "installStore.reviewHint",
+    loading: "installStore.reviewing",
+    loadingHint: "installStore.reviewingHint",
+    allow: "installStore.allowInstall",
+    applying: "installStore.installing",
+    applyingHint: "installStore.installingHint",
+    blocked: "installStore.planBlocked",
+    failed: "installStore.runFailed",
+  },
+  update: {
+    title: "app.review.updateTitle",
+    hint: "app.review.updateHint",
+    loading: "app.review.loading",
+    loadingHint: "app.review.loadingHint",
+    allow: "app.review.allowUpdate",
+    applying: "app.review.updating",
+    applyingHint: "app.review.applyingHint",
+    blocked: "app.review.blocked",
+    failed: "app.review.updateFailed",
+  },
+  apply: {
+    title: "app.review.applyTitle",
+    hint: "app.review.applyHint",
+    loading: "app.review.loading",
+    loadingHint: "app.review.loadingHint",
+    allow: "app.review.allowApply",
+    applying: "app.review.applying",
+    applyingHint: "app.review.applyingHint",
+    blocked: "app.review.blocked",
+    failed: "app.review.applyFailed",
+  },
+  uninstall: {
+    title: "app.review.uninstallTitle",
+    hint: "app.review.uninstallHint",
+    loading: "app.review.loading",
+    loadingHint: "app.review.loadingHint",
+    allow: "app.review.allowUninstall",
+    applying: "app.review.uninstalling",
+    applyingHint: "app.review.applyingHint",
+    blocked: "app.review.blocked",
+    failed: "app.review.uninstallFailed",
+  },
+};
 
 interface Props {
   readonly planRunId: string;
   readonly initialRunId?: string;
-  readonly installRequested?: boolean;
   readonly onState?: (state: "installing" | "failed" | "ready") => void;
   readonly capsuleId: string;
   readonly onDone: () => void;
   readonly onRestart?: () => Promise<void>;
   readonly restartLabel?: string;
+  /** Discards a never-applied attempt; omitted where the app is already installed. */
+  readonly onDiscard?: () => Promise<void>;
+  /** Defaults to the first install. */
+  readonly purpose?: ReviewPurpose;
+  /** Closes a review that can no longer be applied (failed or blocked). */
+  readonly onClose?: () => void;
 }
 
 const READINESS_READ_ATTEMPTS = 3;
@@ -170,7 +251,51 @@ export async function readInstallReadiness(
   }, retry);
 }
 
+/**
+ * The recorded change counts of a reviewed Plan, when they are a fact. A
+ * removal that reports no deletions did not record its counts — removing
+ * deletes by definition — so its counts are unknown rather than 0/0/0.
+ */
+export function reviewSummary(
+  run: Pick<Run, "type" | "summary"> | undefined,
+): Run["summary"] | undefined {
+  const recorded = run?.summary;
+  if (!recorded) return undefined;
+  if (run.type === "destroy_plan" && (recorded.destroy ?? 0) === 0) return undefined;
+  return recorded;
+}
+
+/**
+ * Whether applying needs the explicit "I reviewed these changes" check: any
+ * removal (a destroy Plan or a review opened to uninstall), unknown counts,
+ * deletions, or a Plan the host marked as needing approval.
+ */
+export function reviewNeedsConfirmation(
+  run: Pick<Run, "type" | "summary" | "requiresApproval"> | undefined,
+  purpose: ReviewPurpose | undefined,
+): boolean {
+  const counts = reviewSummary(run);
+  return (
+    run?.type === "destroy_plan" ||
+    purpose === "uninstall" ||
+    !counts ||
+    (counts.destroy ?? 0) > 0 ||
+    run?.requiresApproval === true
+  );
+}
+
+/** A reviewable Plan: an ordinary change or an uninstall's removal Plan. */
+function isReviewRun(type: Run["type"] | undefined): boolean {
+  return type === "plan" || type === "destroy_plan";
+}
+
+/** The Apply that executes a reviewed Plan. */
+function isApplyRun(type: Run["type"] | undefined): boolean {
+  return type === "apply" || type === "destroy_apply";
+}
+
 export default function InstallExecution(props: Props) {
+  const copy = () => REVIEW_COPY[props.purpose ?? "install"];
   const [runId, setRunId] = createSignal(props.initialRunId ?? props.planRunId);
   const [run, { mutate, refetch }] = createResource(runId, async (id) => {
     const value = await getRun(id);
@@ -198,7 +323,7 @@ export default function InstallExecution(props: Props) {
   const [restarting, setRestarting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [hasSeenApply, setHasSeenApply] = createSignal(false);
-  createEffect(() => { if (runLatest()?.type === "apply") setHasSeenApply(true); });
+  createEffect(() => { if (isApplyRun(runLatest()?.type)) setHasSeenApply(true); });
 
   createEffect(() => {
     const id = runId();
@@ -307,26 +432,47 @@ export default function InstallExecution(props: Props) {
     onCleanup(() => globalThis.clearTimeout(timer));
   });
 
-  const summary = () => runLatest()?.summary;
-  const countsKnown = () => Boolean(summary());
-  const destructive = () => {
+  // A removal has no new runtime to wait for: its finished Apply is the end.
+  let removalDoneFor: string | undefined;
+  createEffect(() => {
     const latest = runLatest();
-    return (
-      !countsKnown() ||
-      (summary()?.destroy ?? 0) > 0 ||
-      latest?.requiresApproval === true
-    );
-  };
+    if (
+      latest?.type === "destroy_apply" && latest.status === "succeeded" &&
+      removalDoneFor !== latest.id
+    ) {
+      removalDoneFor = latest.id;
+      props.onDone();
+    }
+  });
+
+  /** A removal Plan, or any review opened to uninstall. */
+  const isRemoval = () =>
+    runLatest()?.type === "destroy_plan" || props.purpose === "uninstall";
+  const summary = () => reviewSummary(runLatest());
+  // A removal always needs the explicit confirmation, whatever its counts say.
+  const destructive = () => reviewNeedsConfirmation(runLatest(), props.purpose);
   const planReady = () => {
     const latest = runLatest();
     return (
-      latest?.type === "plan" &&
-      latest.status === "succeeded" &&
+      isReviewRun(latest?.type) &&
+      latest?.status === "succeeded" &&
       latest.policyStatus === "pass"
     );
   };
 
+  const { confirm } = useConfirmDialog();
   const approve = async () => {
+    // Approving a removal starts removing live resources: never one click.
+    if (isRemoval()) {
+      const ok = await confirm({
+        title: t("run.approveConfirm.destroyTitle"),
+        message: t("run.approveConfirm.destroyMessageGeneric"),
+        confirmText: t("run.approve"),
+        cancelText: t("common.cancel"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
     setApproving(true);
     setError(null);
     try {
@@ -358,23 +504,16 @@ export default function InstallExecution(props: Props) {
     }
   };
 
-  // The in-memory Install click authorizes only this clean plan. It is never
-  // reconstructed from a URL or storage after reload. Unknown POSTs are held.
-  let autoInstallStarted = false;
+  // Apply starts only from the "Allow and install" click on the reviewed Plan.
+  // Nothing applies automatically, and no consent survives a reload or URL.
+  // Unknown POSTs are held.
   let observedInitialRun = props.initialRunId ?? props.planRunId;
   createEffect(() => {
     const id = props.initialRunId ?? props.planRunId;
     if (id === observedInitialRun) return;
     observedInitialRun = id;
-    autoInstallStarted = false;
     setConfirmed(false); setApplyUnconfirmed(false); setError(null);
     mutate(undefined); setRunId(id);
-  });
-  createEffect(() => {
-    if (props.installRequested && !autoInstallStarted && canAutoInstallRun(runLatest()) && !destructive()) {
-      autoInstallStarted = true;
-      void install();
-    }
   });
   const retryFailedApply = async () => {
     setRestarting(true); setError(null);
@@ -403,6 +542,53 @@ export default function InstallExecution(props: Props) {
     }
   };
 
+  // The review shows what the Plan will do in the user's cloud and what it is
+  // estimated to cost. A failed cost read is shown as unknown, never as free.
+  const reviewedPlanRunId = () => {
+    const latest = runLatest();
+    return isReviewRun(latest?.type) && latest?.status === "succeeded" ? latest.id : undefined;
+  };
+  const [planCost] = createResource(reviewedPlanRunId, (id) =>
+    readRunCost(() => getRunCostInfo(id)),
+  );
+  const costState = (): RunCostDisplayState | undefined => {
+    // Never show the previous Plan's cost while the current one loads.
+    if (planCost.loading) return undefined;
+    if (planCost.error) return { kind: "unavailable" };
+    const read = planCost();
+    return read ? runCostDisplayState(read) : undefined;
+  };
+  const costLine = (state: RunCostDisplayState): string | undefined => {
+    if (runCostDisplayHasContent(state)) return undefined;
+    return state.kind === "rated_zero"
+      ? t("installStore.costRatedZero", { amount: formatUsdMicros(0) })
+      : t("installStore.costNotApplicable");
+  };
+
+  const [discarding, setDiscarding] = createSignal(false);
+  const discard = async () => {
+    setDiscarding(true);
+    try {
+      await props.onDiscard?.();
+    } finally {
+      setDiscarding(false);
+    }
+  };
+  // Discarding is offered only before anything was applied.
+  const discardButton = () => (
+    <Show when={props.onDiscard && !hasSeenApply() && !applyUnconfirmed()}>
+      <Button
+        type="button"
+        variant="ghost"
+        busy={discarding()}
+        disabled={applying() || discarding()}
+        onClick={() => void discard()}
+      >
+        {props.purpose && props.purpose !== "install" ? t("app.review.cancel") : t("installStore.discard")}
+      </Button>
+    </Show>
+  );
+
   const failed = () => {
     const status = runLatest()?.status;
     return status === "failed" || status === "cancelled" || status === "expired";
@@ -412,14 +598,32 @@ export default function InstallExecution(props: Props) {
     props.onState?.(failed() || error() ? "failed" : planReady() ? "ready" : "installing");
   });
 
+  // Only the first install retries by re-planning the app as it stands. An
+  // update, version choice, rollback, settings change or removal was planned
+  // for a specific revision or operation, so its retry goes back through the
+  // request that created it (onRestart, with a fresh key) — or, without one,
+  // the review only closes.
+  const isInstall = () => (props.purpose ?? "install") === "install";
+  const canRetryApply = () => isInstall();
+  const canRestart = () => Boolean(props.onRestart) && (!isInstall() || !hasSeenApply());
+  const closeButton = () => (
+    <Show when={props.onClose}>
+      {(close) => (
+        <Button type="button" variant="ghost" onClick={() => close()()}>
+          {t("app.review.close")}
+        </Button>
+      )}
+    </Show>
+  );
+
   return (
     <section class="iv-execution" aria-labelledby="iv-review-title">
       <Show when={run.loading && !run.error && !runLatest()}>
         <div class="iv-status" role="status">
           <Spinner size={18} />
           <div>
-            <strong>{t("installStore.reviewing")}</strong>
-            <span>{t("installStore.reviewingHint")}</span>
+            <strong>{t(copy().loading)}</strong>
+            <span>{t(copy().loadingHint)}</span>
           </div>
         </div>
       </Show>
@@ -441,6 +645,7 @@ export default function InstallExecution(props: Props) {
           >
             {t("common.retry")}
           </Button>
+          {closeButton()}
         </div>
       </Show>
 
@@ -450,14 +655,14 @@ export default function InstallExecution(props: Props) {
             <div class="iv-review-head">
               <div>
                 <h2 id="iv-review-title">
-                  {current().type === "apply"
-                    ? t("installStore.installing")
-                    : t("installStore.reviewTitle")}
+                  {isApplyRun(current().type)
+                    ? t(copy().applying)
+                    : t(copy().title)}
                 </h2>
                 <p>
-                  {current().type === "apply"
-                    ? t("installStore.installingHint")
-                    : t("installStore.reviewHint")}
+                  {isApplyRun(current().type)
+                    ? t(copy().applyingHint)
+                    : t(copy().hint)}
                 </p>
               </div>
               <Badge
@@ -467,13 +672,13 @@ export default function InstallExecution(props: Props) {
                   readinessState(),
                 )}
               >
-                {current().type === "plan" && current().status === "succeeded"
+                {isReviewRun(current().type) && current().status === "succeeded"
                   ? t("installStore.reviewReady")
                   : runStatusLabel(current().status)}
               </Badge>
             </div>
 
-            <Show when={current().type === "plan" && summary()}>
+            <Show when={isReviewRun(current().type) && summary()}>
               <dl class="iv-change-counts" aria-label={t("installStore.changes")}>
                 <div>
                   <dt>{t("installStore.createCount")}</dt>
@@ -488,6 +693,25 @@ export default function InstallExecution(props: Props) {
                   <dd>{summary()?.destroy ?? 0}</dd>
                 </div>
               </dl>
+            </Show>
+
+            <Show when={reviewedPlanRunId()}>
+              <section data-testid="install-plan-resources">
+                <PlanResourceList resources={current().planResources ?? []} sortByAction />
+              </section>
+              <section class="iv-sheet-block" data-testid="install-plan-cost" aria-labelledby="iv-cost-title">
+                <h3 id="iv-cost-title">{t("installStore.costTitle")}</h3>
+                <Show when={costState()} fallback={<Spinner size={16} />}>
+                  {(state) => (
+                    <>
+                      <CostSummary state={state()} />
+                      <Show when={costLine(state())}>
+                        {(line) => <p class="iv-muted">{line()}</p>}
+                      </Show>
+                    </>
+                  )}
+                </Show>
+              </section>
             </Show>
 
             <Show when={current().status === "waiting_approval"}>
@@ -531,11 +755,12 @@ export default function InstallExecution(props: Props) {
                   variant="primary"
                   size="lg"
                   busy={applying()}
-                  disabled={applyUnconfirmed() || (destructive() && !confirmed())}
+                  disabled={applyUnconfirmed() || discarding() || (destructive() && !confirmed())}
                   onClick={() => void install()}
                 >
-                  {t("installStore.install")}
+                  {t(copy().allow)}
                 </Button>
+                {discardButton()}
                 <Button
                   href={`/runs/${encodeURIComponent(current().id)}`}
                   variant="ghost"
@@ -548,7 +773,7 @@ export default function InstallExecution(props: Props) {
 
             <Show
               when={
-                current().type === "plan" &&
+                isReviewRun(current().type) &&
                 current().status === "succeeded" &&
                 !planReady()
               }
@@ -556,22 +781,26 @@ export default function InstallExecution(props: Props) {
               <div class="iv-error" role="alert">
                 <AlertCircle size={18} aria-hidden="true" />
                 <div>
-                  <strong>{t("installStore.planBlocked")}</strong>
+                  <strong>{t(copy().blocked)}</strong>
                   <p>{t("installStore.planBlockedHint")}</p>
-                  <Button
-                    href={`/runs/${encodeURIComponent(current().id)}`}
-                    variant="secondary"
-                    icon={<ExternalLink size={16} />}
-                  >
-                    {t("installStore.runDetails")}
-                  </Button>
+                  <div class="iv-action-row">
+                    <Button
+                      href={`/runs/${encodeURIComponent(current().id)}`}
+                      variant="secondary"
+                      icon={<ExternalLink size={16} />}
+                    >
+                      {t("installStore.runDetails")}
+                    </Button>
+                    {discardButton()}
+                    {closeButton()}
+                  </div>
                 </div>
               </div>
             </Show>
 
             <Show
               when={
-                current().type === "apply" &&
+                isApplyRun(current().type) &&
                 !failed() &&
                 !readinessFailure() &&
                 readinessState() !== "activation_failed"
@@ -583,12 +812,12 @@ export default function InstallExecution(props: Props) {
                   <strong>
                     {current().status === "succeeded"
                       ? t("installStore.finalizing")
-                      : t("installStore.installing")}
+                      : t(copy().applying)}
                   </strong>
                   <span>
                     {current().status === "succeeded"
                       ? t("installStore.finalizingHint")
-                      : t("installStore.installingHint")}
+                      : t(copy().applyingHint)}
                   </span>
                 </div>
               </div>
@@ -640,21 +869,32 @@ export default function InstallExecution(props: Props) {
 
             <Show when={failed()}>
               <div class="iv-error" role="alert">
-                <strong>{t("installStore.runFailed")}</strong>
+                <strong>{t(copy().failed)}</strong>
                 <p>{runFailureHint(current().errorCode)}</p>
                 <div class="iv-action-row">
-                  <Show when={current().type === "apply"}>
+                  <Show when={isInstall() && isApplyRun(current().type) && canRetryApply()}>
                     <Button type="button" variant="primary" busy={restarting()} onClick={() => void retryFailedApply()}>{t("installStore.retryInstall")}</Button>
                   </Show>
-                  <Show when={current().type === "plan"}>
+                  <Show when={isInstall() && isReviewRun(current().type)}>
                     <Button
                       type="button"
                       variant="primary"
                       busy={restarting()}
                       disabled={restarting()}
-                      onClick={() => void (props.onRestart && !hasSeenApply() ? restartWithLatestSource() : retryFailedApply())}
+                      onClick={() => void (canRestart() ? restartWithLatestSource() : retryFailedApply())}
                     >
-                      {props.onRestart && !hasSeenApply() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : t("installStore.retryInstall")}
+                      {canRestart() ? (props.restartLabel ?? t("installStore.restartWithLatestSource")) : t("installStore.retryInstall")}
+                    </Button>
+                  </Show>
+                  <Show when={!isInstall() && canRestart()}>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      busy={restarting()}
+                      disabled={restarting()}
+                      onClick={() => void restartWithLatestSource()}
+                    >
+                      {props.restartLabel ?? t("app.review.retry")}
                     </Button>
                   </Show>
                   <Button
@@ -664,6 +904,7 @@ export default function InstallExecution(props: Props) {
                   >
                     {t("installStore.runDetails")}
                   </Button>
+                  {closeButton()}
                 </div>
               </div>
             </Show>
@@ -680,11 +921,17 @@ export default function InstallExecution(props: Props) {
         }</pre>}</Show>
       </details>
 
-      <Show when={error() && !readinessFailure()}>
+      {/* The keyed value must be the message itself; `error() && …` passed
+          `true` and rendered an empty alert. */}
+      <Show when={!readinessFailure() && error()}>
         {(message) => (
           <div class="iv-error" role="alert">
             <AlertCircle size={18} aria-hidden="true" />
             <p>{message()}</p>
+            {/* An Apply whose outcome is unknown is held — never retried from
+                here — but the review can close; the run detail and the app's
+                history show what happened. */}
+            <Show when={applyUnconfirmed()}>{closeButton()}</Show>
           </div>
         )}
       </Show>

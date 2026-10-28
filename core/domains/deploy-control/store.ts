@@ -140,6 +140,7 @@ import {
   type Run,
   type RunAuditEvent,
   type RunGroup,
+  type RunType,
 } from "takosumi-contract/runs";
 import { runIsInFlight } from "takosumi-contract/runs";
 import type { BackupRecord } from "takosumi-contract/backups";
@@ -693,6 +694,11 @@ export interface WorkspaceManagementAdmissionValidator {
   isWorkspaceManagementDraining?(
     expected: FreezeWorkspaceManagementExpectation,
   ): boolean;
+  /**
+   * Optional co-located read for the open install-attempt listing: whether a
+   * Capsule exists, is not destroyed and was never applied.
+   */
+  isNeverAppliedCapsule?(capsuleId: string): boolean;
 }
 
 export class WorkspaceManagementAdmissionConflictError extends Error {
@@ -1288,6 +1294,8 @@ function planRunPreparationIdentity(run: PlanRun) {
 export type StoredSecretBlobKind = string;
 
 export interface StoredSecretBlob {
+  /** Private durable single-flight claim. An expired claim requires reconnect, never blind reuse. */
+  readonly renewalLease?: { readonly owner: string; readonly expiresAt: string };
   readonly id: string;
   /** Opaque owner reference; not necessarily a ProviderConnection id. */
   readonly connectionId: string;
@@ -1337,6 +1345,8 @@ export interface CommitConnectionTestResultInput {
   /** null means material was observed absent, not an omitted CAS condition. */
   readonly expectedSecretBlob: StoredSecretBlob | null;
   readonly replacement: ProviderConnection;
+  /** Atomic renewal of the exact observed sealed material, never a new owner. */
+  readonly replacementSecretBlob?: StoredSecretBlob;
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
   readonly actorAuthority: ConnectionActorAuthority | null;
 }
@@ -1364,6 +1374,17 @@ export function prepareConnectionTestResult(
 ): CommitConnectionTestResultInput {
   const snapshot = structuredClone(input);
   const { expectedConnection, expectedSecretBlob, replacement } = snapshot;
+  const renewed = snapshot.replacementSecretBlob;
+  if (renewed?.renewalLease && (typeof renewed.renewalLease.owner !== "string" ||
+    !renewed.renewalLease.owner || renewed.renewalLease.owner.length > 100 ||
+    finiteConnectionTimestamp(renewed.renewalLease.expiresAt) === undefined)) {
+    throw new TypeError("Connection renewal lease must have a bounded owner and finite expiry");
+  }
+  if (renewed && (!expectedSecretBlob || renewed.id !== expectedSecretBlob.id ||
+    renewed.connectionId !== expectedConnection.id || renewed.workspaceId !== expectedConnection.workspaceId ||
+    renewed.kind !== expectedSecretBlob.kind || renewed.createdAt !== expectedSecretBlob.createdAt)) {
+    throw new TypeError("Connection renewal cannot replace sealed-material ownership");
+  }
   // Both commands require the same exact management scope, but verification
   // may replace only its own result fields, never identity or configuration.
   prepareConnectionRevocation(snapshot);
@@ -3467,6 +3488,14 @@ export interface StoredRunListPage {
   readonly hasMore: boolean;
 }
 
+export interface CapsuleRunListOptions {
+  readonly workspaceId: string;
+  readonly limit?: number;
+  readonly after?: RunListPosition;
+  /** Exact persisted run kinds (the public Run `type`); absent means all. */
+  readonly kinds?: readonly RunType[];
+}
+
 export interface RuntimeSecretRetirementDispatchClaimInput {
   readonly runId: string;
   /** The row must still be pending and no newer than this retry fence. */
@@ -3588,6 +3617,15 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listRunsByWorkspacePage(
     workspaceId: string,
     options?: { readonly limit?: number; readonly after?: RunListPosition },
+  ): Promise<StoredRunListPage>;
+  /**
+   * One Capsule's run rows in the Workspace listing's newest-first keyset
+   * order. The owning Workspace is matched as well as the Capsule, and
+   * `kinds` optionally narrows the rows to exact persisted run kinds.
+   */
+  listRunsByCapsulePage(
+    capsuleId: string,
+    options: CapsuleRunListOptions,
   ): Promise<StoredRunListPage>;
   /** Latest decisive mutation for runtime Interface safety, if one exists. */
   getCapsuleRuntimeSafety(
@@ -4464,6 +4502,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(true);
   }
 
+  isNeverAppliedCapsule(capsuleId: string): boolean {
+    const capsule = this.#capsules.get(capsuleId);
+    return capsule !== undefined && capsule.status !== "destroyed" &&
+      capsule.currentStateGeneration === 0 &&
+      capsule.currentStateVersionId === undefined;
+  }
+
   /** Named composition pairing; no async observer or generic blocker callback. */
   attachGitInstallPlanStore(store: InMemoryGitInstallPlanStore): void {
     if (!store.usesWorkspaceManagementAdmissionValidator(this)) {
@@ -5232,6 +5277,36 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       .filter((row) => row.workspaceId === workspaceId)
       .filter((row) => {
         const after = options.after;
+        if (!after) return true;
+        const timestamp = storedRunRecordTimestamp(row);
+        return timestamp < after.createdAtMillis ||
+          (timestamp === after.createdAtMillis && compareRunIdsBinary(row.id, after.id) < 0);
+      })
+      .sort((a, b) =>
+        storedRunRecordTimestamp(b) - storedRunRecordTimestamp(a) ||
+        compareRunIdsBinary(b.id, a.id)
+      )
+      .slice(0, limit + 1);
+    return Promise.resolve({
+      rows: rows.slice(0, limit).map(publicStoredRun),
+      hasMore: rows.length > limit,
+    });
+  }
+
+  listRunsByCapsulePage(
+    capsuleId: string,
+    options: CapsuleRunListOptions,
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    const kinds = options.kinds === undefined ? undefined : new Set<string>(options.kinds);
+    const after = options.after;
+    const rows = Array.from(this.#runs.values())
+      .filter((row) =>
+        row.workspaceId === options.workspaceId &&
+        storedRunRecordCapsuleId(row) === capsuleId &&
+        (kinds === undefined || kinds.has(storedRunRecordKind(row)))
+      )
+      .filter((row) => {
         if (!after) return true;
         const timestamp = storedRunRecordTimestamp(row);
         return timestamp < after.createdAtMillis ||
@@ -7501,7 +7576,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async commitConnectionTestResult(input: CommitConnectionTestResultInput): Promise<boolean> {
-    const { expectedConnection, expectedSecretBlob, replacement, expectedWorkspaceManagementAuthority, actorAuthority } =
+    const { expectedConnection, expectedSecretBlob, replacement, replacementSecretBlob, expectedWorkspaceManagementAuthority, actorAuthority } =
       prepareConnectionTestResult(input);
     if (expectedConnection.workspaceId !== undefined) {
       assertWorkspaceManagementAdmission(this.#workspaceManagement.get(expectedConnection.workspaceId),
@@ -7514,6 +7589,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       JSON.stringify(blob) !== JSON.stringify(expectedSecretBlob)) return false;
     // No await between the management, row and material predicates and write.
     this.#connections.set(replacement.id, replacement);
+    if (replacementSecretBlob) this.#secretBlobs.set(replacement.id, replacementSecretBlob);
     return true;
   }
 
@@ -8764,6 +8840,30 @@ function isPublicRunRecord(row: StoredRunRecord): row is Run {
     !isApplyRunRecord(row) &&
     !isSourceSyncRunRecord(row)
   );
+}
+
+/**
+ * The persisted run kind of a ledger row: the SQL stores' `type`/`kind`
+ * column, which equals the public Run `type`.
+ */
+function storedRunRecordKind(row: StoredRunRecord): string {
+  if (isPlanRunRecord(row)) {
+    return row.driftCheck === true
+      ? "drift_check"
+      : row.operation === "destroy"
+        ? "destroy_plan"
+        : "plan";
+  }
+  if (isApplyRunRecord(row)) {
+    return row.operation === "destroy" ? "destroy_apply" : "apply";
+  }
+  if (isSourceSyncRunRecord(row)) return "source_sync";
+  return row.type;
+}
+
+/** The Capsule column the SQL stores persist for a ledger row. */
+function storedRunRecordCapsuleId(row: StoredRunRecord): string | undefined {
+  return isSourceSyncRunRecord(row) ? undefined : row.capsuleId;
 }
 
 export function isRestoreRunRecord(row: StoredRunRecord): row is Run {

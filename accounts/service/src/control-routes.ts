@@ -565,6 +565,7 @@ export async function handleControlRoute(
         store,
         url,
         connectionOAuthHelperId,
+        request,
       );
       return appendServerTiming(response, timings);
     } catch (error) {

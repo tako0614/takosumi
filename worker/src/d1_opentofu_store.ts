@@ -155,6 +155,7 @@ import type {
   RecoverableOpenTofuRunListOptions,
   RunListPosition,
   StoredRunListPage,
+  CapsuleRunListOptions,
   RunManagementAuthorityInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseInput,
   RenewCapsuleInterfaceMaterializationIntentLeaseResult,
@@ -4544,6 +4545,52 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     };
   }
 
+  async listRunsByCapsulePage(
+    capsuleId: string,
+    options: CapsuleRunListOptions,
+  ): Promise<StoredRunListPage> {
+    const limit = clampRunListLimit(options.limit);
+    if (options.kinds !== undefined && options.kinds.length === 0) {
+      return { rows: [], hasMore: false };
+    }
+    const createdAtMillis = d1RunCreatedAtMillisOrder();
+    const idOrder = sql`${schema.runs.id} COLLATE BINARY`;
+    const after = options.after;
+    // Served by runs_installation_idx; the newest-first sort only spans this
+    // one Capsule's rows.
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          eq(schema.runs.capsuleId, capsuleId),
+          eq(schema.runs.workspaceId, options.workspaceId),
+          options.kinds !== undefined
+            ? inArray(schema.runs.type, [...options.kinds])
+            : undefined,
+          after
+            ? or(
+                lt(createdAtMillis, after.createdAtMillis),
+                and(
+                  eq(createdAtMillis, after.createdAtMillis),
+                  lt(idOrder, after.id),
+                ),
+              )
+            : undefined,
+        ),
+        orderBy: [desc(createdAtMillis), desc(idOrder)],
+        limit: limit + 1,
+      },
+    );
+    const decoded = rows
+      .map((row) => d1StoredRunFromD1Value(row))
+      .filter((row): row is StoredRunRecord => row !== undefined);
+    return {
+      rows: decoded.slice(0, limit).map(publicStoredRun),
+      hasMore: decoded.length > limit,
+    };
+  }
+
   async getCapsuleRuntimeSafety(
     capsuleId: string,
     options: { readonly excludeRunId?: string } = {},
@@ -8907,6 +8954,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       expectedConnection,
       expectedSecretBlob,
       replacement,
+      replacementSecretBlob,
       expectedWorkspaceManagementAuthority,
       actorAuthority,
     } = prepareConnectionTestResult(input);
@@ -8966,6 +9014,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         expectedConnection,
         expectedSecretBlob,
       ),
+      ...(replacementSecretBlob ? [this.#orm.update(schema.secretBlobs).set({
+        ciphertext: replacementSecretBlob.ciphertext, encryptedDek: replacementSecretBlob.encryptedDek,
+        nonce: replacementSecretBlob.nonce, aad: replacementSecretBlob.aad,
+        keyVersion: replacementSecretBlob.keyVersion, rotatedAt: replacementSecretBlob.rotatedAt ?? null,
+        blobJson: replacementSecretBlob,
+      }).where(eq(schema.secretBlobs.connectionId, expectedConnection.id))] : []),
       this.#orm
         .update(schema.connections)
         .set({

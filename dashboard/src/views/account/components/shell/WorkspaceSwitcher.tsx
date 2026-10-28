@@ -1,32 +1,35 @@
 /**
- * Global Workspace switcher: the single owner of "which Workspace am I
- * working in" for the whole dashboard (GitHub org-switcher analogue).
+ * Workspace switcher (スペース in the Japanese UI): the single owner of
+ * "which workspace am I using" for the whole dashboard.
  *
- * Replaces the per-view `lib/workspace-state.ts` signal: every view
- * now reads the same `workspace-state.ts` signal this control writes. It lists
- * a bounded recent Workspace projection, always pins the current Workspace,
- * and defaults to the first Workspace when none is selected. The inline create
- * action asks for the human purpose/name only; the dashboard generates the
- * stable public API handle and surfaces it only when it helps distinguish
- * duplicate display names.
+ * Workspaces matter (one person alone, one person keeping environments apart,
+ * a team) but stay out of the way: with a single workspace the chrome shows no
+ * switcher and no workspace name at all. The switcher appears once there are
+ * two or more workspaces, and it lists them by name — never by the generated
+ * API handle (see lib/workspace-labels.ts). New workspaces are offered by
+ * purpose (環境を分ける / チームで使う); a team workspace continues to member
+ * invites.
  *
- * The picker is a lightweight popover menu (not a native `<select>`): one tap
- * on the current-workspace chip opens a list with the active one checked.
+ * Every view reads the same `workspace-state.ts` selection this control
+ * writes. The initial read is a bounded recent projection that always pins the
+ * current workspace; opening the menu discovers the first cursor and "load more"
+ * keeps every workspace reachable.
  */
 import { A, useLocation, useNavigate } from "@solidjs/router";
-import { Check, ChevronsUpDown, Plus, Settings } from "lucide-solid";
+import { Check, ChevronsUpDown, Layers, Settings, Users } from "lucide-solid";
 import {
   createEffect,
   createMemo,
   createResource,
   createSignal,
   For,
+  Match,
   onCleanup,
   Show,
+  Switch,
   untrack,
 } from "solid-js";
 import {
-  createWorkspace,
   DASHBOARD_WORKSPACE_LIST_LIMIT,
   listWorkspacePage,
   type Workspace,
@@ -42,128 +45,88 @@ import {
   selectWorkspaceFromQuery,
   setCurrentWorkspaceId,
 } from "../../../../lib/workspace-state.ts";
-import { friendlyError } from "../../../../lib/error-copy.ts";
-import { createAction } from "../../lib/action.tsx";
+import {
+  duplicatedWorkspaceNames,
+  workspaceDisambiguator,
+  workspaceName,
+  type WorkspacePurpose,
+} from "../../../../lib/workspace-labels.ts";
+import { fetchFailedMessage, friendlyError } from "../../../../lib/error-copy.ts";
 import { t } from "../../../../i18n/index.ts";
-import { Button } from "../../../../components/ui/index.ts";
-import { fetchFailedMessage } from "../../../../lib/error-copy.ts";
+import WorkspaceCreateForm from "../WorkspaceCreateForm.tsx";
 
 interface Props {
   readonly compact?: boolean;
 }
 
 function workspaceInitial(name: string): string {
-  const trimmed = name.trim();
-  return (trimmed[0] ?? "?").toUpperCase();
+  return (name.trim()[0] ?? "?").toUpperCase();
 }
 
 /**
- * Fresh valid public API handle candidate for a workspace created from the
- * switcher (same time+random recipe as the /new and launcher first-workspace
- * flows); global uniqueness is service-enforced, including collision errors.
- * The primary flow asks only for the display name they typed.
+ * Routes whose content belongs to one app or run, not to the selected workspace.
+ * After a switch they would keep showing — and accepting actions on — the
+ * previous workspace's object, so the switch returns to ホーム.
  */
-function newWorkspaceHandle(): string {
-  const time = Date.now().toString(36).slice(-6);
-  const random = Math.random().toString(36).slice(2, 8) || "new";
-  return `workspace-${time}-${random}`.slice(0, 39);
-}
+const ENTITY_SCOPED_ROUTES: readonly RegExp[] = [
+  /^\/workloads\/[^/]+/u,
+  /^\/runs\/[^/]+/u,
+  /^\/run-groups\/[^/]+/u,
+];
 
 export default function WorkspaceSwitcher(props: Props = {}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const [workspaces, { mutate, refetch }] = createResource(() =>
+  const [workspaces, { refetch }] = createResource(() =>
     listWorkspacesCached({
       selectedWorkspaceId: currentWorkspaceId() || undefined,
     }),
   );
-  const [switcherOpen, setSwitcherOpen] = createSignal(false);
-  const [switcherPage, setSwitcherPage] =
-    createSignal<WorkspaceListPage | null>(null);
-  const [switcherPageLoading, setSwitcherPageLoading] = createSignal(false);
-  const [switcherPageError, setSwitcherPageError] = createSignal<string | null>(
-    null,
-  );
+  const [open, setOpen] = createSignal(false);
+  const [page, setPage] = createSignal<WorkspaceListPage | null>(null);
+  const [pageLoading, setPageLoading] = createSignal(false);
+  const [pageError, setPageError] = createSignal<string | null>(null);
+  const [creating, setCreating] = createSignal<WorkspacePurpose | null>(null);
   // Reading an errored createResource THROWS. This switcher is mounted in BOTH
-  // the sidebar and the topbar, so an unguarded read would take the whole
-  // chrome down on every page when the workspace list fails (and its written
-  // error UI below would never render). Guard on `.error` and fall back to the
-  // last-known list — mirrors RunsListView / ActivityView.
+  // the sidebar and the top bar, so an unguarded read would take the whole
+  // chrome down on every page when the workspace list fails.
   const loadedWorkspaces = createMemo(() =>
     mergeWorkspaceLists(
       workspaces.error ? [] : (workspaces.latest ?? []),
-      switcherPage()?.workspaces ?? [],
+      page()?.workspaces ?? [],
     ),
   );
   const selectedWorkspaceId = createMemo(() =>
-    selectWorkspaceFromQuery(
-      "",
-      currentWorkspaceId(),
-      loadedWorkspaces(),
-    ),
+    selectWorkspaceFromQuery("", currentWorkspaceId(), loadedWorkspaces()),
   );
   const selectedWorkspace = createMemo(() =>
-    loadedWorkspaces().find(
-      (workspace) => workspace.id === selectedWorkspaceId(),
-    ),
+    loadedWorkspaces().find((workspace) => workspace.id === selectedWorkspaceId()),
   );
-  const selectedWorkspaceName = createMemo(() => {
+  const duplicates = createMemo(() => duplicatedWorkspaceNames(loadedWorkspaces()));
+  const selectedName = () => {
     const workspace = selectedWorkspace();
-    return workspace?.displayName?.trim() || workspace?.handle || t("workspace.none");
-  });
-  const switcherId = () =>
-    props.compact ? "workspace-switcher-compact" : "workspace-switcher-sidebar";
-  const workspaceName = (workspace: Workspace) =>
-    workspace.displayName?.trim() || workspace.handle;
-  const workspaceNameCounts = createMemo(() => {
-    const counts = new Map<string, number>();
-    for (const workspace of loadedWorkspaces()) {
-      const name = workspaceName(workspace);
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-    return counts;
-  });
-  const showsWorkspaceHandle = (workspace: Workspace) =>
-    Boolean(
-      workspace.displayName?.trim() &&
-        (workspaceNameCounts().get(workspaceName(workspace)) ?? 0) > 1,
-    );
-  const workspaceHandleLabel = (workspace: Workspace) =>
-    `@${workspace.handle}`;
-  const selectedWorkspaceLabel = createMemo(() => {
-    const workspace = selectedWorkspace();
-    return workspace && showsWorkspaceHandle(workspace)
-      ? `${selectedWorkspaceName()} ${workspaceHandleLabel(workspace)}`
-      : selectedWorkspaceName();
-  });
-
-  // Reconcile persisted Workspace selection after sign-in. A browser can keep
-  // the previous user's localStorage value, so never keep an id that is absent
-  // from the loaded Workspace list.
-  //
-  // `currentWorkspaceId` is read UNTRACKED: this reconciliation must fire when a
-  // freshly loaded list arrives, NOT every time the selection changes. Tracking
-  // it made creating a Workspace flap — `setCurrentWorkspaceId(new)` re-ran this
-  // against the still-stale list (new id absent), which reset the selection back
-  // to the first Workspace before the refetch could land the new one.
-  const onLoaded = (list: readonly Workspace[]) => {
-    const current = untrack(currentWorkspaceId);
-    const next = selectWorkspaceFromQuery("", current, list);
-    if (next !== current) {
-      setCurrentWorkspaceId(next);
-    }
-    if (!next) setSwitcherOpen(false);
-    return list;
+    return workspace ? workspaceName(workspace) : "";
   };
+  /** Only two or more workspaces need a switcher. */
+  const visible = () => !workspaces.loading && loadedWorkspaces().length >= 2;
+  const menuId = () =>
+    props.compact ? "workspace-switcher-compact" : "workspace-switcher-sidebar";
 
+  // Reconcile a persisted selection after sign-in: a browser can keep the
+  // previous user's value, so never keep an id absent from the loaded list.
+  // The selection is read UNTRACKED — reconciling on every selection change
+  // made a just-created workspace flap back to the first one before the refetch
+  // landed it.
   createEffect(() => {
     if (workspaces.loading) return;
-    // A failed list read is not evidence that the user has no Workspaces.
-    // Reconciling against the empty fallback cleared the persisted selection,
-    // so `/` offered to create a "first" Workspace and an in-progress add flow
-    // reset. Keep the selection until a list actually loads.
+    // A failed read is not evidence that the user has no workspaces; keep the
+    // selection until a list actually loads.
     if (workspaces.error) return;
-    onLoaded(loadedWorkspaces());
+    const list = loadedWorkspaces();
+    const current = untrack(currentWorkspaceId);
+    const next = selectWorkspaceFromQuery("", current, list);
+    if (next !== current) setCurrentWorkspaceId(next);
+    if (!next) setOpen(false);
   });
 
   let rootRef: HTMLDivElement | undefined;
@@ -172,50 +135,38 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   if (typeof window !== "undefined") {
     const refreshWorkspaces = () => {
       clearWorkspaceListCache();
-      setSwitcherPage(null);
-      setSwitcherPageError(null);
+      setPage(null);
+      setPageError(null);
       void refetch();
     };
     window.addEventListener("takosumi:workspaces-changed", refreshWorkspaces);
-    // Dismiss the popover on an outside click, Escape, or focus moving out.
-    const onPointerDown = (event: MouseEvent) => {
-      if (!switcherOpen()) return;
-      if (rootRef && !rootRef.contains(event.target as Node)) {
-        setSwitcherOpen(false);
-      }
+    const dismissOutside = (event: Event) => {
+      if (!open()) return;
+      if (rootRef && !rootRef.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && switcherOpen()) {
-        setSwitcherOpen(false);
+      if (event.key === "Escape" && open()) {
+        setOpen(false);
         triggerRef?.focus();
       }
     };
-    const onFocusIn = (event: FocusEvent) => {
-      if (!switcherOpen()) return;
-      if (rootRef && !rootRef.contains(event.target as Node)) {
-        setSwitcherOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerdown", dismissOutside);
+    window.addEventListener("focusin", dismissOutside);
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("focusin", onFocusIn);
     onCleanup(() => {
-      window.removeEventListener(
-        "takosumi:workspaces-changed",
-        refreshWorkspaces,
-      );
-      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("takosumi:workspaces-changed", refreshWorkspaces);
+      window.removeEventListener("pointerdown", dismissOutside);
+      window.removeEventListener("focusin", dismissOutside);
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("focusin", onFocusIn);
     });
   }
 
-  const loadSwitcherPage = async (cursor?: string) => {
-    if (switcherPageLoading()) return;
-    setSwitcherPageLoading(true);
-    setSwitcherPageError(null);
+  const loadPage = async (cursor?: string) => {
+    if (pageLoading()) return;
+    setPageLoading(true);
+    setPageError(null);
     try {
-      const page = await listWorkspacePage({
+      const next = await listWorkspacePage({
         limit: DASHBOARD_WORKSPACE_LIST_LIMIT,
         order: "updated_desc",
         ...(cursor ? { cursor } : {}),
@@ -224,109 +175,52 @@ export default function WorkspaceSwitcher(props: Props = {}) {
           : {}),
       });
       const merged = mergeWorkspaceLists(
-        cursor ? (switcherPage()?.workspaces ?? []) : [],
-        page.workspaces,
+        cursor ? (page()?.workspaces ?? []) : [],
+        next.workspaces,
       );
-      setSwitcherPage({
-        ...page,
-        workspaces: merged,
-        returned: merged.length,
-      });
+      setPage({ ...next, workspaces: merged, returned: merged.length });
     } catch (error) {
-      setSwitcherPageError(friendlyError(error, t).message);
+      setPageError(friendlyError(error, t).message);
     } finally {
-      setSwitcherPageLoading(false);
+      setPageLoading(false);
     }
   };
 
-  const toggleSwitcher = () => {
-    const open = !switcherOpen();
-    setSwitcherOpen(open);
-    if (open && switcherPage() === null) void loadSwitcherPage();
+  const toggle = () => {
+    const next = !open();
+    setOpen(next);
+    if (next && page() === null) void loadPage();
+  };
+  const loadMore = () => {
+    const cursor = page()?.nextCursor;
+    if (cursor) void loadPage(cursor);
   };
 
-  const loadMoreSwitcherWorkspaces = () => {
-    const cursor = switcherPage()?.nextCursor;
-    if (cursor) void loadSwitcherPage(cursor);
-  };
-
-  /**
-   * Routes whose content belongs to a specific entity, not to the selected
-   * workspace. They read their scope from the entity id in the URL, so after a
-   * switch they keep rendering — and keep accepting destructive actions on —
-   * the PREVIOUS workspace's object while the chrome says otherwise.
-   */
-  const ENTITY_SCOPED_ROUTES: readonly (readonly [RegExp, string])[] = [
-    [/^\/workloads\/[^/]+/u, "/workloads"],
-    [/^\/runs\/[^/]+/u, "/runs"],
-    [/^\/run-groups\/[^/]+/u, "/runs"],
-  ];
   const choose = (id: string) => {
     setCurrentWorkspaceId(id);
-    setSwitcherOpen(false);
-    const match = ENTITY_SCOPED_ROUTES.find(([pattern]) =>
-      pattern.test(location.pathname),
-    );
-    if (match) navigate(match[1]);
-    // Closing removes the focused menu item from the DOM; without this,
-    // focus falls back to <body>.
-    triggerRef?.focus();
-  };
-
-  // ----- inline workspace creation ------------------------------------------
-  // The primary flow asks only for a purpose/name. Handles remain stable public
-  // API identifiers; this dashboard generates them and keeps their grammar out
-  // of the primary flow, showing them only for disambiguation when needed.
-  const [createOpen, setCreateOpen] = createSignal(false);
-  const [createName, setCreateName] = createSignal("");
-  let createInputRef: HTMLInputElement | undefined;
-
-  const onNameInput = (value: string) => setCreateName(value);
-  const resetCreateForm = () => {
-    setCreateName("");
-  };
-
-  const create = createAction(async () => {
-    const displayName = createName().trim();
-    if (!displayName) throw new Error(t("workspace.create.nameRequired"));
-    const workspace = await createWorkspace({
-      handle: newWorkspaceHandle(),
-      displayName,
-      type: "personal",
-    });
-    clearWorkspaceListCache();
-    // Reflect the new Workspace in this switcher immediately (the refetch below
-    // replaces it with the canonical list); selecting it before the list settles
-    // is now safe because the reconcile effect reads the selection untracked.
-    mutate((prev) => [...(prev ?? []), workspace]);
-    setCurrentWorkspaceId(workspace.id);
-    window.dispatchEvent(new Event("takosumi:workspaces-changed"));
-    resetCreateForm();
-    setCreateOpen(false);
-    setSwitcherOpen(false);
-    triggerRef?.focus();
-    return workspace;
-  });
-
-  // Re-opening the popover starts back at the workspace list, not a stale
-  // half-open create form.
-  createEffect(() => {
-    if (!switcherOpen()) setCreateOpen(false);
-  });
-  // Whenever the create form is closed (cancel, success, or dismissing the
-  // popover) drop its inputs and any error so it always reopens clean.
-  createEffect(() => {
-    if (!createOpen()) {
-      resetCreateForm();
-      create.clearError();
+    setOpen(false);
+    if (ENTITY_SCOPED_ROUTES.some((pattern) => pattern.test(location.pathname))) {
+      navigate("/");
     }
-  });
+    // Closing removes the focused item from the DOM; keep focus on the trigger.
+    triggerRef?.focus();
+  };
+
+  const created = (_workspace: Workspace, purpose: WorkspacePurpose) => {
+    setCreating(null);
+    setOpen(false);
+    // A team workspace exists to be shared: continue straight to inviting people.
+    if (purpose === "team") navigate("/account/members");
+    else triggerRef?.focus();
+  };
+
+  // Re-opening the menu starts at the workspace list, not a half-open form.
   createEffect(() => {
-    if (createOpen()) queueMicrotask(() => createInputRef?.focus());
+    if (!open()) setCreating(null);
   });
 
-  // role="menu" keyboard model: move focus into the menu on open (landing on
-  // the checked workspace), then arrows / Home / End rove between items.
+  // role="menu" keyboard model: focus the checked workspace on open, then arrows /
+  // Home / End rove between items. It stands down inside the create form.
   const menuItems = (): HTMLElement[] =>
     menuRef
       ? Array.from(
@@ -335,32 +229,27 @@ export default function WorkspaceSwitcher(props: Props = {}) {
           ),
         )
       : [];
-
   createEffect(() => {
-    if (!switcherOpen()) return;
+    if (!open() || creating()) return;
     queueMicrotask(() => {
       const items = menuItems();
-      const current = items.find(
-        (el) => el.getAttribute("aria-checked") === "true",
-      );
+      const current = items.find((el) => el.getAttribute("aria-checked") === "true");
       (current ?? items[0])?.focus();
     });
   });
-
   const onMenuKeyDown = (event: KeyboardEvent) => {
-    // Inside the create form, arrows/Home/End edit the input's caret and Tab
-    // moves between its controls — the menu roving model must stand down.
-    const target = event.target as HTMLElement | null;
-    if (target?.closest(".topbar-workspace-create")) return;
+    if ((event.target as HTMLElement | null)?.closest(".workspace-create-form")) return;
     const items = menuItems();
     if (items.length === 0) return;
-    const idx = items.indexOf(document.activeElement as HTMLElement);
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const focusAt = (next: number) =>
+      items[(next + items.length) % items.length]?.focus();
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      items[(idx + 1 + items.length) % items.length]?.focus();
+      focusAt(index + 1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      items[(idx - 1 + items.length) % items.length]?.focus();
+      focusAt(index - 1);
     } else if (event.key === "Home") {
       event.preventDefault();
       items[0]?.focus();
@@ -368,292 +257,175 @@ export default function WorkspaceSwitcher(props: Props = {}) {
       event.preventDefault();
       items[items.length - 1]?.focus();
     } else if (event.key === "Tab") {
-      // Menus close on Tab. Refocus the trigger first (without
-      // preventDefault) so the default Tab continues from it instead of
-      // from the removed menu item.
-      setSwitcherOpen(false);
+      setOpen(false);
       triggerRef?.focus();
     }
   };
 
   return (
-    <div
-      class="topbar-workspace"
-      classList={{ compact: props.compact }}
-      ref={rootRef}
-    >
-      <Show when={!props.compact}>
-        <div class="topbar-workspace-header">
-          <span class="topbar-workspace-label">{t("workspace.label")}</span>
-        </div>
-      </Show>
-      <div class="topbar-workspace-row">
-        <Show
-          when={!workspaces.loading && loadedWorkspaces().length > 0}
-          fallback={
-            // On error, suppress the "no workspaces" text — the error line
-            // below states what actually happened instead of implying empty.
-            <Show when={!workspaces.error}>
-              <Show
-                when={!workspaces.loading}
-                fallback={
-                  <span class="topbar-workspace-empty">
-                    {t("workspace.loading")}
-                  </span>
-                }
-              >
-                {/* Zero workspaces is the one state where creating one is
-                    mandatory — and it used to be the one state where the
-                    create control was unreachable (it lives inside a popover
-                    that only opens when a workspace already exists). */}
-                <a href="/" class="topbar-workspace-empty-cta">
-                  <Plus size={15} aria-hidden="true" />
-                  <span>{t("workspace.start.create")}</span>
-                </a>
-              </Show>
-            </Show>
-          }
-        >
-          <div class="topbar-workspace-picker">
+    <Show when={visible() || workspaces.error}>
+      <div
+        class="workspace-switcher"
+        classList={{ compact: props.compact }}
+        ref={rootRef}
+      >
+        <Show when={visible()}>
+          <div class="workspace-switcher-picker">
             <button
               type="button"
-              class="topbar-workspace-current"
-              // Names the current Workspace even in the compact topbar; the
-              // CSS truncates long names instead of reducing the control to an
-              // unlabeled initial.
-              aria-label={t("workspace.switcherAria", {
-                name: selectedWorkspaceLabel(),
-              })}
+              class="workspace-switcher-current"
+              aria-label={t("workspace.switcherAria", { name: selectedName() })}
               aria-haspopup="menu"
-              aria-expanded={switcherOpen()}
-              aria-controls={switcherId()}
+              aria-expanded={open()}
+              aria-controls={menuId()}
               ref={triggerRef}
-              onClick={toggleSwitcher}
+              onClick={toggle}
             >
-              <span class="topbar-workspace-avatar" aria-hidden="true">
-                {workspaceInitial(selectedWorkspaceName())}
+              <span class="workspace-switcher-avatar" aria-hidden="true">
+                {workspaceInitial(selectedName())}
               </span>
-              <span class="topbar-workspace-name">
-                {selectedWorkspaceName()}
-              </span>
-              <Show when={selectedWorkspace()}>
-                {(workspace) => (
-                  <Show when={showsWorkspaceHandle(workspace())}>
-                    <span class="topbar-workspace-current-handle">
-                      {workspaceHandleLabel(workspace())}
-                    </span>
-                  </Show>
-                )}
-              </Show>
-              <Show when={loadedWorkspaces().length > 1}>
-                <ChevronsUpDown
-                  class="topbar-workspace-caret"
-                  size={15}
-                  aria-hidden="true"
-                />
-              </Show>
+              <span class="workspace-switcher-name">{selectedName()}</span>
+              <ChevronsUpDown
+                class="workspace-switcher-caret"
+                size={15}
+                aria-hidden="true"
+              />
             </button>
-            <Show when={switcherOpen()}>
+            <Show when={open()}>
               <div
-                class="topbar-workspace-menu"
-                id={switcherId()}
-                // The inline create <form> is invalid content for role="menu"
-                // (menus allow only menuitem-family children); while it is open
-                // present the popover as a dialog instead. The menu's roving
-                // model already stands down inside the create form.
-                role={createOpen() ? "dialog" : "menu"}
-                aria-labelledby={`${switcherId()}-label`}
+                class="workspace-switcher-menu"
+                id={menuId()}
+                // A <form> is invalid content for role="menu"; while the create
+                // form is open the popover is presented as a dialog.
+                role={creating() ? "dialog" : "menu"}
+                aria-labelledby={`${menuId()}-label`}
                 ref={menuRef}
                 onKeyDown={onMenuKeyDown}
               >
-                <div
-                  class="topbar-workspace-menu-head"
-                  id={`${switcherId()}-label`}
-                >
+                <div class="workspace-switcher-menu-head" id={`${menuId()}-label`}>
                   {t("workspace.label")}
                 </div>
-                <ul class="topbar-workspace-menu-list" role="none">
-                  <For each={loadedWorkspaces()}>
-                    {(workspace) => (
-                      <li role="none">
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={workspace.id === selectedWorkspaceId()}
-                          class="topbar-workspace-item"
-                          classList={{
-                            current: workspace.id === selectedWorkspaceId(),
+                <Switch>
+                  <Match when={creating()}>
+                    {(purpose) => (
+                      <div class="workspace-switcher-create">
+                        <WorkspaceCreateForm
+                          purpose={purpose()}
+                          idPrefix={`${menuId()}-create`}
+                          autofocus
+                          onCreated={created}
+                          onCancel={() => {
+                            setCreating(null);
+                            queueMicrotask(() => menuItems()[0]?.focus());
                           }}
-                          onClick={() => choose(workspace.id)}
-                        >
-                          <span
-                            class="topbar-workspace-avatar"
-                            aria-hidden="true"
-                          >
-                            {workspaceInitial(workspaceName(workspace))}
-                          </span>
-                          <span class="topbar-workspace-item-name">
-                            {workspaceName(workspace)}
-                          </span>
-                          <Show when={showsWorkspaceHandle(workspace)}>
-                            <span class="topbar-workspace-item-handle">
-                              {workspaceHandleLabel(workspace)}
-                            </span>
-                          </Show>
-                          <Show when={workspace.id === selectedWorkspaceId()}>
-                            <Check
-                              class="topbar-workspace-check"
-                              size={16}
-                              aria-hidden="true"
-                            />
-                          </Show>
-                        </button>
-                      </li>
+                        />
+                      </div>
                     )}
-                  </For>
-                </ul>
-                <Show when={!createOpen() && switcherPage()?.nextCursor}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="topbar-workspace-settings"
-                    disabled={switcherPageLoading()}
-                    onClick={loadMoreSwitcherWorkspaces}
-                  >
-                    <span>
-                      {switcherPageLoading()
-                        ? t("workspace.loading")
-                        : t("common.loadMore")}
-                    </span>
-                  </button>
-                </Show>
-                <Show when={switcherPageError()}>
-                  {(message) => (
-                    <p class="topbar-workspace-error" role="alert">
-                      {t("workspace.loadFailed", { message: message() })}
-                    </p>
-                  )}
-                </Show>
-                <Show
-                  when={createOpen()}
-                  fallback={
-                    <button
-                      type="button"
-                      role="menuitem"
-                      class="topbar-workspace-settings"
-                      onClick={() => setCreateOpen(true)}
-                    >
-                      <Plus size={15} aria-hidden="true" />
-                      <span>{t("workspace.start.create")}</span>
-                    </button>
-                  }
-                >
-                  <form
-                    class="topbar-workspace-create"
-                    style={{
-                      display: "flex",
-                      "flex-direction": "column",
-                      gap: "8px",
-                      padding: "8px",
-                    }}
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void create.run();
-                    }}
-                  >
-                    <label
-                      class="tg-field-label"
-                      for={`${switcherId()}-create-name`}
-                    >
-                      {t("workspace.create.nameLabel")}
-                    </label>
-                    <input
-                      id={`${switcherId()}-create-name`}
-                      class="tg-input"
-                      type="text"
-                      required
-                      value={createName()}
-                      onInput={(event) =>
-                        onNameInput(event.currentTarget.value)
-                      }
-                      placeholder={t("workspace.create.namePlaceholder")}
-                      aria-describedby={`${switcherId()}-create-name-help${
-                        create.error()
-                          ? ` ${switcherId()}-create-error`
-                          : ""
-                      }`}
-                      autocomplete="off"
-                      spellcheck={false}
-                      ref={createInputRef}
-                    />
-                    <p
-                      class="topbar-workspace-hint"
-                      id={`${switcherId()}-create-name-help`}
-                    >
-                      {t("workspace.create.purposeHelp")}
-                    </p>
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        type="submit"
-                        busy={create.busy()}
-                      >
-                        {create.busy()
-                          ? t("common.creating")
-                          : t("common.create")}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                  </Match>
+                  <Match when={!creating()}>
+                    <ul class="workspace-switcher-list" role="none">
+                      <For each={loadedWorkspaces()}>
+                        {(workspace) => (
+                          <li role="none">
+                            <button
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={workspace.id === selectedWorkspaceId()}
+                              class="workspace-switcher-item"
+                              classList={{
+                                current: workspace.id === selectedWorkspaceId(),
+                              }}
+                              onClick={() => choose(workspace.id)}
+                            >
+                              <span class="workspace-switcher-avatar" aria-hidden="true">
+                                {workspaceInitial(workspaceName(workspace))}
+                              </span>
+                              <span class="workspace-switcher-item-name">
+                                {workspaceName(workspace)}
+                              </span>
+                              <Show when={duplicates().has(workspaceName(workspace))}>
+                                <span class="workspace-switcher-item-hint">
+                                  {workspaceDisambiguator(workspace)}
+                                </span>
+                              </Show>
+                              <Show when={workspace.id === selectedWorkspaceId()}>
+                                <Check
+                                  class="workspace-switcher-check"
+                                  size={16}
+                                  aria-hidden="true"
+                                />
+                              </Show>
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                    <Show when={page()?.nextCursor}>
+                      <button
                         type="button"
-                        onClick={() => setCreateOpen(false)}
+                        role="menuitem"
+                        class="workspace-switcher-action"
+                        disabled={pageLoading()}
+                        onClick={loadMore}
                       >
-                        {t("common.cancel")}
-                      </Button>
-                    </div>
-                    <Show when={create.error()}>
+                        <span>
+                          {pageLoading() ? t("workspace.loading") : t("common.loadMore")}
+                        </span>
+                      </button>
+                    </Show>
+                    <Show when={pageError()}>
                       {(message) => (
-                        <p
-                          class="topbar-workspace-error"
-                          id={`${switcherId()}-create-error`}
-                          role="alert"
-                        >
-                          {t("workspace.create.failed", {
-                            message: message(),
-                          })}
+                        <p class="workspace-switcher-error" role="alert">
+                          {t("workspace.loadFailed", { message: message() })}
                         </p>
                       )}
                     </Show>
-                  </form>
-                </Show>
-                <A
-                  href="/advanced/workspace"
-                  class="topbar-workspace-settings"
-                  role="menuitem"
-                  onClick={() => setSwitcherOpen(false)}
-                >
-                  <Settings size={15} aria-hidden="true" />
-                  <span>{t("workspace.settings")}</span>
-                </A>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="workspace-switcher-action"
+                      onClick={() => setCreating("environment")}
+                    >
+                      <Layers size={15} aria-hidden="true" />
+                      <span>{t("workspace.create.environment")}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="workspace-switcher-action"
+                      onClick={() => setCreating("team")}
+                    >
+                      <Users size={15} aria-hidden="true" />
+                      <span>{t("workspace.create.team")}</span>
+                    </button>
+                    <A
+                      href="/account/workspace"
+                      class="workspace-switcher-action"
+                      role="menuitem"
+                      onClick={() => setOpen(false)}
+                    >
+                      <Settings size={15} aria-hidden="true" />
+                      <span>{t("workspace.settings")}</span>
+                    </A>
+                  </Match>
+                </Switch>
               </div>
             </Show>
           </div>
         </Show>
+        <Show when={workspaces.error}>
+          <div class="workspace-switcher-error" role="alert">
+            <span>{fetchFailedMessage(workspaces.error, t)}</span>
+            <button
+              type="button"
+              class="workspace-switcher-retry"
+              onClick={() => void refetch()}
+            >
+              {t("common.retry")}
+            </button>
+          </div>
+        </Show>
       </div>
-
-      <Show when={workspaces.error}>
-        <div class="topbar-workspace-error" role="alert">
-          <span>{fetchFailedMessage(workspaces.error, t)}</span>
-          <button
-            type="button"
-            class="topbar-workspace-retry"
-            onClick={() => void refetch()}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      </Show>
-    </div>
+    </Show>
   );
 }

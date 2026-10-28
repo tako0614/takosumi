@@ -21,6 +21,7 @@ import type {
   CredentialRecipeRunCredentialRequest,
 } from "takosumi-contract/credential-recipe-host";
 export {
+  CredentialRecipeRefreshFailure,
   credentialRecipeDriverKey,
   type CredentialDriverFetch,
   type CredentialRecipeDriverContext,

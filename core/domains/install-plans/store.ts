@@ -1,8 +1,12 @@
 import type {
   GitInstallPlan,
   GitInstallPlanInitialConfiguration,
+  GitInstallPlanModuleCandidate,
+  GitInstallPlanPhase,
+  GitInstallPlanVariablePresentation,
 } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract";
+import type { CapsuleResourceSummary } from "takosumi-contract/capsules";
 import {
   assertWorkspaceFreezeExpectation,
   assertWorkspaceManagementAuthorityInput,
@@ -14,6 +18,47 @@ import {
 
 export const GIT_INSTALL_PLAN_RECONCILE_LEASE_MS = 30_000;
 
+/** Idle lifetime of an install attempt before lazy expiry on read. */
+export const GIT_INSTALL_ATTEMPT_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Upper bound for one actor's open-attempt listing. */
+export const GIT_INSTALL_ATTEMPT_LIST_LIMIT = 20;
+
+/** Value-free provider-credential policy axes used to offer connections. */
+export interface GitInstallAttemptProviderPolicy {
+  readonly allowedConnectionIds?: readonly string[];
+  readonly forbiddenConnectionIds?: readonly string[];
+  readonly allowedConnectionScopes?: readonly string[];
+  readonly allowedCredentialRecipes?: readonly {
+    readonly id: string;
+    readonly authMode: string;
+  }[];
+  readonly requiredCredentialCapabilities?: readonly string[];
+}
+
+/** One provider identity that needs run-scoped credential material. */
+export interface GitInstallAttemptRequirement {
+  readonly provider: string;
+  readonly moduleLocalName: string;
+  readonly childAlias?: string;
+}
+
+/**
+ * Private, value-free facts captured from immutable evidence when an attempt
+ * pauses. Live data (connections, app names) is read again on every
+ * projection; no variable value is ever captured here.
+ */
+export interface GitInstallAttemptFacts {
+  readonly modules?: readonly GitInstallPlanModuleCandidate[];
+  readonly inputs?: {
+    readonly modulePath: string;
+    readonly resources: readonly CapsuleResourceSummary[];
+    readonly requirements: readonly GitInstallAttemptRequirement[];
+    readonly variables: readonly GitInstallPlanVariablePresentation[];
+    readonly providerPolicy?: GitInstallAttemptProviderPolicy;
+  };
+}
+
 export interface StoredGitInstallPlan extends GitInstallPlan {
   /** Exact actor boundary used for idempotency; not projected separately. */
   readonly actorSubject: string;
@@ -23,8 +68,31 @@ export interface StoredGitInstallPlan extends GitInstallPlan {
   readonly workspaceManagementAuthority?: WorkspaceManagementAuthority;
   /** Private Capsule execution-authority fence for revision coordination. */
   readonly capsuleExecutionAuthorityEpoch?: number;
-  /** Private reviewed values retained only until atomic initial creation. */
+  /**
+   * Legacy private reviewed values. Records written before transient inputs
+   * may still carry them; new records never do, and every terminal transition
+   * scrubs them.
+   */
   readonly initialVariables?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Names (never values) of variables supplied in the request that started
+   * atomic initial creation. While set, a reconcile without those values must
+   * adopt an already committed Capsule or pause for resubmission instead of
+   * creating authority without them.
+   */
+  readonly transientVariableNames?: readonly string[];
+  /**
+   * Set when a confirming request started atomic initial creation, with or
+   * without variables. From then on a Capsule may exist: the attempt adopts
+   * it by its deterministic id before any create, never expires, and accepts
+   * only a resubmission until a definitive pre-commit failure proves no
+   * Capsule was created.
+   */
+  readonly creationAttempted?: true;
+  /** Set only when this attempt itself turned on polling for its Source. */
+  readonly sourcePollingEnabledByAttempt?: true;
+  /** Private attempt facts; projected only through `userAction`. */
+  readonly attemptFacts?: GitInstallAttemptFacts;
   /** Private create-only configuration retained until atomic initial creation. */
   readonly initialConfiguration?: GitInstallPlanInitialConfiguration;
   /** Private digest pin for the exact config returned by install preflight. */
@@ -117,8 +185,9 @@ export function gitInstallPlanForDrainFailure(
     completedAt < Date.parse(plan.createdAt)) return undefined;
   // Existing request/configuration/provenance are retained, not recreated or
   // recaptured under the stopped Workspace's current epoch.
+  const { initialVariables: _initialVariables, ...retained } = plan;
   return {
-    ...plan,
+    ...retained,
     phase: "failed",
     diagnostic: {
       code: "workspace_management_draining",
@@ -127,6 +196,141 @@ export function gitInstallPlanForDrainFailure(
     updatedAt: input.completedAt,
     completedAt: input.completedAt,
   };
+}
+
+export type TransitionGitInstallPlanResult =
+  | { readonly status: "updated"; readonly plan: StoredGitInstallPlan }
+  | { readonly status: "busy" | "conflict"; readonly plan: StoredGitInstallPlan }
+  | { readonly status: "not_found" };
+
+/**
+ * CAS transition of an unleased plan. `lease` acquires the reconcile lease in
+ * the same write; `expectedWorkspaceManagementAuthority` fences the write on
+ * the original active admission (required for any transition that can lead
+ * to new canonical work). A terminal transition such as discard omits it.
+ */
+export interface TransitionGitInstallPlanInput {
+  readonly id: string;
+  readonly expectedGeneration: number;
+  readonly expectedPhase: GitInstallPlanPhase;
+  readonly plan: StoredGitInstallPlan;
+  readonly at: string;
+  readonly lease?: { readonly token: string; readonly expiresAt: string };
+  readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+}
+
+export interface ListOpenGitInstallAttemptsInput {
+  readonly workspaceId: string;
+  /** Absent lists every actor's open attempts (private cleanup checks). */
+  readonly actorSubject?: string;
+  readonly limit: number;
+}
+
+export function assertTransitionGitInstallPlanInput(
+  current: StoredGitInstallPlan,
+  input: TransitionGitInstallPlanInput,
+): void {
+  const next = input.plan;
+  if (
+    next.generation !== input.expectedGeneration + 1 ||
+    next.id !== input.id ||
+    typeof input.at !== "string" ||
+    !Number.isFinite(Date.parse(input.at)) ||
+    (input.lease !== undefined &&
+      (typeof input.lease.token !== "string" || input.lease.token === "" ||
+        typeof input.lease.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(input.lease.expiresAt))))
+  ) {
+    throw new TypeError("Git install plan transition input is invalid");
+  }
+  if (input.expectedWorkspaceManagementAuthority !== undefined) {
+    assertWorkspaceManagementAuthorityInput(
+      input.expectedWorkspaceManagementAuthority,
+      current.workspaceId,
+    );
+  }
+  if (next.workspaceManagementAuthority !== undefined) {
+    assertWorkspaceManagementAuthorityInput(next.workspaceManagementAuthority, next.workspaceId);
+  }
+  // Answers may change the app name, module and connection selection; the
+  // admission, actor, request identity and Git address never change.
+  if (
+    current.id !== next.id ||
+    current.workspaceId !== next.workspaceId ||
+    current.actorSubject !== next.actorSubject ||
+    current.idempotencyKeyHash !== next.idempotencyKeyHash ||
+    !sameWorkspaceManagementAuthority(
+      current.workspaceManagementAuthority,
+      next.workspaceManagementAuthority,
+    ) ||
+    current.capsuleExecutionAuthorityEpoch !== next.capsuleExecutionAuthorityEpoch ||
+    current.preflightInstallConfigDigest !== next.preflightInstallConfigDigest ||
+    current.requestDigest !== next.requestDigest ||
+    current.createdBy !== next.createdBy ||
+    current.createdAt !== next.createdAt ||
+    (current.operation ?? "install") !== (next.operation ?? "install") ||
+    current.mode !== next.mode ||
+    canonicalJson(current.source) !== canonicalJson(next.source) ||
+    current.capsule?.environment !== next.capsule?.environment ||
+    canonicalJson(current.preflight) !== canonicalJson(next.preflight) ||
+    canonicalJson(current.revision) !== canonicalJson(next.revision)
+  ) {
+    throw new TypeError("Git install plan immutable request scope changed");
+  }
+}
+
+/** Key-order independent JSON, because jsonb storage reorders object keys. */
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item as Record<string, unknown>)
+            .filter(([, entry]) => entry !== undefined)
+            .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+        )
+      : item
+  );
+}
+
+/**
+ * An idle attempt waiting for its actor holds no lease and no execution
+ * authority, so it does not block Workspace management. Every advance out of
+ * `awaiting_input` re-checks the original active admission atomically.
+ */
+export function gitInstallPlanPhaseBlocksWorkspaceManagement(
+  phase: unknown,
+): boolean {
+  return !isTerminalGitInstallPlanPhase(phase) && phase !== "awaiting_input";
+}
+
+/** Pre-Capsule coordinator phases an unleased expired attempt may idle in. */
+const EXPIRABLE_COORDINATOR_PHASES: ReadonlySet<string> = new Set([
+  "syncing_source",
+  "compiling_install",
+  "analyzing_compatibility",
+]);
+
+/**
+ * An unleased attempt past `expiresAt` before its Capsule exists can never
+ * advance (reconcile refuses it and any claim re-checks the original
+ * admission), so it stops blocking Workspace management instead of waiting
+ * for its creator's discard. The SQL predicates encode the same rule with
+ * ISO-8601 UTC string comparison against the database clock.
+ */
+export function isExpiredIdleGitInstallAttempt(
+  plan: Pick<StoredGitInstallPlan, "mode" | "phase" | "expiresAt">,
+  nowIso: string,
+): boolean {
+  return plan.mode === "attempt" &&
+    EXPIRABLE_COORDINATOR_PHASES.has(plan.phase) &&
+    typeof plan.expiresAt === "string" &&
+    plan.expiresAt <= nowIso;
+}
+
+/** Attempts the actor may still resume (`reviewable` is filtered further). */
+export function isOpenGitInstallAttemptPhase(phase: unknown): boolean {
+  return phase !== "failed" && phase !== "discarded";
 }
 
 export interface GitInstallPlanStore {
@@ -138,7 +342,11 @@ export interface GitInstallPlanStore {
   get(id: string): Promise<StoredGitInstallPlan | undefined>;
   /** Observation only: an exact replay must not require new admission. */
   getByScope(scope: GitInstallPlanScope): Promise<StoredGitInstallPlan | undefined>;
-  hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean>;
+  /** Scoped to the Capsule's Workspace so the read stays on its index. */
+  hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean>;
   /**
    * Private Workspace-wide quiescence observation. A terminal plan is settled
    * only after both reconciliation lease columns have been cleared.
@@ -162,6 +370,17 @@ export interface GitInstallPlanStore {
     readonly leaseToken: string;
     readonly plan: StoredGitInstallPlan;
   }): Promise<CompleteGitInstallPlanResult>;
+  /** CAS write of an unleased plan (answers, continue claim, discard). */
+  transitionUnleased(
+    input: TransitionGitInstallPlanInput,
+  ): Promise<TransitionGitInstallPlanResult>;
+  /**
+   * Newest-first attempt-mode install plans that are not failed/discarded and
+   * whose reviewable Capsule was never applied, filtered before the limit.
+   */
+  listOpenAttempts(
+    input: ListOpenGitInstallAttemptsInput,
+  ): Promise<readonly StoredGitInstallPlan[]>;
 }
 
 function clone<T>(value: T): T {
@@ -239,10 +458,14 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     return id === undefined ? undefined : await this.get(id);
   }
 
-  hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+  hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
     return Promise.resolve(
       Array.from(this.#entries.values()).some(
         ({ plan }) =>
+          plan.workspaceId === workspaceId &&
           plan.operation === "revision" &&
           plan.capsuleId === capsuleId &&
           plan.phase !== "failed" && plan.phase !== "reviewable",
@@ -253,8 +476,13 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
   hasWorkspaceManagementBlockersNow(workspaceId: string): boolean {
     for (const entry of this.#entries.values()) {
       if (entry.plan.workspaceId !== workspaceId) continue;
-      if (!isTerminalGitInstallPlanPhase(entry.plan.phase)) return true;
-      if (entry.leaseToken !== undefined || entry.leaseExpiresAt !== undefined) {
+      const leased = entry.leaseToken !== undefined ||
+        entry.leaseExpiresAt !== undefined;
+      if (leased) return true;
+      if (
+        gitInstallPlanPhaseBlocksWorkspaceManagement(entry.plan.phase) &&
+        !isExpiredIdleGitInstallAttempt(entry.plan, new Date().toISOString())
+      ) {
         return true;
       }
     }
@@ -350,6 +578,68 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
     return { status: "completed", plan: clone(entry.plan) };
   }
 
+  async transitionUnleased(
+    inputValue: TransitionGitInstallPlanInput,
+  ): Promise<TransitionGitInstallPlanResult> {
+    const input = clone(inputValue);
+    const entry = this.#entries.get(input.id);
+    if (!entry) return { status: "not_found" };
+    assertTransitionGitInstallPlanInput(entry.plan, input);
+    if (
+      entry.plan.generation !== input.expectedGeneration ||
+      entry.plan.phase !== input.expectedPhase
+    ) {
+      return { status: "conflict", plan: clone(entry.plan) };
+    }
+    if (entry.leaseExpiresAt !== undefined && entry.leaseExpiresAt > input.at) {
+      return { status: "busy", plan: clone(entry.plan) };
+    }
+    if (input.expectedWorkspaceManagementAuthority !== undefined) {
+      this.#assertNewAdmission(
+        entry.plan.workspaceId,
+        gitInstallPlanManagementAuthority(
+          entry.plan,
+          input.expectedWorkspaceManagementAuthority,
+        ),
+      );
+    }
+    entry.plan = clone(input.plan);
+    if (input.lease) {
+      entry.leaseToken = input.lease.token;
+      entry.leaseExpiresAt = input.lease.expiresAt;
+    } else {
+      delete entry.leaseToken;
+      delete entry.leaseExpiresAt;
+    }
+    return { status: "updated", plan: clone(entry.plan) };
+  }
+
+  async listOpenAttempts(
+    input: ListOpenGitInstallAttemptsInput,
+  ): Promise<readonly StoredGitInstallPlan[]> {
+    return Array.from(this.#entries.values())
+      .map(({ plan }) => plan)
+      .filter((plan) =>
+        plan.workspaceId === input.workspaceId &&
+        (input.actorSubject === undefined || plan.actorSubject === input.actorSubject) &&
+        plan.mode === "attempt" &&
+        (plan.operation ?? "install") === "install" &&
+        isOpenGitInstallAttemptPhase(plan.phase) &&
+        // A reviewable attempt stays open only while its Capsule was never
+        // applied. Without a co-located Capsule reader the caller filters.
+        (plan.phase !== "reviewable" || plan.capsuleId === undefined ||
+          this.#workspaceManagementValidator?.isNeverAppliedCapsule?.(
+            plan.capsuleId,
+          ) !== false)
+      )
+      .sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+      )
+      .slice(0, input.limit)
+      .map((plan) => clone(plan));
+  }
+
   #assertNewAdmission(
     workspaceId: string,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
@@ -368,8 +658,8 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
 /** Terminal phases are clear only when no reconciliation lease is retained. */
 export function isTerminalGitInstallPlanPhase(
   phase: unknown,
-): phase is "reviewable" | "failed" {
-  return phase === "reviewable" || phase === "failed";
+): phase is "reviewable" | "failed" | "discarded" {
+  return phase === "reviewable" || phase === "failed" || phase === "discarded";
 }
 
 /** Only known nonterminal phases may be claimed for reconciliation. */
@@ -392,6 +682,10 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     initialVariables: _initialVariables,
     initialConfiguration: _initialConfiguration,
     preflightInstallConfigDigest: _preflightInstallConfigDigest,
+    transientVariableNames: _transientVariableNames,
+    creationAttempted: _creationAttempted,
+    sourcePollingEnabledByAttempt: _sourcePollingEnabledByAttempt,
+    attemptFacts: _attemptFacts,
     ...publicPlan
   } = plan;
   return publicPlan;
@@ -421,11 +715,11 @@ export function assertImmutableScope(
     current.createdBy !== next.createdBy ||
     current.createdAt !== next.createdAt ||
     (current.operation ?? "install") !== (next.operation ?? "install") ||
-    JSON.stringify(current.source) !== JSON.stringify(next.source) ||
-    JSON.stringify(current.capsule) !== JSON.stringify(next.capsule) ||
-    JSON.stringify(current.options) !== JSON.stringify(next.options) ||
-    JSON.stringify(current.preflight) !== JSON.stringify(next.preflight) ||
-    JSON.stringify(current.revision) !== JSON.stringify(next.revision) ||
+    canonicalJson(current.source) !== canonicalJson(next.source) ||
+    canonicalJson(current.capsule) !== canonicalJson(next.capsule) ||
+    canonicalJson(current.options) !== canonicalJson(next.options) ||
+    canonicalJson(current.preflight) !== canonicalJson(next.preflight) ||
+    canonicalJson(current.revision) !== canonicalJson(next.revision) ||
     (current.preflight !== undefined &&
       (current.installConfigBaseId !== next.installConfigBaseId ||
         current.installConfigBaseDigest !== next.installConfigBaseDigest)) ||

@@ -450,6 +450,11 @@ export interface ConnectionOAuthCompletion {
 }
 
 export interface ConnectionOAuthHelper {
+  readonly browserBindingRequired?: boolean;
+  /** Value-free setup metadata supplied by the host, never client configuration. */
+  readonly providerSource?: string;
+  readonly credentialRecipe?: { readonly id: string; readonly authMode: string };
+  readonly setupFields?: readonly { readonly key: string; readonly envName: string }[];
   start(
     input: ConnectionOAuthStartInput,
   ): Promise<ConnectionOAuthStartResponse>;

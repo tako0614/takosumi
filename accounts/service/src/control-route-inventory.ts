@@ -67,7 +67,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/install-plans",
-      summary: "Create or replay an idempotent Git install plan",
+      summary: "Create or replay an idempotent Git install plan or install attempt",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/install-plans",
+      summary: "List the caller's open install attempts for resume (open=1)",
       auth: "account-session",
     },
     {
@@ -98,6 +104,18 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/install-plans/{installPlanId}",
       summary: "Read an install plan without advancing it",
+      auth: "account-session",
+    },
+    {
+      method: "PATCH",
+      path: "/api/v1/install-plans/{installPlanId}",
+      summary: "Answer an install attempt that is waiting for input (generation CAS)",
+      auth: "account-session",
+    },
+    {
+      method: "DELETE",
+      path: "/api/v1/install-plans/{installPlanId}",
+      summary: "Discard an install attempt and the never-applied app it created",
       auth: "account-session",
     },
     {
@@ -274,6 +292,18 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       path: "/api/v1/capsules/{capsuleId}/configuration-plans",
       summary:
         "Atomically adopt an immutable desired config/provider-binding successor and return a review-only OpenTofu Plan",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/app",
+      summary: "Read the server-computed installed-app view: state, primary action, problems, screens, version and uninstall terms",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/runs",
+      summary: "List the Capsule's Runs newest first with a keyset cursor",
       auth: "account-session",
     },
     {

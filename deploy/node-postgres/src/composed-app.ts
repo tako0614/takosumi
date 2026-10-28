@@ -60,6 +60,7 @@ import { createStaticAssetResponder } from "./static-assets.ts";
 import {
   connectionOAuthDescriptorsFromEnv,
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  referenceCredentialDriversFromEnv,
 } from "@takosumi/providers";
 import { createConnectionOAuthHelpers } from "../../../core/api/connection_oauth_helpers.ts";
 import {
@@ -273,7 +274,7 @@ export async function buildComposedApp(
     operatorInstallConfigs: input.operatorInstallConfigs ?? [],
     credentialRecipeDrivers:
       input.credentialRecipeDrivers ??
-      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+      referenceCredentialDriversFromEnv(runtimeEnv),
     ...(input.runCredentialIssuer !== undefined
       ? { runCredentialIssuer: input.runCredentialIssuer }
       : {}),

@@ -1,44 +1,61 @@
 /**
- * Account (`/account`) — sign-in info, the current browser session, and
- * language, merged from the former Hub / Profile / Sessions trio. The
- * account-plane has no subject-scoped session-enumeration API yet, so only the
- * current browser's session can be managed (stated honestly below).
+ * アカウント (`/account[/:section]`) — the behavior "use Takosumi with others
+ * and pay", plus you yourself. One page with five sections:
+ *
+ *   自分              (`/account`)            name, display and language, sign-out
+ *   メンバー          (`/account/members`)    invite people, roles, display names
+ *   料金と利用量      (`/account/billing`)    what this workspace costs and uses
+ *   スペース          (`/account/workspace`)  this workspace's name, new
+ *                                             workspaces by purpose
+ *   CLI・APIから使う  (`/account/cli`)        keys for the CLI (`--token`) and API
+ *
+ * Members, billing and the workspace section are about the selected workspace
+ * (スペース in the Japanese UI). The page names that workspace only when there
+ * are two or more (lib: current-workspace.tsx); one person with one workspace
+ * never has to learn the word.
  */
-import "../../styles/wave-c.css";
 import "../../styles/wave-b.css";
-import { createSignal, Show } from "solid-js";
-import { useNavigate } from "@solidjs/router";
-import { LogOut, User } from "lucide-solid";
+import "../../styles/wave-c.css";
+import "../../styles/account-views.css";
+import { Match, Show, Switch, type JSX } from "solid-js";
+import { Navigate, useParams } from "@solidjs/router";
+import { Layers } from "lucide-solid";
 import Page from "./components/auth/Page.tsx";
-import { clearSession, type SessionRecord } from "./lib/session.ts";
-import { formatEpochDateTime, locale, setLocale, t } from "../../i18n/index.ts";
-import type { MessageKey } from "../../i18n/index.ts";
-import {
-  setThemePreference,
-  themePreference,
-  type ThemePreference,
-} from "../../lib/theme.ts";
-import {
-  installHandlerRegistered,
-  installHandlerSupported,
-  registerInstallHandler,
-} from "../../lib/install-handler.ts";
+import type { SessionRecord } from "./lib/session.ts";
+import { createCurrentWorkspace, WorkspaceScopeNote } from "./lib/current-workspace.tsx";
+import ProfileSection from "./sections/ProfileSection.tsx";
+import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
+import MembersTab from "../workspace/tabs/MembersTab.tsx";
+import WorkspaceTab from "../workspace/tabs/WorkspaceTab.tsx";
+import BillingTab from "../workspace/tabs/BillingTab.tsx";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import { type MessageKey, t } from "../../i18n/index.ts";
 import {
   Button,
-  Card,
-  CardHeader,
-  CardSection,
-  KVList,
+  EmptyState,
   PageHeader,
+  Tabs,
 } from "../../components/ui/index.ts";
-import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
 
-const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
-  system: "theme.system",
-  light: "theme.light",
-  dark: "theme.dark",
-};
+export type AccountSection = "me" | "members" | "billing" | "workspace" | "cli";
+
+export const ACCOUNT_SECTIONS: readonly {
+  readonly id: AccountSection;
+  readonly href: string;
+  readonly labelKey: MessageKey;
+}[] = [
+  { id: "me", href: "/account", labelKey: "account.section.me" },
+  { id: "members", href: "/account/members", labelKey: "account.section.members" },
+  { id: "billing", href: "/account/billing", labelKey: "account.section.billing" },
+  { id: "workspace", href: "/account/workspace", labelKey: "account.section.workspace" },
+  { id: "cli", href: "/account/cli", labelKey: "account.section.cli" },
+];
+
+function sectionFromParam(raw: string | undefined): AccountSection | undefined {
+  if (raw === undefined || raw === "") return "me";
+  return ACCOUNT_SECTIONS.find((section) => section.id === raw && raw !== "me")
+    ?.id;
+}
 
 export default function AccountView() {
   return (
@@ -49,225 +66,76 @@ export default function AccountView() {
 }
 
 function Inner(props: { readonly session: SessionRecord }) {
-  const nav = useNavigate();
-  const [busy, setBusy] = createSignal(false);
-  const [confirming, setConfirming] = createSignal(false);
-  const installHandlerAvailable = installHandlerSupported();
-  const [handlerRegistered, setHandlerRegistered] = createSignal(
-    installHandlerRegistered(),
-  );
-  const [handlerJustRegistered, setHandlerJustRegistered] = createSignal(false);
+  const params = useParams<{ section?: string }>();
+  const section = () => sectionFromParam(params.section);
+  const currentWorkspace = createCurrentWorkspace();
 
-  const registerThisDevice = () => {
-    try {
-      registerInstallHandler();
-      setHandlerRegistered(true);
-      setHandlerJustRegistered(true);
-    } catch {
-      // The browser refused (no gesture / private mode). Leave state unchanged;
-      // the button stays offered.
-    }
-  };
-
-  const signOutThisBrowser = () => {
-    setBusy(true);
-    clearSession();
-    // `manual=1`: see UserMenu.signOut — sign-out must never hand the user
-    // straight back to the single-provider auto-start.
-    nav("/sign-in");
-  };
-
-  return (
+  /** Members, billing and the workspace need a selected workspace. */
+  const inWorkspace = (render: (workspaceId: string) => JSX.Element) => (
     <>
-      <PageHeader title={t("account.title")} subtitle={t("account.subtitle")} />
-
-      <div class="wc-stack">
-        <Card>
-          <CardHeader
-            title={
-              <span style="display:inline-flex;align-items:center;gap:8px">
-                <User size={18} /> {t("account.profile.title")}
-              </span>
+      <WorkspaceScopeNote context={currentWorkspace} />
+      <Show
+        when={currentWorkspaceId() || null}
+        keyed
+        fallback={
+          <EmptyState
+            icon={<Layers size={28} />}
+            title={t("workspace.noneTitle")}
+            message={t("workspace.noneMessage")}
+            action={
+              <Button variant="primary" href="/">
+                {t("workspace.noneCta")}
+              </Button>
             }
           />
-          <KVList
-            items={[
-              {
-                label: t("account.profile.displayName"),
-                // A bare "—" reads as broken when the session simply has no
-                // profile data yet — say 未設定 / "Not set" instead.
-                value: props.session.displayName ?? (
-                  <span class="muted">{t("account.profile.notSet")}</span>
-                ),
-              },
-              {
-                label: t("account.profile.email"),
-                value: props.session.email ?? (
-                  <span class="muted">{t("account.profile.notSet")}</span>
-                ),
-              },
-            ]}
-          />
-          <CardSection>
-            <Show
-              when={confirming()}
-              fallback={
-                <Button
-                  variant="danger"
-                  type="button"
-                  onClick={() => setConfirming(true)}
-                  disabled={busy()}
-                  icon={<LogOut size={16} />}
-                >
-                  {t("account.session.signOut")}
-                </Button>
-              }
-            >
-              <div class="wc-form-actions">
-                <span class="muted">{t("account.session.signOutConfirm")}</span>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  type="button"
-                  onClick={signOutThisBrowser}
-                  disabled={busy()}
-                  icon={<LogOut size={14} />}
-                >
-                  {t("shell.signOut")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  disabled={busy()}
-                >
-                  {t("common.cancel")}
-                </Button>
-              </div>
-            </Show>
-            <details class="wb-disclosure wc-advanced-settings">
-              <summary>{t("account.session.details")}</summary>
-              <p class="muted">{t("account.session.otherNote")}</p>
-              <details class="wb-inline-details">
-                <summary>{t("account.session.debug")}</summary>
-                <KVList
-                  items={[
-                    {
-                      label: t("account.profile.provider"),
-                      value: props.session.provider ?? "—",
-                    },
-                    {
-                      label: t("account.profile.subject"),
-                      value: (
-                        <code class="wc-code">{props.session.subject}</code>
-                      ),
-                    },
-                    {
-                      label: t("account.profile.expires"),
-                      // 0 means the server sent no expiry; never "1970".
-                      value: props.session.expiresAt
-                        ? formatEpochDateTime(props.session.expiresAt)
-                        : "—",
-                    },
-                    {
-                      label: t("account.session.userAgent"),
-                      value: (
-                        <span class="muted">
-                          {typeof navigator !== "undefined"
-                            ? navigator.userAgent
-                            : "—"}
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              </details>
-            </details>
-          </CardSection>
-        </Card>
-
-        <TakosumiApiKeysCard
-          workspaceId={currentWorkspaceId() || undefined}
-        />
-
-        <Card>
-          <CardHeader
-            title={t("account.preferences.title")}
-            subtitle={t("account.preferences.body")}
-          />
-          <CardSection>
-            <div class="wc-stack-sm">
-              <div>
-                <p class="tg-card-title">{t("account.language.title")}</p>
-                <div class="wc-form-actions tg-segmented">
-                  <Button
-                    variant={locale() === "ja" ? "primary" : "secondary"}
-                    aria-pressed={locale() === "ja"}
-                    type="button"
-                    onClick={() => setLocale("ja")}
-                  >
-                    日本語
-                  </Button>
-                  <Button
-                    variant={locale() === "en" ? "primary" : "secondary"}
-                    aria-pressed={locale() === "en"}
-                    type="button"
-                    onClick={() => setLocale("en")}
-                  >
-                    English
-                  </Button>
-                </div>
-              </div>
-              <div>
-                <p class="tg-card-title">{t("account.theme.title")}</p>
-                <div class="wc-form-actions tg-segmented">
-                  {(["system", "light", "dark"] as const).map((theme) => (
-                    <Button
-                      variant={
-                        themePreference() === theme ? "primary" : "secondary"
-                      }
-                      aria-pressed={themePreference() === theme}
-                      type="button"
-                      onClick={() => setThemePreference(theme)}
-                    >
-                      {t(THEME_LABEL_KEY[theme])}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p class="tg-card-title">{t("account.installTarget.title")}</p>
-                <p class="muted">{t("account.installTarget.body")}</p>
-                <Show
-                  when={installHandlerAvailable}
-                  fallback={
-                    <p class="muted">
-                      {t("account.installTarget.unsupported")}
-                    </p>
-                  }
-                >
-                  <div class="wc-form-actions">
-                    <Button
-                      variant={handlerRegistered() ? "secondary" : "primary"}
-                      aria-pressed={handlerRegistered()}
-                      type="button"
-                      onClick={registerThisDevice}
-                    >
-                      {handlerRegistered()
-                        ? t("account.installTarget.registered")
-                        : t("account.installTarget.register")}
-                    </Button>
-                  </div>
-                  <Show when={handlerJustRegistered()}>
-                    <p class="muted">{t("account.installTarget.done")}</p>
-                  </Show>
-                </Show>
-              </div>
-            </div>
-          </CardSection>
-        </Card>
-      </div>
+        }
+      >
+        {(workspaceId) => render(workspaceId)}
+      </Show>
     </>
+  );
+
+  return (
+    <Show when={section()} fallback={<Navigate href="/account" />}>
+      {(current) => (
+        <div class="acct-page">
+          <PageHeader title={t("account.title")} />
+          <Tabs
+            class="acct-tabs"
+            items={ACCOUNT_SECTIONS.map((item) => ({
+              href: item.href,
+              label: t(item.labelKey),
+              end: true,
+            }))}
+            aria-label={t("account.sectionsLabel")}
+          />
+          <div class="acct-section">
+            <Switch>
+              <Match when={current() === "me"}>
+                <ProfileSection session={props.session} />
+              </Match>
+              <Match when={current() === "members"}>
+                {inWorkspace((workspaceId) => (
+                  <MembersTab workspaceId={workspaceId} session={props.session} />
+                ))}
+              </Match>
+              <Match when={current() === "billing"}>
+                {inWorkspace((workspaceId) => <BillingTab workspaceId={workspaceId} />)}
+              </Match>
+              <Match when={current() === "workspace"}>
+                {/* Creating a workspace by purpose works with no workspace yet. */}
+                <WorkspaceScopeNote context={currentWorkspace} />
+                <WorkspaceTab />
+              </Match>
+              <Match when={current() === "cli"}>
+                <TakosumiApiKeysCard
+                  workspaceId={currentWorkspaceId() || undefined}
+                />
+              </Match>
+            </Switch>
+          </div>
+        </div>
+      )}
+    </Show>
   );
 }

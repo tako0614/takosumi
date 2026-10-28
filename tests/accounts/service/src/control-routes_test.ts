@@ -4092,3 +4092,46 @@ test("Capsule cancel-uninstall restores the Capsule through the domain operation
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({ id: "cap_1", options: { actor: "tsub_owner" } });
 });
+
+
+test("OAuth popup callback broadcasts only an opaque attempt result with a nonce CSP", async () => {
+  const operations = { connectionOAuth: { helper: { complete: async () => { throw new Error("private-provider-error-fixture"); } } } } as unknown as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/connections/oauth/helper/callback?code=private-code-fixture&state=opaque-state-fixture&popup=1");
+  const response = await handleControlRoute({ request, url: new URL(request.url), store: new InMemoryAccountsStore(), operations });
+  expect(response?.status).toBe(200);
+  expect(response?.headers.get("cache-control")).toBe("no-store");
+  expect(response?.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(response?.headers.get("content-security-policy")).toContain("script-src 'nonce-");
+  const html = await response!.text();
+  expect(html).toContain("BroadcastChannel");
+  expect(html).toContain('"error":true');
+  expect(html).not.toContain("private-code-fixture");
+  expect(html).not.toContain("opaque-state-fixture");
+  expect(html).not.toContain("private-provider-error-fixture");
+});
+
+
+test("browser-bound provider callbacks reject copied authorization URLs before token exchange", async () => {
+  let exchanges = 0;
+  const operations = {
+    connectionOAuth: { helper: { browserBindingRequired: true, complete: async () => {
+      exchanges++;
+      return { request: { workspaceId: workspace.id }, subject: workspace.ownerUserId,
+        expectedWorkspaceManagementAuthority: { workspaceId: workspace.id, managementState: "active", managementEpoch: 1 } };
+    } } },
+    workspaces: { getWorkspace: async () => workspace },
+    createConnection: async () => ({ connection: { id: "conn_browser_bound" } }),
+    testConnection: async () => ({ status: "verified" }),
+  } as unknown as ControlPlaneOperations;
+  const url = new URL("https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-fixture&state=state-fixture");
+  const request = new Request(url);
+  const refused = await handleControlRoute({ request, url, store: new InMemoryAccountsStore(), operations });
+  expect(refused?.headers.get("location")).toContain("connection_error=oauth_failed");
+  expect(exchanges).toBe(0);
+  const flow = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify("state-fixture")))).toString("hex");
+  const bound = new Request(url, { headers: { cookie: `__Host-takosumi_oauth_${flow}=1` } });
+  const response = await handleControlRoute({ request: bound, url, store: new InMemoryAccountsStore(), operations });
+  expect(response?.headers.get("location")).toContain("connected=1");
+  expect(response?.headers.get("set-cookie")).toContain("Max-Age=0");
+  expect(exchanges).toBe(1);
+});

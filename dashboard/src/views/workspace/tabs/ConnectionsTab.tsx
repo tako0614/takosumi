@@ -1,34 +1,37 @@
 /**
- * Workspace settings — 接続. Port of the former ConnectionsView, now fully on the
- * session-authed control surface (`/api/v1/connections*`): list / create /
- * test / revoke all go through control-api (the legacy `/v1/connections` RPC
- * is gone). Secret values are write-only — kept in component state only until
- * the submit resolves, then cleared.
+ * 接続 — the behavior "connect my cloud". Lists the workspace's connections on the
+ * session-authed control surface (`/api/v1/connections*`), and for each one
+ * shows which installed apps use it, a test, and removal that names the
+ * affected apps. The create form (guided recipe fields, provider OAuth popup,
+ * or keys for a cloud without a guided method) lives in
+ * ../connections/ConnectionCreateForm.tsx; this component owns the list, the
+ * per-connection test / remove state, and the first test of each connection
+ * the form saves.
+ *
+ * Which apps use a connection is derived from each app's provider bindings
+ * (lib/connection-usage.ts). The install review embeds this component with
+ * `embedded` and skips that read: there the question is which connection to
+ * pick, not who already uses it.
  *
  * A credential OAuth callback redirects to `/connections?connected=1` plus an
  * opaque `connection_id` / `connection_status`, which the router forwards here
  * query-intact; the one-time banner reads and strips those params. `/new` links
  * may also include a safe `return=/new?...` target so users can create a
- * ProviderConnection, then jump back to the add flow.
+ * connection, then jump back to the install.
  */
 import "../../../styles/wave-c.css";
 import {
-  createEffect,
   createMemo,
   createResource,
   createSignal,
   onCleanup,
   For,
-  Index,
   Match,
   Show,
   Switch,
 } from "solid-js";
-import { ArrowLeft, Plug, Plus, Trash } from "lucide-solid";
-import {
-  isProviderEnvName,
-  isReservedProviderEnvName,
-} from "takosumi-contract";
+import { A } from "@solidjs/router";
+import { ArrowLeft, Plug, Plus, RefreshCw } from "lucide-solid";
 import {
   providerSetupOptionsFromCredentialRecipes,
   type ProviderConnectionSetupOption,
@@ -49,36 +52,30 @@ import {
 } from "../../../lib/install-return-context.ts";
 import {
   type ProviderConnection,
-  createConnection,
-  listCredentialRecipes,
+  connectionSetupCatalog,
   listProviderConnections,
   revokeConnection,
   testConnection,
 } from "../../../lib/control-api.ts";
 import { readableProviderSourceLabel } from "../../../lib/provider-labels.ts";
 import { providerConnectionDisplayName } from "../../../lib/provider-connections.ts";
-import { formatDateTime, locale, t } from "../../../i18n/index.ts";
+import {
+  type ConnectionAppRef,
+  loadConnectionUsage,
+} from "../../../lib/connection-usage.ts";
+import { formatDate, formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
   Card,
   CardHeader,
   EmptyState,
-  FormField,
-  Input,
-  Select,
   Skeleton,
   Toast,
 } from "../../../components/ui/index.ts";
+import ConnectionCreateForm from "../connections/ConnectionCreateForm.tsx";
 
-/** Sentinel `<select>` value for the custom provider credential path. */
-const GENERIC_ENV_PROVIDER_OPTION = "__generic_env_provider__";
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
-
-interface EnvPair {
-  readonly name: string;
-  readonly value: string;
-}
 
 function providerConnectionProviderLabel(
   connection: ProviderConnection,
@@ -129,9 +126,25 @@ export default function ConnectionsTab(props: {
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(workspaceId, listProviderConnections);
-  const [credentialRecipes] = createResource(listCredentialRecipes);
+  const [credentialRecipes] = createResource(connectionSetupCatalog);
+  // Which apps use each connection. Not read inside the install review.
+  const [usage, { refetch: refetchUsage }] = createResource(
+    () => (props.embedded ? null : workspaceId()),
+    (id) => loadConnectionUsage(id),
+  );
+  /** Apps using the connection; `undefined` while unknown. */
+  const appsUsing = (
+    connectionId: string,
+  ): readonly ConnectionAppRef[] | undefined => {
+    if (props.embedded || usage.loading || usage.error) return undefined;
+    const known = usage.latest;
+    if (!known) return undefined;
+    const apps = known.appsByConnection.get(connectionId) ?? [];
+    // An incomplete read cannot say "no app uses this".
+    return apps.length === 0 && known.incomplete ? undefined : apps;
+  };
   const installedCredentialRecipes = () =>
-    credentialRecipes.error ? [] : (credentialRecipes.latest ?? []);
+    credentialRecipes.error ? [] : (credentialRecipes.latest?.recipes ?? []);
   const providerOptions = createMemo(() =>
     providerSetupOptionsFromCredentialRecipes(
       installedCredentialRecipes(),
@@ -151,7 +164,7 @@ export default function ConnectionsTab(props: {
   );
   // An errored resource THROWS on read; every data read goes through this
   // guarded accessor so a failed list surfaces the error toast below instead
-  // of crashing the tab (mirrors RunsListView / RunGroupView).
+  // of crashing the tab.
   const providerConnectionRows = (): readonly ProviderConnection[] =>
     providerConnections.error ? [] : (providerConnections.latest ?? []);
   const hasProviderConnections = () => providerConnectionRows().length > 0;
@@ -161,6 +174,8 @@ export default function ConnectionsTab(props: {
     await refetchProviderConnections();
     if (!disposed) props.onChanged?.();
   };
+  const appNames = (apps: readonly ConnectionAppRef[]) =>
+    apps.map((app) => app.name).join(locale() === "ja" ? "、" : ", ");
 
   const afterConnectionCreated = async (connection: ProviderConnection) => {
     if (disposed || connection.workspaceId !== workspaceId()) return;
@@ -176,80 +191,12 @@ export default function ConnectionsTab(props: {
     );
     setLastCreatedConnectionId(connection.id);
     setLastCreatedVerifiedHint(false);
-    clearForm();
     await refreshConnections();
     if (!installReturn) setCreateFormOpen(false);
   };
   const installReturnHref = installReturn
     ? installReturnPathFromContext(installReturn)
     : undefined;
-  // ----- register form state -----------------------------------------------
-  // Service-installed recipes are the guided path. The raw bring-your-own-key
-  // editor accepts an arbitrary provider source, but the saved connection
-  // remains subject to provider policy, runner capability, and Run approval.
-  const [provider, setProvider] = createSignal("");
-  const [displayName, setDisplayName] = createSignal("");
-  // Secret material lives ONLY for the lifetime of the form; cleared on submit.
-  const [values, setValues] = createSignal<Record<string, string>>({});
-  const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
-  const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
-    { name: "", value: "" },
-  ]);
-  const isGenericEnvProvider = () => provider() === GENERIC_ENV_PROVIDER_OPTION;
-
-  let initialProviderSelected = false;
-  createEffect(() => {
-    const options = providerOptions();
-    if (!initialProviderSelected && !credentialRecipes.loading && props.initialProviderSource) {
-      initialProviderSelected = true;
-      const match = options.find((option) => option.providerSource === props.initialProviderSource || option.providerAliases.includes(props.initialProviderSource!));
-      if (match) setProvider(match.id);
-      else { setProvider(GENERIC_ENV_PROVIDER_OPTION); setGenericEnvProvider(props.initialProviderSource); }
-    }
-    if (isGenericEnvProvider()) return;
-    if (options.some((option) => option.id === provider())) return;
-    if (options[0]) setProvider(options[0].id);
-    else if (!credentialRecipes.loading)
-      setProvider(GENERIC_ENV_PROVIDER_OPTION);
-  });
-
-  const setupOption = createMemo(() => {
-    if (isGenericEnvProvider()) return undefined;
-    return providerOptions().find((candidate) => candidate.id === provider());
-  });
-  const fields = createMemo(() => setupOption()?.fields ?? []);
-  const setupGuide = createMemo(() => setupOption()?.setupGuide);
-
-  const setFieldValue = (envName: string, value: string) => {
-    setValues((prev) => ({ ...prev, [envName]: value }));
-  };
-  const setEnvPair = (index: number, patch: Partial<EnvPair>) => {
-    setEnvPairs((prev) =>
-      prev.map((p, i) => (i === index ? { ...p, ...patch } : p)),
-    );
-  };
-  const addEnvPair = () =>
-    setEnvPairs((prev) => [...prev, { name: "", value: "" }]);
-  const removeEnvPair = (index: number) =>
-    setEnvPairs((prev) =>
-      prev.length > 1 ? prev.filter((_, i) => i !== index) : prev,
-    );
-
-  const clearForm = () => {
-    setValues({});
-    setDisplayName("");
-    setGenericEnvProvider("");
-    setEnvPairs([{ name: "", value: "" }]);
-  };
-
-  // Quiet advanced path: switch the add flow to the raw BYOK env editor.
-  // Dropping any half-entered secret values mirrors the provider switcher.
-  const openByokEditor = () => {
-    setProvider(GENERIC_ENV_PROVIDER_OPTION);
-    setValues({});
-    setGenericEnvProvider("");
-    setEnvPairs([{ name: "", value: "" }]);
-  };
 
   // ----- one-time URL result banner (OAuth backend callback) ---------------
   const [oauthNotice, setOauthNotice] = createSignal<
@@ -261,6 +208,13 @@ export default function ConnectionsTab(props: {
   };
   if (!props.embedded && typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
+    const flow = params.get("connection_flow");
+    if (flow && /^sha256:[a-f0-9]{64}$/u.test(flow)) {
+      const channel = new BroadcastChannel(`takosumi.oauth.${flow}`);
+      channel.postMessage({ kind: "connection-oauth", error: params.has("connection_error"),
+        connectionId: params.get("connection_id"), connectionStatus: params.get("connection_status") });
+      setTimeout(() => channel.close(), 200);
+    }
     if (params.get("connected")) {
       setOauthNotice({ kind: "ok" });
       const connectionId = params.get("connection_id");
@@ -284,6 +238,7 @@ export default function ConnectionsTab(props: {
       params.delete("connection_error");
       params.delete("connection_id");
       params.delete("connection_status");
+      params.delete("connection_flow");
       const next = params.toString();
       window.history.replaceState(
         {},
@@ -292,82 +247,6 @@ export default function ConnectionsTab(props: {
       );
     }
   }
-
-  // One generic submit path for every service-described setup option.
-  const createFromRecipe = createAction(async () => {
-    const option = setupOption();
-    if (!option) throw new Error(t("conn.error.invalidProvider"));
-    const submitValues: Record<string, string> = {};
-    for (const field of option.fields) {
-      const raw = (values()[field.envName] ?? "").trim();
-      if (field.required && raw.length === 0) {
-        throw new Error(t("conn.error.fieldRequired", { field: field.label }));
-      }
-      if (raw.length > 0) submitValues[field.envName] = raw;
-    }
-    const connection = await createConnection({
-      workspaceId: workspaceId(),
-      provider: option.providerSource,
-      credentialRecipe: option.credentialRecipe,
-      displayName: displayName().trim() || option.label,
-      values: submitValues,
-    });
-    await afterConnectionCreated(connection);
-    if (!disposed && connection.workspaceId === workspaceId()) await runTest(connection.id);
-  });
-
-  // Generic ProviderConnection submit. This is the first-class path for any
-  // provider not covered by a guided recipe.
-  const createGenericEnvProvider = createAction(async () => {
-    const name = genericEnvProvider().trim();
-    if (!name) throw new Error(t("conn.genericEnv.providerRequired"));
-    const submitValues: Record<string, string> = {};
-    const seenEnvNames = new Set<string>();
-    for (const pair of envPairs()) {
-      const envName = pair.name.trim();
-      const value = pair.value;
-      if (envName.length === 0 && value.length === 0) continue;
-      if (envName.length === 0) {
-        throw new Error(t("conn.genericEnv.nameRequired"));
-      }
-      if (!isProviderEnvName(envName)) {
-        throw new Error(t("conn.genericEnv.invalidName", { name: envName }));
-      }
-      if (isReservedProviderEnvName(envName)) {
-        throw new Error(t("conn.genericEnv.reservedName", { name: envName }));
-      }
-      if (seenEnvNames.has(envName)) {
-        throw new Error(t("conn.genericEnv.duplicateName", { name: envName }));
-      }
-      seenEnvNames.add(envName);
-      submitValues[envName] = value;
-    }
-    if (Object.keys(submitValues).length === 0) {
-      throw new Error(t("conn.genericEnv.oneRequired"));
-    }
-    const genericRecipe = installedCredentialRecipes().find(
-      (recipe) =>
-        recipe.id === "generic-env" &&
-        recipe.authModes.env !== undefined &&
-        recipe.secretPartition,
-    );
-    if (!genericRecipe?.secretPartition) {
-      throw new Error(t("conn.error.invalidProvider"));
-    }
-    const connection = await createConnection({
-      workspaceId: workspaceId(),
-      provider: name,
-      credentialRecipe: {
-        id: "generic-env",
-        authMode: "env",
-        secretPartition: genericRecipe.secretPartition,
-      },
-      displayName: displayName().trim() || undefined,
-      values: submitValues,
-    });
-    await afterConnectionCreated(connection);
-    if (!disposed && connection.workspaceId === workspaceId()) await runTest(connection.id);
-  });
 
   // Per-connection test / remove. Busy and error state are tracked PER
   // connection id — a single shared signal would let concurrent tests clear
@@ -439,10 +318,15 @@ export default function ConnectionsTab(props: {
       setTestBusy(id, false);
     }
   };
+  // The first test of a connection the form just saved. The form calls this
+  // even after it closed itself; only an unmounted tab skips it.
+  const verifyCreatedConnection = async (id: string) => {
+    if (!disposed) await runTest(id);
+  };
 
   // Which connection is being revoked — remove is one shared action, so
   // without this every row's delete button would look busy during a single
-  // revoke (same per-row idiom as SharesTab/BackupsTab).
+  // revoke.
   const [removingId, setRemovingId] = createSignal<string | null>(null);
   const remove = createAction(async (id: string) => {
     setRemovingId(id);
@@ -454,6 +338,7 @@ export default function ConnectionsTab(props: {
         setLastCreatedVerifiedHint(false);
       }
       await refreshConnections();
+      if (!props.embedded && !disposed) void refetchUsage();
     } finally {
       setRemovingId(null);
     }
@@ -478,27 +363,83 @@ export default function ConnectionsTab(props: {
     const name =
       providerConnectionDisplayName(connection) ||
       providerConnectionProviderLabel(connection, providerOptions());
+    const apps = appsUsing(connection.id);
+    // The consequence is stated with the apps it affects: their next update,
+    // settings change or uninstall needs another connection. Removing never
+    // deletes what the apps created.
+    const consequence =
+      apps === undefined
+        ? t("conn.remove.appsUnknown")
+        : apps.length === 0
+          ? t("conn.remove.noApps")
+          : t("conn.remove.affectsApps", { apps: appNames(apps) });
     const ok = await confirm({
-      title: t("conn.remove.confirmTitle"),
-      // Warn that live Capsules' ProviderBindings referencing this connection
-      // will fail their next Run (provider_connection_setup_required).
-      message: `${t("conn.remove.confirmMessage", { name })} ${t(
-        "conn.remove.bindingWarning",
-      )}`,
-      confirmText: t("common.delete"),
+      title: t("conn.remove.confirmTitle", { name }),
+      message: `${consequence} ${t("conn.remove.keepsResources")}`,
+      confirmText: t("conn.remove.confirm"),
       danger: true,
     });
     if (!ok) return;
     void remove.run(connection.id);
   };
 
+  /** Workspace connections can be removed; operator-provided ones cannot. */
+  const removable = (connection: ProviderConnection) =>
+    connection.scope !== "operator";
+
+  const usageLine = (connection: ProviderConnection) => (
+    <Show when={!props.embedded}>
+      <div class="conn-apps">
+        <span class="conn-apps-label">{t("conn.apps.label")}</span>
+        <Switch>
+          <Match when={usage.loading && !usage.latest}>
+            <span class="muted">{t("conn.apps.loading")}</span>
+          </Match>
+          <Match when={appsUsing(connection.id)}>
+            {(apps) => (
+              <Show
+                when={apps().length > 0}
+                fallback={<span class="muted">{t("conn.apps.none")}</span>}
+              >
+                <ul class="conn-apps-list">
+                  <For each={apps()}>
+                    {(app) => (
+                      <li>
+                        <A href={`/workloads/${encodeURIComponent(app.capsuleId)}`}>
+                          {app.name}
+                        </A>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
+            )}
+          </Match>
+          <Match when>
+            <span class="muted">{t("conn.apps.unknown")}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              icon={<RefreshCw size={14} />}
+              busy={usage.loading}
+              onClick={() => void refetchUsage()}
+            >
+              {t("common.retry")}
+            </Button>
+          </Match>
+        </Switch>
+      </div>
+    </Show>
+  );
+
   const providerConnectionList = () => (
-    <ul class="wc-conn-list">
+    <ul class="conn-list">
       <For each={providerConnectionRows()}>
         {(connection) => (
-          <li class="wc-conn-row">
-            <div class="wc-conn-head">
-              <span class="wc-conn-name">
+          <li class="conn-card tg-card">
+            <div class="conn-card-head">
+              <span class="conn-card-name">
                 {providerConnectionDisplayName(connection) ||
                   providerConnectionProviderLabel(
                     connection,
@@ -509,24 +450,26 @@ export default function ConnectionsTab(props: {
                 {providerConnectionStatusLabel(connection.status)}
               </Badge>
             </div>
-            <div class="wc-conn-meta">
+            <div class="conn-card-meta">
               <span>
                 {providerConnectionProviderLabel(
                   connection,
                   providerOptions(),
                 )}
               </span>
+              <Show when={connection.scope === "operator"}>
+                <span>{t("conn.operatorProvided")}</span>
+              </Show>
               <Show when={connection.expiresAt}>
                 {(expiresAt) => (
-                  <span>
-                    {t("conn.expiresAt", {
-                      date: formatDateTime(expiresAt()),
-                    })}
+                  <span title={formatDateTime(expiresAt())}>
+                    {t("conn.expiresAt", { date: formatDate(expiresAt()) })}
                   </span>
                 )}
               </Show>
             </div>
-            <div class="wc-conn-actions">
+            {usageLine(connection)}
+            <div class="conn-card-actions">
               <Button
                 variant="secondary"
                 size="sm"
@@ -536,17 +479,19 @@ export default function ConnectionsTab(props: {
               >
                 {testBusy(connection.id) ? t("conn.testing") : t("conn.test")}
               </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                type="button"
-                onClick={() => void confirmRemoveProviderConnection(connection)}
-                busy={remove.busy() && removingId() === connection.id}
-                disabled={remove.busy()}
-                icon={<Trash size={14} />}
-              >
-                {t("common.delete")}
-              </Button>
+              <Show when={removable(connection)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  class="conn-remove"
+                  onClick={() => void confirmRemoveProviderConnection(connection)}
+                  busy={remove.busy() && removingId() === connection.id}
+                  disabled={remove.busy()}
+                >
+                  {t("conn.remove.cta")}
+                </Button>
+              </Show>
             </div>
             <Show when={testError(connection.id)}>
               {(failure) => (
@@ -696,7 +641,7 @@ export default function ConnectionsTab(props: {
           <Show when={!createFormOpen()}>
             <div class="wc-card-action-row">
               <Button
-                variant="primary"
+                variant="secondary"
                 size="sm"
                 type="button"
                 icon={<Plus size={14} />}
@@ -765,279 +710,17 @@ export default function ConnectionsTab(props: {
       </Show>
 
       {/* ----- register form ----- */}
-      <Show when={shouldShowCreateForm()}>
-        <Card>
-          <CardHeader
-            title={t("conn.add.title")}
-            actions={
-              <Show when={hasProviderConnections()}>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  onClick={() => setCreateFormOpen(false)}
-                >
-                  {t("conn.add.close")}
-                </Button>
-              </Show>
-            }
-          />
-          <div class="wc-form">
-            <Show when={!isGenericEnvProvider()}>
-              {/* Every option and field comes from the service recipe list. */}
-              <FormField label={t("conn.add.provider")}>
-                <Select
-                  id="connection-provider"
-                  name="provider"
-                  value={provider()}
-                  onChange={(e) => {
-                    setProvider(e.currentTarget.value);
-                    // Switching provider drops any half-entered secret values.
-                    setValues({});
-                    setGenericEnvProvider("");
-                    setEnvPairs([{ name: "", value: "" }]);
-                  }}
-                >
-                  <For each={providerOptions()}>
-                    {(option) => (
-                      <option value={option.id}>{option.label}</option>
-                    )}
-                  </For>
-                </Select>
-              </FormField>
-            </Show>
-
-            <details class="connection-advanced">
-              <summary>{t("conn.add.optionalSettings")}</summary>
-              <FormField label={t("conn.add.displayName")}>
-                <Input
-                  id="connection-display-name"
-                  name="displayName"
-                  type="text"
-                  value={displayName()}
-                  onInput={(e) => setDisplayName(e.currentTarget.value)}
-                  placeholder={t("conn.add.displayNamePlaceholder")}
-                  autocomplete="off"
-                />
-              </FormField>
-            </details>
-
-            <Show
-              when={isGenericEnvProvider()}
-              fallback={
-                <>
-                  <Show when={setupOption()?.description}>
-                    {(description) => <p class="muted">{description()}</p>}
-                  </Show>
-                  <Show when={setupGuide()}>
-                    {(guide) => (
-                      <div class="wc-guided">
-                        <div class="wc-form-actions">
-                          <Button
-                            variant="secondary"
-                            href={guide().url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {t("conn.guided.openProvider", {
-                              provider: setupOption()?.label ?? "",
-                            })}
-                          </Button>
-                        </div>
-                        <Show when={guide().steps.length > 0}>
-                          <details class="connection-instructions">
-                            <summary>{t("conn.guided.instructions")}</summary>
-                            <ol class="wc-steps">
-                              <For each={guide().steps}>
-                                {(step) => <li>{step}</li>}
-                              </For>
-                            </ol>
-                          </details>
-                        </Show>
-                      </div>
-                    )}
-                  </Show>
-                  <form
-                    class="wc-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void createFromRecipe.run();
-                    }}
-                  >
-                    <Index each={fields()}>
-                      {(field) => (
-                        <FormField
-                          label={field().label}
-                          required={field().required}
-                        >
-                          <Input
-                            id={`connection-field-${field().envName}`}
-                            name={`field:${field().envName}`}
-                            type={field().secret ? "password" : "text"}
-                            value={values()[field().envName] ?? ""}
-                            onInput={(e) =>
-                              setFieldValue(
-                                field().envName,
-                                e.currentTarget.value,
-                              )
-                            }
-                            placeholder={field().placeholder}
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </FormField>
-                      )}
-                    </Index>
-                    <div class="wc-form-actions">
-                      <Button
-                        variant="primary"
-                        type="submit"
-                        busy={createFromRecipe.busy()}
-                      >
-                        {createFromRecipe.busy()
-                          ? t("conn.registering")
-                          : t("conn.register")}
-                      </Button>
-                    </div>
-                    <ActionError error={createFromRecipe.error} />
-                  </form>
-                </>
-              }
-            >
-              {/* Advanced bring-your-own-key editor: any OpenTofu provider,
-                  no allowlist / approval / billing. h2 keeps the heading
-                  hierarchy flat under the page h1, like sibling sections. */}
-              <div class="wc-guided">
-                <div class="wc-byok-intro">
-                  <h2 class="wc-byok-title">{t("conn.byok.title")}</h2>
-                  <p class="muted">{t("conn.byok.body")}</p>
-                  <p class="wc-byok-note">{t("conn.byok.noBillingNote")}</p>
-                </div>
-                <div class="wc-form-actions">
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    onClick={() => {
-                      setProvider(providerOptions()[0]?.id ?? "");
-                      setGenericEnvProvider("");
-                      setEnvPairs([{ name: "", value: "" }]);
-                    }}
-                  >
-                    {t("conn.byok.usePreset")}
-                  </Button>
-                </div>
-                <form
-                  class="wc-form"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void createGenericEnvProvider.run();
-                  }}
-                >
-                  <FormField label={t("conn.genericEnv.providerName")} required>
-                    <Input
-                      id="connection-generic-provider"
-                      name="genericProvider"
-                      type="text"
-                      value={genericEnvProvider()}
-                      onInput={(e) =>
-                        setGenericEnvProvider(e.currentTarget.value)
-                      }
-                      placeholder={t("conn.genericEnv.providerPlaceholder")}
-                      autocomplete="off"
-                      spellcheck={false}
-                    />
-                  </FormField>
-
-                  <Index each={envPairs()}>
-                    {(pair, index) => (
-                      <div class="wc-env-pair">
-                        <FormField label={t("conn.genericEnv.envName")}>
-                          <Input
-                            id={`connection-generic-env-name-${index}`}
-                            name={`genericEnvName:${index}`}
-                            type="text"
-                            value={pair().name}
-                            onInput={(e) =>
-                              setEnvPair(index, { name: e.currentTarget.value })
-                            }
-                            placeholder={t(
-                              "conn.genericEnv.envNamePlaceholder",
-                            )}
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </FormField>
-                        <FormField label={t("conn.genericEnv.value")}>
-                          <Input
-                            id={`connection-generic-env-value-${index}`}
-                            name={`genericEnvValue:${index}`}
-                            type="password"
-                            value={pair().value}
-                            onInput={(e) =>
-                              setEnvPair(index, {
-                                value: e.currentTarget.value,
-                              })
-                            }
-                            placeholder={t("conn.genericEnv.valuePlaceholder")}
-                            autocomplete="off"
-                            spellcheck={false}
-                          />
-                        </FormField>
-                        <Show when={envPairs().length > 1}>
-                          <Button
-                            variant="ghost"
-                            type="button"
-                            onClick={() => removeEnvPair(index)}
-                            icon={<Trash size={16} />}
-                          >
-                            {t("common.delete")}
-                          </Button>
-                        </Show>
-                      </div>
-                    )}
-                  </Index>
-
-                  <div class="wc-form-actions">
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      onClick={() => addEnvPair()}
-                      icon={<Plus size={16} />}
-                    >
-                      {t("conn.genericEnv.addRow")}
-                    </Button>
-                    <Button
-                      variant="primary"
-                      type="submit"
-                      busy={createGenericEnvProvider.busy()}
-                    >
-                      {createGenericEnvProvider.busy()
-                        ? t("conn.registering")
-                        : t("conn.register")}
-                    </Button>
-                  </div>
-                  <ActionError error={createGenericEnvProvider.error} />
-                </form>
-              </div>
-            </Show>
-
-            <Show when={!isGenericEnvProvider()}>
-              {/* Quiet advanced entry: providers without a preset connect via
-                  the raw BYOK env editor. */}
-              <div class="wc-form-actions">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  onClick={openByokEditor}
-                >
-                  {t("conn.add.genericEnvOption")}
-                </Button>
-              </div>
-            </Show>
-          </div>
-        </Card>
-      </Show>
+      <ConnectionCreateForm
+        open={shouldShowCreateForm()}
+        workspaceId={workspaceId()}
+        setupCatalog={credentialRecipes}
+        initialProviderSource={props.initialProviderSource}
+        onCreated={afterConnectionCreated}
+        verifyConnection={verifyCreatedConnection}
+        onCancel={
+          hasProviderConnections() ? () => setCreateFormOpen(false) : undefined
+        }
+      />
 
       {/* First-load skeleton only — refetch after create/test/revoke keeps the
           list rendered instead of flashing two skeleton cards each time. */}

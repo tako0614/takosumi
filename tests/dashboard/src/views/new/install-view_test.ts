@@ -175,25 +175,35 @@ describe("single-screen install surface", () => {
     expect(styles).toContain("background: transparent");
   });
 
-  test("centers configuration on the selected service and name field", () => {
+  test("the app page starts from one Install action and keeps the app identity", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    const configureStart = view.indexOf('<Show when={phase() === "configure"}>');
-    const configure = view.slice(configureStart);
+    const configure = view.slice(
+      view.indexOf('<Show when={phase() === "configure"}>'),
+      view.indexOf('<Show when={phase() === "preparing"}>'),
+    );
 
     expect(view).toContain('"iv-configure-page": phase() === "configure"');
     expect(view).toContain('data-testid="install-app-header"');
-    expect(configure).not.toContain('class="iv-app-summary"');
-    expect(configure.indexOf('label={t("installStore.name")}')).toBeGreaterThan(-1);
-    expect(configure).toContain('<Show when={!configurationExpanded()}>');
-    expect(configure).toContain('<Show when={configurationExpanded()}>');
-    expect(view).toContain("configurationExpanded()");
+    expect(view).toContain('data-testid="install-provenance"');
     expect(view).toContain('phase() !== "browse"');
+    // One primary action; no second Install hidden behind an expansion.
+    expect(view).not.toContain("configurationExpanded");
+    expect(configure.match(/variant="primary"/gu)).toHaveLength(1);
+    expect(configure).toContain('t("installStore.install")');
+    expect(configure).toContain('t("installStore.startHint")');
+    expect(configure).not.toContain('class="iv-app-summary"');
+    // A Store install can still choose its version instead of a silent pick.
+    expect(configure).toContain('label={t("installStore.sourceRef")}');
   });
 
-  test("the initial Install expands preparation without creating a Plan", () => {
+  test("the initial Install starts preparation without creating a Plan", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain('when={!configurationExpanded()}');
-    expect(view).toContain('setConfigurationExpanded(true); void prepareInstall();');
+    const configure = view.slice(
+      view.indexOf('<Show when={phase() === "configure"}>'),
+      view.indexOf('<Show when={phase() === "preparing"}>'),
+    );
+    expect(configure).toContain("void prepareInstall();");
+    expect(configure).not.toContain("preparePlan(");
     const preparation = view.slice(view.indexOf("const prepareInstall ="), view.indexOf("const restartFailedInstall ="));
     expect(preparation).toContain('setPhase("setup")');
     expect(preparation).not.toContain("await preparePlan(");
@@ -207,7 +217,7 @@ describe("single-screen install surface", () => {
     expect(view.indexOf("setPhase(\"preparing\")")).toBeLessThan(
       view.indexOf("await checkCapsuleCompatibility("),
     );
-    expect(view).toContain('t("installStore.add")');
+    expect(view).toContain('t("installStore.install")');
     expect(view).not.toContain("canContinue");
     expect(view).not.toContain("checkingCompatibility() || !provider");
   });
@@ -290,7 +300,7 @@ describe("single-screen install surface", () => {
     expect(restart.indexOf("resetPreparedSource")).toBeLessThan(
       restart.indexOf("await prepareInstall()"),
     );
-    expect(execution).toContain('current().type === "plan"');
+    expect(execution).toContain("isReviewRun(current().type)");
     expect(execution).toContain('t("installStore.restartWithLatestSource")');
     expect(execution).toContain("await props.onRestart?.();");
   });
@@ -379,7 +389,9 @@ describe("single-screen install surface", () => {
     );
     expect(view).toContain("sourcePath: sourcePath(),");
     expect(view).toContain('setSourcePath(".");');
-    expect(view).toContain('t("installStore.sourcePath")');
+    // A link may name the subtree; it is not a field a person needs to fill.
+    expect(view).not.toContain('t("installStore.sourcePath")');
+    expect(view).not.toContain('t("installStore.modulePath")');
     expect(view).not.toContain("join(sourcePath(), modulePath())");
     expect(view).not.toContain("`${sourcePath()}/${modulePath()}`");
   });
@@ -478,7 +490,9 @@ describe("single-screen install surface", () => {
     expect(view).toContain('t("installStore.sourceBuildWorkingDirectory")');
     expect(view).toContain('t("installStore.sourceBuildOutputs")');
     expect(view).toContain("sourceBuild()");
-    expect(view).toContain('<details class="iv-source-build">');
+    // Shown plainly before the Plan: what will run is part of the review.
+    expect(view).toContain('<section class="iv-source-build" aria-labelledby="iv-source-build-title">');
+    expect(view).not.toContain('<details class="iv-source-build">');
     expect(view).not.toContain("await preparePlan(workspace, result, config, rows, undefined)");
     expect(view).not.toContain("sourceBuild.env");
   });
@@ -490,12 +504,14 @@ describe("single-screen install surface", () => {
       "storeInstallFeatures",
       "storeFeatureSelections",
       "setupProjectionInvalid",
-      "selectedModuleProviderRequirements",
-      'data-testid="install-module-requirements"',
-      't("installStore.moduleRequirement"',
     ]) {
       expect(view).toContain(token);
     }
+    // The module requirement list and provider addresses are not something
+    // a person needs to install the app; the API keeps them.
+    expect(view).not.toContain('data-testid="install-module-requirements"');
+    expect(view).not.toContain("selectedModuleDetails");
+    expect(view).not.toContain('t("installStore.connectionTechnical")');
     expect(view).not.toContain("CapsuleSourceOptions");
     expect(view).not.toContain("readSnapshotDocument");
     expect(view).not.toContain("entryEvidence");
@@ -509,27 +525,35 @@ describe("single-screen install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain('data-testid="install-app-header"');
     expect(view).toContain('data-install-state={uiState()}');
-    expect(view).toContain("<ConnectionsTab");
+    // Connections are made in place on each row; once installed, the app
+    // page's settings own them.
+    expect(view).not.toContain("<ConnectionsTab");
+    expect(view).toContain("<ConnectionCreateForm");
     expect(view).not.toContain('data-testid="install-steps"');
     expect(view).not.toContain("parseCapsuleSourceOptions");
   });
 
-  test("keeps scanned packages and connection requirements visible in review", () => {
+  test("shows optional settings and the version plainly, without disclosures", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    const summary = view.slice(
-      view.indexOf("const selectedModuleDetails ="),
-      view.indexOf("const sourceCandidates ="),
-    );
-    expect(summary).toContain('data-testid="install-source-summary"');
-    expect(summary).toContain("catalog.scopePath");
-    expect(summary).toContain("module.providerPackages");
-    expect(summary).toContain("candidatesFor(row.provider)");
-    // An aborted/blocked compatibility check must not claim no connection is needed.
-    expect(summary).toContain('phase() === "setup" || phase() === "review"');
-    const review = view.slice(view.indexOf('<Show when={phase() === "review" &&'));
-    expect(review.indexOf("selectedModuleDetails()")).toBeLessThan(review.indexOf("<InstallExecution"));
-    expect(summary).not.toContain("createApplyRun");
-    expect(summary).not.toContain("setProviderRows");
+    expect(view).toContain('data-testid="install-optional-settings"');
+    expect(view).toContain('t("installStore.optionalSettings")');
+    expect(view).toContain('data-testid="install-source-fields"');
+    expect(view).toContain('t("installStore.sourceRef")');
+    expect(view).not.toContain('t("installStore.advancedSettings")');
+    expect(view).not.toContain('t("installStore.sourceDetails")');
+    // The module chooser stays, only for an ambiguous repository version.
+    expect(view).toContain('setPhase("module-select")');
+    expect(view).toContain('data-testid="install-module-chooser"');
+  });
+
+  test("an installed app shows the same app page sections", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const lifecycle = read("dashboard/src/views/new/InstallLifecycle.tsx");
+    expect(lifecycle).toContain("<AppManagePage");
+    expect(lifecycle).toContain('state() === "installed" || state() === "uninstalling"');
+    expect(view).toContain("justInstalled={completedHere()}");
+    // The install header gives way to the app page's own header.
+    expect(view).toContain('lifecycleState() === "installed" || lifecycleState() === "uninstalling"');
   });
 
   test("preserves app handoff and Interface-first completion", () => {
@@ -564,6 +588,42 @@ describe("single-screen install surface", () => {
     expect(view).toContain("config?.installExperience?.repositoryInstallUx");
   });
 
+  test("the install sheet shows what the app creates and connects in place", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const sheet = view.slice(
+      view.indexOf('<Show when={phase() === "setup"}>'),
+      view.indexOf('<Show when={phase() === "review" && planRunId() && capsuleId()}>'),
+    );
+    // Planned resources come from the scanned module before any Plan exists.
+    expect(sheet).toContain('<PlannedResources resources={compatibility()?.resources ?? []} />');
+    expect(sheet).toContain("renderConnectionRow");
+    // A missing connection is fixed from the row itself, not a second panel.
+    const rows = view.slice(view.indexOf("const renderConnectionRow"), view.indexOf("const sectionError"));
+    expect(rows).toContain("toggleConnect(row)");
+    expect(rows).toContain('initialProviderSource={row.provider}');
+    // The name stays editable until the Plan, and Review is a separate label.
+    expect(sheet).toContain("updateName(event.currentTarget.value)");
+    expect(sheet).not.toContain("readOnly");
+    expect(sheet).toContain('t("installStore.reviewChanges")');
+    expect(sheet).toContain("void discardAttempt()");
+    expect(sheet).not.toContain('t("installStore.install")');
+  });
+
+  test("discarding an attempt only removes what that attempt created", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const discard = view.slice(view.indexOf("const discardAttempt"), view.indexOf("const confirmInstallModule"));
+    expect(discard).toContain("abandonUnappliedCapsule(pendingCapsuleId)");
+    expect(discard).toContain("capsuleAbandonmentCompleted(");
+    expect(discard).toContain("attemptCreatedSourceId");
+    expect(discard).toContain("deleteSource(createdSourceId).catch(");
+    // A Source the server keeps stops polling Git instead of lingering.
+    expect(discard).toContain("patchSource(createdSourceId, { autoSync: false })");
+    // A Plan request in flight is never discarded over.
+    expect(discard).toContain("busy() && !cancellingPreparation");
+    expect(discard).toContain('setPhase("configure")');
+    expect(view).toContain("attemptCreatedSourceId = createdSourceId;");
+  });
+
   test("review and apply stay inside /new", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const execution = read("dashboard/src/views/new/InstallExecution.tsx");
@@ -571,7 +631,8 @@ describe("single-screen install surface", () => {
     expect(execution).toContain("createApplyRun(");
     expect(execution).toContain("openRunStream(");
     expect(execution).toContain("stateVersionReadinessAfterApply(");
-    expect(execution).toContain('t("installStore.install")');
+    expect(execution).toContain('allow: "installStore.allowInstall"');
+    expect(execution).toContain("t(copy().allow)");
     expect(execution).not.toContain('navigate(`/runs/');
     expect(execution).not.toContain("auto=install");
   });
@@ -588,7 +649,7 @@ describe("single-screen install surface", () => {
     // The decided destination reads as text, not as a disabled select.
     const summary = view.slice(
       view.indexOf("const autoSelectedDestinationSummary"),
-      view.indexOf("const providerConnectionSetupRequired"),
+      view.indexOf("const storeFeatureKey"),
     );
     expect(summary).toContain('class="iv-destination-name"');
     expect(summary).not.toContain("<Select");
@@ -598,8 +659,7 @@ describe("single-screen install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain('t("installStore.moduleTitle")');
     expect(view).toContain('data-testid="install-module-chooser"');
-    expect(view).toContain('t("installStore.providerModule")');
-    expect(view).toContain("providerModuleLabel(row)");
+    expect(view).toContain("moduleCandidateLabel(module)");
     expect(view).toContain("providerConnectionDisplayName(connection)");
     expect(view).not.toContain("deploymentProfile");
   });

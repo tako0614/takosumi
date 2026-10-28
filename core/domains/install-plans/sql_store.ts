@@ -10,6 +10,7 @@ import {
   assertCompletionGeneration,
   assertGitInstallPlanDrainFailureInput,
   assertImmutableScope,
+  assertTransitionGitInstallPlanInput,
   gitInstallPlanForDrainFailure,
   gitInstallPlanManagementAuthority,
   type ClaimGitInstallPlanResult,
@@ -18,7 +19,10 @@ import {
   type FailUnclaimedGitInstallPlanInput,
   type GitInstallPlanScope,
   type GitInstallPlanStore,
+  type ListOpenGitInstallAttemptsInput,
   type StoredGitInstallPlan,
+  type TransitionGitInstallPlanInput,
+  type TransitionGitInstallPlanResult,
   isReconcileableGitInstallPlanPhase,
   isTerminalGitInstallPlanPhase,
 } from "./store.ts";
@@ -133,15 +137,19 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return await this.#getByScope(scope);
   }
 
-  async hasInFlightRevisionForCapsule(capsuleId: string): Promise<boolean> {
+  async hasInFlightRevisionForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
     const result = await this.#client.query<{ readonly present: boolean }>(
       `select exists (
          select 1 from ${TABLE}
-          where record_json ->> 'operation' = 'revision'
+          where workspace_id = $2
+            and record_json ->> 'operation' = 'revision'
             and record_json ->> 'capsuleId' = $1
             and phase not in ('failed', 'reviewable')
        ) as present`,
-      [capsuleId],
+      [capsuleId, workspaceId],
     );
     return result.rows[0]?.present === true;
   }
@@ -433,6 +441,131 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return latest
       ? { status: "conflict", plan: latest }
       : { status: "not_found" };
+  }
+
+  async transitionUnleased(
+    inputValue: TransitionGitInstallPlanInput,
+  ): Promise<TransitionGitInstallPlanResult> {
+    const input = structuredClone(inputValue);
+    const observedRow = await this.#getByIdRow(input.id);
+    if (!observedRow) return { status: "not_found" };
+    const observed = rowPlan(observedRow);
+    assertTransitionGitInstallPlanInput(observed, input);
+    const classify = (
+      row: GitInstallPlanRow,
+      plan: StoredGitInstallPlan,
+    ): TransitionGitInstallPlanResult | undefined => {
+      if (
+        plan.generation !== input.expectedGeneration ||
+        plan.phase !== input.expectedPhase ||
+        row.phase !== plan.phase
+      ) {
+        return { status: "conflict", plan };
+      }
+      if (leaseIsBusy(row, input.at)) return { status: "busy", plan };
+      return undefined;
+    };
+    const refused = classify(observedRow, observed);
+    if (refused) return refused;
+    const workspaceId = observed.workspaceId;
+    const next = input.plan;
+    return await this.#client.transaction(async (transaction) => {
+      const authority = input.expectedWorkspaceManagementAuthority === undefined
+        ? undefined
+        : gitInstallPlanManagementAuthority(
+            observed,
+            input.expectedWorkspaceManagementAuthority,
+          );
+      // Workspace is the outer lock for an admission-fenced transition, as
+      // for a reconcile claim. A terminal transition needs no admission.
+      const management = authority === undefined
+        ? undefined
+        : await pgWorkspaceManagementForTransaction(transaction, workspaceId);
+      const currentRow = await this.#getByIdRow(input.id, transaction);
+      if (!currentRow) return { status: "not_found" as const };
+      const current = rowPlan(currentRow);
+      const currentRefusal = classify(currentRow, current);
+      if (currentRefusal) return currentRefusal;
+      if (
+        recordJsonSnapshot(currentRow.record_json) !==
+          recordJsonSnapshot(observedRow.record_json)
+      ) {
+        return { status: "conflict" as const, plan: current };
+      }
+      if (authority !== undefined) {
+        assertWorkspaceManagementAdmission(management, workspaceId, authority);
+      }
+      const result = await transaction.query<GitInstallPlanRow>(
+        `update ${TABLE}
+            set phase = $1, generation = $2, record_json = $3::jsonb,
+                updated_at = $4, reconcile_lease_token = $5,
+                reconcile_lease_expires_at = $6
+          where id = $7 and workspace_id = $8 and generation = $9
+            and phase = $10
+            and record_json = $11::jsonb
+            and (reconcile_lease_expires_at is null or reconcile_lease_expires_at <= $12)
+            ${authority === undefined ? "" : `and exists (
+              select 1 from takosumi_workspaces as workspace
+               where workspace.id = ${TABLE}.workspace_id
+                 and workspace.management_state = 'active'
+                 and workspace.management_epoch = $13
+            )`}
+          returning *`,
+        [
+          next.phase,
+          next.generation,
+          JSON.stringify(next),
+          next.updatedAt,
+          input.lease?.token ?? null,
+          input.lease?.expiresAt ?? null,
+          input.id,
+          workspaceId,
+          input.expectedGeneration,
+          input.expectedPhase,
+          recordJsonSnapshot(currentRow.record_json),
+          input.at,
+          ...(authority === undefined ? [] : [authority.managementEpoch]),
+        ],
+      );
+      const row = result.rows[0];
+      if (row) return { status: "updated" as const, plan: rowPlan(row) };
+      const latestRow = await this.#getByIdRow(input.id, transaction);
+      if (!latestRow) return { status: "not_found" as const };
+      const latest = rowPlan(latestRow);
+      return classify(latestRow, latest) ??
+        { status: "conflict" as const, plan: latest };
+    });
+  }
+
+  async listOpenAttempts(
+    input: ListOpenGitInstallAttemptsInput,
+  ): Promise<readonly StoredGitInstallPlan[]> {
+    const limit = Math.max(1, Math.min(200, Math.trunc(input.limit)));
+    const params: (string | number)[] = [input.workspaceId];
+    if (input.actorSubject !== undefined) params.push(input.actorSubject);
+    params.push(limit);
+    const result = await this.#client.query<GitInstallPlanRow>(
+      `select * from ${TABLE}
+        where workspace_id = $1
+          ${input.actorSubject === undefined ? "" : "and actor_subject = $2"}
+          and phase not in ('failed', 'discarded')
+          and record_json ->> 'mode' = 'attempt'
+          and coalesce(record_json ->> 'operation', 'install') = 'install'
+          and (
+            phase <> 'reviewable'
+            or exists (
+              select 1 from takosumi_capsules as capsule
+               where capsule.id = ${TABLE}.record_json ->> 'capsuleId'
+                 and capsule.status <> 'destroyed'
+                 and capsule.current_state_version_id is null
+                 and coalesce(capsule.installation_json ->> 'currentStateGeneration', '0') = '0'
+            )
+          )
+        order by updated_at desc, id asc
+        limit $${params.length}`,
+      params,
+    );
+    return result.rows.map(rowPlan);
   }
 
   async #getByScope(

@@ -218,3 +218,50 @@ test("install Run keeps a fallback read until a terminal state", () => {
     expect(installRunNeedsFallbackRead({ status } as never)).toBe(false);
   }
 });
+
+// --- safety review of PR #622 -------------------------------------------------
+
+test("a removal always needs the explicit confirmation, and zero deletions on it are unknown", async () => {
+  const { reviewNeedsConfirmation, reviewSummary } = await import(
+    resolve(root, "dashboard/src/views/new/InstallExecution.tsx")
+  );
+  const destroyPlan = { type: "destroy_plan", summary: { add: 0, change: 0, destroy: 0 } };
+  expect(reviewSummary(destroyPlan)).toBeUndefined();
+  expect(reviewSummary({ type: "destroy_plan", summary: { destroy: 3 } })).toEqual({ destroy: 3 });
+  expect(reviewNeedsConfirmation(destroyPlan, "uninstall")).toBe(true);
+  expect(reviewNeedsConfirmation({ type: "destroy_plan", summary: { destroy: 2 } }, undefined)).toBe(true);
+  // A review opened to uninstall stays gated even if a Plan reads clean.
+  expect(reviewNeedsConfirmation({ type: "plan", summary: { add: 1, change: 0, destroy: 0 } }, "uninstall")).toBe(true);
+  // An ordinary clean Plan does not; unknown counts and deletions do.
+  expect(reviewNeedsConfirmation({ type: "plan", summary: { add: 1, change: 0, destroy: 0 } }, "update")).toBe(false);
+  expect(reviewNeedsConfirmation({ type: "plan" }, "update")).toBe(true);
+  expect(reviewNeedsConfirmation({ type: "plan", summary: { destroy: 1 } }, "apply")).toBe(true);
+  expect(reviewNeedsConfirmation({ type: "plan", summary: { add: 1 }, requiresApproval: true }, "apply")).toBe(true);
+});
+
+test("approving a removal asks first; it is never one click", () => {
+  const approve = source.slice(source.indexOf("const approve = async () =>"), source.indexOf("const install = async () =>"));
+  expect(approve).toContain("if (isRemoval()) {");
+  expect(approve).toContain('title: t("run.approveConfirm.destroyTitle")');
+  expect(approve).toContain("danger: true");
+  expect(approve.indexOf("await confirm(")).toBeLessThan(approve.indexOf("approveRun("));
+});
+
+test("only the first install retries by re-planning the app as it stands", () => {
+  // planCapsule (no snapshot) is reachable only for the install purpose; any
+  // other review retries through the request that created it.
+  expect(source).toContain("const canRetryApply = () => isInstall();");
+  expect(source).toContain("<Show when={isInstall() && isApplyRun(current().type) && canRetryApply()}>");
+  expect(source).toContain("<Show when={isInstall() && isReviewRun(current().type)}>");
+  expect(source).toContain("<Show when={!isInstall() && canRestart()}>");
+  expect(source).toContain("const canRestart = () => Boolean(props.onRestart) && (!isInstall() || !hasSeenApply());");
+});
+
+test("a review that cannot continue can always close", () => {
+  // First read failed: Retry and Close.
+  const firstRead = source.slice(source.indexOf("<Show when={run.error && !runLatest()}>"), source.indexOf("<Show when={runLatest()}>"));
+  expect(firstRead).toContain("{closeButton()}");
+  // An unknown Apply outcome is held (no retry) but closable.
+  expect(source).toContain("<Show when={applyUnconfirmed()}>{closeButton()}</Show>");
+  expect(source).toContain('setError(t("installStore.applyUnconfirmed"));');
+});

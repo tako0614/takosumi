@@ -111,10 +111,116 @@ describe("i18n dictionaries", () => {
   });
 
   test("the install actions consistently use the user's Install terminology", () => {
+    // TASK-0115: one label per meaning. Install states the intent, Review
+    // makes the Plan, and only "Allow and install" applies it.
     expect(ja["installStore.install"]).toBe("インストール");
-    expect(ja["installStore.add"]).toBe("インストール");
+    expect(ja["installStore.reviewChanges"]).toBe("内容を確認");
+    expect(ja["installStore.allowInstall"]).toBe("許可してインストール");
     expect(ja["installStore.installing"]).toContain("インストール");
     expect(en["installStore.install"]).toBe("Install");
+    expect(en["installStore.reviewChanges"]).toBe("Review");
+    expect(en["installStore.allowInstall"]).toBe("Allow and install");
+  });
+
+  test("the install and app surfaces use the app vocabulary only", () => {
+    // The thing a user installs is an app. Old nouns and verbs (service,
+    // workload, add, deploy) must not come back into the install surface,
+    // its sign-in context, or its recovery copy.
+    const installKeys = (Object.keys(ja) as Array<keyof typeof ja>).filter(
+      (key) => key.startsWith("installStore.") || key.startsWith("auth.install"),
+    );
+    expect(installKeys.length).toBeGreaterThan(50);
+    for (const key of installKeys) {
+      expect({ key, value: ja[key] }).not.toEqual(
+        expect.objectContaining({ value: expect.stringMatching(/サービス|ワークロード|追加|デプロイ|公開(?!リポジトリ)|反映/u) }),
+      );
+      expect({ key, value: en[key] }).not.toEqual(
+        expect.objectContaining({ value: expect.stringMatching(/\b(?:services?|workloads?|add|adding|deploy(?:ed|ing)?)\b/iu) }),
+      );
+    }
+  });
+
+  test("navigation, connections, account, workspace, billing and sign-in copy use the app vocabulary", () => {
+    // TASK-0115: every surface says アプリ / 画面 / リソース / 接続 / スペース.
+    // These namespaces belong to the navigation and account side.
+    const prefixes = [
+      "nav.",
+      "shell.",
+      "conn.",
+      "account.",
+      "members.",
+      "workspace.",
+      "billing.",
+      "auth.",
+      "notif.",
+    ];
+    const keys = (Object.keys(ja) as Array<keyof typeof ja>).filter((key) =>
+      prefixes.some((prefix) => key.startsWith(prefix)),
+    );
+    expect(keys.length).toBeGreaterThan(300);
+    for (const key of keys) {
+      expect({ key, value: ja[key] }).not.toEqual(
+        expect.objectContaining({
+          value: expect.stringMatching(
+            /ワークスペース|サービス|ワークロード|デプロイ|公開(?!リポジトリ)|反映/u,
+          ),
+        }),
+      );
+      // "Terms of Service" is the legal document's name.
+      if (key === "auth.termsOfService") continue;
+      expect({ key, value: en[key] }).not.toEqual(
+        expect.objectContaining({
+          value: expect.stringMatching(
+            /\b(?:services?|workloads?|deploy(?:s|ed|ing)?)\b/iu,
+          ),
+        }),
+      );
+    }
+    expect(ja["nav.connections"]).toBe("接続");
+    // スペース is the Japanese UI word; English keeps the product noun
+    // Workspace, never the retired "Space" alias.
+    expect(ja["account.section.workspace"]).toBe("スペース");
+    expect(en["account.section.workspace"]).toBe("Workspace");
+    for (const key of keys) {
+      expect({ key, retiredAlias: /\bspaces?\b/iu.test(en[key]) }).toEqual({
+        key,
+        retiredAlias: false,
+      });
+    }
+    // The app page is titled as an app in the top bar.
+    expect(ja["nav.app"]).toBe("アプリ");
+    expect(en["nav.app"]).toBe("App");
+  });
+
+  test("the settings hub, manage catalog and removed workspace tools have no copy left", () => {
+    for (const removed of [
+      "settings.",
+      "workspaceSettings.",
+      "shares.",
+      "backups.",
+      "interfaceRecovery.",
+      "hostedResources.",
+      "graph.",
+      "runList.",
+    ]) {
+      expect({
+        removed,
+        keys: Object.keys(ja).filter((key) => key.startsWith(removed)),
+      }).toEqual({ removed, keys: [] });
+    }
+    // Generated API handles never appear in copy as if they were names.
+    for (const [locale, messages] of [
+      ["ja", ja],
+      ["en", en],
+    ] as const) {
+      for (const [key, value] of Object.entries(messages)) {
+        expect({ locale, key, leaked: value.includes("@workspace-") }).toEqual({
+          locale,
+          key,
+          leaked: false,
+        });
+      }
+    }
   });
 
   test("no dictionary key is left behind by removed UI", () => {

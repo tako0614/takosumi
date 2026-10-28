@@ -113,6 +113,7 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
   "/output-shares",
   "/sources",
   "/providers",
+  "/account/:section",
   "/account/settings",
   "/account/billing",
   "/account/profile",

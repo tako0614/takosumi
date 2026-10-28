@@ -11,6 +11,13 @@ const source = readFileSync(
   ),
   "utf8",
 );
+const planResourceListSource = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../../../../dashboard/src/components/run/PlanResourceList.tsx",
+  ),
+  "utf8",
+);
 
 describe("RunView", () => {
   test("the Run ledger no longer becomes a second install screen", () => {
@@ -83,11 +90,11 @@ describe("RunView", () => {
     expect(source).toMatch(
       /changeCounts\(\)\.delete > 0 \|\|\s*\n?\s*!changeCountsKnown\(\)\)/,
     );
-    // ...and the ?auto=update auto-continue must WAIT for the logs refetch
-    // to settle before evaluating the gate on a summary-less run.
-    expect(source).toContain(
-      "if (!runHasChangeSummary(r) && logs.loading) return;",
-    );
+    // Nothing on the run page applies automatically (TASK-0115): no
+    // ?auto=update flow, no consent token, no auto-continue.
+    expect(source).not.toContain("auto-apply-consent");
+    expect(source).not.toContain("autoContinue");
+    expect(source).not.toContain("useSearchParams");
     // Confirmation is a local review step over structured Run facts. There is
     // no server-error prose fallback and no retired confirmDestructive field.
     expect(source).toContain("confirmedReview !== true");
@@ -101,7 +108,7 @@ describe("RunView", () => {
     expect(source).toContain('t("run.summary.stateRecoverySucceededHint")');
     expect(ja["run.summary.stateRecoverySucceeded"]).toContain("状態データ");
     expect(ja["run.summary.stateRecoverySucceededHint"]).toContain("失敗したまま");
-    expect(en["run.summary.stateRecoverySucceeded"]).toContain("does not mean the deploy succeeded");
+    expect(en["run.summary.stateRecoverySucceeded"]).toContain("does not mean the apply succeeded");
     expect(en["run.summary.stateRecoverySucceededHint"]).toContain("remains failed");
   });
 
@@ -115,17 +122,11 @@ describe("RunView", () => {
     expect(source).not.toContain("<Match when={run.loading}>");
   });
 
-  test("プランを再実行 re-plans the FRESH snapshot via planCapsuleUpdate", () => {
-    // A deployed update refreshes the Source, but an incomplete first install
-    // must preserve its reviewed snapshot/report pair. Refreshing only the
-    // report makes the next plan fail closed on a snapshot mismatch.
-    expect(source).toContain("capsule.currentStateGeneration === 0");
-    expect(source).toContain("await planCapsule(instId, {");
-    expect(source).toMatch(
-      /compatibilityReportId:\s+initialReport \?\? currentRun\.compatibilityReportId/u,
-    );
-    expect(source).toContain("initialPlanRetryReport(currentRun, capsule)");
-    expect(source).toContain("planCapsuleUpdate(instId)");
+  test("try again re-plans through the shared retry selector", () => {
+    // Behavior lives in lib/run-retry.ts (tests/dashboard/src/views/runs/
+    // run-retry_test.ts); the run page and the app page both call it.
+    expect(source).toContain("retryPlanForRun(currentRun, capsule)");
+    expect(source).toContain("const capsule = await getCapsule(instId);");
   });
 
   test("a failed first-install Plan abandons its stale snapshot before rebuilding from latest source", () => {
@@ -159,13 +160,8 @@ describe("RunView", () => {
       "履歴は残ります",
     );
     expect(en["run.restartLatestSourceConfirm.message"]).toContain(
-      "history is preserved",
+      "stays in history",
     );
-  });
-
-  test("destroy retry preserves the destroy operation", () => {
-    expect(source).toContain('currentRun.type === "destroy_plan"');
-    expect(source).toContain("await destroyPlanCapsule(instId)");
   });
 
   test("terminal applies clear the install-config list cache with the rest", () => {
@@ -219,11 +215,17 @@ describe("RunView", () => {
   });
 
   test("allows the full Plan change list to be reviewed above the initial limit", () => {
-    expect(source).toContain("const [expanded, setExpanded] = createSignal(false)");
-    expect(source).toMatch(
+    // The list lives in the shared PlanResourceList component RunView renders.
+    expect(source).toContain("<PlanResourceList resources={planResources()} />");
+    expect(planResourceListSource).toContain(
+      "const [expanded, setExpanded] = createSignal(false)",
+    );
+    expect(planResourceListSource).toMatch(
       /expanded\(\)\s*\? actionable\(\)\s*:\s*actionable\(\)\.slice\(0, PLAN_RESOURCE_REVIEW_LIMIT\)/,
     );
-    expect(source).toContain("onClick={() => setExpanded(true)}");
-    expect(source).toContain('t("run.resources.more", { n: hiddenCount() })');
+    expect(planResourceListSource).toContain("onClick={() => setExpanded(true)}");
+    expect(planResourceListSource).toContain(
+      't("run.resources.more", { n: hiddenCount() })',
+    );
   });
 });

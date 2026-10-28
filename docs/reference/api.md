@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 91 件です。
+次の 96 件です。
 
 ### Account views
 
@@ -251,6 +251,11 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
+メンバー一覧の各行は、membership の field に加えて、アカウントに表示名があれば
+`displayName` を返します。`email` は呼び出し元がその Workspace の active な owner または
+admin のときだけ返し、identity provider が未確認と示したアドレスは返しません。member と
+viewer には他のメンバーのメールを返しません。追加・役割変更・削除の応答はどちらも含みません。
+
 空の Workspace だけが owner によって削除できます。非破棄 Capsule、Source、
 進行中 Run、利用量の証拠、保持された backup が一つでも残ると `409 workspace_not_empty` で拒否します。
 保持された backup は削除後に到達できなくなるため、削除前に明示的に扱ってください。
@@ -271,6 +276,8 @@ member 行は同時に削除します。削除後の読み取りは 404 です�
 | DELETE   | `/api/v1/capsules/{capsuleId}`                             | 削除を予約する（即時破棄計画は `?immediate=true`） |
 | POST     | `/api/v1/capsules/{capsuleId}/uninstall`                   | 猶予付きの削除 (二段階アンインストール) を予約する |
 | POST     | `/api/v1/capsules/{capsuleId}/cancel-uninstall`            | 猶予期間中の削除予約を取り消す               |
+| GET      | `/api/v1/capsules/{capsuleId}/app`                         | アプリの状態・主操作・問題・画面・版・削除条件をまとめて読む |
+| GET      | `/api/v1/capsules/{capsuleId}/runs`                        | この Capsule の Run を新しい順に一覧する     |
 | GET      | `/api/v1/capsules/{capsuleId}/outputs`                     | 公開 Output を読む                           |
 | GET      | `/api/v1/capsules/{capsuleId}/current-resource-inventory`  | 現在の版に記録された OpenTofu の resource の一覧を読む |
 | GET      | `/api/v1/capsules/{capsuleId}/usage-summary`               | 利用量の集計を読む                           |
@@ -318,6 +325,34 @@ destroy-plan が bridge になります。猶予なしで破棄したい client 
 provider に届いた破棄が失敗した場合は、通常の破棄失敗と同じく `error` になります。
 `destroy-plan` は猶予なしの破棄計画を作ります。
 
+`GET /api/v1/capsules/{capsuleId}/app` は、インストール済みのアプリを1つの見え方として
+返します。状態 (`state`) と主操作 (`primaryAction`) は control plane が Capsule、
+この Capsule の最新の計画・デプロイ Run、版の更新処理、ProviderConnection、
+画面の作成記録から決めます。Workspace 全体の Run の窓には頼りません。
+
+- `state`: `installing` / `installed` / `updating` / `needs_attention` / `stopped` /
+  `uninstall_scheduled` / `uninstalling` / `uninstalled`
+- `primaryAction`: `open` / `view_resources` / `review` / `retry` / `retry_screen` /
+  `fix_connection` / `continue_install` / `cancel_uninstall` / `uninstall_now` / `reinstall` / `none`
+- `problems[].code`（優先順）: `connection_unavailable` / `uninstall_failed` /
+  `uninstall_blocked` / `policy_blocked` / `run_failed` / `capsule_error` /
+  `install_incomplete` / `screen_unavailable` / `uninstall_scheduled`（警告）
+
+応答には、開ける画面のすべて (`screens`)、採用中の版と同じ ref の最新 snapshot
+(`version.current` / `version.latest` / `updateAvailable` / `stale` / `autoUpdate`)、
+進行中の Run と確認待ちの計画 (`progress`)、最新の Run (`latestRun`)、削除の条件
+(`uninstall.mode` と、予約前でも分かる `graceDays`、予約後の `scheduled.deleteAfter`)
+が入ります。秘密の値、Output の値、画面の起動 URL 以外の Interface 入力は含みません。
+補助的な読み取りに失敗した部分は `incomplete` に名前が入ります。
+削除の予約記録は、Capsule が `uninstalled` の間と、provider に届いた破棄が失敗して
+`error` になり、最新の Run がまだ破棄である間だけ有効と見なします。予約が猶予中でも
+破棄中でも、`blockedReason` が記録されていれば `uninstall_blocked` になります。
+`cancel_uninstall` と `uninstall.mode` / `scheduled.cancellable` は、取り消しと予約の
+コマンド自身の受付条件で判定します。
+
+`GET /api/v1/capsules/{capsuleId}/runs` は `limit`（既定 50、上限 100）と
+`cursor` で新しい順にページングします。`type` を繰り返すと Run の種類で絞れます。
+
 新しい Capsule は `POST /api/v1/workspaces/{workspaceId}/install-plans` から
 exact SourceSnapshot と成功済み compatibility declaration を固定して作成し、返された
 Plan Run を確認してからデプロイします。Workspace Capsule collection の公開面は GET のみです。
@@ -360,20 +395,50 @@ source_has_in_flight_run` で拒否します。削除後は webhook bearer が�
 
 ### Git install plan
 
-| メソッド | パス                                              | 説明                                      |
-| -------- | ------------------------------------------------- | ----------------------------------------- |
-| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`  | Git から reviewable Plan Run まで準備する |
-| GET      | `/api/v1/install-plans/{installPlanId}`           | coordinator の現在状態を読む              |
-| POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                    |
+| メソッド | パス                                              | 説明                                           |
+| -------- | ------------------------------------------------- | ---------------------------------------------- |
+| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`  | Git から reviewable Plan Run まで準備する      |
+| GET      | `/api/v1/workspaces/{workspaceId}/install-plans`  | 自分の未完了のインストール試行を読む（`open=1`） |
+| GET      | `/api/v1/install-plans/{installPlanId}`           | coordinator の現在状態を読む                   |
+| PATCH    | `/api/v1/install-plans/{installPlanId}`           | 入力待ちの試行に回答する（generation CAS）     |
+| DELETE   | `/api/v1/install-plans/{installPlanId}`           | 試行と、試行が作った未適用の Capsule を捨てる  |
+| POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                         |
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
-は同じ record を返し、内容が異なれば 409 になります。public projection が含むのは Source、
-SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
-作成時に渡した private variable 値は atomic initial authority commit まで非公開 coordinator
-state にだけ保持され、response には投影されず、commit 直後に coordinator から削除されます。
-credential、token、Output 値は受け付けません。
+は同じ record を返し、内容が異なれば 409 になります。request digest は variable の名前だけを
+含み、値は含みません。そのため同じ key で値だけを変えた request は 409 にならず、最初の
+record を 200 で返します。値を変えるときは新しい key を使ってください。public projection が
+含むのは Source、SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic
+だけです。reviewed preflight に渡した private variable 値は atomic initial authority commit
+まで非公開 coordinator state にだけ保持され、response には投影されず、commit 直後と、
+失敗などの終端に移ったときに coordinator から削除されます。credential、token、Output 値は
+受け付けません。
 `reviewable` になった後の承認と apply は `Run` API だけが所有し、install-plan 専用 apply
 route はありません。
+
+`mode: "attempt"` で作ると、coordinator が試行全体を持ちます。Source sync、module 走査、
+互換性確認、Provider Connection の照合を自分で進め、利用者の判断が要るとき（module 候補が
+複数、接続の不足、必須設定、名前の衝突）と、Capsule を作る直前に、非終端の
+`awaiting_input` で止まります。response の `userAction` が次の操作を一つだけ返します
+（`wait`・`choose_module`・`provide_inputs`・`review_run`・`retry`・`none`）。候補が一つだけの
+接続は自動で選びます。`PATCH` と `DELETE` は試行を始めた本人だけが使え、`PATCH` は
+`expectedGeneration` で CAS します。variable 値は `continue: true` で確定する request だけが
+受け取り、coordinator には保存しません。確定の request が作成を始めた後は（variable が
+なくても）Capsule が存在しうるので、結果を確認できなかったときは同じ値の再送だけを受け付け、
+作成済みの Capsule を先に採用します。`DELETE` は、lease を持つ処理がないことを確かめてから
+試行が作った未適用の Capsule を abandon し、終端の `discarded` にします。abandon が途中で
+止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
+すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
+Source は削除しません。その試行自身が有効にした polling だけを止めます。
+
+試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
+GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の
+管理 epoch の変更（`workspace_management_changed`）は `invalidated` と `userAction: retry`
+で示すだけで、片付けは本人の `DELETE` か、無効な試行に届いた本人の `PATCH`（409
+`install_attempt_invalid`）で行います。`awaiting_input` は lease も実行権限も持たないため、
+Workspace 管理の blocker になりません。Capsule ができる前に期限切れになり lease を持たない
+試行も、進められないので blocker になりません。そこから先へ進む書き込みは、作成時の管理
+admission を同じ statement で確かめます。
 
 `configuration-plans` は、現在の private InstallConfig に closed な
 `variablePatch`（`set` / `remove`）、value-free ProviderBinding 選択、Interface
@@ -580,6 +645,11 @@ Apply が新しい InstallConfig を認可することはありません。
 | POST     | `/api/v1/run-groups/{runGroupId}/approve`               | まとめて実行した Run を承認する |
 | GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
 | POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |
+
+ポリシーで止まった計画と承認が必要な計画の Run には `policyReasons` が付きます。各要素は
+`{ code, layer, provider?, resourceType? }` で、`code` と `layer` は決まった値だけを取ります
+（例: `provider_not_allowed` / `provider`、`approval_required_change` / `action`）。
+英文の理由そのものは返しません。分類できない理由は `unclassified` として残ります。
 
 ### 認証情報と Output の共有
 
