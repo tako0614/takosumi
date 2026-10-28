@@ -144,7 +144,14 @@ function StorePage(props: { readonly principalId: string }) {
     navigate(`/new?${buildNewQuery(listing)}`);
   };
   return (
-    <main class="iv-page iv-browse-page" data-install-state={!installedApps() || installedApps()?.complete === false ? "unknown" : "not-installed"}>
+    <main
+      class="iv-page iv-browse-page"
+      data-install-state={
+        installedApps.error || installedApps.loading || !installedApps() || installedApps()?.complete === false
+          ? "unknown"
+          : "not-installed"
+      }
+    >
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
       <OpenAttempts principalId={props.principalId} />
       <Show when={installedApps.error}>
@@ -499,7 +506,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     </div>
                   </div>
                 </Show>
-                <Show when={installedApps.error || installedApps()?.complete === false}>
+                <Show when={installedApps.error || (!installedApps.loading && installedApps()?.complete === false)}>
                   <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
                   <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
                 </Show>
