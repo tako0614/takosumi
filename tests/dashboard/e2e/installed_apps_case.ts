@@ -5,7 +5,7 @@ import type { DashboardE2EMode } from "./traffic-policy.ts";
 
 const repository = "https://github.com/example/repository-office";
 const modulePath = "deploy/app";
-const hint = "別のアプリとして新しく追加します。データや設定は共有されません。";
+const hint = "別のアプリとして新しくインストールします。データや設定は共有されません。";
 const listing = {
   id: "example/installed-app", source: { git: repository, path: modulePath },
   suggestedName: "another-office", name: { ja: "共有オフィス", en: "Shared Office" },
@@ -13,7 +13,7 @@ const listing = {
   badge: { ja: "アプリ", en: "App" }, createdAt: "2026-10-28T00:00:00.000Z", updatedAt: "2026-10-28T00:00:00.000Z",
 };
 function app(capsuleId: string, name: string): InstalledAppSummary {
-  return { capsuleId, name, state: "installed", primaryAction: "open", installedFrom: { url: `${repository}.git/`, path: `./${modulePath}/` } };
+  return { capsuleId, name, state: "installed", installedFrom: { url: `${repository}.git/`, path: `./${modulePath}/` } };
 }
 
 async function fixture(page: Page, apps: readonly InstalledAppSummary[]) {
@@ -70,7 +70,7 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
       await expect(card.getByText("インストール済み", { exact: true })).toBeVisible();
       await expect(card.getByRole("link", { name: "開く: office-personal", exact: true })).toHaveAttribute("href", "/apps/cap_repository_office");
-      await expect(card.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeVisible();
+      await expect(card.getByRole("button", { name: "もう1つ入れる: 共有オフィス", exact: true })).toBeVisible();
       await expect(card.getByText(hint, { exact: true })).toBeVisible();
       await capture(page, "store-installed-one");
       expect(h.mutations).toEqual([]);
@@ -95,11 +95,11 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       const h = await fixture(page, [app("cap_repository_office", "office-personal"), app("cap_imported_state", "office-team")]);
       await page.goto("/new");
       const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
-      await expect(card.getByText("2つインストール済み", { exact: true })).toBeVisible();
+      await expect(card.getByText("2件インストール済み", { exact: true })).toBeVisible();
       await expect(card.getByRole("link", { name: /^開く:/u })).toHaveCount(2);
       await capture(page, "store-installed-two");
       await card.getByRole("heading", { name: "共有オフィス" }).getByRole("button").click();
-      await expect(page.getByTestId("install-existing-apps").getByText("2つインストール済み", { exact: true })).toBeVisible();
+      await expect(page.getByTestId("install-existing-apps").getByText("2件インストール済み", { exact: true })).toBeVisible();
       await expect(page.getByTestId("install-existing-apps").getByRole("link", { name: /^開く:/u })).toHaveCount(2);
       await capture(page, "new-installed-two");
       expect(h.mutations).toEqual([]);
@@ -135,6 +135,27 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await expect(page.getByTestId("install-existing-apps")).toBeVisible();
       await expect(page.getByRole("button", { name: "もう1つ入れる", exact: true })).toBeEnabled();
       expect(h.mutations).toEqual([]);
+      expect(h.errors).toEqual([]);
+    });
+
+    test("a person with no workspace can start Install and create one", async ({ page }) => {
+      const h = await fixture(page, []);
+      await page.addInitScript(() => localStorage.removeItem("takosumi.currentWorkspaceId"));
+      await page.route((url) => url.pathname === "/api/v1/dashboard/bootstrap", (route) => route.fulfill({
+        json: { session: { subject: "sub_portable_e2e", expiresAt: Date.now() + 60_000 },
+          workspaces: [], workspaceList: { total: 0, returned: 0, limit: 50, truncated: false }, notifications: [] },
+      }));
+      await page.route((url) => url.pathname === "/api/v1/workspaces", (route) =>
+        route.fulfill({ json: route.request().method() === "POST"
+          ? { workspace: { id: "ws_alpha", handle: "alpha", displayName: "Alpha Workspace", type: "personal", ownerUserId: "sub_portable_e2e", createdAt: "2026-10-28T00:00:00.000Z", updatedAt: "2026-10-28T00:00:00.000Z" } }
+          : { workspaces: [], total: 0, returned: 0, limit: 50, truncated: false } }));
+      const query = new URLSearchParams({ git: repository, path: modulePath, ref: PORTABLE_SOURCE_COMMIT });
+      await page.goto(`/new?${query}`);
+      const install = page.getByRole("button", { name: "インストール", exact: true });
+      await expect(install).toBeEnabled();
+      await install.click();
+      await expect.poll(() => h.mutations).toContain("POST /api/v1/workspaces");
+      await expect.poll(() => h.mutations).toContain("POST /api/v1/workspaces/ws_alpha/install-plans");
       expect(h.errors).toEqual([]);
     });
   });
