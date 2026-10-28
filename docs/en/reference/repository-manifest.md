@@ -207,13 +207,24 @@ hostname convention, and the request adds no provider, resource, deployment,
 or lifecycle authority.
 
 `interface.consume` never declares a provider, product name, Interface ID,
-endpoint, or credential. After Plan, the host reads the DB-owned InstallConfig
-and resolves the exact type/version only when there is exactly one
-Workspace-owned `Resolved` Interface. It then creates an ordinary
-least-privilege `InterfaceBinding` for the authenticated Principal. Zero or
-multiple matches, revoked/conflicting bindings, or
-permissions/delivery outside operator policy fail closed. Runtime credentials
-are short-lived and are never written to the manifest or an OpenTofu variable.
+endpoint, or credential. The provider declares `interfaces`; the consumer declares
+`requires[].kind: "interface.consume"`. During installation, the user selects a
+`Resolved` provider they can open that matches the stored InstallConfig's exact
+type, version, and permissions. With no candidates, the user can read the guidance
+and choose later. A single candidate is selected automatically. With several,
+the user chooses a provider or later. The install plan accepts these value-free
+choices as `interfaceLinks`.
+
+After the Capsule is created, an `InterfaceLink` pins the selected Interface and
+provider Capsule. Adding another provider or losing a candidate never selects a
+replacement automatically. Only an approved, active link can create an ordinary,
+least-privilege `InterfaceBinding` for the authenticated Principal. The current
+Workspace composition approves same-Workspace links immediately through a
+replaceable approval policy. An unset or unavailable link does not prevent OIDC
+sign-in; it creates no Binding for that link. Runtime credentials are short-lived.
+Neither Interface values nor credentials enter the manifest or OpenTofu variables.
+See [Interfaces](../concepts/interfaces.md) for changing links and reviewing the
+impact of uninstalling a provider.
 
 ## `features`
 

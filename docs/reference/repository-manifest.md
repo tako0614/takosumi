@@ -181,12 +181,19 @@ client を登録し、何度実行しても結果は同じです。最後の des
 output、製品名、ホスト名の決まりから推測して補うことはなく、この要求で provider、resource、デプロイ、
 lifecycle の権限が増えることもありません。
 
-`interface.consume` には、provider、製品名、Interface の ID、endpoint、認証情報を書きません。Takosumi は、
-Plan のあとに保存した InstallConfig から正確な type と version を読み、同じ Workspace に `Resolved` の
-Interface がちょうど 1 件あるときだけ、認証済みの Principal に、必要最小限の permissions の通常の
-`InterfaceBinding` を作ります。0 件や複数件のとき、取り消された binding や衝突する binding があるとき、
-運用している人の policy の外の permission や delivery のときは拒否します（fail closed）。実行時の認証情報は短い期限で
-発行され、manifest や OpenTofu の変数には書き込まれません。
+`interface.consume` には、provider、製品名、Interface の ID、endpoint、認証情報を書きません。
+提供側は `interfaces`、利用側は `requires[].kind: "interface.consume"` を宣言します。保存した
+InstallConfig の正確な type、version、permissions に合い、利用者が開ける `Resolved` の提供元を、
+追加時に選びます。候補が 0 件なら案内を読み「あとで」を選べます。1 件なら自動で選ばれ、複数なら
+提供元か「あとで」を選びます。選択は値を含まない `interfaceLinks` として install plan に答えます。
+
+Capsule の作成後、選んだ提供元の Interface と Capsule は `InterfaceLink` に固定されます。
+2 つ目の提供元を追加しても、候補が減っても、自動で選び直しません。承認された active な連携だけが、
+認証済み Principal に対する必要最小限の通常の `InterfaceBinding` を作れます。現在の Workspace
+構成では同じ Workspace の連携を即時承認し、その判断は差し替え可能な承認 policy が行います。
+連携が未設定・利用不可でも OIDC のサインインは続き、その連携の Binding を作りません。
+実行時の認証情報は短い期限で発行され、Interface の値も認証情報も manifest や OpenTofu の変数には
+書き込まれません。連携の確認・変更と削除時の影響は[Interface](../concepts/interfaces.md)を参照してください。
 
 ## `features`
 

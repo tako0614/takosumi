@@ -3,10 +3,12 @@
 An Interface declares what a deployment offers. Who is allowed to use it is decided by an
 InterfaceBinding, so **a declaration on its own lets nobody call anything**.
 
-## The two halves
+## Declaration, selection, and authorization
 
 - **Interface** — the declaration from the side that offers something, describing the
   inputs it has and the permissions it requires
+- **InterfaceLink** — the durable link from a consumer Capsule and requirement key to the
+  selected provider Interface and Capsule, with requested and approved permissions
 - **InterfaceBinding** — the authorization given to the side that uses it, saying who may
   use it with which permissions
 
@@ -100,17 +102,28 @@ readable from the Interface's `status.resolvedInputs`, and where it came from fr
 
 ## Using another Capsule from a deployed service
 
-An Interface is a provider-side declaration. A consumer Capsule uses the same Interface and
-InterfaceBinding ledger to receive a connection and its authorization.
+In a repository's `.well-known/takosumi.json`, `interfaces` declares what the Capsule
+**offers**. `requires[].kind: "interface.consume"` declares the type, version, and permissions
+it **uses**. After review, these become `interfaceBlueprints` and `requiredInterfaces` in the
+stored InstallConfig. The manifest contains no provider ID or credentials. See the
+[Repository manifest](../reference/repository-manifest.md#requires) for the declaration format.
 
-The two declarations remain separate.
+During installation, choose a matching `Resolved` provider that you can open. With no
+candidates, choose later. A single candidate is selected automatically. With several, choose
+a provider or later. An InterfaceLink stores the selected provider Interface and Capsule.
+Adding another provider, or losing access to the current one, never switches to another
+candidate automatically.
 
-- `InstallConfig.interfaceBlueprints` proposes Interfaces that the Capsule **offers**.
-- Consumer input mapping lists the Interface aliases and permissions it **consumes**. It is not
-  repository metadata, an Output convention, or provider configuration.
+A link is `pending_approval`, `active`, `declined`, or `revoked`. It records requested and
+approved permissions separately. Only an active link can create ordinary InterfaceBindings.
+A replaceable policy decides approval; the current Workspace composition immediately
+approves same-Workspace links. An unset link does not prevent OIDC sign-in; it creates no
+Binding for that link.
 
-Takosumi resolves the Capsule's Interface, Ready InterfaceBinding, and permissions. The runtime
-receives only a materialization scoped to exactly the permissions of each alias.
+At runtime, Takosumi checks the provider pinned by the active link, the calling Principal's
+Ready InterfaceBinding, and the permission. Interface values and credentials never flow into
+the consumer's OpenTofu variables or state.
+The host's runtime receives only a materialization scoped to each alias's permissions.
 It does not receive provider credentials, account ids, native resource ids, or bearer
 tokens.
 
@@ -120,6 +133,26 @@ rather than run with stale permissions.
 
 This is an Interface authorization capability. It does not replace the path where an OpenTofu
 module uses Cloudflare, AWS, Takoform, or another provider directly.
+
+## Viewing and changing links
+
+The app page shows outgoing links in `links.uses` and incoming links in `links.usedBy`.
+Problems report `interface_link_unset` for an unset link, `interface_link_unavailable` for
+an unavailable provider, or `interface_link_degraded` for a provider scheduled for removal.
+The action to repair a link is `fix_interface_link`.
+
+Use the [Interface link API](../reference/api.md#interface-links) with app management access to
+list candidates, select another provider, or unlink. Selecting a provider creates its
+Binding before revoking the old Binding, and needs no Plan. Send the `generation` you read
+as `expectedGeneration` when changing a link.
+
+The uninstall confirmation shows incoming consumers in `uninstall.impact.usedBy`.
+Uninstalling a provider leaves consumer apps in place. It neither selects a replacement nor
+rewrites the link's state: availability is computed from the current provider.
+
+The store matches Git URL and module to show an installed badge and Open. Choose Add another
+to install the same app again. Each new installation is an independent app; data and settings
+are not shared.
 
 ## Reading state and authorization
 

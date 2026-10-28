@@ -3,9 +3,11 @@
 Interface は、デプロイしたものが何を提供しているかを宣言する仕組みです。誰に使わせるかは
 InterfaceBinding が決めるので、**宣言しただけでは誰も呼べません**。
 
-## 役割の分担
+## 宣言・選択・認可
 
 - **Interface** — 提供する側の宣言。どんな入力を持ち、どの権限が必要かを書く
+- **InterfaceLink** — 利用する Capsule の requirement key と、選んだ提供元の Interface / Capsule、
+  要求・承認した権限を固定する連携の記録
 - **InterfaceBinding** — 利用する側への認可。誰が、どの権限で使えるかを決める
 
 秘密の値は Interface に載りません。Interface が公開するのは、明示的に対応付けた
@@ -97,17 +99,25 @@ JSON Pointer です。
 
 ## デプロイしたサービスから別の Capsule を使う
 
-Interface は提供側の宣言です。consumer Capsule に接続を渡す場合も、同じ
-Interface / InterfaceBinding の記録で、値の出どころと認可を明示します。
+リポジトリの `.well-known/takosumi.json` では、`interfaces` がその Capsule の**提供する**
+Interface を、`requires[].kind: "interface.consume"` が**使う** Interface の type、version、
+permissions を宣言します。確認後に保存する InstallConfig では、それぞれ
+`interfaceBlueprints` と `requiredInterfaces` になります。manifest に提供元の ID や認証情報を
+埋め込みません。宣言の形は[Repository manifest](../reference/repository-manifest.md#requires)を参照してください。
 
-この場合、宣言は2種類を混ぜません。
+追加時には、宣言に合う `Resolved` の提供元のうち、自分が開けるものを選びます。
+候補がなければ「あとで」を選べます。1 件なら自動で選ばれ、複数なら提供元か「あとで」を選びます。
+選択は InterfaceLink に保存され、提供元の Interface と Capsule に固定されます。後から
+2 つ目の提供元を追加しても、現在の提供元が使えなくなっても、別の候補へ自動で切り替えません。
 
-- `InstallConfig.interfaceBlueprints` は、その Capsule が**提供する** Interface の候補です。
-- consumer 側の input mapping は、repository manifest、Output、provider 設定とは別に、
-  どの Interface をどの権限で使うかを示します。
+連携の状態は `pending_approval`、`active`、`declined`、`revoked` のいずれかです。
+要求した権限と承認された権限を別に記録し、active な連携だけが通常の InterfaceBinding を作れます。
+承認は差し替え可能な policy が判断します。現在の Workspace 構成では、同じ Workspace の
+連携を即時承認します。連携が未設定でも OIDC のサインインは続き、その連携の Binding は作りません。
 
-Takosumi は対象 Capsule の Interface、Ready な InterfaceBinding、permission を解決します。
-runtime には、alias ごとに権限を正確に絞った実体（materialization）だけを渡します。
+実行時は、active な連携が指す提供元と、呼ぶ Principal の Ready な InterfaceBinding、permission を
+確かめます。Interface の値や認証情報を、consumer の OpenTofu 変数や state に流し込みません。
+host の runtime に渡す実体（materialization）は、alias ごとの権限に絞ります。
 provider credential、account id、native resource id、bearer token は
 渡しません。
 
@@ -117,6 +127,25 @@ Binding の revoke、Interface generation の変更、permission の変更後に
 
 これは Interface の認可機能です。OpenTofu module が Cloudflare / AWS / Takoform などの
 provider を直接使う経路を置き換えません。
+
+## 連携を確認・変更する
+
+アプリページの連携には、使っている側の `links.uses` と、使われている側の `links.usedBy` が
+表示されます。未設定は `interface_link_unset`、利用不可は `interface_link_unavailable`、
+提供元が削除予約中の連携は `interface_link_degraded` として通知されます。連携先を直す操作は
+`fix_interface_link` です。
+
+候補の取得・選び直し・解除は、アプリの管理権限で[連携 API](../reference/api.md#interface-links)を
+使います。選び直しは Plan を作らず、新しい提供元への Binding を作ってから旧 Binding を取り消します。
+更新には、読んだ `generation` を `expectedGeneration` として渡します。
+
+アンインストールの確認には、そのアプリを使う `uninstall.impact.usedBy` が表示されます。
+提供元をアンインストールしても、利用側のアプリは残ります。連携の選択を別の提供元に変えたり、
+連携の状態を勝手に書き換えたりせず、現在の提供元から利用可能性を計算します。
+
+ストアは、Git URL と module の一致から「インストール済み」と「開く」を表示します。
+同じアプリを追加したいときは「もう1つ入れる」を選べます。新しいインストールは独立したアプリで、
+データや設定は共有しません。
 
 ## 状態と認可を読む
 
