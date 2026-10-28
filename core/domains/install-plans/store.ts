@@ -62,6 +62,8 @@ export interface GitInstallAttemptFacts {
       readonly requirementKey: string;
       readonly interfaceId: string;
     }[];
+    /** Name only; captured for the accepted repository OIDC endpoint input. */
+    readonly repositoryAccountsOidcPublicUrlVariable?: string;
     readonly providerPolicy?: GitInstallAttemptProviderPolicy;
   };
 }
