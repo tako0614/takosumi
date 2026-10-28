@@ -111,8 +111,10 @@ stored InstallConfig. The manifest contains no provider ID or credentials. See t
 When installing, choose a matching `Resolved` provider from another app in the same
 Workspace. Only Capsule-owned Interfaces can provide app-to-app links; Workspace-owned
 and operator-owned Interfaces are not link providers. With no candidates, choose later.
-A single eligible candidate is selected automatically. With several, choose
-a provider or later. An InterfaceLink stores the selected provider Interface and Capsule.
+A single candidate is selected automatically only when it is not private and does not
+duplicate a candidate for another requirement. Private providers, duplicate candidates,
+and multiple candidates require an explicit provider or later choice.
+An InterfaceLink stores the selected provider Interface and Capsule.
 Adding another provider, or losing access to the current one, never switches to another
 candidate automatically.
 
@@ -121,6 +123,9 @@ approved permissions separately. Only an active link can create ordinary Interfa
 A replaceable policy decides approval; the current Workspace composition immediately
 approves same-Workspace links. An unset link does not prevent OIDC sign-in; it creates no
 Binding for that link.
+Reordering or reducing an app's permissions preserves links within the approved scope.
+An increase reports `reapproval_required` health; choose the linked app again to approve
+the additional permissions before they can be granted.
 
 At runtime, Takosumi checks the provider pinned by the active link, the calling Principal's
 Ready InterfaceBinding, and the permission. Interface values and credentials never flow into

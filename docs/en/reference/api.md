@@ -264,14 +264,17 @@ unverified. Members and viewers do not receive other members' email addresses.
 Add, role change, and remove responses carry neither field.
 
 `GET /api/v1/workspaces/{workspaceId}/installed-apps` has no query parameters. With
-Workspace read access, it returns `{ installedApps: [...] }`, excluding destroyed apps.
+Workspace read access, it returns `{ installedApps: [...], complete: boolean }`, excluding destroyed apps.
 Each row has `capsuleId`, `name`, optional `displayName` (`{ja,en}`) and `iconUrl`, a light
 Capsule-derived `state`, and `installedFrom: {url,path,matchable?}`. The display URL contains no
 credentials, query, or fragment; `path` is the executable module's repository-relative directory.
 When removing a query or other content prevents exact comparison, the row includes
 `matchable: false` and is excluded from installed-app matching. Its app ID and summary are
 still returned. Never-applied apps do not match. If one app's config or source cannot be read,
-that row is omitted while the others remain. Matching ignores ref but preserves query as part
+that row is omitted while the others remain. `complete: false` means that discovery could not
+finish, for example after a bulk config read failure or the bounded Source page limit.
+Returned matches remain useful; an unmatched listing cannot be assumed uninstalled.
+Matching ignores ref but preserves query as part
 of executable source identity. The store uses normalized Git URL and module to show the installed
 count, Open, and Install another. Installing another copy creates an independent app with separate
 data and settings.
@@ -457,7 +460,9 @@ that the attempt itself turned on is turned off.
 
 For `userAction.kind: "provide_inputs"`, `interfaces` lists each `requirementKey`, exact
 type/version, permissions, value-free candidates, `choice`, and `autoSelected`. No candidates
-allows later; one is selected automatically; several require a provider or later. PATCH
+allows later. One is selected automatically only if it is not private and is not also a
+candidate for another requirement. Private providers, duplicates, and several candidates
+require an explicit provider or later choice. PATCH
 `interfaceLinks` replaces the complete answer list with entries shaped as
 `{requirementKey,choice:{kind:"interface",interfaceId}}` or
 `{requirementKey,choice:{kind:"later"}}`. The selected provider ID lives in this answer,

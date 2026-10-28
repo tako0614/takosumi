@@ -252,12 +252,14 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
 `GET /api/v1/workspaces/{workspaceId}/installed-apps` に query parameter はありません。その Workspace を
-読める利用者に、destroyed を除くアプリを `{ installedApps: [...] }` で返します。各行は
+読める利用者に、destroyed を除くアプリを `{ installedApps: [...], complete: boolean }` で返します。各行は
 `capsuleId`、`name`、任意の `displayName`（`{ja,en}`）と `iconUrl`、Capsule から作る簡易な `state`、
 `installedFrom: {url,path,matchable?}` を持ちます。URL は認証情報・query・fragment を含まず、`path` はリポジトリから見た
 実行する module のフォルダです。元の URL が query を含むなど、表示用 URL から正確に照合できない行には
 `matchable: false` を付け、インストール済みの照合から除外します。アプリの ID や要約は引き続き返します。
 未適用のアプリも照合から除外します。設定や取得元を読めないアプリの行は省き、他のアプリの一覧を返します。
+設定の一括取得失敗や取得元のページ上限などで一覧を確認しきれないときは `complete: false` です。
+この場合、返った行との一致は使えますが、一致しないアプリを未インストールとは判断できません。
 ref は照合に使いませんが、query は実行元の identity の一部として保持します。ストアは正規化した Git URL と module
 で照合し、「インストール済み」の件数と「開く」、副操作の「もう1つ入れる」を表示します。
 もう一度インストールしたものは独立したアプリで、データや設定は共有しません。
@@ -499,7 +501,8 @@ Source は削除しません。その試行自身が有効にした polling だ�
 
 `userAction.kind: "provide_inputs"` の `interfaces` は、`requirementKey`、type/version、
 permissions、値を含まない候補、`choice`、`autoSelected` を返します。候補が 0 件なら「あとで」、
-1 件なら自動選択、複数なら提供元か「あとで」を選びます。PATCH の `interfaceLinks` は
+1 件で private ではなく別の要件の候補とも重複しない場合だけ自動選択します。private の提供元、
+重複する候補、複数の候補は、提供元か「あとで」を明示して選びます。PATCH の `interfaceLinks` は
 `[{requirementKey,choice:{kind:"interface",interfaceId}}]` または
 `[{requirementKey,choice:{kind:"later"}}]` という完全な回答一覧です。提供元の ID は manifest ではなく
 この選択に保存し、Capsule 作成の直後に固定した InterfaceLink を作ります。以後は候補を解決し直しません。

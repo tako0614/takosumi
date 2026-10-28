@@ -110,7 +110,8 @@ permissions を宣言します。確認後に保存する InstallConfig では�
 埋め込みません。宣言の形は[Repository manifest](../reference/repository-manifest.md#requires)を参照してください。
 
 インストール時には、宣言に合う `Resolved` の提供元を、同じ Workspace のアプリから選びます。
-候補がなければ「あとで」を選べます。1 件なら自動で選ばれ、複数なら提供元か「あとで」を選びます。
+候補がなければ「あとで」を選べます。候補が 1 件で、private ではなく、別の要件の候補と重複していない場合だけ
+自動で選ばれます。private の提供元、別の要件と重複する候補、複数の候補は、提供元か「あとで」を明示して選びます。
 選択は InterfaceLink に保存され、提供元の Interface と Capsule に固定されます。後から
 2 つ目の提供元を追加しても、現在の提供元が使えなくなっても、別の候補へ自動で切り替えません。
 
@@ -118,6 +119,8 @@ permissions を宣言します。確認後に保存する InstallConfig では�
 要求した権限と承認された権限を別に記録し、active な連携だけが通常の InterfaceBinding を作れます。
 承認は差し替え可能な policy が判断します。現在の Workspace 構成では、同じ Workspace の
 連携を即時承認します。連携が未設定でも OIDC のサインインは続き、その連携の Binding は作りません。
+アプリの更新で権限の順序が変わったり減ったりしても、承認済みの範囲で連携を続けます。
+権限が増えた場合は health が `reapproval_required` になり、連携先を選び直して承認するまで新しい権限を付与しません。
 
 実行時は、active な連携が指す提供元と、呼ぶ Principal の Ready な InterfaceBinding、permission を
 確かめます。Interface の値や認証情報を、consumer の OpenTofu 変数や state に流し込みません。
