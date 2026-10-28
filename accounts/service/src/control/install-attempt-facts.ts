@@ -34,6 +34,7 @@ import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connect
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { isSecretKey } from "takosumi-contract/redaction";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import { accountsOidcModuleVariableProfile } from "../../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
 import type {
   GitInstallAttemptFacts,
@@ -181,6 +182,20 @@ export function attemptInputFacts(input: {
         sensitive: true,
       }));
   }
+  let repositoryAccountsOidcPublicUrlVariable: string | undefined;
+  if (input.repositoryManifest) {
+    try {
+      repositoryAccountsOidcPublicUrlVariable = accountsOidcModuleVariableProfile(
+        input.installConfig,
+      )?.publicUrlVariable;
+    } catch {
+      return {
+        ok: false,
+        code: "repository_install_ux_profile_invalid",
+        message: "This app's reviewed sign-in settings are invalid.",
+      };
+    }
+  }
   return {
     ok: true,
     facts: {
@@ -194,6 +209,9 @@ export function attemptInputFacts(input: {
       ),
       requirements,
       variables: variables.slice(0, MAX_FACT_VARIABLES),
+      ...(repositoryAccountsOidcPublicUrlVariable !== undefined
+        ? { repositoryAccountsOidcPublicUrlVariable }
+        : {}),
       ...(providerPolicyFrom(input.installConfig.policy)
         ? { providerPolicy: providerPolicyFrom(input.installConfig.policy) }
         : {}),
@@ -503,7 +521,32 @@ export function checkAttemptVariables(
   if (missing.length > 0) {
     return { ok: false, reason: "install_variable_required", names: missing.sort() };
   }
+  const publicUrlVariable = facts?.repositoryAccountsOidcPublicUrlVariable;
+  if (
+    publicUrlVariable !== undefined &&
+    Object.prototype.hasOwnProperty.call(variables, publicUrlVariable) &&
+    !isCanonicalHttpsOrigin(variables[publicUrlVariable])
+  ) {
+    return {
+      ok: false,
+      reason: "install_variable_invalid",
+      names: [publicUrlVariable],
+    };
+  }
   return { ok: true };
+}
+
+function isCanonicalHttpsOrigin(value: JsonValue | undefined): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && parsed.username === "" &&
+      parsed.password === "" && parsed.port === "" &&
+      parsed.pathname === "/" && parsed.search === "" && parsed.hash === "" &&
+      parsed.origin === value;
+  } catch {
+    return false;
+  }
 }
 
 /**
