@@ -23,6 +23,8 @@
 - Validation: regressions for each behavior, storage parity across memory,
   PostgreSQL and D1, focused browser checks, complete `bun run check`, and
   GitHub Actions `check and test` at every final PR head.
+- CI: quality checks every pull request base, including stacked feature bases;
+  push checks remain limited to main. No deployment workflow is changed.
 - Report: `/root/dev/tmp/tk0118/phase4-fix-report.md`, with exact heads, checks,
   finding dispositions and any unresolved limits.
 - Reversal: revert the code changes without deleting retained link history.
