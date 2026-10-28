@@ -75,6 +75,7 @@ import {
   type SharedAuthEnvironment,
 } from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
+import { handleSourceOwnershipMigrationOperatorRequest } from "../../worker/src/source_ownership_migration_operator.ts";
 import { fenceControlDatabase } from "./fenced-control-database.ts";
 import { handlePlatformBrowserBillingRequest } from "./browser-billing.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
@@ -671,6 +672,8 @@ export default {
   ): Promise<Response> {
     const sharedIngressFailure = sharedAuthRequestFailure(request, env);
     if (sharedIngressFailure) return sharedIngressFailure;
+    const sourceOwnershipMigrationResponse = await handleSourceOwnershipMigrationOperatorRequest(request, env);
+    if (sourceOwnershipMigrationResponse) return sourceOwnershipMigrationResponse;
     const privateFilesResponse = await handlePlatformPrivateRunFilesRequest(request, env, context);
     if (privateFilesResponse) return privateFilesResponse;
     const metricsResponse = await handlePlatformMetricsRequest(request, env);

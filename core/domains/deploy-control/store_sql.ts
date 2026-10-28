@@ -67,6 +67,10 @@ import {
   type CommitRecoveredStateResult,
 } from "./operator_state_recovery.ts";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
+import { inventorySourceOwnershipGroup, type SourceOwnershipMigrationGroup,
+  type SourceOwnershipMigrationMutation, type SourceOwnershipMigrationStore } from "../sources/ownership-migration.ts";
+import type { StoredGitInstallPlan } from "../install-plans/store.ts";
 import {
   clampPageLimit,
   decodeCursor,
@@ -1848,7 +1852,7 @@ async function assertWorkspaceFinancialPostgresTriggers(client:SqlClient):Promis
     throw new Error("PostgreSQL Workspace financial source trigger qualification failed");
 }
 
-export class SqlOpenTofuControlStore implements OpenTofuControlStore {
+export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwnershipMigrationStore {
   #financialSourceStore():SqlWorkspaceFinancialSource {
     const client=this.#client;
     const make=(executor:SqlClient):FinancialSourceSqlPort=>({dialect:"postgres",
@@ -9807,6 +9811,50 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  /** Operator-only Source migration. This is deliberately not on the ordinary control port. */
+  async listSourceIds(): Promise<readonly string[]> {
+    const rows = await this.#client.query<{ id: string }>(
+      `select id from takosumi_sources order by id`,
+    );
+    return rows.rows.map((row) => row.id);
+  }
+
+  async readGroup(sourceId: string): Promise<SourceOwnershipMigrationGroup | undefined> {
+    return await this.#client.transaction(async (transaction) => {
+      await transaction.query(`set transaction isolation level repeatable read read only`);
+      return await pgReadSourceOwnershipGroup(transaction, sourceId);
+    });
+  }
+
+  async commitGroup(input: SourceOwnershipMigrationMutation): Promise<"committed" | "conflict"> {
+    const mutation = structuredClone(input);
+    try {
+      return await this.#client.transaction(async (transaction) => {
+        await transaction.query(`set transaction isolation level serializable`);
+        // Workspace is the outer lock used by the ordinary dependent writers.
+        const management = await pgWorkspaceManagementForTransaction(
+          transaction, mutation.expected.source.workspaceId,
+        );
+        if (!management) return "conflict" as const;
+        const observed = await pgReadSourceOwnershipGroup(transaction, mutation.sourceId);
+        if (!observed || stableStringify(observed) !== stableStringify(mutation.expected) ||
+          inventorySourceOwnershipGroup(observed).action !== mutation.action ||
+          observed.inFlightRunIds.length !== 0) return "conflict" as const;
+        await pgCommitSourceOwnershipGroup(transaction, mutation);
+        return "committed" as const;
+      });
+    } catch (error) {
+      // A concurrent insertion or update can cause a serializable retry error.
+      // The operator must re-inventory and re-copy explicitly, never blind-retry.
+      if (typeof error === "object" && error !== null &&
+        "code" in error && (error.code === "40001" || error.code === "40P01" ||
+          error.code === "23505")) {
+        return "conflict";
+      }
+      throw error;
+    }
+  }
+
   async listAutoSyncSourcesDue(limit: number): Promise<readonly StoredSource[]> {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const sources = pgSchema.sources;
@@ -11691,6 +11739,369 @@ interface PgStoredSourceRow extends Record<string, unknown> {
   readonly sourceJson: unknown;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/** One consistent, physical-column-checked inventory for the operator migration. */
+async function pgReadSourceOwnershipGroup(
+  client: SqlClient,
+  sourceId: string,
+): Promise<SourceOwnershipMigrationGroup | undefined> {
+  const sourceRows = await client.query<PgStoredSourceRow>(
+    `select id, space_id as "workspaceId", status, source_json as "sourceJson",
+            created_at as "createdAt", updated_at as "updatedAt"
+       from takosumi_sources where id = $1`, [sourceId],
+  );
+  const sourceRow = sourceRows.rows[0];
+  if (!sourceRow) return undefined;
+  const source = sourceFromPgRow(sourceRow);
+  if (!source) throw new Error(`source_ownership_migration_source_row_drift:${sourceId}`);
+  const capsuleRows = await client.query<{
+    id: string; workspaceId: string; sourceId: string | null; status: string;
+    currentStateVersionId: string | null; capsuleJson: unknown;
+  }>(
+    `select id, space_id as "workspaceId", source_id as "sourceId", status,
+            current_state_version_id as "currentStateVersionId",
+            installation_json as "capsuleJson"
+       from takosumi_capsules
+      where source_id = $1 or installation_json ->> 'sourceId' = $1
+      order by id`, [sourceId],
+  );
+  const capsules: { capsule: Capsule; adoptedSnapshotId?: string }[] = [];
+  // The canonical helper covers Apply, restore, and recovery provenance. All
+  // reads it performs use this transaction's connection/snapshot.
+  const lineageReader = new SqlOpenTofuControlStore({ client });
+  for (const row of capsuleRows.rows) {
+    const capsule = parseJson(row.capsuleJson) as Capsule;
+    if (capsule.id !== row.id || capsule.workspaceId !== row.workspaceId ||
+      capsule.sourceId !== row.sourceId || capsule.status !== row.status ||
+      (capsule.currentStateVersionId ?? null) !== row.currentStateVersionId) {
+      throw new Error(`source_ownership_migration_capsule_row_drift:${row.id}`);
+    }
+    const adopted = await getCapsuleAdoptedSourceSnapshot(lineageReader, capsule);
+    capsules.push({ capsule, ...(adopted ? { adoptedSnapshotId: adopted.id } : {}) });
+  }
+  const snapshotRows = await client.query<{
+    id: string; sourceId: string | null; fetchedAt: string; snapshotJson: unknown;
+  }>(
+    `select id, source_id as "sourceId", fetched_at as "fetchedAt",
+            snapshot_json as "snapshotJson"
+       from takosumi_source_snapshots
+      where source_id = $1 or snapshot_json ->> 'sourceId' = $1
+      order by id`, [sourceId],
+  );
+  const snapshots = snapshotRows.rows.map((row) => {
+    const snapshot = parseJson(row.snapshotJson) as SourceSnapshot;
+    if (snapshot.id !== row.id || snapshot.sourceId !== row.sourceId ||
+      snapshot.fetchedAt !== row.fetchedAt) {
+      throw new Error(`source_ownership_migration_snapshot_row_drift:${row.id}`);
+    }
+    return snapshot;
+  });
+  const runRows = await client.query<{
+    id: string; kind: string; workspaceId: string; sourceId: string | null;
+    capsuleId: string | null; status: string; runJson: unknown;
+  }>(
+    `select id, kind, space_id as "workspaceId", source_id as "sourceId",
+            installation_id as "capsuleId", status, run_json as "runJson"
+       from takosumi_runs where source_id = $1 or run_json ->> 'sourceId' = $1
+         or installation_id in (select id from takosumi_capsules where source_id = $1)
+         or run_json ->> 'capsuleId' in
+           (select id from takosumi_capsules where source_id = $1)
+       order by id`, [sourceId],
+  );
+  const syncRuns: SourceSyncRun[] = [];
+  const compatibilityRuns: Run[] = [];
+  const planRuns: PlanRun[] = [];
+  const inFlightRunIds: string[] = [];
+  for (const row of runRows.rows) {
+    const run = parseJson(row.runJson) as Record<string, unknown>;
+    if (run.id !== row.id || run.workspaceId !== row.workspaceId ||
+      (run.sourceId ?? null) !== row.sourceId ||
+      (run.capsuleId ?? null) !== row.capsuleId || run.status !== row.status ||
+      (run.kind !== undefined && run.kind !== row.kind) ||
+      (run.type !== undefined && run.type !== row.kind)) {
+      throw new Error(`source_ownership_migration_run_row_drift:${row.id}`);
+    }
+    // PostgreSQL has no run_group_id column; the canonical run_json owns this
+    // relationship. Cloning a grouped Source run without its RunGroup would
+    // leave a false membership edge, so historical rows fail closed.
+    if ((row.kind === "source_sync" || row.kind === "compatibility_check") &&
+      run.runGroupId !== undefined && run.runGroupId !== null) {
+      throw new Error(`source_ownership_migration_grouped_source_run:${row.id}`);
+    }
+    if (row.status !== "succeeded" && row.status !== "failed" &&
+      row.status !== "cancelled" && row.status !== "expired") {
+      inFlightRunIds.push(row.id);
+    }
+    if (row.kind === "source_sync" && row.sourceId === sourceId) {
+      syncRuns.push(run as unknown as SourceSyncRun);
+    }
+    if (row.kind === "compatibility_check") {
+      compatibilityRuns.push(run as unknown as Run);
+    }
+    if ((row.kind === "plan" || row.kind === "destroy_plan" ||
+      row.kind === "drift_check") && row.capsuleId !== null) {
+      planRuns.push(run as unknown as PlanRun);
+    }
+  }
+  const reportRows = await client.query<PgCompatibilitySettlementReportRow>(
+    `select id, source_id as "sourceId", installation_id as "capsuleId",
+            source_snapshot_id as "sourceSnapshotId", module_path as "modulePath",
+            level, findings_json as "findingsJson", providers_json as "providersJson",
+            resources_json as "resourcesJson", data_sources_json as "dataSourcesJson",
+            provisioners_json as "provisionersJson",
+            root_module_variables_json as "rootModuleVariablesJson",
+            root_module_variable_declarations_json as "rootModuleVariableDeclarationsJson",
+            root_module_outputs_json as "rootModuleOutputsJson", created_at as "createdAt"
+       from takosumi_capsule_compatibility_reports
+      where source_id = $1 or source_snapshot_id in
+        (select id from takosumi_source_snapshots where source_id = $1)
+        or installation_id in (select id from takosumi_capsules where source_id = $1)
+      order by id`, [sourceId],
+  );
+  const reports = reportRows.rows.map((row) => {
+    const report = pgCompatibilityReportFromSettlementRow(row);
+    if (!report) throw new Error(`source_ownership_migration_report_row_drift:${row.id}`);
+    return report;
+  });
+  const gitPlanRows = await client.query<{
+    id: string; workspaceId: string; phase: string; generation: number;
+    reconcileLeaseToken: string | null; recordJson: unknown;
+  }>(
+    `select id, workspace_id as "workspaceId", phase, generation,
+            reconcile_lease_token as "reconcileLeaseToken", record_json as "recordJson"
+       from takosumi_git_install_plans
+      where record_json ->> 'sourceId' = $1
+         or record_json -> 'preflight' ->> 'sourceId' = $1
+         or record_json ->> 'capsuleId' in
+           (select id from takosumi_capsules where source_id = $1)
+      order by id`, [sourceId],
+  );
+  const gitPlans = gitPlanRows.rows.map((row) => {
+    const plan = parseJson(row.recordJson) as StoredGitInstallPlan;
+    if (plan.id !== row.id || plan.workspaceId !== row.workspaceId ||
+      plan.phase !== row.phase || plan.generation !== Number(row.generation)) {
+      throw new Error(`source_ownership_migration_git_plan_row_drift:${row.id}`);
+    }
+    if ((plan.phase !== "reviewable" && plan.phase !== "failed" &&
+      plan.phase !== "discarded") || row.reconcileLeaseToken !== null) {
+      inFlightRunIds.push(`git_install_plan:${row.id}`);
+    }
+    return plan;
+  });
+  const referencedCompatibilityRunIds = new Set(gitPlans.flatMap((plan) =>
+    [plan.compatibilityCheckRunId, plan.preflight?.compatibilityCheckRunId]
+      .filter((id): id is string => !!id)));
+  for (const id of referencedCompatibilityRunIds) {
+    if (compatibilityRuns.some((run) => run.id === id)) continue;
+    const rows = await client.query<{
+      id: string; kind: string; workspaceId: string; sourceId: string | null;
+      capsuleId: string | null; status: string; runJson: unknown;
+    }>(
+      `select id, kind, space_id as "workspaceId", source_id as "sourceId",
+              installation_id as "capsuleId", status, run_json as "runJson"
+         from takosumi_runs where id = $1`, [id],
+    );
+    const row = rows.rows[0];
+    if (!row) continue; // Engine reports the missing provenance before writing.
+    const run = parseJson(row.runJson) as Run;
+    if (row.kind !== "compatibility_check" || run.type !== row.kind ||
+      run.id !== row.id || run.workspaceId !== row.workspaceId ||
+      (run.sourceId ?? null) !== row.sourceId ||
+      (run.capsuleId ?? null) !== row.capsuleId || run.status !== row.status) {
+      throw new Error(`source_ownership_migration_run_row_drift:${id}`);
+    }
+    if (run.runGroupId !== undefined && run.runGroupId !== null) {
+      throw new Error(`source_ownership_migration_grouped_source_run:${id}`);
+    }
+    compatibilityRuns.push(run);
+    if (row.status !== "succeeded" && row.status !== "failed" &&
+      row.status !== "cancelled" && row.status !== "expired") {
+      inFlightRunIds.push(id);
+    }
+  }
+  compatibilityRuns.sort((a, b) => a.id.localeCompare(b.id));
+  return { source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans,
+    inFlightRunIds: [...new Set(inFlightRunIds)].sort() };
+}
+
+/** All row changes for one Source happen under the caller's serializable transaction. */
+async function pgCommitSourceOwnershipGroup(
+  transaction: SqlTransaction,
+  mutation: SourceOwnershipMigrationMutation,
+): Promise<void> {
+  const expected = mutation.expected;
+  const source = mutation.retainedSource;
+  if (source.id !== mutation.sourceId || source.workspaceId !== expected.source.workspaceId ||
+    mutation.splits.some((split) => split.source.id === source.id ||
+      split.source.workspaceId !== source.workspaceId ||
+      split.source.ownerCapsuleId !== split.capsuleId ||
+      split.capsule.id !== split.capsuleId ||
+      split.capsule.sourceId !== split.source.id) ||
+    new Set(mutation.splits.map((split) => split.capsuleId)).size !== mutation.splits.length ||
+    mutation.splits.some((split) => !expected.capsules.some(({ capsule }) =>
+      capsule.id === split.capsuleId && capsule.status !== "destroyed"))) {
+    throw new TypeError("invalid Source ownership migration mutation");
+  }
+  const updatedSource = await transaction.query(
+    `update takosumi_sources set status = $2, source_json = $3::jsonb,
+            updated_at = $4 where id = $1 and space_id = $5 returning id`,
+    [source.id, source.status, JSON.stringify(source), source.updatedAt, source.workspaceId],
+  );
+  if (updatedSource.rows.length !== 1) throw new Error("Source ownership migration lost Source row");
+  for (const snapshot of mutation.retainedSnapshots) {
+    if (!expected.snapshots.some((old) => old.id === snapshot.id &&
+      old.sourceId === snapshot.sourceId) || snapshot.sourceId !== source.id) {
+      throw new TypeError("invalid retained SourceSnapshot");
+    }
+    const result = await transaction.query(
+      `update takosumi_source_snapshots set snapshot_json = $2::jsonb
+        where id = $1 and source_id = $3 returning id`,
+      [snapshot.id, JSON.stringify(snapshot), source.id],
+    );
+    if (result.rows.length !== 1) throw new Error("Source ownership migration lost SourceSnapshot row");
+  }
+  for (const run of mutation.retainedSyncRuns) {
+    if (!expected.syncRuns.some((old) => old.id === run.id &&
+      old.sourceId === run.sourceId) || run.sourceId !== source.id) {
+      throw new TypeError("invalid retained SourceSyncRun");
+    }
+    const result = await transaction.query(
+      `update takosumi_runs set run_json = $2::jsonb
+        where id = $1 and kind = 'source_sync' and source_id = $3 returning id`,
+      [run.id, JSON.stringify(run), source.id],
+    );
+    if (result.rows.length !== 1) throw new Error("Source ownership migration lost SourceSyncRun row");
+  }
+  for (const split of mutation.splits) {
+    const freshSource = split.source;
+    await transaction.query(
+      `insert into takosumi_sources
+        (id, space_id, status, source_json, created_at, updated_at)
+       values ($1, $2, $3, $4::jsonb, $5, $6)`,
+      [freshSource.id, freshSource.workspaceId, freshSource.status,
+        JSON.stringify(freshSource), freshSource.createdAt, freshSource.updatedAt],
+    );
+    for (const run of split.syncRuns) {
+      if (run.sourceId !== freshSource.id || run.workspaceId !== freshSource.workspaceId) {
+        throw new TypeError("invalid split SourceSyncRun");
+      }
+      await transaction.query(
+        `insert into takosumi_runs
+          (id, kind, space_id, source_id, installation_id, status,
+           lease_token, heartbeat_at, created_at, run_json)
+         values ($1, 'source_sync', $2, $3, null, $4, null, $5, $6, $7::jsonb)`,
+        [run.id, run.workspaceId, run.sourceId, run.status,
+          run.heartbeatAt ?? null, String(run.createdAt), JSON.stringify(run)],
+      );
+    }
+    for (const snapshot of split.snapshots) {
+      if (snapshot.sourceId !== freshSource.id || snapshot.workspaceId !== freshSource.workspaceId ||
+        !split.syncRuns.some((run) => run.id === snapshot.fetchedByRunId)) {
+        throw new TypeError("invalid split SourceSnapshot");
+      }
+      await transaction.query(
+        `insert into takosumi_source_snapshots
+          (id, source_id, snapshot_json, fetched_at)
+         values ($1, $2, $3::jsonb, $4)`,
+        [snapshot.id, snapshot.sourceId, JSON.stringify(snapshot), snapshot.fetchedAt],
+      );
+    }
+    for (const report of split.reports) {
+      if (report.sourceId !== freshSource.id ||
+        (report.capsuleId !== undefined && report.capsuleId !== split.capsuleId) ||
+        !split.snapshots.some((snapshot) => snapshot.id === report.sourceSnapshotId)) {
+        throw new TypeError("invalid split compatibility report");
+      }
+      const normalized = normalizeStoredCapsuleCompatibilityReport(report);
+      await transaction.query(
+        `insert into takosumi_capsule_compatibility_reports
+          (id, source_id, installation_id, source_snapshot_id, module_path,
+           level, findings_json, providers_json, resources_json, data_sources_json,
+           provisioners_json, root_module_variables_json,
+           root_module_variable_declarations_json, root_module_outputs_json, created_at)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
+                 $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15)`,
+        [normalized.id, normalized.sourceId ?? null, normalized.capsuleId ?? null,
+          normalized.sourceSnapshotId, normalized.modulePath ?? null, normalized.level,
+          JSON.stringify(normalized.findings),
+          JSON.stringify(storedCapsuleCompatibilityProviderGraph(normalized)),
+          JSON.stringify(normalized.resources), JSON.stringify(normalized.dataSources),
+          JSON.stringify(normalized.provisioners),
+          JSON.stringify(normalized.rootModuleVariables ?? []),
+          normalized.rootModuleVariableDeclarations
+            ? JSON.stringify(normalized.rootModuleVariableDeclarations) : null,
+          JSON.stringify(normalized.rootModuleOutputs ?? []), normalized.createdAt],
+      );
+    }
+    for (const run of split.compatibilityRuns) {
+      if (run.type !== "compatibility_check" || run.sourceId !== freshSource.id ||
+        run.workspaceId !== freshSource.workspaceId ||
+        expected.compatibilityRuns.length === 0 ||
+        expected.compatibilityRuns.some((old) => old.id === run.id) ||
+        (run.sourceSnapshotId !== undefined &&
+          !split.snapshots.some((snapshot) => snapshot.id === run.sourceSnapshotId)) ||
+        (run.compatibilityReportId !== undefined &&
+          !split.reports.some((report) => report.id === run.compatibilityReportId))) {
+        throw new TypeError("invalid split compatibility Run");
+      }
+      await transaction.query(
+        `insert into takosumi_runs
+          (id, kind, space_id, source_id, installation_id, status,
+           lease_token, heartbeat_at, created_at, run_json)
+         values ($1, 'compatibility_check', $2, $3, $4, $5, null, $6, $7, $8::jsonb)`,
+        [run.id, run.workspaceId, run.sourceId, run.capsuleId ?? null,
+          run.status, run.heartbeatAt ?? null, String(run.createdAt), JSON.stringify(run)],
+      );
+    }
+    const capsuleResult = await transaction.query(
+      `update takosumi_capsules set source_id = $2, installation_json = $3::jsonb,
+              updated_at = $4 where id = $1 and source_id = $5 and space_id = $6 returning id`,
+      [split.capsuleId, freshSource.id, JSON.stringify(split.capsule),
+        split.capsule.updatedAt, source.id, source.workspaceId],
+    );
+    if (capsuleResult.rows.length !== 1) throw new Error("Source ownership migration lost Capsule row");
+    for (const plan of split.planRuns) {
+      if (plan.capsuleId !== split.capsuleId ||
+        !expected.planRuns.some((old) => old.id === plan.id && old.capsuleId === plan.capsuleId)) {
+        throw new TypeError("invalid split PlanRun");
+      }
+      const result = await transaction.query(
+        `update takosumi_runs set run_json = $2::jsonb
+          where id = $1 and kind in ('plan', 'destroy_plan', 'drift_check')
+            and installation_id = $3 returning id`,
+        [plan.id, JSON.stringify(plan), split.capsuleId],
+      );
+      if (result.rows.length !== 1) throw new Error("Source ownership migration lost PlanRun row");
+    }
+    for (const plan of split.gitPlans) {
+      if (plan.capsuleId !== split.capsuleId ||
+        !expected.gitPlans.some((old) => old.id === plan.id)) {
+        throw new TypeError("invalid split GitInstallPlan");
+      }
+      const result = await transaction.query(
+        `update takosumi_git_install_plans set record_json = $2::jsonb
+          where id = $1 and workspace_id = $3 returning id`,
+        [plan.id, JSON.stringify(plan), source.workspaceId],
+      );
+      if (result.rows.length !== 1) throw new Error("Source ownership migration lost GitInstallPlan row");
+    }
+  }
+  for (const activity of mutation.activity) {
+    if (activity.workspaceId !== source.workspaceId || activity.action !== "source.split" ||
+      !mutation.splits.some((split) => split.source.id === activity.targetId)) {
+      throw new TypeError("invalid Source ownership migration Activity");
+    }
+    await transaction.query(
+      `insert into takosumi_audit_events
+        (id, space_id, actor_id, action, target_type, target_id, run_id,
+         event_json, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+      [activity.id, activity.workspaceId, activity.actorId ?? null, activity.action,
+        activity.targetType, activity.targetId, activity.runId ?? null,
+        JSON.stringify(activity), activity.createdAt],
+    );
+  }
 }
 
 /**

@@ -332,6 +332,12 @@ import {
   wrapControlD1MaintenanceMigrationBatch,
 } from "./d1_schema_maintenance.ts";
 import { chunkD1InQueryValues } from "./d1_query_limits.ts";
+import {
+  commitD1SourceOwnershipGroup,
+  listD1SourceOwnershipIds,
+  readD1SourceOwnershipGroup,
+} from "./d1_source_ownership_migration.ts";
+import type { SourceOwnershipMigrationMutation } from "../../core/domains/sources/ownership-migration.ts";
 import { D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS } from "./d1_portable_host_idempotency_schema.ts";
 import {
   IDENTITY_INVENTORY_LIMIT,
@@ -9585,6 +9591,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  /** Operator-only, DDL-free migration port. Never called by reconciliation. */
+  async listSourceIds(): Promise<readonly string[]> {
+    await this.#ensureSchema();
+    return listD1SourceOwnershipIds(this.db);
+  }
+
+  async readGroup(sourceId: string) {
+    await this.#ensureSchema();
+    return readD1SourceOwnershipGroup(this.db, this, sourceId);
+  }
+
+  async commitGroup(mutation: SourceOwnershipMigrationMutation): Promise<"committed" | "conflict"> {
+    await this.#ensureSchema();
+    return commitD1SourceOwnershipGroup(this.db, mutation);
+  }
+
   async listSources(workspaceId?: string): Promise<readonly StoredSource[]> {
     return await this.#drizzleManyJson<StoredSource>(
       schema.sources,
@@ -9891,11 +9913,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
     const row = await this.db.prepare(`select 1 from source_snapshots
         where source_id is not ? and
-          coalesce(json_extract(record_json, '$.archiveRef'),
+          coalesce(nullif(json_extract(record_json, '$.archiveRef'), ''),
             json_extract(record_json, '$.archiveObjectKey')) = ?
        union all
        select 1 from runs where type = 'source_sync' and source_id is not ?
-         and coalesce(json_extract(run_json, '$.archiveRef'),
+         and coalesce(nullif(json_extract(run_json, '$.archiveRef'), ''),
            json_extract(run_json, '$.archiveObjectKey')) = ? limit 1`)
       .bind(sourceId, archiveRef, sourceId, archiveRef).first();
     return row !== null;
