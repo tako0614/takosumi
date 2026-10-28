@@ -603,8 +603,8 @@ export class SourcesService {
           `Source ${sourceId} owner Capsule is not destroyed`,
           { reason: "source_owner_not_destroyed" });
       }
-      const capsules = await this.#store.listCapsules(source!.workspaceId);
-      if (capsules.some((capsule) => capsule.sourceId === sourceId && capsule.status !== "destroyed")) {
+      const blockers = await this.#store.sourceLifecycleBlockers(sourceId, source!.workspaceId);
+      if (blockers.includes("source_referenced_by_capsule")) {
         throw new OpenTofuControllerError("failed_precondition",
           `Source ${sourceId} is still referenced by a Capsule`,
           { reason: "source_referenced_by_capsule" });
@@ -725,22 +725,8 @@ export class SourcesService {
    * that tracks it (a destroyed Capsule's history alone does not block).
    */
   async #hasInFlightSourceRun(stored: StoredSource): Promise<boolean> {
-    const syncRuns = await this.#store.listSourceSyncRuns(stored.id);
-    if (syncRuns.some((run) => runIsInFlight(run.status))) return true;
-    const runs = await this.#store.listRunsByWorkspace(stored.workspaceId);
-    for (const run of runs) {
-      if (!runIsInFlight(run.status)) continue;
-      if ("sourceId" in run && run.sourceId === stored.id) return true;
-      if (
-        "capsuleId" in run &&
-        typeof run.capsuleId === "string" &&
-        run.capsuleId.length > 0
-      ) {
-        const capsule = await this.#store.getCapsule(run.capsuleId);
-        if (capsule?.sourceId === stored.id) return true;
-      }
-    }
-    return false;
+    return (await this.#store.sourceLifecycleBlockers(stored.id, stored.workspaceId))
+      .includes("source_has_in_flight_run");
   }
 
   async listSnapshots(

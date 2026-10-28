@@ -9849,42 +9849,30 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return { status: "conflict" };
   }
 
+  async sourceLifecycleBlockers(sourceId: string, workspaceId: string): Promise<readonly string[]> {
+    await this.#ensureSchema();
+    const row = await this.db.prepare(`select
+      exists (select 1 from capsules c where c.space_id = ?
+        and (c.source_id = ? or json_extract(c.record_json, '$.sourceId') = ?)
+        and not coalesce((c.status = 'destroyed' and json_extract(c.record_json, '$.status') = 'destroyed'
+          and json_extract(c.record_json, '$.id') = c.id
+          and json_extract(c.record_json, '$.workspaceId') = c.space_id
+          and json_extract(c.record_json, '$.sourceId') = c.source_id), 0)) as live,
+      exists (select 1 from runs r where r.space_id = ?
+        and (r.status in ('queued','running') or json_extract(r.run_json, '$.status') in ('queued','running'))
+        and (r.source_id = ? or json_extract(r.run_json, '$.sourceId') = ?
+          or r.installation_id in (select c.id from capsules c
+            where c.source_id = ? or json_extract(c.record_json, '$.sourceId') = ?)
+          or json_extract(r.run_json, '$.capsuleId') in (select c.id from capsules c
+            where c.source_id = ? or json_extract(c.record_json, '$.sourceId') = ?))) as inflight`)
+      .bind(workspaceId, sourceId, sourceId, workspaceId, sourceId, sourceId,
+        sourceId, sourceId, sourceId, sourceId).first<{ live: number; inflight: number }>();
+    return [...(row?.live ? ["source_referenced_by_capsule"] : []),
+      ...(row?.inflight ? ["source_has_in_flight_run"] : [])];
+  }
+
   async #sourceDeleteBlockers(sourceId: string, workspaceId: string): Promise<string[]> {
-    const ref = await this.#orm.select({ id: schema.capsules.id })
-      .from(schema.capsules)
-      .where(and(eq(schema.capsules.sourceId, sourceId), ne(schema.capsules.status, "destroyed")))
-      .limit(1);
-    if (ref.length > 0) return ["source_referenced_by_capsule"];
-    const direct = await this.#orm.select({ id: schema.runs.id })
-      .from(schema.runs)
-      .where(and(eq(schema.runs.sourceId, sourceId),
-        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running"))))
-      .limit(1);
-    if (direct.length > 0) return ["source_has_in_flight_run"];
-    const capsuleIds = await this.#orm.select({ id: schema.capsules.id })
-      .from(schema.capsules)
-      .where(eq(schema.capsules.sourceId, sourceId));
-    for (const chunk of chunkD1InQueryValues(capsuleIds.map((row) => row.id))) {
-      if (chunk.length === 0) continue;
-      const bound = await this.#orm.select({ id: schema.runs.id })
-        .from(schema.runs)
-        .where(and(
-          inArray(schema.runs.capsuleId, [...chunk]),
-          or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
-        ))
-        .limit(1);
-      if (bound.length > 0) return ["source_has_in_flight_run"];
-    }
-    const workspaceSource = await this.#orm.select({ id: schema.runs.id })
-      .from(schema.runs)
-      .where(and(
-        eq(schema.runs.workspaceId, workspaceId),
-        eq(schema.runs.sourceId, sourceId),
-        or(eq(schema.runs.status, "queued"), eq(schema.runs.status, "running")),
-      ))
-      .limit(1);
-    if (workspaceSource.length > 0) return ["source_has_in_flight_run"];
-    return [];
+    return [...await this.sourceLifecycleBlockers(sourceId, workspaceId)];
   }
 
   async putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot> {

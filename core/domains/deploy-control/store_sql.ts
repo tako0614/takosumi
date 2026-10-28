@@ -9992,6 +9992,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     });
   }
 
+  async sourceLifecycleBlockers(sourceId: string, workspaceId: string): Promise<readonly string[]> {
+    const result = await this.#client.query<{ live: boolean; inflight: boolean }>(`
+      select exists (select 1 from takosumi_capsules c where c.space_id = $2
+        and (c.source_id = $1 or c.installation_json ->> 'sourceId' = $1)
+        and not coalesce((c.status = 'destroyed' and c.installation_json ->> 'status' = 'destroyed'
+          and c.installation_json ->> 'id' = c.id
+          and c.installation_json ->> 'workspaceId' = c.space_id
+          and c.installation_json ->> 'sourceId' = c.source_id), false)) as live,
+      exists (select 1 from takosumi_runs r where r.space_id = $2
+        and (r.status in ('queued','running') or r.run_json ->> 'status' in ('queued','running'))
+        and (r.source_id = $1 or r.run_json ->> 'sourceId' = $1
+          or r.installation_id in (select c.id from takosumi_capsules c
+            where c.source_id = $1 or c.installation_json ->> 'sourceId' = $1)
+          or r.run_json ->> 'capsuleId' in (select c.id from takosumi_capsules c
+            where c.source_id = $1 or c.installation_json ->> 'sourceId' = $1))) as inflight`,
+      [sourceId, workspaceId]);
+    const row = result.rows[0];
+    return [...(row?.live ? ["source_referenced_by_capsule"] : []),
+      ...(row?.inflight ? ["source_has_in_flight_run"] : [])];
+  }
+
   async retireSource(input: RetireSourceInput): Promise<RetireSourceResult> {
     const { expectedSource, expectedWorkspaceManagementAuthority, activity } = structuredClone(input);
     assertWorkspaceManagementAuthorityInput(expectedWorkspaceManagementAuthority, expectedSource.workspaceId);

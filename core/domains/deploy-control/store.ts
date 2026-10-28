@@ -4058,6 +4058,8 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
    */
   deleteSourceWithActivity(input: DeleteSourceWithActivityInput): Promise<DeleteSourceWithActivityResult>;
   retireSource(input: RetireSourceInput): Promise<RetireSourceResult>;
+  /** Bounded existence probes; never materialize Source or Workspace history. */
+  sourceLifecycleBlockers(sourceId: string, workspaceId: string): Promise<readonly string[]>;
 
   // SourceSnapshot records (immutable archive snapshots).
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
@@ -7992,6 +7994,18 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     this.#sources.delete(current.id);
     this.#activityEvents.set(activity.id, activity);
     return { status: "deleted", source: current };
+  }
+
+  sourceLifecycleBlockers(sourceId: string, workspaceId: string): Promise<readonly string[]> {
+    const blockers: string[] = [];
+    for (const capsule of this.#capsules.values()) {
+      if (capsule.workspaceId === workspaceId && capsule.sourceId === sourceId && capsule.status !== "destroyed") {
+        blockers.push("source_referenced_by_capsule"); break;
+      }
+    }
+    const source = this.#sources.get(sourceId);
+    if (source && this.#hasInFlightSourceRunSync(source)) blockers.push("source_has_in_flight_run");
+    return Promise.resolve(blockers);
   }
 
   #hasInFlightSourceRunSync(stored: StoredSource): boolean {
