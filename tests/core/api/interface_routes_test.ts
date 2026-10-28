@@ -21,6 +21,8 @@ function declaredDurableGitInstallPlanStore(): GitInstallPlanStore {
     getByScope: (scope) => store.getByScope(scope),
     hasInFlightRevisionForCapsule: (id, workspaceId) =>
       store.hasInFlightRevisionForCapsule(id, workspaceId),
+    hasInFlightCoordinatorForCapsule: (id, workspaceId) =>
+      store.hasInFlightCoordinatorForCapsule(id, workspaceId),
     hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),
     claimReconcile: (input) => store.claimReconcile(input),
     completeReconcile: (input) => store.completeReconcile(input),

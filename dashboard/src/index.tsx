@@ -11,11 +11,7 @@ import {
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 import { initializeTakosumiRuntimeCapabilities } from "./lib/runtime-capabilities.ts";
 import { installHandoffTarget } from "./lib/app-handoff.ts";
-import {
-  appPageHref,
-  legacyAppTabSection,
-  legacyInstallLocatorCapsuleId,
-} from "./lib/app-links.ts";
+import { resolveLegacyAppUrl } from "./lib/app-links.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
@@ -115,10 +111,8 @@ function InstallEntryRoute() {
  * tab as the section fragment the page scrolls to.
  */
 function RedirectLegacyAppPage() {
-  const params = useParams();
-  return (
-    <Navigate href={appPageHref(params.id ?? "", legacyAppTabSection(params.tab))} />
-  );
+  const location = useLocation();
+  return <Navigate href={resolveLegacyAppUrl(location.pathname) ?? "/"} />;
 }
 
 /**
@@ -128,8 +122,8 @@ function RedirectLegacyAppPage() {
  */
 function NewRoute() {
   const location = useLocation();
-  const capsuleId = legacyInstallLocatorCapsuleId(untrack(() => location.search));
-  return capsuleId ? <Navigate href={appPageHref(capsuleId)} /> : <InstallView />;
+  const appPage = resolveLegacyAppUrl("/new", untrack(() => location.search));
+  return appPage ? <Navigate href={appPage} /> : <InstallView />;
 }
 
 /**

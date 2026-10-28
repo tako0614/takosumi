@@ -9,7 +9,9 @@ import { describe, expect, test } from "bun:test";
 import {
   APP_HISTORY_RUN_TYPES,
   appCostState,
+  appInstalledRef,
   appPrimaryActionLabel,
+  appPrimaryStep,
   appRunHistory,
   appState,
   appStateRank,
@@ -17,6 +19,8 @@ import {
   appViewIncomplete,
   groupInventoryResources,
   linkedApps,
+  mergeAppHistoryPages,
+  openableScreens,
   primaryProblem,
   providerRowLabels,
   repositoryLabel,
@@ -228,6 +232,71 @@ describe("the server's app view", () => {
     expect(reviewPurposeForRun("destroy_plan", true)).toBe("uninstall");
     expect(reviewPurposeForRun("plan", false)).toBe("install");
     expect(reviewPurposeForRun("plan", true)).toBe("apply");
+  });
+});
+
+describe("what the page does with the server's view", () => {
+  test("every primary action maps to one in-page step", () => {
+    const failed = { code: "run_failed", severity: "error", runId: "run_f", runType: "apply" } as const;
+    const blocked = { code: "policy_blocked", severity: "error", runId: "run_b", runType: "plan" } as const;
+    const screen = { code: "screen_unavailable", severity: "error", screenFailure: { id: "f", failureDigest: "d", stateVersionId: "sv", stateGeneration: 1, errorCode: "e" } } as const;
+    const cases: readonly (readonly [Partial<CapsuleAppView>, unknown])[] = [
+      [{ primaryAction: "open" }, { kind: "open" }],
+      [{ primaryAction: "view_resources" }, { kind: "show_created" }],
+      [{ primaryAction: "review", progress: { revisionPreparing: false, review: { runId: "run_p", runType: "plan" } } }, { kind: "review", runId: "run_p", runType: "plan" }],
+      [{ primaryAction: "review", problems: [blocked] }, { kind: "review", runId: "run_b", runType: "plan" }],
+      [{ primaryAction: "review" }, { kind: "none" }],
+      [{ primaryAction: "retry", problems: [failed] }, { kind: "retry", problem: failed }],
+      [{ primaryAction: "retry", problems: [{ code: "capsule_error", severity: "error" }] }, { kind: "retry", problem: { code: "capsule_error", severity: "error" } }],
+      [{ primaryAction: "retry_screen", problems: [screen] }, { kind: "retry_screen", problem: screen }],
+      [{ primaryAction: "fix_connection" }, { kind: "fix_connection" }],
+      [{ primaryAction: "continue_install" }, { kind: "continue_install" }],
+      [{ primaryAction: "cancel_uninstall" }, { kind: "cancel_uninstall" }],
+      [{ primaryAction: "uninstall_now" }, { kind: "uninstall_now" }],
+      [{ primaryAction: "reinstall" }, { kind: "reinstall" }],
+      [{ primaryAction: "none" }, { kind: "none" }],
+      [{ primaryAction: "something_new" as CapsuleAppView["primaryAction"] }, { kind: "none" }],
+    ];
+    for (const [patch, step] of cases) {
+      expect({ action: patch.primaryAction, step: appPrimaryStep(appView(patch)) }).toEqual({ action: patch.primaryAction, step });
+    }
+  });
+
+  test("an installed app updates its own ref, never the Source's default ref", () => {
+    const repository = { url: "https://github.com/example/office.git", defaultRef: "main" };
+    const pinned = appView({ version: { repository, current: { sourceSnapshotId: "s", ref: "v2", path: ".", commit: COMMIT_A }, updateAvailable: false, stale: false, autoUpdate: false } });
+    expect(appInstalledRef(pinned, undefined)).toBe("v2");
+    // The server could not read the version: the Capsule's adopted revision decides.
+    const unread = appView({ incomplete: ["version"], version: { repository, updateAvailable: false, stale: false, autoUpdate: false } });
+    expect(appInstalledRef(unread, capsule({ adoptedSourceRevision: { sourceSnapshotId: "s", ref: "v2", path: ".", resolvedCommit: COMMIT_A } }))).toBe("v2");
+    // Neither known: nothing to update — not the default ref.
+    expect(appInstalledRef(unread, capsule())).toBeUndefined();
+  });
+
+  test("screens are linked only with absolute http(s) launch URLs", () => {
+    const screen = (url: string, title?: string) => ({ interfaceId: url, name: "app.launcher", url, ...(title ? { title } : {}) });
+    expect(openableScreens([
+      screen("https://apps.example.test/a", "A"),
+      screen("javascript:alert(1)"),
+      screen("/relative"),
+      screen("data:text/html,x"),
+      screen("http://apps.example.test/b"),
+    ])).toEqual([{ name: "A", url: "https://apps.example.test/a" }, { url: "http://apps.example.test/b" }]);
+  });
+
+  test("a refreshed first history page keeps the older pages it still reaches", () => {
+    const r = (id: string) => run({ id, type: "apply", status: "succeeded", createdAt: "2026-10-01T00:00:00.000Z" });
+    const older = { startCursor: "c1", runs: [r("run_3"), r("run_4")], nextCursor: "c2" };
+    // Same first page: older pages kept, cursor continues after them.
+    expect(mergeAppHistoryPages({ runs: [r("run_1"), r("run_2")], nextCursor: "c1" }, older)).toEqual({
+      runs: [r("run_1"), r("run_2"), r("run_3"), r("run_4")], nextCursor: "c2",
+    });
+    // New runs pushed the first page down into the older ones: deduplicated.
+    expect(mergeAppHistoryPages({ runs: [r("run_0"), r("run_1"), r("run_2"), r("run_3")], nextCursor: "c9" }, older).runs.map((item) => item.id))
+      .toEqual(["run_0", "run_1", "run_2", "run_3", "run_4"]);
+    // So many new runs that a gap could open: only the first page is kept.
+    expect(mergeAppHistoryPages({ runs: [r("run_new")], nextCursor: "c_new" }, older)).toEqual({ runs: [r("run_new")], nextCursor: "c_new" });
+    expect(mergeAppHistoryPages(undefined, older)).toEqual({ runs: [] });
   });
 });
 

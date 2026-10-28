@@ -44,7 +44,6 @@ import {
   type CapsuleAppAction,
   type CapsuleAppProblem,
   type CapsuleAppView,
-  type CapsuleRunPage,
   type Capsule,
   ControlApiError,
   createReviewableGitRevisionPlan,
@@ -90,12 +89,16 @@ import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
   APP_HISTORY_RUN_TYPES,
   appPrimaryActionLabel,
+  appPrimaryStep,
+  appInstalledRef,
   appRunHistory,
+  type AppOlderHistory,
   appStateSentence,
   appViewIncomplete,
   isSettled,
   linkedApps,
-  primaryProblem,
+  mergeAppHistoryPages,
+  openableScreens,
   reviewPurposeForRun,
   settledValue,
   stateVersionLabels,
@@ -107,7 +110,7 @@ import {
   reinstallHref,
 } from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
-import { retryPlanForRun } from "../../lib/run-retry.ts";
+import { defaultRetryPlanApi, retryPlanForRun, type RetryPlanApi } from "../../lib/run-retry.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppSection, OpenAppButton } from "./app-ui.tsx";
@@ -199,6 +202,9 @@ export default function AppManagePage(props: {
   const applied = () => app()?.applied === true;
   const managed = () => applied() && !destroyed();
   const loadError = () => (contextLatest() ? undefined : context.error) ?? (app() ? undefined : appView.error);
+  // Only the app's own record decides "not found": a view the server could
+  // not serve (for example a skewed deploy) is unreadable, not missing.
+  const notFound = () => !contextLatest() && isCapsuleNotFound(context.error);
 
   const [installConfig] = createResource(
     () => capsule()?.installConfigId ?? null,
@@ -270,30 +276,16 @@ export default function AppManagePage(props: {
     listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES }),
   );
   const historyFirstValue = () => settledValue(historyFirst);
-  const [olderRuns, setOlderRuns] = createSignal<{
-    readonly base: CapsuleRunPage;
-    readonly runs: readonly Run[];
-    readonly nextCursor?: string;
-  }>();
-  const historyRuns = createMemo((): readonly Run[] => {
-    const first = historyFirstValue();
-    if (!first) return [];
-    const older = olderRuns();
-    if (older?.base !== first) return first.runs;
-    const seen = new Set(first.runs.map((run) => run.id));
-    return [...first.runs, ...older.runs.filter((run) => !seen.has(run.id))];
-  });
-  const historyCursor = () => {
-    const first = historyFirstValue();
-    const older = olderRuns();
-    return older && older.base === first ? older.nextCursor : first?.nextCursor;
-  };
+  // Older pages survive a refresh of the first page (see mergeAppHistoryPages).
+  const [olderRuns, setOlderRuns] = createSignal<AppOlderHistory>();
+  const historyPages = createMemo(() => mergeAppHistoryPages(historyFirstValue(), olderRuns()));
+  const historyRuns = () => historyPages().runs;
+  const historyCursor = () => historyPages().nextCursor;
   const [moreBusy, setMoreBusy] = createSignal(false);
   const [moreError, setMoreError] = createSignal<string>();
   const loadMoreHistory = async () => {
-    const first = historyFirstValue();
     const cursor = historyCursor();
-    if (!first || !cursor || moreBusy()) return;
+    if (!cursor || moreBusy()) return;
     const forCapsule = capsuleId();
     setMoreBusy(true);
     setMoreError(undefined);
@@ -303,11 +295,13 @@ export default function AppManagePage(props: {
         cursor,
         types: APP_HISTORY_RUN_TYPES,
       });
-      if (capsuleId() !== forCapsule || historyFirstValue() !== first) return;
-      const previous = olderRuns();
+      if (capsuleId() !== forCapsule || historyCursor() !== cursor) return;
+      // Continue the older pages when this cursor came from them; otherwise
+      // (the first page moved past them) start the older pages afresh.
+      const previous = olderRuns()?.nextCursor === cursor ? olderRuns() : undefined;
       setOlderRuns({
-        base: first,
-        runs: [...(previous?.base === first ? previous.runs : []), ...page.runs],
+        startCursor: previous?.startCursor ?? cursor,
+        runs: [...(previous?.runs ?? []), ...page.runs],
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       });
     } catch (cause) {
@@ -507,11 +501,19 @@ export default function AppManagePage(props: {
     }
   };
 
+  // After a review ends, a poll that started before it ended may still report
+  // the run it followed as in progress. Work is not followed again until the
+  // fresh read that the end triggers has landed.
+  const [autoOpenHeld, setAutoOpenHeld] = createSignal(false);
+  const refreshAfterReview = () => {
+    setAutoOpenHeld(true);
+    void refreshAll().finally(() => setAutoOpenHeld(false));
+  };
   const finishReview = (active: ActiveReview) => {
     setReview(undefined);
     dismissedRuns.add(active.initialRunId ?? active.planRunId);
     setNotice({ section: active.section, message: t(DONE_MESSAGE[active.purpose]) });
-    void refreshAll();
+    refreshAfterReview();
   };
 
   /** Opens the review of a run the server named (a plan waiting, a blocked plan). */
@@ -532,7 +534,7 @@ export default function AppManagePage(props: {
   // is followed in place. Only the explicit Allow click applies anything.
   createEffect(() => {
     const view = app();
-    if (!view || review() || starting()) return;
+    if (!view || review() || starting() || autoOpenHeld()) return;
     if (view.state !== "installing" && view.state !== "updating") return;
     const target = view.progress.review
       ? { runId: view.progress.review.runId, runType: view.progress.review.runType }
@@ -572,7 +574,7 @@ export default function AppManagePage(props: {
             // its state, problems and history show what actually happened.
             onClose={() => {
               closeReview(active());
-              void refreshAll();
+              refreshAfterReview();
             }}
             {...(active().restart
               ? {
@@ -606,15 +608,17 @@ export default function AppManagePage(props: {
   // Update / Review again / later update to the same ref is a new request
   // instead of a replay of the plan already returned.
   const revisionAttempts = new Map<string, RevisionPlanAttempt>();
-  const currentRef = () =>
-    app()?.version.current?.ref ?? app()?.version.repository?.defaultRef;
+  // The installed ref, from the server's view or the Capsule's adopted
+  // revision. An installed app never falls back to the Source's default ref:
+  // without a known ref there is nothing to update.
+  const currentRef = () => appInstalledRef(app(), capsule());
   const revisionReady = () => {
     const ref = currentRef();
     return managed() && typeof ref === "string" && ref.trim().length > 0;
   };
   const createRevisionRun = async (requested?: string): Promise<string> => {
     const ref = (requested ?? currentRef())?.trim();
-    if (!revisionReady() || !ref) {
+    if (!managed() || !ref) {
       throw new ControlApiError(
         409,
         "revision_unavailable",
@@ -654,19 +658,31 @@ export default function AppManagePage(props: {
   };
 
   // --- the actions the server names ------------------------------------------------
-  // "Review again" plans the failed run the way the run page does: a removal
-  // as a removal, a first install with its reviewed report, an installed
-  // app's change from the latest source. Without a run the app is planned
-  // again as it is configured now. The app is re-read first.
+  // "Review again" plans the failed run as the same change, the way the run
+  // page does (lib/run-retry.ts): a removal as a removal, a first install with
+  // its reviewed report, a version change to the same ref (with this page's
+  // idempotency key), a rollback to the same version. Without a run, or for a
+  // configuration change, the installed version is planned again with the
+  // current configuration — never the Source's default ref. The app is re-read
+  // first.
+  const retryApi: RetryPlanApi = {
+    ...defaultRetryPlanApi(),
+    planRevision: (_capsuleId, ref) => createRevisionRun(ref),
+  };
   const retry = (problem: CapsuleAppProblem | undefined) => {
     const runId = problem?.runId;
     const removal = problem?.runType === "destroy_plan" || problem?.runType === "destroy_apply";
     const purpose: ReviewPurpose = removal ? "uninstall" : applied() ? "apply" : "install";
     void startReview("attention", purpose, async () => {
-      if (!runId) return extractRunId(await planCapsule(capsuleId()));
+      if (!runId) {
+        if (!applied()) return extractRunId(await planCapsule(capsuleId()));
+        const installed = (await getCapsule(capsuleId())).currentStateVersionId;
+        if (!installed) throw new Error(t("app.review.notStarted"));
+        return extractRunId(await createStateVersionRollbackPlan(installed));
+      }
       const run = await getRun(runId);
       const fresh = await getCapsule(run.capsuleId ?? capsuleId());
-      return extractRunId(await retryPlanForRun(run, fresh));
+      return await retryPlanForRun(run, fresh, retryApi);
     }, { action: "retry" });
   };
   const continueInstall = () =>
@@ -789,25 +805,19 @@ export default function AppManagePage(props: {
 
   // --- the one primary action ---------------------------------------------------------
   const runPrimary = (view: CapsuleAppView) => {
-    const problem = primaryProblem(view);
-    switch (view.primaryAction) {
-      case "view_resources":
+    const step = appPrimaryStep(view);
+    switch (step.kind) {
+      case "show_created":
         scrollToSection("created");
         return;
-      case "review": {
-        const target = view.progress.review
-          ? { runId: view.progress.review.runId, runType: view.progress.review.runType }
-          : problem?.runId && problem.runType
-            ? { runId: problem.runId, runType: problem.runType }
-            : undefined;
-        if (target) openRunReview(target.runId, target.runType);
+      case "review":
+        openRunReview(step.runId, step.runType);
         return;
-      }
       case "retry":
-        retry(problem);
+        retry(step.problem);
         return;
       case "retry_screen":
-        void retryScreen(problem);
+        void retryScreen(step.problem);
         return;
       case "fix_connection":
         fixConnection();
@@ -822,6 +832,7 @@ export default function AppManagePage(props: {
         uninstallNow();
         return;
       default:
+        // `open` and `reinstall` are links; `none` has nothing to do.
         return;
     }
   };
@@ -834,11 +845,21 @@ export default function AppManagePage(props: {
     (view.primaryAction === "retry_screen" && screenRetryBusy());
 
   // --- header ------------------------------------------------------------------------
-  const screens = () =>
-    (app()?.screens ?? []).map((screen) => ({
-      ...(screen.title ? { name: screen.title } : {}),
-      url: screen.url,
-    }));
+  const screens = () => openableScreens(app()?.screens ?? []);
+  /** What installing again pre-fills: the repository, last ref and paths. */
+  const reinstallInput = (view: CapsuleAppView, inst: Capsule) => {
+    const config = installConfigValue();
+    const repositoryUrl = view.version.repository?.url ?? config?.sourceSelector?.url;
+    const ref = view.version.current?.ref ?? inst.adoptedSourceRevision?.ref;
+    const sourcePath = view.version.current?.path ?? config?.sourceSelector?.path;
+    return {
+      ...(repositoryUrl ? { repositoryUrl } : {}),
+      ...(ref ? { ref } : {}),
+      ...(sourcePath ? { sourcePath } : {}),
+      ...(config?.modulePath ? { path: config.modulePath } : {}),
+      name: inst.name,
+    };
+  };
   const iconUrl = () => {
     const icon = app()?.screens[0]?.icon;
     return icon?.kind === "image" ? icon.url : app()?.iconUrl ?? installConfigValue()?.store?.iconUrl;
@@ -865,7 +886,7 @@ export default function AppManagePage(props: {
       <Match when={loadError()}>
         {(error) => (
           <Show
-            when={isCapsuleNotFound(error())}
+            when={notFound()}
             fallback={
               <EmptyState
                 title={t("app.loadFailedTitle")}
@@ -938,11 +959,7 @@ export default function AppManagePage(props: {
                     <Match when={view().primaryAction === "reinstall"}>
                       <Button
                         variant="primary"
-                        href={reinstallHref({
-                          ...(view().version.repository?.url ? { repositoryUrl: view().version.repository!.url } : {}),
-                          ...(view().version.repository?.defaultRef ? { ref: view().version.repository!.defaultRef } : {}),
-                          name: inst().name,
-                        })}
+                        href={reinstallHref(reinstallInput(view(), inst()))}
                       >
                         {t("app.action.reinstall")}
                       </Button>

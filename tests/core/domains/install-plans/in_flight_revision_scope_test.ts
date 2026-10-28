@@ -112,7 +112,128 @@ test("the in-flight revision check is scoped to the Capsule's Workspace in every
   }
 });
 
-test("the D1 in-flight revision check binds the Workspace predicate it filters on", async () => {
+/**
+ * An install coordinator row that already created its Capsule: attempt mode
+ * as `POST /install-plans` stores it now, or a legacy row without `mode` and
+ * `operation`.
+ */
+function installPlan(
+  id: string,
+  workspaceId: string,
+  capsuleId: string,
+  phase: StoredGitInstallPlan["phase"],
+  kind: "attempt" | "legacy" = "attempt",
+): StoredGitInstallPlan {
+  return {
+    id,
+    workspaceId,
+    workspaceManagementAuthority: { workspaceId, managementState: "active", managementEpoch: 1 },
+    createdBy: "user_one",
+    actorSubject: "user_one",
+    idempotencyKeyHash: `key_${id}`,
+    requestDigest: `digest_${id}`,
+    source: { name: "repo", url: "https://github.com/takos/example.git", ref: "main", path: "." },
+    capsule: { name: "example", environment: "production" },
+    options: {},
+    phase,
+    generation: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    sourceId: "src_install",
+    installConfigId: "cfg_install",
+    capsuleId,
+    creationAttempted: true,
+    ...(kind === "attempt"
+      ? {
+          operation: "install" as const,
+          mode: "attempt" as const,
+          // Expiry applies only before the Capsule exists; a bound attempt
+          // past it still owns the Capsule.
+          expiresAt: "2026-10-26T00:00:00.000Z",
+          ...(phase === "awaiting_input" ? { awaitingInput: "inputs" as const } : {}),
+        }
+      : {}),
+  };
+}
+
+const OPEN_INSTALL_PHASES = [
+  "awaiting_input",
+  "creating_capsule",
+  "planning",
+] as const satisfies readonly StoredGitInstallPlan["phase"][];
+const SETTLED_PHASES = [
+  "failed",
+  "reviewable",
+  "discarded",
+] as const satisfies readonly StoredGitInstallPlan["phase"][];
+
+async function expectCoordinatorParity(label: string, store: GitInstallPlanStore): Promise<void> {
+  const rows = [
+    ...OPEN_INSTALL_PHASES.map((phase) =>
+      installPlan(`ip_${phase}`, "ws_one", `cap_install_${phase}`, phase)
+    ),
+    ...SETTLED_PHASES.map((phase) =>
+      installPlan(`ip_${phase}`, "ws_one", `cap_install_${phase}`, phase)
+    ),
+    installPlan("ip_legacy_planning", "ws_one", "cap_legacy_planning", "planning", "legacy"),
+    installPlan("ip_legacy_failed", "ws_one", "cap_legacy_failed", "failed", "legacy"),
+    revisionPlan("rp_open", "ws_one", "cap_revision_open"),
+    { ...revisionPlan("rp_reviewable", "ws_one", "cap_revision_reviewable"), phase: "reviewable" as const },
+    { ...revisionPlan("rp_failed", "ws_one", "cap_revision_failed"), phase: "failed" as const },
+    installPlan("ip_foreign", "ws_two", "cap_foreign", "planning"),
+  ];
+  for (const row of rows) {
+    expect((await store.create(row)).status, `${label} ${row.id}`).toBe("created");
+  }
+  const coordinator = (capsuleId: string, workspaceId = "ws_one") =>
+    store.hasInFlightCoordinatorForCapsule(capsuleId, workspaceId);
+
+  // Open install rows hold their Capsule in every non-terminal phase,
+  // including an attempt idling for the person's input.
+  for (const phase of OPEN_INSTALL_PHASES) {
+    expect(await coordinator(`cap_install_${phase}`), `${label} ${phase}`).toBe(true);
+  }
+  expect(await coordinator("cap_legacy_planning"), label).toBe(true);
+  // Terminal rows release it.
+  for (const phase of SETTLED_PHASES) {
+    expect(await coordinator(`cap_install_${phase}`), `${label} ${phase}`).toBe(false);
+  }
+  expect(await coordinator("cap_legacy_failed"), label).toBe(false);
+  // Revision rows count exactly as the revision-only check counts them.
+  for (const capsuleId of ["cap_revision_open", "cap_revision_reviewable", "cap_revision_failed"]) {
+    expect(await coordinator(capsuleId), `${label} ${capsuleId}`)
+      .toBe(await store.hasInFlightRevisionForCapsule(capsuleId, "ws_one"));
+  }
+  expect(await coordinator("cap_revision_open"), label).toBe(true);
+  // Another Workspace's row, or a Capsule without a row, is not this Capsule's.
+  expect(await coordinator("cap_foreign"), label).toBe(false);
+  expect(await coordinator("cap_foreign", "ws_two"), label).toBe(true);
+  expect(await coordinator("cap_unbound"), label).toBe(false);
+  // The revision-only check still ignores install rows.
+  expect(await store.hasInFlightRevisionForCapsule("cap_install_planning", "ws_one"), label)
+    .toBe(false);
+}
+
+test("the in-flight coordinator check counts open install and revision rows with parity", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  for (const id of ["ws_one", "ws_two"]) {
+    await memoryControl.putWorkspace(workspace(id));
+    await seedPostgres(postgres, id);
+    await seedD1(d1, id);
+  }
+  try {
+    await expectCoordinatorParity("memory", new InMemoryGitInstallPlanStore(memoryControl));
+    await expectCoordinatorParity("postgres", new SqlGitInstallPlanStore(postgres));
+    await expectCoordinatorParity("d1", new D1GitInstallPlanStore(d1));
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("the D1 in-flight checks bind the Workspace predicate they filter on", async () => {
   const statements: { sql: string; values: unknown[] }[] = [];
   const db = {
     prepare(sql: string) {
@@ -128,7 +249,10 @@ test("the D1 in-flight revision check binds the Workspace predicate it filters o
   };
   const store = new D1GitInstallPlanStore(db as never);
   expect(await store.hasInFlightRevisionForCapsule("cap_scope", "ws_one")).toBe(false);
-  expect(statements).toHaveLength(1);
-  expect(statements[0]!.sql).toContain("where workspace_id = ?");
-  expect(statements[0]!.values).toEqual(["ws_one", "cap_scope"]);
+  expect(await store.hasInFlightCoordinatorForCapsule("cap_scope", "ws_one")).toBe(false);
+  expect(statements).toHaveLength(2);
+  for (const statement of statements) {
+    expect(statement.sql).toContain("where workspace_id = ?");
+    expect(statement.values).toEqual(["ws_one", "cap_scope"]);
+  }
 });

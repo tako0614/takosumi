@@ -298,7 +298,7 @@ Add, role change, and remove responses carry neither field.
 
 `GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
 The control plane computes `state` and `primaryAction` from the Capsule, this
-Capsule's newest plan/apply Run, the revision coordinator, its
+Capsule's newest plan/apply Run, the revision and install coordinators, its
 ProviderConnections and its screen materialization ledger. It does not rely on
 a window of Workspace-wide Runs.
 
@@ -425,6 +425,12 @@ A plan Run that policy blocked or that requires approval carries
 and `layer` come from a closed set (for example `provider_not_allowed` /
 `provider`, `approval_required_change` / `action`). The prose reasons are not
 returned; a reason this build does not recognize stays as `unclassified`.
+
+A plan Run created by a version change, a rollback to an earlier StateVersion
+or a configuration change carries `origin` (`{ kind: "revision", ref }`,
+`{ kind: "rollback", stateVersionId }` or `{ kind: "configuration" }`), so a
+client retrying a failed change plans the same change again instead of the
+Source's default ref.
 
 ### Credentials and Output sharing
 

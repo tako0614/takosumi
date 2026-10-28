@@ -1120,11 +1120,11 @@ function Inner() {
         t("controlError.sourceRevisionMismatch"),
       );
     }
-    // The same selector as the app page's problem card: a failed removal is
-    // retried as a removal, a first install keeps its reviewed pair, and an
-    // installed app's change re-reads the latest source.
-    const envelope = await retryPlanForRun(currentRun, capsule);
-    const newRunId = extractRunId(envelope);
+    // The same selector as the app page: a failed removal is retried as a
+    // removal, a first install keeps its reviewed pair, and an installed
+    // app's change repeats the change its plan records (never the Source's
+    // default ref).
+    const newRunId = await retryPlanForRun(currentRun, capsule);
     if (newRunId) {
       navigate(
         appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
@@ -1729,7 +1729,8 @@ function Inner() {
                     </Show>
 
                     {/* Same-source first-install retries preserve their exact
-                        review; applied updates use planCapsuleUpdate. */}
+                        review; an installed app's change repeats the change
+                        its plan records (lib/run-retry.ts). */}
                     <Show
                       when={
                         Boolean(r().capsuleId) &&

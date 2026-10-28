@@ -154,6 +154,24 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return result.rows[0]?.present === true;
   }
 
+  async hasInFlightCoordinatorForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
+    // Install (legacy or attempt) and revision rows alike; only the terminal
+    // phases release the Capsule.
+    const result = await this.#client.query<{ readonly present: boolean }>(
+      `select exists (
+         select 1 from ${TABLE}
+          where workspace_id = $2
+            and record_json ->> 'capsuleId' = $1
+            and phase not in ('failed', 'reviewable', 'discarded')
+       ) as present`,
+      [capsuleId, workspaceId],
+    );
+    return result.rows[0]?.present === true;
+  }
+
   async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
     const result = await this.#client.query<{ readonly present: boolean }>(
       `select exists (

@@ -148,6 +148,26 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return row?.present === 1;
   }
 
+  async hasInFlightCoordinatorForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
+    // Install (legacy or attempt) and revision rows alike; only the terminal
+    // phases release the Capsule.
+    const row = await this.#db
+      .prepare(
+        `select exists (
+           select 1 from git_install_plans
+            where workspace_id = ?
+              and json_extract(record_json, '$.capsuleId') = ?
+              and phase not in ('failed', 'reviewable', 'discarded')
+         ) as present`,
+      )
+      .bind(workspaceId, capsuleId)
+      .first<{ readonly present: number }>();
+    return row?.present === 1;
+  }
+
   async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
     const result = await this.#db
       .prepare(

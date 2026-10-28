@@ -6,7 +6,7 @@
  * action the server chose; a card here repeats an action only when it is
  * not that primary one. Reviews opened from here render in this section.
  */
-import { For, type JSX, Match, Show, Switch } from "solid-js";
+import { createMemo, For, type JSX, Match, Show, Switch } from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import { Button } from "../../components/ui/index.ts";
 import type {
@@ -56,6 +56,25 @@ const UNINSTALL_CODES = new Set<CapsuleAppProblem["code"]>([
   "uninstall_failed",
 ]);
 
+/** What a problem is, stable across polls of the same app view. */
+export function problemKey(problem: CapsuleAppProblem): string {
+  return [
+    problem.code,
+    problem.runId ?? "",
+    problem.provider ?? "",
+    problem.connectionId ?? "",
+    problem.screenFailure?.id ?? "",
+  ].join("\u0000");
+}
+
+function sameKeys(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((key, index) => key === b[index]);
+}
+
+function sameProblem(a: CapsuleAppProblem | undefined, b: CapsuleAppProblem | undefined): boolean {
+  return a === b || (a !== undefined && b !== undefined && JSON.stringify(a) === JSON.stringify(b));
+}
+
 function failedRunTitle(problem: CapsuleAppProblem): MessageKey {
   if (problem.runType === "destroy_plan" || problem.runType === "destroy_apply") {
     return "app.problem.uninstallFailed";
@@ -84,9 +103,14 @@ export default function AppAttentionSection(props: {
   const app = () => props.app;
   const first = () => primaryProblem(app());
   /** True when this card's action is the header's primary action. */
-  const isPrimary = (problem: CapsuleAppProblem, action: CapsuleAppAction | undefined) =>
-    action !== undefined && app().primaryAction === action && first() === problem;
+  const isPrimary = (problem: CapsuleAppProblem, action: CapsuleAppAction | undefined) => {
+    const primary = first();
+    return action !== undefined && app().primaryAction === action &&
+      primary !== undefined && problemKey(primary) === problemKey(problem);
+  };
   const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code));
+  const cardKeys = createMemo(() => cards().map(problemKey), undefined, { equals: sameKeys });
+  const cardByKey = () => new Map(cards().map((problem) => [problemKey(problem), problem]));
   const scheduled = () => app().uninstall.scheduled;
   const uninstallFailed = () => app().problems.find((problem) => problem.code === "uninstall_failed");
   const uninstallBlocked = () => app().problems.find((problem) => problem.code === "uninstall_blocked");
@@ -257,61 +281,70 @@ export default function AppAttentionSection(props: {
             </article>
           </Show>
 
-          <For each={cards()}>
-            {(problem) => (
-              <article class="ap-problem" data-problem={problem.code}>
+          {/* Keyed by what each problem is, not by object identity: a poll
+              that returns the same problems keeps the cards (and focus). */}
+          <For each={cardKeys()}>
+            {(key) => {
+              const problem = createMemo(() => cardByKey().get(key), undefined, { equals: sameProblem });
+              return (
+                <Show when={problem()}>
+                  {(problem) => (
+              <article class="ap-problem" data-problem={problem().code}>
                 <Switch>
-                  <Match when={problem.code === "connection_unavailable"}>
+                  <Match when={problem().code === "connection_unavailable"}>
                     <strong>{t("app.problem.connection")}</strong>
                     <p>
                       {t("app.problem.connectionHint", {
-                        provider: problem.provider ? providerName(problem.provider) : t("common.unknown"),
-                        status: t(CONNECTION_STATUS[problem.connectionStatus ?? ""] ?? "app.problem.connectionError"),
+                        provider: problem().provider ? providerName(problem().provider!) : t("common.unknown"),
+                        status: t(CONNECTION_STATUS[problem().connectionStatus ?? ""] ?? "app.problem.connectionError"),
                       })}
                     </p>
                   </Match>
-                  <Match when={problem.code === "policy_blocked"}>
+                  <Match when={problem().code === "policy_blocked"}>
                     <strong>{t("app.problem.policyBlocked")}</strong>
                     <p>{t("app.problem.policyBlockedHint")}</p>
-                    <Show when={problem.runId}>
+                    <Show when={problem().runId}>
                       {(runId) => (
                         <RunPolicyReasons runId={runId()} capsuleId={app().capsuleId} reportLoadFailure />
                       )}
                     </Show>
                   </Match>
-                  <Match when={problem.code === "run_failed"}>
-                    <strong>{t(failedRunTitle(problem))}</strong>
-                    <p>{runFailureHint(problem.errorCode)}</p>
-                    {serverSaid(problem.errorCode)}
+                  <Match when={problem().code === "run_failed"}>
+                    <strong>{t(failedRunTitle(problem()))}</strong>
+                    <p>{runFailureHint(problem().errorCode)}</p>
+                    {serverSaid(problem().errorCode)}
                   </Match>
-                  <Match when={problem.code === "capsule_error"}>
+                  <Match when={problem().code === "capsule_error"}>
                     <strong>{t("app.problem.error")}</strong>
                     <p>{t("app.problem.errorHint")}</p>
                   </Match>
-                  <Match when={problem.code === "install_incomplete"}>
+                  <Match when={problem().code === "install_incomplete"}>
                     <strong>{t("app.problem.installIncomplete")}</strong>
                     <p>{t("app.problem.installIncompleteHint")}</p>
                   </Match>
-                  <Match when={problem.code === "screen_unavailable"}>
+                  <Match when={problem().code === "screen_unavailable"}>
                     <strong>{t("app.problem.screen")}</strong>
                     <p>{t("app.problem.screenHint")}</p>
-                    {serverSaid(problem.screenFailure?.errorCode)}
+                    {serverSaid(problem().screenFailure?.errorCode)}
                   </Match>
                   <Match when={true}>
                     {/* A problem a newer server reports: say only that there is one. */}
                     <strong>{t("app.problem.error")}</strong>
-                    {serverSaid(problem.code)}
+                    {serverSaid(problem().code)}
                   </Match>
                 </Switch>
                 <div class="ap-row-actions">
-                  {actionButton(problem)}
-                  <Show when={problem.runId}>{(runId) => detailsLink(runId())}</Show>
+                  {actionButton(problem())}
+                  <Show when={problem().runId}>{(runId) => detailsLink(runId())}</Show>
                 </div>
-                <Show when={problem.code === "screen_unavailable" && props.screenRetryMessage}>
+                <Show when={problem().code === "screen_unavailable" && props.screenRetryMessage}>
                   <p role="status">{props.screenRetryMessage}</p>
                 </Show>
               </article>
-            )}
+                  )}
+                </Show>
+              );
+            }}
           </For>
 
           <Show when={screenProblemsUnknown()}>

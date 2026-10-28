@@ -139,6 +139,9 @@ async function detailFixture(page: Page, base: (page: Page, provider: boolean) =
     if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
     if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
     if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
+    // An installed app's failed change with no recorded origin is planned
+    // again on the installed version (never the Source's default ref).
+    if (path === "/api/v1/state-versions/sv_inline/rollback-plan" && request.method() === "POST") { retryCount += 1; return route.fulfill({ status: 201, json: { run: plan() } }); }
     if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
     if (path.startsWith("/api/v1/runs/") && path.endsWith("/cost")) {
       if (cost === "unavailable") return route.fulfill({ status: 503, json: { error: "fixture_cost_unavailable" } });
@@ -587,12 +590,14 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await expect(problem.getByRole("link", { name: "See reason and logs" })).toHaveAttribute("href", `/runs/${applyId}`);
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
       await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
-      await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(1);
+      const replan = "POST /api/v1/state-versions/sv_inline/rollback-plan";
+      await expect.poll(() => f.mutations.filter((m) => m === replan).length).toBe(1);
       const review = page.getByTestId("app-review");
       await expect(review.locator('.iv-error a[href="/runs/run_retry_fixture_1"]')).toBeVisible();
       f.failRetry(false);
       await review.getByRole("button", { name: "Review again", exact: true }).click();
-      await expect.poll(() => f.mutations.filter((m) => m.endsWith(`/${capId}/plan`)).length).toBe(2);
+      await expect.poll(() => f.mutations.filter((m) => m === replan).length).toBe(2);
+      expect(f.mutations.some((m) => m.endsWith(`/${capId}/plan`))).toBe(false);
       await expect(review.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
       expect(f.mutations.filter((m) => m === applyMutation)).toHaveLength(1);
       expect(f.mutations.some((m) => m.includes("/abandon"))).toBe(false);

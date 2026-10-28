@@ -211,7 +211,7 @@ import {
   type CapsuleUninstallFinalizeResult,
   finalizeDueCapsuleUninstalls,
 } from "./domains/capsules/uninstall_finalize.ts";
-import type { Run } from "takosumi-contract/runs";
+import type { Run, RunPlanOrigin } from "takosumi-contract/runs";
 import type { Dependency } from "takosumi-contract/dependencies";
 import type {
   BillingSettings,
@@ -817,6 +817,7 @@ export interface TakosumiOperations {
       readonly expectedCapsulePlanAuthority?: CapsulePlanCreationFence;
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       readonly actor?: string;
+      readonly origin?: RunPlanOrigin;
     },
   ): Promise<PlanRunResponse>;
   validateCapsuleConfigurationProviderBindings(input: {
@@ -1950,7 +1951,8 @@ export async function createTakosumiService(
         options?.sourceSnapshotId ||
         options?.planRunId ||
         options?.expectedCapsulePlanAuthority ||
-        options?.expectedWorkspaceManagementAuthority
+        options?.expectedWorkspaceManagementAuthority ||
+        options?.origin
           ? {
               ...(options?.compatibilityReportId
                 ? { compatibilityReportId: options.compatibilityReportId }
@@ -1976,6 +1978,7 @@ export async function createTakosumiService(
                       options.expectedWorkspaceManagementAuthority,
                   }
                 : {}),
+              ...(options?.origin ? { origin: options.origin } : {}),
             }
           : {},
       ),

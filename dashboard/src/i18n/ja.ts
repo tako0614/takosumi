@@ -635,6 +635,7 @@ export const ja = {
   "app.history.approvalWaiting": "承認待ち",
   "app.history.waitingBadge": "承認待ち",
   "app.history.loadFailed": "履歴を読み込めませんでした。",
+  "app.history.emptyPage": "最近の記録に表示する出来事はありません。それより前は「もっと見る」で読み込めます。",
   "app.review.doneInstall": "インストールしました。",
   "app.uninstall.bodyGrace": "{name} のアンインストールを予約します。{days} 日間はデータが残り、いつでも取り消せます。期限が来ると、できる場合はデータを書き出してから、作られたリソースを取り除きます。",
   "app.uninstall.confirmGrace": "{name} は {days} 日間動き続け、データも残ります。期限が来るとデータの書き出しを試みてから取り除きます。それまでは取り消せます。",

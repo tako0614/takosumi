@@ -9,6 +9,8 @@
  * redirect here.
  */
 
+import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
+
 /** Section fragments the app page honors, mapped to their element ids. */
 export const APP_PAGE_SECTIONS = {
   attention: "attention",
@@ -66,6 +68,33 @@ export function legacyAppTabSection(tab: string | undefined): AppPageSection | u
 }
 
 /**
+ * Where an older app URL lands: `/workloads/:id[/:tab]`, `/services/…`,
+ * `/capsules/…` and `/apps/:id/:tab` open the canonical `/apps/:id` (an old
+ * tab as its section fragment), and a bare `/new?capsule=<id>` opens that
+ * app's page. Anything else is not an older app URL.
+ */
+export function resolveLegacyAppUrl(pathname: string, search = ""): string | undefined {
+  const match = /^\/(workloads|services|capsules|apps)\/([^/]+)(?:\/([^/]+))?\/?$/u.exec(pathname);
+  if (match) {
+    const [, root, rawId, tab] = match;
+    // `/apps/:id` itself is the canonical page, not a redirect.
+    if (root === "apps" && tab === undefined) return undefined;
+    let id: string;
+    try {
+      id = decodeURIComponent(rawId!);
+    } catch {
+      return undefined;
+    }
+    return appPageHref(id, legacyAppTabSection(tab));
+  }
+  if (pathname === "/new") {
+    const capsuleId = legacyInstallLocatorCapsuleId(search);
+    return capsuleId ? appPageHref(capsuleId) : undefined;
+  }
+  return undefined;
+}
+
+/**
  * The app an old `/new?capsule=<id>` link named, when that locator is the
  * whole query. A link that also carries an app handoff or install prefill
  * stays on the install page, which owns those parameters.
@@ -80,12 +109,18 @@ export function legacyInstallLocatorCapsuleId(search: string): string | undefine
 
 /**
  * The install page for installing an uninstalled app again: its Git
- * repository and ref pre-filled, nothing started. Without a known https
- * repository it is the store.
+ * repository, the ref it last ran, its Source subtree and module path
+ * pre-filled, nothing started. Without a known https repository it is the
+ * store. A ref is carried only when it is known (never the Source's default
+ * ref in its place).
  */
 export function reinstallHref(input: {
   readonly repositoryUrl?: string;
   readonly ref?: string;
+  /** Git subtree the Source syncs. */
+  readonly sourcePath?: string;
+  /** OpenTofu module path inside that subtree. */
+  readonly path?: string;
   readonly name?: string;
 }): string {
   const url = input.repositoryUrl?.trim();
@@ -93,6 +128,10 @@ export function reinstallHref(input: {
   const params = new URLSearchParams({ git: url });
   const ref = input.ref?.trim();
   if (ref && ref.length <= 512) params.set("ref", ref);
+  const sourcePath = input.sourcePath?.trim();
+  if (sourcePath && isCanonicalRepositoryDirectoryPath(sourcePath)) params.set("sourcePath", sourcePath);
+  const path = input.path?.trim();
+  if (path && isCanonicalRepositoryDirectoryPath(path)) params.set("path", path);
   const name = input.name?.trim();
   if (name && name.length <= 96) params.set("name", name);
   return `/new?${params.toString()}`;

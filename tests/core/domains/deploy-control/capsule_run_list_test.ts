@@ -213,3 +213,26 @@ test("RunQueryService pages one Capsule's projected Runs with the opaque cursor"
     query.listCapsuleRunsPage("cap_app", { workspaceId: "ws_app", cursor: "not a cursor" }),
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
+
+test("a Plan's change origin round-trips through every store and reaches the public Run", async () => {
+  const origins = [
+    { kind: "revision", ref: "release/v2" },
+    { kind: "rollback", stateVersionId: "sv_app_1" },
+    { kind: "configuration" },
+  ] as const;
+  for (const [name, store] of await stores()) {
+    for (const [index, origin] of origins.entries()) {
+      await store.putPlanRun(planRun(`plan_origin_${index}`, 1_000 + index, { origin }));
+    }
+    await store.putPlanRun(planRun("plan_origin_none", 2_000));
+    for (const [index, origin] of origins.entries()) {
+      expect({ name, origin: (await store.getPlanRun(`plan_origin_${index}`))?.origin }).toEqual({ name, origin });
+    }
+    expect({ name, origin: (await store.getPlanRun("plan_origin_none"))?.origin }).toEqual({ name, origin: undefined });
+    const query = new RunQueryService(store);
+    const page = await query.listCapsuleRunsPage("cap_app", { workspaceId: "ws_app", limit: 10 });
+    const projected = new Map(page.runs.map((run) => [run.id, run.origin]));
+    expect({ name, revision: projected.get("plan_origin_0"), rollback: projected.get("plan_origin_1"), configuration: projected.get("plan_origin_2"), none: projected.get("plan_origin_none") })
+      .toEqual({ name, revision: origins[0], rollback: origins[1], configuration: origins[2], none: undefined });
+  }
+});

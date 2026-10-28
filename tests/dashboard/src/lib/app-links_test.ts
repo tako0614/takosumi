@@ -58,6 +58,14 @@ describe("app page links", () => {
       path: "",
       name: "office",
     });
+    // The Source subtree and module path come along; an unsafe path does not.
+    const withPaths = reinstallHref({ repositoryUrl: "https://github.com/example/office.git", ref: "v2", sourcePath: "apps", path: "deploy/opentofu" });
+    expect(parseInstallPrefill(withPaths.slice("/new".length))).toEqual({
+      git: "https://github.com/example/office.git", ref: "v2", sourcePath: "apps", path: "deploy/opentofu",
+    });
+    expect(new URL(reinstallHref({ repositoryUrl: "https://github.com/example/office.git", path: "../escape" }), "https://d.test").searchParams.has("path")).toBe(false);
+    // No known ref: none is invented.
+    expect(new URL(reinstallHref({ repositoryUrl: "https://github.com/example/office.git" }), "https://d.test").searchParams.has("ref")).toBe(false);
     expect(reinstallHref({})).toBe("/new");
     expect(reinstallHref({ repositoryUrl: "http://insecure.test/repo.git" })).toBe("/new");
   });

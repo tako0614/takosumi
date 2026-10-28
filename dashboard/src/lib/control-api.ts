@@ -58,6 +58,7 @@ import type {
   CreateGitRevisionPlanRequest,
   GitRevisionPlanResponse,
   CapsuleAppView as ContractCapsuleAppView,
+  RunPlanOrigin as ContractRunPlanOrigin,
   RunPolicyReason as ContractRunPolicyReason,
 } from "takosumi-contract";
 import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
@@ -682,6 +683,8 @@ export interface Run {
   readonly policyStatus?: RunPolicyStatus;
   /** Structured, value-free reasons a policy blocked or gated this plan. */
   readonly policyReasons?: readonly RunPolicyReason[];
+  /** The change flow that created this plan (version, rollback, settings). */
+  readonly origin?: RunPlanOrigin;
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
@@ -2450,6 +2453,7 @@ export type {
 } from "takosumi-contract";
 export type CapsuleAppView = ContractCapsuleAppView;
 export type RunPolicyReason = ContractRunPolicyReason;
+export type RunPlanOrigin = ContractRunPlanOrigin;
 
 /** The view kind this dashboard build understands. */
 const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1";
@@ -2505,10 +2509,24 @@ export async function listCapsuleRuns(
   if (options.cursor) params.set("cursor", options.cursor);
   for (const type of options.types ?? []) params.append("type", type);
   const search = params.toString();
-  const body = await controlFetch<{ runs?: readonly Run[]; nextCursor?: string }>(
+  const body = await controlFetch<{ runs?: unknown; nextCursor?: unknown }>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs${search ? `?${search}` : ""}`,
   );
-  const runs = (body.runs ?? []).filter((run) => run.capsuleId === capsuleId);
+  // A page without its list is unreadable, never an empty history.
+  if (
+    !isRecord(body) ||
+    !Array.isArray(body.runs) ||
+    (body.nextCursor !== undefined && typeof body.nextCursor !== "string")
+  ) {
+    throw new ControlApiError(
+      502,
+      "invalid_capsule_runs_response",
+      "App history read returned an invalid response.",
+    );
+  }
+  const runs = (body.runs as readonly Run[]).filter(
+    (run) => isRecord(run) && run.capsuleId === capsuleId,
+  );
   return typeof body.nextCursor === "string" && body.nextCursor
     ? { runs, nextCursor: body.nextCursor }
     : { runs };

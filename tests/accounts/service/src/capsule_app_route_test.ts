@@ -666,6 +666,70 @@ test("a Capsule restored to active after a failed teardown is not stuck uninstal
   expect(app).toMatchObject({ state: "installed", primaryAction: "view_resources" });
 });
 
+test("a stalled first install still owned by its install attempt is installing, not incomplete", async () => {
+  const h = await fixture();
+  const seeded = await h.ledger.getCapsule(CAPSULE);
+  const { currentStateVersionId: _currentStateVersionId, ...unapplied } = seeded!;
+  await h.ledger.putCapsule({
+    ...unapplied,
+    status: "pending",
+    currentStateGeneration: 0,
+    updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+  });
+  // With no coordinator working on it, the person is asked to continue.
+  expect(await h.app()).toMatchObject({
+    applied: false,
+    state: "needs_attention",
+    primaryAction: "continue_install",
+    problems: [{ code: "install_incomplete" }],
+    progress: { revisionPreparing: false },
+  });
+  // The install attempt that created this Capsule is waiting for input: it
+  // owns the next plan, so the app must not offer one of its own.
+  const at = new Date().toISOString();
+  const authority = {
+    workspaceId: WORKSPACE,
+    managementState: "active" as const,
+    managementEpoch: 1,
+  };
+  const created = await h.core.gitInstallPlans.create(
+    {
+      id: "ip_app_route",
+      workspaceId: WORKSPACE,
+      workspaceManagementAuthority: authority,
+      createdBy: OWNER,
+      actorSubject: OWNER,
+      idempotencyKeyHash: "key_app_route",
+      requestDigest: "digest_app_route",
+      source: { name: "app", url: "https://git.example.com/example/app.git", ref: "main", path: "." },
+      capsule: { name: "app", environment: "production" },
+      options: {},
+      operation: "install",
+      mode: "attempt",
+      phase: "awaiting_input",
+      awaitingInput: "inputs",
+      generation: 0,
+      sourceId: "src_app_route",
+      installConfigId: "cfg_app_route",
+      capsuleId: CAPSULE,
+      creationAttempted: true,
+      expiresAt: at,
+      createdAt: at,
+      updatedAt: at,
+    },
+    authority,
+  );
+  expect(created.status).toBe("created");
+  const app = await h.app();
+  expect(app).toMatchObject({
+    applied: false,
+    state: "installing",
+    primaryAction: "none",
+    progress: { revisionPreparing: true },
+  });
+  expect(app.problems.map((problem) => problem.code)).not.toContain("install_incomplete");
+});
+
 test("a disabled app is not offered a scheduled uninstall the command would refuse", async () => {
   const h = await fixture();
   const capsule = await h.ledger.getCapsule(CAPSULE);

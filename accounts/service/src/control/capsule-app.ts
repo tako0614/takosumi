@@ -162,7 +162,7 @@ async function readCapsuleAppView(
     ? [undefined, false, [], { schedule: false, cancel: false }] as const
     : await Promise.all([
         readLatestLifecycleRun(operations, capsule),
-        operations.gitInstallPlans.hasInFlightRevisionForCapsule(
+        operations.gitInstallPlans.hasInFlightCoordinatorForCapsule(
           capsule.id,
           capsule.workspaceId,
         ),

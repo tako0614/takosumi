@@ -15,6 +15,7 @@ import type {
   CapsuleAppAction,
   CapsuleAppIncompleteSection,
   CapsuleAppProblem,
+  CapsuleAppScreen,
   CapsuleAppView,
   CapsuleCurrentResourceInventory,
   CapsuleUsageSummary,
@@ -26,6 +27,7 @@ import type {
   RunPolicyReason,
   SourceSnapshot,
 } from "./control-api.ts";
+import { isSafeLinkHref } from "takosumi-contract";
 import type { MessageKey } from "../i18n/index.ts";
 import { effectiveCapsuleStatus } from "./capsules-ui.ts";
 import { readableProviderSourceLabel } from "./provider-labels.ts";
@@ -213,9 +215,89 @@ export function appPrimaryActionLabel(action: CapsuleAppAction): MessageKey | un
   }
 }
 
+/**
+ * The screens the page may link to: the server already checked each launch
+ * URL; the page checks it again like every other link it renders, keeping
+ * only absolute http(s) URLs.
+ */
+export function openableScreens(
+  screens: readonly CapsuleAppScreen[],
+): readonly { readonly name?: string; readonly url: string }[] {
+  return screens
+    .filter((screen) => /^https?:\/\//iu.test(screen.url) && isSafeLinkHref(screen.url))
+    .map((screen) => ({ ...(screen.title ? { name: screen.title } : {}), url: screen.url }));
+}
+
 /** The first problem that decides the primary action (an error, in order). */
 export function primaryProblem(app: CapsuleAppView): CapsuleAppProblem | undefined {
   return app.problems.find((problem) => problem.severity === "error");
+}
+
+/**
+ * The ref an installed app runs, for updating it or choosing another
+ * version: the server's current version, else the Capsule's adopted
+ * revision. Never the Source's default ref — without a known ref an
+ * installed app has nothing to update.
+ */
+export function appInstalledRef(
+  app: Pick<CapsuleAppView, "version"> | undefined,
+  capsule: Pick<Capsule, "adoptedSourceRevision"> | undefined,
+): string | undefined {
+  const ref = app?.version.current?.ref ?? capsule?.adoptedSourceRevision?.ref;
+  return ref?.trim() ? ref.trim() : undefined;
+}
+
+/** What the page does for the server's primary action. */
+export type AppPrimaryStep =
+  | { readonly kind: "open" }
+  | { readonly kind: "reinstall" }
+  | { readonly kind: "show_created" }
+  | { readonly kind: "review"; readonly runId: string; readonly runType: Run["type"] }
+  | { readonly kind: "retry"; readonly problem?: CapsuleAppProblem }
+  | { readonly kind: "retry_screen"; readonly problem?: CapsuleAppProblem }
+  | { readonly kind: "fix_connection" }
+  | { readonly kind: "continue_install" }
+  | { readonly kind: "cancel_uninstall" }
+  | { readonly kind: "uninstall_now" }
+  | { readonly kind: "none" };
+
+/**
+ * Maps the server's primary action onto the in-page flow that carries it
+ * out. `review` opens the plan waiting in `progress.review`, else the run the
+ * first problem names; without either there is nothing to open.
+ */
+export function appPrimaryStep(app: CapsuleAppView): AppPrimaryStep {
+  const problem = primaryProblem(app);
+  switch (app.primaryAction) {
+    case "open":
+      return { kind: "open" };
+    case "reinstall":
+      return { kind: "reinstall" };
+    case "view_resources":
+      return { kind: "show_created" };
+    case "review": {
+      const waiting = app.progress.review;
+      if (waiting) return { kind: "review", runId: waiting.runId, runType: waiting.runType };
+      if (problem?.runId && problem.runType) {
+        return { kind: "review", runId: problem.runId, runType: problem.runType };
+      }
+      return { kind: "none" };
+    }
+    case "retry":
+      return problem ? { kind: "retry", problem } : { kind: "retry" };
+    case "retry_screen":
+      return problem ? { kind: "retry_screen", problem } : { kind: "retry_screen" };
+    case "fix_connection":
+      return { kind: "fix_connection" };
+    case "continue_install":
+      return { kind: "continue_install" };
+    case "cancel_uninstall":
+      return { kind: "cancel_uninstall" };
+    case "uninstall_now":
+      return { kind: "uninstall_now" };
+    default:
+      return { kind: "none" };
+  }
 }
 
 /** True when the control plane could not read the named part of the view. */
@@ -282,6 +364,36 @@ export interface AppHistoryEvent {
   readonly version?: string;
   /** Why a policy blocked this plan or made it wait for an approval. */
   readonly policyReasons?: readonly RunPolicyReason[];
+}
+
+/** Older history pages read with "Show more", after the first page. */
+export interface AppOlderHistory {
+  /** The cursor the first older page was read with. */
+  readonly startCursor: string;
+  readonly runs: readonly Run[];
+  readonly nextCursor?: string;
+}
+
+/**
+ * The app's Runs from the first history page plus the older pages already
+ * read. A refreshed first page keeps the older pages while it still reaches
+ * them (same cursor, an overlapping run, or no further page); if new runs
+ * pushed it so far that a gap could open, only the first page is kept.
+ */
+export function mergeAppHistoryPages(
+  first: { readonly runs: readonly Run[]; readonly nextCursor?: string } | undefined,
+  older: AppOlderHistory | undefined,
+): { readonly runs: readonly Run[]; readonly nextCursor?: string } {
+  if (!first) return { runs: [] };
+  if (!older) return first;
+  const firstIds = new Set(first.runs.map((run) => run.id));
+  const contiguous = first.nextCursor === undefined ||
+    first.nextCursor === older.startCursor ||
+    older.runs.some((run) => firstIds.has(run.id));
+  if (!contiguous) return first;
+  const runs = [...first.runs, ...older.runs.filter((run) => !firstIds.has(run.id))];
+  const nextCursor = first.nextCursor === undefined ? undefined : older.nextCursor;
+  return nextCursor ? { runs, nextCursor } : { runs };
 }
 
 /** The source snapshot an applied run used (its own, or its Plan's). */

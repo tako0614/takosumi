@@ -109,9 +109,12 @@ describe("installed app page", () => {
   });
 
   test("every primary action the server names maps to an in-page flow", () => {
+    // The mapping itself is lib/app-page.ts appPrimaryStep (behavior-tested);
+    // the page runs one handler per step.
     const run = page.slice(page.indexOf("const runPrimary = (view: CapsuleAppView) =>"), page.indexOf("const primaryOpenInPlace"));
-    for (const action of [
-      "view_resources",
+    expect(run).toContain("const step = appPrimaryStep(view);");
+    for (const kind of [
+      "show_created",
       "review",
       "retry",
       "retry_screen",
@@ -120,9 +123,9 @@ describe("installed app page", () => {
       "cancel_uninstall",
       "uninstall_now",
     ]) {
-      expect(run).toContain(`case "${action}":`);
+      expect(run).toContain(`case "${kind}":`);
     }
-    expect(run).toContain("openRunReview(target.runId, target.runType)");
+    expect(run).toContain("openRunReview(step.runId, step.runType)");
     // Open shows every screen; Install again goes to the app's install page.
     expect(page).toContain('<Match when={view().primaryAction === "open" && screens().length > 0}>');
     expect(page).toContain("<OpenAppButton surfaces={screens()}");
@@ -134,7 +137,7 @@ describe("installed app page", () => {
     expect(secondary).toContain('view.primaryAction !== "open" && screens().length > 0');
     expect(secondary).toContain('view.state !== "uninstalling" && view.state !== "uninstalled"');
     expect(page).toContain('<Match when={view().primaryAction === "reinstall"}>');
-    expect(page).toContain("href={reinstallHref({");
+    expect(page).toContain("href={reinstallHref(reinstallInput(view(), inst()))}");
     // A connection problem goes to the connections this app uses.
     expect(page).toContain('if (managed()) scrollToSection("connections");');
     // In-progress work the server reports is followed in place, never applied.
@@ -173,7 +176,7 @@ describe("installed app page", () => {
   });
 
   test("every screen is reachable from Open", () => {
-    expect(page).toContain("(app()?.screens ?? []).map((screen) => ({");
+    expect(page).toContain("const screens = () => openableScreens(app()?.screens ?? []);");
     expect(ui).toContain("const others = () => props.surfaces.slice(1)");
     expect(ui).toContain('role="menuitem"');
     expect(ui).toContain('target="_blank"');
@@ -181,17 +184,19 @@ describe("installed app page", () => {
   });
 
   test("problems are the server's, each told in words with its own next step", () => {
-    expect(page).toContain("const problem = primaryProblem(view);");
+    expect(read("lib/app-page.ts")).toContain("const problem = primaryProblem(app);");
     for (const code of ["connection_unavailable", "policy_blocked", "run_failed", "capsule_error", "install_incomplete", "screen_unavailable"]) {
-      expect(attention).toContain(`problem.code === "${code}"`);
+      expect(attention).toContain(`problem().code === "${code}"`);
     }
-    expect(attention).toContain("runFailureHint(problem.errorCode)");
+    expect(attention).toContain("runFailureHint(problem().errorCode)");
     // Raw server text is supporting detail, never the headline.
     expect(attention).toContain('t("app.problem.serverSaid")');
     // A policy block names its structured reasons.
     expect(attention).toContain("<RunPolicyReasons runId={runId()} capsuleId={app().capsuleId} reportLoadFailure />");
-    // A card repeats an action only when it is not the header's primary one.
+    // A card repeats an action only when it is not the header's primary one,
+    // and cards are keyed by what each problem is so a poll keeps them.
     expect(attention).toContain("if (!action || isPrimary(problem, action)) return null;");
+    expect(attention).toContain("<For each={cardKeys()}>");
     // Screen recovery retries the exact failure the server named.
     expect(page).toContain("const failure = problem?.screenFailure;");
     expect(page).toContain("retryInterfaceMaterializationFailure(workspace, failure.id, {");
@@ -250,12 +255,19 @@ describe("installed app page", () => {
     expect(settings).toContain("[() => props.installConfig, () => props.seed]");
   });
 
-  test("try again plans the failed run the way the run page does, or the app as configured", () => {
+  test("try again repeats the failed change the way the run page does, or the installed version as configured", () => {
     expect(page).toContain("const fresh = await getCapsule(run.capsuleId ?? capsuleId());");
-    expect(page).toContain("return extractRunId(await retryPlanForRun(run, fresh));");
-    // Only a problem that names no run plans the app as it is configured now.
-    expect(page).toContain("if (!runId) return extractRunId(await planCapsule(capsuleId()));");
+    expect(page).toContain("return await retryPlanForRun(run, fresh, retryApi);");
+    // A version change keeps this page's per-ref idempotency key.
+    expect(page).toContain("planRevision: (_capsuleId, ref) => createRevisionRun(ref),");
+    // A problem that names no run re-plans the installed version (never the
+    // Source's default ref); only an unapplied app plans its saved settings.
+    expect(page).toContain("if (!applied()) return extractRunId(await planCapsule(capsuleId()));");
+    expect(page).toContain("return extractRunId(await createStateVersionRollbackPlan(installed));");
     expect(page).toContain('const purpose: ReviewPurpose = removal ? "uninstall" : applied() ? "apply" : "install";');
+    // The installed ref never falls back to the Source's default ref.
+    expect(page).toContain("const currentRef = () => appInstalledRef(app(), capsule());");
+    expect(page).not.toContain("version.repository?.defaultRef");
   });
 
   test("another app never shows this app's review, notices or reads", () => {

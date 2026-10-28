@@ -1279,11 +1279,13 @@ test("capsule configuration Plan atomically preserves authority and replays one 
   expect(replay.configurationPlan.planRunId).toBe(
     first.configurationPlan.planRunId,
   );
-  expect(
-    (await fixture.operations.listRuns(fixture.seeded.workspace.id)).filter(
-      (run) => run.id === first.configurationPlan.planRunId,
-    ),
-  ).toHaveLength(1);
+  const configurationRuns = (
+    await fixture.operations.listRuns(fixture.seeded.workspace.id)
+  ).filter((run) => run.id === first.configurationPlan.planRunId);
+  expect(configurationRuns).toHaveLength(1);
+  // The Plan records that a configuration change made it, so a failed apply
+  // is retried as a settings change rather than a plan of the default ref.
+  expect(configurationRuns[0]?.origin).toEqual({ kind: "configuration" });
 
   const changedBody = await controlJson<{
     readonly error: { readonly code: string };

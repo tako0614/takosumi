@@ -62,7 +62,11 @@ export default function AppHistorySection(props: {
         >
           <Show
             when={props.events.length > 0}
-            fallback={<p class="ap-muted">{t("app.history.empty")}</p>}
+            fallback={
+              // Older pages may still hold events: "nothing yet" only when
+              // the server has nothing more to read.
+              <p class="ap-muted">{props.hasMore ? t("app.history.emptyPage") : t("app.history.empty")}</p>
+            }
           >
             <ol class="ap-history" data-testid="app-history-list">
               <For each={props.events}>

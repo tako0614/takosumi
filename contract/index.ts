@@ -180,6 +180,7 @@ export type {
   RunLogsResponse,
   RunPolicyLayer,
   RunPolicyReason,
+  RunPlanOrigin,
   RunPolicyReasonCode,
   RunPolicyStatus,
   RunType,

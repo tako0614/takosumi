@@ -237,6 +237,7 @@ export function projectPlanRun(
     ...runEnvironmentEvidence(planRun),
     policyStatus: policyStatusFor(planRun.policy.status),
     ...(policyReasons ? { policyReasons } : {}),
+    ...(planRun.origin ? { origin: planRun.origin } : {}),
     ...(planRun.requiresApproval === true || type === "destroy_plan"
       ? { requiresApproval: true }
       : {}),

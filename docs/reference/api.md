@@ -327,7 +327,7 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
 
 `GET /api/v1/capsules/{capsuleId}/app` は、インストール済みのアプリを1つの見え方として
 返します。状態 (`state`) と主操作 (`primaryAction`) は control plane が Capsule、
-この Capsule の最新の計画・デプロイ Run、版の更新処理、ProviderConnection、
+この Capsule の最新の計画・デプロイ Run、版の更新処理と途中のインストール、ProviderConnection、
 画面の作成記録から決めます。Workspace 全体の Run の窓には頼りません。
 
 - `state`: `installing` / `installed` / `updating` / `needs_attention` / `stopped` /
@@ -650,6 +650,10 @@ Apply が新しい InstallConfig を認可することはありません。
 `{ code, layer, provider?, resourceType? }` で、`code` と `layer` は決まった値だけを取ります
 （例: `provider_not_allowed` / `provider`、`approval_required_change` / `action`）。
 英文の理由そのものは返しません。分類できない理由は `unclassified` として残ります。
+
+版の変更・以前の版への巻き戻し・設定の変更から作られた計画の Run には `origin` が付きます
+（`{ kind: "revision", ref }` / `{ kind: "rollback", stateVersionId }` / `{ kind: "configuration" }`）。
+失敗した変更をやり直すクライアントは、Source の既定 ref ではなく同じ変更をもう一度計画します。
 
 ### 認証情報と Output の共有
 

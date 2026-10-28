@@ -348,6 +348,17 @@ export interface GitInstallPlanStore {
     workspaceId: string,
   ): Promise<boolean>;
   /**
+   * Whether an install or revision coordinator row bound to this Capsule may
+   * still create or plan on it: any phase except the terminal `failed`,
+   * `reviewable` and `discarded`. An idle `awaiting_input` attempt counts,
+   * since its next advance resumes on this Capsule. Scoped to the Capsule's
+   * Workspace so the read stays on its index.
+   */
+  hasInFlightCoordinatorForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean>;
+  /**
    * Private Workspace-wide quiescence observation. A terminal plan is settled
    * only after both reconciliation lease columns have been cleared.
    */
@@ -469,6 +480,20 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
           plan.operation === "revision" &&
           plan.capsuleId === capsuleId &&
           plan.phase !== "failed" && plan.phase !== "reviewable",
+      ),
+    );
+  }
+
+  hasInFlightCoordinatorForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+  ): Promise<boolean> {
+    return Promise.resolve(
+      Array.from(this.#entries.values()).some(
+        ({ plan }) =>
+          plan.workspaceId === workspaceId &&
+          plan.capsuleId === capsuleId &&
+          !isTerminalGitInstallPlanPhase(plan.phase),
       ),
     );
   }

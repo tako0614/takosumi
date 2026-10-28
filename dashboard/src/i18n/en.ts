@@ -626,6 +626,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.history.approvalWaiting": "Waiting for approval",
   "app.history.waitingBadge": "Waiting",
   "app.history.loadFailed": "Couldn't load the history.",
+  "app.history.emptyPage": "Nothing to show in the most recent records. Show more reads earlier ones.",
   "app.review.doneInstall": "Installed.",
   "app.uninstall.bodyGrace": "Schedules {name} to be uninstalled. Its data stays for {days} days and you can cancel at any time. When that ends, the data is exported where possible and the resources it created are removed.",
   "app.uninstall.confirmGrace": "{name} keeps running and keeps its data for {days} days. Then its data is exported where possible and it is removed. You can cancel until then.",
