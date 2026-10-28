@@ -35,11 +35,21 @@ describe("Store installed app identity", () => {
     }
   });
 
-  test("Store comparison uses the same value-free URL on both sides", () => {
+  test("Store comparison removes userinfo and hash but keeps query identity", () => {
     const selected = { ...source, url: "https://reader:private@git.example.test/team/app.git?variant=one#release" };
-    const summary = app("one", { installedFrom: { ...source, url: "https://git.example.test/team/app.git" } });
-    expect(matchingInstalledApps([summary], selected)).toEqual([summary]);
-    expect(matchingInstalledApps([app("raw", { installedFrom: selected })], source)).toHaveLength(1);
+    const queried = app("queried", { installedFrom: selected });
+    const queryless = app("queryless");
+    expect(matchingInstalledApps([queryless], selected)).toEqual([]);
+    expect(matchingInstalledApps([queried], source)).toEqual([]);
+    expect(matchingInstalledApps([queried], { ...source, url: `${source.url}?variant=two` })).toEqual([]);
+    expect(matchingInstalledApps([queried], { ...source, url: `${source.url}?variant=one` })).toEqual([queried]);
+    expect(matchingInstalledApps([queryless], { ...source, url: "https://reader:private@git.example.test/team/app.git#release" })).toEqual([queryless]);
+  });
+
+  test("a value-free summary marked unmatchable never produces an installed badge", () => {
+    const projected = app("projected", { installedFrom: { ...source, matchable: false } });
+    expect(matchingInstalledApps([projected], source)).toEqual([]);
+    expect(matchingInstalledApps([projected], { ...source, url: `${source.url}?variant=one` })).toEqual([]);
   });
 
   test("value-free identities support URL SSH and scp without exposing userinfo", () => {
@@ -50,7 +60,8 @@ describe("Store installed app identity", () => {
     ]) {
       expect(installedAppSourceUrl(raw!)).toBe(safe!);
       const summary = app("one", { installedFrom: { ...source, url: safe! } });
-      expect(matchingInstalledApps([summary], { ...source, url: raw! })).toEqual([summary]);
+      expect(matchingInstalledApps([summary], { ...source, url: raw! })).toEqual([]);
+      expect(matchingInstalledApps([summary], { ...source, url: raw!.split("?")[0]! })).toEqual([summary]);
     }
     expect(installedAppSourceUrl("file:///private/repo")).toBe("");
   });

@@ -14,7 +14,10 @@ export interface InstalledAppSummary {
   readonly state: CapsuleAppState;
   readonly primaryAction: CapsuleAppAction;
   /** Repository and executable module coordinate. A ref is never identity. */
-  readonly installedFrom: InstallConfigSourceSelector;
+  readonly installedFrom: InstallConfigSourceSelector & {
+    /** Display URL omitted identity-bearing content; do not use it for matching. */
+    readonly matchable?: false;
+  };
 }
 
 export interface ListInstalledAppsResponse {
@@ -22,26 +25,36 @@ export interface ListInstalledAppsResponse {
 }
 
 /**
- * Value-free repository identity for Store discovery only. URL credentials,
- * query and fragment never leave this projection or affect its comparison.
- * This does not replace the executable InstallConfig source selector.
+ * Value-free display URL. Query content is not public-safe; callers must
+ * mark a summary unmatchable when removing it loses executable identity.
  * scp keeps its relative-path spelling separate from ssh:// absolute paths.
  */
 export function installedAppSourceUrl(value: string): string {
+  return sourceUrl(value, false);
+}
+
+/** Whether the display URL retains enough identity for exact Store matching. */
+export function installedAppSourceIsMatchable(value: string): boolean {
+  const identity = sourceUrl(value, true);
+  return identity !== "" && identity === installedAppSourceUrl(value);
+}
+
+/** Comparison removes userinfo and fragment, retaining executable URL queries. */
+function sourceUrl(value: string, preserveQuery: boolean): string {
   const trimmed = value.trim();
   if (/[\\\r\n\0]/u.test(trimmed)) return "";
   if (!trimmed.includes("://")) {
     // Accept both source spelling (git@host:path) and its already-projected
     // host:path spelling so normalization is idempotent.
-    const scp = /^(?:[^@/:]+@)?([^@/:?#\s]+):([^?#]+)(?:[?#].*)?$/u.exec(trimmed);
-    return scp ? `${scp[1]!.toLowerCase()}:${scp[2]!}` : "";
+    const scp = /^(?:[^@/:]+@)?([^@/:?#\s]+):([^?#]+)(\?[^#]*)?(?:#.*)?$/u.exec(trimmed);
+    return scp ? `${scp[1]!.toLowerCase()}:${scp[2]!}${preserveQuery ? scp[3] ?? "" : ""}` : "";
   }
   try {
     const url = new URL(trimmed);
     if (!["https:", "http:", "ssh:"].includes(url.protocol) || !url.hostname) return "";
     url.username = "";
     url.password = "";
-    url.search = "";
+    if (!preserveQuery) url.search = "";
     url.hash = "";
     return url.toString();
   } catch {
@@ -56,9 +69,10 @@ export function matchingInstalledApps<T extends InstalledAppSummary>(
 ): readonly T[] {
   return apps.filter((app) =>
     app.state !== "uninstalled" &&
+    app.installedFrom.matchable !== false &&
     installConfigSourceCoordinateMatches(
-      { ...app.installedFrom, url: installedAppSourceUrl(app.installedFrom.url) },
-      { ...coordinate, url: installedAppSourceUrl(coordinate.url) },
+      { ...app.installedFrom, url: sourceUrl(app.installedFrom.url, true) },
+      { ...coordinate, url: sourceUrl(coordinate.url, true) },
     ),
   );
 }

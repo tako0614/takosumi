@@ -254,8 +254,10 @@ membership 行数です。Workspace-scoped credential では利用できませ�
 `GET /api/v1/workspaces/{workspaceId}/installed-apps` に query parameter はありません。その Workspace を
 読める利用者に、destroyed を除くアプリを `{ installedApps: [...] }` で返します。各行は
 `capsuleId`、`name`、任意の `displayName`（`{ja,en}`）と `iconUrl`、`state`、`primaryAction`、
-`installedFrom: {url,path}` を持ちます。URL は認証情報を含まず、`path` はリポジトリから見た
-実行する module のフォルダです。ref は照合に使いません。ストアは正規化した Git URL と module
+`installedFrom: {url,path,matchable?}` を持ちます。URL は認証情報・query・fragment を含まず、`path` はリポジトリから見た
+実行する module のフォルダです。元の URL が query を含むなど、表示用 URL から正確に照合できない行には
+`matchable: false` を付け、導入済みの照合から除外します。アプリの ID や要約は引き続き返します。
+ref は照合に使いませんが、query は実行元の identity の一部として保持します。ストアは正規化した Git URL と module
 で照合し、「インストール済み」の件数と「開く」、副操作の「もう1つ入れる」を表示します。
 追加したものは独立したアプリで、データや設定は共有しません。
 

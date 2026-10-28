@@ -59,7 +59,7 @@ test("installed-apps summarizes each live install by executable module without v
   expect(body.installedApps).toHaveLength(3);
   expect(body.installedApps.find((app) => app.capsuleId === "cap_first")).toEqual({
     capsuleId: "cap_first", name: "cap_first", state: "installed", primaryAction: "view_resources",
-    installedFrom: { url: "https://git.example.test/team/app.git", path: "subtree/deploy/app" },
+    installedFrom: { url: "https://git.example.test/team/app.git", path: "subtree/deploy/app", matchable: false },
   });
   expect(body.installedApps.find((app) => app.capsuleId === "cap_second")?.installedFrom.path).toBe("subtree/deploy/app");
   expect(body.installedApps.find((app) => app.capsuleId === "cap_other_module")?.installedFrom.path).toBe("subtree/deploy/other");
@@ -73,11 +73,11 @@ test("installed-apps derives old configs from the Source and selected module", a
   const h = await fixture(false);
   const body = await (await h.request()).json() as ListInstalledAppsResponse;
   expect(body.installedApps.find((app) => app.capsuleId === "cap_first")?.installedFrom).toEqual({
-    url: "https://git.example.test/team/app.git", path: "deploy/app",
+    url: "https://git.example.test/team/app.git", path: "deploy/app", matchable: false,
   });
 });
 
-test("value-free route summaries match queried HTTPS, SSH and scp Store coordinates", async () => {
+test("queried Sources stay visible by id without matching queryless Store coordinates", async () => {
   for (const url of [
     "https://git.example.test/team/app.git?variant=one",
     "ssh://git@git.example.test/team/app.git?token=private-token#private-fragment",
@@ -85,12 +85,28 @@ test("value-free route summaries match queried HTTPS, SSH and scp Store coordina
   ]) {
     const h = await fixture(true, url);
     const body = await (await h.request()).json() as ListInstalledAppsResponse;
-    expect(matchingInstalledApps(body.installedApps, { url, path: "subtree/deploy/app" })
-      .map((app) => app.capsuleId).sort()).toEqual(["cap_first", "cap_second"]);
+    expect(body.installedApps.map((app) => app.capsuleId).sort()).toEqual(["cap_first", "cap_other_module", "cap_second"]);
+    expect(body.installedApps.every((app) => app.installedFrom.matchable === false)).toBe(true);
+    expect(matchingInstalledApps(body.installedApps, { url, path: "subtree/deploy/app" })).toEqual([]);
+    expect(matchingInstalledApps(body.installedApps, { url: url.split("?")[0]!, path: "subtree/deploy/app" })).toEqual([]);
     const encoded = JSON.stringify(body);
     for (const value of ["git@", "private-token", "private-fragment", "variant=one"]) {
       expect(encoded).not.toContain(value);
     }
+  }
+});
+
+test("queryless HTTPS, SSH and scp summaries keep their shape and match normally", async () => {
+  for (const url of [
+    "https://git.example.test/team/app.git",
+    "ssh://git@git.example.test/team/app.git",
+    "git@git.example.test:team/app.git",
+  ]) {
+    const h = await fixture(true, url);
+    const body = await (await h.request()).json() as ListInstalledAppsResponse;
+    expect(body.installedApps.every((app) => !("matchable" in app.installedFrom))).toBe(true);
+    expect(matchingInstalledApps(body.installedApps, { url, path: "subtree/deploy/app" })
+      .map((app) => app.capsuleId).sort()).toEqual(["cap_first", "cap_second"]);
   }
 });
 
