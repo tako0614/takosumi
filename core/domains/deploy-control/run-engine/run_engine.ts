@@ -10434,6 +10434,7 @@ export class RunEngine {
       throw new ArtifactLedgerTailAmbiguousError(input.applyRun.id, error);
     }
     if (committed.applyRunLeaseLost) return "lease_lost";
+    if (committed.capsule && stateVersion) await this.#convergeSourceLaneAfterCommit(committed.capsule);
     await this.#notifyTerminal(failed);
     return {
       failed,
