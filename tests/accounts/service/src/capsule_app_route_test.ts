@@ -508,8 +508,8 @@ const LINK_REQUIREMENT: CapsuleRequiredInterface = {
   delivery: { type: "none" },
 };
 
-async function linkedFixture() {
-  const h = await fixture({ requiredInterfaces: [LINK_REQUIREMENT] });
+async function linkedFixture(requirement = LINK_REQUIREMENT, consent = LINK_REQUIREMENT.permissions) {
+  const h = await fixture({ requiredInterfaces: [requirement] });
   const provider = await seedCapsuleModel(h.ledger, {
     workspaceId: WORKSPACE,
     capsuleId: "cap_link_provider",
@@ -565,8 +565,8 @@ async function linkedFixture() {
     consumerCapsuleId: CAPSULE,
     requirementKey: LINK_REQUIREMENT.key,
     interface: LINK_REQUIREMENT.interface,
-    requestedPermissions: LINK_REQUIREMENT.permissions,
-    approvedPermissions: LINK_REQUIREMENT.permissions,
+    requestedPermissions: consent,
+    approvedPermissions: consent,
     deliveryType: "none",
     providerInterfaceId: iface.metadata.id,
     providerCapsuleId: provider.capsule.id,
@@ -613,6 +613,21 @@ test("app links show exact current providers, permissions and value-free display
   expect(JSON.stringify(app)).not.toContain("must-not-be-projected");
   expect(JSON.stringify(app)).not.toContain("requestedBy");
   expect(JSON.stringify(app)).not.toContain("approvedBy");
+});
+
+test("link health accepts reordered and reduced permission sets and identifies an increase", async () => {
+  for (const permissions of [["data.write", "data.read"], ["data.read"]]) {
+    const h = await linkedFixture({ ...LINK_REQUIREMENT, permissions }, ["data.read", "data.write"]);
+    const app = await h.app();
+    expect(app.links.uses[0]).toMatchObject({ health: "ok", permissions });
+    expect(app.problems).toEqual([]);
+  }
+  const increased = await linkedFixture({
+    ...LINK_REQUIREMENT, permissions: ["data.read", "data.write"],
+  });
+  const app = await increased.app();
+  expect(app.links.uses[0].health).toBe("reapproval_required");
+  expect(app.problems).toMatchObject([{ code: "interface_link_unavailable", severity: "warning" }]);
 });
 
 test("a provider uninstall degrades its link without changing consent, and removal requires repair", async () => {

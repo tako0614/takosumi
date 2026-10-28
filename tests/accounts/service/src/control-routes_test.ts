@@ -1099,6 +1099,7 @@ test("Capsule abandon action is idempotent and never falls through to a destroy 
       getCapsule: async () => capsule,
       abandonUnappliedCapsule: async () => {
         abandonCalls += 1;
+        revokeCalls += 1;
         capsule = { ...capsule, status: "destroyed" as const };
         return capsule;
       },
@@ -1134,7 +1135,7 @@ test("Capsule abandon action is idempotent and never falls through to a destroy 
     alreadyDeleted: true,
     capsule: { id: "cap_1", status: "destroyed" },
   });
-  expect(abandonCalls).toBe(1);
+  expect(abandonCalls).toBe(2);
   expect(revokeCalls).toBe(2);
   expect(destroyPlanCalls).toBe(0);
 });
@@ -1149,6 +1150,7 @@ test("unapplied Capsule DELETE revokes links and replays revocation", async () =
       ...fixture.operations.capsules,
       getCapsule: async () => capsule,
       abandonUnappliedCapsule: async () => {
+        revokeCalls += 1;
         capsule = { ...capsule, status: "destroyed" as const };
         return capsule;
       },

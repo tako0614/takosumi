@@ -739,9 +739,25 @@ test("v75 D1 without interface_links permits OIDC sign-in and Capsule retirement
   const { SqliteFakeD1 } = await import("../../../helpers/deploy-control/sqlite_fake_d1.ts");
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
-  const service = new InterfaceService({ stores: createD1InterfaceStores(db) });
+  const stores = createD1InterfaceStores(db);
+  const service = new InterfaceService({ stores });
+  const requiredInterface = { key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } } as const;
+  expect(await stores.interfaces.create({
+    apiVersion: "takosumi/v1alpha1",
+    kind: "Interface",
+    metadata: { id: "if_v75_candidate", workspaceId, ownerRef: { kind: "Capsule", id: "provider" }, name: "provider", generation: 1, createdAt: "2026-10-28T00:00:00.000Z", updatedAt: "2026-10-28T00:00:00.000Z" },
+    spec: { type: requiredInterface.interface.type, version: requiredInterface.interface.version, document: {}, access: { visibility: "workspace" } },
+    status: { phase: "Resolved", observedGeneration: 1, resolvedRevision: 1 },
+  })).toBe(true);
+  expect(await service.listInterfaceLinkCandidates({ workspaceId, capsuleId, requirement: requiredInterface })).toEqual([]);
+  await expect(service.ensureCapsuleInterfaceLinks({
+    workspaceId,
+    capsuleId,
+    requirements: [requiredInterface],
+    selections: [{ requirementKey: "ai", interfaceId: "if_unavailable", selection: "auto_single" }],
+  })).rejects.toMatchObject({ code: "failed_precondition" });
   const { store, operations, installConfig } = await liveGrantFixture();
-  installConfig.requiredInterfaces = [{ key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } }];
+  installConfig.requiredInterfaces = [requiredInterface];
   const currentClient = store.findOidcClient(clientId)!;
   store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
   operations.interfaces!.ensureCapsuleRequiredInterfaces = service.ensureCapsuleRequiredInterfaces.bind(service);

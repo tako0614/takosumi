@@ -502,10 +502,15 @@ permissions、値を含まない候補、`choice`、`autoSelected` を返しま�
 この選択に保存し、Capsule 作成の直後に固定した InterfaceLink を作ります。以後は候補を解決し直しません。
 
 表示した自動選択を確認するときは、`continue: true` と一緒に
-`observedInterfaces: [{requirementKey,interfaceId}]` を返します。明示した `interfaceLinks` が
-ある requirement はそちらを優先し、それ以外で表示した ID が唯一の候補でなくなっていれば
-409 `interface_candidate_unavailable` を返します。最新の sheet を GET して確認し直してください。
-この観測情報は ID だけで、`options` への保存や権限の付与は行いません。
+`observedInterfaces: [{requirementKey,candidateIds}]` を返します。明示した `interfaceLinks` が
+ある requirement はそちらを優先し、それ以外で送信した候補 ID 集合が現在の候補と異なれば
+409 を返します。sheet を開いた後に候補が変わっていても、送信時点の候補集合と一致すれば
+受け付けます。`implicitInterfaceKeys` は確認 sheet で選択済みの暗黙選択（候補が一つのときの
+自動選択や「後で設定」）の requirement key を示します。この観測情報は ID だけで、`options` への
+保存や権限の付与は行いません。
+Control D1 が Interface link store の導入前（schema v76 未満）の場合は候補を表示せず、
+`linkStoreUnavailable: true` と設定案内を返します。「後で設定」を選ぶと Capsule 作成前に
+リンクを作らずに進みます。導入前の候補 ID を明示しても Capsule 作成前に拒否します。
 
 試行には Capsule ができるまで `expiresAt` があり、Capsule ができた試行は失効しません。
 GET と一覧は書き込みをしません。期限切れ（`install_attempt_expired`）や、待っている間の

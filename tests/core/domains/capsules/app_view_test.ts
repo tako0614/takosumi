@@ -569,6 +569,28 @@ test("a failed run takes priority over link repair, while an unapplied plan keep
   expect(transient.problems[0]?.severity).toBe("warning");
 });
 
+test("an unapplied review does not hide connection or Capsule errors", () => {
+  const review = run({ type: "plan", status: "succeeded" });
+  const connection = deriveCapsuleAppStatus(facts({
+    capsule: UNAPPLIED,
+    latestRun: review,
+    connectionIssues: [{ provider: "test/provider", status: "missing" }],
+    interfaceLinks: [{ ...LINK, health: "provider_removed" }],
+  }));
+  expect(connection.state).toBe("needs_attention");
+  expect(connection.primaryAction).toBe("fix_connection");
+  expect(connection.problems.map((problem) => problem.code)).toEqual([
+    "connection_unavailable", "interface_link_unavailable",
+  ]);
+  const errored = deriveCapsuleAppStatus(facts({
+    capsule: { ...UNAPPLIED, status: "error" },
+    latestRun: review,
+  }));
+  expect(errored.state).toBe("needs_attention");
+  expect(errored.primaryAction).toBe("retry");
+  expect(errored.problems[0]?.code).toBe("capsule_error");
+});
+
 test("problems carry the exact Run, connection, blocked reason and teardown Run", () => {
   const failed = deriveCapsuleAppStatus(facts({
     latestRun: run({ id: "run_failed_1", type: "apply", status: "failed", errorCode: "credential_mint_failed" }),

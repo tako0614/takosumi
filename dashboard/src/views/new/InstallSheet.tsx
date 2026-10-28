@@ -479,6 +479,9 @@ export function InstallScreen(props: {
         <Show when={requirement().permissions.length > 0}>
           <p class="iv-muted">{t("installStore.interfaces.permissions")}: {requirement().permissions.map(interfaceLabel).join(", ")}</p>
         </Show>
+        <Show when={requirement().linkStoreUnavailable}>
+          <p class="iv-muted" data-testid="install-interface-store-unavailable">{t("installStore.interfaces.storeUnavailable")}</p>
+        </Show>
         <Show when={duplicate()}>
           <p class="iv-muted">{t("installStore.interfaces.duplicate")}</p>
         </Show>

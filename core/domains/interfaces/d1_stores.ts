@@ -437,6 +437,8 @@ class D1InterfaceLinkStore implements InterfaceLinkStore {
 
   constructor(readonly db: D1Like, readonly schema: D1InterfaceLinkSchema) {}
 
+  available(): Promise<boolean> { return this.schema.available(); }
+
   async create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean> {
     await this.schema.require();
     if (record.generation !== 1 || !isCurrentInterfaceLink(record)) return false;

@@ -33,6 +33,7 @@ let automaticSourceCounter = 0;
 
 function build(
   store: OpenTofuControlStore = new InMemoryOpenTofuControlStore(),
+  revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>,
 ) {
   let counter = 0;
   const newId = (prefix: string) =>
@@ -41,6 +42,7 @@ function build(
     store,
     newId,
     now: () => new Date(NOW),
+    revokeCapsuleInterfaceLinks,
   });
   STORE_BY_SERVICE.set(service, store);
   return { store, service };
@@ -575,7 +577,10 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
     ],
     { onRelease: () => (releaseCalls += 1) },
   );
-  const { service } = build(store);
+  const revoked: string[] = [];
+  const { service } = build(store, async (workspaceId, capsuleId) => {
+    revoked.push(`${workspaceId}:${capsuleId}`);
+  });
   await seedWorkspaceAndSource(store);
   const capsule = await createInitialCapsule(service, {
     capsuleId: "cap_test00000001",
@@ -605,6 +610,7 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
   );
 
   expect(abandoned.status).toBe("destroyed");
+  expect(revoked).toEqual([`ws_1:${capsule.id}`]);
   expect((await store.getCapsule(capsule.id))?.status).toBe("destroyed");
   expect(
     (await store.getPublicHostReservation("shop.app.example"))?.status,
@@ -625,6 +631,27 @@ test("abandonUnappliedCapsule closes the ledger and bindings without mutating hi
       })
     ).id,
   ).not.toBe(capsule.id);
+});
+
+test("abandonUnappliedCapsule retries Interface revocation after commit acknowledgement loss", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let revokeCalls = 0;
+  const { service } = build(store, async () => {
+    revokeCalls += 1;
+    if (revokeCalls === 1) throw new Error("lost Interface revocation acknowledgement");
+  });
+  await seedWorkspaceAndSource(store);
+  const capsule = await createInitialCapsule(service, {
+    capsuleId: "cap_abandon_revoke_retry",
+    providerBindingSetId: "pbind_abandon_revoke_retry",
+    installConfig: initialInstallConfig("cfg_abandon_revoke_retry"),
+  });
+  await expect(service.abandonUnappliedCapsule(capsule.id, "test retry"))
+    .rejects.toThrow("lost Interface revocation acknowledgement");
+  expect((await store.getCapsule(capsule.id))?.status).toBe("destroyed");
+  const retried = await service.abandonUnappliedCapsule(capsule.id, "test retry");
+  expect(retried.status).toBe("destroyed");
+  expect(revokeCalls).toBe(2);
 });
 
 test("Capsule status patches cannot retire or resurrect a Capsule", async () => {

@@ -721,15 +721,6 @@ async function discardAttemptRecord(
       throw error;
     }
   }
-  if (check.capsule) {
-    // Also repair a prior discard that abandoned the Capsule before its link
-    // revocation acknowledgement was received.
-    await ctx.operations.interfaces?.revokeCapsuleInterfaceLinks?.(
-      observed.workspaceId,
-      check.capsule.id,
-      "install_discarded",
-    );
-  }
   const completedAt = new Date().toISOString();
   const {
     initialVariables: _initialVariables,
@@ -1178,20 +1169,25 @@ async function continueInstallAttempt(
       connectionRequirements(ctx.operations, next),
       interfaceRequirements(ctx.operations, next),
     ]);
-    if (observedInterfaces.some((entry) => {
+    const changedObserved = observedInterfaces.some((entry) => {
       if (next.options.interfaceLinks?.some((answer) =>
         answer.requirementKey === entry.requirementKey
       )) return false;
-      const captured = facts?.autoInterfaceCandidates?.find((row) => row.requirementKey === entry.requirementKey);
-      return !captured || JSON.stringify(captured.candidateIds) !== JSON.stringify(entry.candidateIds);
-    }) || facts?.autoInterfaceCandidates?.some((captured) => {
+      const row = interfaces.find((candidateRow) => candidateRow.requirementKey === entry.requirementKey);
+      return !row || JSON.stringify(row.candidates.map((candidate) => candidate.id)) !==
+        JSON.stringify(entry.candidateIds);
+    });
+    const changedUnobservedAutoSelection = facts?.autoInterfaceCandidates?.some((captured) => {
       if (next.options.interfaceLinks?.some((answer) =>
         answer.requirementKey === captured.requirementKey
       )) return false;
-      const row = interfaces.find((entry) => entry.requirementKey === captured.requirementKey);
+      const echoed = observedInterfaces.find((entry) => entry.requirementKey === captured.requirementKey);
+      const expectedIds = echoed?.candidateIds ?? captured.candidateIds;
+      const row = interfaces.find((candidateRow) => candidateRow.requirementKey === captured.requirementKey);
       return !row || JSON.stringify(row.candidates.map((candidate) => candidate.id)) !==
-        JSON.stringify(captured.candidateIds);
-    })) {
+        JSON.stringify(expectedIds);
+    });
+    if (changedObserved || changedUnobservedAutoSelection) {
       return await refreshChangedInterfaceCandidates(ctx, observed, next, interfaces);
     }
     if (!connectionsReady(rows)) {
