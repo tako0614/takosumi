@@ -199,3 +199,40 @@ test("shredCredentialDir checks the path before it starts any removal", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("configured relative run roots are normalized before guarded source credential cleanup", async () => {
+  const root = await fixtureRoot();
+  try {
+    const artifacts = new URL("../../runner/lib/artifacts.ts", import.meta.url).href;
+    const util = new URL("../../runner/lib/util.ts", import.meta.url).href;
+    for (const configured of [".", "runs", "./runs", join(root, "absolute-runs")]) {
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { mkdir, stat, writeFile } from "node:fs/promises";
+        import { isAbsolute, join, resolve } from "node:path";
+        import { workspaceForRun } from ${JSON.stringify(artifacts)};
+        import { shredCredentialDir } from ${JSON.stringify(util)};
+        const workspace = workspaceForRun("synthetic-relative-root");
+        const credentials = join(workspace.root, "source-credentials");
+        await mkdir(credentials, { recursive: true });
+        await writeFile(join(credentials, "token"), "synthetic-relative-root-credential");
+        await shredCredentialDir(credentials);
+        console.log(JSON.stringify({ absolute: isAbsolute(workspace.root),
+          expected: workspace.root === join(resolve(process.env.TAKOSUMI_OPENTOFU_RUN_ROOT), "synthetic-relative-root"),
+          removed: await stat(credentials).then(() => false, () => true) }));
+      `], {
+        cwd: root,
+        env: { PATH: Bun.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: Bun.env.HOME ?? "/root",
+          TMPDIR: tmpdir(), TAKOSUMI_OPENTOFU_RUN_ROOT: configured },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ]);
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ absolute: true, expected: true, removed: true });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
