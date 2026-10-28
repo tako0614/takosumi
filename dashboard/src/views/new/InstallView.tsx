@@ -381,7 +381,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
 
   const install = () => {
-    if (installedApps.loading || installedApps.error || !installedApps()) return;
+    if (currentWorkspaceId() && (installedApps.loading || installedApps.error || !installedApps())) return;
     void attempt.start(
       {
         url: gitUrl(),
@@ -508,7 +508,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     variant={existingApps().length > 0 ? "secondary" : "primary"}
                     size="lg"
                     busy={attempt.mutating() === "start"}
-                    disabled={!gitUrl() || installedApps.loading || Boolean(installedApps.error) || (store() !== undefined && listing.loading)}
+                    disabled={!gitUrl() || (Boolean(currentWorkspaceId()) && (installedApps.loading || Boolean(installedApps.error))) || (store() !== undefined && listing.loading)}
                     icon={<PackagePlus size={18} />}
                   >
                     {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}

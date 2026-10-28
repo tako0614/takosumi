@@ -100,12 +100,12 @@ const STR = {
   sourceLocation: { ja: "取得元", en: "Source" },
   openRepo: { ja: "取得元を開く", en: "Open source" },
   installed: { ja: "インストール済み", en: "Installed" },
-  installedCount: { ja: "{count}つインストール済み", en: "{count} installed" },
+  installedCount: { ja: "{count}件インストール済み", en: "{count} installed" },
   open: { ja: "開く", en: "Open" },
-  installAnother: { ja: "もう1つ入れる", en: "Add another" },
+  installAnother: { ja: "もう1つ入れる", en: "Install another" },
   installAnotherHint: {
-    ja: "別のアプリとして新しく追加します。データや設定は共有されません。",
-    en: "This adds a separate app. Its data and settings are not shared.",
+    ja: "別のアプリとして新しくインストールします。データや設定は共有されません。",
+    en: "This installs a separate app. Its data and settings are not shared.",
   },
 } as const;
 
@@ -335,7 +335,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               {s("open", props.locale)}<Show when={installedFor(listing).length > 1}> · {app.name}</Show>
             </a>
           )}</For>
-          <button type="button" class="tcs-btn" onClick={() => props.onConfigure(listing)}>
+          <button type="button" class="tcs-btn" aria-label={`${s("installAnother", props.locale)}: ${pick(listing.name, props.locale)}`} onClick={() => props.onConfigure(listing)}>
             {s("installAnother", props.locale)}
           </button>
           <p class="tcs-installed-hint">{s("installAnotherHint", props.locale)}</p>

@@ -198,7 +198,9 @@ function interfaceLinkProblems(
     return code
       ? [{
           code,
-          severity: code === "interface_link_unavailable" ? "error" : "warning",
+          severity: code === "interface_link_unavailable" && link.health === "provider_removed"
+            ? "error"
+            : "warning",
           requirementKey: link.requirementKey,
           ...(link.linkId ? { interfaceLinkId: link.linkId } : {}),
           ...(link.providerCapsuleId ? { providerCapsuleId: link.providerCapsuleId } : {}),
@@ -353,6 +355,7 @@ export function deriveCapsuleAppStatus(facts: CapsuleAppFacts): CapsuleAppStatus
   if (inFlight || preparing) {
     return status(applied ? "updating" : "installing", "none", sorted);
   }
+  if (!applied && review) return status("installing", "review", sorted);
   if (sorted.some((problem) => problem.severity === "error")) {
     return status(
       "needs_attention",

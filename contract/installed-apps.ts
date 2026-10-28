@@ -1,5 +1,5 @@
 /** Value-free Store matching summaries; no Output or Interface inputs. */
-import type { CapsuleAppAction, CapsuleAppState } from "./capsules.ts";
+import type { CapsuleAppState } from "./capsules.ts";
 import {
   installConfigSourceCoordinateMatches,
   type InstallConfigSourceSelector,
@@ -12,7 +12,6 @@ export interface InstalledAppSummary {
   readonly displayName?: InstallConfigStoreText;
   readonly iconUrl?: string;
   readonly state: CapsuleAppState;
-  readonly primaryAction: CapsuleAppAction;
   /** Repository and executable module coordinate. A ref is never identity. */
   readonly installedFrom: InstallConfigSourceSelector & {
     /** Display URL omitted identity-bearing content; do not use it for matching. */
@@ -62,17 +61,32 @@ function sourceUrl(value: string, preserveQuery: boolean): string {
   }
 }
 
+/** Transport and repository spelling are not part of the Store identity. */
+function matchingSourceUrl(value: string): string {
+  const safe = sourceUrl(value, true);
+  if (!safe) return "";
+  if (!safe.includes("://")) {
+    const separator = safe.indexOf(":");
+    const host = safe.slice(0, separator);
+    const path = safe.slice(separator + 1);
+    return `https://${host}/${path.toLowerCase()}`;
+  }
+  const url = new URL(safe);
+  const transport = url.protocol === "http:" ? "http" : "https";
+  return `${transport}://${url.host}${url.pathname.toLowerCase()}${url.search}`;
+}
+
 /** Matches app identity across versions without equating different modules. */
 export function matchingInstalledApps<T extends InstalledAppSummary>(
   apps: readonly T[],
   coordinate: InstallConfigSourceSelector,
 ): readonly T[] {
   return apps.filter((app) =>
-    app.state !== "uninstalled" &&
+    app.state !== "uninstalled" && app.state !== "installing" &&
     app.installedFrom.matchable !== false &&
     installConfigSourceCoordinateMatches(
-      { ...app.installedFrom, url: sourceUrl(app.installedFrom.url, true) },
-      { ...coordinate, url: sourceUrl(coordinate.url, true) },
+      { ...app.installedFrom, url: matchingSourceUrl(app.installedFrom.url) },
+      { ...coordinate, url: matchingSourceUrl(coordinate.url) },
     ),
   );
 }

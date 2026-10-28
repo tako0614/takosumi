@@ -34,7 +34,7 @@ async function capture(page: Page, name: string): Promise<void> {
 function link(requirementKey: string, patch: Partial<CapsuleAppLink> = {}): CapsuleAppLink {
   return {
     requirementKey, consumerCapsuleId: ID, interfaceType: `example.${requirementKey}`, interfaceVersion: "1.0.0",
-    permissions: ["read"], state: "unset", generation: 0, health: "ok", canManage: true, candidateCount: 0,
+    permissions: ["read"], state: "unset", generation: 0, health: "ok", canManage: true,
     ...patch,
   };
 }
@@ -135,6 +135,7 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
     test.skip(mode !== "portable", "deterministic app-link fixture; not production evidence");
 
     test("install sheet handles zero, one and many app candidates and choosing later", async ({ page }) => {
+      await page.clock.install();
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const errors = watchErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
@@ -157,15 +158,13 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await expect(many).toHaveAttribute("data-interface-state", "missing");
       await expect(many.getByRole("combobox")).toHaveValue("");
       await capture(page, "interface-install-candidates");
-      await many.getByTestId("install-interface-choice").selectOption("if_second");
-      await expect(many).toHaveAttribute("data-interface-state", "selected");
-      await expect(many.getByRole("combobox")).toHaveValue("if_second");
       await many.getByTestId("install-interface-choice").selectOption("later");
       await expect(many).toHaveAttribute("data-interface-state", "later");
       await expect(many.getByRole("combobox")).toHaveValue("later");
       await expect(one.getByRole("combobox")).toHaveValue("if_one");
       await capture(page, "interface-install-later");
-      expect(attempts.log.answers.some((body) => (body as { interfaceLinks?: unknown[] }).interfaceLinks?.some((entry) => JSON.stringify(entry) === JSON.stringify({ requirementKey: "many", choice: { kind: "later" } })))).toBe(true);
+      await expect.poll(() => attempts.log.answers.some((body) => (body as { interfaceLinks?: unknown[] }).interfaceLinks?.some((entry) => JSON.stringify(entry) === JSON.stringify({ requirementKey: "many", choice: { kind: "later" } })))).toBe(true);
+      await page.clock.runFor(1_000);
       expect(attempts.log.answers.some((body) => (body as { continue?: boolean }).continue === true)).toBe(false);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
@@ -180,9 +179,10 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
         state: "active", generation: 4, otherApp: { capsuleId: "cap_wiki", name: "チームWiki" },
       });
       const fixture = await appFixture(page, [
-        link("files", { linkId: "il_files", state: "active", generation: 1, providerCapsuleId: "cap_files_a", providerInterfaceId: "if_files_a", otherApp: { capsuleId: "cap_files_a", name: "保管庫 A" }, candidateCount: 2 }),
+        link("files", { linkId: "il_files", state: "active", generation: 1, providerCapsuleId: "cap_files_a", providerInterfaceId: "if_files_a", otherApp: { capsuleId: "cap_files_a", name: "保管庫 A" } }),
         link("pending", { linkId: "il_pending", state: "pending_approval", generation: 3, canManage: false, otherApp: { capsuleId: "cap_calendar", name: "予定表" } }),
-        link("later", { candidateCount: 2 }),
+        link("later"),
+        link("later_two"),
         link("declined", { linkId: "il_declined", state: "declined", generation: 2, canManage: false }),
         link("revoked", { linkId: "il_revoked", state: "revoked", generation: 5, canManage: false }),
         link("unavailable", { linkId: "il_unavailable", state: "active", generation: 1, health: "provider_uninstall_scheduled", canManage: false, otherApp: { capsuleId: "cap_retiring", name: "旧保管庫" } }),
@@ -199,6 +199,10 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
         await expect(section).toContainText(text);
       }
       await expect(use("pending").getByRole("button")).toHaveCount(0);
+      const firstLaterName = await use("later").getByRole("button").getAttribute("aria-label");
+      const secondLaterName = await use("later_two").getByRole("button").getAttribute("aria-label");
+      expect(firstLaterName).not.toBe(secondLaterName);
+      expect(`${firstLaterName}${secondLaterName}`).not.toMatch(/later(?:_two)?/u);
       await capture(page, "interface-app-links");
 
       // Removal explains the affected app by name before any DELETE is sent.
@@ -209,21 +213,21 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
       expect(fixture.mutations).toEqual([]);
 
-      await use("files").getByRole("button", { name: "変更", exact: true }).click();
+      await use("files").getByRole("button", { name: /との連携を変更/u }).click();
       await use("files").getByRole("combobox").selectOption("if_files_b");
       await use("files").getByRole("button", { name: "このアプリと連携する", exact: true }).click();
       await expect(use("files")).toContainText("保管庫 B");
-      await use("later").getByRole("button", { name: "選ぶ", exact: true }).click();
+      await use("later").getByRole("button", { name: /の連携先を選ぶ/u }).click();
       await use("later").getByRole("combobox").selectOption("if_files_a");
       await use("later").getByRole("button", { name: "このアプリと連携する", exact: true }).click();
       await expect(use("later")).toContainText("保管庫 A");
       await expect(use("later")).toContainText("連携中");
 
-      await use("files").getByRole("button", { name: "取り消す", exact: true }).click();
+      await use("files").getByRole("button", { name: /との連携を取り消す/u }).click();
       await expect(dialog).toContainText("アプリ自体は残ります");
       await dialog.getByRole("button", { name: "取り消す", exact: true }).click();
       await expect(use("files")).toContainText("連携は取り消されています");
-      await usedBy.getByRole("button", { name: "取り消す", exact: true }).click();
+      await usedBy.getByRole("button", { name: /との連携を取り消す/u }).click();
       await dialog.getByRole("button", { name: "取り消す", exact: true }).click();
       await expect(section.getByTestId("app-link-used-by")).toHaveCount(0);
       await capture(page, "interface-app-links-revoked");

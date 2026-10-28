@@ -3,7 +3,7 @@ import { installedAppSourceUrl, matchingInstalledApps, type InstalledAppSummary 
 
 const source = { url: "https://git.example.test/team/app.git", path: "deploy/app" };
 function app(id: string, overrides: Partial<InstalledAppSummary> = {}): InstalledAppSummary {
-  return { capsuleId: id, name: id, state: "installed", primaryAction: "open", installedFrom: source, ...overrides };
+  return { capsuleId: id, name: id, state: "installed", installedFrom: source, ...overrides };
 }
 
 describe("Store installed app identity", () => {
@@ -27,9 +27,10 @@ describe("Store installed app identity", () => {
   });
 
   test("destroyed apps and unsafe paths never count; scheduled removals still count", () => {
-    const removed = app("gone", { state: "uninstalled", primaryAction: "reinstall" });
-    const scheduled = app("scheduled", { state: "uninstall_scheduled", primaryAction: "cancel_uninstall" });
-    expect(matchingInstalledApps([removed, scheduled], source)).toEqual([scheduled]);
+    const removed = app("gone", { state: "uninstalled" });
+    const neverApplied = app("new", { state: "installing" });
+    const scheduled = app("scheduled", { state: "uninstall_scheduled" });
+    expect(matchingInstalledApps([removed, neverApplied, scheduled], source)).toEqual([scheduled]);
     for (const path of ["../deploy/app", "/deploy/app", "deploy/../app", ""]) {
       expect(matchingInstalledApps([app("one")], { ...source, path })).toEqual([]);
     }
@@ -50,6 +51,13 @@ describe("Store installed app identity", () => {
     const projected = app("projected", { installedFrom: { ...source, matchable: false } });
     expect(matchingInstalledApps([projected], source)).toEqual([]);
     expect(matchingInstalledApps([projected], { ...source, url: `${source.url}?variant=one` })).toEqual([]);
+  });
+
+  test("owner and repo case and scp/HTTPS spellings name the same repository", () => {
+    const selected = app("one", { installedFrom: { ...source, url: "git@git.example.test:Team/App.git" } });
+    expect(matchingInstalledApps([selected], { ...source, url: "https://git.example.test/team/app" })).toEqual([selected]);
+    expect(matchingInstalledApps([selected], { ...source, url: "https://git.example.test/Team/Other" })).toEqual([]);
+    expect(matchingInstalledApps([selected], { ...source, url: "http://git.example.test/team/app" })).toEqual([]);
   });
 
   test("value-free identities support URL SSH and scp without exposing userinfo", () => {
