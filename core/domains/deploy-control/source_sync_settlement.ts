@@ -106,6 +106,9 @@ export async function observeSourceSyncSettlement(
   terminalRun: SourceSyncRun,
   observedCapsules: readonly Capsule[],
 ): Promise<SourceSyncSettlementObservation> {
+  if (terminalRun.status !== "succeeded" || !terminalRun.finishedAt) {
+    throw new SourceSyncSettlementConflictError();
+  }
   // Stores supply a bounded non-destroyed census (at most limit + 1 rows),
   // using their native query/Map boundary rather than loading all tombstones.
   const capsules = structuredClone(observedCapsules);
@@ -150,7 +153,7 @@ export async function observeSourceSyncSettlement(
       (adopted.origin === "git" && snapshot.origin === "git" &&
         adopted.sourceId === snapshot.sourceId && adopted.url === snapshot.url &&
         adopted.resolvedCommit === snapshot.resolvedCommit)) continue;
-    const updated: Capsule = { ...capsule, status: "stale", updatedAt: snapshot.fetchedAt };
+    const updated: Capsule = { ...capsule, status: "stale", updatedAt: terminalRun.finishedAt };
     changes.push({
       capsule: updated,
       activity: {
@@ -170,7 +173,7 @@ export async function observeSourceSyncSettlement(
           ref: terminalRun.ref,
           path: terminalRun.path,
         },
-        createdAt: snapshot.fetchedAt,
+        createdAt: terminalRun.finishedAt,
       },
     });
   }

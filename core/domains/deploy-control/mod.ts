@@ -119,7 +119,7 @@ import type {
   SourceSyncPhaseTiming,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import type { Page, PageParams } from "takosumi-contract/pagination";
+import type { PageParams } from "takosumi-contract/pagination";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import {
@@ -921,6 +921,14 @@ export interface OpenTofuRunner {
    * ledger queued indefinitely.
    */
   sourceSync?(job: OpenTofuSourceSyncJob, control?: RunExecutionControl): Promise<OpenTofuSourceSyncResult>;
+  /** Remove only this SourceSync Run's unused host-allocated archive after canonical settlement. */
+  cleanupUnusedSourceArchive?(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRef: string;
+    readonly canonicalSnapshotId: string;
+  }): Promise<void>;
   /**
    * Expands an immutable SourceSnapshot archive in the Runner Container and
    * returns the OpenTofu source files needed by the Capsule Compatibility
@@ -2513,14 +2521,8 @@ export class OpenTofuController {
     return await this.#runQuery.getRunCost(id);
   }
 
-  async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
-    return await this.#sources.listAutoSyncSources(limit);
-  }
-
-  async listAutoSyncSourcesPage(
-    params: PageParams,
-  ): Promise<Page<Source>> {
-    return await this.#sources.listAutoSyncSourcesPage(params);
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly Source[]> {
+    return await this.#sources.listAutoSyncSourcesDue(limit);
   }
 
   async verifySourceHookSecret(

@@ -8,7 +8,8 @@ as the executable source, but it is never module-path, provider, Connection,
 resource, deployment, or lifecycle authority. A plain Git/OpenTofu app remains
 installable without this file. Source sync validates the repository-root file
 as UTF-8 JSON of at most 128 KiB and records its status and digest in the
-immutable `SourceSnapshot.repositoryManifest`. Public APIs never return the raw
+commit-bound `SourceSnapshot.repositoryManifest`. Valid observations remain fixed;
+missing or invalid observations may be repaired by a same-commit sync. Public APIs never return the raw
 document.
 
 The Git URL, ref, Source subtree, and tracked-regular-file scan at the exact

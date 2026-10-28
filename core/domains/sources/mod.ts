@@ -33,7 +33,6 @@ import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
 import {
   MAX_PAGE_LIMIT,
-  type Page,
   type PageParams,
 } from "takosumi-contract/pagination";
 import {
@@ -45,6 +44,7 @@ import {
   OpenTofuControllerError,
   requireNonEmptyString,
   sourceSyncRequiredError,
+  structuredErrorReason,
 } from "../deploy-control/errors.ts";
 import type {
   OpenTofuControlStore,
@@ -68,7 +68,7 @@ import { evaluateSourceUrl } from "./url-policy.ts";
 import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
-import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
+import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
@@ -82,12 +82,6 @@ const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/iu;
 
 function isImmutableSourceRevision(value: string): boolean {
   return IMMUTABLE_SOURCE_REVISION.test(value);
-}
-
-function shouldScheduleAutoSync(source: StoredSource): boolean {
-  if (source.status !== "active" || !source.autoSync) return false;
-  if (!isImmutableSourceRevision(source.defaultRef)) return true;
-  return !sameGitRef(source.defaultRef, source.lastSeenCommit);
 }
 
 function sameGitRef(left: unknown, right: unknown): boolean {
@@ -518,36 +512,9 @@ export class SourcesService {
     return snapshot;
   }
 
-  /**
-   * Scheduler scan: active sources whose autoSync flag is set, capped at
-   * `limit`. An exact commit remains eligible until one successful sync records
-   * that same commit; after that, polling could not discover a newer revision.
-   * Returns the public Source records (the scheduler only needs the id).
-   */
-  async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
-    const rows = await this.#store.listSources();
-    const out: Source[] = [];
-    for (const row of rows) {
-      if (out.length >= limit) break;
-      if (shouldScheduleAutoSync(row)) {
-        out.push(toPublicSource(row));
-      }
-    }
-    return out;
-  }
-
-  /**
-   * Bounded cross-Workspace scheduler page. The cursor advances across every
-   * row so sparse autoSync populations cannot cause an unbounded cron scan.
-   */
-  async listAutoSyncSourcesPage(params: PageParams): Promise<Page<Source>> {
-    const page = await this.#store.listAllSourcesPage(params);
-    return {
-      items: page.items
-        .filter(shouldScheduleAutoSync)
-        .map(toPublicSource),
-      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-    };
+  /** Least recently attempted eligible Sources, with never-synced Sources first. */
+  async listAutoSyncSourcesDue(limit: number): Promise<readonly Source[]> {
+    return (await this.#store.listAutoSyncSourcesDue(limit)).map(toPublicSource);
   }
 
   /**
@@ -579,13 +546,53 @@ export class SourcesService {
   async createReconciliationSyncs(
     sourceId: string,
   ): Promise<readonly CreateSourceSyncResponse[]> {
-    const stored = await this.#requireSource(sourceId);
+    let stored = await this.#requireSource(sourceId);
+    try {
+      const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+      // Persist the attempt before lineage enumeration or archive allocation:
+      // either can fail before there is a Run to advance the polling cursor.
+      stored = await this.#writeSourceConfiguration({
+        source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
+        expectedSource: stored,
+        expectedWorkspaceManagementAuthority: authority,
+      });
+      return await this.#createReconciliationSyncs(stored, authority);
+    } catch (error) {
+      // Invalid durable configuration cannot make progress on another hourly
+      // poll. Quarantine permanent preparation/lineage failures; infrastructure
+      // errors remain retryable behind later Sources. CAS preserves a repair
+      // made while this attempt was preparing its lanes.
+      if (
+        error instanceof OpenTofuControllerError &&
+        (error.code === "invalid_argument" ||
+          structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON ||
+          structuredErrorReason(error) === "source_reconciliation_capsule_limit")
+      ) {
+        try {
+          const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
+          await this.#writeSourceConfiguration({
+            source: { ...stored, status: "error", updatedAt: this.#now().toISOString() },
+            expectedSource: stored,
+            expectedWorkspaceManagementAuthority: authority,
+          });
+        } catch {
+          // A concurrent repair or management drain wins; report the original
+          // preparation failure and let a later eligible poll reconsider it.
+        }
+      }
+      throw error;
+    }
+  }
+
+  async #createReconciliationSyncs(
+    stored: StoredSource,
+    workspaceManagementAuthority: WorkspaceManagementAuthority,
+  ): Promise<readonly CreateSourceSyncResponse[]> {
+    const sourceId = stored.id;
     // Capture one immutable authority before asynchronous Capsule/lane
     // enumeration. Every reconciliation lane must use this original tuple;
     // taking a fresh epoch after a drain/resume could admit only a subset of
     // the lanes from an obsolete reconciliation request.
-    const workspaceManagementAuthority =
-      await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
     const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
     const addAddress = (ref: string, path: string) => {
       addresses.set(JSON.stringify([ref, path]), { ref, path });
@@ -1611,6 +1618,7 @@ export function toPublicSource(stored: StoredSource): Source {
   const {
     hookSecretHash: _hookSecretHash,
     lastSeenCommit: _lastSeenCommit,
+    lastAutoSyncAttemptAt: _lastAutoSyncAttemptAt,
     ...rest
   } = stored;
   return rest;
@@ -1727,7 +1735,7 @@ function sourceSyncMatchesCoordinator(
 ): boolean {
   return (
     run.id === coordinator.runId &&
-    run.snapshotId === coordinator.snapshotId &&
+    (run.requestedSnapshotId ?? run.snapshotId) === coordinator.snapshotId &&
     run.workspaceId === source.workspaceId &&
     run.sourceId === source.id &&
     run.url === source.url &&

@@ -3666,7 +3666,7 @@ test("D1 historical double-encoded SourceSync held leases finish without authori
       leaseToken: "legacy-held-lease",
       snapshot,
     }),
-  ).toEqual({ won: true, run: terminal, staleCapsules: [] });
+  ).toEqual({ won: true, run: terminal, snapshot, staleCapsules: [] });
   expect(await reopened.getSourceSyncRun(running.id)).toEqual(terminal);
   expect(await reopened.getSourceSnapshot(snapshot.id)).toEqual(snapshot);
   expect(
@@ -3779,7 +3779,7 @@ test("D1 historical double-encoded SourceSync preserves its private authority on
       leaseToken: "legacy-private-lease",
       snapshot,
     }),
-  ).toEqual({ won: true, run: terminal, staleCapsules: [] });
+  ).toEqual({ won: true, run: terminal, snapshot, staleCapsules: [] });
   expect(
     await database
       .prepare(

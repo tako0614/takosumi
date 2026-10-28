@@ -750,6 +750,27 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
+  async cleanupUnusedSourceArchive(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRef: string;
+    readonly canonicalSnapshotId: string;
+  }): Promise<void> {
+    if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
+    const id = this.env.RUNNER.idFromName(input.runId);
+    const response = await this.env.RUNNER.get(id).fetch(
+      new Request(`https://opentofu-runner.internal/runs/${encodeURIComponent(input.runId)}/source-archive/cleanup`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    );
+    if (!response.ok) {
+      throw new Error(`source archive cleanup rejected: ${response.status}`);
+    }
+  }
+
   async readCapsuleSourceFiles(
     job: OpenTofuCapsuleSourceFilesJob,
   ): Promise<readonly OpenTofuCapsuleSourceFile[]> {

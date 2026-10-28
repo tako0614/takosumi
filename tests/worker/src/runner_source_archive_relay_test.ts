@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { expect, test } from "bun:test";
 import type {
   CloudflareWorkerEnv,
   R2Bucket,
@@ -13,6 +13,7 @@ import {
   type ContainerRequestFetcher,
   OpenTofuRunnerObject,
 } from "../../../worker/src/durable/OpenTofuRunnerObject.ts";
+import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const ARCHIVE_BYTES = new Uint8Array([
   0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x02, 0x03,
@@ -20,6 +21,42 @@ const ARCHIVE_BYTES = new Uint8Array([
 const ARCHIVE_KEY =
   "workspaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst";
 const RESOLVED_COMMIT = "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d";
+
+test("source archive cleanup deletes only the terminal Run's unreferenced allocation", async () => {
+  const db = new SqliteFakeD1();
+  await db.exec("create table runs (id text, space_id text, source_id text, type text, status text, lease_token text, run_json text); create table source_snapshots (id text, source_id text, record_json text)");
+  const runId = "sync_cleanup";
+  const allocated = "workspaces/spc_1/sources/src_1/snapshots/snap_new/source.tar.zst";
+  const canonical = ARCHIVE_KEY;
+  const run = { id: runId, workspaceId: "spc_1", sourceId: "src_1", kind: "source_sync",
+    status: "succeeded", archiveRef: allocated, requestedSnapshotId: "snap_new",
+    snapshotId: "snap_1", finishedAt: "2026-06-06T00:00:10.000Z" };
+  await db.prepare("insert into runs values (?, ?, ?, ?, ?, ?, ?)")
+    .bind(runId, "spc_1", "src_1", "source_sync", "succeeded", null, JSON.stringify(run)).run();
+  await db.prepare("insert into source_snapshots values (?, ?, ?)")
+    .bind("snap_1", "src_1", JSON.stringify({ id: "snap_1", sourceId: "src_1", workspaceId: "spc_1", archiveRef: canonical })).run();
+  const source = new FakeR2Bucket();
+  await source.put(allocated, ARCHIVE_BYTES, { customMetadata: { "takosumi-run-id": runId } });
+  await source.put(canonical, ARCHIVE_BYTES, { customMetadata: { "takosumi-run-id": "sync_old" } });
+  const runner = runnerWithContainer(new FakeR2Bucket(), source, {
+    async containerFetch() { throw new Error("cleanup must not start container"); },
+  }, { TAKOSUMI_CONTROL_DB: db });
+  const request = (archiveRef: string) => new Request(`https://runner/runs/${runId}/source-archive/cleanup`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ runId, workspaceId: "spc_1", sourceId: "src_1", archiveRef, canonicalSnapshotId: "snap_1" }),
+  });
+  expect((await runner.fetch(request(canonical))).status).toBe(503);
+  expect(source.body(canonical)).toBeDefined();
+  expect((await runner.fetch(request(allocated))).status).toBe(204);
+  expect(source.body(allocated)).toBeUndefined();
+  expect(source.body(canonical)).toBeDefined();
+  expect((await runner.fetch(request(allocated))).status).toBe(204);
+  await source.put(allocated, ARCHIVE_BYTES, { customMetadata: { "takosumi-run-id": runId } });
+  await db.prepare("insert into source_snapshots values (?, ?, ?)")
+    .bind("snap_shared", "src_1", JSON.stringify({ id: "snap_shared", sourceId: "src_1", workspaceId: "spc_1", archiveRef: allocated })).run();
+  expect((await runner.fetch(request(allocated))).status).toBe(503);
+  expect(source.body(allocated)).toBeDefined();
+});
 
 async function digestOf(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);

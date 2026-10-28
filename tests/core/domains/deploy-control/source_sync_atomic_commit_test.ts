@@ -497,8 +497,12 @@ async function assertSettlementCommitted(
     committed.staleCapsules?.map((capsule) => capsule.id).sort(),
     `${label}: retry stale projection`,
   ).toEqual([...staleCapsuleIds].sort());
-  expect(await store.getSourceSyncRun(RUN_ID), `${label}: committed run`).toEqual(terminal);
-  expect(await store.getSourceSnapshot(SNAPSHOT_ID), `${label}: committed snapshot`).toEqual(snapshot);
+  expect(await store.getSourceSyncRun(RUN_ID), `${label}: committed run`).toEqual(committed.run);
+  expect(committed.snapshot, `${label}: canonical snapshot`).toBeDefined();
+  expect(await store.getSourceSnapshot(committed.snapshot!.id), `${label}: committed snapshot`).toEqual(committed.snapshot);
+  if (committed.snapshot!.id !== SNAPSHOT_ID) {
+    expect(await store.getSourceSnapshot(SNAPSHOT_ID), `${label}: unused allocated snapshot`).toBeUndefined();
+  }
   expect((await store.getSource(SOURCE_ID))?.lastSeenCommit, `${label}: committed cursor`).toBe(snapshot.resolvedCommit);
   for (const capsule of expectedCapsules) {
     const actual = await store.getCapsule(capsule.id);
@@ -594,12 +598,15 @@ test("source-sync settlement atomically projects stale applied Capsules across s
     });
 
     expect(result.won, label).toBe(true);
-    expect(await store.getSourceSyncRun(RUN_ID), `${label}:run`).toEqual(
-      terminal,
-    );
-    expect(await store.getSourceSnapshot(SNAPSHOT_ID), `${label}:snapshot`).toEqual(
-      snapshot,
-    );
+    const canonicalSnapshotId = `snapshot_same_${label}`;
+    expect(await store.getSourceSyncRun(RUN_ID), `${label}:run`).toMatchObject({
+      ...terminal,
+      requestedSnapshotId: SNAPSHOT_ID,
+      snapshotId: canonicalSnapshotId,
+    });
+    expect(result.snapshot?.id, `${label}:snapshot id`).toBe(canonicalSnapshotId);
+    expect(await store.getSourceSnapshot(canonicalSnapshotId), `${label}:snapshot`).toEqual(result.snapshot);
+    expect(await store.getSourceSnapshot(SNAPSHOT_ID), `${label}:allocated snapshot`).toBeUndefined();
     expect((await store.getSource(SOURCE_ID))?.lastSeenCommit, `${label}:cursor`).toBe(
       `new-${label}`,
     );
@@ -698,7 +705,7 @@ test("source-sync settlement may fill a legacy missing Snapshot id without chang
     const terminal = succeededRun(running, `legacy-missing-${label}`);
     const snapshot = sourceSnapshot(terminal.resolvedCommit!);
     expect(await store.commitSourceSyncSuccess({ terminalRun: terminal, leaseToken, snapshot }), label)
-      .toEqual({ won: true, run: terminal, staleCapsules: [] });
+      .toEqual({ won: true, run: terminal, snapshot, staleCapsules: [] });
     expect(await store.getSourceSnapshot(snapshot.id), label).toEqual(snapshot);
   }
 });
@@ -1171,7 +1178,8 @@ test("source-sync success exactly adopts an identical immutable snapshot", async
     });
 
     expect(committed.won, label).toBe(true);
-    expect(await store.getSourceSyncRun(RUN_ID), label).toEqual(terminal);
+    expect(await store.getSourceSyncRun(RUN_ID), label).toEqual(committed.run);
+    expect(committed.snapshot, label).toEqual(snapshot);
     expect(await store.getSourceSnapshot(SNAPSHOT_ID), label).toEqual(snapshot);
   }
 });
@@ -1338,7 +1346,7 @@ test("postgres SourceSync success tolerates a concurrent heartbeat on the same h
   armed = true;
   const result = await store.commitSourceSyncSuccess({ terminalRun: terminal, leaseToken: "same-lease-heartbeat", snapshot });
   expect(interleaved).toBe(true);
-  expect(result).toEqual({ won: true, run: terminal, staleCapsules: [] });
+  expect(result).toEqual({ won: true, run: terminal, snapshot, staleCapsules: [] });
   expect(await store.getSourceSnapshot(SNAPSHOT_ID)).toEqual(snapshot);
 });
 

@@ -126,6 +126,7 @@ function preparationHeaders(reservation?: LocalMutationReservation): Record<stri
 export interface SourceArchiveStore {
   write(key: string, bytes: Uint8Array): Promise<void>;
   read(key: string): Promise<Uint8Array>;
+  delete?(key: string): Promise<void>;
 }
 
 export interface LocalOpenTofuStateArtifact {
@@ -227,6 +228,11 @@ export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
     },
     read: async (key) =>
       new Uint8Array(await readFile(archivePath(normalizedRoot, key))),
+    delete: async (key) => {
+      await unlink(archivePath(normalizedRoot, key)).catch((error) => {
+        if (!isErrno(error, "ENOENT")) throw error;
+      });
+    },
   };
 }
 
@@ -629,6 +635,26 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     private readonly stateStore: LocalOpenTofuStateArtifactStore,
     private readonly transport: RunnerTransport,
   ) {}
+
+  async cleanupUnusedSourceArchive(input: {
+    readonly runId: string;
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRef: string;
+    readonly canonicalSnapshotId: string;
+  }): Promise<void> {
+    const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
+    const allocatedSnapshotId = input.archiveRef.startsWith(prefix)
+      ? input.archiveRef.slice(prefix.length).split("/")[0]
+      : undefined;
+    if (!allocatedSnapshotId ||
+      input.archiveRef !== `${prefix}${allocatedSnapshotId}/source.tar.zst` ||
+      allocatedSnapshotId === input.canonicalSnapshotId ||
+      !this.archiveStore.delete) {
+      throw new Error("source archive cleanup requires a noncanonical allocated key and delete custody");
+    }
+    await this.archiveStore.delete(input.archiveRef);
+  }
 
   async assertPrivateRunFileRefreshCapability(): Promise<void> {
     const controller = new AbortController();

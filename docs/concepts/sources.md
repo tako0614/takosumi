@@ -69,7 +69,7 @@ Authorization bearer を新しい値に置き換えます。secret を URL や q
 forge 側の設定は rotate 後 **即時に更新**してください。更新までの間に旧 secret で届いた
 webhook は `401` となり、変更を取りこぼす可能性があります。取りこぼしがあれば、下の
 [SourceSnapshot の手動同期](#sourcesnapshot-ref-と-commit-は別物)で `POST /api/v1/sources/{sourceId}/sync`
-を `intent: manual_plan` で実行し、同期 Run の成功と新しい snapshot を確認してから plan に進みます。
+を `intent: manual_plan` で実行し、同期 Run の成功と対応する snapshot を確認してから plan に進みます。
 
 ローテーションの commit 後に検証される webhook request では、旧 secret は直ちに無効です。
 すでに認証済みの webhook や進行中の webhook/Run は取り消されません。並行するローテーションは
@@ -104,10 +104,19 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources/src_example/sync" \
 - `manual_plan` — 人が確認する計画のための同期。この同期自体が別の自動更新を
   始めることはありません
 
-同期 Run が `succeeded` になり、その Run の `sourceSnapshotId` が
+同期 Run が `succeeded` になり、その Run の `snapshotId` が
 `/api/v1/sources/{sourceId}/snapshots` に現れてから、互換性確認と計画に進みます。
-**古い snapshot を「最新」として流用してはいけません。** 確認した内容とデプロイする
-内容が一致しなくなります。
+同じ Source の ref/path ごとの最新 snapshot と解決した commit が同じなら、その snapshot ID を
+再利用します。archive と取得元の記録は維持し、未記録または無効だった観測だけを補完します。
+有効な manifest や module の観測が変わった場合は、元の snapshot を変更せず新しい snapshot を作ります。
+再利用によって不要になった今回の archive は、保存先の custody 経路で削除します。
+別の Source の archive は流用しません。
+Run が返した ID を使い、独自に古い snapshot を選び直さないでください。
+
+自動同期は、最後の試行または source_sync Run が古い Source から順に処理します。
+Run 作成前の失敗も試行として記録します。未試行が先で、既定では 1 回 25 件です。
+Workspace が active でない Source と、すでに観測済みの固定 commit は除外します。恒久的に不正な取得座標や適用履歴の
+Source は `error` となり、設定を修復して `active` に戻すまで自動同期の対象から外れます。
 
 dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の
 `.well-known/takosumi.json` entry は input の表示 hint と generic Host API/service request

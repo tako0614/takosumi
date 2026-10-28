@@ -181,6 +181,7 @@ export class SourceLifecycleService {
       );
     }
     if (!this.#shouldProcessRun(run.status, run.heartbeatAt)) {
+      if (run.status === "succeeded") await this.#cleanupUnusedSourceArchive(run);
       return run;
     }
     const claim = await this.#claimSourceSyncRun(run);
@@ -237,10 +238,7 @@ export class SourceLifecycleService {
     }
 
     try {
-      const reuseSnapshot = await this.#latestReusableSourceSnapshot(
-        running,
-        stored,
-      );
+      const reuseSnapshot = await this.#latestReusableSourceSnapshot(running);
       const result = await this.#withSourceSyncRenewal(
         running,
         leaseToken,
@@ -416,12 +414,22 @@ export class SourceLifecycleService {
       // A vanished/lost Run is not a successfully committed observation.
       return terminal.run;
     }
+    const terminalRun = terminal.run ?? succeeded;
+    const canonicalSnapshot =
+      terminal.snapshot ??
+      (terminalRun.snapshotId === snapshot.id
+        ? snapshot
+        : terminalRun.snapshotId
+          ? await this.#store.getSourceSnapshot(terminalRun.snapshotId)
+          : undefined);
+    if (!canonicalSnapshot) return terminalRun;
+    await this.#cleanupUnusedSourceArchive(terminalRun);
     await this.#notifySourceCapsulesStaleForNewSnapshot({
       running,
-      snapshot,
+      snapshot: canonicalSnapshot,
       capsules: terminal.staleCapsules ?? [],
     });
-    return succeeded;
+    return terminalRun;
   }
 
   async #notifySourceCapsulesStaleForNewSnapshot(input: {
@@ -495,6 +503,7 @@ export class SourceLifecycleService {
     if (archiveRef === running.archiveRef) return archiveRef;
     if (
       reuseSnapshot &&
+      reuseSnapshot.sourceId === running.sourceId &&
       archiveRef === reuseSnapshot.archiveRef &&
       result.resolvedCommit === reuseSnapshot.resolvedCommit &&
       result.archiveDigest === reuseSnapshot.archiveDigest &&
@@ -510,45 +519,56 @@ export class SourceLifecycleService {
 
   async #latestReusableSourceSnapshot(
     running: SourceSyncRun,
-    stored: StoredSource,
   ): Promise<SourceSnapshot | undefined> {
-    const snapshots = await this.#store.listSourceSnapshots(running.sourceId);
-    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
-      const snapshot = snapshots[index]!;
-      if (
-        sourceSnapshotMatchesRun(snapshot, running) &&
-        snapshot.repositoryInstallMetadata !== undefined &&
-        snapshot.repositoryManifest !== undefined &&
-        snapshot.repositoryModules !== undefined
-      ) {
-        return snapshot;
-      }
+    const snapshot = await this.#store.getLatestSourceSnapshotForLane({
+      sourceId: running.sourceId,
+      workspaceId: running.workspaceId,
+      url: running.url,
+      ref: running.ref,
+      path: running.path,
+    });
+    return snapshot && sourceSnapshotMatchesRun(snapshot, running)
+      ? snapshot
+      : undefined;
+  }
+
+  async #cleanupUnusedSourceArchive(run: SourceSyncRun): Promise<void> {
+    if (run.status !== "succeeded" || !run.snapshotId) return;
+    try {
+      // Re-read after settlement, including redeliveries. The allocated key is
+      // unique to this Run; a reused snapshot may point at another key.
+      const terminal = await this.#store.getSourceSyncRun(run.id);
+      if (terminal?.status !== "succeeded" ||
+        terminal.snapshotId !== run.snapshotId ||
+        terminal.archiveRef !== run.archiveRef ||
+        !terminal.requestedSnapshotId ||
+        terminal.requestedSnapshotId === terminal.snapshotId) return;
+      const canonical = await this.#store.getSourceSnapshot(run.snapshotId);
+      if (!canonical || canonical.archiveRef === run.archiveRef) return;
+      if (canonical.workspaceId !== run.workspaceId ||
+        canonical.sourceId !== run.sourceId ||
+        canonical.id !== run.snapshotId) return;
+      // A historical/sibling snapshot may retain this exact key. The local
+      // archive adapter cannot consult the ledger itself, so Core fences the
+      // deletion before invoking either host's custody path.
+      if (await this.#store.hasSourceSnapshotArchiveReference(run.archiveRef)) return;
+      const cleanup = this.#runner?.cleanupUnusedSourceArchive;
+      if (!cleanup) throw new Error("runner source archive cleanup capability is unavailable");
+      await cleanup.call(this.#runner, {
+        runId: run.id,
+        workspaceId: run.workspaceId,
+        sourceId: run.sourceId,
+        archiveRef: run.archiveRef,
+        canonicalSnapshotId: canonical.id,
+      });
+    } catch (error) {
+      // Cleanup is retryable by redelivering the already-terminal Run. It must
+      // not change a committed SourceSync success or stale projection.
+      console.error("SourceSync unused archive cleanup failed; redeliver the terminal Run to retry", {
+        runId: run.id,
+        error: errorMessage(error),
+      });
     }
-    if (stored.authConnectionId) return undefined;
-    const siblingSources = (await this.#store.listSources(running.workspaceId))
-      .filter((source) => source.id !== running.sourceId)
-      .filter((source) => !source.authConnectionId)
-      .filter(
-        (source) =>
-          source.status === "active" &&
-          source.url === running.url &&
-          source.defaultRef === running.ref &&
-          source.defaultPath === running.path,
-      );
-    if (siblingSources.length === 0) return undefined;
-    const siblingSnapshots = await this.#store.listSourceSnapshotsBySourceIds(
-      siblingSources.map((source) => source.id),
-    );
-    const reusable = siblingSnapshots
-      .filter(
-        (snapshot) =>
-          sourceSnapshotMatchesRun(snapshot, running) &&
-          snapshot.repositoryInstallMetadata !== undefined &&
-          snapshot.repositoryManifest !== undefined &&
-          snapshot.repositoryModules !== undefined,
-      )
-      .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
-    return reusable.at(-1);
   }
 
   async #failSourceSyncRun(
@@ -663,6 +683,7 @@ function sourceSnapshotMatchesRun(
 ): boolean {
   return (
     snapshot.origin === "git" &&
+    snapshot.sourceId === running.sourceId &&
     snapshot.workspaceId === running.workspaceId &&
     snapshot.url === running.url &&
     snapshot.ref === running.ref &&
@@ -676,10 +697,4 @@ function isExactImmutableGitCommit(value: string): boolean {
 
 function normalizeGitObjectId(value: string): string {
   return value.toLowerCase();
-}
-
-function compareIso(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
 }

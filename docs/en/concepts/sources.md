@@ -106,10 +106,20 @@ There are two values for `intent`.
 - `manual_plan` — a sync for a plan a person is going to read. The sync itself starts no
   other automatic update
 
-Wait until the sync Run reaches `succeeded` and that Run's `sourceSnapshotId` appears
+Wait until the sync Run reaches `succeeded` and that Run's `snapshotId` appears
 under `/api/v1/sources/{sourceId}/snapshots`, then move on to the compatibility check and
-the plan. **Do not reuse an older snapshot as if it were the latest one.** What you
-reviewed and what you apply would stop matching.
+the plan. When the resolved commit matches the newest snapshot in the same Source ref/path
+lane, the sync reuses that snapshot ID. Archive bytes and fetch provenance stay fixed;
+only missing or invalid observations may be repaired. Valid manifest and module observations
+remain fixed; a changed valid observation creates a new snapshot instead. An unused archive
+uploaded for the current Run is deleted through its storage owner's custody path.
+Archives are never reused across Sources. Use the ID returned by the Run.
+
+Automatic polling orders Sources by their latest attempt or source_sync Run creation time,
+including attempts that fail before creating a Run. Never-attempted Sources come first, with
+a default batch of 25. Sources outside active Workspaces and already observed commit pins are
+excluded. Permanently invalid Git coordinates or applied lineage mark the Source `error`; repair its configuration
+and restore `active` to resume automatic polling.
 
 The dashboard reads that scan result and lets the user select a real module. A matching
 entry in `.well-known/takosumi.json` may add input presentation hints and requests for

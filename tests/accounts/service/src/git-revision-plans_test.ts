@@ -153,6 +153,25 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
   expect(denied.status).toBe(403);
 });
 
+test("Git revision recovers a lost sync acknowledgement after same-lane snapshot dedupe", async () => {
+  const fixture = revisionFixture({ loseAckOnce: ["sync"] });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "deduped-revision" },
+  );
+  const planId = (await created.json()).revisionPlan.id as string;
+  await fixture.reconcile(planId);
+  fixture.succeedSourceSync("snap_canonical_previous");
+  let response = await fixture.reconcile(planId);
+  expect((await response.json()).revisionPlan).toMatchObject({
+    phase: "analyzing_compatibility", sourceSnapshotId: "snap_canonical_previous",
+  });
+  await fixture.reconcile(planId);
+  response = await fixture.reconcile(planId);
+  expect((await response.json()).revisionPlan.phase).toBe("reviewable");
+  expect(fixture.counts).toEqual({ sync: 1, compatibility: 1, plan: 1 });
+});
+
 test("Git revision cannot replace an un-applied accepted install review", async () => {
   const fixture = revisionFixture({
     unAppliedInitialInstall: true,
@@ -1185,10 +1204,12 @@ function revisionFixture(
     },
     reconcile: (planId: string) =>
       request(`/api/v1/revision-plans/${planId}/reconcile`, "POST"),
-    succeedSourceSync() {
+    succeedSourceSync(canonicalSnapshotId?: string) {
       const [id, current] = [...syncRuns.entries()][0]!;
+      const snapshotId = canonicalSnapshotId ?? current.snapshotId!;
       const succeeded: SourceSyncRun = {
         ...current,
+        ...(canonicalSnapshotId ? { requestedSnapshotId: current.snapshotId, snapshotId } : {}),
         status: "succeeded",
         resolvedCommit: "a".repeat(40),
         archiveDigest: `sha256:${"b".repeat(64)}`,
@@ -1197,8 +1218,8 @@ function revisionFixture(
         updatedAt: new Date().toISOString(),
       };
       syncRuns.set(id, succeeded);
-      snapshots.set(current.snapshotId!, {
-        id: current.snapshotId!,
+      snapshots.set(snapshotId, {
+        id: snapshotId,
         origin: "git",
         workspaceId: WORKSPACE.id,
         sourceId: source.id,
@@ -1222,7 +1243,7 @@ function revisionFixture(
             },
           ],
         },
-        fetchedByRunId: current.id,
+        fetchedByRunId: canonicalSnapshotId ? "ssr_previous_observation" : current.id,
         fetchedAt: new Date().toISOString(),
       });
     },
