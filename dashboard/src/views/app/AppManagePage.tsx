@@ -782,7 +782,7 @@ export default function AppManagePage(props: {
             : t("app.uninstall.confirmMessage", { name: displayName() }),
         app()?.uninstall.impact?.usedBy.length
           ? t("app.links.uninstallImpact", {
-              apps: app()!.uninstall.impact.usedBy.map((row) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.consumerCapsuleId).join("、"),
+              apps: app()!.uninstall.impact.usedBy.map((row) => row.otherApp?.displayName?.[locale()] || row.otherApp?.name || row.consumerCapsuleId).join(locale() === "ja" ? "、" : ", "),
               name: displayName(),
             })
           : undefined,

@@ -77,7 +77,10 @@ export default function AppLinkedSection(props: {
   };
   const revoke = async (row: CapsuleAppLink) => {
     if (busy() || !(await confirm({
-      title: t("app.links.revokeTitle"), message: t("app.links.revokeHint"),
+      title: t("app.links.revokeTitle"),
+      message: props.app.capsuleId === row.consumerCapsuleId
+        ? t("app.links.revokeHint")
+        : t("app.links.revokeProviderHint", { name: name(row) }),
       confirmText: t("app.links.revoke"), cancelText: t("common.cancel"), danger: true,
     }))) return;
     setBusy(true);
@@ -112,12 +115,12 @@ export default function AppLinkedSection(props: {
           <Show when={row.canManage}>
             <div class="ap-row-actions">
               <Show when={!incoming}>
-                <Button type="button" variant="secondary" disabled={busy() || loading()} onClick={() => void startChoosing(row)}>
+                <Button type="button" variant="secondary" aria-label={t(row.state === "active" ? "app.links.changeNamed" : "app.links.chooseNamed", { name: name(row) })} disabled={busy() || loading()} onClick={() => void startChoosing(row)}>
                   {t(row.state === "active" ? "app.links.change" : "app.links.choose")}
                 </Button>
               </Show>
               <Show when={row.state === "active" || row.state === "pending_approval"}>
-                <Button type="button" variant="ghost" disabled={busy()} onClick={() => void revoke(row)}>{t("app.links.revoke")}</Button>
+                <Button type="button" variant="ghost" aria-label={t("app.links.revokeNamed", { name: name(row) })} disabled={busy()} onClick={() => void revoke(row)}>{t("app.links.revoke")}</Button>
               </Show>
             </div>
           </Show>
@@ -125,7 +128,7 @@ export default function AppLinkedSection(props: {
             <div class="ap-linked-choice" data-testid="app-link-choice">
               <Show when={!loading()} fallback={<Spinner size={18} />}>
                 <Show when={candidates().length > 0} fallback={<p>{t("app.links.noCandidates")}</p>}>
-                  <Select aria-label={t("installStore.interfaces.choose")} value={choice()} disabled={busy()} onChange={(event) => setChoice(event.currentTarget.value)}>
+                  <Select aria-label={t("app.links.selectNamed", { name: name(row) })} value={choice()} disabled={busy()} onChange={(event) => setChoice(event.currentTarget.value)}>
                     <option value="" disabled>{t("installStore.interfaces.choose")}</option>
                     <For each={candidates()}>{(candidate) => <option value={candidate.interfaceId}>{candidate.providerCapsuleName} · {candidate.interfaceName}</option>}</For>
                   </Select>

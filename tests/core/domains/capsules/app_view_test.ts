@@ -242,10 +242,10 @@ const ROWS: readonly Row[] = [
     problems: ["interface_link_unavailable"],
   },
   {
-    name: "a not-ready Interface link provider needs a new selection",
+    name: "a not-ready Interface link provider warns without blocking the app",
     facts: facts({ interfaceLinks: [{ ...LINK, health: "provider_not_ready" }] }),
-    state: "needs_attention",
-    action: "fix_interface_link",
+    state: "installed",
+    action: "view_resources",
     problems: ["interface_link_unavailable"],
   },
   {
@@ -545,6 +545,28 @@ test("link problems identify the requirement to repair and preserve approval war
     ["interface_link_unset", "warning"],
     ["interface_link_unset", "warning"],
   ]);
+});
+
+test("a failed run takes priority over link repair, while an unapplied plan keeps review primary", () => {
+  const failed = deriveCapsuleAppStatus(facts({
+    latestRun: run({ status: "failed" }),
+    interfaceLinks: [{ ...LINK, health: "provider_removed" }],
+  }));
+  expect(failed.primaryAction).toBe("retry");
+  expect(failed.problems.map((problem) => problem.code)).toEqual([
+    "run_failed", "interface_link_unavailable",
+  ]);
+  const reviewing = deriveCapsuleAppStatus(facts({
+    capsule: UNAPPLIED,
+    latestRun: run({ type: "plan", status: "succeeded" }),
+    interfaceLinks: [{ ...LINK, health: "provider_removed" }],
+  }));
+  expect(reviewing.primaryAction).toBe("review");
+  expect(reviewing.state).toBe("installing");
+  const transient = deriveCapsuleAppStatus(facts({
+    interfaceLinks: [{ ...LINK, health: "provider_not_ready" }],
+  }));
+  expect(transient.problems[0]?.severity).toBe("warning");
 });
 
 test("problems carry the exact Run, connection, blocked reason and teardown Run", () => {

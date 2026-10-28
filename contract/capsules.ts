@@ -575,8 +575,8 @@ export type CapsuleAppAction = (typeof CAPSULE_APP_ACTIONS)[number];
  *
  * - `connection_unavailable`: a ProviderBinding points at a connection that is
  *   missing, revoked, expired or in error.
- * - `interface_link_unavailable`: an active app link's provider was removed or
- *   its Interface is no longer ready.
+ * - `interface_link_unavailable`: an active app link's provider was removed
+ *   (error) or its Interface is temporarily not ready (warning).
  * - `interface_link_degraded`: an active link's provider is scheduled for removal.
  * - `interface_link_unset`: a requirement has no active, approved app link.
  * - `uninstall_failed`: a teardown that reached the provider failed; the
@@ -597,13 +597,13 @@ export type CapsuleAppAction = (typeof CAPSULE_APP_ACTIONS)[number];
  */
 export const CAPSULE_APP_PROBLEM_CODES = [
   "connection_unavailable",
-  "interface_link_unavailable",
   "uninstall_failed",
   "uninstall_blocked",
   "policy_blocked",
   "run_failed",
   "capsule_error",
   "install_incomplete",
+  "interface_link_unavailable",
   "screen_unavailable",
   "interface_link_degraded",
   "interface_link_unset",
@@ -682,8 +682,6 @@ export interface CapsuleAppLink {
   readonly otherApp?: CapsuleAppLinkedApp;
   /** The caller may manage at least one end of this link. */
   readonly canManage: boolean;
-  /** Providers currently eligible for this requirement; zero for incoming rows. */
-  readonly candidateCount: number;
 }
 
 export interface CapsuleAppLinks {
