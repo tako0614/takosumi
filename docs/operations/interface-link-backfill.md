@@ -7,7 +7,7 @@ Capsule-owned providers. Workspace-owned Interfaces are outside this workflow.
 
 The script reads each named Workspace's Capsule-owned Interfaces and Bindings
 through the Control API. It groups unrevoked, linkId-less Principal Bindings by
-consumer Capsule and requirement key. It refuses multiple providers for one
+consumer Capsule and requirement key. Only Ready Bindings are eligible. It refuses multiple providers for one
 requirement, an existing link lineage, or a provider that is no longer a current
 candidate. It never reads or prints credentials. The API checks the current
 InstallConfig and write authority again on each PUT. The operator must compare

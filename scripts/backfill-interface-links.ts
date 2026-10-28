@@ -17,9 +17,17 @@ export interface LegacyLinkBackfillOptions {
   readonly fetcher?: typeof fetch;
 }
 
+function verifiedBaseUrl(raw: string): URL {
+  const url = new URL(raw);
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Control API URL must be an origin without credentials, path, query, or fragment");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1"))) throw new Error("Control API must use HTTPS except on localhost");
+  return url;
+}
+
 async function getJson<T>(options: LegacyLinkBackfillOptions, path: string): Promise<T> {
-  const response = await (options.fetcher ?? fetch)(new URL(path, options.baseUrl), {
+  const response = await (options.fetcher ?? fetch)(new URL(path, verifiedBaseUrl(options.baseUrl)), {
     headers: { authorization: `Bearer ${options.token}` },
+    redirect: "error",
   });
   if (!response.ok) throw new Error(`Interface-link backfill read failed: ${path} (${response.status})`);
   return await response.json() as T;
@@ -35,7 +43,7 @@ export async function planLegacyInterfaceLinkBackfill(options: LegacyLinkBackfil
       const result = await getJson<{ bindings: InterfaceBinding[] }>(options, `/api/v1/interfaces/${encodeURIComponent(iface.metadata.id)}/bindings`);
       for (const binding of result.bindings) {
         const source = binding.metadata.materializedFrom;
-        if (source?.source !== "capsule_required_interface" || source.linkId || binding.status.phase === "Revoked" || binding.spec.subjectRef.kind !== "Principal") continue;
+        if (source?.source !== "capsule_required_interface" || source.linkId || binding.status.phase !== "Ready" || binding.spec.subjectRef.kind !== "Principal") continue;
         if (binding.spec.interfaceId !== iface.metadata.id || binding.metadata.workspaceId !== workspaceId || source.interfaceType !== iface.spec.type || source.interfaceVersion !== iface.spec.version) throw new Error(`Legacy binding ${binding.metadata.id} does not match its Interface`);
         const scope = `${workspaceId}\0${source.capsuleId}\0${source.requirementKey}`;
         const prior = scopes.get(scope);
@@ -58,10 +66,11 @@ export async function applyLegacyInterfaceLinkBackfill(options: LegacyLinkBackfi
   const applied: InterfaceLink[] = [];
   for (const entry of plan) {
     const path = `/api/v1/capsules/${encodeURIComponent(entry.consumerCapsuleId)}/interface-links/${encodeURIComponent(entry.requirementKey)}`;
-    const response = await (options.fetcher ?? fetch)(new URL(path, options.baseUrl), {
+    const response = await (options.fetcher ?? fetch)(new URL(path, verifiedBaseUrl(options.baseUrl)), {
       method: "PUT",
       headers: { authorization: `Bearer ${options.token}`, "content-type": "application/json" },
       body: JSON.stringify({ interfaceId: entry.providerInterfaceId, expectedGeneration: 0 }),
+      redirect: "error",
     });
     if (!response.ok) throw new Error(`Interface-link backfill stopped after ${applied.length} writes: ${path} (${response.status})`);
     const result = await response.json() as { link: InterfaceLink };
@@ -83,8 +92,7 @@ async function main(args: readonly string[]): Promise<void> {
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (!baseUrl || workspaceIds.length === 0 || workspaceIds.some((id) => !id.trim())) throw new Error("Use --base-url=<Control API URL> and one or more --workspace=<id>");
-  const parsed = new URL(baseUrl);
-  if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") throw new Error("Control API must use HTTPS except on localhost");
+  const parsed = verifiedBaseUrl(baseUrl);
   const token = process.env.TAKOSUMI_CONTROL_TOKEN;
   if (!token) throw new Error("TAKOSUMI_CONTROL_TOKEN is required");
   const options = { baseUrl: parsed.href, workspaceIds, token };

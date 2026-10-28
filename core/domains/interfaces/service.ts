@@ -815,8 +815,7 @@ export class InterfaceService {
       const history = await this.#stores.bindings.listByInterface(current.providerInterfaceId);
       try {
         for (const binding of history) {
-          const source = binding.metadata.materializedFrom;
-          if (source?.source !== "capsule_required_interface" || source.linkId !== current.id || binding.status.phase === "Revoked" || binding.spec.subjectRef.kind !== "Principal") continue;
+          if (!bindingBelongsToLink(binding, current) || binding.status.phase === "Revoked" || binding.spec.subjectRef.kind !== "Principal") continue;
           await writeFence.assertCurrent();
           await this.#ensureLinkedPrincipalBinding(next, iface, binding.spec.subjectRef.id, next.requestedPermissions.filter((p) => next.approvedPermissions.includes(p)), input.requirement.delivery, true);
           await writeFence.assertCurrent();
@@ -844,7 +843,7 @@ export class InterfaceService {
     if (current) {
       const previousSubjects = current.providerInterfaceId === next.providerInterfaceId && next.state === "active"
         ? (await this.#stores.bindings.listByInterface(current.providerInterfaceId))
-          .filter((binding) => binding.metadata.materializedFrom?.source === "capsule_required_interface" && binding.metadata.materializedFrom.linkId === current.id && binding.status.phase !== "Revoked" && binding.spec.subjectRef.kind === "Principal")
+          .filter((binding) => bindingBelongsToLink(binding, current) && binding.status.phase !== "Revoked" && binding.spec.subjectRef.kind === "Principal")
           .map((binding) => binding.spec.subjectRef.id)
         : [];
       await this.#revokeLinkBindings(current);
@@ -898,8 +897,7 @@ export class InterfaceService {
 
   async #revokeLinkBindings(link: InterfaceLink): Promise<void> {
     for (const binding of await this.#stores.bindings.listByInterface(link.providerInterfaceId)) {
-      const source = binding.metadata.materializedFrom;
-      if (source?.source === "capsule_required_interface" && source.linkId === link.id && binding.status.phase !== "Revoked") await this.revokeBinding(link.providerInterfaceId, binding.metadata.id);
+      if (bindingBelongsToLink(binding, link) && binding.status.phase !== "Revoked") await this.revokeBinding(link.providerInterfaceId, binding.metadata.id);
     }
   }
 
@@ -947,7 +945,7 @@ export class InterfaceService {
       }
       await this.revokeBinding(iface.metadata.id, legacy.metadata.id);
     }
-    if (history.some((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.status.phase !== "Revoked")) {
+    if ((await this.#stores.bindings.listByInterface(iface.metadata.id)).some((binding) => binding.spec.subjectRef.kind === "Principal" && binding.spec.subjectRef.id === principalId && binding.status.phase !== "Revoked")) {
       if (preparing) throw new InterfaceServiceError("conflict", "selected provider has a conflicting Principal grant");
       return;
     }
@@ -1215,16 +1213,15 @@ export class InterfaceService {
     subjectId: string,
     permission: string,
   ): Promise<readonly InterfaceBinding[]> {
-    const iface = await this.getAuthorizedForPrincipal(
-      interfaceId,
-      subjectId,
-      permission,
-    );
-    return await this.#principalBindings(
+    const iface = await this.reconcile(interfaceId, { allowSafetyRecovery: true });
+    validatePermissionToken(permission, "permission");
+    const bindings = await this.#principalBindings(
       iface,
       requireText(subjectId, "subjectId"),
       permission.trim(),
     );
+    if (bindings.length === 0) throw new InterfaceServiceError("not_found", "Interface not found");
+    return bindings;
   }
 
   async issueToken(
@@ -3912,6 +3909,12 @@ function condition(
 
 function linkMatchesRequirement(link: InterfaceLink, requirement: CapsuleRequiredInterface): boolean {
   return link.interface.type === requirement.interface.type && link.interface.version === requirement.interface.version && link.deliveryType === requirement.delivery.type && JSON.stringify(link.requestedPermissions) === JSON.stringify(requirement.permissions);
+}
+
+function bindingBelongsToLink(binding: InterfaceBinding, link: InterfaceLink): boolean {
+  const source = binding.metadata.materializedFrom;
+  return source?.source === "capsule_required_interface" && binding.spec.interfaceId === link.providerInterfaceId &&
+    (source.linkId === link.id || (!source.linkId && source.capsuleId === link.consumerCapsuleId && source.requirementKey === link.requirementKey && source.interfaceType === link.interface.type && source.interfaceVersion === link.interface.version && binding.spec.delivery.type === link.deliveryType));
 }
 
 function isMissingInterfaceOwner(error: unknown): boolean {
