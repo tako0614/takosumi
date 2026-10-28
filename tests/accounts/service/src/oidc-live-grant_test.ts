@@ -719,3 +719,50 @@ test("UserInfo uses the current role and refresh revokes the chain after members
   // other active Workspace members.
   expect(store.findOidcClient(clientId)).toBeDefined();
 });
+
+test("required Interface domain unavailability permits sign-in while infrastructure failure returns 503", async () => {
+  const { InterfaceServiceError } = await import("../../../../core/domains/interfaces/service.ts");
+  for (const [failure, status] of [[new InterfaceServiceError("failed_precondition", "provider unavailable"), 302], [new InterfaceServiceError("not_found", "link missing"), 302], [new Error("Interface store unavailable"), 503]] as const) {
+    const { store, operations, installConfig } = await liveGrantFixture();
+    installConfig.requiredInterfaces = [{ key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } }];
+    const currentClient = store.findOidcClient(clientId)!;
+    store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+    operations.interfaces!.ensureCapsuleRequiredInterfaces = async () => { throw failure; };
+    const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
+    expect(response.status).toBe(status);
+  }
+});
+
+test("v75 D1 without interface_links permits OIDC sign-in and Capsule retirement", async () => {
+  const { InterfaceService, createD1InterfaceStores } = await import("../../../../core/domains/interfaces/mod.ts");
+  const { ensureD1OpenTofuLedgerSchema } = await import("../../../../worker/src/d1_opentofu_store.ts");
+  const { SqliteFakeD1 } = await import("../../../helpers/deploy-control/sqlite_fake_d1.ts");
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
+  const stores = createD1InterfaceStores(db);
+  const service = new InterfaceService({ stores });
+  const requiredInterface = { key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" }, permissions: ["ai.chat"], delivery: { type: "oauth2" } } as const;
+  expect(await stores.interfaces.create({
+    apiVersion: "takosumi/v1alpha1",
+    kind: "Interface",
+    metadata: { id: "if_v75_candidate", workspaceId, ownerRef: { kind: "Capsule", id: "provider" }, name: "provider", generation: 1, createdAt: "2026-10-28T00:00:00.000Z", updatedAt: "2026-10-28T00:00:00.000Z" },
+    spec: { type: requiredInterface.interface.type, version: requiredInterface.interface.version, document: {}, access: { visibility: "workspace" } },
+    status: { phase: "Resolved", observedGeneration: 1, resolvedRevision: 1 },
+  })).toBe(true);
+  expect(await service.listInterfaceLinkCandidates({ workspaceId, capsuleId, requirement: requiredInterface })).toEqual([]);
+  await expect(service.ensureCapsuleInterfaceLinks({
+    workspaceId,
+    capsuleId,
+    requirements: [requiredInterface],
+    selections: [{ requirementKey: "ai", interfaceId: "if_unavailable", selection: "auto_single" }],
+  })).rejects.toMatchObject({ code: "failed_precondition" });
+  const { store, operations, installConfig } = await liveGrantFixture();
+  installConfig.requiredInterfaces = [requiredInterface];
+  const currentClient = store.findOidcClient(clientId)!;
+  store.saveOidcClient({ ...currentClient, activationDigest: await oidcClientActivationDigest({ workspaceId, capsuleId, executionAuthorityEpoch: 1, installConfig: installConfig as InstallConfig }) });
+  operations.interfaces!.ensureCapsuleRequiredInterfaces = service.ensureCapsuleRequiredInterfaces.bind(service);
+  const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
+  expect(response.status).toBe(302);
+  expect(await db.prepare("select name from sqlite_master where name='interface_links'").first()).toBeNull();
+  await expect(service.retireCapsule(workspaceId, capsuleId)).resolves.toBeUndefined();
+});

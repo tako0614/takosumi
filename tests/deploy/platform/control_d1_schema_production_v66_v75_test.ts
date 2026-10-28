@@ -14,7 +14,8 @@ import type { D1Database, D1PreparedStatement, D1Result } from "../../../worker/
 const source = "a".repeat(40);
 const databaseId = "synthetic-production66to75";
 const now = "2026-10-26T00:00:00.000Z";
-const planPromise = buildControlD1SchemaPlan();
+// Historical production owner is intentionally pinned to its authorized v75 tail.
+const planPromise = buildControlD1SchemaPlan({ throughMigrationVersion: 75 });
 function options() {
   return {
     sourceCommit: source, environment: "production" as const, databaseId,
@@ -300,3 +301,12 @@ test("native D1 quiescent fence atomically rejects a racing Run on insert and in
     }
   } finally { await runtime.dispose(); }
 }, 30_000);
+
+
+test("production66to75 default CLI plan stays pinned when the catalog advances", async () => {
+  const output: string[] = [];
+  expect(await runControlD1SchemaProductionV66V75Cli(["plan", "--environment", "production"], {}, (value) => output.push(value), {
+    sourceCommit: source,
+  })).toBe(0);
+  expect(JSON.parse(output[0]!).manifestDigest).toBe((await planPromise).manifestDigest);
+});

@@ -507,7 +507,7 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
   const iface = await service.create({
     workspaceId: "workspace_1",
     name: "workspace-ai",
-    ownerRef: { kind: "Workspace", id: "workspace_1" },
+    ownerRef: { kind: "Capsule", id: "capsule_provider" },
     spec: {
       type: "takosumi.ai.gateway",
       version: "1",
@@ -545,6 +545,8 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
     delivery: { type: "oauth2" },
   } as const;
 
+  await service.ensureCapsuleInterfaceLinks({ workspaceId: "workspace_1", capsuleId: "capsule_takos", requirements: [requirement], selections: [{ requirementKey: requirement.key, interfaceId: iface.metadata.id, selection: "explicit" }] });
+
   await service.ensureCapsuleRequiredInterfaces({
     workspaceId: "workspace_1",
     capsuleId: "capsule_takos",
@@ -576,14 +578,13 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
     status: { phase: "Ready" },
   });
   await service.revokeBinding(iface.metadata.id, bindings[0]!.metadata.id);
-  await expect(
-    service.ensureCapsuleRequiredInterfaces({
+  await service.ensureCapsuleRequiredInterfaces({
       workspaceId: "workspace_1",
       capsuleId: "capsule_takos",
       principalId: "pairwise_takos_user",
       requirements: [requirement],
-    }),
-  ).rejects.toThrow("conflicting or revoked Principal grant");
+    });
+  expect(await service.listBindings(iface.metadata.id)).toHaveLength(1);
 });
 
 test("Capsule required Interface resolves one workspace-visible Capsule provider", async () => {
@@ -624,6 +625,8 @@ test("Capsule required Interface resolves one workspace-visible Capsule provider
     permissions: ["mcp.invoke"],
     delivery: { type: "oauth2" },
   } as const;
+
+  await service.ensureCapsuleInterfaceLinks({ workspaceId: "workspace_1", capsuleId: "capsule_consumer", requirements: [requirement], selections: [{ requirementKey: requirement.key, interfaceId: iface.metadata.id, selection: "explicit" }] });
 
   await service.ensureCapsuleRequiredInterfaces({
     workspaceId: "workspace_1",
@@ -676,18 +679,16 @@ test("Capsule required Interface resolves one workspace-visible Capsule provider
   expect(await service.listBindings(laterProvider.metadata.id)).toEqual([]);
 
   await service.retire(iface.metadata.id, iface.metadata.generation);
-  await expect(
-    service.ensureCapsuleRequiredInterfaces({
+  await service.ensureCapsuleRequiredInterfaces({
       workspaceId: "workspace_1",
       capsuleId: "capsule_consumer",
       principalId: "pairwise_consumer",
       requirements: [requirement],
-    }),
-  ).rejects.toThrow("pinned Interface is unavailable");
+    });
   expect(await service.listBindings(laterProvider.metadata.id)).toEqual([]);
 });
 
-test("Capsule required Interface fails closed when workspace providers are ambiguous", async () => {
+test("Capsule required Interface never selects a provider without an active link", async () => {
   const stores = createInMemoryInterfaceStores();
   let id = 0;
   const service = new InterfaceService({
@@ -718,8 +719,7 @@ test("Capsule required Interface fails closed when workspace providers are ambig
     ),
   );
 
-  await expect(
-    service.ensureCapsuleRequiredInterfaces({
+  await service.ensureCapsuleRequiredInterfaces({
       workspaceId: "workspace_1",
       capsuleId: "capsule_consumer",
       principalId: "pairwise_consumer",
@@ -731,8 +731,7 @@ test("Capsule required Interface fails closed when workspace providers are ambig
           delivery: { type: "oauth2" },
         },
       ],
-    }),
-  ).rejects.toThrow("is ambiguous");
+    });
   const [firstProvider, secondProvider] = providers;
   if (!firstProvider || !secondProvider) {
     throw new Error("expected two provider fixtures");

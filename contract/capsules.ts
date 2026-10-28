@@ -542,6 +542,8 @@ export type CapsuleAppState = (typeof CAPSULE_APP_STATES)[number];
  * - `retry_screen`: retry the screen materialization failure named by the
  *   first problem.
  * - `fix_connection`: repair the ProviderConnection named by the first problem.
+ * - `fix_interface_link`: select a working provider for the Interface requirement
+ *   named by the first problem.
  * - `continue_install`: resume an install that stopped before a plan.
  * - `cancel_uninstall`: cancel the scheduled uninstall (the cancel command
  *   would admit it now).
@@ -558,6 +560,7 @@ export const CAPSULE_APP_ACTIONS = [
   "retry",
   "retry_screen",
   "fix_connection",
+  "fix_interface_link",
   "continue_install",
   "cancel_uninstall",
   "uninstall_now",
@@ -572,6 +575,10 @@ export type CapsuleAppAction = (typeof CAPSULE_APP_ACTIONS)[number];
  *
  * - `connection_unavailable`: a ProviderBinding points at a connection that is
  *   missing, revoked, expired or in error.
+ * - `interface_link_unavailable`: an active app link's provider was removed
+ *   (error) or its Interface is temporarily not ready (warning).
+ * - `interface_link_degraded`: an active link's provider is scheduled for removal.
+ * - `interface_link_unset`: a requirement has no active, approved app link.
  * - `uninstall_failed`: a teardown that reached the provider failed; the
  *   problem names the failed removal Run.
  * - `uninstall_blocked`: the scheduled uninstall stopped (in either phase) and
@@ -596,7 +603,10 @@ export const CAPSULE_APP_PROBLEM_CODES = [
   "run_failed",
   "capsule_error",
   "install_incomplete",
+  "interface_link_unavailable",
   "screen_unavailable",
+  "interface_link_degraded",
+  "interface_link_unset",
   "uninstall_scheduled",
 ] as const;
 export type CapsuleAppProblemCode = (typeof CAPSULE_APP_PROBLEM_CODES)[number];
@@ -631,6 +641,53 @@ export interface CapsuleAppProblem {
   readonly connectionStatus?: CapsuleAppConnectionStatus;
   /** `screen_unavailable`: the exact failure the retry route expects. */
   readonly screenFailure?: CapsuleAppScreenFailure;
+  /** `interface_link_*`: stable requirement identity for the repair action. */
+  readonly requirementKey?: string;
+  readonly interfaceLinkId?: string;
+  readonly providerCapsuleId?: string;
+}
+
+/** Value-free identity and display metadata of the app at the other end. */
+export interface CapsuleAppLinkedApp {
+  readonly capsuleId: string;
+  readonly name: string;
+  readonly displayName?: InstallConfigStoreText;
+  readonly iconUrl?: string;
+}
+
+export type CapsuleAppLinkHealth =
+  | "ok"
+  | "reapproval_required"
+  | "provider_not_ready"
+  | "provider_uninstall_scheduled"
+  | "provider_removed";
+
+/**
+ * One declared requirement (`uses`) or current incoming link (`usedBy`).
+ * Health is computed from the provider at read time; it never changes the
+ * persisted approval state. No Interface input, output or delivery is exposed.
+ */
+export interface CapsuleAppLink {
+  readonly linkId?: string;
+  readonly requirementKey: string;
+  readonly consumerCapsuleId: string;
+  readonly providerCapsuleId?: string;
+  readonly providerInterfaceId?: string;
+  readonly interfaceType: string;
+  readonly interfaceVersion: string;
+  readonly permissions: readonly string[];
+  readonly state: "unset" | "pending_approval" | "active" | "declined" | "revoked";
+  /** Current link generation for a guarded mutation; zero before a link exists. */
+  readonly generation: number;
+  readonly health: CapsuleAppLinkHealth;
+  readonly otherApp?: CapsuleAppLinkedApp;
+  /** The caller may manage at least one end of this link. */
+  readonly canManage: boolean;
+}
+
+export interface CapsuleAppLinks {
+  readonly uses: readonly CapsuleAppLink[];
+  readonly usedBy: readonly CapsuleAppLink[];
 }
 
 /**
@@ -735,6 +792,8 @@ export interface CapsuleAppProgress {
 }
 
 export interface CapsuleAppUninstall {
+  /** Current consumers affected if this provider is removed. */
+  readonly impact: { readonly usedBy: readonly CapsuleAppLink[] };
   /**
    * What a new uninstall request does now: `scheduled` keeps resources and
    * data for `graceDays` first, `discard` drops a never-applied app at once,
@@ -764,6 +823,7 @@ export type CapsuleAppIncompleteSection =
   | "display"
   | "screens"
   | "version"
+  | "links"
   | "screen_problems";
 
 /** Body of `GET /api/v1/capsules/:capsuleId/app`. Value-free; no secrets. */
@@ -785,6 +845,7 @@ export interface CapsuleAppView {
   readonly problems: readonly CapsuleAppProblem[];
   /** Every launchable screen, in display order. */
   readonly screens: readonly CapsuleAppScreen[];
+  readonly links: CapsuleAppLinks;
   readonly version: CapsuleAppVersion;
   readonly progress: CapsuleAppProgress;
   /** The newest lifecycle Run (plan, apply, destroy plan or destroy apply). */

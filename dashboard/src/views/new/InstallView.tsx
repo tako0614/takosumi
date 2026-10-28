@@ -16,14 +16,14 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { Navigate, useLocation, useNavigate } from "@solidjs/router";
 import { ArrowLeft, ExternalLink, PackagePlus } from "lucide-solid";
-import type { GitInstallPlan, GitInstallPlanResponse } from "takosumi-contract";
+import { matchingInstalledApps, type GitInstallPlan, type GitInstallPlanResponse } from "takosumi-contract";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, FormField, Input, Select, Spinner } from "../../components/ui/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { locale, t } from "../../i18n/index.ts";
-import { listConnections, listOpenGitInstallAttempts } from "../../lib/control-api.ts";
+import { listConnections, listInstalledApps, listOpenGitInstallAttempts } from "../../lib/control-api.ts";
 import { capsuleNameFromUrl, isSafeHttpsGitUrl, parseInstallPrefill } from "../../lib/install-link.ts";
 import { installReturnPathFromPrefill } from "../../lib/install-return-context.ts";
 import {
@@ -134,18 +134,38 @@ function StorePage(props: { readonly principalId: string }) {
   const navigate = useNavigate();
   const [gitUrl, setGitUrl] = createSignal("");
   const [gitError, setGitError] = createSignal<string>();
+  const [installedApps, { refetch: refetchInstalledApps }] = createResource(
+    () => currentWorkspaceId() || false,
+    (workspaceId) => listInstalledApps(workspaceId),
+  );
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
     pickedListing = listing;
     navigate(`/new?${buildNewQuery(listing)}`);
   };
   return (
-    <main class="iv-page iv-browse-page" data-install-state="not-installed">
+    <main
+      class="iv-page iv-browse-page"
+      data-install-state={
+        installedApps.error || installedApps.loading || !installedApps() || installedApps()?.complete === false
+          ? "unknown"
+          : "not-installed"
+      }
+    >
       <header class="iv-hero iv-page-heading"><h1>{t("installStore.title")}</h1></header>
       <OpenAttempts principalId={props.principalId} />
+      <Show when={installedApps.error}>
+        <div class="iv-error" role="alert">
+          <p>{t("installStore.installedReadFailed")}</p>
+          <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
+        </div>
+      </Show>
       <section class="iv-catalogue iv-catalogue-browse" aria-label={t("installStore.browseTitle")}>
         <StoreBrowser
           locale={locale()}
+          installedApps={!installedApps.loading && !installedApps.error ? installedApps()?.installedApps : []}
+          installedAppsLoading={installedApps.loading}
+          installedAppsComplete={!installedApps.loading && !installedApps.error ? installedApps()?.complete : false}
           onConfigure={choose}
           onSelectListing={choose}
           showSourceControls={true}
@@ -321,6 +341,21 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const listed = () => (listing.error ? undefined : (listing.latest ?? undefined));
   const listingFailed = (): boolean => Boolean(listing.error);
   const gitUrl = () => plan()?.source.url ?? listed()?.source.url ?? prefill()?.git ?? "";
+  const [installedApps, { refetch: refetchInstalledApps }] = createResource(
+    () => currentWorkspaceId() || false,
+    (workspaceId) => listInstalledApps(workspaceId),
+  );
+  const existingApps = createMemo(() => matchingInstalledApps(
+    !installedApps.loading && !installedApps.error ? installedApps()?.installedApps ?? [] : [],
+    {
+      url: gitUrl(),
+      path: listed()?.source.path || [prefill()?.sourcePath, prefill()?.path]
+        .filter((part) => part && part !== ".").join("/") || ".",
+    },
+  ));
+  const installedLabel = () => existingApps().length === 1
+    ? t("installStore.installed")
+    : t("installStore.installedCount", { count: existingApps().length });
 
   // Private repositories: an existing Git connection may read the source.
   // Offered only before Install, so only read then.
@@ -354,7 +389,8 @@ function AppInstallPage(props: { readonly principalId: string }) {
       : versionLabel(current.source.ref);
   };
 
-  const install = () =>
+  const install = () => {
+    if (currentWorkspaceId() && (installedApps.loading || installedApps.error || !installedApps())) return;
     void attempt.start(
       {
         url: gitUrl(),
@@ -368,6 +404,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
       },
       { fromStore: fromStore() },
     );
+  };
 
   /**
    * The install finished on this screen: offer 「開く」 once the app's screen
@@ -458,22 +495,38 @@ function AppInstallPage(props: { readonly principalId: string }) {
                   install();
                 }}
               >
+                <Show when={existingApps().length > 0}>
+                  <div class="iv-existing-apps" data-testid="install-existing-apps">
+                    <p class="iv-muted">{installedLabel()}</p>
+                    <div class="iv-action-row">
+                      <For each={existingApps()}>{(app) => (
+                        <Button variant="primary" href={appPageHref(app.capsuleId)} aria-label={`${t("installStore.open")}: ${app.name}`}>
+                          {t("installStore.open")}<Show when={existingApps().length > 1}> · {app.name}</Show>
+                        </Button>
+                      )}</For>
+                    </div>
+                  </div>
+                </Show>
+                <Show when={installedApps.error || (!installedApps.loading && installedApps()?.complete === false)}>
+                  <p class="iv-error" role="alert">{t("installStore.installedReadFailed")}</p>
+                  <Button type="button" variant="secondary" onClick={() => void refetchInstalledApps()}>{t("common.retry")}</Button>
+                </Show>
                 <div class="iv-action-row iv-start-actions">
                   <Button
                     type="submit"
-                    variant="primary"
+                    variant={existingApps().length > 0 ? "secondary" : "primary"}
                     size="lg"
                     busy={attempt.mutating() === "start"}
-                    disabled={!gitUrl() || (store() !== undefined && listing.loading)}
+                    disabled={!gitUrl() || (Boolean(currentWorkspaceId()) && (installedApps.loading || Boolean(installedApps.error))) || (store() !== undefined && listing.loading)}
                     icon={<PackagePlus size={18} />}
                   >
-                    {t("installStore.install")}
+                    {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
                   </Button>
                   <Button variant="ghost" href="/new" icon={<ArrowLeft size={16} />}>
                     {t("installStore.back")}
                   </Button>
                 </div>
-                <p class="iv-start-hint">{t("installStore.startHint")}</p>
+                <p class="iv-start-hint">{existingApps().length > 0 ? t("installStore.installAnotherHint") : t("installStore.startHint")}</p>
                 <div class="iv-fields iv-source-fields" data-testid="install-source-fields">
                   <FormField
                     label={t("installStore.sourceRef")}

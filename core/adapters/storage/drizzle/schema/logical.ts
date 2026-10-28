@@ -41,6 +41,7 @@ export const deployControlLogicalTables = [
   // Provider-neutral runtime declarations retained by the Stack flow.
   "interfaces",
   "interfaceBindings",
+  "interfaceLinks",
 ] as const;
 
 export type DeployControlLogicalTable =
@@ -89,6 +90,7 @@ export const deployControlD1TableNames = {
   scheduledSweepCursors: "scheduled_sweep_cursors",
   interfaces: "interfaces",
   interfaceBindings: "interface_bindings",
+  interfaceLinks: "interface_links",
 } as const satisfies Record<DeployControlLogicalTable, string>;
 
 export const deployControlPostgresTableNames = {
@@ -134,4 +136,5 @@ export const deployControlPostgresTableNames = {
   scheduledSweepCursors: "takosumi_scheduled_sweep_cursors",
   interfaces: "takosumi_interfaces",
   interfaceBindings: "takosumi_interface_bindings",
+  interfaceLinks: "takosumi_interface_links",
 } as const satisfies Record<DeployControlLogicalTable, string>;
