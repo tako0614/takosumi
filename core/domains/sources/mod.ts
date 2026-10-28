@@ -67,7 +67,8 @@ import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
 import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
-import { convergeOwnedSourceLane } from "./owned-lane.ts";
+import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
+import { convergeOwnedSourceLane, isLiveSourceLaneCapsule } from "./owned-lane.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
 // default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
@@ -817,7 +818,6 @@ export class SourcesService {
     let stored = await this.#requireSource(sourceId);
     try {
       const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
-      stored = await convergeOwnedSourceLane(this.#store, sourceId, this.#now) ?? stored;
       if (options.scheduled) {
         const result = await this.#store.writeSourceConfiguration({
           source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
@@ -828,11 +828,13 @@ export class SourcesService {
         // write wins; read once rather than failing observation for this tick.
         stored = result.status === "conflict" ? await this.#requireSource(sourceId) : result.source;
       }
-      return [await this.#createSync(sourceId, { intent: "observe", dedupe: true },
-        { ref: stored.defaultRef, path: stored.defaultPath }, authority)];
+      stored = await convergeOwnedSourceLane(this.#store, sourceId, this.#now) ?? stored;
+      return await this.#createReconciliationSyncs(stored, authority, options.scheduled === true);
     } catch (error) {
       if (error instanceof OpenTofuControllerError &&
-        (error.code === "invalid_argument" || structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON)) {
+        (error.code === "invalid_argument" ||
+          structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON ||
+          structuredErrorReason(error) === "source_reconciliation_capsule_limit")) {
         try {
           const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
           await this.#writeSourceConfiguration({
@@ -845,6 +847,40 @@ export class SourcesService {
       }
       throw error;
     }
+  }
+
+  async #createReconciliationSyncs(
+    stored: StoredSource,
+    authority: WorkspaceManagementAuthority,
+    scheduled: boolean,
+  ): Promise<readonly CreateSourceSyncResponse[]> {
+    const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
+    const addAddress = (ref: string, path: string) => {
+      if (scheduled && isImmutableSourceRevision(ref)) return;
+      addresses.set(JSON.stringify([ref, path]), { ref, path });
+    };
+    addAddress(stored.defaultRef, stored.defaultPath);
+
+    const laneCapsules = stored.ownerCapsuleId
+      ? [await this.#store.getCapsule(stored.ownerCapsuleId)].filter((capsule) => capsule !== undefined)
+      : await this.#store.listCapsulesForSource(stored.workspaceId, stored.id);
+    if (laneCapsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES) {
+      throw new OpenTofuControllerError("resource_exhausted",
+        `Source reconciliation exceeds ${MAX_SOURCE_RECONCILIATION_CAPSULES} Capsules`,
+        { reason: "source_reconciliation_capsule_limit" });
+    }
+    for (const capsule of laneCapsules) {
+      if (capsule.sourceId !== stored.id || !isLiveSourceLaneCapsule(capsule) ||
+        !capsule.currentStateVersionId) continue;
+      const adopted = await getCapsuleAdoptedSourceSnapshot(this.#store, capsule);
+      if (adopted) addAddress(adopted.ref, adopted.path);
+    }
+
+    const runs: CreateSourceSyncResponse[] = [];
+    for (const address of addresses.values()) {
+      runs.push(await this.#createSync(stored.id, { intent: "observe", dedupe: true }, address, authority));
+    }
+    return runs;
   }
 
   async #createSync(

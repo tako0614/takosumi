@@ -309,6 +309,7 @@ import {
   observeSourceSyncSettlement,
   sourceSyncSettlementCensusMatches,
   sourceSyncSettlementReadMatches,
+  MAX_SOURCE_RECONCILIATION_CAPSULES,
   SourceSyncSettlementConflictError,
   type SourceSyncSettlementRead,
   type SourceSyncSettlementReader,
@@ -7789,6 +7790,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return rows.map(normalizeCapsuleRecord);
   }
 
+  async listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
+    const rows = await this.#db.select({ json: pgSchema.capsules.capsuleJson })
+      .from(pgSchema.capsules)
+      .where(and(eq(pgSchema.capsules.workspaceId, workspaceId), eq(pgSchema.capsules.sourceId, sourceId)))
+      .orderBy(asc(pgSchema.capsules.createdAt), asc(pgSchema.capsules.id));
+    return rows.map((row) => normalizeCapsuleRecord(parseRow(row) as Capsule));
+  }
+
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     const query = this.#db
       .select({ json: pgSchema.capsules.capsuleJson })
@@ -9621,6 +9630,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
         if (!rows.rows[0] || stableStringify(parseJson(rows.rows[0].capsuleJson)) !==
           stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" as const };
+        if (input.expectedSource?.ownerCapsuleId === undefined) {
+          const other = await transaction.query<{ id: string }>(
+            `select id from takosumi_capsules where space_id = $1 and id <> $2
+              and (source_id = $3 or installation_json ->> 'sourceId' = $3)
+              and status <> 'destroyed' limit 1 for update`,
+            [source.workspaceId, input.expectedOwnerCapsule.id, source.id],
+          );
+          if (other.rows.length) return { status: "conflict" as const };
+        }
       }
 
 
@@ -12134,7 +12152,9 @@ async function pgLockSourceSyncSettlementCapsules(
             updated_at as "updatedAt"
       from takosumi_capsules
       where space_id = $1
-        and id = (select source_json ->> 'ownerCapsuleId' from takosumi_sources where id = $2 and space_id = $1)
+        and (id = (select source_json ->> 'ownerCapsuleId' from takosumi_sources where id = $2 and space_id = $1)
+          or ((select source_json ->> 'ownerCapsuleId' from takosumi_sources where id = $2 and space_id = $1) is null
+            and (source_id = $2 or installation_json ->> 'sourceId' = $2)))
         and not (
           status = 'destroyed'
           and coalesce(installation_json ->> 'status', '') = 'destroyed'
@@ -12142,6 +12162,7 @@ async function pgLockSourceSyncSettlementCapsules(
           and coalesce(installation_json ->> 'workspaceId', '') = space_id
         )
       order by created_at, id
+      limit ${MAX_SOURCE_RECONCILIATION_CAPSULES + 1}
       for update`,
     [workspaceId, sourceId],
   );

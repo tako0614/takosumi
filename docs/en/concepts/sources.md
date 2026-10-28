@@ -155,7 +155,7 @@ A Capsule is one deployed unit. Where a Source says where the code comes from, a
 says what is running right now.
 
 Each new app owns a separate Source, including apps added from the same repository.
-Existing shared Sources must be split with the operator migration. Modules carry no credentials and no notion of
+Existing shared Sources must be split with the operator migration. Until ownership backfill, ownerless Sources retain observation of existing apps' adopted lanes and stale/auto-update behavior. Commit-pinned adopted lanes are excluded from scheduled polling. Modules carry no credentials and no notion of
 environment, so development and production use separate Capsules with their own Sources
 and Connections (see [Credentials](./credentials.md)).
 

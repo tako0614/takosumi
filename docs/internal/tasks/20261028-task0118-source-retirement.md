@@ -4,7 +4,7 @@
 - Base: `origin/main` `b6f9bb5ba`; branch `feature/app-source-retirement-20261028`.
 - Delivery order: retirement core and archive custody; lifecycle callers and daily recovery; one lane per owner; operator-only existing-data migration.
 - Retirement stops admission first, waits for source sync work, deletes only owned source archives, then atomically removes snapshot/Source rows and records `source.retired`. Rows remain the retry work list until object deletion succeeds.
-- Existing shared Sources must be split by an explicit dry-run-first operator migration. Normal reconciliation targets only `ownerCapsuleId`; no shared-Source compatibility path is retained.
+- Existing shared Sources must be split by an explicit dry-run-first operator migration. Normal reconciliation targets `ownerCapsuleId`; ownerless legacy Sources retain their applied-lane observation until explicit backfill.
 - Phase 4 owns Interface links, install-attempt interface inputs, and installed-store state. This task avoids those areas.
 - Validation: focused lifecycle/custody and memory/PostgreSQL/D1 parity tests and affected static phases locally; the complete portable gate runs in CI. The review-fix session must not run the local full gate or full suite because shared SSD capacity is limited; stop below 2 GB free. Operator migration fixtures include shared adopted snapshots and interrupted retries.
 - External report: `/root/dev/tmp/tk0118/phase2-report.md`.

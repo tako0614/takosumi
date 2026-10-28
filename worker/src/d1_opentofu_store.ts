@@ -316,6 +316,7 @@ import {
 import {
   observeSourceSyncSettlement,
   SOURCE_SYNC_SETTLEMENT_READ_PATHS,
+  MAX_SOURCE_RECONCILIATION_CAPSULES,
   SourceSyncSettlementConflictError,
   type SourceSyncSettlementObservation,
   type SourceSyncSettlementReadKind,
@@ -3509,7 +3510,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(schema.capsules.workspaceId, input.terminalRun.workspaceId),
-          sql`${schema.capsules.id} = (select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId})`,
+          sql`(${schema.capsules.id} = (select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId})
+            or ((select json_extract(record_json, '$.ownerCapsuleId') from sources where id = ${input.terminalRun.sourceId}) is null
+              and (${schema.capsules.sourceId} = ${input.terminalRun.sourceId}
+                or json_extract(${schema.capsules.recordJson}, '$.sourceId') = ${input.terminalRun.sourceId})))`,
           not(
             sql.raw(
               d1SourceSyncSettlementCoherentDestroyedCapsuleSql("capsules"),
@@ -3518,7 +3522,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ),
       )
       .orderBy(asc(schema.capsules.createdAt), asc(schema.capsules.id))
-      .limit(1);
+      .limit(MAX_SOURCE_RECONCILIATION_CAPSULES + 1);
     const observedCapsules = capsuleRows.map(({ recordJson }) => {
       const parsed = typeof recordJson === "string"
         ? parseD1JsonColumn(recordJson)
@@ -7763,6 +7767,13 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     ).map(normalizeCapsuleRecord);
   }
 
+  async listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
+    return (await this.#drizzleManyJson<Capsule>(schema.capsules, schema.capsules.recordJson, {
+      where: and(eq(schema.capsules.workspaceId, workspaceId), eq(schema.capsules.sourceId, sourceId)),
+      orderBy: [asc(schema.capsules.createdAt), asc(schema.capsules.id)],
+    })).map(normalizeCapsuleRecord);
+  }
+
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     return (
       await this.#drizzleManyJson<Capsule>(
@@ -9364,13 +9375,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
 
     const source = input.source;
-    const ownerMatches = input.expectedOwnerCapsule ? exists(this.#orm.select({ id: schema.capsules.id })
-      .from(schema.capsules).where(and(
+    const ownerMatches = input.expectedOwnerCapsule ? and(
+      exists(this.#orm.select({ id: schema.capsules.id }).from(schema.capsules).where(and(
         eq(schema.capsules.id, input.expectedOwnerCapsule.id),
         eq(schema.capsules.workspaceId, source.workspaceId),
         eq(schema.capsules.sourceId, source.id),
         eq(schema.capsules.recordJson, input.expectedOwnerCapsule),
-      ))) : undefined;
+      ))),
+      input.expectedSource?.ownerCapsuleId === undefined ? notExists(
+        this.#orm.select({ id: schema.capsules.id }).from(schema.capsules).where(and(
+          ne(schema.capsules.id, input.expectedOwnerCapsule.id),
+          d1CapsuleReferencesSourceWhere(source.workspaceId, source.id),
+          ne(schema.capsules.status, "destroyed"),
+        )),
+      ) : undefined,
+    ) : undefined;
     if (input.expectedOwnerCapsule && stableStringify(await this.getCapsule(input.expectedOwnerCapsule.id)) !==
       stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" };
     const currentRow = await this.#readD1StoredSourceRow(source.id);
@@ -11655,7 +11674,7 @@ function d1SourceSyncSettlementEnvelope(
   latestLaneRecordJson: string | undefined,
 ): D1SourceSyncSettlementEnvelope {
   if (
-    observation.capsules.length > 1 ||
+    observation.capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
     new Set(observation.capsules.map((capsule) => capsule.id)).size !==
       observation.capsules.length
   ) {
@@ -12016,7 +12035,10 @@ function d1SourceSyncSettlementGuardSql(): string {
   const censusMismatch = `(
     (SELECT count(*) FROM capsules c
       WHERE c.space_id = json_extract(e.payload, '$.workspaceId')
-        AND c.id = (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+        AND (c.id = (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+          OR ((SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId')) IS NULL
+            AND (c.source_id = json_extract(e.payload, '$.terminalRun.sourceId')
+              OR json_extract(c.record_json, '$.sourceId') = json_extract(e.payload, '$.terminalRun.sourceId'))))
         AND NOT ${coherentDestroyed})
       <> (SELECT count(*) FROM observed_capsules)
     OR (SELECT count(*) FROM observed_capsules)
@@ -12027,7 +12049,9 @@ function d1SourceSyncSettlementGuardSql(): string {
         OR json_extract(o.capsule_json, '$.id') IS NOT o.id
         OR json_extract(o.capsule_json, '$.workspaceId') IS NOT
           json_extract(e.payload, '$.workspaceId')
-        OR o.id IS NOT (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+        OR NOT (o.id IS (SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId'))
+          OR ((SELECT json_extract(s.record_json, '$.ownerCapsuleId') FROM sources s WHERE s.id = json_extract(e.payload, '$.terminalRun.sourceId')) IS NULL
+            AND json_extract(o.capsule_json, '$.sourceId') IS json_extract(e.payload, '$.terminalRun.sourceId')))
         OR json_extract(o.capsule_json, '$.status') IS 'destroyed'
         OR NOT EXISTS (
         SELECT 1 FROM capsules c

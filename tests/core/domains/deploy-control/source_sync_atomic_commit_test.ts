@@ -163,6 +163,7 @@ async function seedAppliedCapsule(input: {
   readonly resolvedCommit: string;
   readonly ref?: string;
   readonly path?: string;
+  readonly legacySharedSource?: boolean;
 }): Promise<Capsule> {
   const ownedSourceId = await input.store.getSource(SOURCE_ID) ? `${SOURCE_ID}_${input.capsuleId}` : SOURCE_ID;
   const previous = sourceSnapshot(input.resolvedCommit, {
@@ -183,6 +184,7 @@ async function seedAppliedCapsule(input: {
     installConfigId: `config_${input.capsuleId}`,
     name: input.capsuleId,
     withoutSnapshot: true,
+    legacySharedSource: input.legacySharedSource,
   });
   await input.store.putSourceSnapshot(previous);
 
@@ -1543,4 +1545,34 @@ test("a service-data backup receives the adopted snapshot rather than the newest
   });
   await service.createBackup({ workspaceId: WORKSPACE_ID });
   expect(captured).toBe("backup_adopted_snapshot");
+});
+
+
+test("ownerless legacy Source settlement preserves stale and auto-update candidates on all stores", async () => {
+  for (const [label, store] of await stores()) {
+    const first = await seedAppliedCapsule({ store, capsuleId: `legacy_${label}`,
+      snapshotId: `legacy_snapshot_${label}`, resolvedCommit: `legacy-old-${label}`,
+      legacySharedSource: true });
+    const second = await prepareAppliedCapsule(store, first, `legacy_second_${label}`);
+    await persistAppliedLineage(store, second, true);
+    await store.putCapsule({ ...second.capsule, autoUpdate: true });
+    expect((await store.getSource(SOURCE_ID))?.ownerCapsuleId, label).toBeUndefined();
+    const lease = `legacy_lease_${label}`;
+    const running = await claimRun(store, lease);
+    const result = await store.commitSourceSyncSuccess({ leaseToken: lease,
+      terminalRun: succeededRun(running, `legacy-new-${label}`),
+      snapshot: sourceSnapshot(`legacy-new-${label}`) });
+    expect(result.won, label).toBe(true);
+    expect(result.staleCapsules?.map((capsule) => capsule.id).sort(), label)
+      .toEqual([first.id, second.capsule.id].sort());
+    expect((await store.getCapsule(first.id))?.status, label).toBe("stale");
+    expect(await store.getCapsule(second.capsule.id), label).toMatchObject({ status: "stale", autoUpdate: true });
+    expect((await store.getSource(SOURCE_ID))?.ownerCapsuleId, label).toBeUndefined();
+    const source = (await store.getSource(SOURCE_ID))!;
+    expect(await store.writeSourceConfiguration({
+      source: { ...source, defaultRef: "release" }, expectedSource: source,
+      expectedOwnerCapsule: (await store.getCapsule(first.id))!,
+    }), label).toEqual({ status: "conflict" });
+    expect((await store.getSource(SOURCE_ID))?.defaultRef, label).toBe("main");
+  }
 });

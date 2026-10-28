@@ -1575,7 +1575,8 @@ export function assertSourceHookSecretRotationInput(input: SourceHookSecretRotat
 
 export function assertSourceConfigurationWriteInput(input: SourceConfigurationWriteInput): void {
   if (input.expectedOwnerCapsule && (
-    !input.expectedSource || input.source.ownerCapsuleId !== input.expectedOwnerCapsule.id ||
+    !input.expectedSource ||
+    (input.source.ownerCapsuleId !== undefined && input.source.ownerCapsuleId !== input.expectedOwnerCapsule.id) ||
     input.expectedOwnerCapsule.sourceId !== input.source.id ||
     input.expectedOwnerCapsule.workspaceId !== input.source.workspaceId ||
     input.expectedOwnerCapsule.status === "destroyed"
@@ -3905,6 +3906,8 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     environment: string,
   ): Promise<Capsule | undefined>;
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]>;
+  /** Source-scoped legacy lane census; does not claim Source ownership. */
+  listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]>;
   /**
    * Internal scheduler read for the two-stage uninstall finalizer: Capsules in
    * `uninstalled` whose `uninstall.scheduledDestroyAt` is at or before `now`,
@@ -5001,8 +5004,13 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const readCapsules = (): readonly Capsule[] => {
       const source = this.#sources.get(input.terminalRun.sourceId);
       const owner = source?.ownerCapsuleId ? this.#capsules.get(source.ownerCapsuleId) : undefined;
-      return owner && owner.workspaceId === input.terminalRun.workspaceId &&
+      if (!source) return [];
+      if (source.ownerCapsuleId) return owner && owner.workspaceId === input.terminalRun.workspaceId &&
         owner.status !== "destroyed" ? [owner] : [];
+      // Preserve legacy live apps until their Source ownership is backfilled.
+      return [...this.#capsules.values()].filter((capsule) =>
+        capsule.workspaceId === input.terminalRun.workspaceId &&
+        capsule.sourceId === source.id && capsule.status !== "destroyed");
     };
     const observation = await observeSourceSyncSettlement(
       this, committedSnapshot, terminalRun, readCapsules(),
@@ -6484,6 +6492,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(due.slice(0, Math.max(0, input.limit)));
   }
 
+  listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
+    return Promise.resolve([...this.#capsules.values()]
+      .filter((capsule) => capsule.workspaceId === workspaceId && capsule.sourceId === sourceId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)));
+  }
+
   listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
     const rows = Array.from(this.#capsules.values());
     const filtered =
@@ -7797,6 +7811,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const current = this.#sources.get(input.source.id);
     if (input.expectedOwnerCapsule && stableStringify(this.#capsules.get(input.expectedOwnerCapsule.id)) !==
       stableStringify(input.expectedOwnerCapsule)) return { status: "conflict" };
+    if (input.expectedOwnerCapsule && input.expectedSource?.ownerCapsuleId === undefined &&
+      [...this.#capsules.values()].some((capsule) => capsule.id !== input.expectedOwnerCapsule!.id &&
+        capsule.workspaceId === input.source.workspaceId && capsule.sourceId === input.source.id &&
+        capsule.status !== "destroyed")) return { status: "conflict" };
 
     if (current && stableStringify(current) === stableStringify(input.source)) {
       return { status: "replayed", source: current };

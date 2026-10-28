@@ -152,7 +152,7 @@ Capsule はデプロイされた 1 つのまとまりです。Source が「ど�
 「何が動いているか」です。
 
 新しいアプリはそれぞれ専用の Source を持ち、同じリポジトリから追加しても共有しません。
-既存の共有 Source は operator の移行ツールで分割します。module は認証情報も環境の区別も持たないので、
+既存の共有 Source は operator の移行ツールで分割します。移行前の ownerless Source では、既存アプリの採用 lane の観測と `stale` / 自動更新を維持します。commit 固定の採用 lane は定期 polling の対象外です。module は認証情報も環境の区別も持たないので、
 開発用と本番用は「別の Capsule に別の Source と Connection を割り当てる」ことで表します
 ([認証情報](./credentials.md))。
 
