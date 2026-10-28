@@ -17,7 +17,7 @@
  * complete sheet on its own and prepares the install again after a change.
  */
 import { createEffect, createMemo, createResource, createSignal, For, Match, Show, Suspense, Switch } from "solid-js";
-import { PlugZap } from "lucide-solid";
+import { ExternalLink, PlugZap } from "lucide-solid";
 import type {
   GitInstallPlanConnectionRequirement,
   GitInstallPlanUserAction,
@@ -171,6 +171,14 @@ function ProgressLine(props: { readonly attempt: InstallAttempt }) {
             >
               {kind() === "failed" ? t("installStore.problem.retry") : t("installStore.continue")}
             </Button>
+          </Show>
+          {/* A failed Plan's reason and logs are on its run's page. */}
+          <Show when={kind() === "failed" ? props.attempt.response()?.installPlan.planRunId : undefined}>
+            {(runId) => (
+              <Button variant="ghost" size="sm" href={`/runs/${encodeURIComponent(runId())}`} icon={<ExternalLink size={16} />}>
+                {t("installStore.runDetails")}
+              </Button>
+            )}
           </Show>
         </div>
       )}

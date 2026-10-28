@@ -76,8 +76,11 @@ describe("attempt-driven install page", () => {
     const execution = read("dashboard/src/views/new/InstallExecution.tsx");
     const install = between(execution, "const install = async", "// Apply starts only from");
     expect(install).toContain("createApplyRun(runId()");
-    // An out-of-date Plan is never applied.
+    // An out-of-date Plan is never applied, nor approved.
     expect(install).toContain("if (props.blockedReason ||");
+    expect(between(execution, "const approve = async", "const install = async")).toContain("if (props.blockedReason) return;");
+    // A failed Plan links to its run for the reason and logs.
+    expect(sheet).toContain("href={`/runs/${encodeURIComponent(runId())}`}");
     expect(execution.match(/void install\(\)/gu)).toHaveLength(1);
     // Once an Apply started, the screen's answers are locked.
     expect(sheet).toContain("onApplyStarted={() => props.attempt.lockAnswers()}");

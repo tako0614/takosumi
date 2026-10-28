@@ -409,6 +409,36 @@ export function retainedBindings(
   );
 }
 
+function bindingKey(binding: GitInstallPlanProviderBindingRequest): string {
+  return `${connectionKey(binding)}=${binding.connectionId}`;
+}
+
+/** Two connection answers name the same connection for the same rows. */
+export function sameBindings(
+  left: readonly GitInstallPlanProviderBindingRequest[],
+  right: readonly GitInstallPlanProviderBindingRequest[],
+): boolean {
+  const a = left.map(bindingKey).sort();
+  const b = right.map(bindingKey).sort();
+  return a.length === b.length && a.every((key, index) => key === b[index]);
+}
+
+/**
+ * The rows of a new sheet shown with a connection answer the attempt has
+ * not received yet (a row the answer leaves out shows as cleared).
+ */
+export function overridesForBindings(
+  connections: readonly GitInstallPlanConnectionRequirement[],
+  bindings: readonly GitInstallPlanProviderBindingRequest[],
+): ConnectionOverrides {
+  const overrides: Record<string, string> = {};
+  for (const requirement of connections) {
+    const key = connectionKey(requirement);
+    overrides[key] = bindings.find((binding) => connectionKey(binding) === key)?.connectionId ?? "";
+  }
+  return overrides;
+}
+
 /** What the install keeps when it is prepared again after a change. */
 export interface RetainedAnswers {
   /** The app name the person wants. */

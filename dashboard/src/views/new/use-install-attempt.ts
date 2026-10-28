@@ -24,6 +24,7 @@ import type {
   CreateGitInstallAttemptRequest,
   GitInstallPlan,
   GitInstallPlanConnectionRequirement,
+  GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
   GitInstallPlanUserAction,
   PatchGitInstallPlanRequest,
@@ -65,10 +66,13 @@ import {
   continueVariables,
   deriveInstallView,
   INSTALL_SCREEN_STAGES,
+  overridesForBindings,
   progressSignature,
   replanRequest,
   restartRequest,
   retainedBindings,
+  sameBindings,
+  sheetVariables,
   withConnectionOverrides,
   type ConnectionOverrides,
   type InstallCandidate,
@@ -272,6 +276,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [locked, setLocked] = createSignal(false);
   /** Preparing again did not go through; Continue tries it again. */
   const [replanStalled, setReplanStalled] = createSignal(false);
+  /**
+   * The connections the person chose that the new attempt did not start
+   * with (they changed them while its start was being sent again): its
+   * sheet receives them before it is confirmed.
+   */
+  const [bindingsToSend, setBindingsToSend] =
+    createSignal<readonly GitInstallPlanProviderBindingRequest[]>();
   const settleMs = options.settleMs ?? SETTLE_MS;
   /** The attempt and edit a confirmation was sent for on its own, never twice. */
   let autoSentFor: string | undefined;
@@ -403,6 +414,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setPlanVersion(undefined);
     setReplanning(false);
     setReplanStalled(false);
+    setBindingsToSend(undefined);
     setArmed(false);
     setLocked(false);
     autoSentFor = undefined;
@@ -448,7 +460,15 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     // the coordinator's word again: no Plan was asked for from it yet.
     if (next.userAction.kind === "provide_inputs") {
       setSheet(next.userAction);
-      setOverrides({});
+      // Connections chosen but not yet received stay shown until they are.
+      const unsent = untrack(bindingsToSend);
+      setOverrides(unsent ? overridesForBindings(next.userAction.connections, unsent) : {});
+      // A field the new sheet no longer has can never be left: stop waiting for it.
+      const names = new Set(sheetVariables(next.userAction).map((variable) => variable.name));
+      setSettingsEditing((current) => {
+        const kept = [...current].filter((name) => names.has(name));
+        return kept.length === current.size ? current : new Set(kept);
+      });
       setPlanVersion(undefined);
       // Still asking for the sheet: no confirmation went through.
       unconfirmedPlanVersion = undefined;
@@ -1080,6 +1100,14 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       if (!adoptNewAttempt(created, expected, { keepAnswers: true })) return false;
       pendingReplan = undefined;
       replanDiscarded = undefined;
+      // A start sent again as it was may carry older connections than the
+      // person chose meanwhile: the new sheet receives the current ones.
+      if (retained) {
+        const chosen = retainedBindings(rows);
+        if (!sameBindings(chosen, replacement.request.options?.providerBindings ?? [])) {
+          setBindingsToSend(chosen);
+        }
+      }
       // The new attempt starts with these answers; until its own sheet
       // arrives the screen keeps showing them.
       if (retained) {
@@ -1111,6 +1139,20 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
+  // Connections the new attempt did not start with are its sheet's first
+  // answer (before any confirmation).
+  createEffect(() => {
+    const current = response();
+    const unsent = bindingsToSend();
+    if (!unsent || current?.userAction.kind !== "provide_inputs" || mutating() || confirming()) return;
+    setBindingsToSend(undefined);
+    if (awaitingResubmission(current.userAction)) return;
+    void answer({ providerBindings: [...unsent] }, "answer").then((next) => {
+      // An answer that moved the attempt on is followed like any other.
+      if (next && canAdvance(next)) drive();
+    });
+  });
+
   // A complete sheet is confirmed on its own once edits settle, at most once
   // per attempt and edit, and only after the person acted in this page view.
   createEffect(() => {
@@ -1119,6 +1161,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     const version = editVersion();
     if (current?.userAction.kind !== "provide_inputs" || !ready) return;
     if (!armed() || mutating() || confirming() || editing() || nameInvalid() || outdated()) return;
+    if (bindingsToSend() !== undefined) return;
     const key = `${current.installPlan.id}:${version}`;
     if (autoSentFor === key) return;
     const timer = setTimeout(() => {

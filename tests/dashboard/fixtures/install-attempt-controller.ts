@@ -939,6 +939,16 @@ describe("install attempt controller", () => {
       answerGitInstallAttempt: async (id: never, body: never) => {
         const attempt = attempts.get(id as unknown as string)!;
         attempt.generation += 1;
+        const bindings = (body as { providerBindings?: readonly { moduleLocalName: string; connectionId: string }[] }).providerBindings;
+        if (bindings && attempt.action.kind === "provide_inputs") {
+          attempt.action = {
+            ...attempt.action,
+            connections: attempt.action.connections.map((row) => {
+              const chosen = bindings.find((binding) => binding.moduleLocalName === row.moduleLocalName);
+              return chosen ? { ...row, selectedConnectionId: chosen.connectionId, autoSelected: false } : row;
+            }),
+          };
+        }
         if ((body as { continue?: boolean }).continue) {
           attempt.phase = "planning";
           attempt.action = { kind: "wait", phase: "planning" };
@@ -1162,6 +1172,54 @@ describe("install attempt controller", () => {
     expect(server.creates()).toBe(2);
     expect(answerBodies().at(-1)).toMatchObject({ continue: true, variables: { api_token: SECRET } });
     expect(JSON.stringify(named("createGitInstallAttempt"))).not.toContain(SECRET);
+    page.dispose();
+  });
+  test("a connection chosen while a start is sent again reaches the new sheet before it is confirmed", async () => {
+    const server = coordinator({ sheet: settingSheet, failCreate: (count) => count === 2 });
+    reset(server.handlers);
+    const page = mount(undefined, { settleMs: 5 });
+    await page.attempt.start(candidate, { fromStore: false });
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    page.attempt.setDraft("domain", "changed.example.com");
+    await until(() => server.creates() === 2 && page.attempt.mutating() === undefined, "the start whose outcome is unknown");
+    // While it waits for Continue, the person picks another connection.
+    expect(await page.attempt.chooseConnection(requirement, "conn_b")).toBe(true);
+    page.attempt.resume();
+    const second = "gip_00000000000000b2";
+    await until(() => page.attempt.response()?.installPlan.id === second && page.attempt.view().stage === "review", "the new Plan");
+    const starts = named("createGitInstallAttempt");
+    // The start is sent again exactly as it was (same key)…
+    expect(starts[2]!.args).toEqual(starts[1]!.args);
+    // …and the new sheet first receives the connection chosen meanwhile.
+    const toSecond = named("answerGitInstallAttempt").filter(({ args }) => args[0] === second).map(({ args }) => args[1]);
+    expect(toSecond).toEqual([
+      { expectedGeneration: 1, providerBindings: [{ provider: requirement.provider, moduleLocalName: "cloudflare", connectionId: "conn_b" }] },
+      { expectedGeneration: 2, continue: true, variables: { domain: "changed.example.com" } },
+    ]);
+    expect(page.attempt.connectionRows().map((row) => row.selectedConnectionId)).toEqual(["conn_b"]);
+    expect(page.attempt.outdated()).toBe(false);
+    page.dispose();
+  });
+
+  test("a typed field the new sheet no longer has stops holding the confirmation", async () => {
+    let withField = true;
+    reset({
+      getGitInstallPlan: async () => respond(withField ? settingSheet() : inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_b" }], variables: [], missing: [] }), 3),
+      answerGitInstallAttempt: async (_id: never, body: never) => {
+        if ((body as { continue?: boolean }).continue) return respond({ kind: "wait", phase: "planning" }, 5);
+        withField = false;
+        return respond(inputs({ connections: [{ ...requirement, selectedConnectionId: "conn_b" }], variables: [], missing: [] }), 4);
+      },
+      reconcileGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 6),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    await until(() => page.attempt.view().stage === "provide_inputs", "the sheet");
+    page.attempt.setDraft("domain", "typing.exa", { typing: true });
+    expect(page.attempt.view().applyBlock).toBe("editing");
+    // The answer brings a sheet without that field: nothing waits for it.
+    await page.attempt.chooseConnection(requirement, "conn_b");
+    await until(() => page.attempt.view().stage === "review", "the Plan");
+    expect(answerBodies().filter((body) => body.continue)).toEqual([{ expectedGeneration: 4, continue: true }]);
     page.dispose();
   });
 });

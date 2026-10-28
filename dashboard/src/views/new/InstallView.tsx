@@ -654,6 +654,14 @@ function AttemptProblem(props: { readonly attempt: InstallAttempt; readonly onRe
         <Show when={view().stage === "unavailable" || view().stage === "discarded"}>
           <Button variant="ghost" href="/new">{t("installStore.chooseAnother")}</Button>
         </Show>
+        {/* A failed Plan's reason and logs are on its run's page. */}
+        <Show when={view().stage === "failed" ? props.attempt.response()?.installPlan.planRunId : undefined}>
+          {(runId) => (
+            <Button variant="ghost" href={`/runs/${encodeURIComponent(runId())}`} icon={<ExternalLink size={16} />}>
+              {t("installStore.runDetails")}
+            </Button>
+          )}
+        </Show>
       </div>
     </section>
   );

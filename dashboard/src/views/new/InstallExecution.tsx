@@ -479,6 +479,8 @@ export default function InstallExecution(props: Props) {
 
   const { confirm } = useConfirmDialog();
   const approve = async () => {
+    // An out-of-date Plan is never approved either.
+    if (props.blockedReason) return;
     // Approving a removal starts removing live resources: never one click.
     if (isRemoval()) {
       const ok = await confirm({
@@ -735,12 +737,19 @@ export default function InstallExecution(props: Props) {
               </section>
             </Show>
 
+            <Show when={current().status === "waiting_approval" ? props.blockedReason : undefined}>
+              {(reason) => (
+                <p class="iv-apply-reason" id="iv-approve-outdated" role="status">{reason()}</p>
+              )}
+            </Show>
             <Show when={current().status === "waiting_approval"}>
               <div class="iv-action-row">
                 <Button
                   type="button"
                   variant="primary"
                   busy={approving()}
+                  aria-disabled={props.blockedReason ? "true" : undefined}
+                  aria-describedby={props.blockedReason ? "iv-approve-outdated" : undefined}
                   onClick={() => void approve()}
                 >
                   {t("installStore.approve")}
