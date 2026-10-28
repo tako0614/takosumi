@@ -20393,17 +20393,17 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
 /**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
- * executes DDL or data migration. It requires the complete current migration
- * catalog with exact names/checksums before any store query is allowed.
+ * executes DDL or data migration. During the additive link rollout it accepts
+ * complete v75 or v76 catalogs with exact names/checksums and physical shape.
  */
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
-  await verifyD1PredeployedSchemaEvidence(db, 76);
+  await verifyD1PredeployedSchemaEvidence(db, 75);
   await assertWorkspaceFinancialD1Triggers(db);
 }
 
-/** Runtime floors never weaken qualification, which requires exact current v76. */
+/** Runtime floors never weaken complete catalog and physical qualification. */
 async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
