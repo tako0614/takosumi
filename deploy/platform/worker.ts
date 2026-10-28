@@ -4163,6 +4163,7 @@ export interface SourceWebhookOperations {
   ): Promise<boolean>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly { readonly run: { readonly id: string } }[]>;
 }
 
@@ -4334,7 +4335,7 @@ export async function pollAutoSyncSources(
   const sources = await operations.controller.listAutoSyncSourcesDue(batch);
   for (const source of sources) {
     try {
-      await operations.createSourceReconciliationSyncs(source.id);
+      await operations.createSourceReconciliationSyncs(source.id, { scheduled: true });
     } catch {
       // Best-effort: one bad source must not abort the whole poll.
       console.warn("scheduled.source_poll_reconciliation_failed", {

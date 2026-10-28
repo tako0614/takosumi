@@ -778,6 +778,7 @@ export interface ControlPlaneOperations {
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly CreateSourceSyncResponse[]>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   listSourceSnapshots(

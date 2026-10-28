@@ -972,6 +972,7 @@ export interface TakosumiOperations {
   ): Promise<CreateSourceSyncResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly CreateSourceSyncResponse[]>;
   createSourceCompatibilityCheck(
     sourceId: string,
@@ -2103,8 +2104,8 @@ export async function createTakosumiService(
         opts ?? {},
         expectedWorkspaceManagementAuthority,
       ),
-    createSourceReconciliationSyncs: (sourceId) =>
-      opentofuController.createSourceReconciliationSyncs(sourceId),
+    createSourceReconciliationSyncs: (sourceId, reconciliationOptions) =>
+      opentofuController.createSourceReconciliationSyncs(sourceId, reconciliationOptions),
     createSourceCompatibilityCheck: (sourceId, request, context) =>
       opentofuController.createSourceCompatibilityCheck(
         sourceId,
