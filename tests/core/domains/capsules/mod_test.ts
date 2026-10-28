@@ -28,6 +28,8 @@ import { withHistoricalPublicHostReservations } from "../../../helpers/deploy-co
 import { transitionProviderBindingSetForFixture } from "../../../helpers/deploy-control/model_fixture.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
+const STORE_BY_SERVICE = new WeakMap<CapsulesService, OpenTofuControlStore>();
+let automaticSourceCounter = 0;
 
 function build(
   store: OpenTofuControlStore = new InMemoryOpenTofuControlStore(),
@@ -40,6 +42,7 @@ function build(
     newId,
     now: () => new Date(NOW),
   });
+  STORE_BY_SERVICE.set(service, store);
   return { store, service };
 }
 
@@ -175,11 +178,28 @@ async function createInitialCapsule(
   service: CapsulesService,
   fixture: InitialCapsuleFixture,
 ) {
+  const store = STORE_BY_SERVICE.get(service);
+  let selectedSourceId = fixture.sourceId ?? "src_1";
+  if (fixture.sourceId === undefined && store) {
+    const current = await store.getSource(selectedSourceId);
+    if (current?.ownerCapsuleId !== undefined) {
+      const suffix = fixture.capsuleId ?? `automatic_${(automaticSourceCounter += 1)}`;
+      selectedSourceId = `src_${suffix}`;
+      if (!await store.getSource(selectedSourceId)) {
+        await store.putSource({
+          ...current,
+          id: selectedSourceId,
+          name: suffix,
+          ownerCapsuleId: undefined,
+        });
+      }
+    }
+  }
   const response = await service.createCapsuleInitialAuthority({
     workspaceId: "ws_1",
     name: "shop",
     environment: "production",
-    sourceId: "src_1",
+    sourceId: selectedSourceId,
     installingPrincipalId: "principal_installer",
     providerBindings: [],
     ...fixture,

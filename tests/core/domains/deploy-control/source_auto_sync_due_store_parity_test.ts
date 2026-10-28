@@ -7,6 +7,7 @@ import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_clie
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type { Workspace } from "takosumi-contract/workspaces";
+import type { Capsule } from "takosumi-contract/capsules";
 import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 
 function workspace(id: string): Workspace {
@@ -95,6 +96,60 @@ test("all stores return a fair due batch and exclude already observed pinned com
       })).status, label).toBe("updated");
       expect((await store.listAutoSyncSourcesDue(2)).map((row) => row.id), label).toEqual(["src_04", "src_05"]);
       expect((await store.listAutoSyncSourcesDue(0)).length, label).toBe(0);
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
+test("all stores poll only applied eligible app-owned Sources and preserve ownerless legacy polling", async () => {
+  const postgres = await PGliteSqlClient.create();
+  try {
+    const stores: ReadonlyArray<[string, OpenTofuControlStore]> = [
+      ["memory", new InMemoryOpenTofuControlStore()],
+      ["postgres", new SqlOpenTofuControlStore({ client: postgres })],
+      ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
+    ];
+    const ownerCases = [
+      { id: "active", status: "active", applied: true },
+      { id: "stale", status: "stale", applied: true },
+      { id: "missing", status: "active", applied: true, omitCapsule: true },
+      { id: "pending", status: "pending", applied: false },
+      { id: "disabled", status: "disabled", applied: true },
+      { id: "uninstalled", status: "uninstalled", applied: true },
+      { id: "destroyed", status: "destroyed", applied: true },
+      { id: "wrong_workspace", status: "active", applied: true, wrongWorkspace: true },
+      { id: "wrong_source", status: "active", applied: true, wrongSource: true },
+    ] as const;
+    for (const [label, store] of stores) {
+      await store.putWorkspace(workspace("workspace_due"));
+      await store.putWorkspace(workspace("workspace_due_foreign"));
+      await store.putSource(source("src_due_legacy", { createdAt: "2026-01-01T00:00:00.000Z" }));
+      await store.putSource(source("src_due_other", { autoSync: false,
+        createdAt: "2026-01-01T00:00:00.000Z" }));
+      for (const entry of ownerCases) {
+        const sourceId = `src_due_owned_${entry.id}`;
+        const capsuleId = `cap_due_${entry.id}`;
+        await store.putSource(source(sourceId, { ownerCapsuleId: capsuleId,
+          createdAt: "2026-01-01T00:00:00.000Z" }));
+        if ("omitCapsule" in entry) continue;
+        const capsule: Capsule = {
+          id: capsuleId,
+          workspaceId: "wrongWorkspace" in entry ? "workspace_due_foreign" : "workspace_due",
+          projectId: `project_due_${entry.id}`, name: entry.id, slug: entry.id,
+          sourceId: "wrongSource" in entry ? "src_due_other" : sourceId,
+          installConfigId: `config_due_${entry.id}`,
+          installingPrincipalId: "principal_due", environment: "production",
+          currentStateGeneration: entry.applied ? 1 : 0,
+          ...(entry.applied ? { currentStateVersionId: `state_due_${entry.id}` } : {}),
+          status: entry.status, createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        };
+        await store.putCapsule(capsule);
+      }
+      expect((await store.listAutoSyncSourcesDue(20)).map((row) => row.id), label).toEqual([
+        "src_due_legacy", "src_due_owned_active", "src_due_owned_stale",
+      ]);
     }
   } finally {
     await postgres.close();

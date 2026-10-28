@@ -514,6 +514,7 @@ test("control bundle strips the Source internal hook-secret + sync fields", asyn
     hookSecretHash: "TOP-SECRET-HASH",
     lastSeenCommit: "deadbeef",
     lastAutoSyncAttemptAt: "2026-10-28T00:00:00.000Z",
+    createdByInstallPlanId: "gitplan_private_origin",
     autoSync: true,
   };
   await store.putSource(source);
@@ -526,6 +527,7 @@ test("control bundle strips the Source internal hook-secret + sync fields", asyn
   expect(serialized).not.toContain("hookSecretHash");
   expect(serialized).not.toContain("lastSeenCommit");
   expect(serialized).not.toContain("lastAutoSyncAttemptAt");
+  expect(serialized).not.toContain("createdByInstallPlanId");
   // The public Source fields survive.
   expect(bundle.sources[0]!.id).toBe("src_secret");
   expect(bundle.sources[0]!.url).toBe("https://git.example.com/a/b.git");
@@ -1109,6 +1111,8 @@ test("provider_snapshot and custom_command service-data backup modes use isolate
   await seedCapsuleModel(store, {
     workspaceId: "ws_backup1",
     capsuleId: "cap_command1",
+    sourceId: "src_command1",
+    snapshotId: "snap_command1",
     installConfigId: "cfg_cmd",
     name: "cmd",
   });

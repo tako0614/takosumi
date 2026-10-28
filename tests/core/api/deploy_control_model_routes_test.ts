@@ -310,6 +310,7 @@ test("model e2e: retired Dependency routes return 404 without mutating Capsules"
   const { app, operations } = await service();
   const workspaceId = await createWorkspace(app, "deps");
   const sourceId = await createSource(app, workspaceId);
+  const consumerSourceId = await createSource(app, workspaceId);
   const installConfigId = await seedInstallConfig(operations, workspaceId);
   const producer = await createCapsule(
     operations,
@@ -321,7 +322,7 @@ test("model e2e: retired Dependency routes return 404 without mutating Capsules"
   const consumer = await createCapsule(
     operations,
     workspaceId,
-    sourceId,
+    consumerSourceId,
     installConfigId,
     "consumer",
   );

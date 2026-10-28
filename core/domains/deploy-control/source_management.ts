@@ -10,6 +10,7 @@
 
 import type {
   CompatibilityCheckManagementContext,
+  EnsureOwnedSourceRequest,
   SourcesService,
 } from "../sources/mod.ts";
 import type {
@@ -54,6 +55,13 @@ export class SourceManagement {
       request,
       expectedWorkspaceManagementAuthority,
     );
+  }
+
+  async ensureOwnedSource(
+    request: EnsureOwnedSourceRequest,
+    expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+  ): Promise<SourceResponse> {
+    return await this.#require().ensureOwnedSource(request, expectedWorkspaceManagementAuthority);
   }
 
   async listSources(

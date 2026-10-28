@@ -7,6 +7,16 @@ Takosumi は Git を正とします。デプロイされているものの内容
 
 Source は「このリポジトリのこのディレクトリを、この ref で追う」という宣言です。
 
+新しいインストールは、アプリごとに専用の Source を作ります。同じリポジトリをもう一度
+インストールしても、Source と同期 Run を共有しません。`ownerCapsuleId` は所有するアプリを
+表し、一度設定されると変更・解除できません。インストール計画から作る ID は固定されるため、
+応答が失われても同じ Source を採用して再開できます。
+
+`POST /sources` で事前確認用に作った Source は所有者未設定で、最初のアプリ作成と同時に
+所有が確定します。他のアプリが所有・参照する Source を新しいアプリへ割り当てることはできません。
+自動同期は、通常のインストールと事前確認からのインストールのどちらも、計画の確認が可能に
+なった段階で有効になります。
+
 必須は Workspace、名前、URL の 3 つだけです。
 
 例の `$TAKOSUMI_DEPLOY_CONTROL_TOKEN` には、`read` と `write` を持つ[発行した token](../reference/cli.md#トークンを発行する)を入れます。
@@ -29,7 +39,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `defaultRef`       | Git の `HEAD` | 追跡する branch / tag / commit                      |
 | `defaultPath`      | `.`           | sync/archive/scan の対象にする repository subtree  |
 | `authConnectionId` | なし          | 非公開リポジトリを読むための Connection             |
-| `autoSync`         | `false`（dashboard の追加画面は、作った直後に `true` にします） | operator の scheduler が Git ref を定期的に確認する |
+| `autoSync`         | `false`（インストール計画を確認できる段階で `true` にします） | operator の scheduler が Git ref を定期的に確認する |
 
 Git URL、ref、source subtree が Source の取得座標です。専用の source catalog はありません。
 `defaultPath` は取得範囲を狭めますが、実行 module を選びません。Source sync は exact
@@ -117,6 +127,9 @@ Run が返した ID を使い、独自に古い snapshot を選び直さない�
 Run 作成前の失敗も試行として記録します。未試行が先で、既定では 1 回 25 件です。
 Workspace が active でない Source と、すでに観測済みの固定 commit は除外します。恒久的に不正な取得座標や適用履歴の
 Source は `error` となり、設定を修復して `active` に戻すまで自動同期の対象から外れます。
+アプリが所有する Source は、同じ Workspace の所有アプリに適用済み state がある間だけ
+自動同期の対象です。未適用、アンインストール済み、削除済みの所有アプリは対象外です。
+所有アプリが記録されていない既存 Source の扱いは維持します。
 
 dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の
 `.well-known/takosumi.json` entry は input の表示 hint と generic Host API/service request
@@ -127,8 +140,9 @@ dashboard はこの scan 結果を読み、利用者が実在する module を�
 Capsule はデプロイされた 1 つのまとまりです。Source が「どこから」なら、Capsule は
 「何が動いているか」です。
 
-同じ Source から複数の Capsule を作れます。module は認証情報も環境の区別も持たない
-ので、開発用と本番用は「別の Capsule に別の Connection を割り当てる」ことで表します
+新しいアプリはそれぞれ専用の Source を持ち、同じリポジトリから追加しても共有しません。
+既存の共有 Source は維持します。module は認証情報も環境の区別も持たないので、
+開発用と本番用は「別の Capsule に別の Source と Connection を割り当てる」ことで表します
 ([認証情報](./credentials.md))。
 
 ```bash

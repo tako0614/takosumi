@@ -169,6 +169,7 @@ async function seedAppliedCapsule(input: {
     installConfigId: `config_${input.capsuleId}`,
     name: input.capsuleId,
     withoutSnapshot: true,
+    legacySharedSource: true,
   });
   await input.store.putSourceSnapshot(previous);
 

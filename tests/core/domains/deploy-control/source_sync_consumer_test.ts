@@ -297,9 +297,10 @@ async function seedActiveCapsuleOnSnapshot(input: {
     sourceId: input.sourceId,
     snapshotId: input.snapshot.id,
     withoutSnapshot: true,
+    legacySharedSource: true,
   });
-  // The shared model fixture supplies ownership rows; preserve the Source
-  // created by SourcesService so this helper does not replace its Git address.
+  // Preserve the Source created by SourcesService after seeding the legacy
+  // shared-Source Capsule row, so its Git address remains authoritative.
   if (source) await input.store.putSource(source);
   await input.store.putSourceSnapshot(input.snapshot);
   const planRun: PlanRun = {
@@ -844,6 +845,7 @@ test("source_sync continues stale finalization when the first auto-update gate r
     installConfigId: "cfg_fixture_second",
     name: "second",
     withoutSnapshot: true,
+    legacySharedSource: true,
   });
   const previousPlan = await store.getPlanRun("plan_prev");
   const previousApply = await store.getApplyRun("apply_prev");
@@ -851,8 +853,7 @@ test("source_sync continues stale finalization when the first auto-update gate r
   if (!originalSource || !previousPlan || !previousApply || !previousState) {
     throw new Error("source_sync stale-finalization fixture is incomplete");
   }
-  // seedCapsuleModel supplies ownership rows for the second Capsule; restore
-  // the Source and old Snapshot that both Capsules are expected to have adopted.
+  // Restore the legacy shared Source and old Snapshot adopted by both Capsules.
   await store.putSource(originalSource);
   await store.putSourceSnapshot(previous);
   await store.putPlanRun({

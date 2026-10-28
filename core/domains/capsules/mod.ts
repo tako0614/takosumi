@@ -439,6 +439,12 @@ export class CapsulesService {
         "source is not available to this workspace",
       );
     }
+    if (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== request.capsuleId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition", "Source belongs to another app.",
+        { reason: "source_owned_by_another_app" },
+      );
+    }
     const config = request.installConfig;
     if (config.workspaceId !== request.workspaceId) {
       throw new OpenTofuControllerError(
@@ -531,6 +537,12 @@ export class CapsulesService {
         throw workspaceManagementAdmissionErrorFor();
       }
       throw error;
+    }
+    if (result.status === "source_owned_by_another_app") {
+      throw new OpenTofuControllerError(
+        "failed_precondition", "Source belongs to another app.",
+        { reason: "source_owned_by_another_app" },
+      );
     }
     if (result.status === "conflict") {
       throw new OpenTofuControllerError(

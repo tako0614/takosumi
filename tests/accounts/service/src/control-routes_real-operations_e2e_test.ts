@@ -3726,8 +3726,10 @@ test("compatibility check refuses a repository-relative modulePath for a path-sc
   // A Source registered at `defaultPath: "deploy/takoform"` captures exactly
   // that subtree, so the snapshot archive root already IS the repository path
   // the caller wants to install.
+  const scopedSource = await deployStore.getSource(seeded.source.id);
+  if (!scopedSource) throw new Error("fixture Source is missing");
   await deployStore.putSource({
-    ...seeded.source,
+    ...scopedSource,
     defaultPath: "deploy/takoform",
   });
   await deployStore.putSourceSnapshot({
@@ -4990,6 +4992,25 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
     installConfigId: "icfg_repo_source_build_base",
     sourceUrl: "https://git.example.com/example/source-build.git",
   });
+  const reviewedSourceId = `src_source_build_pin_${crypto.randomUUID().replaceAll("-", "")}`;
+  const reviewedSnapshotId = `snap_source_build_pin_${crypto.randomUUID().replaceAll("-", "")}`;
+  const reviewedSource = { ...seeded.source };
+  delete reviewedSource.ownerCapsuleId;
+  delete reviewedSource.createdByInstallPlanId;
+  await deployStore.putSource({
+    ...reviewedSource,
+    id: reviewedSourceId,
+    name: "source-build-pin-reviewed-source",
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    id: reviewedSnapshotId,
+    sourceId: reviewedSourceId,
+    archiveRef: seeded.snapshot.archiveRef.replace(
+      seeded.source.id,
+      reviewedSourceId,
+    ),
+  });
   const digest = `sha256:${"e".repeat(64)}`;
   const reviewedSourceBuild: SourceBuildConfig = {
     commands: [
@@ -5019,6 +5040,8 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   });
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    id: reviewedSnapshotId,
+    sourceId: reviewedSourceId,
     repositoryModules: repositoryModules(["."]),
     repositoryManifest: manifestWithSourceBuild(reviewedSourceBuild),
   });
@@ -5034,9 +5057,9 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
       store: accountStore,
       cookie,
       method: "POST",
-      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      path: `/api/v1/sources/${reviewedSourceId}/compatibility-check`,
       body: {
-        sourceSnapshotId: seeded.snapshot.id,
+        sourceSnapshotId: reviewedSnapshotId,
         capsuleName: "source-build-pin",
         compileInstallUx: true,
       },
@@ -5050,7 +5073,7 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   const created = await createInitialAuthorityFixture({
     operations,
     workspaceId: seeded.workspace.id,
-    sourceId: seeded.source.id,
+    sourceId: reviewedSourceId,
     installConfig: reviewedConfig,
     name: "source-build-pin",
   });
@@ -5064,6 +5087,9 @@ test("initial Plan and Apply keep the persisted repository sourceBuild after met
   // changed repository metadata.
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    id: reviewedSnapshotId,
+    sourceId: reviewedSourceId,
+    fetchedAt: "2026-06-06T00:00:00.001Z",
     repositoryModules: repositoryModules(["."]),
     repositoryManifest: manifestWithSourceBuild(changedSourceBuild),
   });
@@ -5576,8 +5602,29 @@ test("authenticated repository Interface review persists exact proposals and app
     },
   });
   const repositoryManifestDigest = `sha256:${"e".repeat(64)}`;
+  const reviewedSourceId = `src_repo_interface_${crypto.randomUUID().replaceAll("-", "")}`;
+  const reviewedSnapshotId = `snap_repo_interface_${crypto.randomUUID().replaceAll("-", "")}`;
+  const reviewedSource = { ...seeded.source };
+  delete reviewedSource.ownerCapsuleId;
+  delete reviewedSource.createdByInstallPlanId;
+  await deployStore.putSource({
+    ...reviewedSource,
+    id: reviewedSourceId,
+    name: "repo-interface-reviewed-source",
+  });
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
+    id: reviewedSnapshotId,
+    sourceId: reviewedSourceId,
+    archiveRef: seeded.snapshot.archiveRef.replace(
+      seeded.source.id,
+      reviewedSourceId,
+    ),
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    id: reviewedSnapshotId,
+    sourceId: reviewedSourceId,
     repositoryModules: repositoryModules(["."]),
     repositoryManifest: {
       status: "present",
@@ -5588,10 +5635,10 @@ test("authenticated repository Interface review persists exact proposals and app
 
   const unauthenticatedPreviewRequest = request(
     "POST",
-    `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+    `/api/v1/sources/${reviewedSourceId}/compatibility-check`,
     {
       body: {
-        sourceSnapshotId: seeded.snapshot.id,
+        sourceSnapshotId: reviewedSnapshotId,
         capsuleName: "repo-interface",
         compileInstallUx: true,
       },
@@ -5616,9 +5663,9 @@ test("authenticated repository Interface review persists exact proposals and app
       store: accountStore,
       cookie,
       method: "POST",
-      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      path: `/api/v1/sources/${reviewedSourceId}/compatibility-check`,
       body: {
-        sourceSnapshotId: seeded.snapshot.id,
+        sourceSnapshotId: reviewedSnapshotId,
         capsuleName: "repo-interface",
         compileInstallUx: true,
       },
@@ -5678,7 +5725,7 @@ test("authenticated repository Interface review persists exact proposals and app
   const created = await createInitialAuthorityFixture({
     operations,
     workspaceId: seeded.workspace.id,
-    sourceId: seeded.source.id,
+    sourceId: reviewedSourceId,
     installConfig: previewConfig,
     name: "repo-interface",
   });

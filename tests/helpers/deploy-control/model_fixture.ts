@@ -78,6 +78,8 @@ export interface SeedCapsuleModelOptions {
   readonly ref?: string;
   /** Skip seeding the SourceSnapshot (to exercise source_sync_required). */
   readonly withoutSnapshot?: boolean;
+  /** Model pre-ownership historical data where multiple Capsules point at one Source. */
+  readonly legacySharedSource?: boolean;
   /** Extra InstallConfig fields (e.g. templateBinding for template runs). */
   readonly installConfig?: Partial<InstallConfig>;
   /** Provider identities committed with the Capsule's initial authority. */
@@ -341,7 +343,6 @@ export async function seedCapsuleModel(
     hookSecretHash: "test-hook-hash",
     autoSync: false,
   };
-  await store.putSource(source);
   const snapshot: SourceSnapshot = {
     id: options.snapshotId ?? "snap_fixture",
     origin: "git",
@@ -357,9 +358,6 @@ export async function seedCapsuleModel(
     fetchedByRunId: "run_fixture_sync",
     fetchedAt: now,
   };
-  if (!options.withoutSnapshot) {
-    await store.putSourceSnapshot(snapshot);
-  }
   const installConfig: InstallConfig = {
     id: options.installConfigId ?? "cfg_fixture",
     name: `${name}-config`,
@@ -399,15 +397,34 @@ export async function seedCapsuleModel(
     createdAt: now,
     updatedAt: now,
   };
+  const authoritySource = options.legacySharedSource
+    ? {
+        ...source,
+        id: `${sourceId}_fixture_authority_${sanitizeId(capsuleId)}`,
+      }
+    : source;
+  await store.putSource(authoritySource);
   const initial = await store.createCapsuleInitialAuthority({
     installConfig,
-    capsule,
+    capsule: { ...capsule, sourceId: authoritySource.id },
     providerBindingSet,
   });
-  if (initial.status === "conflict") {
-    throw new Error(`fixture initial authority conflicted for ${capsule.id}`);
+  if (initial.status !== "created" && initial.status !== "replayed") {
+    throw new Error(`fixture initial authority ${initial.status} for ${capsule.id}`);
   }
-  return { workspace, project, source, snapshot, installConfig, capsule };
+  if (options.legacySharedSource) {
+    await store.putSource(source);
+    await store.putCapsule(capsule);
+    if (!await store.deleteSource(authoritySource.id)) {
+      throw new Error(`fixture temporary Source was not removed: ${authoritySource.id}`);
+    }
+  }
+  if (!options.withoutSnapshot) {
+    await store.putSourceSnapshot(snapshot);
+  }
+  const persistedSource = await store.getSource(sourceId);
+  if (!persistedSource) throw new Error(`fixture Source missing after creation: ${sourceId}`);
+  return { workspace, project, source: persistedSource, snapshot, installConfig, capsule };
 }
 
 export async function seedProviderConnections(

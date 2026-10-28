@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { SourcesService, type EnsureOwnedSourceRequest } from "../../../../core/domains/sources/mod.ts";
 import {
   ObjectKeyArtifactReferenceAllocator,
   type ArtifactReferenceAllocator,
@@ -377,6 +377,76 @@ async function seedConnection(
   };
   await store.putConnection(conn);
 }
+
+function ownedSourceRequest(overrides: Partial<EnsureOwnedSourceRequest> = {}): EnsureOwnedSourceRequest {
+  return {
+    id: "src_0011223344556677", workspaceId: "workspace_1", name: "Independent app",
+    ownerCapsuleId: "cap_0011223344556677", createdByInstallPlanId: "gip_0011223344556677",
+    url: "https://github.com/acme/repo.git", ref: "main", path: ".",
+    createdAt: "2026-06-06T00:00:00.000Z", ...overrides,
+  };
+}
+
+test("ensureOwnedSource recovers committed creation after a lost acknowledgement and hides internal provenance", async () => {
+  class LostAckSourceStore extends InMemoryOpenTofuControlStore {
+    lost = false;
+    override async writeSourceConfiguration(input: Parameters<InMemoryOpenTofuControlStore["writeSourceConfiguration"]>[0]) {
+      const result = await super.writeSourceConfiguration(input);
+      if (result.status === "created" && !this.lost) {
+        this.lost = true;
+        throw new Error("lost Source acknowledgement");
+      }
+      return result;
+    }
+  }
+  const { store, service } = makeService({ store: new LostAckSourceStore() });
+  const request = ownedSourceRequest();
+  const first = await service.ensureOwnedSource(request);
+  const replay = await service.ensureOwnedSource({ ...request, name: "New display name" });
+  expect(replay).toEqual(first);
+  expect(first.source.ownerCapsuleId).toBe(request.ownerCapsuleId);
+  expect(await store.listSources()).toHaveLength(1);
+  expect((await store.getSource(request.id))?.createdByInstallPlanId).toBe(request.createdByInstallPlanId);
+  expect(JSON.stringify(first)).not.toContain("createdByInstallPlanId");
+  expect(JSON.stringify(await service.getSource(request.id))).not.toContain("createdByInstallPlanId");
+  expect(JSON.stringify(await service.listSources(request.workspaceId))).not.toContain("createdByInstallPlanId");
+  expect(JSON.stringify(first)).not.toContain("hookSecretHash");
+});
+
+test("ensureOwnedSource re-reads a concurrent create conflict and adopts one exact Source", async () => {
+  const { store, service } = makeService();
+  const request = ownedSourceRequest();
+  const results = await Promise.all([
+    service.ensureOwnedSource(request), service.ensureOwnedSource({ ...request, name: "Other label" }),
+  ]);
+  expect(results[0]).toEqual(results[1]);
+  expect((await store.listSources()).map((source) => source.id)).toEqual([request.id]);
+});
+
+test("ensureOwnedSource refuses mismatched identity without replacing the occupied row", async () => {
+  const request = ownedSourceRequest();
+  const overrides: Partial<StoredSource>[] = [
+    { ownerCapsuleId: undefined }, { ownerCapsuleId: "cap_other" },
+    { createdByInstallPlanId: "gip_other" }, { workspaceId: "workspace_other" },
+    { url: "https://github.com/acme/other.git" }, { defaultRef: "develop" },
+    { defaultPath: "other" }, { authConnectionId: "conn_other" },
+  ];
+  for (const override of overrides) {
+    const { store, service } = makeService();
+    const occupied: StoredSource = {
+      id: request.id, workspaceId: request.workspaceId, name: request.name,
+      ownerCapsuleId: request.ownerCapsuleId, createdByInstallPlanId: request.createdByInstallPlanId,
+      url: request.url, defaultRef: request.ref, defaultPath: request.path,
+      createdAt: request.createdAt, updatedAt: request.createdAt,
+      status: "active", autoSync: false, hookSecretHash: "existing", ...override,
+    };
+    await store.putSource(occupied);
+    await expect(service.ensureOwnedSource(request)).rejects.toMatchObject({
+      code: "failed_precondition", details: { reason: "source_identity_conflict" },
+    });
+    expect(await store.getSource(request.id)).toEqual(occupied);
+  }
+});
 
 test("createSource validates URL policy and stores status active", async () => {
   const { store, service } = makeService();

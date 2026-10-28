@@ -5,6 +5,15 @@ commit in some repository.
 
 ## Source
 
+Each new install creates a Source owned exclusively by its app. Installing the same repository
+again creates a different Source and sync Run. `ownerCapsuleId` identifies the owning app and
+cannot be changed or removed once assigned. Install-plan-derived IDs let retries recover the
+same Source after a lost acknowledgement.
+
+A Source registered through `POST /sources` for preflight starts unowned. Initial app creation
+claims it atomically; a Source owned or referenced by another app cannot be assigned to a new
+app. Both install modes enable automatic polling when their plan becomes reviewable.
+
 A Source declares that you want to follow this directory of this repository at this ref.
 
 Only three things are required: the Workspace, a name, and a URL.
@@ -30,7 +39,7 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `defaultRef`       | Git `HEAD`   | The branch, tag, or commit to track                      |
 | `defaultPath`      | `.`          | Repository subtree captured, archived, and scanned       |
 | `authConnectionId` | none         | The Connection used to read a private repository         |
-| `autoSync`         | `false` (the dashboard's add screen sets it to `true` right after creating the Source) | The operator's scheduler checks the Git ref periodically |
+| `autoSync`         | `false` (installs enable it when their plan is reviewable) | The operator's scheduler checks the Git ref periodically |
 
 The Git URL, ref, and source subtree are the Source acquisition coordinate.
 There is no Takosumi-specific source catalog. `defaultPath` narrows the captured
@@ -120,6 +129,9 @@ including attempts that fail before creating a Run. Never-attempted Sources come
 a default batch of 25. Sources outside active Workspaces and already observed commit pins are
 excluded. Permanently invalid Git coordinates or applied lineage mark the Source `error`; repair its configuration
 and restore `active` to resume automatic polling.
+An app-owned Source is eligible only while its owner in the same Workspace has applied
+state and remains enabled. Missing, uninstalled, destroyed, disabled, and never-applied owners are
+excluded. Existing ownerless Sources retain their polling behavior.
 
 The dashboard reads that scan result and lets the user select a real module. A matching
 entry in `.well-known/takosumi.json` may add input presentation hints and requests for
@@ -131,9 +143,10 @@ Connections, Plans, or Runs.
 A Capsule is one deployed unit. Where a Source says where the code comes from, a Capsule
 says what is running right now.
 
-One Source can back several Capsules. Modules carry no credentials and no notion of
-environment, so development and production are expressed by giving separate Capsules
-separate Connections (see [Credentials](./credentials.md)).
+Each new app owns a separate Source, including apps added from the same repository.
+Existing shared Sources are retained. Modules carry no credentials and no notion of
+environment, so development and production use separate Capsules with their own Sources
+and Connections (see [Credentials](./credentials.md)).
 
 ```bash
 curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \

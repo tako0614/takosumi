@@ -59,6 +59,7 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
     links: { reconcile: expect.stringContaining("/reconcile") },
   });
   const planId = created.installPlan.id as string;
+  const expectedSourceId = sourceIdForPlanId(planId);
   expect(JSON.stringify(created)).not.toContain("install-exactly-once");
   expect((await fixture.planStore.get(planId))?.idempotencyKeyHash).not.toBe(
     "install-exactly-once",
@@ -84,13 +85,16 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
   );
   expect(conflict.status).toBe(409);
 
-  let response = await fixture.reconcile(planId); // create Source
-  expect((await response.clone().json()).installPlan.sourceId).toBe("src_one");
+  let response = await fixture.reconcile(planId); // create owned Source
+  expect((await response.clone().json()).installPlan.sourceId).toBe(expectedSourceId);
   response = await fixture.reconcile(planId); // create pending Source sync
   const pending = await response.json();
+  const storedForSync = await fixture.planStore.get(planId);
+  expect(storedForSync).toBeDefined();
+  const syncIds = await sourceSyncIds(storedForSync!);
   expect(pending.installPlan).toMatchObject({
     phase: "syncing_source",
-    sourceSyncRunId: "ssr_one",
+    sourceSyncRunId: syncIds.runId,
   });
 
   const mutationsBeforeGet = fixture.mutationCount();
@@ -110,9 +114,9 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
   expect(reviewable).toMatchObject({
     installPlan: {
       phase: "reviewable",
-      sourceId: "src_one",
-      sourceSyncRunId: "ssr_one",
-      sourceSnapshotId: "snap_one",
+      sourceId: expectedSourceId,
+      sourceSyncRunId: syncIds.runId,
+      sourceSnapshotId: syncIds.snapshotId,
       installConfigId: expect.stringMatching(/^icfg_[0-9a-f]{16}$/u),
       capsuleId: expect.stringMatching(/^cap_[A-Za-z0-9]{16}$/u),
       planRunId: expect.stringMatching(/^plan_[A-Za-z0-9]{16}$/u),
@@ -127,6 +131,14 @@ test("Accounts Git install plan explicitly reconciles to one reviewable canonica
   expect(reviewable.links.reconcile).toBeUndefined();
   expect(reviewable.links.apply).toBeUndefined();
   expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 1, plan: 1 });
+  expect(fixture.sources[0]).toMatchObject({
+    id: expectedSourceId,
+    ownerCapsuleId: deterministicCapsuleIdForPlan(planId),
+    autoSync: true,
+  });
+  expect(fixture.sourcePatches).toEqual([{ id: expectedSourceId, autoSync: true }]);
+  expect(fixture.sourceInventoryReads).toBe(0);
+  expect(fixture.runInventoryReads).toBe(0);
   expect(fixture.approvalCalls).toBe(0);
   expect(fixture.applyCalls).toBe(0);
 
@@ -297,6 +309,29 @@ test("reviewed preflight fails closed when its pinned host authority changes bef
     id: planId,
     phase: "failed",
   });
+  expect(fixture.counts.capsule).toBe(0);
+});
+
+test("legacy reviewed preflight refuses a Source owned by another app before storing a plan", async () => {
+  const fixture = installFixture();
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [],
+    sourceOwnerCapsuleId: "cap_some_other_app",
+  });
+  const response = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    { ...createBody({ modulePath: ".", providerBindings: [] }), preflight },
+    { "idempotency-key": "preflight-owned-source" },
+  );
+  expect(response.status).toBe(409);
+  expect((await response.json()).error.code).toBe("source_owned_by_another_app");
+  expect(
+    await fixture.planStore.listOpenAttempts({
+      workspaceId: WORKSPACE.id,
+      actorSubject: WORKSPACE.ownerUserId,
+    }),
+  ).toEqual([]);
   expect(fixture.counts.capsule).toBe(0);
 });
 
@@ -725,7 +760,7 @@ test("generic Git install materializes exact runner variable provenance", async 
   const installConfig = fixture.getInstallConfig(plan?.installConfigId!);
   expect(installConfig?.internal).toMatchObject({
     reason: "per_install_overrides",
-    genericOpenTofuSourceSnapshotId: "snap_one",
+    genericOpenTofuSourceSnapshotId: plan.sourceSnapshotId,
   });
   expect(
     installConfig?.internal?.genericOpenTofuVariableContractDigest,
@@ -1135,6 +1170,7 @@ test("Git install plan accepts hyphenated provider local and alias identities", 
 test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run without duplicates", async () => {
   const fixture = installFixture({
     loseAckOnce: ["source", "sync", "capsule", "plan"],
+    canonicalSnapshotId: "snap_prior_same_lane",
   });
   const created = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
@@ -1143,6 +1179,9 @@ test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run wi
     { "idempotency-key": "lost-acks" },
   );
   const planId = (await created.json()).installPlan.id as string;
+  const expectedSourceId = sourceIdForPlanId(planId);
+  const originalPlan = (await fixture.planStore.get(planId))!;
+  const expectedSync = await sourceSyncIds(originalPlan);
 
   let response = await fixture.reconcile(planId);
   expect(response.status).toBe(202);
@@ -1156,10 +1195,14 @@ test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run wi
   );
   response = await fixture.reconcile(planId); // recover Source
   expect(fixture.counts.source).toBe(1);
+  expect((await fixture.planStore.get(planId))?.sourceId).toBe(expectedSourceId);
 
   response = await fixture.reconcile(planId); // sync commits, ack lost
   expect(response.status).toBe(202);
   expect(fixture.counts.sync).toBe(1);
+  expect(fixture.syncRuns.get(expectedSync.runId)?.snapshotId).toBe(
+    expectedSync.snapshotId,
+  );
   response = await fixture.reconcile(planId); // recover pending sync
   fixture.succeedSourceSync();
   response = await fixture.reconcile(planId); // snapshot -> compiling
@@ -1181,7 +1224,284 @@ test("lost acknowledgements recover exact Source, sync, Capsule, and Plan Run wi
   expect(fixture.counts.plan).toBe(1);
   response = await fixture.reconcile(planId); // exact deterministic Run recovery
   expect((await response.json()).installPlan.phase).toBe("reviewable");
+  expect((await fixture.planStore.get(planId))?.sourceSnapshotId)
+    .toBe("snap_prior_same_lane");
+  expect(fixture.syncRuns.get(expectedSync.runId)).toMatchObject({
+    id: expectedSync.runId,
+    requestedSnapshotId: expectedSync.snapshotId,
+    snapshotId: "snap_prior_same_lane",
+  });
   expect(fixture.counts).toEqual({ source: 1, sync: 1, capsule: 1, plan: 1 });
+});
+
+test("a deterministic Source id collision with another owner fails permanently", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "source-id-collision" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  const sourceId = sourceIdForPlanId(planId);
+  fixture.sources.push({
+    id: sourceId,
+    workspaceId: WORKSPACE.id,
+    ownerCapsuleId: "cap_other_owner",
+    name: "different-name-is-not-identity",
+    url: "https://github.com/takos/example",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    autoSync: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "source_identity_conflict" },
+  });
+  expect(fixture.counts.source).toBe(0);
+});
+
+test("an ownerless deterministic Source collision is never treated as legacy", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "ownerless-deterministic-collision" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  fixture.sources.push({
+    id: sourceIdForPlanId(planId),
+    workspaceId: WORKSPACE.id,
+    name: "example",
+    url: "https://github.com/takos/example",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active",
+    autoSync: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "source_identity_conflict" },
+  });
+  expect(fixture.counts.source).toBe(0);
+});
+
+test("a recorded legacy Source and sync resume an awaiting-input attempt and claim app ownership", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const source = await seedRecordedLegacySource(fixture, planId);
+  const recordedSyncId = "ssr_recorded_legacy_attempt";
+  const recordedSnapshotId = "snap_recorded_legacy_attempt";
+  const plan = (await fixture.planStore.get(planId))!;
+  const olderSyncAt = new Date(Date.parse(plan.createdAt) - 1_000).toISOString();
+  fixture.syncRuns.set(recordedSyncId, {
+    id: recordedSyncId,
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: plan.source.ref,
+    path: plan.source.path,
+    archiveRef: `source-archive/${recordedSnapshotId}`,
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: recordedSnapshotId,
+    // The old dedupe path could return a matching sync started before the
+    // coordinator row itself was created.
+    createdAt: olderSyncAt,
+    updatedAt: olderSyncAt,
+  });
+  const seeded = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: plan.generation,
+    expectedPhase: plan.phase,
+    plan: {
+      ...plan,
+      generation: plan.generation + 1,
+      sourceSyncRunId: recordedSyncId,
+    },
+    at: new Date().toISOString(),
+  });
+  expect(seeded.status).toBe("updated");
+
+  const pending = await fixture.reconcile(planId);
+  expect((await pending.json()).installPlan).toMatchObject({
+    phase: "syncing_source",
+    sourceId: source.id,
+    sourceSyncRunId: recordedSyncId,
+  });
+  expect(fixture.counts).toMatchObject({ source: 0, sync: 0 });
+  fixture.succeedSourceSync();
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.installPlan).toMatchObject({
+    phase: "awaiting_input",
+    awaitingInput: "inputs",
+    sourceSnapshotId: recordedSnapshotId,
+  });
+  expect(fixture.sources[0]?.ownerCapsuleId).toBeUndefined();
+
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { region: "eu" },
+  });
+  expect((await confirmed.json()).installPlan.phase).toBe("planning");
+  expect(fixture.sources[0]?.ownerCapsuleId)
+    .toBe(deterministicCapsuleIdForPlan(planId));
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan).toMatchObject({
+    phase: "reviewable",
+    sourceId: source.id,
+    sourceSyncRunId: recordedSyncId,
+    sourceSnapshotId: recordedSnapshotId,
+  });
+  expect(fixture.counts).toMatchObject({ source: 0, sync: 0, capsule: 1, plan: 1 });
+});
+
+test("a recorded legacy Source without a recorded sync starts a deterministic sync", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "recorded-source-only" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  const source = await seedRecordedLegacySource(fixture, planId);
+  fixture.syncRuns.set("ssr_unrecorded_legacy", {
+    id: "ssr_unrecorded_legacy",
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    path: source.defaultPath,
+    archiveRef: "source-archive/snap_unrecorded_legacy",
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: "snap_unrecorded_legacy",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const response = await fixture.reconcile(planId);
+  const resumed = (await response.json()).installPlan;
+  expect(resumed.phase).toBe("syncing_source");
+  expect(resumed.sourceSyncRunId).not.toBe("ssr_unrecorded_legacy");
+  expect(fixture.counts).toMatchObject({ source: 0, sync: 1 });
+});
+
+test("recorded legacy Source recovery refuses changed Git, name, or foreign ownership", async () => {
+  const changes: readonly [string, Partial<Source>][] = [
+    ["name", { name: "another-app" }],
+    ["Git address", { defaultRef: "other-ref" }],
+    ["Workspace", { workspaceId: "ws_other" }],
+    ["owner", { ownerCapsuleId: "cap_other_owner" }],
+  ];
+  for (const [label, change] of changes) {
+    const fixture = installFixture();
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans",
+      "POST",
+      createBody(),
+      { "idempotency-key": `recorded-source-${label}` },
+    );
+    const planId = (await created.json()).installPlan.id as string;
+    const source = await seedRecordedLegacySource(fixture, planId);
+    fixture.sources[0] = { ...source, ...change };
+    const response = await fixture.reconcile(planId);
+    expect((await response.json()).installPlan).toMatchObject({
+      phase: "failed",
+      diagnostic: { code: "source_identity_changed" },
+    });
+    expect(fixture.counts.sync).toBe(0);
+  }
+});
+
+test("recorded legacy sync recovery rejects foreign evidence", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "recorded-sync-foreign" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  const source = await seedRecordedLegacySource(fixture, planId);
+  const plan = (await fixture.planStore.get(planId))!;
+  const recordedSyncId = "ssr_recorded_foreign";
+  fixture.syncRuns.set(recordedSyncId, {
+    id: recordedSyncId,
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: "other-ref",
+    path: plan.source.path,
+    archiveRef: "source-archive/snap_recorded_foreign",
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: "snap_recorded_foreign",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const seeded = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: plan.generation,
+    expectedPhase: plan.phase,
+    plan: { ...plan, generation: plan.generation + 1, sourceSyncRunId: recordedSyncId },
+    at: new Date().toISOString(),
+  });
+  expect(seeded.status).toBe("updated");
+  const response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "source_sync_identity_conflict" },
+  });
+  expect(fixture.counts.sync).toBe(0);
+});
+
+test("a deterministic sync id collision fails permanently instead of retrying forever", async () => {
+  const fixture = installFixture();
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody(),
+    { "idempotency-key": "sync-id-collision" },
+  );
+  const planId = (await created.json()).installPlan.id as string;
+  await fixture.reconcile(planId); // register Source
+  const plan = (await fixture.planStore.get(planId))!;
+  const ids = await sourceSyncIds(plan);
+  const source = fixture.sources[0]!;
+  fixture.syncRuns.set(ids.runId, {
+    id: ids.runId,
+    kind: "source_sync",
+    workspaceId: WORKSPACE.id,
+    sourceId: source.id,
+    url: source.url,
+    ref: "other-ref",
+    path: plan.source.path,
+    archiveRef: `source-archive/${ids.snapshotId}`,
+    intent: "manual_plan",
+    status: "queued",
+    snapshotId: ids.snapshotId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const response = await fixture.reconcile(planId);
+  expect((await response.json()).installPlan).toMatchObject({
+    phase: "failed",
+    diagnostic: { code: "source_sync_identity_conflict" },
+  });
+  expect(fixture.counts.sync).toBe(0);
 });
 
 test("retryable Plan creation records only bounded structured controller diagnostics", async () => {
@@ -1302,6 +1622,80 @@ type LostAckMutation =
 
 const CLOUDFLARE = "registry.opentofu.org/cloudflare/cloudflare";
 const SECRET_VALUE = "super-secret-attempt-value";
+
+function sourceIdForPlanId(planId: string): string {
+  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
+  return `src_${suffix.padStart(16, "0")}`;
+}
+
+function deterministicCapsuleIdForPlan(planId: string): string {
+  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
+  return `cap_${suffix.padStart(16, "0")}`;
+}
+
+async function sourceSyncIds(plan: {
+  readonly id: string;
+  readonly requestDigest: string;
+  readonly workspaceId: string;
+  readonly source: {
+    readonly url: string;
+    readonly ref: string;
+    readonly path: string;
+    readonly authConnectionId?: string;
+  };
+}) {
+  const digest = await stableJsonDigest({
+    kind: "git_install_source_sync_v1",
+    installPlanId: plan.id,
+    installRequestDigest: plan.requestDigest,
+    workspaceId: plan.workspaceId,
+    capsuleId: deterministicCapsuleIdForPlan(plan.id),
+    sourceId: sourceIdForPlanId(plan.id),
+    url: plan.source.url,
+    ref: plan.source.ref,
+    path: plan.source.path,
+    authConnectionId: plan.source.authConnectionId ?? null,
+  });
+  const suffix = digest.replace(/^sha256:/u, "").slice(0, 16);
+  return { runId: `ssr_${suffix}`, snapshotId: `snap_${suffix}` };
+}
+
+async function seedRecordedLegacySource(
+  fixture: ReturnType<typeof installFixture>,
+  planId: string,
+): Promise<Source> {
+  const plan = (await fixture.planStore.get(planId))!;
+  const source: Source = {
+    id: "src_recorded_legacy",
+    workspaceId: plan.workspaceId,
+    name: plan.source.name,
+    url: plan.source.url,
+    defaultRef: plan.source.ref,
+    defaultPath: plan.source.path,
+    ...(plan.source.authConnectionId
+      ? { authConnectionId: plan.source.authConnectionId }
+      : {}),
+    status: "active",
+    autoSync: false,
+    createdAt: plan.createdAt,
+    updatedAt: plan.createdAt,
+  };
+  fixture.sources.push(source);
+  const seeded = await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: plan.generation,
+    expectedPhase: plan.phase,
+    plan: {
+      ...plan,
+      generation: plan.generation + 1,
+      sourceId: source.id,
+      ...(plan.mode === "attempt" ? { sourceCreatedByAttempt: true } : {}),
+    },
+    at: new Date().toISOString(),
+  });
+  expect(seeded.status).toBe("updated");
+  return source;
+}
 
 function attemptBody(
   input: {
@@ -1447,6 +1841,8 @@ test("install attempt pauses once for the whole sheet, auto-selects the only con
     sourceCreatedByAttempt: true,
     installModulePath: ".",
   });
+  expect(fixture.sources[0]?.ownerCapsuleId)
+    .toBe(deterministicCapsuleIdForPlan(planId));
   expect(paused.installPlan.attemptFacts).toBeUndefined();
   expect(paused.nextAction).toBe("none");
   expect(paused.links.reconcile).toBeUndefined();
@@ -1565,7 +1961,9 @@ test("install attempt pauses once for the whole sheet, auto-selects the only con
     },
   });
   expect(fixture.sources[0]?.autoSync).toBe(true);
-  expect(fixture.sourcePatches).toEqual([{ id: "src_one", autoSync: true }]);
+  expect(fixture.sourcePatches).toEqual([
+    { id: sourceIdForPlanId(planId), autoSync: true },
+  ]);
   expect(JSON.stringify(reviewable)).not.toContain(SECRET_VALUE);
   expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(SECRET_VALUE);
   expect(fixture.approvalCalls).toBe(0);
@@ -1839,11 +2237,12 @@ test("discarding an attempt abandons its never-applied Capsule and keeps the Sou
   expect(fixture.capsules[0]?.status).toBe("destroyed");
   // The Source is never deleted; polling this attempt enabled is turned off.
   expect(fixture.deletedSources).toEqual([]);
-  expect(fixture.sources.map((source) => source.id)).toEqual(["src_one"]);
+  const attemptSourceId = sourceIdForPlanId(planId);
+  expect(fixture.sources.map((source) => source.id)).toEqual([attemptSourceId]);
   expect(fixture.sources[0]?.autoSync).toBe(false);
   expect(fixture.sourcePatches).toEqual([
-    { id: "src_one", autoSync: true },
-    { id: "src_one", autoSync: false },
+    { id: attemptSourceId, autoSync: true },
+    { id: attemptSourceId, autoSync: false },
   ]);
   expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
 
@@ -1889,35 +2288,55 @@ test("refused discards write nothing, legacy plans cannot be discarded here, and
   expect((await legacyAnswer.json()).error.code).toBe("install_plan_not_attempt");
 });
 
-test("discarding an attempt never removes a Source that a legacy install plan reuses", async () => {
-  const fixture = attemptFixture();
+test("installing the same Git address creates a distinct Source per app", async () => {
+  const fixture = attemptFixture({
+    repositoryModules: {
+      status: "ready",
+      scopePath: ".",
+      modules: [
+        { path: ".", providerPackages: [], rootProviderRequirements: [] },
+        { path: "infra", providerPackages: [], rootProviderRequirements: [] },
+      ],
+    },
+  });
   const planId = await startAttempt(fixture);
   const paused = await reconcileUntilIdle(fixture, planId);
+  const attemptSourceId = sourceIdForPlanId(planId);
   expect(paused.installPlan).toMatchObject({
-    sourceId: "src_one",
+    sourceId: attemptSourceId,
     sourceCreatedByAttempt: true,
   });
-  // A legacy plan with the same Git address reuses the attempt's Source.
+  // A second install of the same Git address gets its own Source and owner.
   const legacy = await fixture.request(
     "/api/v1/workspaces/ws_install/install-plans",
     "POST",
-    createBody({ providerBindings: [], capsuleName: "legacy-app" }),
+    createBody({
+      providerBindings: [],
+      capsuleName: "legacy-app",
+      modulePath: "infra",
+    }),
     { "idempotency-key": "legacy-shares-source" },
   );
   const legacyId = (await legacy.json()).installPlan.id as string;
   const matched = await fixture.reconcile(legacyId);
-  expect((await matched.json()).installPlan.sourceId).toBe("src_one");
-
-  const discarded = await discard(fixture, planId, paused.installPlan.generation);
-  expect(discarded.status).toBe(200);
-  expect(fixture.deletedSources).toEqual([]);
-  expect(fixture.sources.map((source) => source.id)).toEqual(["src_one"]);
-  expect(fixture.sourcePatches).toEqual([]);
+  const legacySourceId = sourceIdForPlanId(legacyId);
+  expect(legacySourceId).not.toBe(attemptSourceId);
+  expect((await matched.json()).installPlan.sourceId).toBe(legacySourceId);
+  expect(fixture.sources.map((source) => source.id)).toEqual([
+    attemptSourceId,
+    legacySourceId,
+  ]);
+  expect(fixture.sources.map((source) => source.ownerCapsuleId)).toEqual([
+    deterministicCapsuleIdForPlan(planId),
+    deterministicCapsuleIdForPlan(legacyId),
+  ]);
+  expect(fixture.sourceInventoryReads).toBe(0);
+  expect(fixture.runInventoryReads).toBe(0);
 
   const legacyReviewable = await reconcileUntilIdle(fixture, legacyId);
   expect(legacyReviewable.installPlan).toMatchObject({
     phase: "reviewable",
-    sourceId: "src_one",
+    sourceId: legacySourceId,
   });
 });
 
@@ -2448,6 +2867,8 @@ function installFixture(
     readonly staleManagementCapture?: boolean;
     /** The next Capsule abandonment fails after the discard reserved the row. */
     readonly abandonErrorOnce?: boolean;
+    /** Successful sync adopts an earlier same-lane snapshot id. */
+    readonly canonicalSnapshotId?: string;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -2476,6 +2897,7 @@ function installFixture(
   const accountsStore = new InMemoryAccountsStore();
   const loseAck = new Set(options.loseAckOnce ?? []);
   const sources: Source[] = [];
+  const sourceCreators = new Map<string, string>();
   const syncRuns = new Map<string, SourceSyncRun>();
   const snapshots: SourceSnapshot[] = [];
   const capsules: Capsule[] = [];
@@ -2490,6 +2912,8 @@ function installFixture(
     ),
   ]);
   const counts = { source: 0, sync: 0, capsule: 0, plan: 0 };
+  let sourceInventoryReads = 0;
+  let runInventoryReads = 0;
   const sourcePatches: { readonly id: string; readonly autoSync?: boolean }[] = [];
   const deletedSources: string[] = [];
   const abandonedCapsules: string[] = [];
@@ -2573,7 +2997,74 @@ function installFixture(
     connections: {
       listProviderConnections: async () => options.providerConnections ?? [],
     },
-    listSources: async () => ({ sources }),
+    listSources: async () => {
+      sourceInventoryReads += 1;
+      return { sources };
+    },
+    ensureOwnedSource: async (input: {
+      readonly id: string;
+      readonly workspaceId: string;
+      readonly name: string;
+      readonly ownerCapsuleId: string;
+      readonly createdByInstallPlanId: string;
+      readonly url: string;
+      readonly ref: string;
+      readonly path: string;
+      readonly authConnectionId?: string;
+      readonly createdAt: string;
+    }, authority?: WorkspaceManagementAuthority) => {
+      if (!managementValidator.isWorkspaceManagementAdmissionAllowed(
+        input.workspaceId,
+        authority,
+      )) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "Workspace management admission conflict",
+          { reason: "workspace_management_admission_conflict" },
+        );
+      }
+      const current = sources.find((candidate) => candidate.id === input.id);
+      if (current) {
+        if (
+          sourceCreators.get(current.id) !== input.createdByInstallPlanId ||
+          current.workspaceId !== input.workspaceId ||
+          current.ownerCapsuleId !== input.ownerCapsuleId ||
+          current.url !== input.url ||
+          current.defaultRef !== input.ref ||
+          current.defaultPath !== input.path ||
+          (current.authConnectionId ?? undefined) !==
+            (input.authConnectionId ?? undefined)
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "deterministic Source identity conflict",
+            { reason: "source_identity_conflict" },
+          );
+        }
+        return { source: current };
+      }
+      counts.source += 1;
+      const source: Source = {
+        id: input.id,
+        workspaceId: input.workspaceId,
+        ownerCapsuleId: input.ownerCapsuleId,
+        name: input.name,
+        url: input.url,
+        defaultRef: input.ref,
+        defaultPath: input.path,
+        ...(input.authConnectionId
+          ? { authConnectionId: input.authConnectionId }
+          : {}),
+        status: "active",
+        autoSync: false,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+      };
+      sources.push(source);
+      sourceCreators.set(source.id, input.createdByInstallPlanId);
+      lose("source");
+      return { source };
+    },
     createSource: async (input: {
       readonly workspaceId: string;
       readonly name: string;
@@ -2644,7 +3135,15 @@ function installFixture(
     },
     createSourceSync: async (
       sourceId: string,
-      _request: unknown,
+      request: {
+        readonly intent?: "observe" | "manual_plan";
+        readonly coordinator?: {
+          readonly ref: string;
+          readonly path: string;
+          readonly runId: string;
+          readonly snapshotId: string;
+        };
+      },
       expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
     ) => {
       if (raceAfterClaimBeforeSourceSyncPending) {
@@ -2663,20 +3162,42 @@ function installFixture(
           { reason: "workspace_management_admission_conflict" },
         );
       }
-      counts.sync += 1;
       const source = sources.find((candidate) => candidate.id === sourceId)!;
+      const coordinator = request.coordinator;
+      if (!coordinator) throw new Error("install sync coordinator missing");
+      const existing = syncRuns.get(coordinator.runId);
+      if (existing) {
+        if (
+          existing.workspaceId !== WORKSPACE.id ||
+          existing.sourceId !== sourceId ||
+          existing.url !== source.url ||
+          existing.ref !== coordinator.ref ||
+          existing.path !== coordinator.path ||
+          existing.intent !== request.intent ||
+          (existing.requestedSnapshotId ?? existing.snapshotId) !==
+            coordinator.snapshotId
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "deterministic Source sync identity conflict",
+            { reason: "source_sync_identity_conflict" },
+          );
+        }
+        return { run: existing };
+      }
+      counts.sync += 1;
       const run: SourceSyncRun = {
-        id: "ssr_one",
+        id: coordinator.runId,
         kind: "source_sync",
         workspaceId: WORKSPACE.id,
         sourceId,
         url: source.url,
-        ref: source.defaultRef,
-        path: source.defaultPath,
-        archiveRef: "source-archive/snap_one",
-        intent: "manual_plan",
+        ref: coordinator.ref,
+        path: coordinator.path,
+        archiveRef: `source-archive/${coordinator.snapshotId}`,
+        intent: request.intent,
         status: "queued",
-        snapshotId: "snap_one",
+        snapshotId: coordinator.snapshotId,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -2695,10 +3216,13 @@ function installFixture(
       return snapshot;
     },
     listSourceSnapshots: async () => ({ snapshots }),
-    listRuns: async () => [
-      ...[...syncRuns.values()].map(projectSyncRun),
-      ...runs.values(),
-    ],
+    listRuns: async () => {
+      runInventoryReads += 1;
+      return [
+        ...[...syncRuns.values()].map(projectSyncRun),
+        ...runs.values(),
+      ];
+    },
     createSourceCompatibilityCheck: async (
       sourceId: string,
       request: {
@@ -2844,6 +3368,23 @@ function installFixture(
         readonly providerBindingSetId: string;
         readonly providerBindings: ProviderBindingSet["bindings"];
       }) => {
+        const sourceIndex = sources.findIndex(
+          (candidate) => candidate.id === input.sourceId,
+        );
+        if (sourceIndex < 0) {
+          throw new OpenTofuControllerError("not_found", "source missing");
+        }
+        const source = sources[sourceIndex]!;
+        if (
+          source.ownerCapsuleId !== undefined &&
+          source.ownerCapsuleId !== input.capsuleId
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "Source belongs to another app",
+            { reason: "source_owned_by_another_app" },
+          );
+        }
         const existing = capsules.find(
           (candidate) => candidate.id === input.capsuleId,
         );
@@ -2879,6 +3420,7 @@ function installFixture(
         counts.capsule += 1;
         installConfigMutationCount += 1;
         installConfigs.set(input.installConfig.id, input.installConfig);
+        sources[sourceIndex] = { ...source, ownerCapsuleId: input.capsuleId };
         const capsule: Capsule = {
           id: input.capsuleId,
           workspaceId: input.workspaceId,
@@ -3007,6 +3549,7 @@ function installFixture(
   return {
     planStore,
     sources,
+    syncRuns,
     capsules,
     sourcePatches,
     deletedSources,
@@ -3055,6 +3598,12 @@ function installFixture(
       return result;
     },
     counts,
+    get sourceInventoryReads() {
+      return sourceInventoryReads;
+    },
+    get runInventoryReads() {
+      return runInventoryReads;
+    },
     get compatibilityMutationCount() {
       return compatibilityMutationCount;
     },
@@ -3100,11 +3649,15 @@ function installFixture(
       readonly variableDeclarations: NonNullable<
         CapsuleCompatibilityReport["rootModuleVariableDeclarations"]
       >;
+      readonly sourceOwnerCapsuleId?: string;
     }) {
       const now = new Date().toISOString();
       const source: Source = {
         id: "src_preflight",
         workspaceId: WORKSPACE.id,
+        ...(input.sourceOwnerCapsuleId
+          ? { ownerCapsuleId: input.sourceOwnerCapsuleId }
+          : {}),
         name: "example",
         url: "https://github.com/takos/example",
         defaultRef: "main",
@@ -3185,10 +3738,18 @@ function installFixture(
     mutationCount: () =>
       counts.source + counts.sync + counts.capsule + counts.plan,
     succeedSourceSync() {
-      const current = syncRuns.get("ssr_one")!;
-      const sourcePath = sources[0]?.defaultPath ?? ".";
-      syncRuns.set("ssr_one", {
+      const current = [...syncRuns.values()].find((run) => run.status === "queued");
+      if (!current) return;
+      const requestedSnapshotId = current.snapshotId;
+      const canonicalSnapshotId = options.canonicalSnapshotId ?? requestedSnapshotId;
+      const source = sources.find((candidate) => candidate.id === current.sourceId)!;
+      const sourcePath = current.path;
+      syncRuns.set(current.id, {
         ...current,
+        snapshotId: canonicalSnapshotId,
+        ...(canonicalSnapshotId !== requestedSnapshotId
+          ? { requestedSnapshotId }
+          : {}),
         status: "succeeded",
         resolvedCommit: "a".repeat(40),
         archiveDigest: `sha256:${"b".repeat(64)}`,
@@ -3196,17 +3757,17 @@ function installFixture(
         finishedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      if (snapshots.length === 0) {
+      if (!snapshots.some((snapshot) => snapshot.id === canonicalSnapshotId)) {
         snapshots.push({
-          id: "snap_one",
+          id: canonicalSnapshotId,
           origin: "git",
           workspaceId: WORKSPACE.id,
-          sourceId: "src_one",
-          url: "https://github.com/takos/example",
-          ref: "main",
+          sourceId: current.sourceId,
+          url: source.url,
+          ref: current.ref,
           resolvedCommit: "a".repeat(40),
           path: sourcePath,
-          archiveRef: "source-archive/snap_one",
+          archiveRef: `source-archive/${canonicalSnapshotId}`,
           archiveDigest: `sha256:${"b".repeat(64)}`,
           archiveSizeBytes: 42,
           repositoryManifest: options.repositoryManifest ?? {
@@ -3223,7 +3784,9 @@ function installFixture(
               },
             ],
           },
-          fetchedByRunId: "ssr_one",
+          fetchedByRunId: canonicalSnapshotId === requestedSnapshotId
+            ? current.id
+            : "ssr_previous_same_lane",
           fetchedAt: new Date().toISOString(),
         });
       }
