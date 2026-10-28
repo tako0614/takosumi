@@ -84,6 +84,37 @@ The counts for all-destroyed and orphan Sources may remain until the sweeper
 completes retirement.
 
 ```sql
+WITH source_apps AS (
+  SELECT s.id, s.status,
+         COALESCE(json_extract(s.record_json, '$.autoSync'), 0) AS auto_sync,
+         COUNT(c.id) AS app_refs,
+         COALESCE(SUM(CASE WHEN c.status <> 'destroyed' THEN 1 ELSE 0 END), 0) AS live_apps
+  FROM sources s LEFT JOIN capsules c ON c.source_id = s.id
+  GROUP BY s.id
+)
+SELECT COUNT(*) AS sources,
+       SUM(status = 'active') AS active_sources,
+       SUM(auto_sync = 1) AS auto_sync_sources,
+       SUM(status = 'active' AND auto_sync = 1) AS active_polling_sources,
+       SUM(live_apps > 1) AS shared_live_sources,
+       SUM(live_apps > 0 AND app_refs > live_apps) AS shared_live_destroyed_sources,
+       SUM(app_refs > 0 AND live_apps = 0) AS all_destroyed_sources,
+       SUM(app_refs = 0) AS orphan_sources,
+       SUM(app_refs = 0 AND status = 'active' AND auto_sync = 1) AS polling_orphans,
+       SUM(app_refs > 0 AND live_apps = 0 AND status = 'active' AND auto_sync = 1)
+         AS polling_all_destroyed
+FROM source_apps;
+
+SELECT COUNT(*) AS snapshot_rows, COUNT(DISTINCT source_id) AS snapshot_sources
+FROM source_snapshots;
+
+SELECT COUNT(*) AS snapshots_used_by_multiple_apps FROM (
+  SELECT json_extract(run_json, '$.sourceSnapshotId') AS snapshot_id
+  FROM runs WHERE type IN ('plan', 'destroy_plan', 'drift_check')
+    AND json_extract(run_json, '$.sourceSnapshotId') IS NOT NULL
+  GROUP BY snapshot_id HAVING COUNT(DISTINCT installation_id) > 1
+);
+
 SELECT s.id AS source_id,
        COUNT(c.id) AS app_refs,
        COALESCE(SUM(CASE WHEN c.status <> 'destroyed' THEN 1 ELSE 0 END), 0) AS live_apps,
