@@ -334,6 +334,7 @@ test("authorized UI-surface pages stay one read and clamp 1/50/100/over-limit", 
     capsuleId: 123,
   });
 
+  let cold = true;
   for (const [requested, expected] of [
     [1, 1],
     [50, 50],
@@ -357,7 +358,8 @@ test("authorized UI-surface pages stay one read and clamp 1/50/100/over-limit", 
     );
     expect(JSON.stringify(page)).not.toContain("cached-foreign-output");
     expect(page.nextCursor).toBeString();
-    expect(db.prepareCount).toBe(1);
+    expect(db.prepareCount).toBe(cold ? 2 : 1);
+    cold = false;
     expect(db.writeCount).toBe(0);
   }
 
@@ -423,7 +425,7 @@ test("D1 large-Workspace authorization uses both cursor and current-Binding inde
 
   expect(page.items).toHaveLength(100);
   expect(page.nextCursor).toBeString();
-  expect(db.prepareCount).toBe(1);
+  expect(db.prepareCount).toBe(2); // v76 capability read plus bounded page query.
   expect(db.writeCount).toBe(0);
   expect(db.authorizedReadSql).not.toContain("owner_kind = 'Resource'");
   expect(db.authorizedReadSql).toContain("not exists");
@@ -515,8 +517,8 @@ test("Postgres large-Workspace authorization uses indexed Interface and Binding 
       client.authorizedRead.parameters,
     );
     const plan = explained.rows.map((row) => row["QUERY PLAN"]).join("\n");
-    expect(plan).toContain(
-      "takosumi_interface_bindings_workspace_subject_idx",
+    expect(plan).toMatch(
+      /takosumi_interface_bindings_(?:workspace_subject|authorized_current)_idx/u,
     );
     expect(plan).toContain("takosumi_interfaces_pkey");
     expect(plan).not.toMatch(/\bSeq Scan on takosumi_interfaces\b/u);

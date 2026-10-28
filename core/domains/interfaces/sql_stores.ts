@@ -1,4 +1,4 @@
-import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
+import type { Interface, InterfaceBinding, InterfaceLink } from "takosumi-contract/interfaces";
 import {
   clampPageLimit,
   decodeCursor,
@@ -8,22 +8,28 @@ import {
   UI_SURFACE_INTERFACE_TYPE,
   UI_SURFACE_INTERFACE_VERSION,
 } from "takosumi-contract";
-import type { SqlClient, SqlValue } from "../../adapters/storage/sql.ts";
+import type { SqlClient, SqlTransaction, SqlValue } from "../../adapters/storage/sql.ts";
 import { deployControlPostgresTableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
 import {
   assertWorkspaceManagementAdmission,
+  assertWorkspaceManagementAuthorityInput,
+  type WorkspaceManagementAuthority,
 } from "../deploy-control/store.ts";
 import { pgWorkspaceManagementForTransaction } from "../deploy-control/store_sql.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
   InterfaceBindingStore,
+  InterfaceLinkKey,
+  InterfaceLinkReplacement,
+  InterfaceLinkStore,
   InterfaceListFilter,
   InterfaceStore,
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { isCurrentInterfaceLink, isValidInterfaceLinkReplacement, isValidInterfaceLinkUpdate } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 import { registerIdentityPrincipalStorage } from "../identity-reconciliation/storage-identity.ts";
 
@@ -365,6 +371,114 @@ class SqlInterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
+class SqlInterfaceLinkStore implements InterfaceLinkStore {
+  readonly #table = names.interfaceLinks;
+
+  constructor(readonly client: SqlClient) {}
+
+  async create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (record.generation !== 1 || !isCurrentInterfaceLink(record)) return false;
+    return await this.#withManagementGuard(guard, async (client) => {
+      const result = await client.query(
+        `insert into ${this.#table} (${LINK_COLUMNS}) select ${LINK_PLACEHOLDERS}
+         where not exists (select 1 from ${this.#table} where consumer_capsule_id=$3 and requirement_key=$4)
+         on conflict do nothing`, linkParameters(record),
+      );
+      return result.rowCount > 0;
+    });
+  }
+
+  async get(id: string): Promise<InterfaceLink | undefined> {
+    const result = await this.client.query<InterfaceRow>(`select record_json from ${this.#table} where id=$1 limit 1`, [id]);
+    return result.rows[0] ? decode<InterfaceLink>(result.rows[0].record_json) : undefined;
+  }
+
+  getCurrent(key: InterfaceLinkKey): Promise<InterfaceLink | undefined> { return this.#find(key, true); }
+  getLatest(key: InterfaceLinkKey): Promise<InterfaceLink | undefined> { return this.#find(key, false); }
+
+  async #find(key: InterfaceLinkKey, current: boolean): Promise<InterfaceLink | undefined> {
+    const result = await this.client.query<InterfaceRow>(
+      `select record_json from ${this.#table} where consumer_capsule_id=$1 and requirement_key=$2
+       ${current ? "and state in ('pending_approval','active')" : ""} order by generation desc limit 1`,
+      [key.consumerCapsuleId, key.requirementKey],
+    );
+    return result.rows[0] ? decode<InterfaceLink>(result.rows[0].record_json) : undefined;
+  }
+
+  listByConsumerCapsule(id: string): Promise<readonly InterfaceLink[]> { return this.#list("consumer_capsule_id", id); }
+  listByProviderInterface(id: string): Promise<readonly InterfaceLink[]> { return this.#list("provider_interface_id", id); }
+  listByProviderCapsule(id: string): Promise<readonly InterfaceLink[]> { return this.#list("provider_capsule_id", id); }
+
+  async #list(column: string, id: string): Promise<readonly InterfaceLink[]> {
+    const result = await this.client.query<InterfaceRow>(`select record_json from ${this.#table} where ${column}=$1 order by created_at asc, id asc`, [id]);
+    return result.rows.map((row) => decode<InterfaceLink>(row.record_json));
+  }
+
+  async compareAndSet(record: InterfaceLink, expectedGeneration: number, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    const prior = await this.get(record.id);
+    if (!prior || prior.generation !== expectedGeneration || !isValidInterfaceLinkUpdate(record, prior)) return false;
+    return await this.#withManagementGuard(guard, async (client) => {
+      const result = await client.query(
+        `update ${this.#table} set generation=$1, state=$2, record_json=$3::jsonb, updated_at=$4
+         where id=$5 and generation=$6 and record_json=$7::jsonb`,
+        [record.generation, record.state, JSON.stringify(record), record.updatedAt, record.id, expectedGeneration, JSON.stringify(prior)],
+      );
+      return result.rowCount > 0;
+    });
+  }
+
+  async replace(input: InterfaceLinkReplacement, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (!isValidInterfaceLinkReplacement(input)) return false;
+    const { record, expected, revoked } = input;
+    try {
+      return await this.client.transaction(async (transaction) => {
+        if (!await this.#managementCurrent(transaction, guard)) return false;
+        // Every replacement locks the exact prior row, including a terminal
+        // prior. The latest-lineage guard prevents a stale terminal selection
+        // from becoming a second winner after another replacement committed.
+        const prior = await transaction.query<InterfaceRow>(
+          `select record_json from ${this.#table} where id=$1 and generation=$2 and record_json=$3::jsonb for update`,
+          [expected.id, expected.generation, JSON.stringify(expected)],
+        );
+        if (!prior.rows[0]) return false;
+        const newer = await transaction.query(`select 1 from ${this.#table}
+          where consumer_capsule_id=$1 and requirement_key=$2 and generation>$3 limit 1`,
+          [expected.consumerCapsuleId, expected.requirementKey, expected.generation]);
+        if (newer.rowCount > 0) return false;
+        if (revoked) await transaction.query(
+          `update ${this.#table} set generation=$1, state=$2, record_json=$3::jsonb, updated_at=$4 where id=$5`,
+          [revoked.generation, revoked.state, JSON.stringify(revoked), revoked.updatedAt, expected.id],
+        );
+        await transaction.query(`insert into ${this.#table} (${LINK_COLUMNS}) values (${LINK_PLACEHOLDERS})`, linkParameters(record));
+        return true;
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) return false;
+      throw error;
+    }
+  }
+
+  async #managementCurrent(client: SqlTransaction, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (!guard) return true;
+    assertWorkspaceManagementAuthorityInput(guard, guard.workspaceId);
+    const actual = await pgWorkspaceManagementForTransaction(client, guard.workspaceId);
+    return actual?.managementState === "active" && actual.managementEpoch === guard.managementEpoch;
+  }
+
+  async #withManagementGuard(guard: WorkspaceManagementAuthority | undefined, write: (client: SqlClient) => Promise<boolean>): Promise<boolean> {
+    if (!guard) return await write(this.client);
+    return await this.client.transaction(async (transaction) =>
+      await this.#managementCurrent(transaction, guard) ? await write(transaction) : false);
+  }
+}
+
+const LINK_COLUMNS = "id, generation, consumer_capsule_id, requirement_key, provider_interface_id, provider_capsule_id, state, record_json, created_at, updated_at";
+const LINK_PLACEHOLDERS = "$1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10";
+function linkParameters(record: InterfaceLink): readonly SqlValue[] {
+  return [record.id, record.generation, record.consumerCapsuleId, record.requirementKey,
+    record.providerInterfaceId, record.providerCapsuleId, record.state, JSON.stringify(record), record.createdAt, record.updatedAt];
+}
+
 class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
   readonly #interfaces = names.interfaces;
   readonly #bindings = names.interfaceBindings;
@@ -449,6 +563,27 @@ class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
           and b.record_json->'status'->>'observedInterfaceRevision'
               = i.resolved_revision::text
           and b.record_json->'spec'->'permissions' @> ${permission}::jsonb
+          and (
+            coalesce(b.record_json->'metadata'->'materializedFrom'->>'source', '') <> 'capsule_required_interface'
+            or exists (
+              select 1 from ${names.interfaceLinks} consent
+              where consent.id = b.record_json->'metadata'->'materializedFrom'->>'linkId'
+                and consent.state = 'active'
+                and consent.provider_interface_id = b.interface_id
+                and exists (select 1 from ${this.#interfaces} provider
+                  where provider.id = b.interface_id and provider.owner_kind = 'Capsule'
+                    and provider.owner_id = consent.provider_capsule_id
+                    and provider.interface_type = consent.record_json->'interface'->>'type'
+                    and provider.record_json->'spec'->>'version' = consent.record_json->'interface'->>'version')
+                and consent.record_json->>'deliveryType' = b.record_json->'spec'->'delivery'->>'type'
+                and consent.consumer_capsule_id = b.record_json->'metadata'->'materializedFrom'->>'capsuleId'
+                and consent.requirement_key = b.record_json->'metadata'->'materializedFrom'->>'requirementKey'
+                and consent.record_json->'interface'->>'type' = b.record_json->'metadata'->'materializedFrom'->>'interfaceType'
+                and consent.record_json->'interface'->>'version' = b.record_json->'metadata'->'materializedFrom'->>'interfaceVersion'
+                and consent.record_json->'requestedPermissions' @> ${permission}::jsonb
+                and consent.record_json->'approvedPermissions' @> ${permission}::jsonb
+            )
+          )
       )`,
     );
     const cursor = decodeCursor(input.params.cursor);
@@ -591,6 +726,7 @@ export function createSqlInterfaceStores(client: SqlClient): InterfaceStores {
     persistence: "durable",
     interfaces: new SqlInterfaceStore(client),
     bindings: new SqlInterfaceBindingStore(client),
+    links: new SqlInterfaceLinkStore(client),
     authorized: new SqlInterfaceAuthorizationQuery(client),
   };
 }

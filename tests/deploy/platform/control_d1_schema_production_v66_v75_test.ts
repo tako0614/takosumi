@@ -14,7 +14,8 @@ import type { D1Database, D1PreparedStatement, D1Result } from "../../../worker/
 const source = "a".repeat(40);
 const databaseId = "synthetic-production66to75";
 const now = "2026-10-26T00:00:00.000Z";
-const planPromise = buildControlD1SchemaPlan();
+// Historical production owner is intentionally pinned to its authorized v75 tail.
+const planPromise = buildControlD1SchemaPlan({ throughMigrationVersion: 75 });
 function options() {
   return {
     sourceCommit: source, environment: "production" as const, databaseId,
@@ -196,6 +197,7 @@ for (const head of [67, 68, 69, 70, 71, 72, 73, 74, 75]) {
       expect(await db.prepare("select count(*) as count from workspace_billing_bindings").first()).toEqual({ count: 0 });
       const output: string[] = [];
       const deps = {
+        buildSchemaPlan: async () => await planPromise,
         sourceCommit: source, now: () => now,
         inspectSourceCheckout: async () => ({ head: source, clean: true }),
         createRemoteDatabase: async () => ({ database: db, configurationDigest: `sha256:${"b".repeat(64)}`, databaseId }),
@@ -231,6 +233,7 @@ test("production66to75 actual CLI keeps its internal admission guard and refuses
       "apply", "--environment", "production", "--confirm-manifest", (await planPromise).manifestDigest,
       "--retain-maintenance-fence",
     ], {}, (value) => output.push(value), {
+      buildSchemaPlan: async () => await planPromise,
       sourceCommit: source, inspectSourceCheckout: async () => ({ head: source, clean: true }),
       createRemoteDatabase: async () => ({ database: counted.database, configurationDigest: `sha256:${"b".repeat(64)}`, databaseId }),
     })).toBe(1);

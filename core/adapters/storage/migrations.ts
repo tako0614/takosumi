@@ -1089,6 +1089,13 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         ["workspace_id", "subject_kind", "subject_id"],
       ],
     },
+    {
+      name: "takosumi_interface_links",
+      domain: "runtime",
+      columns: ["id", "generation", "consumer_capsule_id", "requirement_key", "provider_interface_id", "provider_capsule_id", "state", "record_json", "created_at", "updated_at"],
+      primaryKey: ["id"],
+      indexes: [["consumer_capsule_id", "requirement_key"], ["consumer_capsule_id", "requirement_key", "generation"], ["provider_interface_id"], ["provider_capsule_id"]],
+    },
     { name: "takosumi_workspace_financial_sources", domain: "deploy", columns: ["workspace_id", "source_ref", "incarnation", "registration_json", "enrollment_json", "identity_json", "permission_sequence", "last_event_ref", "management_state", "closed", "materialized_sequence", "materialized_digest", "enrolled_at"], primaryKey: ["workspace_id"] },
     { name: "takosumi_workspace_financial_events", domain: "deploy", columns: ["event_ref", "workspace_id", "source_ref", "incarnation", "sequence", "previous_event_ref", "kind", "payload_json", "closed", "recorded_at"], primaryKey: ["event_ref"] },
     { name: "takosumi_workspace_financial_materializations", domain: "deploy", columns: ["event_ref", "source_ref", "incarnation", "sequence", "previous_digest", "digest", "expected_head_json", "record_json"], primaryKey: ["event_ref"] },
@@ -5239,5 +5246,34 @@ begin if exists(select 1 from takosumi_workspace_financial_sources where workspa
 if TG_OP='DELETE' then return OLD; else return NEW; end if; end
 $financial$;
 create trigger takosumi_workspace_billing_bindings_financial_source before update or delete on takosumi_workspace_billing_bindings for each row execute function takosumi_financial_binding_immutable();`,
+    },
+    {
+      id: "runtime_interfaces.links.create",
+      version: 122,
+      domain: "runtime",
+      description: "Expand retained consumer Interface selection and provider consent with atomic CAS replacement and indexed provider reverse lookup.",
+      sql: `-- expand: TASK-0118 Phase 4. Unique indexes apply only to this new empty table.
+-- Forward repair retains this additive table and fixes the compatible artifact. No production down migration.
+create table if not exists takosumi_interface_links (
+  id text primary key,
+  generation integer not null check (generation >= 1),
+  consumer_capsule_id text not null,
+  requirement_key text not null,
+  provider_interface_id text not null,
+  provider_capsule_id text not null,
+  state text not null check (state in ('pending_approval', 'active', 'declined', 'revoked')),
+  record_json jsonb not null,
+  created_at text not null,
+  updated_at text not null
+);
+create unique index if not exists takosumi_interface_links_current_consumer_requirement_unique
+  on takosumi_interface_links (consumer_capsule_id, requirement_key)
+  where state in ('pending_approval', 'active');
+create index if not exists takosumi_interface_links_consumer_lineage_idx
+  on takosumi_interface_links (consumer_capsule_id, requirement_key, generation);
+create index if not exists takosumi_interface_links_provider_interface_idx
+  on takosumi_interface_links (provider_interface_id);
+create index if not exists takosumi_interface_links_provider_capsule_idx
+  on takosumi_interface_links (provider_capsule_id);`,
     },
   ]);

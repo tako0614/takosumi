@@ -325,8 +325,8 @@ test("native74 index migration rolls both index creations back on a failing seco
   } finally { await f.close(); }
 }, 30_000);
 
-test("native exact71/72/73/74/75 request bridge separates ordinary, billing, identity and indexed floors without DDL", async () => {
-  for (const head of [71, 72, 73, 74, 75]) {
+test("native exact71/72/73/74/75/76 request bridge separates ordinary, billing, identity and indexed floors without DDL", async () => {
+  for (const head of [71, 72, 73, 74, 75, 76]) {
     const f = await fixture(head);
     try {
       const workspace = { id: "workspace_bridge", handle: "workspace-bridge", displayName: "Native bridge", type: "personal" as const, ownerUserId: "owner_bridge", createdAt: NOW, updatedAt: NOW };
@@ -348,7 +348,7 @@ test("native exact71/72/73/74/75 request bridge separates ordinary, billing, ide
       else await expect(store.captureIdentityReconciliationInventory([member.accountId])).rejects.toThrow();
       if (head >= 74) await verifyD1BackupOwnerIndexesPredeployed(readonly);
       else await expect(verifyD1BackupOwnerIndexesPredeployed(readonly)).rejects.toThrow();
-      if (head === 75) await verifyD1OpenTofuLedgerSchemaPredeployed(readonly);
+      if (head === 76) await verifyD1OpenTofuLedgerSchemaPredeployed(readonly);
       else await expect(verifyD1OpenTofuLedgerSchemaPredeployed(readonly)).rejects.toThrow();
       expect((await f.native.prepare("select name from sqlite_master where type='index' and name in (?,?)").bind(PHYSICAL, LEGACY).all()).results).toHaveLength(head >= 74 ? 2 : 0);
       await f.native.prepare("update _takosumi_control_schema_maintenance set active=1,released_at=null where singleton=1").run();

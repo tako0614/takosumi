@@ -1,4 +1,4 @@
-import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
+import type { Interface, InterfaceBinding, InterfaceLink } from "takosumi-contract/interfaces";
 import {
   clampPageLimit,
   decodeCursor,
@@ -11,16 +11,20 @@ import {
 import { deployControlD1TableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type { D1Like } from "../../adapters/storage/d1.ts";
 import type { InterfaceMaterializationWriteAuthority } from "../deploy-control/interface_materialization_intent.ts";
-import { WorkspaceManagementAdmissionConflictError } from "../deploy-control/store.ts";
+import { WorkspaceManagementAdmissionConflictError, assertWorkspaceManagementAuthorityInput, type WorkspaceManagementAuthority } from "../deploy-control/store.ts";
 import type {
   InterfaceAuthorizationPageInput,
   InterfaceAuthorizationQuery,
   InterfaceBindingStore,
+  InterfaceLinkKey,
+  InterfaceLinkReplacement,
+  InterfaceLinkStore,
   InterfaceListFilter,
   InterfaceStore,
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import { isCurrentInterfaceLink, isValidInterfaceLinkReplacement, isValidInterfaceLinkUpdate } from "./stores.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 import { registerIdentityPrincipalStorage } from "../identity-reconciliation/storage-identity.ts";
 
@@ -394,9 +398,124 @@ class D1InterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
+class D1InterfaceLinkStore implements InterfaceLinkStore {
+  readonly #table = names.interfaceLinks;
+
+  constructor(readonly db: D1Like) {}
+
+  async create(record: InterfaceLink, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (record.generation !== 1 || !isCurrentInterfaceLink(record)) return false;
+    const parameters = [...linkParameters(record), record.consumerCapsuleId, record.requirementKey];
+    const managementClause = d1LinkManagementClause(parameters, guard);
+    const result = await this.db.prepare(
+      `insert or ignore into ${this.#table} (${LINK_COLUMNS})
+       select ${LINK_PLACEHOLDERS} where not exists (
+         select 1 from ${this.#table} where consumer_capsule_id=? and requirement_key=?
+       ) and ${managementClause}`,
+    ).bind(...parameters).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async get(id: string): Promise<InterfaceLink | undefined> {
+    const row = await this.db.prepare(`select record_json from ${this.#table} where id=? limit 1`).bind(id).first<JsonRow>();
+    return row ? JSON.parse(row.record_json) as InterfaceLink : undefined;
+  }
+
+  async getCurrent(key: InterfaceLinkKey): Promise<InterfaceLink | undefined> {
+    return await this.#find(key, true);
+  }
+
+  async getLatest(key: InterfaceLinkKey): Promise<InterfaceLink | undefined> {
+    return await this.#find(key, false);
+  }
+
+  async #find(key: InterfaceLinkKey, current: boolean): Promise<InterfaceLink | undefined> {
+    const row = await this.db.prepare(
+      `select record_json from ${this.#table} where consumer_capsule_id=? and requirement_key=?
+       ${current ? "and state in ('pending_approval','active')" : ""} order by generation desc limit 1`,
+    ).bind(key.consumerCapsuleId, key.requirementKey).first<JsonRow>();
+    return row ? JSON.parse(row.record_json) as InterfaceLink : undefined;
+  }
+
+  listByConsumerCapsule(id: string): Promise<readonly InterfaceLink[]> { return this.#list("consumer_capsule_id", id); }
+  listByProviderInterface(id: string): Promise<readonly InterfaceLink[]> { return this.#list("provider_interface_id", id); }
+  listByProviderCapsule(id: string): Promise<readonly InterfaceLink[]> { return this.#list("provider_capsule_id", id); }
+
+  async #list(column: string, id: string): Promise<readonly InterfaceLink[]> {
+    const rows = await this.db.prepare(`select record_json from ${this.#table} where ${column}=? order by created_at asc, id asc`).bind(id).all<JsonRow>();
+    return (rows.results ?? []).map((row) => JSON.parse(row.record_json) as InterfaceLink);
+  }
+
+  async compareAndSet(record: InterfaceLink, expectedGeneration: number, guard?: WorkspaceManagementAuthority): Promise<boolean> {
+    const prior = await this.get(record.id);
+    if (!prior || prior.generation !== expectedGeneration || !isValidInterfaceLinkUpdate(record, prior)) return false;
+    const parameters: unknown[] = [record.generation, record.state, JSON.stringify(record), record.updatedAt,
+      record.id, expectedGeneration, JSON.stringify(prior)];
+    const managementClause = d1LinkManagementClause(parameters, guard);
+    const result = await this.db.prepare(
+      `update ${this.#table} set generation=?, state=?, record_json=?, updated_at=?
+       where id=? and generation=? and record_json=? and ${managementClause}`,
+    ).bind(...parameters).run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+
+  async replace(input: InterfaceLinkReplacement, management?: WorkspaceManagementAuthority): Promise<boolean> {
+    if (!isValidInterfaceLinkReplacement(input)) return false;
+    const { record, expected, revoked } = input;
+    const guard = `exists (select 1 from ${this.#table} where id=? and generation=? and record_json=?)
+      and not exists (select 1 from ${this.#table} where consumer_capsule_id=? and requirement_key=? and generation>?)`;
+    const guardParameters = [expected.id, expected.generation, JSON.stringify(expected), expected.consumerCapsuleId, expected.requirementKey, expected.generation];
+    try {
+      if (!revoked) {
+        const parameters = [...linkParameters(record), ...guardParameters];
+        const managementClause = d1LinkManagementClause(parameters, management);
+        const result = await this.db.prepare(`insert into ${this.#table} (${LINK_COLUMNS})
+          select ${LINK_PLACEHOLDERS} where ${guard} and ${managementClause}`).bind(...parameters).run();
+        return (result.meta?.changes ?? 0) > 0;
+      }
+      // D1 batch is one transaction. A failed plain INSERT rolls the old-link
+      // UPDATE back; a stale guard changes neither row. Never emulate it with
+      // sequential writes on a port without atomic batch support.
+      if (!this.db.batch) throw new Error("InterfaceLink replacement requires D1 atomic batch support");
+      const parameters: unknown[] = [revoked.generation, revoked.state, JSON.stringify(revoked), revoked.updatedAt,
+        expected.id, ...guardParameters, record.id];
+      const managementClause = d1LinkManagementClause(parameters, management);
+      const results = await this.db.batch([
+        this.db.prepare(`update ${this.#table} set generation=?, state=?, record_json=?, updated_at=?
+          where id=? and ${guard}
+          and not exists (select 1 from ${this.#table} where id=?) and ${managementClause}`)
+          .bind(...parameters),
+        this.db.prepare(`insert into ${this.#table} (${LINK_COLUMNS})
+          select ${LINK_PLACEHOLDERS} where changes()=1`).bind(...linkParameters(record)),
+      ]);
+      return (results[1]?.meta?.changes ?? 0) > 0;
+    } catch (error) {
+      if (isUniqueConstraintError(error)) return false;
+      throw error;
+    }
+  }
+}
+
+const LINK_COLUMNS = "id, generation, consumer_capsule_id, requirement_key, provider_interface_id, provider_capsule_id, state, record_json, created_at, updated_at";
+const LINK_PLACEHOLDERS = "?,?,?,?,?,?,?,?,?,?";
+function linkParameters(record: InterfaceLink): readonly unknown[] {
+  return [record.id, record.generation, record.consumerCapsuleId, record.requirementKey,
+    record.providerInterfaceId, record.providerCapsuleId, record.state, JSON.stringify(record), record.createdAt, record.updatedAt];
+}
+
+function d1LinkManagementClause(parameters: unknown[], guard?: WorkspaceManagementAuthority): string {
+  if (!guard) return "1";
+  assertWorkspaceManagementAuthorityInput(guard, guard.workspaceId);
+  parameters.push(guard.workspaceId, guard.managementEpoch);
+  return `exists (select 1 from ${names.workspaces} management_workspace
+    where management_workspace.id=? and management_workspace.management_state='active'
+      and management_workspace.management_epoch=?)`;
+}
+
 class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
   readonly #interfaces = names.interfaces;
   readonly #bindings = names.interfaceBindings;
+  #linksAvailable: Promise<boolean> | undefined;
 
   constructor(readonly db: D1Like) {}
 
@@ -410,6 +529,12 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
     ) {
       return { items: [] };
     }
+    // The existing v71-v75 runtime bridge keeps ordinary grants available.
+    // Only the v76 receipt enables SQL that references the additive link table.
+    this.#linksAvailable ??= this.db.prepare(
+      "select 1 as available from schema_migrations where version=76 and name='d1_interface_links' limit 1",
+    ).first<{ readonly available: number }>().then((row) => row?.available === 1);
+    const linksAvailable = await this.#linksAvailable;
     const clauses = ["i.workspace_id = ?", "i.phase = 'Resolved'"];
     clauses.push(
       `not exists (
@@ -484,6 +609,25 @@ class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
                 '$.status.observedInterfaceRevision'
               ) = i.resolved_revision
           and permission.value = ?
+          and (
+            coalesce(json_extract(b.record_json, '$.metadata.materializedFrom.source'), '') <> 'capsule_required_interface'
+            or ${linksAvailable ? `exists (
+              select 1 from ${names.interfaceLinks} consent
+              where consent.id = json_extract(b.record_json, '$.metadata.materializedFrom.linkId')
+                and consent.state = 'active'
+                and consent.provider_interface_id = i.id
+                and i.owner_kind = 'Capsule' and consent.provider_capsule_id = i.owner_id
+                and json_extract(consent.record_json, '$.interface.type') = i.interface_type
+                and json_extract(consent.record_json, '$.interface.version') = json_extract(i.record_json, '$.spec.version')
+                and json_extract(consent.record_json, '$.deliveryType') = json_extract(b.record_json, '$.spec.delivery.type')
+                and consent.consumer_capsule_id = json_extract(b.record_json, '$.metadata.materializedFrom.capsuleId')
+                and consent.requirement_key = json_extract(b.record_json, '$.metadata.materializedFrom.requirementKey')
+                and json_extract(consent.record_json, '$.interface.type') = json_extract(b.record_json, '$.metadata.materializedFrom.interfaceType')
+                and json_extract(consent.record_json, '$.interface.version') = json_extract(b.record_json, '$.metadata.materializedFrom.interfaceVersion')
+                and exists (select 1 from json_each(consent.record_json, '$.requestedPermissions') requested where requested.value = permission.value)
+                and exists (select 1 from json_each(consent.record_json, '$.approvedPermissions') approved where approved.value = permission.value)
+            )` : "0"}
+          )
       )`,
     );
     parameters.push(input.subjectId, input.permission);
@@ -622,6 +766,7 @@ export function createD1InterfaceStores(db: D1Like): InterfaceStores {
     persistence: "durable",
     interfaces: new D1InterfaceStore(db),
     bindings: new D1InterfaceBindingStore(db),
+    links: new D1InterfaceLinkStore(db),
     authorized: new D1InterfaceAuthorizationQuery(db),
   };
 }
