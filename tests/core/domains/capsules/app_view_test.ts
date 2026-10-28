@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { CapsuleUninstall } from "takosumi-contract/capsules";
+import type { CapsuleAppLink, CapsuleUninstall } from "takosumi-contract/capsules";
 import {
   CAPSULE_APP_ACTIONS,
   CAPSULE_APP_PROBLEM_CODES,
@@ -36,6 +36,22 @@ const UNAPPLIED: CapsuleFacts = {
   status: "pending",
   currentStateGeneration: 0,
   updatedAt: RECENT,
+};
+
+const LINK: CapsuleAppLink = {
+  linkId: "ifl_app",
+  requirementKey: "data",
+  consumerCapsuleId: "cap_consumer",
+  providerCapsuleId: "cap_provider",
+  providerInterfaceId: "if_data",
+  interfaceType: "data",
+  interfaceVersion: "1",
+  permissions: ["data.read"],
+  state: "active",
+  generation: 1,
+  health: "ok",
+  canManage: true,
+  candidateCount: 1,
 };
 
 /** A record exactly as the schedule command writes it. */
@@ -218,6 +234,41 @@ const ROWS: readonly Row[] = [
     problems: ["connection_unavailable"],
   },
   // needs_attention
+  {
+    name: "a removed Interface link provider needs a new selection",
+    facts: facts({ interfaceLinks: [{ ...LINK, health: "provider_removed" }] }),
+    state: "needs_attention",
+    action: "fix_interface_link",
+    problems: ["interface_link_unavailable"],
+  },
+  {
+    name: "a not-ready Interface link provider needs a new selection",
+    facts: facts({ interfaceLinks: [{ ...LINK, health: "provider_not_ready" }] }),
+    state: "needs_attention",
+    action: "fix_interface_link",
+    problems: ["interface_link_unavailable"],
+  },
+  {
+    name: "a scheduled provider uninstall warns while the app keeps opening",
+    facts: facts({ interfaceLinks: [{ ...LINK, health: "provider_uninstall_scheduled" }], screenCount: 1 }),
+    state: "installed",
+    action: "open",
+    problems: ["interface_link_degraded"],
+  },
+  {
+    name: "an unset requirement warns without stopping the app",
+    facts: facts({ interfaceLinks: [{ ...LINK, state: "unset", health: "provider_not_ready", generation: 0 }], screenCount: 1 }),
+    state: "installed",
+    action: "open",
+    problems: ["interface_link_unset"],
+  },
+  {
+    name: "an Interface repair in progress does not offer a racing action",
+    facts: facts({ interfaceLinks: [{ ...LINK, health: "provider_removed" }], revisionPreparing: true }),
+    state: "updating",
+    action: "none",
+    problems: ["interface_link_unavailable"],
+  },
   {
     name: "a failed apply",
     facts: facts({ latestRun: run({ status: "failed", errorCode: "apply_failed" }) }),
@@ -470,6 +521,30 @@ test("every state and every primary action is reachable from the table", () => {
   expect(new Set(ROWS.flatMap((row) => row.problems))).toEqual(
     new Set(CAPSULE_APP_PROBLEM_CODES),
   );
+});
+
+test("link problems identify the requirement to repair and preserve approval warnings", () => {
+  const derived = deriveCapsuleAppStatus(facts({
+    interfaceLinks: [
+      { ...LINK, health: "provider_removed" },
+      { ...LINK, linkId: "ifl_pending", requirementKey: "pending", state: "pending_approval" },
+      { ...LINK, linkId: "ifl_revoked", requirementKey: "revoked", state: "revoked" },
+      { ...LINK, linkId: "ifl_declined", requirementKey: "declined", state: "declined" },
+    ],
+  }));
+  expect(derived.primaryAction).toBe("fix_interface_link");
+  expect(derived.problems[0]).toEqual({
+    code: "interface_link_unavailable",
+    severity: "error",
+    requirementKey: "data",
+    interfaceLinkId: "ifl_app",
+    providerCapsuleId: "cap_provider",
+  });
+  expect(derived.problems.slice(1).map((problem) => [problem.code, problem.severity])).toEqual([
+    ["interface_link_unset", "warning"],
+    ["interface_link_unset", "warning"],
+    ["interface_link_unset", "warning"],
+  ]);
 });
 
 test("problems carry the exact Run, connection, blocked reason and teardown Run", () => {

@@ -15,6 +15,10 @@
 import {
   CAPSULE_APP_VIEW_KIND,
   type CapsuleAppIncompleteSection,
+  type CapsuleAppLink,
+  type CapsuleAppLinkedApp,
+  type CapsuleAppLinkHealth,
+  type CapsuleAppLinks,
   type CapsuleAppRunSummary,
   type CapsuleAppScreen,
   type CapsuleAppScreenFailure,
@@ -25,6 +29,7 @@ import {
   type CapsuleAdoptedSourceRevision,
 } from "takosumi-contract/capsules";
 import type { Capsule } from "takosumi-contract/install-configs";
+import type { CapsuleRequiredInterface, Interface, InterfaceLink } from "takosumi-contract/interfaces";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
   CAPSULE_RUN_LIST_DEFAULT_LIMIT,
@@ -45,6 +50,7 @@ import {
 } from "takosumi-contract";
 import { encodeCursor } from "takosumi-contract/pagination";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { requireAccountsBearer } from "../account-session.ts";
 import {
   gitRevisionPreparationStalled,
   type PreparingGitPlanCoordinator,
@@ -52,6 +58,7 @@ import {
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   publicRun,
 } from "./shared.ts";
@@ -150,7 +157,7 @@ async function optional<T>(read: () => Promise<T>): Promise<Optional<T>> {
   }
 }
 
-async function readCapsuleAppView(
+export async function readCapsuleAppView(
   ctx: ControlDispatchContext,
   capsule: Capsule,
   now: number,
@@ -217,6 +224,11 @@ async function readCapsuleAppView(
   if (screenFailure.failed || screenFailure.value?.complete === false) {
     incomplete.add("screen_problems");
   }
+  const links: Optional<CapsuleAppLinks> = installConfig.failed
+    ? { failed: true } as const
+    : await optional(() => readAppLinks(ctx, capsule, installConfig.value?.requiredInterfaces ?? []));
+  if (links.failed) incomplete.add("links");
+  const linkView: CapsuleAppLinks = links.value ?? { uses: [], usedBy: [] };
 
   const version = await readVersion(operations, capsule, {
     source: source.value,
@@ -232,6 +244,7 @@ async function readCapsuleAppView(
     ...(latestRun ? { latestRun } : {}),
     revisionPreparing,
     connectionIssues,
+    ...(links.failed ? {} : { interfaceLinks: linkView.uses }),
     ...(failure ? { screenFailure: failure } : {}),
     ...(screens.failed ? {} : { screenCount: screenList.length }),
     uninstallCancellable: admission.cancel,
@@ -260,6 +273,7 @@ async function readCapsuleAppView(
     primaryAction: derived.primaryAction,
     problems: derived.problems,
     screens: screenList,
+    links: linkView,
     version,
     progress: {
       revisionPreparing: !destroyed && revisionPreparing,
@@ -275,11 +289,195 @@ async function readCapsuleAppView(
     uninstall: uninstallTerms(operations, capsule, {
       applied,
       admission,
+      usedBy: linkView.usedBy,
       ...(latestRun ? { latestRun } : {}),
     }),
     ...(incomplete.size > 0 ? { incomplete: [...incomplete].sort() } : {}),
     observedAt: new Date(now).toISOString(),
   };
+}
+
+// --- app links -----------------------------------------------------------------
+
+async function readAppLinks(
+  ctx: ControlDispatchContext,
+  capsule: Capsule,
+  requirements: readonly CapsuleRequiredInterface[],
+): Promise<CapsuleAppLinks> {
+  const service = ctx.operations.interfaces;
+  if (!service) {
+    if (requirements.length > 0) throw new Error("Interface service is unavailable");
+    return { uses: [], usedBy: [] };
+  }
+  if (
+    !service.listCapsuleInterfaceLinks || !service.listProviderCapsuleInterfaceLinks ||
+    !service.listInterfaceLinkCandidates || !service.get
+  ) throw new Error("Interface link reads are unavailable");
+  const listOutgoing = service.listCapsuleInterfaceLinks.bind(service);
+  const listIncoming = service.listProviderCapsuleInterfaceLinks.bind(service);
+  const listCandidates = service.listInterfaceLinkCandidates.bind(service);
+  const getInterface = service.get.bind(service);
+  const [outgoing, incoming] = await Promise.all([
+    listOutgoing(capsule.id),
+    listIncoming(capsule.id),
+  ]);
+  const latest = new Map<string, InterfaceLink>();
+  for (const link of outgoing) {
+    if (link.consumerCapsuleId !== capsule.id) continue;
+    const previous = latest.get(link.requirementKey);
+    if (!previous || link.generation > previous.generation) latest.set(link.requirementKey, link);
+  }
+  const currentIncoming = incoming.filter((link) =>
+    link.providerCapsuleId === capsule.id &&
+    (link.state === "active" || link.state === "pending_approval")
+  );
+  const ids = [...new Set([
+    ...[...latest.values()].map((link) => link.providerCapsuleId),
+    ...currentIncoming.map((link) => link.consumerCapsuleId),
+    capsule.id,
+  ])];
+  const apps = await ctx.operations.capsules.getCapsulesByIds(ids);
+  const byId = new Map(apps.map((app) => [app.id, app]));
+  byId.set(capsule.id, capsule);
+  const displays = new Map<string, Promise<CapsuleAppLinkedApp>>();
+  const management = new Map<string, Promise<boolean>>();
+  const providerInterfaces = new Map<string, Promise<Interface | undefined>>();
+  // Membership alone must not advertise writes to a read-only delegated grant.
+  const writeBearer = ctx.session.uninstallRequester?.grant
+    ? await requireAccountsBearer({ request: ctx.request, store: ctx.store, scope: "write" })
+    : undefined;
+  const mayWrite = writeBearer === undefined ||
+    (writeBearer.ok && writeBearer.auth.subject === ctx.session.subject &&
+      writeBearer.auth.workspaceId === ctx.session.workspaceId &&
+      JSON.stringify(writeBearer.auth.uninstallRequester.grant) ===
+        JSON.stringify(ctx.session.uninstallRequester?.grant));
+  const mayManage = (workspaceId: string): Promise<boolean> => {
+    if (!mayWrite) return Promise.resolve(false);
+    let result = management.get(workspaceId);
+    if (!result) {
+      result = canAccessWorkspace({
+        operations: ctx.operations,
+        store: ctx.store,
+        session: { ...ctx.session, requiredAccess: "write" },
+        workspaceId,
+      });
+      management.set(workspaceId, result);
+    }
+    return result;
+  };
+  const display = (app: Capsule): Promise<CapsuleAppLinkedApp> => {
+    let result = displays.get(app.id);
+    if (!result) {
+      result = (async () => {
+        const config = await ctx.operations.capsules.getInstallConfig(app.installConfigId);
+        const iconUrl = safeImageUrl(config.store?.iconUrl);
+        return {
+          capsuleId: app.id,
+          name: app.name,
+          ...(config.store ? { displayName: { ja: config.store.name.ja, en: config.store.name.en } } : {}),
+          ...(iconUrl ? { iconUrl } : {}),
+        };
+      })();
+      displays.set(app.id, result);
+    }
+    return result;
+  };
+  const providerInterface = (id: string): Promise<Interface | undefined> => {
+    let result = providerInterfaces.get(id);
+    if (!result) {
+      result = getInterface(id).catch((error: unknown) => {
+        if (asRecord(error)?.code === "not_found") return undefined;
+        throw error;
+      });
+      providerInterfaces.set(id, result);
+    }
+    return result;
+  };
+  const project = async (
+    link: InterfaceLink | undefined,
+    requirement: CapsuleRequiredInterface,
+    direction: "uses" | "usedBy",
+  ): Promise<CapsuleAppLink> => {
+    const provider = link ? byId.get(link.providerCapsuleId) : undefined;
+    const consumer = link ? byId.get(link.consumerCapsuleId) : capsule;
+    const otherApp = direction === "uses" ? provider : consumer;
+    const iface = link && provider && provider.status !== "destroyed"
+      ? await providerInterface(link.providerInterfaceId)
+      : undefined;
+    const health = linkHealth(link, provider, iface, requirement);
+    const canManage = await mayManage(capsule.workspaceId) ||
+      (otherApp !== undefined && await mayManage(otherApp.workspaceId));
+    const candidates = direction === "uses" && capsule.status !== "destroyed"
+      ? await listCandidates({
+          workspaceId: capsule.workspaceId,
+          capsuleId: capsule.id,
+          requirement,
+        })
+      : [];
+    return {
+      ...(link ? {
+        linkId: link.id,
+        providerCapsuleId: link.providerCapsuleId,
+        providerInterfaceId: link.providerInterfaceId,
+      } : {}),
+      requirementKey: requirement.key,
+      consumerCapsuleId: link?.consumerCapsuleId ?? capsule.id,
+      interfaceType: requirement.interface.type,
+      interfaceVersion: requirement.interface.version,
+      permissions: [...requirement.permissions],
+      state: link?.state ?? "unset",
+      generation: link?.generation ?? 0,
+      health,
+      ...(otherApp ? { otherApp: await display(otherApp) } : {}),
+      canManage,
+      candidateCount: candidates.length,
+    };
+  };
+  const [uses, usedBy] = await Promise.all([
+    Promise.all(requirements.map((requirement) => project(latest.get(requirement.key), requirement, "uses"))),
+    Promise.all(currentIncoming.map((link) => project(link, {
+      key: link.requirementKey,
+      interface: link.interface,
+      permissions: link.requestedPermissions,
+      delivery: { type: link.deliveryType },
+    }, "usedBy"))),
+  ]);
+  const sort = (left: CapsuleAppLink, right: CapsuleAppLink): number =>
+    left.consumerCapsuleId.localeCompare(right.consumerCapsuleId) ||
+    left.requirementKey.localeCompare(right.requirementKey);
+  return { uses: uses.sort(sort), usedBy: usedBy.sort(sort) };
+}
+
+function linkHealth(
+  link: InterfaceLink | undefined,
+  provider: Capsule | undefined,
+  iface: Interface | undefined,
+  requirement: CapsuleRequiredInterface,
+): CapsuleAppLinkHealth {
+  if (!link) return "provider_not_ready";
+  if (!provider || provider.status === "destroyed" || !iface || iface.status.phase === "Retired") {
+    return "provider_removed";
+  }
+  if (provider.status === "uninstalled") return "provider_uninstall_scheduled";
+  if (
+    !capsuleIsApplied(provider) ||
+    (provider.status !== "active" && provider.status !== "stale") ||
+    iface.metadata.ownerRef.kind !== "Capsule" ||
+    iface.metadata.ownerRef.id !== provider.id ||
+    iface.metadata.workspaceId !== provider.workspaceId ||
+    iface.status.phase !== "Resolved" ||
+    iface.status.observedGeneration !== iface.metadata.generation ||
+    iface.status.resolvedRevision < 1 ||
+    iface.spec.type !== requirement.interface.type ||
+    iface.spec.version !== requirement.interface.version ||
+    link.interface.type !== requirement.interface.type ||
+    link.interface.version !== requirement.interface.version ||
+    link.deliveryType !== requirement.delivery.type ||
+    !requirement.permissions.every((permission) =>
+      link.requestedPermissions.includes(permission) && link.approvedPermissions.includes(permission)
+    )
+  ) return "provider_not_ready";
+  return "ok";
 }
 
 /**
@@ -724,6 +922,7 @@ function uninstallTerms(
     readonly applied: boolean;
     readonly admission: UninstallAdmission;
     readonly latestRun?: CapsuleAppRunSummary;
+    readonly usedBy: readonly CapsuleAppLink[];
   },
 ): CapsuleAppUninstall {
   const graceDays = operations.capsules.uninstallGraceDays;
@@ -759,6 +958,7 @@ function uninstallTerms(
       }
     : undefined;
   return {
+    impact: { usedBy: input.usedBy },
     mode,
     ...(mode === "scheduled" && typeof graceDays === "number" ? { graceDays } : {}),
     ...(scheduled ? { scheduled } : {}),

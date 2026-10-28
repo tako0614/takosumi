@@ -1,6 +1,7 @@
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import { registerInstallDetailCases } from "./install_detail_case.ts";
 import { registerAppPageCases } from "./app_page_case.ts";
+import { registerInterfaceLinksCases } from "./interface_links_case.ts";
 import {
   expect,
   request as apiRequest,
@@ -461,7 +462,7 @@ async function stubProviderDestinationFixture(
       status: applied ? "active" : "pending", applied,
       state: applied ? "installed" : "installing", primaryAction: applied ? "view_resources" : "review", problems: [], screens: [],
       version: { updateAvailable: false, stale: false, autoUpdate: false },
-      progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
+      links: { uses: [], usedBy: [] }, progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
       observedAt: "2026-08-01T00:00:00Z",
     } } });
     if (path === "/api/v1/capsules/cap_provider_destination_e2e") return route.fulfill({ json: { capsule: {
@@ -1066,7 +1067,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           applied: true, state: "installed", primaryAction: "open", problems: [],
           screens: [{ interfaceId: "if_provider_readiness_e2e", name: "app.launcher", title: "Synthetic readiness service", url: "https://service.example.test/fixture" }],
           version: { updateAvailable: false, stale: false, autoUpdate: false },
-          progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
+          links: { uses: [], usedBy: [] }, progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
           observedAt: "2026-08-01T00:00:00.000Z",
         } } });
       }
@@ -2250,6 +2251,7 @@ test.describe("public-live bootstrap response local regression", () => {
 });
 
 registerAppPageCases(mode);
+registerInterfaceLinksCases(mode);
 registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinationFixture(
   page,
   [],

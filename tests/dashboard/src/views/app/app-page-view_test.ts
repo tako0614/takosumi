@@ -17,12 +17,13 @@ const page = read("views/app/AppManagePage.tsx");
 const attention = read("views/app/AppAttentionSection.tsx");
 const version = read("views/app/AppVersionSection.tsx");
 const settings = read("views/app/AppSettingsSection.tsx");
+const linked = read("views/app/AppLinkedSection.tsx");
 const created = read("views/app/AppCreatedSection.tsx");
 const history = read("views/app/AppHistorySection.tsx");
 const ui = read("views/app/app-ui.tsx");
 const route = read("views/app/AppPage.tsx");
 const execution = read("views/new/InstallExecution.tsx");
-const allAppSources = [page, attention, version, settings, created, history, ui, route].join("\n");
+const allAppSources = [page, attention, version, settings, linked, created, history, ui, route].join("\n");
 
 describe("installed app page", () => {
   test("the canonical route renders the one app page", () => {
@@ -36,6 +37,7 @@ describe("installed app page", () => {
       "<AppAttentionSection",
       "<AppVersionSection",
       "<AppSettingsSection",
+      "<AppLinkedSection",
       "<AppCreatedSection",
       "<AppHistorySection",
       'id="danger"',
@@ -47,14 +49,21 @@ describe("installed app page", () => {
     expect(version).toContain('id="version"');
     expect(settings).toContain('id="settings"');
     expect(settings).toContain('id="connections"');
+    expect(linked).toContain('id="links"');
     expect(created).toContain('id="created"');
     expect(history).toContain('id="history"');
   });
 
-  test("app pages do not read or render retired app links", () => {
-    for (const retired of ["getWorkspaceGraph", "<AppLinkedSection", "linkedApps", "app-linked"]) {
+  test("links render the server's per-app projection without the retired Workspace graph", () => {
+    for (const retired of ["getWorkspaceGraph", "linkedApps"]) {
       expect({ retired, found: allAppSources.includes(retired) }).toEqual({ retired, found: false });
     }
+    expect(page).toContain("<AppLinkedSection");
+    expect(linked).toContain("props.app.links.uses");
+    expect(linked).toContain("props.app.links.usedBy");
+    expect(linked).toContain('testId="app-linked"');
+    expect(linked).toContain('props.app.incomplete?.includes("links")');
+    expect(linked).toContain('t("app.links.unreadable")');
   });
 
   test("state, problems, screens and history come from the server's per-app reads", () => {
