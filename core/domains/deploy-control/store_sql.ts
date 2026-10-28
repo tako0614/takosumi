@@ -77,10 +77,14 @@ const pgLegacyUsageSelect = {
   createdAt: pgSchema.usageEvents.createdAt,
 };
 
-function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
-  if (!expected.ownerAccountId) {
-    return sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`;
-  }
+function pgConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumnAvailable: boolean): SQL {
+  if (!ownerColumnAvailable) return sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`;
+  if (!expected.ownerAccountId) return and(
+    sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`,
+    expected.workspaceId
+      ? sql`${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId})`
+      : isNull(pgSchema.connections.ownerAccountId),
+  )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
     sql`(${pgSchema.connections.connectionJson}::jsonb - 'ownerAccountId') = ${JSON.stringify(legacy)}::jsonb`,
@@ -9206,6 +9210,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     replacement: ProviderConnection,
   ): Promise<boolean> {
     if (replacement.id !== expected.id) return false;
+    const ownerColumnAvailable = await this.#v77Column("takosumi_connections", "owner_account_id");
     const updated = await this.#db
       .update(pgSchema.connections)
       .set({
@@ -9219,7 +9224,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .where(
         and(
           eq(pgSchema.connections.id, expected.id),
-          pgConnectionSnapshotJsonWhere(expected),
+          pgConnectionSnapshotJsonWhere(expected, ownerColumnAvailable),
         ),
       )
       .returning({ id: pgSchema.connections.id });
@@ -9296,6 +9301,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       }
 
       const db = this.#drizzleForClient(transaction);
+      const ownerColumnAvailable = await this.#v77Column("takosumi_connections", "owner_account_id", transaction);
       const deleted = await db
         .delete(pgSchema.connections)
         .where(
@@ -9309,7 +9315,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
                 ),
             eq(pgSchema.connections.provider, expectedConnection.provider),
             eq(pgSchema.connections.status, expectedConnection.status),
-            pgConnectionSnapshotJsonWhere(expectedConnection),
+            pgConnectionSnapshotJsonWhere(expectedConnection, ownerColumnAvailable),
             eq(pgSchema.connections.createdAt, expectedConnection.createdAt),
             eq(pgSchema.connections.updatedAt, expectedConnection.updatedAt),
           ),
@@ -9408,6 +9414,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       );
 
       const db = this.#drizzleForClient(transaction);
+      const ownerColumnAvailable = await this.#v77Column("takosumi_connections", "owner_account_id", transaction);
       const connectionFence = and(
         eq(pgSchema.connections.id, expectedConnection.id),
         expectedConnection.workspaceId === undefined
@@ -9418,7 +9425,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             ),
         eq(pgSchema.connections.provider, expectedConnection.provider),
         eq(pgSchema.connections.status, expectedConnection.status),
-        pgConnectionSnapshotJsonWhere(expectedConnection),
+        pgConnectionSnapshotJsonWhere(expectedConnection, ownerColumnAvailable),
         eq(pgSchema.connections.createdAt, expectedConnection.createdAt),
         eq(pgSchema.connections.updatedAt, expectedConnection.updatedAt),
       )!;
