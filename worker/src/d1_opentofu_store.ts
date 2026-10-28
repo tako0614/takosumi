@@ -9713,21 +9713,33 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const current = currentRow ? sourceFromD1Row(currentRow) : undefined;
     if (!current) return { status: "not_found" };
     if (current.workspaceId !== expectedSource.workspaceId) return { status: "not_found" };
+    if (stableStringify(current) !== stableStringify(expectedSource)) return { status: "conflict" };
     try {
       await this.#assertWorkspaceManagementAdmission(expectedSource.workspaceId, expectedWorkspaceManagementAuthority);
     } catch {
       return { status: "conflict" };
     }
+    if (current.ownerCapsuleId || current.retiringAt) {
+      return { status: "blocked", blockers: ["source_retirement_required"] };
+    }
+    const history = await this.db.prepare(`select 1 from source_snapshots where source_id = ?
+      union all select 1 from runs where source_id = ? and type = 'source_sync' limit 1`)
+      .bind(current.id, current.id).first();
+    if (history !== null) return { status: "blocked", blockers: ["source_retirement_required"] };
     const preBlockers = await this.#sourceDeleteBlockers(expectedSource.id, expectedSource.workspaceId);
     if (preBlockers.length > 0) return { status: "blocked", blockers: preBlockers };
-    const predicate = `id = ? and space_id = ?
+    const predicate = `id = ? and space_id = ? and record_json = ?
+      and json_extract(record_json, '$.ownerCapsuleId') is null
+      and json_extract(record_json, '$.retiringAt') is null
       and exists (select 1 from workspaces where workspaces.id = sources.space_id
         and workspaces.management_state = 'active' and workspaces.management_epoch = ?)
+      and not exists (select 1 from source_snapshots where source_id = sources.id)
+      and not exists (select 1 from runs where source_id = sources.id and type = 'source_sync')
       and not exists (select 1 from capsules where capsules.source_id = sources.id and capsules.status <> 'destroyed')
       and not exists (select 1 from runs where runs.source_id = sources.id and runs.status in ('queued', 'running'))
       and not exists (select 1 from runs where runs.installation_id in
         (select id from capsules where capsules.source_id = sources.id) and runs.status in ('queued', 'running'))`;
-    const guard = [expectedSource.id, expectedSource.workspaceId,
+    const guard = [expectedSource.id, expectedSource.workspaceId, JSON.stringify(expectedSource),
       expectedWorkspaceManagementAuthority.managementEpoch];
     const results = await this.db.batch([
       this.db.prepare(`insert into audit_events
@@ -9748,6 +9760,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       if (wasActivity) return { status: "deleted", source: current };
       return { status: "not_found" };
     }
+    if (stableStringify(after) !== stableStringify(expectedSource)) return { status: "conflict" };
+    if (after.ownerCapsuleId || after.retiringAt) {
+      return { status: "blocked", blockers: ["source_retirement_required"] };
+    }
+    const afterHistory = await this.db.prepare(`select 1 from source_snapshots where source_id = ?
+      union all select 1 from runs where source_id = ? and type = 'source_sync' limit 1`)
+      .bind(after.id, after.id).first();
+    if (afterHistory !== null) return { status: "blocked", blockers: ["source_retirement_required"] };
     const afterBlockers = await this.#sourceDeleteBlockers(expectedSource.id, expectedSource.workspaceId);
     if (afterBlockers.length > 0) return { status: "blocked", blockers: afterBlockers };
     try {

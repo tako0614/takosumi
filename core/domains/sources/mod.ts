@@ -509,6 +509,24 @@ export class SourcesService {
         { reason: "source_has_in_flight_run" },
       );
     }
+    // App-owned and historically synced Sources require archive custody before
+    // their rows disappear. A concurrent destroy or manual DELETE cannot take
+    // the Source-only path and strand the archive work list.
+    const requiresRetirement = Boolean(stored.ownerCapsuleId || stored.retiringAt) ||
+      (await this.#store.listSourceSnapshots(id)).length > 0 ||
+      (await this.#store.listSourceSyncRuns(id)).length > 0;
+    if (requiresRetirement) {
+      const retired = await this.retireOwnedSource(id, "source deleted by operator", {
+        expectedWorkspaceManagementAuthority: authority, actorId,
+      });
+      if (retired === "retired") return { source: toPublicSource(stored) };
+      if (retired === "already_retired") {
+        throw new OpenTofuControllerError("not_found", `source ${id} not found`);
+      }
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${id} still has an in-flight Run; wait for it to settle first.`,
+        { reason: "source_has_in_flight_run" });
+    }
     const nowIso = this.#now().toISOString();
     const outcome = await this.#store.deleteSourceWithActivity({
       expectedSource: stored,
@@ -542,6 +560,11 @@ export class SourcesService {
           { reason },
         );
       }
+      if (reason === "source_retirement_required") {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${id} changed before deletion; retry through archive custody.`,
+          { reason });
+      }
       throw new OpenTofuControllerError(
         "failed_precondition",
         `Source ${stored.id} still has an in-flight Run; wait for it to settle first.`,
@@ -560,6 +583,10 @@ export class SourcesService {
   async retireOwnedSource(
     sourceId: string,
     reason: string,
+    options: {
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+      readonly actorId?: string;
+    } = {},
   ): Promise<"retired" | "already_retired" | "deferred"> {
     requireNonEmptyString(sourceId, "sourceId");
     requireNonEmptyString(reason, "reason");
@@ -582,7 +609,11 @@ export class SourcesService {
       }
     };
     await assertUnreferenced();
-    const authority = await this.#captureWorkspaceManagementAuthority(source.workspaceId);
+    const authority = options.expectedWorkspaceManagementAuthority ??
+      await this.#captureWorkspaceManagementAuthority(source.workspaceId);
+    if (options.expectedWorkspaceManagementAuthority) {
+      assertWorkspaceManagementAuthorityInput(authority, source.workspaceId);
+    }
     if (!source.retiringAt) {
       try {
         source = await this.#writeSourceConfiguration({
@@ -644,6 +675,7 @@ export class SourcesService {
       expectedSourceSyncRunCount: runs.length,
       activity: {
         id: this.#newId("act"), workspaceId: source.workspaceId,
+        ...(options.actorId === undefined ? {} : { actorId: options.actorId }),
         action: "source.retired", targetType: "source", targetId: sourceId,
         metadata: { reason }, createdAt: this.#now().toISOString(),
       },
