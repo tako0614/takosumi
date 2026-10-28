@@ -17,6 +17,8 @@ import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import type { StoredGitInstallPlan } from "../install-plans/store.ts";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export interface SourceOwnershipMigrationCapsule {
   readonly capsule: Capsule;
   /** Resolved through the immutable StateVersion -> ApplyRun -> PlanRun chain. */
@@ -52,6 +54,8 @@ export interface SourceOwnershipMigrationInventory {
   readonly archiveBytes: number;
   readonly foreignArchiveRefs: number;
   readonly inFlightRunIds: readonly string[];
+  /** Split Sources need a new webhook secret before webhook delivery resumes. */
+  readonly webhookReregistrationRequired?: boolean;
   readonly reason?: string;
 }
 
@@ -117,7 +121,10 @@ export interface SourceOwnershipMigrationResult {
 }
 
 /** Stable operator report. No credential or repository content is included. */
-export function inventorySourceOwnershipGroup(group: SourceOwnershipMigrationGroup): SourceOwnershipMigrationInventory {
+export function inventorySourceOwnershipGroup(
+  group: SourceOwnershipMigrationGroup,
+  now: string = new Date().toISOString(),
+): SourceOwnershipMigrationInventory {
   const source = group.source;
   const live = group.capsules.filter(({ capsule }) => capsule.status !== "destroyed").map(({ capsule }) => capsule.id).sort();
   const destroyed = group.capsules.filter(({ capsule }) => capsule.status === "destroyed").map(({ capsule }) => capsule.id).sort();
@@ -171,11 +178,33 @@ export function inventorySourceOwnershipGroup(group: SourceOwnershipMigrationGro
     reason = "source_owner_not_live_referenced_capsule";
   } else if (inFlight.length > 0) {
     reason = "work_in_flight";
+  } else if (live.length > 0 && (source.status !== "active" || source.retiringAt)) {
+    reason = source.retiringAt ? "source_retiring" : "source_not_active";
+  } else if (live.length === 0) {
+    const nowMs = Date.parse(now);
+    const expiredBefore = Number.isFinite(nowMs) ? new Date(nowMs - DAY_MS).toISOString() : "";
+    if (!Number.isFinite(nowMs) || !Number.isFinite(Date.parse(source.createdAt)) ||
+      Date.parse(source.createdAt) + DAY_MS > nowMs) {
+      reason = "retirement_grace_not_elapsed";
+    } else if (group.gitPlans.some((plan) => plan.workspaceId === source.workspaceId &&
+      (plan.sourceId === source.id || plan.preflight?.sourceId === source.id) && !isTerminalPlan(plan) &&
+      (!plan.expiresAt || !Number.isFinite(Date.parse(plan.expiresAt)) || plan.expiresAt > expiredBefore))) {
+      reason = "source_plan_still_active";
+    } else {
+      const creator = group.gitPlans.find((plan) => plan.id === source.createdByInstallPlanId);
+      if (creator && creator.workspaceId === source.workspaceId &&
+        creator.phase !== "discarded" &&
+        !(creator.phase === "failed" && creator.mode !== "attempt") &&
+        (creator.phase === "reviewable" || !creator.expiresAt ||
+          !Number.isFinite(Date.parse(creator.expiresAt)) || Date.parse(creator.expiresAt) + DAY_MS > nowMs)) {
+        reason = "source_creator_plan_still_active";
+      }
+    }
   }
   const foreignArchiveRefs = group.snapshots.filter((snapshot) => !archiveOwnedBySource(snapshot.archiveRef, source)).length +
     group.syncRuns.filter((run) => !archiveOwnedBySource(run.archiveRef, source)).length;
   const action: SourceOwnershipMigrationAction = reason ? "blocked"
-    : live.length === 0 ? (source.status === "disabled" && !source.autoSync && source.retiringAt && foreignArchiveRefs === 0 ? "none" : "retire")
+    : live.length === 0 ? (source.status === "disabled" && !source.autoSync && source.retiringAt ? "none" : "retire")
     : live.length > 1 ? "split"
     : source.ownerCapsuleId === undefined ? "backfill"
     : foreignArchiveRefs > 0 || ownerLaneMismatch ? "normalize"
@@ -188,7 +217,12 @@ export function inventorySourceOwnershipGroup(group: SourceOwnershipMigrationGro
     archiveBytes: group.snapshots.reduce((total, snapshot) => total + snapshot.archiveSizeBytes, 0),
     foreignArchiveRefs,
     inFlightRunIds: inFlight, ...(reason ? { reason } : {}),
+    ...(action === "split" ? { webhookReregistrationRequired: true } : {}),
   };
+}
+
+function isTerminalPlan(plan: StoredGitInstallPlan): boolean {
+  return plan.phase === "reviewable" || plan.phase === "failed" || plan.phase === "discarded";
 }
 
 export async function prepareSourceOwnershipMigration(
@@ -196,13 +230,20 @@ export async function prepareSourceOwnershipMigration(
   allocator: ArtifactReferenceAllocator,
   now: string,
 ): Promise<SourceOwnershipMigrationMutation | undefined> {
-  const inventory = inventorySourceOwnershipGroup(group);
+  const inventory = inventorySourceOwnershipGroup(group, now);
   if (inventory.action === "blocked") throw new Error(`source_ownership_migration_blocked:${inventory.sourceId}:${inventory.reason}`);
   if (inventory.action === "none") return undefined;
   const retainedSource: StoredSource = inventory.action === "retire"
     ? { ...group.source, status: "disabled", autoSync: false, retiringAt: group.source.retiringAt ?? now, updatedAt: now }
     : { ...group.source, ownerCapsuleId: inventory.ownerCapsuleId,
-      ...retainedOwnerLane(group, inventory.ownerCapsuleId), updatedAt: now };
+      ...retainedOwnerLane(group, inventory.ownerCapsuleId), updatedAt: now,
+      retirementArchiveCursor: undefined, retirementSnapshotCount: undefined,
+      retirementSourceSyncRunCount: undefined };
+  if (inventory.action === "retire") {
+    return { sourceId: group.source.id, expected: group, action: "retire", retainedSource,
+      retainedSnapshots: [], retainedSyncRuns: [], retainedCompatibilityRuns: [],
+      retainedReports: [], splits: [], archiveCopies: [], activity: [] };
+  }
   const retainedSnapshots: SourceSnapshot[] = [];
   const retainedSyncRuns: SourceSyncRun[] = [];
   const retainedCompatibilityRuns: Run[] = [];
@@ -406,8 +447,10 @@ async function prepareSplit(
       compatibilityCheckRunId: requiredMap(compatibilityRunIds, plan.preflight.compatibilityCheckRunId) } : undefined }));
   const source: StoredSource = { ...original, id: newSourceId, ownerCapsuleId: capsuleId,
     createdByInstallPlanId: undefined, defaultRef: laneRef, defaultPath: lanePath,
-    hookSecretHash: "0".repeat(64), lastSeenCommit: laneSnapshot?.resolvedCommit,
+    hookSecretHash: await freshWebhookHash(), lastSeenCommit: laneSnapshot?.resolvedCommit,
     lastAutoSyncAttemptAt: undefined, retiringAt: undefined, createdAt: now, updatedAt: now,
+    retirementArchiveCursor: undefined, retirementSnapshotCount: undefined,
+    retirementSourceSyncRunCount: undefined,
     name: `${original.name} (${capsuleId})` };
   const capsule: Capsule = { ...evidence.capsule, sourceId: newSourceId,
     installConfigId: copiedConfigId ?? evidence.capsule.installConfigId,
@@ -420,10 +463,55 @@ async function prepareSplit(
     planRuns, reports, gitPlans, installConfigs, archiveCopies };
 }
 
+async function freshWebhookHash(): Promise<string> {
+  const secret = crypto.getRandomValues(new Uint8Array(32));
+  return await sha256HexOfStringAsync(Array.from(secret, (byte) => byte.toString(16).padStart(2, "0")).join(""));
+}
+
 function requiredMap(map: ReadonlyMap<string, string>, id: string): string {
   const value = map.get(id);
   if (!value) throw new Error(`source_ownership_migration_unmapped_snapshot:${id}`);
   return value;
+}
+
+function blockedResult(
+  sourceId: string,
+  reason: string,
+  group?: SourceOwnershipMigrationGroup,
+  observed?: SourceOwnershipMigrationInventory,
+): SourceOwnershipMigrationResult {
+  const fallback: SourceOwnershipMigrationInventory = {
+    sourceId, workspaceId: group?.source.workspaceId ?? "", action: "blocked",
+    liveCapsuleIds: group?.capsules.filter(({ capsule }) => capsule.status !== "destroyed")
+      .map(({ capsule }) => capsule.id).sort() ?? [],
+    destroyedCapsuleIds: group?.capsules.filter(({ capsule }) => capsule.status === "destroyed")
+      .map(({ capsule }) => capsule.id).sort() ?? [],
+    splitCapsuleIds: [], snapshotCount: group?.snapshots.length ?? 0,
+    archiveBytes: group?.snapshots.reduce((total, snapshot) => total + snapshot.archiveSizeBytes, 0) ?? 0,
+    foreignArchiveRefs: 0, inFlightRunIds: group?.inFlightRunIds ?? [], reason,
+  };
+  return { inventory: observed ? { ...observed, action: "blocked",
+    webhookReregistrationRequired: undefined, reason } : fallback,
+    status: "blocked", copies: 0, bytes: 0 };
+}
+
+function preparationFailureReason(error: unknown): string {
+  if (error instanceof Error && /^source_ownership_migration_[a-z_]+(?::[^:]*)?$/.test(error.message)) {
+    return error.message.split(":", 1)[0]!;
+  }
+  return "preparation_failed";
+}
+
+/** The approval digest covers every planned row and archive copy except a newly generated verifier hash. */
+function digestableMutation(mutation: SourceOwnershipMigrationMutation): SourceOwnershipMigrationMutation {
+  return { ...mutation, splits: mutation.splits.map((split) => ({ ...split,
+    source: { ...split.source, hookSecretHash: "<fresh-on-apply>" } })) };
+}
+
+export async function sourceOwnershipMigrationPlanDigest(
+  mutation: SourceOwnershipMigrationMutation,
+): Promise<string> {
+  return await stableJsonDigest(JSON.parse(JSON.stringify(digestableMutation(mutation))));
 }
 
 async function deterministicId(prefix: string, ...parts: readonly string[]): Promise<string> {
@@ -441,19 +529,30 @@ export async function migrateSourceOwnership(
 ): Promise<readonly SourceOwnershipMigrationResult[]> {
   const ids = options.sourceId ? [options.sourceId] : [...await store.listSourceIds()].sort();
   const results: SourceOwnershipMigrationResult[] = [];
+  const now = options.now ?? new Date().toISOString();
   for (const id of ids) {
-    const group = await store.readGroup(id);
-    if (!group) throw new Error(`source_ownership_migration_missing_source:${id}`);
-    const inventory = inventorySourceOwnershipGroup(group);
+    let group: SourceOwnershipMigrationGroup | undefined;
+    try { group = await store.readGroup(id); }
+    catch { results.push(blockedResult(id, "group_read_failed")); continue; }
+    if (!group) { results.push(blockedResult(id, "source_missing")); continue; }
+    let inventory: SourceOwnershipMigrationInventory;
+    try { inventory = inventorySourceOwnershipGroup(group, now); }
+    catch { results.push(blockedResult(id, "inventory_failed", group)); continue; }
     if (inventory.action === "blocked") { results.push({ inventory, status: "blocked", copies: 0, bytes: 0 }); continue; }
     if (inventory.action === "none") { results.push({ inventory, status: "unchanged", copies: 0, bytes: 0 }); continue; }
-    const mutation = await prepareSourceOwnershipMigration(group, allocator, options.now ?? new Date().toISOString());
-    if (!mutation) throw new Error(`source_ownership_migration_missing_mutation:${id}`);
-    const planDigest = await stableJsonDigest(JSON.parse(JSON.stringify(mutation)));
+    let mutation: SourceOwnershipMigrationMutation | undefined;
+    try { mutation = await prepareSourceOwnershipMigration(group, allocator, now); }
+    catch (error) { results.push(blockedResult(id, preparationFailureReason(error), group, inventory)); continue; }
+    if (!mutation) { results.push(blockedResult(id, "missing_mutation", group, inventory)); continue; }
+    const planDigest = await sourceOwnershipMigrationPlanDigest(mutation);
     const copies = mutation.archiveCopies;
     const bytes = copies.reduce((total, copy) => total + copy.sizeBytes, 0);
     if (!options.apply) { results.push({ inventory, status: "dry_run", planDigest, copies: copies.length, bytes }); continue; }
-    for (const copy of copies) await copier.copyVerified(copy);
+    try { for (const copy of copies) await copier.copyVerified(copy); }
+    catch (error) { results.push({ ...blockedResult(id,
+      error instanceof Error && error.message.startsWith("source_archive_missing")
+        ? "source_archive_missing" : "archive_copy_failed", group, inventory), planDigest,
+      copies: copies.length, bytes }); continue; }
     const status = await store.commitGroup(mutation);
     results.push({ inventory, status, planDigest, copies: copies.length, bytes });
     if (status === "conflict") break;

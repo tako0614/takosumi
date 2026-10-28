@@ -1,3 +1,4 @@
+import { inventorySourceOwnershipGroup } from "../../core/domains/sources/ownership-migration.ts";
 /**
  * Operator-only Source ownership repair against the existing D1 schema.
  * Every observed physical row and each group membership count is fenced inside
@@ -332,7 +333,8 @@ export async function commitD1SourceOwnershipGroup(
 ): Promise<"committed" | "conflict"> {
   const observed = observations.get(mutation.expected);
   if (!observed || mutation.expected.source.id !== mutation.sourceId ||
-    mutation.retainedSource.id !== mutation.sourceId || mutation.expected.inFlightRunIds.length > 0) return "conflict";
+    mutation.retainedSource.id !== mutation.sourceId || mutation.expected.inFlightRunIds.length > 0 ||
+    inventorySourceOwnershipGroup(mutation.expected).action !== mutation.action) return "conflict";
   const physicalByTable = new Map(observed.map((entry) =>
     [entry.table, new Map(entry.rows.map((row) => [String(row.id), row]))] as const));
   const statements = observed.flatMap((entry) => fence(db, entry));

@@ -220,9 +220,124 @@ test("failed archive readback prevents the DB group commit", async () => {
       body: JSON.stringify({ sourceId: "src_legacy", preparedAt: body.preparedAt,
         reportDigest: body.reportDigest }),
     }), env, { store, copier });
-    expect(apply?.status).toBe(500);
+    expect(apply?.status).toBe(409);
+    expect(await apply!.json()).toMatchObject({ results: [{ status: "blocked",
+      inventory: { action: "blocked", reason: "archive_copy_failed" } }] });
     expect(store.commits).toBe(0);
   } finally {
     console.error = previousError;
   }
+});
+
+
+function pendingSplitGroup(): SourceOwnershipMigrationGroup {
+  return { ...structuredClone(group), capsules: [group.capsules[0]!, {
+    capsule: { ...group.capsules[0]!.capsule, id: "cap_2", name: "other", slug: "other", installConfigId: "cfg_2" },
+  }], installConfigs: [...group.installConfigs, { ...group.installConfigs[0]!, id: "cfg_2" }] };
+}
+
+test("split dry-run remains stable with fresh webhook hashes and can apply its reviewed digest", async () => {
+  const store = new FixtureStore();
+  store.current = pendingSplitGroup();
+  let committed: SourceOwnershipMigrationMutation | undefined;
+  store.commitGroup = async (mutation) => { committed = mutation; store.commits++; return "committed"; };
+  const deps = { store, copier: { copyVerified: async () => { throw new Error("no copy expected"); } },
+    now: () => new Date("2026-10-28T00:00:00.000Z") };
+  const get = async () => (await handleSourceOwnershipMigrationOperatorRequest(new Request(`${origin}?sourceId=src_legacy`, {
+    headers: { authorization: `Bearer ${token}` },
+  }), env, deps))!;
+  const dry = await (await get()).json() as { preparedAt: string; reportDigest: string; results: unknown[] };
+  expect(await (await get()).json()).toEqual(dry);
+  expect(dry.results).toMatchObject([{ inventory: { action: "split", webhookReregistrationRequired: true } }]);
+  const apply = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt, reportDigest: dry.reportDigest }),
+  }), env, deps);
+  expect(apply?.status).toBe(200);
+  expect(committed?.splits[0]?.source.hookSecretHash).toMatch(/^[0-9a-f]{64}$/u);
+  expect(committed?.splits[0]?.source.hookSecretHash).not.toBe("0".repeat(64));
+  expect(committed?.splits[0]?.source.hookSecretHash).not.toBe(group.source.hookSecretHash);
+  expect(store.commits).toBe(1);
+});
+
+test("missing original during split reports that group blocked without a ledger commit", async () => {
+  const store = new FixtureStore();
+  store.current = { ...pendingSplitGroup(), snapshots: [{ id: "snap_missing", origin: "git", workspaceId: "ws_1",
+    sourceId: "src_legacy", url: group.source.url, ref: "main", path: ".", resolvedCommit: "abc",
+    archiveRef: "workspaces/ws_1/sources/src_other/snapshots/snap_missing/source.tar.zst",
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1, fetchedByRunId: "ssr_missing",
+    fetchedAt: "2026-10-01T00:00:00.000Z" }] };
+  store.current = { ...store.current, syncRuns: [{ id: "ssr_missing", kind: "source_sync", workspaceId: "ws_1",
+    sourceId: "src_legacy", url: group.source.url, ref: "main", path: ".", status: "succeeded",
+    archiveRef: store.current.snapshots[0]!.archiveRef, snapshotId: "snap_missing", resolvedCommit: "abc",
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+    createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" }] };
+  const deps = { store, copier: { copyVerified: async () => { throw new Error("source_archive_missing"); } } };
+  const get = await handleSourceOwnershipMigrationOperatorRequest(new Request(`${origin}?sourceId=src_legacy`, {
+    headers: { authorization: `Bearer ${token}` },
+  }), env, deps);
+  const dry = await get!.json() as { preparedAt: string; reportDigest: string };
+  const apply = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt, reportDigest: dry.reportDigest }),
+  }), env, deps);
+  expect(apply?.status).toBe(409);
+  expect(await apply!.json()).toMatchObject({ results: [{ status: "blocked",
+    inventory: { action: "blocked", reason: "source_archive_missing" } }] });
+  expect(store.commits).toBe(0);
+});
+
+test("native R2 archive copy streams the original and finishes it before readback", async () => {
+  const from = "workspaces/ws_1/sources/src_old/snapshots/snap_stream/source.tar.zst";
+  const to = "workspaces/ws_1/sources/src_new/snapshots/snap_stream/source.tar.zst";
+  const bytes = new TextEncoder().encode("streamed archive");
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const order: string[] = [];
+  let stored: Uint8Array | undefined;
+  const bucket = {
+    get: async (key: string) => {
+      if (key === from) {
+        order.push("source");
+        return { size: bytes.length, body: new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } }),
+          arrayBuffer: async () => { throw new Error("original must stream"); } };
+      }
+      if (!stored) return null;
+      order.push("readback");
+      return { size: stored.length, arrayBuffer: async () => stored!.slice().buffer };
+    },
+    put: async (_key: string, value: ReadableStream, options: { sha256?: string; onlyIf?: { etagDoesNotMatch?: string } }) => {
+      expect(value).toBeInstanceOf(ReadableStream);
+      expect(options.sha256).toBe(hex);
+      expect(options.onlyIf?.etagDoesNotMatch).toBe("*");
+      stored = new Uint8Array(await new Response(value).arrayBuffer());
+      order.push("copied");
+      return { size: stored.length };
+    },
+  } as unknown as R2Bucket;
+  await new R2SourceOwnershipArchiveCopier(bucket).copyVerified({ from, to, digest: `sha256:${hex}`, sizeBytes: bytes.length });
+  expect(order).toEqual(["source", "copied", "readback"]);
+});
+
+
+test("retirement marking never reads or copies external archives and needs no R2 binding", async () => {
+  const store = new FixtureStore();
+  store.current = { ...structuredClone(group), capsules: [], snapshots: [{ id: "snap_retire_foreign", origin: "git",
+    workspaceId: "ws_1", sourceId: "src_legacy", url: group.source.url, ref: "main", path: ".", resolvedCommit: "abc",
+    archiveRef: "workspaces/ws_1/sources/src_gone/snapshots/snap_retire_foreign/source.tar.zst",
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1, fetchedByRunId: "ssr_gone",
+    fetchedAt: "2026-10-01T00:00:00.000Z" }] };
+  const noObjectsEnv = { ...env, TAKOSUMI_STORED_SERVICE_USAGE: {}, TAKOSUMI_STORED_OBJECT_OWNERS: {} } as CloudflareWorkerEnv;
+  const get = await handleSourceOwnershipMigrationOperatorRequest(new Request(`${origin}?sourceId=src_legacy`, {
+    headers: { authorization: `Bearer ${token}` },
+  }), noObjectsEnv, { store });
+  const dry = await get!.json() as { preparedAt: string; reportDigest: string; results: unknown[] };
+  expect(dry.results).toMatchObject([{ inventory: { action: "retire" }, copies: 0, bytes: 0 }]);
+  const apply = await handleSourceOwnershipMigrationOperatorRequest(new Request(origin, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt, reportDigest: dry.reportDigest }),
+  }), noObjectsEnv, { store });
+  expect(apply?.status).toBe(200);
+  expect(store.commits).toBe(1);
+  expect(store.current.source).toMatchObject({ status: "disabled", autoSync: false, retiringAt: dry.preparedAt });
 });

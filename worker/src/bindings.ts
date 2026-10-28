@@ -288,6 +288,8 @@ export interface R2Bucket {
 }
 
 export interface R2PutOptions {
+  /** R2 validates the streamed object against this SHA-256 checksum. */
+  readonly sha256?: ArrayBuffer | string;
   readonly httpMetadata?: {
     readonly contentType?: string;
   };
@@ -330,6 +332,8 @@ export interface R2Object {
 }
 
 export interface R2ObjectBody extends R2Object {
+  /** Native R2 stream; older minimal adapters may expose only arrayBuffer. */
+  readonly body?: ReadableStream<Uint8Array>;
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 

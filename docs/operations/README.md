@@ -40,6 +40,7 @@ Cloud 側のリポジトリで管理します。
 - [backup と restore の訓練](./backup-restore-drills.md)
 - [disaster recovery](./disaster-recovery.md)
 - [Source polling と archive retirement](./source-maintenance.md)
+- [Source ownership の backfill と split](./source-ownership-migration.md)
 - [Resource state の取り込み](./resource-state-adoption.md)
 - [Output / Interface migration](./output-interface-migration.md)
 - [廃止済み Dependency のデータ保守](./retired-dependency-maintenance.md)

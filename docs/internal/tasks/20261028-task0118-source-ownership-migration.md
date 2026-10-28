@@ -5,12 +5,11 @@ Source belonged to one app. The route is `/internal/platform/source-ownership-mi
 and requires the existing deploy-control operator bearer. Nothing schedules it.
 The D1 handler always uses `predeployed` schema mode, including dry-run.
 
-The optional stored-service composition can run the read-only GET dry-run, but
-POST apply returns `503 source_archive_custody_unavailable` before any R2 copy
-or DB write. Its Runner reads require a matching physical stored-object usage
-record, while this migration's raw R2 copier cannot create that record for a
-new Source before its DB group commits. Migration in that composition is
-deferred until a reviewed custody-aware copier and adoption sequence exist.
+The optional stored-service composition can run the read-only GET dry-run and
+metadata-only backfill or retirement marking. Archive-copy mutations return
+`503 source_archive_custody_unavailable` before any R2 copy or DB write: its
+Runner requires a physical stored-object usage record which the raw R2 copier
+cannot create. Those copies need a reviewed custody-aware adoption sequence.
 The ordinary OSS R2 path uses the copied archive after its size and digest
 checks; it does not require a `takosumi-run-id` metadata field on the copy.
 
@@ -60,14 +59,16 @@ TAKOSUMI_DEPLOY_CONTROL_TOKEN=... bun scripts/operator-source-ownership.ts \
 ```
 
 The mutation is per Source group. It backfills a sole live app as owner,
-marks an all-destroyed or orphan Source disabled for the retirement sweeper,
+marks an all-destroyed or orphan Source disabled for the retirement sweeper only
+after the 24-hour grace and source-plan checks,
 or splits each extra live app into a new Source. For a split it copies the
 app's adopted and referenced historical SourceSnapshots and their producer
 SourceSync/compatibility-check Runs, repoints that app's Capsule, PlanRuns,
 GitInstallPlans, InstallConfig snapshot pins, compatibility reports, and preflight evidence, and records
 `source.split` Activity. The retained owner's `defaultRef/defaultPath` is set
-from its adopted snapshot. A cloned Source's webhook verifier is disabled
-until the operator rotates its secret; the old verifier is never duplicated.
+from its adopted snapshot. A cloned Source gets a fresh random webhook verifier and reports
+`webhookReregistrationRequired`. Rotate its secret and re-register the external
+webhook before using it; the old verifier is never duplicated.
 The original compatibility report and producer Run remain as Source history,
 with their moved Capsule association cleared after the app-specific clone is
 created. Both resulting groups can be inventoried again without treating that
@@ -79,10 +80,10 @@ to the exact dry-run. If the CLI exits during copying, rerun the same reviewed
 command from the beginning; existing destination objects are read back and
 verified without overwrite. The DB group is committed only on the final batch.
 
-Historical cross-Source archive refs are normalized even for a Source that is
-not split. Each immutable archive is copied under its own Source prefix.
-The copier checks the original bytes, creates the destination without
-overwrite, then reads and hashes the destination. Only after all copies have
+Retirement marking never copies archives. Historical cross-Source archive refs
+of live Sources can be normalized even when that live Source is not split. Each immutable archive is copied under its own Source prefix.
+The native R2 copier streams the original with a required checksum, creates the
+destination without overwrite, then reads and hashes the destination sequentially. Only after all copies have
 passed does the DB commit atomically guard and write the group. A failed copy
 touches no DB row; an interrupted DB commit can leave verified extra copies,
 which are safe to reuse on retry and should be inventoried for later cleanup.
@@ -195,3 +196,12 @@ committed and later found incorrect, stop further groups, preserve evidence,
 restore the reviewed DB/R2 backup under the normal maintenance fence, or make
 an independently reviewed forward repair. Do not manually overwrite immutable
 SourceSnapshot IDs or archive objects.
+
+
+## Independent review follow-up
+
+The canonical operator checklist, per-Source archive counts, staging split plus full re-plan requirement,
+and Node/PostgreSQL metadata-only backfill entrypoint are in
+[Source ownership operations](../../operations/source-ownership-migration.md).
+Group preparation failures and missing copy originals are reported as blocked without stopping the full dry-run.
+Approval digests exclude only newly generated split webhook verifier hashes; all observed rows and other planned changes remain bound.

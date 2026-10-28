@@ -2,8 +2,7 @@
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { sha256HexOfStringAsync } from "../../core/shared/runtime/hash.ts";
-import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
-import { migrateSourceOwnership, prepareSourceOwnershipMigration, type SourceOwnershipMigrationArchiveCopier,
+import { migrateSourceOwnership, prepareSourceOwnershipMigration, sourceOwnershipMigrationPlanDigest, type SourceOwnershipMigrationArchiveCopier,
   type SourceOwnershipMigrationResult, type SourceOwnershipMigrationStore } from "../../core/domains/sources/ownership-migration.ts";
 import { CloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
 import type { CloudflareWorkerEnv, R2Bucket, R2ObjectBody } from "./bindings.ts";
@@ -39,28 +38,11 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
   if (!env.TAKOSUMI_CONTROL_DB) return Response.json({ error: "control_db_unavailable" }, { status: 503 });
-  if (request.method === "POST") {
-    // The raw R2 copier does not record the physical stored-service snapshot.
-    // After DB commit, the Runner's ordinary read custody would reject the
-    // copied archive. Refuse before copying even when a test injects a copier.
-    try {
-      if (storedServiceCompositionFromEnv(env)) {
-        return Response.json({ error: "source_archive_custody_unavailable" },
-          { status: 503, headers: { "cache-control": "no-store" } });
-      }
-    } catch {
-      return Response.json({ error: "source_archive_custody_unavailable" },
-        { status: 503, headers: { "cache-control": "no-store" } });
-    }
-  }
   const store = dependencies.store ?? new CloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
     // Operator migration is DDL-free even in an OSS bootstrap composition.
     schemaMode: "predeployed",
   });
   const copier = dependencies.copier ?? (env.R2_SOURCE ? new R2SourceOwnershipArchiveCopier(env.R2_SOURCE) : undefined);
-  if (request.method === "POST" && !copier) {
-    return Response.json({ error: "source_archive_store_unavailable" }, { status: 503 });
-  }
   const dryRunCopier: SourceOwnershipMigrationArchiveCopier = copier ?? {
     copyVerified: async () => { throw new Error("source_archive_store_unavailable"); },
   };
@@ -116,9 +98,22 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
     if (!group) throw new Error(`source_ownership_migration_missing_source:${sourceId}`);
     const mutation = await prepareSourceOwnershipMigration(group, allocator, values.preparedAt);
     if (!mutation) throw new Error("source_ownership_migration_missing_mutation");
-    if (await stableJsonDigest(JSON.parse(JSON.stringify(mutation))) !== observed.planDigest) {
+    if (await sourceOwnershipMigrationPlanDigest(mutation) !== observed.planDigest) {
       return Response.json({ error: "dry_run_changed" }, { status: 409,
         headers: { "cache-control": "no-store" } });
+    }
+    // Metadata-only backfill/retire does not need object copy custody.
+    if (mutation.archiveCopies.length > 0) {
+      try {
+        if (storedServiceCompositionFromEnv(env)) {
+          return Response.json({ error: "source_archive_custody_unavailable" },
+            { status: 503, headers: { "cache-control": "no-store" } });
+        }
+      } catch {
+        return Response.json({ error: "source_archive_custody_unavailable" },
+          { status: 503, headers: { "cache-control": "no-store" } });
+      }
+      if (!copier) return Response.json({ error: "source_archive_store_unavailable" }, { status: 503 });
     }
     if (copyCursor as number > mutation.archiveCopies.length) {
       return Response.json({ error: "invalid_copy_cursor" }, { status: 400 });
@@ -133,7 +128,15 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
     while (cursor < mutation.archiveCopies.length && cursor - (copyCursor as number) < MAX_COPY_BATCH_ITEMS) {
       const copy = mutation.archiveCopies[cursor]!;
       if (cursor > (copyCursor as number) && batchBytes + copy.sizeBytes > MAX_COPY_BATCH_BYTES) break;
-      await dryRunCopier.copyVerified(copy);
+      try {
+        await dryRunCopier.copyVerified(copy);
+      } catch (error) {
+        const reason = error instanceof Error && error.message.startsWith("source_archive_missing")
+          ? "source_archive_missing" : "archive_copy_failed";
+        return Response.json({ kind: "takosumi.source-ownership-migration.apply@v1",
+          results: [{ ...observed, status: "blocked", inventory: { ...observed.inventory, action: "blocked", reason } }] },
+          { status: 409, headers: { "cache-control": "no-store" } });
+      }
       batchBytes += copy.sizeBytes;
       cursor++;
     }
@@ -152,7 +155,9 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
   } catch (error) {
     // Raw diagnostics are intentionally not returned over HTTP. The operator
     // sees a stable failure code and can inspect the Worker log for the error.
-    console.error("source ownership migration failed", error);
+    console.error("source ownership migration failed", {
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
     return Response.json({ error: "source_ownership_migration_failed" }, { status: 500,
       headers: { "cache-control": "no-store" } });
   }
@@ -187,14 +192,9 @@ export class R2SourceOwnershipArchiveCopier implements SourceOwnershipMigrationA
       await verifyObject(existing, input.digest, input.sizeBytes);
       return;
     }
-    const original = await this.bucket.get(input.from);
-    if (!original) throw new Error(`source_archive_missing:${input.from}`);
-    const bytes = await verifyObject(original, input.digest, input.sizeBytes);
-    const result = await this.bucket.put(input.to, bytes, {
-      onlyIf: { etagDoesNotMatch: "*" },
-      httpMetadata: { contentType: "application/zstd" },
-      customMetadata: { "takosumi-digest": input.digest, "takosumi-migration": "source-split-v1" },
-    });
+    // Finish copying before readback, so the fallback byte buffer can be
+    // released. Native R2 passes its body stream through without buffering.
+    const result = await this.copyOriginal(input);
     if (!result) {
       const raced = await this.bucket.get(input.to);
       if (!raced) throw new Error(`source_archive_copy_lost:${input.to}`);
@@ -206,6 +206,21 @@ export class R2SourceOwnershipArchiveCopier implements SourceOwnershipMigrationA
     if (!stored) throw new Error(`source_archive_copy_readback_missing:${input.to}`);
     await verifyObject(stored, input.digest, input.sizeBytes);
   }
+
+  private async copyOriginal(input: { readonly from: string; readonly to: string;
+    readonly digest: string; readonly sizeBytes: number }) {
+    const original = await this.bucket.get(input.from);
+    if (!original) throw new Error("source_archive_missing");
+    if (original.size !== input.sizeBytes) throw new Error("source_archive_size_mismatch");
+    const value = original.body ?? await verifyObject(original, input.digest, input.sizeBytes);
+    return await this.bucket.put(input.to, value, {
+      sha256: input.digest.slice("sha256:".length),
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: { contentType: "application/zstd" },
+      customMetadata: { "takosumi-digest": input.digest, "takosumi-migration": "source-split-v1" },
+    });
+  }
+
 }
 
 function safeArchiveKey(value: string): boolean {

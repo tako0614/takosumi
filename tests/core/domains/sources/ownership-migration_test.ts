@@ -7,6 +7,7 @@ import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/s
 import type { StoredInstallConfig, StoredSource } from "../../../../core/domains/deploy-control/store.ts";
 import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
 import { inventorySourceOwnershipGroup, migrateSourceOwnership, prepareSourceOwnershipMigration,
+  sourceOwnershipMigrationPlanDigest,
   type SourceOwnershipMigrationGroup, type SourceOwnershipMigrationMutation,
   type SourceOwnershipMigrationStore } from "../../../../core/domains/sources/ownership-migration.ts";
 
@@ -159,6 +160,7 @@ describe("operator Source ownership migration", () => {
     expect(split.capsuleId).toBe("cap_b");
     expect(split.source.ownerCapsuleId).toBe("cap_b");
     expect(split.source.hookSecretHash).not.toBe(original.source.hookSecretHash);
+    expect(split.source.hookSecretHash).toMatch(/^[0-9a-f]{64}$/);
     expect(split.snapshots).toHaveLength(1);
     expect(split.syncRuns).toHaveLength(1);
     expect(split.snapshots[0]?.fetchedByRunId).toBe(split.syncRuns[0]?.id);
@@ -180,7 +182,8 @@ describe("operator Source ownership migration", () => {
     expect(prepared?.activity[0]?.action).toBe("source.split");
     expect(split.archiveCopies[0]?.to).toBe(split.snapshots[0]?.archiveRef);
     const again = await prepareSourceOwnershipMigration(originalWithData, allocator, "2026-10-28T00:00:00.000Z");
-    expect(again).toEqual(prepared);
+    expect(again?.splits[0]?.source.hookSecretHash).not.toBe(split.source.hookSecretHash);
+    expect(again?.splits[0]?.source.id).toBe(split.source.id);
     expect(originalWithData.planRuns[0]?.sourceSnapshotId).toBe(snap.id);
     expect(originalWithData.compatibilityRuns[0]?.id).toBe("check_1");
     const store = new FixtureStore();
@@ -257,7 +260,7 @@ describe("operator Source ownership migration", () => {
       .map((entry) => entry.status)).toEqual(["unchanged", "unchanged"]);
   });
 
-  test("foreign archive refs are copied into each retained Source before mark for retirement", async () => {
+  test("retirement prepares no archive copies, even with foreign historical refs", async () => {
     const original = group("src_old", [["cap_gone", "destroyed"]]);
     const snap = { ...snapshot("snap_foreign", "src_old", "ssr_foreign"),
       archiveRef: "workspaces/ws_1/sources/src_other/snapshots/snap_foreign/source.tar.zst" };
@@ -270,11 +273,11 @@ describe("operator Source ownership migration", () => {
       copyVerified: async ({ to }) => { copied.push(to); },
     }, { apply: true, now: "2026-10-28T00:00:00.000Z" });
     expect(result[0]?.status).toBe("committed");
-    expect(copied).toEqual(["workspaces/ws_1/sources/src_old/snapshots/snap_foreign/source.tar.zst"]);
+    expect(copied).toEqual([]);
     const mutation = await prepareSourceOwnershipMigration(evidence, allocator, "2026-10-28T00:00:00.000Z");
-    expect(mutation?.retainedSnapshots[0]?.archiveRef).toBe(copied[0]);
-    expect(mutation?.retainedSyncRuns[0]?.archiveRef).toBe(copied[0]);
-    expect(mutation?.archiveCopies).toHaveLength(1);
+    expect(mutation?.retainedSnapshots).toHaveLength(0);
+    expect(mutation?.retainedSyncRuns).toHaveLength(0);
+    expect(mutation?.archiveCopies).toHaveLength(0);
   });
 
   test("retained owner adopts its own lane during backfill and split", async () => {
@@ -292,4 +295,99 @@ describe("operator Source ownership migration", () => {
     expect(mutation?.retainedSource.defaultRef).toBe("release/v1");
     expect(mutation?.splits[0]?.source.defaultRef).toBe("release/v2");
   });
+
+  test("retirement waits for a day and respects creator and referenced install plans", async () => {
+    const now = "2026-10-28T00:00:00.000Z";
+    const old = group("src_retire_safety", []);
+    const fresh: SourceOwnershipMigrationGroup = { ...old,
+      source: { ...old.source, createdAt: "2026-10-27T01:00:00.000Z" } };
+    expect(inventorySourceOwnershipGroup(fresh, now)).toMatchObject({ action: "blocked",
+      reason: "retirement_grace_not_elapsed" });
+    expect(inventorySourceOwnershipGroup(old, "invalid-time")).toMatchObject({ action: "blocked",
+      reason: "retirement_grace_not_elapsed" });
+    const creator = { id: "git_review", workspaceId: "ws_1", sourceId: old.source.id,
+      phase: "reviewable" } as StoredGitInstallPlan;
+    const withCreator: SourceOwnershipMigrationGroup = { ...old,
+      source: { ...old.source, createdByInstallPlanId: creator.id }, gitPlans: [creator] };
+    expect(inventorySourceOwnershipGroup(withCreator, now)).toMatchObject({ action: "blocked",
+      reason: "source_creator_plan_still_active" });
+    const active = { ...creator, id: "git_active", phase: "syncing_source",
+      expiresAt: "2026-10-28T12:00:00.000Z" } as StoredGitInstallPlan;
+    expect(inventorySourceOwnershipGroup({ ...old, gitPlans: [active] }, now)).toMatchObject({
+      action: "blocked", reason: "source_plan_still_active" });
+    expect(inventorySourceOwnershipGroup({ ...old, gitPlans: [{ ...active, sourceId: undefined,
+      preflight: { sourceId: old.source.id } } as StoredGitInstallPlan] }, now)).toMatchObject({
+      action: "blocked", reason: "source_plan_still_active" });
+    expect(inventorySourceOwnershipGroup({ ...withCreator,
+      gitPlans: [{ ...creator, phase: "discarded" }] }, now).action).toBe("retire");
+  });
+
+  test("read and preparation failures block one group and preserve later dry runs", async () => {
+    const store = new FixtureStore();
+    const broken = group("src_broken", [["cap_a", "active"], ["cap_b", "active"]]);
+    store.groups.set("src_broken", { ...broken, capsules: broken.capsules.map((entry) =>
+      entry.capsule.id === "cap_b" ? { ...entry, adoptedSnapshotId: "snap_missing" } : entry) });
+    store.groups.set("src_good", group("src_good", [["cap_live", "active"]]));
+    store.groups.set("src_read_failure", group("src_read_failure", []));
+    const failingStore: SourceOwnershipMigrationStore = { ...store,
+      listSourceIds: () => store.listSourceIds(),
+      readGroup: (id) => id === "src_read_failure" ? Promise.reject(new Error("database offline")) : store.readGroup(id),
+      commitGroup: (mutation) => store.commitGroup(mutation) };
+    const results = await migrateSourceOwnership(failingStore, allocator, { copyVerified: async () => {} },
+      { now: "2026-10-28T00:00:00.000Z" });
+    expect(results.map((result) => [result.inventory.sourceId, result.status, result.inventory.reason]))
+      .toEqual([["src_broken", "blocked", "source_ownership_migration_missing_snapshot"],
+        ["src_good", "dry_run", undefined], ["src_read_failure", "blocked", "group_read_failed"]]);
+    expect(store.commits).toBe(0);
+  });
+
+  test("a failed archive copy blocks that split and lets the next Source proceed", async () => {
+    const store = new FixtureStore();
+    const split = group("src_copy_failure", [["cap_a", "active"], ["cap_b", "active"]]);
+    const snap = snapshot("snap_copy", split.source.id, "ssr_copy");
+    store.groups.set(split.source.id, { ...split,
+      source: { ...split.source, retirementArchiveCursor: "stale", retirementSnapshotCount: 1,
+        retirementSourceSyncRunCount: 1 }, snapshots: [snap],
+      syncRuns: [syncRun("ssr_copy", split.source.id, snap.id)] });
+    store.groups.set("src_later", group("src_later", [["cap_later", "active"]]));
+    const results = await migrateSourceOwnership(store, allocator, {
+      copyVerified: async () => { throw new Error("source_archive_missing:archive missing"); },
+    }, { apply: true, now: "2026-10-28T00:00:00.000Z" });
+    expect(results.map((result) => [result.status, result.inventory.reason]))
+      .toEqual([["blocked", "source_archive_missing"], ["committed", undefined]]);
+    expect(store.commits).toBe(1);
+    const prepared = await prepareSourceOwnershipMigration(store.groups.get(split.source.id)!, allocator,
+      "2026-10-28T00:00:00.000Z");
+    expect(prepared?.retainedSource.retirementArchiveCursor).toBeUndefined();
+    expect(prepared?.retainedSource.retirementSnapshotCount).toBeUndefined();
+    expect(prepared?.retainedSource.retirementSourceSyncRunCount).toBeUndefined();
+    expect(prepared?.splits[0]?.source.retirementArchiveCursor).toBeUndefined();
+  });
+
+  test("split approval digest stays stable across independently generated verifier hashes", async () => {
+    const store = new FixtureStore();
+    store.groups.set("src_digest", group("src_digest", [["cap_a", "active"], ["cap_b", "active"]]));
+    const options = { now: "2026-10-28T00:00:00.000Z" };
+    const first = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, options);
+    const second = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, options);
+    expect(first[0]?.planDigest).toBe(second[0]?.planDigest);
+    const observed = store.groups.get("src_digest")!;
+    const mutation = (await prepareSourceOwnershipMigration(observed, allocator, options.now))!;
+    expect(await sourceOwnershipMigrationPlanDigest(mutation)).toBe(first[0]?.planDigest);
+    expect(first[0]?.inventory.webhookReregistrationRequired).toBe(true);
+  });
+});
+
+
+test("migration cannot claim disabled or retiring legacy Sources for live apps", async () => {
+  for (const state of [
+    { status: "disabled" as const },
+    { status: "active" as const, retiringAt: "2026-10-27T00:00:00.000Z" },
+  ]) {
+    const observed = group("src_fenced", [["cap_fenced", "active"]]);
+    const fenced = { ...observed, source: { ...observed.source, ...state } };
+    expect(inventorySourceOwnershipGroup(fenced).action).toBe("blocked");
+    await expect(prepareSourceOwnershipMigration(fenced, new ObjectKeyArtifactReferenceAllocator(),
+      "2026-10-28T00:00:00.000Z")).rejects.toThrow("source_ownership_migration_blocked");
+  }
 });

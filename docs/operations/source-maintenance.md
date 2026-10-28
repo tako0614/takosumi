@@ -21,6 +21,10 @@ destroy Apply の応答では archive を削除せず、sweeper が回収する�
 
 削除前に Source 全体の key prefix に対する foreign reference と custody を検査し、1回最大32個を削除する。
 進捗は Source JSON に保存し、後続 invocation が再開する。既にない object は削除を省略する。
+他の Source の prefix にある archive はコピーも削除もしない。terminal Run の履歴は残すが、
+安全に mark された Source、または `source.retired` Activity がある削除済み Source の履歴参照は
+archive の保持権限として扱わない。いずれも live Capsule / in-flight Run がないことを照合する。
+active な別 Source の参照は引き続き削除を妨げる。
 途中で失敗しても Source / snapshot 行を保持し、最後に ledger の削除と Activity を原子的に確定する。
 
 production retirement の前に、backup と dry-run の確認、独立レビュー、operator の承認を行う。
