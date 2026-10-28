@@ -4,6 +4,7 @@
  */
 import { For, type JSX, Show } from "solid-js";
 import type { LinkedApp } from "../../lib/app-page.ts";
+import { appPageHref } from "../../lib/app-links.ts";
 import { t } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
 
@@ -12,7 +13,7 @@ export default function AppLinkedSection(props: {
   readonly usedBy: readonly LinkedApp[];
 }): JSX.Element {
   return (
-    <AppSection id="app-linked" title={t("app.linked.title")} testId="app-linked">
+    <AppSection id="linked" title={t("app.linked.title")} testId="app-linked">
       <div class="ap-linked">
         <Show when={props.uses.length > 0}>
           <LinkedList title={t("app.linked.uses")} apps={props.uses} />
@@ -33,7 +34,7 @@ function LinkedList(props: { readonly title: string; readonly apps: readonly Lin
         <For each={props.apps}>
           {(app) => (
             <li>
-              <a href={`/workloads/${encodeURIComponent(app.capsuleId)}`}>{app.name}</a>
+              <a href={appPageHref(app.capsuleId)}>{app.name}</a>
             </li>
           )}
         </For>

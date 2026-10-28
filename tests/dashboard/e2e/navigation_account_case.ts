@@ -303,7 +303,7 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(direct.locator(".conn-apps")).toContainText("使っているアプリ");
       await expect(direct.getByRole("link", { name: PORTABLE_EXPECTATIONS.appName })).toHaveAttribute(
         "href",
-        "/workloads/cap_repository_office",
+        "/apps/cap_repository_office",
       );
       await expect(operator.locator(".conn-apps")).toContainText("まだどのアプリも使っていません");
       // Operator-provided connections cannot be removed from here.

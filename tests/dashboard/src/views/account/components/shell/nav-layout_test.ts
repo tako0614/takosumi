@@ -43,10 +43,12 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
-  test("keeps focus within detail and account tabs and announces prefix-active navigation", () => {
-    expect(appShellSource).toContain('segments[0] === "workloads"');
-    expect(appShellSource).toContain('segments[0] === "services"');
+  test("keeps focus within account sections and announces prefix-active navigation", () => {
+    // An app's sections are fragments (`/apps/:id#settings`): the pathname,
+    // and so the focus key, stays the same while moving between them.
+    expect(appShellSource).not.toContain('segments[0] === "workloads"');
     expect(appShellSource).toContain('if (segments[0] === "account") return "account";');
+    expect(appShellSource).toContain("return location.pathname;");
     expect(sidebarSource).toMatch(
       /aria-current=\{\s*isNavActive\(loc\.pathname, item\) \? "page" : undefined/,
     );
@@ -84,7 +86,7 @@ describe("dashboard shell navigation layout", () => {
     expect(primary).toContain('labelKey: "nav.connections"');
     expect(primary).toContain('labelKey: "nav.account"');
     // An app's page and its run details keep ホーム selected.
-    expect(primary).toContain('alsoActiveOn: ["/workloads", "/runs", "/run-groups"]');
+    expect(primary).toContain('alsoActiveOn: ["/apps", "/runs", "/run-groups"]');
     // Nothing else is a destination: no settings hub or manage catalog.
     expect(navSource).not.toContain("MANAGE_DESTINATIONS");
     expect(navSource).not.toContain('"/settings');
@@ -107,7 +109,7 @@ describe("dashboard shell navigation layout", () => {
   test("top bar titles follow the four behaviors", () => {
     for (const [pattern, key] of [
       ["/^\\/$/", "nav.home"],
-      ["/^\\/workloads(\\/|$)/", "nav.app"],
+      ["/^\\/apps(\\/|$)/", "nav.app"],
       ["/^\\/runs(\\/|$)/", "nav.home"],
       ["/^\\/new(\\/|$)/", "nav.store"],
       ["/^\\/connections(\\/|$)/", "nav.connections"],
@@ -119,9 +121,8 @@ describe("dashboard shell navigation layout", () => {
   });
 
   test("browse and install are ONE page: /new is the store tab, /store only redirects", () => {
-    expect(indexSource).toContain(
-      '<Route path="/new" component={InstallView} />',
-    );
+    expect(indexSource).toContain('<Route path="/new" component={NewRoute} />');
+    expect(indexSource).toContain("<InstallView />");
     expect(indexSource).not.toContain("StoreView");
     expect(indexSource).toContain('path="/store"');
     expect(indexSource).toContain('<RedirectWithQuery to="/new" />');

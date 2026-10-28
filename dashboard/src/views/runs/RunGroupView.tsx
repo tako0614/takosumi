@@ -46,6 +46,7 @@ import { Badge, StatusBadge } from "../../components/ui/Badge.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
+import { appPageHref } from "../../lib/app-links.ts";
 
 const RUN_GROUP_POLL_MS = 5_000;
 
@@ -380,7 +381,7 @@ function RunGroupMemberRow(props: {
                and to a screen reader; the aria-label keeps the action verb. */
             <a
               class="wa-run-group-service"
-              href={`/workloads/${encodeURIComponent(id())}`}
+              href={appPageHref(id())}
               aria-label={
                 name()
                   ? t("runGroup.openServiceAria", { name: name()! })

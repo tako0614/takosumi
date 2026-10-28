@@ -86,7 +86,11 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
 
   test("the four behaviors are first-class routes", () => {
     expect(source).toContain('<Route path="/" component={AppListView} />');
-    expect(source).toContain('<Route path="/new" component={InstallView} />');
+    // `/new` is the store and install page; an old `?capsule=` locator alone
+    // opens that app's page instead.
+    expect(source).toContain('<Route path="/new" component={NewRoute} />');
+    expect(source).toContain("legacyInstallLocatorCapsuleId(untrack(() => location.search))");
+    expect(source).toContain('capsuleId ? <Navigate href={appPageHref(capsuleId)} /> : <InstallView />');
     expect(source).toContain(
       '<Route path="/connections" component={ConnectionsView} />',
     );
@@ -94,13 +98,9 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain(
       '<Route path="/account/:section" component={AccountView} />',
     );
-    // An app's page and the details opened from its history stay routable.
-    expect(source).toContain(
-      '<Route path="/workloads/:id" component={WorkloadDetailView} />',
-    );
-    expect(source).toContain(
-      '<Route path="/workloads/:id/:tab" component={WorkloadDetailView} />',
-    );
+    // An app's page (canonical `/apps/:id`) and the details opened from its
+    // history stay routable.
+    expect(source).toContain('<Route path="/apps/:id" component={AppPage} />');
     expect(source).toContain('<Route path="/runs/:id" component={RunView} />');
     expect(source).toContain(
       '<Route path="/run-groups/:id" component={RunGroupView} />',
@@ -155,8 +155,25 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain('case "billing":\n      return "/account/billing";');
     expect(source).toContain('case "interface-recovery":\n      return "/";');
     expect(source).toContain('default:\n      return "/account/workspace";');
+    // Older app-page URLs land on the canonical page, their tab as a section.
+    for (const from of [
+      "/apps/:id/:tab",
+      "/workloads/:id",
+      "/workloads/:id/:tab",
+      "/services/:id",
+      "/services/:id/:tab",
+      "/capsules/:id",
+      "/capsules/:id/:tab",
+    ]) {
+      expect(source).toContain(`<Route path="${from}" component={RedirectLegacyAppPage} />`);
+    }
+    expect(source).toContain(
+      '<Navigate href={appPageHref(params.id ?? "", legacyAppTabSection(params.tab))} />',
+    );
+    expect(source).toContain('<Route path="/apps" component={() => <Navigate href="/" />} />');
     // No removed screen is still mounted.
     for (const removed of [
+      "WorkloadDetailView",
       "RunsListView",
       "ActivityView",
       "GraphView",

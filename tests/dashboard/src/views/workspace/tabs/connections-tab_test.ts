@@ -169,7 +169,7 @@ describe("接続 shows which apps use each connection", () => {
     expect(source).toContain('t("conn.apps.none")');
     expect(source).toContain('t("conn.apps.unknown")');
     // Each app links to its page.
-    expect(source).toContain("href={`/workloads/${encodeURIComponent(app.capsuleId)}`}");
+    expect(source).toContain("href={appPageHref(app.capsuleId)}");
     // An incomplete read never claims "no app uses this".
     expect(source).toContain("apps.length === 0 && known.incomplete ? undefined : apps");
   });

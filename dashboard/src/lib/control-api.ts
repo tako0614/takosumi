@@ -57,6 +57,8 @@ import type {
   GitInstallPlanResponse,
   CreateGitRevisionPlanRequest,
   GitRevisionPlanResponse,
+  CapsuleAppView as ContractCapsuleAppView,
+  RunPolicyReason as ContractRunPolicyReason,
 } from "takosumi-contract";
 import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
 
@@ -678,6 +680,8 @@ export interface Run {
   readonly summary?: RunChangeSummary;
   readonly planResources?: readonly RunPlanResource[];
   readonly policyStatus?: RunPolicyStatus;
+  /** Structured, value-free reasons a policy blocked or gated this plan. */
+  readonly policyReasons?: readonly RunPolicyReason[];
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest?: string;
   readonly redactionProfileId?: string;
@@ -2420,6 +2424,94 @@ export async function listRuns(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/runs${query({ limit })}`,
   );
   return body.runs ?? [];
+}
+
+// --- Installed-app view (TASK-0115 Phase 3a) ---------------------------------
+//
+// `GET /api/v1/capsules/:id/app` is the control plane's own answer to "what
+// state is this app in and what should the person do next": state, the one
+// primary action, ordered problems, every launchable screen, version facts,
+// progress and uninstall terms. `GET /api/v1/capsules/:id/runs` pages one
+// app's Runs newest first, so no app page depends on a Workspace-wide window.
+// The DTOs are the contract shapes; the dashboard adds no fields of its own.
+
+export type {
+  CapsuleAppAction,
+  CapsuleAppIncompleteSection,
+  CapsuleAppProblem,
+  CapsuleAppProblemCode,
+  CapsuleAppRunSummary,
+  CapsuleAppScreen,
+  CapsuleAppState,
+  CapsuleAppUninstall,
+  CapsuleAppVersion,
+  RunPolicyLayer,
+  RunPolicyReasonCode,
+} from "takosumi-contract";
+export type CapsuleAppView = ContractCapsuleAppView;
+export type RunPolicyReason = ContractRunPolicyReason;
+
+/** The view kind this dashboard build understands. */
+const CAPSULE_APP_VIEW_KIND = "takosumi.capsule-app@v1";
+
+/** Reads the server-computed view of one installed app. */
+export async function getCapsuleApp(capsuleId: string): Promise<CapsuleAppView> {
+  const body = await controlFetch<{ app?: CapsuleAppView }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/app`,
+  );
+  const app = body.app;
+  if (
+    !isRecord(app) ||
+    app.kind !== CAPSULE_APP_VIEW_KIND ||
+    app.capsuleId !== capsuleId ||
+    typeof app.state !== "string" ||
+    typeof app.primaryAction !== "string" ||
+    !Array.isArray(app.problems) ||
+    !Array.isArray(app.screens) ||
+    !isRecord(app.version) ||
+    !isRecord(app.progress) ||
+    !isRecord(app.uninstall)
+  ) {
+    throw new ControlApiError(
+      502,
+      "invalid_capsule_app_response",
+      "App read returned an invalid response.",
+    );
+  }
+  return app;
+}
+
+/** Upper bound the per-app Run listing accepts for one page. */
+export const CAPSULE_RUN_PAGE_MAX = 100;
+
+export interface CapsuleRunPage {
+  readonly runs: readonly Run[];
+  readonly nextCursor?: string;
+}
+
+/** One page of an app's Runs, newest first. */
+export async function listCapsuleRuns(
+  capsuleId: string,
+  options: {
+    readonly limit?: number;
+    readonly cursor?: string;
+    readonly types?: readonly RunType[];
+  } = {},
+): Promise<CapsuleRunPage> {
+  const params = new URLSearchParams();
+  if (options.limit !== undefined) {
+    params.set("limit", String(Math.min(Math.max(1, Math.floor(options.limit)), CAPSULE_RUN_PAGE_MAX)));
+  }
+  if (options.cursor) params.set("cursor", options.cursor);
+  for (const type of options.types ?? []) params.append("type", type);
+  const search = params.toString();
+  const body = await controlFetch<{ runs?: readonly Run[]; nextCursor?: string }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/runs${search ? `?${search}` : ""}`,
+  );
+  const runs = (body.runs ?? []).filter((run) => run.capsuleId === capsuleId);
+  return typeof body.nextCursor === "string" && body.nextCursor
+    ? { runs, nextCursor: body.nextCursor }
+    : { runs };
 }
 
 // --- Sources ---------------------------------------------------------------

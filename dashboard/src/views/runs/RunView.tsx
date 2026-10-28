@@ -131,6 +131,8 @@ import {
 } from "../../components/ui/index.ts";
 import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
+import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
+import { appPageHref } from "../../lib/app-links.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import {
   createLastGoodValue,
@@ -1537,7 +1539,7 @@ function Inner() {
               {(id) => (
                 <Button
                   variant="ghost"
-                  href={`/workloads/${encodeURIComponent(id())}`}
+                  href={appPageHref(id())}
                 >
                   {t("run.backToApp")}
                 </Button>
@@ -1643,6 +1645,9 @@ function Inner() {
                       </div>
                     )}
                   </Show>
+                  {/* Why a policy stopped this plan or made it wait for an
+                      approval: structured codes, never the recorded prose. */}
+                  <PolicyReasonList reasons={r().policyReasons ?? []} />
 
                   {/* cost (backend values only). A failed read is an explicit
                       unknown-cost line, never silence; a rated-zero or
@@ -1794,7 +1799,7 @@ function Inner() {
                             variant={
                               completedRunLaunchUrl() ? "secondary" : "primary"
                             }
-                            href={`/workloads/${encodeURIComponent(id())}`}
+                            href={appPageHref(id())}
                           >
                             {t("run.backToApp")}
                           </Button>
@@ -1825,7 +1830,7 @@ function Inner() {
                           setNeedsConfirm(false);
                           const id = capsuleId();
                           if (id)
-                            navigate(`/workloads/${encodeURIComponent(id)}`);
+                            navigate(appPageHref(id));
                         }}
                       >
                         {t("run.stopGoBack")}

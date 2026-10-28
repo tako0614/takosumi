@@ -1,17 +1,22 @@
 /**
  * The installed-app page (TASK-0115): one page for keeping an installed app.
  *
- * Its sections follow what a person does with the app, not the control-plane
- * objects behind it: open it and see its state, deal with its problems,
- * update or change its version, change its settings and connections, see
- * what it created in their cloud and what that costs, see the apps it is
- * linked with, read its history, and uninstall it. Every change is reviewed
- * in place — the exact resource list and cost — and applies only from the
- * explicit "Allow and …" click; nothing is applied automatically and no
- * consent travels in a URL or storage.
+ * The control plane computes the app's state, its one primary action, its
+ * ordered problems, every screen it can open, its version facts, what is in
+ * progress and the uninstall terms (`GET /capsules/:id/app`); this page shows
+ * that view and turns each action into the matching in-page flow. Its
+ * sections follow what a person does with the app: open it and see its
+ * state, deal with its problems, update or change its version, change its
+ * settings and connections, see what it created and what that costs, see the
+ * apps it is linked with, read its history (`GET /capsules/:id/runs`, page by
+ * page), and uninstall it. Every change is reviewed in place — the exact
+ * resource list and cost — and applies only from the explicit "Allow and …"
+ * click; nothing is applied automatically and no consent travels in a URL or
+ * storage.
  *
- * Used by the `/workloads/:id` route and, once an install completes, by the
- * install page, so an installed app reads the same wherever it is opened.
+ * Rendered by the canonical `/apps/:id` route and, once an install completes,
+ * by the install page, so an installed app reads the same wherever it is
+ * opened.
  */
 import "./app-page.css";
 import "../../styles/wave-a.css";
@@ -31,43 +36,44 @@ import {
   type JSX,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { ExternalLink, RefreshCw } from "lucide-solid";
+import { RefreshCw } from "lucide-solid";
 import AppFace from "../../components/AppFace.tsx";
 import { Button, EmptyState, Skeleton, Toast } from "../../components/ui/index.ts";
 import {
   cancelCapsuleUninstall,
+  type CapsuleAppAction,
+  type CapsuleAppProblem,
+  type CapsuleAppView,
+  type CapsuleRunPage,
   type Capsule,
   ControlApiError,
   createReviewableGitRevisionPlan,
   createStateVersionRollbackPlan,
   deleteCapsule,
   extractRunId,
+  getCapsule,
+  getCapsuleApp,
   getCapsuleConfigurationContext,
   getCapsuleProviderBindingSet,
   getCapsuleUsageSummary,
   getCurrentResourceInventory,
   getInstallConfig,
+  getRun,
   getWorkspaceGraph,
-  INTERFACE_MATERIALIZATION_FAILURE_LIMIT,
   isInterfaceMaterializationRetryStale,
-  listActivity,
-  listInterfaceMaterializationFailures,
+  listCapsuleRuns,
   listProviderConnections,
-  listRuns,
   listSourceSnapshots,
-  listSources,
   listStateVersions,
-  getCapsule,
+  planCapsule,
   retryInterfaceMaterializationFailure,
   type Run,
+  type RunType,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import {
-  capsuleUninstallBanner,
   capsuleUninstallDependencyWarning,
-  uninstallCancellable,
   uninstallDependencyReadWarning,
-  uninstallTeardownFailed,
 } from "../../lib/capsule-uninstall.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
@@ -80,67 +86,69 @@ import {
   releaseRevisionPlanAttempt,
   type RevisionPlanAttempt,
 } from "../../lib/revision-plan-attempt.ts";
+import { capsuleDisplayName } from "../../lib/capsules-ui.ts";
 import {
-  installConfigRequiresUiSurface,
-  listAuthorizedUiSurfaces,
-} from "../../lib/ui-surface-interfaces.ts";
-import {
-  capsuleDisplayName,
-  isCapsuleRuntimeOpenable,
-  isStateVersionRuntimeReady,
-  releaseActivationStatusForStateVersion,
-} from "../../lib/capsules-ui.ts";
-import { resolveAppIcon } from "../../lib/app-face.ts";
-import {
-  appHistory,
-  appState,
+  APP_HISTORY_RUN_TYPES,
+  appPrimaryActionLabel,
+  appRunHistory,
+  appStateSentence,
+  appViewIncomplete,
   isSettled,
-  capsuleRuns,
-  latestFailedRun,
   linkedApps,
-  newerSnapshot,
+  primaryProblem,
+  reviewPurposeForRun,
   settledValue,
   stateVersionLabels,
 } from "../../lib/app-page.ts";
+import {
+  APP_PAGE_SECTIONS,
+  appPageHref,
+  type AppPageSection,
+  reinstallHref,
+} from "../../lib/app-links.ts";
 import { listAppHostedResources } from "../../lib/app-hosted-resources.ts";
-import { runFailureHint } from "../../lib/run-errors.ts";
 import { retryPlanForRun } from "../../lib/run-retry.ts";
 import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.ts";
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppSection, OpenAppButton } from "./app-ui.tsx";
+import AppAttentionSection from "./AppAttentionSection.tsx";
 import AppVersionSection from "./AppVersionSection.tsx";
 import AppSettingsSection from "./AppSettingsSection.tsx";
 import AppCreatedSection from "./AppCreatedSection.tsx";
 import AppHistorySection from "./AppHistorySection.tsx";
 import AppLinkedSection from "./AppLinkedSection.tsx";
+import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
-/** Workspace-wide runs read for this app's problems and history. */
-export const APP_RUN_LOOKUP_LIMIT = 100;
+/** Runs read per history page (the server accepts at most 100). */
+export const APP_HISTORY_PAGE_SIZE = 20;
 
-export type ReviewSection = "problems" | "version" | "settings" | "uninstall";
+export type ReviewSection = "attention" | "version" | "settings";
 
 interface ActiveReview {
   readonly section: ReviewSection;
   readonly purpose: ReviewPurpose;
   readonly planRunId: string;
+  /** A run to follow first (an Apply already under way). */
+  readonly initialRunId?: string;
   /** Recreates the same request when its review fails. */
   readonly restart?: () => Promise<string | undefined>;
+  /** Opened because the server reported work in progress, not by a click. */
+  readonly auto?: boolean;
 }
 
 const DONE_MESSAGE: Readonly<Record<ReviewPurpose, MessageKey>> = {
-  install: "app.review.doneApply",
+  install: "app.review.doneInstall",
   update: "app.review.doneUpdate",
   apply: "app.review.doneApply",
   uninstall: "app.review.doneUninstall",
 };
 
-/** Route hash targets kept for old `/workloads/:id/:tab` links. */
-const TAB_SECTIONS: Readonly<Record<string, string>> = {
-  deploys: "app-version",
-  settings: "app-settings",
-  danger: "app-uninstall",
-  history: "app-history",
-};
+/** States in which the server is still working on the app. */
+const IN_PROGRESS_STATES = new Set<CapsuleAppView["state"]>([
+  "installing",
+  "updating",
+  "uninstalling",
+]);
 
 /** True only for a genuine "this app does not exist" answer. */
 function isCapsuleNotFound(error: unknown): boolean {
@@ -150,12 +158,17 @@ function isCapsuleNotFound(error: unknown): boolean {
   );
 }
 
+function scrollToSection(section: AppPageSection | "review") {
+  const id = section === "review" ? "app-review" : APP_PAGE_SECTIONS[section];
+  document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "instant" });
+}
+
 export default function AppManagePage(props: {
   readonly capsuleId: string;
-  /** Signed-in principal, used to judge whether a screen should exist. */
+  /** Signed-in principal (kept for embedding pages; screens come from the server). */
   readonly principalId?: string;
-  /** Old tab route segment; scrolls to the matching section. */
-  readonly tab?: string;
+  /** The section the URL fragment names; scrolled to once the page settles. */
+  readonly section?: AppPageSection;
   /** Shown once right after the install page applied the first install. */
   readonly justInstalled?: boolean;
   /** Every fresh read of the app, so an embedding page can follow it. */
@@ -165,6 +178,7 @@ export default function AppManagePage(props: {
   const { confirm } = useConfirmDialog();
   const capsuleId = () => props.capsuleId;
 
+  // --- the app and the server's view of it -----------------------------------
   const [context, { refetch: refetchContext }] = createResource(
     capsuleId,
     getCapsuleConfigurationContext,
@@ -178,9 +192,13 @@ export default function AppManagePage(props: {
   const capsule = () => contextLatest()?.capsule;
   const authorityGuard = () => contextLatest()?.authorityGuard;
   const workspaceId = () => capsule()?.workspaceId;
-  const applied = () => Boolean(capsule()?.currentStateVersionId);
-  const destroyed = () => capsule()?.status === "destroyed";
+
+  const [appView, { refetch: refetchApp }] = createResource(capsuleId, getCapsuleApp);
+  const app = createLastGoodValue(appView, (value) => value.capsuleId === capsuleId());
+  const destroyed = () => app()?.state === "uninstalled";
+  const applied = () => app()?.applied === true;
   const managed = () => applied() && !destroyed();
+  const loadError = () => (contextLatest() ? undefined : context.error) ?? (app() ? undefined : appView.error);
 
   const [installConfig] = createResource(
     () => capsule()?.installConfigId ?? null,
@@ -188,7 +206,9 @@ export default function AppManagePage(props: {
   );
   const installConfigValue = () => settledValue(installConfig);
   const displayName = () =>
-    capsuleDisplayName(installConfigValue(), locale()) ?? capsule()?.name ?? "";
+    app()?.displayName?.[locale()] ??
+    capsuleDisplayName(installConfigValue(), locale()) ??
+    capsule()?.name ?? "";
 
   const [stateVersions, { refetch: refetchStateVersions }] = createResource(
     () => (applied() ? capsuleId() : null),
@@ -200,83 +220,24 @@ export default function AppManagePage(props: {
     return id ? stateVersionList().find((version) => version.id === id) : undefined;
   });
 
-  const [activity, { refetch: refetchActivity }] = createResource(
-    () => workspaceId() ?? null,
-    (id) => listActivity(id, 100),
-  );
-  const activityList = () => settledValue(activity) ?? [];
-
-  const [runs, { refetch: refetchRuns }] = createResource(
-    () => (destroyed() ? null : (workspaceId() ?? null)),
-    (id) => listRuns(id, APP_RUN_LOOKUP_LIMIT),
-  );
-  const runList = () => settledValue(runs) ?? [];
-  const appRuns = createMemo(() => capsuleRuns(runList(), capsuleId()));
-  const failedRun = createMemo(() => latestFailedRun(appRuns()));
-
-  const [surfaces, { refetch: refetchSurfaces }] = createResource(
-    () => {
-      const inst = capsule();
-      return inst && managed()
-        ? { workspaceId: inst.workspaceId, capsuleId: inst.id }
-        : null;
-    },
-    (key) => listAuthorizedUiSurfaces(key.workspaceId, { capsuleId: key.capsuleId }),
-  );
-  const surfaceList = () => settledValue(surfaces) ?? [];
-  // StateVersion is readiness/provenance only. URL and presentation authority
-  // comes exclusively from the authorized Capsule-owned UI Interfaces above.
-  // An app whose later change failed keeps the screen of its last successful
-  // apply: Open stays available while the problem card says it needs
-  // attention. A recovered state (no successful apply) stays closed.
-  const openable = createMemo(() => {
-    const inst = capsule();
-    const version = currentStateVersion();
-    if (isCapsuleRuntimeOpenable(inst, capsuleId(), version, activityList())) return true;
-    if (inst?.status !== "error" || !version || inst.currentStateVersionId !== version.id) return false;
-    const createdBy = runList().find((item) => item.id === version.createdByRunId);
-    return (
-      createdBy?.type === "apply" && createdBy.status === "succeeded" &&
-      isStateVersionRuntimeReady(version, activityList(), capsuleId())
-    );
-  });
-  const activation = createMemo(() =>
-    releaseActivationStatusForStateVersion(
-      currentStateVersion(),
-      activityList(),
-      capsuleId(),
-    ),
-  );
-
   const [graph, { refetch: refetchGraph }] = createResource(
-    () => (destroyed() ? null : (workspaceId() ?? null)),
+    () => (destroyed() || !app() ? null : (workspaceId() ?? null)),
     getWorkspaceGraph,
   );
   const graphValue = () => settledValue(graph);
   const usesApps = createMemo(() => linkedApps(capsuleId(), graphValue(), "uses"));
   const usedByApps = createMemo(() => linkedApps(capsuleId(), graphValue(), "usedBy"));
 
-  const [sources] = createResource(
-    () => (managed() && capsule()?.sourceId ? (workspaceId() ?? null) : null),
-    listSources,
-  );
-  const source = createMemo(() =>
-    (settledValue(sources) ?? []).find((item) => item.id === capsule()?.sourceId),
-  );
-  const updateAvailable = () =>
-    capsule() !== undefined && appState(capsule()!) === "update_available";
+  // Snapshots only name previous versions; the server already reports the
+  // current and newest version.
   const [snapshots] = createResource(
     () => {
       const inst = capsule();
-      if (!inst?.sourceId || !managed()) return null;
-      return updateAvailable() || stateVersionList().length > 1 ? inst.sourceId : null;
+      return inst?.sourceId && managed() && stateVersionList().length > 1 ? inst.sourceId : null;
     },
     (id) => listSourceSnapshots(id),
   );
   const snapshotList = () => settledValue(snapshots) ?? [];
-  const newVersion = createMemo(() =>
-    newerSnapshot(snapshotList(), capsule()?.adoptedSourceRevision),
-  );
 
   const [bindingSet, { refetch: refetchBindings }] = createResource(
     () => (managed() ? capsuleId() : null),
@@ -304,57 +265,84 @@ export default function AppManagePage(props: {
     (key) => listAppHostedResources(key.workspaceId, key.capsuleId),
   );
 
-  // Screen recovery is read only when there is a sign that a screen could not
-  // be made openable: a dead-letter event for this app, or an app whose
-  // definition declares a screen that the person cannot see.
-  const screenMissing = createMemo(() => {
-    if (!managed() || surfaces.loading || surfaces.error) return false;
-    if (surfaceList().length > 0) return false;
-    const config = installConfigValue();
-    return Boolean(
-      config && props.principalId &&
-      installConfigRequiresUiSurface(config.interfaceBlueprints, {
-        installingPrincipalId: props.principalId,
-        repositoryInstallUxAccepted:
-          config.installExperience?.repositoryInstallUx?.status === "accepted",
-      }),
-    );
+  // --- history: the app's own Runs, page by page --------------------------------
+  const [historyFirst, { refetch: refetchHistory }] = createResource(capsuleId, (id) =>
+    listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES }),
+  );
+  const historyFirstValue = () => settledValue(historyFirst);
+  const [olderRuns, setOlderRuns] = createSignal<{
+    readonly base: CapsuleRunPage;
+    readonly runs: readonly Run[];
+    readonly nextCursor?: string;
+  }>();
+  const historyRuns = createMemo((): readonly Run[] => {
+    const first = historyFirstValue();
+    if (!first) return [];
+    const older = olderRuns();
+    if (older?.base !== first) return first.runs;
+    const seen = new Set(first.runs.map((run) => run.id));
+    return [...first.runs, ...older.runs.filter((run) => !seen.has(run.id))];
   });
-  const deadLettered = createMemo(() =>
-    activityList().some(
-      (event) =>
-        event.action === "interface_materialization.dead_lettered" &&
-        event.metadata.capsuleId === capsuleId(),
-    ),
-  );
-  const [screenFailures, { refetch: refetchScreenFailures }] = createResource(
-    () => (managed() && (deadLettered() || screenMissing()) ? (workspaceId() ?? null) : null),
-    (id) =>
-      listInterfaceMaterializationFailures(id, {
-        limit: INTERFACE_MATERIALIZATION_FAILURE_LIMIT,
-      }),
-  );
-  const appScreenFailures = () =>
-    (settledValue(screenFailures) ?? []).filter(
-      (failure) => failure.capsuleId === capsuleId(),
-    );
+  const historyCursor = () => {
+    const first = historyFirstValue();
+    const older = olderRuns();
+    return older && older.base === first ? older.nextCursor : first?.nextCursor;
+  };
+  const [moreBusy, setMoreBusy] = createSignal(false);
+  const [moreError, setMoreError] = createSignal<string>();
+  const loadMoreHistory = async () => {
+    const first = historyFirstValue();
+    const cursor = historyCursor();
+    if (!first || !cursor || moreBusy()) return;
+    const forCapsule = capsuleId();
+    setMoreBusy(true);
+    setMoreError(undefined);
+    try {
+      const page = await listCapsuleRuns(forCapsule, {
+        limit: APP_HISTORY_PAGE_SIZE,
+        cursor,
+        types: APP_HISTORY_RUN_TYPES,
+      });
+      if (capsuleId() !== forCapsule || historyFirstValue() !== first) return;
+      const previous = olderRuns();
+      setOlderRuns({
+        base: first,
+        runs: [...(previous?.base === first ? previous.runs : []), ...page.runs],
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      });
+    } catch (cause) {
+      if (capsuleId() === forCapsule) setMoreError(friendlyError(cause, t).message);
+    } finally {
+      if (capsuleId() === forCapsule) setMoreBusy(false);
+    }
+  };
 
   const versionLabels = createMemo(() =>
     stateVersionLabels({
       stateVersions: stateVersionList(),
-      runs: runList(),
+      runs: historyRuns(),
       snapshots: snapshotList(),
     }),
   );
-  const history = createMemo(() =>
-    appHistory({
-      capsuleId: capsuleId(),
+  const history = createMemo(() => {
+    const current = app()?.version.current;
+    return appRunHistory({
+      runs: historyRuns(),
       stateVersions: stateVersionList(),
-      runs: runList(),
-      activity: activityList(),
       snapshots: snapshotList(),
-    }),
-  );
+      ...(current
+        ? {
+            current: {
+              ...(capsule()?.currentStateVersionId
+                ? { stateVersionId: capsule()!.currentStateVersionId! }
+                : {}),
+              ref: current.ref,
+              commit: current.commit,
+            },
+          }
+        : {}),
+    });
+  });
 
   createEffect(() => {
     const inst = capsule();
@@ -367,19 +355,19 @@ export default function AppManagePage(props: {
     if (inst) props.onCapsule?.(inst);
   });
 
-  // Old tab routes land on the matching section of this one page, once the
-  // sections above it have loaded and stopped moving it down.
+  // The section the URL names is scrolled to once the sections above it have
+  // loaded and stopped moving it down.
   let scrolledTo: string | undefined;
   createEffect(() => {
-    const target = props.tab ? TAB_SECTIONS[props.tab] : undefined;
-    if (!target || !capsule() || scrolledTo === `${capsuleId()}:${target}`) return;
-    const settling = [installConfig, stateVersions, runs, graph, inventory, bindingSet, usage, sources]
+    const section = props.section;
+    if (!section || !capsule() || !app()) return;
+    const key = `${capsuleId()}:${section}`;
+    if (scrolledTo === key) return;
+    const settling = [installConfig, stateVersions, graph, inventory, bindingSet, usage, historyFirst]
       .some((resource) => resource.loading);
     if (settling) return;
-    scrolledTo = `${capsuleId()}:${target}`;
-    requestAnimationFrame(() =>
-      document.getElementById(target)?.scrollIntoView({ block: "start", behavior: "instant" }),
-    );
+    scrolledTo = key;
+    requestAnimationFrame(() => scrollToSection(section));
   });
 
   const clearCaches = () => {
@@ -393,46 +381,70 @@ export default function AppManagePage(props: {
   const refreshAll = async () => {
     clearCaches();
     await Promise.allSettled([
+      refetchApp(),
       refetchContext(),
       refetchStateVersions(),
-      refetchRuns(),
-      refetchActivity(),
-      refetchSurfaces(),
+      refetchHistory(),
       refetchBindings(),
       refetchConnections(),
       refetchInventory(),
       refetchUsage(),
+      refetchGraph(),
     ]);
   };
 
-  // A scheduled uninstall and a first install finish server-side; keep the
-  // page current while either is in progress.
+  // While the server is working on the app, keep its view current; when that
+  // work ends, re-read every section so they show what it changed.
   createEffect(() => {
-    const inst = capsule();
-    if (!inst) return;
-    const state = appState(inst);
-    if (state !== "uninstalling" && state !== "installing") return;
+    const view = app();
+    if (!view) return;
+    const working = IN_PROGRESS_STATES.has(view.state) || view.progress.revisionPreparing ||
+      view.uninstall.scheduled?.phase === "destroying";
+    if (!working) return;
+    const fast = view.progress.run !== undefined || view.uninstall.scheduled?.phase === "destroying";
     const timer = setInterval(() => {
-      if (!document.hidden && !context.loading) void refetchContext();
-    }, inst.uninstall?.phase === "destroying" ? 5_000 : 30_000);
+      if (!document.hidden && !appView.loading) void refetchApp();
+    }, fast ? 5_000 : 15_000);
     onCleanup(() => clearInterval(timer));
   });
+  createEffect(
+    on(
+      () => {
+        const view = app();
+        return view ? IN_PROGRESS_STATES.has(view.state) : undefined;
+      },
+      (working, wasWorking) => {
+        if (wasWorking === true && working === false) void refreshAll();
+      },
+      { defer: true },
+    ),
+  );
 
   // --- in-page reviews ---------------------------------------------------------
   const [review, setReview] = createSignal<ActiveReview>();
-  const [starting, setStarting] = createSignal<ReviewSection>();
+  const [starting, setStarting] = createSignal<
+    { readonly section: ReviewSection; readonly action?: CapsuleAppAction }
+  >();
   const [sectionError, setSectionError] = createSignal<
     { readonly section: ReviewSection; readonly message: string }
   >();
   const [notice, setNotice] = createSignal<
     { readonly section: ReviewSection; readonly message: string }
   >();
-  const reviewBusy = () => review() !== undefined || starting() !== undefined;
+  // An automatically opened review of a first install never blocks other
+  // actions, such as uninstalling an app that was never applied. A change the
+  // server is applying to an installed app does.
+  const reviewBusy = () =>
+    starting() !== undefined ||
+    (review() !== undefined && (review()!.auto !== true || app()?.state !== "installing"));
   // Bumped when a settings review closes unapplied, so the form shows what
   // the app actually runs rather than edits that were never applied.
   const [settingsSeed, setSettingsSeed] = createSignal(0);
+  // Reviews of in-progress work the person closed are not reopened for them.
+  const dismissedRuns = new Set<string>();
   const closeReview = (active: ActiveReview) => {
     setReview(undefined);
+    dismissedRuns.add(active.initialRunId ?? active.planRunId);
     if (active.section === "settings") setSettingsSeed((value) => value + 1);
   };
   // A review, its errors and notices belong to one app. If this page is
@@ -448,6 +460,9 @@ export default function AppManagePage(props: {
         setUninstallError(undefined);
         setAutoUpdateError(undefined);
         setScreenRetryMessage(undefined);
+        setOlderRuns(undefined);
+        setMoreError(undefined);
+        dismissedRuns.clear();
       },
       { defer: true },
     ),
@@ -456,17 +471,18 @@ export default function AppManagePage(props: {
     sectionError()?.section === section ? sectionError()!.message : undefined;
   const noticeFor = (section: ReviewSection) =>
     notice()?.section === section ? notice()!.message : undefined;
+  const startingIn = (section: ReviewSection) => starting()?.section === section;
 
   const startReview = async (
     section: ReviewSection,
     purpose: ReviewPurpose,
     create: () => Promise<string | undefined>,
-    options: { readonly restartable?: boolean } = {},
+    options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction } = {},
   ) => {
     if (reviewBusy()) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
-    setStarting(section);
+    setStarting({ section, ...(options.action ? { action: options.action } : {}) });
     setSectionError(undefined);
     setNotice(undefined);
     try {
@@ -493,20 +509,65 @@ export default function AppManagePage(props: {
 
   const finishReview = (active: ActiveReview) => {
     setReview(undefined);
+    dismissedRuns.add(active.initialRunId ?? active.planRunId);
     setNotice({ section: active.section, message: t(DONE_MESSAGE[active.purpose]) });
     void refreshAll();
   };
 
+  /** Opens the review of a run the server named (a plan waiting, a blocked plan). */
+  const openRunReview = (runId: string, runType: RunType) => {
+    if (reviewBusy()) return;
+    setSectionError(undefined);
+    setNotice(undefined);
+    setReview({
+      section: "attention",
+      purpose: reviewPurposeForRun(runType, applied()),
+      planRunId: runId,
+    });
+    queueMicrotask(() => scrollToSection("review"));
+  };
+
+  // Work the server reports in progress on an app that is not usable yet
+  // (an install waiting for review or running), or a change being applied,
+  // is followed in place. Only the explicit Allow click applies anything.
+  createEffect(() => {
+    const view = app();
+    if (!view || review() || starting()) return;
+    if (view.state !== "installing" && view.state !== "updating") return;
+    const target = view.progress.review
+      ? { runId: view.progress.review.runId, runType: view.progress.review.runType }
+      : view.progress.run
+        ? { runId: view.progress.run.id, runType: view.progress.run.type }
+        : undefined;
+    if (!target || dismissedRuns.has(target.runId)) return;
+    setReview({
+      section: "attention",
+      purpose: reviewPurposeForRun(target.runType, view.applied),
+      planRunId: target.runId,
+      initialRunId: target.runId,
+      auto: true,
+    });
+  });
+
+  const policyReasonsOnCard = (runId: string) =>
+    app()?.problems.some((problem) => problem.code === "policy_blocked" && problem.runId === runId) === true;
   const reviewPanel = (section: ReviewSection) => (
     <Show when={review()?.section === section ? review() : undefined}>
       {(active) => (
         <div class="ap-review" id="app-review" data-testid="app-review" data-review-purpose={active().purpose}>
+          {/* A blocked plan's problem card already names its reasons. */}
+          <Show when={!policyReasonsOnCard(active().planRunId)}>
+            <RunPolicyReasons runId={active().planRunId} capsuleId={capsuleId()} />
+          </Show>
           <InstallExecution
             purpose={active().purpose}
             planRunId={active().planRunId}
+            {...(active().initialRunId ? { initialRunId: active().initialRunId! } : {})}
             capsuleId={capsuleId()}
             onDone={() => finishReview(active())}
-            onDiscard={async () => closeReview(active())}
+            // An install review has nothing to cancel on this page: the app
+            // stays installable, and Uninstall removes it.
+            {...(active().purpose === "install" ? {} : { onDiscard: async () => closeReview(active()) })}
             // Closing after an unknown or failed outcome re-reads the app so
             // its state, problems and history show what actually happened.
             onClose={() => {
@@ -517,9 +578,16 @@ export default function AppManagePage(props: {
               ? {
                   onRestart: async () => {
                     const forCapsule = capsuleId();
-                    const restarted = await active().restart!();
+                    const current = active();
+                    const restarted = await current.restart!();
                     if (restarted && capsuleId() === forCapsule) {
-                      setReview({ ...active(), planRunId: restarted });
+                      // A restarted review follows its new Plan from the start.
+                      setReview({
+                        section: current.section,
+                        purpose: current.purpose,
+                        planRunId: restarted,
+                        ...(current.restart ? { restart: current.restart } : {}),
+                      });
                     }
                   },
                   restartLabel: t("app.review.retry"),
@@ -539,7 +607,7 @@ export default function AppManagePage(props: {
   // instead of a replay of the plan already returned.
   const revisionAttempts = new Map<string, RevisionPlanAttempt>();
   const currentRef = () =>
-    capsule()?.adoptedSourceRevision?.ref ?? source()?.defaultRef;
+    app()?.version.current?.ref ?? app()?.version.repository?.defaultRef;
   const revisionReady = () => {
     const ref = currentRef();
     return managed() && typeof ref === "string" && ref.trim().length > 0;
@@ -577,7 +645,7 @@ export default function AppManagePage(props: {
     setAutoUpdateError(undefined);
     try {
       await setCapsuleAutoUpdate(capsuleId(), enabled);
-      await refetchContext();
+      await Promise.allSettled([refetchContext(), refetchApp()]);
     } catch (cause) {
       setAutoUpdateError(friendlyError(cause, t).message);
     } finally {
@@ -585,21 +653,33 @@ export default function AppManagePage(props: {
     }
   };
 
-  // --- problems ------------------------------------------------------------------
+  // --- the actions the server names ------------------------------------------------
   // "Review again" plans the failed run the way the run page does: a removal
   // as a removal, a first install with its reviewed report, an installed
-  // app's change from the latest source. The app is re-read first.
-  const retryFailedRun = (run: Run) => {
-    const removal = run.type === "destroy_plan" || run.type === "destroy_apply";
-    void startReview("problems", removal ? "uninstall" : "apply", async () => {
+  // app's change from the latest source. Without a run the app is planned
+  // again as it is configured now. The app is re-read first.
+  const retry = (problem: CapsuleAppProblem | undefined) => {
+    const runId = problem?.runId;
+    const removal = problem?.runType === "destroy_plan" || problem?.runType === "destroy_apply";
+    const purpose: ReviewPurpose = removal ? "uninstall" : applied() ? "apply" : "install";
+    void startReview("attention", purpose, async () => {
+      if (!runId) return extractRunId(await planCapsule(capsuleId()));
+      const run = await getRun(runId);
       const fresh = await getCapsule(run.capsuleId ?? capsuleId());
       return extractRunId(await retryPlanForRun(run, fresh));
-    });
+    }, { action: "retry" });
   };
+  const continueInstall = () =>
+    void startReview(
+      "attention",
+      "install",
+      async () => extractRunId(await planCapsule(capsuleId())),
+      { action: "continue_install" },
+    );
   const [screenRetryBusy, setScreenRetryBusy] = createSignal(false);
   const [screenRetryMessage, setScreenRetryMessage] = createSignal<string>();
-  const retryScreen = async () => {
-    const failure = appScreenFailures()[0];
+  const retryScreen = async (problem: CapsuleAppProblem | undefined) => {
+    const failure = problem?.screenFailure;
     const workspace = workspaceId();
     if (!failure || !workspace || screenRetryBusy()) return;
     setScreenRetryBusy(true);
@@ -619,18 +699,25 @@ export default function AppManagePage(props: {
       );
     } finally {
       setScreenRetryBusy(false);
-      void refetchScreenFailures();
-      void refetchSurfaces();
+      void refetchApp();
     }
+  };
+  const fixConnection = () => {
+    if (managed()) scrollToSection("connections");
+    else navigate("/connections");
   };
 
   // --- uninstall -------------------------------------------------------------------
   const [uninstallBusy, setUninstallBusy] = createSignal(false);
   const [uninstallError, setUninstallError] = createSignal<string>();
+  const graceDays = () => {
+    const terms = app()?.uninstall;
+    return terms?.mode === "scheduled" ? terms.graceDays : undefined;
+  };
   const dependencyWarning = () =>
     capsuleUninstallDependencyWarning(
       displayName(),
-      usedByApps().map((app) => app.name),
+      usedByApps().map((linked) => linked.name),
     );
   const dependencyCheck = () =>
     uninstallDependencyReadWarning(
@@ -643,12 +730,15 @@ export default function AppManagePage(props: {
     setUninstallBusy(true);
     await Promise.resolve(refetchGraph()).catch(() => undefined);
     setUninstallBusy(false);
+    const days = graceDays();
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
       message: [
-        applied()
-          ? t("app.uninstall.confirmMessage", { name: displayName() })
-          : t("app.uninstall.confirmUnapplied", { name: displayName() }),
+        !applied()
+          ? t("app.uninstall.confirmUnapplied", { name: displayName() })
+          : days !== undefined
+            ? t("app.uninstall.confirmGrace", { name: displayName(), days })
+            : t("app.uninstall.confirmMessage", { name: displayName() }),
         dependencyWarning(),
         dependencyCheck(),
       ].filter(Boolean).join("\n\n"),
@@ -666,7 +756,7 @@ export default function AppManagePage(props: {
         navigate("/", { replace: true });
         return;
       }
-      await refetchContext();
+      await Promise.allSettled([refetchContext(), refetchApp()]);
     } catch (cause) {
       setUninstallError(friendlyError(cause, t).message);
     } finally {
@@ -680,481 +770,409 @@ export default function AppManagePage(props: {
     try {
       await cancelCapsuleUninstall(capsuleId());
       clearCaches();
-      await refetchContext();
+      await Promise.allSettled([refetchContext(), refetchApp(), refetchHistory()]);
     } catch (cause) {
       setUninstallError(friendlyError(cause, t).message);
     } finally {
       setUninstallBusy(false);
     }
   };
+  // The immediate teardown is a plan reviewed in place: its removal list,
+  // the explicit check and the approval dialog all stay in front of it.
   const uninstallNow = () =>
     void startReview(
-      "problems",
+      "attention",
       "uninstall",
       async () => extractRunId(await deleteCapsule(capsuleId(), { immediate: true })),
-      { restartable: false },
+      { restartable: false, action: "uninstall_now" },
     );
-  /** Mirrors the server rule: before teardown, or blocked before dispatch. */
-  const teardownRunning = (inst: Capsule) =>
-    inst.uninstall?.phase === "destroying" && inst.uninstall.blockedReason === undefined;
+
+  // --- the one primary action ---------------------------------------------------------
+  const runPrimary = (view: CapsuleAppView) => {
+    const problem = primaryProblem(view);
+    switch (view.primaryAction) {
+      case "view_resources":
+        scrollToSection("created");
+        return;
+      case "review": {
+        const target = view.progress.review
+          ? { runId: view.progress.review.runId, runType: view.progress.review.runType }
+          : problem?.runId && problem.runType
+            ? { runId: problem.runId, runType: problem.runType }
+            : undefined;
+        if (target) openRunReview(target.runId, target.runType);
+        return;
+      }
+      case "retry":
+        retry(problem);
+        return;
+      case "retry_screen":
+        void retryScreen(problem);
+        return;
+      case "fix_connection":
+        fixConnection();
+        return;
+      case "continue_install":
+        continueInstall();
+        return;
+      case "cancel_uninstall":
+        void cancelUninstall();
+        return;
+      case "uninstall_now":
+        uninstallNow();
+        return;
+      default:
+        return;
+    }
+  };
+  /** The primary action's own review is already open below the header. */
+  const primaryOpenInPlace = (view: CapsuleAppView) =>
+    view.primaryAction === "review" && review()?.section === "attention";
+  const primaryBusy = (view: CapsuleAppView) =>
+    starting()?.action === view.primaryAction ||
+    (view.primaryAction === "cancel_uninstall" && uninstallBusy()) ||
+    (view.primaryAction === "retry_screen" && screenRetryBusy());
 
   // --- header ------------------------------------------------------------------------
+  const screens = () =>
+    (app()?.screens ?? []).map((screen) => ({
+      ...(screen.title ? { name: screen.title } : {}),
+      url: screen.url,
+    }));
   const iconUrl = () => {
-    const surface = surfaceList()[0];
-    const fromSurface = surface ? resolveAppIcon(surface.icon, surface.url) : {};
-    return fromSurface.imageSrc ?? installConfigValue()?.store?.iconUrl;
+    const icon = app()?.screens[0]?.icon;
+    return icon?.kind === "image" ? icon.url : app()?.iconUrl ?? installConfigValue()?.store?.iconUrl;
   };
   const iconEmoji = () => {
-    const surface = surfaceList()[0];
-    return surface ? resolveAppIcon(surface.icon, surface.url).emoji : undefined;
+    const icon = app()?.screens[0]?.icon;
+    return icon?.kind === "glyph" ? icon.glyph : undefined;
   };
-  const hasProblem = () =>
-    Boolean(
-      failedRun() ||
-      appScreenFailures().length > 0 ||
-      (managed() && activation() === "failed") ||
-      capsule()?.status === "error",
-    );
-  const stateSentence = (): string => {
-    const inst = capsule();
-    if (!inst) return "";
-    if (destroyed()) return t("app.state.sentence.uninstalled");
-    const state = appState(inst);
-    if (state === "uninstalling") return t("app.state.sentence.uninstalling");
-    if (state === "installing") return t("app.state.sentence.installing");
-    if (hasProblem() || state === "needs_attention") return t("app.state.sentence.needsAttention");
-    if (state === "stopped") return t("app.state.sentence.stopped");
-    if (activation() === "pending") return t("app.state.sentence.preparingScreen");
-    if (state === "update_available") return t("app.state.sentence.updateAvailable");
-    return t("app.state.sentence.ready");
-  };
+  const showUpdate = (view: CapsuleAppView) =>
+    managed() && revisionReady() && (view.version.updateAvailable || view.version.stale) &&
+    view.state === "installed";
 
   return (
     <Switch>
-      <Match when={context.loading && !contextLatest()}>
+      <Match when={!loadError() && (!contextLatest() || !app())}>
         <div class="ap-page">
           <Skeleton variant="block" />
         </div>
       </Match>
-      <Match when={context.error && !contextLatest()}>
-        <Show
-          when={isCapsuleNotFound(context.error)}
-          fallback={
-            <EmptyState
-              title={t("app.loadFailedTitle")}
-              message={friendlyError(context.error, t).message}
-              action={
-                <Button variant="secondary" type="button" onClick={() => void refetchContext()}>
-                  {t("common.retry")}
-                </Button>
-              }
-            />
-          }
-        >
-          <EmptyState
-            title={t("app.notFound")}
-            message={t("app.notFoundMessage")}
-            action={
-              <Button variant="secondary" href="/">
-                {t("app.backHome")}
-              </Button>
-            }
-          />
-        </Show>
-      </Match>
-      <Match when={capsule()}>
-        {(inst) => (
-          <div class="ap-page" data-testid="app-page" data-app-state={destroyed() ? "uninstalled" : appState(inst())}>
-            <Show when={context.error}>
-              <Toast tone="error">{t("app.refreshFailed")}</Toast>
-            </Show>
-            <Show when={props.justInstalled && managed()}>
-              <p class="ap-notice" role="status">{t("app.installedNotice")}</p>
-            </Show>
-
-            <header class="ap-header" data-testid="app-header">
-              <AppFace
-                name={displayName()}
-                iconUrl={iconUrl()}
-                emoji={iconEmoji()}
-                class="ap-icon"
-              />
-              <div class="ap-title">
-                <h1>
-                  {displayName()}
-                  <Show when={displayName() !== inst().name}>
-                    <span class="ap-instance-name">{inst().name}</span>
-                  </Show>
-                </h1>
-                <p class="ap-state" data-testid="app-state-sentence">{stateSentence()}</p>
-                <Show when={managed() && surfaces.error}>
-                  <p class="ap-muted" role="alert">{t("app.open.loadFailed")}</p>
-                </Show>
-              </div>
-              <div class="ap-actions">
-                <Show when={openable() && surfaceList().length > 0}>
-                  <OpenAppButton surfaces={surfaceList()} appName={displayName()} />
-                </Show>
-                <Show when={managed() && surfaces.error}>
+      <Match when={loadError()}>
+        {(error) => (
+          <Show
+            when={isCapsuleNotFound(error())}
+            fallback={
+              <EmptyState
+                title={t("app.loadFailedTitle")}
+                message={friendlyError(error(), t).message}
+                action={
                   <Button
                     variant="secondary"
                     type="button"
-                    busy={surfaces.loading}
-                    onClick={() => void refetchSurfaces()}
+                    onClick={() => void Promise.allSettled([refetchContext(), refetchApp()])}
                   >
-                    {t("app.open.reload")}
+                    {t("common.retry")}
                   </Button>
-                </Show>
-                <Show when={updateAvailable() && revisionReady()}>
-                  <Button
-                    variant={openable() && surfaceList().length > 0 ? "secondary" : "primary"}
-                    type="button"
-                    icon={<RefreshCw size={16} />}
-                    busy={starting() === "version"}
-                    disabled={reviewBusy()}
-                    onClick={() => {
-                      startUpdate();
-                      document.getElementById("app-version")?.scrollIntoView({ block: "start", behavior: "instant" });
-                    }}
-                  >
-                    {t("app.version.update")}
-                  </Button>
-                </Show>
-              </div>
-            </header>
-
-            <Show when={managed()}>
-              <nav class="ap-jump" aria-label={t("app.jump.label")}>
-                <a href="#app-version">{t("app.version.title")}</a>
-                <a href="#app-settings">{t("app.settings.title")}</a>
-                <a href="#app-created">{t("app.created.title")}</a>
-                <a href="#app-history">{t("app.history.title")}</a>
-                <a href="#app-uninstall">{t("app.uninstall.title")}</a>
-              </nav>
-            </Show>
-
-            <Show when={destroyed()}>
-              <AppSection id="app-gone" title={t("app.gone.title")} subtitle={t("app.gone.body")}>
-                <div class="ap-row-actions">
-                  <Button variant="primary" href="/">{t("app.backHome")}</Button>
-                </div>
-              </AppSection>
-            </Show>
-
-            {problemsSection()}
-
-            <Show when={managed()}>
-              <AppVersionSection
-                capsule={inst()}
-                sourceUrl={source()?.url}
-                currentStateVersion={currentStateVersion()}
-                stateVersions={stateVersionList()}
-                stateVersionsLoading={stateVersions.loading}
-                stateVersionsFailed={Boolean(stateVersions.error)}
-                versionLabels={versionLabels()}
-                newVersion={newVersion()}
-                updateAvailable={updateAvailable()}
-                dependencyChanged={updateAvailable() && !newVersion() && !snapshots.loading}
-                revisionReady={revisionReady()}
-                reviewBusy={reviewBusy()}
-                starting={starting() === "version"}
-                error={errorFor("version")}
-                notice={noticeFor("version")}
-                onUpdate={(ref) => startUpdate(ref)}
-                onRollback={startRollback}
-                autoUpdateBusy={autoUpdateBusy()}
-                autoUpdateError={autoUpdateError()}
-                onAutoUpdate={(enabled) => void toggleAutoUpdate(enabled)}
-                review={reviewPanel("version")}
+                }
               />
-              <AppSettingsSection
-                capsuleId={capsuleId()}
-                workspaceId={inst().workspaceId}
-                installConfig={installConfigValue()}
-                installConfigLoading={installConfig.loading}
-                authorityGuard={authorityGuard()}
-                // A loaded app without a binding set uses no connections.
-                bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
-                capsuleInstallConfigId={inst().installConfigId}
-                seed={settingsSeed()}
-                bindingsFailed={Boolean(bindingSet.error)}
-                connections={settledValue(connections) ?? []}
-                onConnectionsChanged={() => void refetchConnections()}
-                reviewBusy={reviewBusy()}
-                starting={starting() === "settings"}
-                error={errorFor("settings")}
-                notice={noticeFor("settings")}
-                onReview={(create) => void startReview("settings", "apply", create, { restartable: false })}
-                review={reviewPanel("settings")}
-              />
-              <AppCreatedSection
-                inventory={settledValue(inventory)}
-                inventoryLoading={inventory.loading}
-                inventoryFailed={Boolean(inventory.error)}
-                bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : []}
-                connections={settledValue(connections) ?? []}
-                usage={settledValue(usage)}
-                usageLoading={usage.loading}
-                usageFailed={Boolean(usage.error)}
-                hosted={settledValue(hosted) ?? []}
-              />
-              <Show when={usesApps().length > 0 || usedByApps().length > 0}>
-                <AppLinkedSection uses={usesApps()} usedBy={usedByApps()} />
+            }
+          >
+            <EmptyState
+              title={t("app.notFound")}
+              message={t("app.notFoundMessage")}
+              action={
+                <Button variant="secondary" href="/">
+                  {t("app.backHome")}
+                </Button>
+              }
+            />
+          </Show>
+        )}
+      </Match>
+      <Match when={capsule() && app() ? { inst: capsule()!, view: app()! } : undefined}>
+        {(loaded) => {
+          const inst = () => loaded().inst;
+          const view = () => loaded().view;
+          const primaryLabel = () => appPrimaryActionLabel(view().primaryAction);
+          return (
+            <div class="ap-page" data-testid="app-page" data-app-state={view().state} data-primary-action={view().primaryAction}>
+              <Show when={context.error || appView.error}>
+                <Toast tone="error">{t("app.refreshFailed")}</Toast>
               </Show>
-            </Show>
+              <Show when={props.justInstalled && managed()}>
+                <p class="ap-notice" role="status">{t("app.installedNotice")}</p>
+              </Show>
 
-            <Show when={!destroyed() || history().length > 0}>
+              <header class="ap-header" data-testid="app-header">
+                <AppFace
+                  name={displayName()}
+                  iconUrl={iconUrl()}
+                  emoji={iconEmoji()}
+                  class="ap-icon"
+                />
+                <div class="ap-title">
+                  <h1>
+                    {displayName()}
+                    <Show when={displayName() !== inst().name}>
+                      <span class="ap-instance-name">{inst().name}</span>
+                    </Show>
+                  </h1>
+                  <p class="ap-state" data-testid="app-state-sentence">{t(appStateSentence(view()))}</p>
+                  <Show when={appViewIncomplete(view(), "screens")}>
+                    <p class="ap-muted" role="alert" data-incomplete="screens">{t("app.incomplete.screens")}</p>
+                  </Show>
+                  <Show when={appViewIncomplete(view(), "display")}>
+                    <p class="ap-muted" role="status" data-incomplete="display">{t("app.incomplete.display")}</p>
+                  </Show>
+                </div>
+                <div class="ap-actions" data-testid="app-primary">
+                  <Switch>
+                    <Match when={view().primaryAction === "open" && screens().length > 0}>
+                      <OpenAppButton surfaces={screens()} appName={displayName()} />
+                    </Match>
+                    <Match when={view().primaryAction === "reinstall"}>
+                      <Button
+                        variant="primary"
+                        href={reinstallHref({
+                          ...(view().version.repository?.url ? { repositoryUrl: view().version.repository!.url } : {}),
+                          ...(view().version.repository?.defaultRef ? { ref: view().version.repository!.defaultRef } : {}),
+                          name: inst().name,
+                        })}
+                      >
+                        {t("app.action.reinstall")}
+                      </Button>
+                    </Match>
+                    <Match when={!primaryOpenInPlace(view()) && primaryLabel()}>
+                      {(label) => (
+                        <Button
+                          variant={view().primaryAction === "uninstall_now" ? "danger" : "primary"}
+                          type="button"
+                          busy={primaryBusy(view())}
+                          disabled={reviewBusy() || uninstallBusy()}
+                          onClick={() => runPrimary(view())}
+                        >
+                          {t(label())}
+                        </Button>
+                      )}
+                    </Match>
+                  </Switch>
+                  <Show when={appViewIncomplete(view(), "screens")}>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      busy={appView.loading}
+                      onClick={() => void refetchApp()}
+                    >
+                      {t("app.open.reload")}
+                    </Button>
+                  </Show>
+                  <Show when={showUpdate(view())}>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      icon={<RefreshCw size={16} />}
+                      busy={startingIn("version")}
+                      disabled={reviewBusy()}
+                      onClick={() => {
+                        startUpdate();
+                        scrollToSection("version");
+                      }}
+                    >
+                      {t("app.version.update")}
+                    </Button>
+                  </Show>
+                </div>
+              </header>
+
+              <Show when={managed()}>
+                <nav class="ap-jump" aria-label={t("app.jump.label")}>
+                  <a href="#version">{t("app.version.title")}</a>
+                  <a href="#settings">{t("app.settings.title")}</a>
+                  <a href="#created">{t("app.created.title")}</a>
+                  <a href="#history">{t("app.history.title")}</a>
+                  <Show when={!view().uninstall.scheduled}>
+                    <a href="#danger">{t("app.uninstall.title")}</a>
+                  </Show>
+                </nav>
+              </Show>
+
+              <Show when={destroyed()}>
+                <AppSection id="app-gone" title={t("app.gone.title")} subtitle={t("app.gone.body")}>
+                  <div class="ap-row-actions">
+                    <Button variant="secondary" href="/">{t("app.backHome")}</Button>
+                  </div>
+                </AppSection>
+              </Show>
+
+              <AppAttentionSection
+                app={view()}
+                displayName={displayName()}
+                busy={reviewBusy() || uninstallBusy()}
+                {...(starting()?.section === "attention" && starting()?.action
+                  ? { startingAction: starting()!.action! }
+                  : {})}
+                uninstallBusy={uninstallBusy()}
+                {...(uninstallError() ? { uninstallError: uninstallError()! } : {})}
+                screenRetryBusy={screenRetryBusy()}
+                {...(screenRetryMessage() ? { screenRetryMessage: screenRetryMessage()! } : {})}
+                {...(errorFor("attention") ? { error: errorFor("attention")! } : {})}
+                {...(noticeFor("attention") ? { notice: noticeFor("attention")! } : {})}
+                {...(review()?.section === "attention"
+                  ? { reviewRunId: review()!.initialRunId ?? review()!.planRunId }
+                  : {})}
+                review={reviewPanel("attention")}
+                actions={{
+                  retry,
+                  retryScreen: (problem) => void retryScreen(problem),
+                  fixConnection,
+                  continueInstall,
+                  cancelUninstall: () => void cancelUninstall(),
+                  uninstallNow,
+                  openReview: openRunReview,
+                }}
+              />
+
+              <Show when={managed()}>
+                <AppVersionSection
+                  version={view().version}
+                  versionIncomplete={appViewIncomplete(view(), "version")}
+                  currentStateVersion={currentStateVersion()}
+                  stateVersions={stateVersionList()}
+                  stateVersionsLoading={stateVersions.loading}
+                  stateVersionsFailed={Boolean(stateVersions.error)}
+                  versionLabels={versionLabels()}
+                  revisionReady={revisionReady()}
+                  reviewBusy={reviewBusy()}
+                  starting={startingIn("version")}
+                  error={errorFor("version")}
+                  notice={noticeFor("version")}
+                  onUpdate={(ref) => startUpdate(ref)}
+                  onRollback={startRollback}
+                  autoUpdateBusy={autoUpdateBusy()}
+                  autoUpdateError={autoUpdateError()}
+                  onAutoUpdate={(enabled) => void toggleAutoUpdate(enabled)}
+                  review={reviewPanel("version")}
+                />
+                <AppSettingsSection
+                  capsuleId={capsuleId()}
+                  workspaceId={inst().workspaceId}
+                  installConfig={installConfigValue()}
+                  installConfigLoading={installConfig.loading}
+                  authorityGuard={authorityGuard()}
+                  // A loaded app without a binding set uses no connections.
+                  bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : undefined}
+                  capsuleInstallConfigId={inst().installConfigId}
+                  seed={settingsSeed()}
+                  bindingsFailed={Boolean(bindingSet.error)}
+                  connections={settledValue(connections) ?? []}
+                  onConnectionsChanged={() => void refetchConnections()}
+                  reviewBusy={reviewBusy()}
+                  starting={startingIn("settings")}
+                  error={errorFor("settings")}
+                  notice={noticeFor("settings")}
+                  onReview={(create) => void startReview("settings", "apply", create, { restartable: false })}
+                  review={reviewPanel("settings")}
+                />
+                <AppCreatedSection
+                  inventory={settledValue(inventory)}
+                  inventoryLoading={inventory.loading}
+                  inventoryFailed={Boolean(inventory.error)}
+                  bindings={isSettled(bindingSet) ? (settledValue(bindingSet)?.bindings ?? []) : []}
+                  connections={settledValue(connections) ?? []}
+                  usage={settledValue(usage)}
+                  usageLoading={usage.loading}
+                  usageFailed={Boolean(usage.error)}
+                  hosted={settledValue(hosted) ?? []}
+                />
+                <Show when={usesApps().length > 0 || usedByApps().length > 0}>
+                  <AppLinkedSection uses={usesApps()} usedBy={usedByApps()} />
+                </Show>
+              </Show>
+
               <AppHistorySection
                 events={history()}
-                loading={runs.loading || stateVersions.loading}
-                partial={runList().length >= APP_RUN_LOOKUP_LIMIT}
+                loading={historyFirst.loading && !historyFirstValue()}
+                failed={Boolean(historyFirst.error) && !historyFirstValue()}
+                onReload={() => void refetchHistory()}
+                hasMore={historyCursor() !== undefined}
+                moreBusy={moreBusy()}
+                moreError={moreError()}
+                onMore={() => void loadMoreHistory()}
               />
-            </Show>
 
-            <Show when={!destroyed() && appState(inst()) !== "uninstalling"}>
-              <AppSection
-                id="app-uninstall"
-                title={t("app.uninstall.title")}
-                subtitle={
-                  applied()
-                    ? t("app.uninstall.body", { name: displayName() })
-                    : t("app.uninstall.bodyUnapplied", { name: displayName() })
+              <Show
+                when={
+                  !destroyed() && !view().uninstall.scheduled &&
+                  view().state !== "uninstalling" && view().state !== "uninstall_scheduled"
                 }
-                testId="app-uninstall"
               >
-                <Show when={usedByApps().length > 0}>
-                  <div class="ap-impact" role="note">
-                    <strong>{t("app.uninstall.impactTitle")}</strong>
-                    <ul>
-                      <For each={usedByApps()}>
-                        {(app) => (
-                          <li>
-                            <a href={`/workloads/${encodeURIComponent(app.capsuleId)}`}>{app.name}</a>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
+                <AppSection
+                  id="danger"
+                  title={t("app.uninstall.title")}
+                  subtitle={
+                    view().uninstall.mode === "discard"
+                      ? t("app.uninstall.bodyUnapplied", { name: displayName() })
+                      : view().uninstall.mode === "none"
+                        ? t("app.uninstall.bodyImmediate", { name: displayName() })
+                        : graceDays() !== undefined
+                          ? t("app.uninstall.bodyGrace", { name: displayName(), days: graceDays()! })
+                          : t("app.uninstall.body", { name: displayName() })
+                  }
+                  testId="app-uninstall"
+                >
+                  <Show when={usedByApps().length > 0}>
+                    <div class="ap-impact" role="note">
+                      <strong>{t("app.uninstall.impactTitle")}</strong>
+                      <ul>
+                        <For each={usedByApps()}>
+                          {(linked) => (
+                            <li>
+                              <a href={appPageHref(linked.capsuleId)}>{linked.name}</a>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </div>
+                  </Show>
+                  <Show when={dependencyCheck()}>
+                    {(status) => <p class="ap-muted" role="status">{status()}</p>}
+                  </Show>
+                  <div class="ap-row-actions">
+                    <Show
+                      when={view().uninstall.mode !== "none"}
+                      fallback={
+                        <Button
+                          variant="danger"
+                          type="button"
+                          busy={starting()?.action === "uninstall_now"}
+                          disabled={reviewBusy() || uninstallBusy()}
+                          onClick={uninstallNow}
+                        >
+                          {t("app.uninstall.now")}
+                        </Button>
+                      }
+                    >
+                      <Button
+                        variant="danger"
+                        type="button"
+                        busy={uninstallBusy()}
+                        disabled={uninstallBusy() || reviewBusy()}
+                        onClick={() => void uninstall()}
+                      >
+                        {t("app.uninstall.cta")}
+                      </Button>
+                    </Show>
                   </div>
-                </Show>
-                <Show when={dependencyCheck()}>
-                  {(status) => <p class="ap-muted" role="status">{status()}</p>}
-                </Show>
-                <div class="ap-row-actions">
-                  <Button
-                    variant="danger"
-                    type="button"
-                    busy={uninstallBusy()}
-                    disabled={uninstallBusy() || reviewBusy()}
-                    onClick={() => void uninstall()}
-                  >
-                    {t("app.uninstall.cta")}
-                  </Button>
-                </div>
-                <Show when={uninstallError()}>
-                  {(message) => <p class="wa-error" role="alert">{message()}</p>}
-                </Show>
-              </AppSection>
-            </Show>
-          </div>
-        )}
+                  <Show when={uninstallError()}>
+                    {(message) => <p class="wa-error" role="alert">{message()}</p>}
+                  </Show>
+                </AppSection>
+              </Show>
+            </div>
+          );
+        }}
       </Match>
     </Switch>
   );
-
-  function problemsSection(): JSX.Element {
-    const inst = () => capsule()!;
-    const scheduled = () =>
-      inst().status === "uninstalled" || uninstallTeardownFailed(inst()) ||
-      inst().uninstall?.phase === "destroying";
-    const visible = () =>
-      !destroyed() &&
-      (scheduled() || !applied() || hasProblem() || review()?.section === "problems");
-    return (
-      <Show when={visible()}>
-        <AppSection
-          id="app-problems"
-          title={t("app.problem.title")}
-          testId="app-problems"
-        >
-          <div class="ap-problems">
-            <Show when={scheduled()}>
-              <article class="ap-problem ap-problem-warn" data-problem="uninstall">
-                <strong>{capsuleUninstallBanner(inst(), displayName())}</strong>
-                <Show when={uninstallExportNote(inst())}>
-                  {(note) => <p>{note()}</p>}
-                </Show>
-                <div class="ap-row-actions">
-                  <Show when={uninstallCancellable(inst())}>
-                    <Button
-                      variant="primary"
-                      type="button"
-                      busy={uninstallBusy()}
-                      disabled={uninstallBusy()}
-                      onClick={() => void cancelUninstall()}
-                    >
-                      {t("app.uninstall.cancel")}
-                    </Button>
-                  </Show>
-                  <Show
-                    when={
-                      !teardownRunning(inst()) ||
-                      uninstallTeardownFailed(inst())
-                    }
-                  >
-                    <Button
-                      variant={uninstallCancellable(inst()) ? "secondary" : "primary"}
-                      type="button"
-                      busy={starting() === "problems"}
-                      disabled={reviewBusy()}
-                      onClick={uninstallNow}
-                    >
-                      {t("app.uninstall.now")}
-                    </Button>
-                  </Show>
-                </div>
-                <Show when={uninstallError()}>
-                  {(message) => <p class="wa-error" role="alert">{message()}</p>}
-                </Show>
-              </article>
-            </Show>
-
-            <Show when={!applied() && !scheduled()}>
-              <article class="ap-problem" data-problem="install-incomplete">
-                <strong>{t("app.problem.installIncomplete")}</strong>
-                <p>
-                  {failedRun()
-                    ? runFailureHint(failedRun()!.errorCode)
-                    : t("app.problem.installIncompleteHint")}
-                </p>
-                <div class="ap-row-actions">
-                  <Button
-                    variant="primary"
-                    href={`/new?capsule=${encodeURIComponent(inst().id)}`}
-                  >
-                    {t("app.problem.continueInstall")}
-                  </Button>
-                </div>
-              </article>
-            </Show>
-
-            <Show when={applied() && !scheduled() ? failedRun() : undefined} keyed>
-              {(run) => failedRunCard(run)}
-            </Show>
-
-            <Show when={applied() && !scheduled() && !failedRun() && (inst()).status === "error"}>
-              <article class="ap-problem" data-problem="error">
-                <strong>{t("app.problem.error")}</strong>
-                <p>{t("app.problem.errorHint")}</p>
-              </article>
-            </Show>
-
-            <Show when={appScreenFailures()[0]}>
-              {(failure) => (
-                <article class="ap-problem" data-problem="screen">
-                  <strong>{t("app.problem.screen")}</strong>
-                  <p>{t("app.problem.screenHint")}</p>
-                  <p class="ap-detail">
-                    {t("app.problem.serverSaid")} <code>{failure().error.code}</code>
-                  </p>
-                  <div class="ap-row-actions">
-                    <Button
-                      variant="primary"
-                      type="button"
-                      busy={screenRetryBusy()}
-                      disabled={screenRetryBusy()}
-                      onClick={() => void retryScreen()}
-                    >
-                      {t("app.problem.screenRetry")}
-                    </Button>
-                  </div>
-                  <Show when={screenRetryMessage()}>
-                    {(message) => <p role="status">{message()}</p>}
-                  </Show>
-                </article>
-              )}
-            </Show>
-
-            <Show when={managed() && activation() === "failed" && appScreenFailures().length === 0}>
-              <article class="ap-problem" data-problem="activation">
-                <strong>{t("app.problem.activation")}</strong>
-                <p>{t("app.problem.activationHint")}</p>
-                <Show when={currentStateVersion()?.createdByRunId}>
-                  {(runId) => (
-                    <div class="ap-row-actions">
-                      <Button variant="secondary" href={`/runs/${encodeURIComponent(runId())}`} icon={<ExternalLink size={16} />}>
-                        {t("app.problem.details")}
-                      </Button>
-                    </div>
-                  )}
-                </Show>
-              </article>
-            </Show>
-
-            <Show when={errorFor("problems")}>
-              {(message) => <p class="wa-error" role="alert">{message()}</p>}
-            </Show>
-            <Show when={noticeFor("problems")}>
-              {(message) => <p class="ap-notice" role="status">{message()}</p>}
-            </Show>
-            {reviewPanel("problems")}
-          </div>
-        </AppSection>
-      </Show>
-    );
-  }
-
-  function failedRunCard(run: Run): JSX.Element {
-    const removal = run.type === "destroy_plan" || run.type === "destroy_apply";
-    const title = removal
-      ? t("app.problem.uninstallFailed")
-      : run.type === "apply"
-        ? t("app.problem.applyFailed")
-        : t("app.problem.reviewFailed");
-    return (
-      <article class="ap-problem" data-problem="failed-run">
-        <strong>{title}</strong>
-        <p>{runFailureHint(run.errorCode)}</p>
-        <Show when={run.errorCode}>
-          {(code) => (
-            <p class="ap-detail">
-              {t("app.problem.serverSaid")} <code>{code()}</code>
-            </p>
-          )}
-        </Show>
-        <div class="ap-row-actions">
-          <Button
-            variant="primary"
-            type="button"
-            busy={starting() === "problems"}
-            disabled={reviewBusy()}
-            onClick={() => retryFailedRun(run)}
-          >
-            {t("app.problem.retry")}
-          </Button>
-          <Button
-            variant="secondary"
-            href={`/runs/${encodeURIComponent(run.id)}`}
-            icon={<ExternalLink size={16} />}
-          >
-            {t("app.problem.details")}
-          </Button>
-        </div>
-      </article>
-    );
-  }
-}
-
-function uninstallExportNote(inst: Capsule): string | undefined {
-  switch (inst.uninstall?.preDestroyExport?.status) {
-    case "exported":
-      return inst.uninstall.preDestroyExport.includesServiceData === false
-        ? t("app.uninstall.exportExportedLedgerOnly")
-        : t("app.uninstall.exportExported");
-    case "failed":
-      return t("app.uninstall.exportFailed");
-    case "skipped":
-      return t("app.uninstall.exportSkipped");
-    default:
-      return undefined;
-  }
 }

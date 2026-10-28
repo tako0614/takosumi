@@ -54,6 +54,7 @@ import { Badge, Button, type Tone, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { OpenAppButton } from "../app/app-ui.tsx";
+import { appPageHref } from "../../lib/app-links.ts";
 
 /** One installed app on Home with the screens it may open. */
 interface HomeApp {
@@ -277,7 +278,7 @@ function HomeAppCard(props: { readonly app: HomeApp }) {
     props.app.state !== "uninstalling" &&
     props.app.state !== "stopped" &&
     props.app.state !== "installing";
-  const pageHref = () => `/workloads/${encodeURIComponent(props.app.inst.id)}`;
+  const pageHref = () => appPageHref(props.app.inst.id);
   return (
     <article
       class="ap-app-card"

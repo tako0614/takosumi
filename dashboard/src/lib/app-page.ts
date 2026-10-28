@@ -2,15 +2,20 @@
  * Pure presentation logic for the installed-app page and the Home overview
  * (TASK-0115). The page is organised around what a person does with an
  * installed app — open it, keep it working, update it, change its settings,
- * see what it created and what it costs, uninstall it — so these helpers turn
- * the control-plane ledgers (Capsule, StateVersion, Run, Activity, resource
- * inventory, graph) into that vocabulary without inventing anything the
- * backend did not record.
+ * see what it created and what it costs, uninstall it. The control plane
+ * computes the app's state, primary action and problems
+ * (`GET /capsules/:id/app`); these helpers only choose the words for them and
+ * turn the app's own ledgers (its Runs, StateVersions, resource inventory,
+ * the graph) into that vocabulary without inventing anything the backend did
+ * not record.
  */
 import { untrack, type Resource } from "solid-js";
 import type {
-  ActivityEvent,
   Capsule,
+  CapsuleAppAction,
+  CapsuleAppIncompleteSection,
+  CapsuleAppProblem,
+  CapsuleAppView,
   CapsuleCurrentResourceInventory,
   CapsuleUsageSummary,
   GraphEdge,
@@ -18,8 +23,10 @@ import type {
   ProviderBinding,
   PublicStateVersion,
   Run,
+  RunPolicyReason,
   SourceSnapshot,
 } from "./control-api.ts";
+import type { MessageKey } from "../i18n/index.ts";
 import { effectiveCapsuleStatus } from "./capsules-ui.ts";
 import { readableProviderSourceLabel } from "./provider-labels.ts";
 
@@ -53,8 +60,9 @@ export type AppState =
 
 /**
  * One state per app, derived from the Capsule projection only so Home can
- * show it for every app without per-app reads. The app page adds problems it
- * reads itself (a failed run, a screen that could not be made openable).
+ * show it for every app without per-app reads. The app page itself shows the
+ * control plane's own state and problems for the app
+ * (`GET /capsules/:id/app`).
  */
 export function appState(
   capsule: Pick<
@@ -139,59 +147,115 @@ export function repositoryLabel(url: string): string {
     .replace(/\/+$/u, "");
 }
 
+// --- the server-computed app view ---------------------------------------------
+
 /**
- * The newest snapshot the app's Source fetched for the ref the app follows,
- * when it differs from the applied commit. `undefined` when the Source has no
- * newer snapshot (or the snapshot list was unavailable).
+ * The sentence under the app's name, from the control plane's state for the
+ * app and what is in progress. The server owns the state; this only chooses
+ * the words for it.
  */
-export function newerSnapshot(
-  snapshots: readonly SourceSnapshot[],
-  adopted: Capsule["adoptedSourceRevision"],
-): SourceSnapshot | undefined {
-  if (!adopted) return undefined;
-  const sameRef = snapshots
-    .filter((snapshot) => snapshot.ref === adopted.ref)
-    .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt));
-  const latest = sameRef[0];
-  return latest && latest.resolvedCommit !== adopted.resolvedCommit
-    ? latest
-    : undefined;
+export function appStateSentence(app: CapsuleAppView): MessageKey {
+  switch (app.state) {
+    case "uninstalled":
+      return "app.state.sentence.uninstalled";
+    case "uninstalling":
+      return "app.state.sentence.uninstallingNow";
+    case "uninstall_scheduled":
+      return "app.state.sentence.uninstalling";
+    case "stopped":
+      return "app.state.sentence.stopped";
+    case "needs_attention":
+      return "app.state.sentence.needsAttention";
+    case "installing":
+      if (app.progress.review) return "app.state.sentence.installReview";
+      if (app.progress.run) return "app.state.sentence.installRunning";
+      return app.progress.revisionPreparing
+        ? "app.state.sentence.preparing"
+        : "app.state.sentence.installing";
+    case "updating":
+      return app.progress.run && isApplyType(app.progress.run.type)
+        ? "app.state.sentence.updating"
+        : "app.state.sentence.updatePreparing";
+    case "installed":
+      if (app.progress.review) return "app.state.sentence.changeWaiting";
+      return app.version.updateAvailable || app.version.stale
+        ? "app.state.sentence.updateAvailable"
+        : "app.state.sentence.ready";
+    default:
+      // A state a newer server added: say only that the app was read.
+      return "app.state.sentence.unknown";
+  }
 }
 
-// --- runs and problems -----------------------------------------------------------
+/** The label of the one primary action; `undefined` for `open` and `none`. */
+export function appPrimaryActionLabel(action: CapsuleAppAction): MessageKey | undefined {
+  switch (action) {
+    case "view_resources":
+      return "app.action.viewResources";
+    case "review":
+      return "app.action.review";
+    case "retry":
+      return "app.problem.retry";
+    case "retry_screen":
+      return "app.problem.screenRetry";
+    case "fix_connection":
+      return "app.action.fixConnection";
+    case "continue_install":
+      return "app.problem.continueInstall";
+    case "cancel_uninstall":
+      return "app.uninstall.cancel";
+    case "uninstall_now":
+      return "app.uninstall.now";
+    case "reinstall":
+      return "app.action.reinstall";
+    default:
+      return undefined;
+  }
+}
 
-const LIFECYCLE_RUN_TYPES = new Set<Run["type"]>([
+/** The first problem that decides the primary action (an error, in order). */
+export function primaryProblem(app: CapsuleAppView): CapsuleAppProblem | undefined {
+  return app.problems.find((problem) => problem.severity === "error");
+}
+
+/** True when the control plane could not read the named part of the view. */
+export function appViewIncomplete(
+  app: CapsuleAppView | undefined,
+  part: CapsuleAppIncompleteSection,
+): boolean {
+  return app?.incomplete?.includes(part) === true;
+}
+
+/**
+ * The review a run calls for: a removal plan reviews an uninstall, a first
+ * install's plan reviews the install, any other plan reviews a change.
+ */
+export function reviewPurposeForRun(
+  type: Run["type"],
+  applied: boolean,
+): "install" | "apply" | "uninstall" {
+  if (type === "destroy_plan" || type === "destroy_apply") return "uninstall";
+  return applied ? "apply" : "install";
+}
+
+function isApplyType(type: Run["type"]): boolean {
+  return type === "apply" || type === "destroy_apply";
+}
+
+function isPlanType(type: Run["type"]): boolean {
+  return type === "plan" || type === "destroy_plan";
+}
+
+// --- history ----------------------------------------------------------------------
+
+/** The Run types the app's history is told from, requested from the server. */
+export const APP_HISTORY_RUN_TYPES: readonly Run["type"][] = [
   "plan",
   "apply",
   "destroy_plan",
   "destroy_apply",
   "state_recovery",
-]);
-
-/** This app's lifecycle runs, newest first. */
-export function capsuleRuns(
-  runs: readonly Run[],
-  capsuleId: string,
-): readonly Run[] {
-  return runs
-    .filter((run) => run.capsuleId === capsuleId && LIFECYCLE_RUN_TYPES.has(run.type))
-    .sort(
-      (a, b) =>
-        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
-    );
-}
-
-/**
- * The run behind the app's current problem: its newest lifecycle run, when
- * that run failed. A newer run (a successful apply, or a new review the person
- * started) supersedes an older failure.
- */
-export function latestFailedRun(runs: readonly Run[]): Run | undefined {
-  const latest = runs.find((run) => run.type !== "state_recovery");
-  return latest?.status === "failed" ? latest : undefined;
-}
-
-// --- history ----------------------------------------------------------------------
+];
 
 export type AppHistoryKind =
   | "install"
@@ -202,30 +266,24 @@ export type AppHistoryKind =
   | "recovered"
   | "uninstall"
   | "apply_failed"
+  | "uninstall_failed"
   | "review_failed"
   | "applying"
-  | "uninstall_scheduled"
-  | "uninstall_cancelled"
-  | "uninstall_blocked";
+  | "policy_blocked"
+  | "approval_waiting";
 
 export interface AppHistoryEvent {
   readonly key: string;
   readonly kind: AppHistoryKind;
   readonly at: string;
   /** The run to open for the deep dive (failure reason, logs). */
-  readonly runId?: string;
+  readonly runId: string;
   /** Version applied by this event, when the snapshot is known. */
   readonly version?: string;
+  /** Why a policy blocked this plan or made it wait for an approval. */
+  readonly policyReasons?: readonly RunPolicyReason[];
 }
 
-/**
- * This app's events, newest first. Applied changes come from the StateVersion
- * ledger (complete per app); failed and in-progress attempts come from the
- * Run list; uninstall scheduling comes from Activity. Whether an applied
- * change was an update or a settings change is read from the source snapshot
- * each change used — when that is unknown the event says only that a change
- * was applied.
- */
 /** The source snapshot an applied run used (its own, or its Plan's). */
 function snapshotIdOf(
   run: Run | undefined,
@@ -262,104 +320,106 @@ export function stateVersionLabels(input: {
   return labels;
 }
 
-export function appHistory(input: {
-  readonly capsuleId: string;
-  readonly stateVersions: readonly PublicStateVersion[];
+/**
+ * This app's history, newest first, told from its own Runs (read page by page
+ * from the server, so nothing depends on a Workspace-wide window). Applied
+ * changes say what they were — install, update, version change, settings —
+ * using the StateVersion each one created and the snapshot it used; when that
+ * evidence is not loaded the event only says a change was applied. Failed
+ * and running attempts, plans a policy blocked and plans waiting for an
+ * approval are listed too. A plan that was simply reviewed is not an event.
+ */
+export function appRunHistory(input: {
   readonly runs: readonly Run[];
-  readonly activity: readonly ActivityEvent[];
+  readonly stateVersions: readonly PublicStateVersion[];
   readonly snapshots: readonly SourceSnapshot[];
+  /** The version the current StateVersion runs, from the app view. */
+  readonly current?: {
+    readonly stateVersionId?: string;
+    readonly ref: string;
+    readonly commit: string;
+  };
 }): readonly AppHistoryEvent[] {
   const runsById = new Map(input.runs.map((run) => [run.id, run]));
   const snapshotsById = new Map(
     input.snapshots.map((snapshot) => [snapshot.id, snapshot]),
   );
-  const snapshotOf = (run: Run | undefined) => snapshotIdOf(run, runsById);
-  const events: AppHistoryEvent[] = [];
-  const seenRuns = new Set<string>();
-  const versions = [...input.stateVersions]
-    .filter((version) => version.capsuleId === input.capsuleId)
-    .sort((a, b) => a.generation - b.generation);
-  let previousSnapshot: string | undefined;
-  for (const version of versions) {
-    const run = runsById.get(version.createdByRunId);
-    const snapshotId = snapshotOf(run);
+  const versionsByRun = new Map(
+    input.stateVersions.map((version) => [version.createdByRunId, version]),
+  );
+  const versionsByGeneration = [...input.stateVersions].sort(
+    (a, b) => a.generation - b.generation,
+  );
+  const labelFor = (
+    version: PublicStateVersion | undefined,
+    snapshotId: string | undefined,
+  ): string | undefined => {
     const snapshot = snapshotId ? snapshotsById.get(snapshotId) : undefined;
-    const label = snapshot
-      ? versionLabel(snapshot.ref, snapshot.resolvedCommit)
+    if (snapshot) return versionLabel(snapshot.ref, snapshot.resolvedCommit);
+    const current = input.current;
+    return version && current && version.id === current.stateVersionId
+      ? versionLabel(current.ref, current.commit)
       : undefined;
-    let kind: AppHistoryKind;
-    if (run?.type === "state_recovery") kind = "recovered";
-    else if (run?.type === "destroy_apply") kind = "uninstall";
-    else if (version.generation === 1) kind = "install";
-    else if (snapshotId && previousSnapshot) {
-      if (snapshotId === previousSnapshot) kind = "settings";
-      else {
-        const before = snapshotsById.get(previousSnapshot);
-        kind = before && snapshot && snapshot.fetchedAt < before.fetchedAt
-          ? "version"
-          : "update";
-      }
-    } else kind = "change";
-    events.push({
-      key: `sv:${version.id}`,
-      kind,
-      at: version.createdAt,
-      runId: version.createdByRunId,
-      ...(label && kind !== "settings" ? { version: label } : {}),
-    });
-    seenRuns.add(version.createdByRunId);
-    if (snapshotId) previousSnapshot = snapshotId;
-  }
-  for (const run of capsuleRuns(input.runs, input.capsuleId)) {
-    if (seenRuns.has(run.id)) continue;
-    const applying = run.type === "apply" || run.type === "destroy_apply";
-    if (run.status === "failed") {
-      events.push({
-        key: `run:${run.id}`,
-        kind: applying ? "apply_failed" : "review_failed",
-        at: run.finishedAt ?? run.createdAt,
-        runId: run.id,
-      });
-    } else if (
-      applying &&
-      (run.status === "queued" || run.status === "running")
-    ) {
-      events.push({
-        key: `run:${run.id}`,
-        kind: "applying",
-        at: run.startedAt ?? run.createdAt,
-        runId: run.id,
-      });
-    } else if (run.type === "destroy_apply" && run.status === "succeeded") {
-      events.push({
-        key: `run:${run.id}`,
-        kind: "uninstall",
-        at: run.finishedAt ?? run.createdAt,
-        runId: run.id,
-      });
+  };
+  const appliedKind = (run: Run): { kind: AppHistoryKind; version?: string } => {
+    const version = versionsByRun.get(run.id);
+    const snapshotId = snapshotIdOf(run, runsById);
+    const label = labelFor(version, snapshotId);
+    if (version?.generation === 1) return { kind: "install", ...(label ? { version: label } : {}) };
+    const previous = version
+      ? [...versionsByGeneration].reverse().find((item) => item.generation < version.generation)
+      : undefined;
+    const previousSnapshot = previous
+      ? snapshotIdOf(runsById.get(previous.createdByRunId), runsById)
+      : undefined;
+    if (!version || !snapshotId || !previousSnapshot) {
+      return { kind: "change", ...(label ? { version: label } : {}) };
     }
-  }
-  for (const event of input.activity) {
-    if (
-      event.metadata.capsuleId !== input.capsuleId &&
-      event.targetId !== input.capsuleId
-    ) {
+    if (snapshotId === previousSnapshot) return { kind: "settings" };
+    const before = snapshotsById.get(previousSnapshot);
+    const after = snapshotsById.get(snapshotId);
+    const kind: AppHistoryKind = before && after && after.fetchedAt < before.fetchedAt
+      ? "version"
+      : "update";
+    return { kind, ...(label ? { version: label } : {}) };
+  };
+
+  const events: AppHistoryEvent[] = [];
+  for (const run of input.runs) {
+    const at = run.finishedAt ?? run.startedAt ?? run.createdAt;
+    const base = { key: `run:${run.id}`, at, runId: run.id } as const;
+    const reasons = run.policyReasons && run.policyReasons.length > 0
+      ? { policyReasons: run.policyReasons }
+      : {};
+    if (run.type === "state_recovery") {
+      if (run.status === "succeeded") events.push({ ...base, kind: "recovered" });
+      else if (run.status === "failed") events.push({ ...base, kind: "apply_failed" });
       continue;
     }
-    const kind = UNINSTALL_ACTIVITY[event.action];
-    if (!kind) continue;
-    events.push({ key: `act:${event.id}`, kind, at: event.createdAt });
+    if (isApplyType(run.type)) {
+      const removal = run.type === "destroy_apply";
+      if (run.status === "succeeded") {
+        events.push(removal ? { ...base, kind: "uninstall" } : { ...base, ...appliedKind(run) });
+      } else if (run.status === "failed") {
+        events.push({ ...base, kind: removal ? "uninstall_failed" : "apply_failed" });
+      } else if (run.status === "queued" || run.status === "running") {
+        events.push({ ...base, kind: "applying", at: run.startedAt ?? run.createdAt });
+      }
+      continue;
+    }
+    if (!isPlanType(run.type)) continue;
+    const blocked =
+      (run.status === "succeeded" && run.policyStatus !== undefined && run.policyStatus !== "pass") ||
+      run.errorCode === "policy_denied";
+    if (blocked) events.push({ ...base, kind: "policy_blocked", ...reasons });
+    else if (run.status === "waiting_approval") {
+      events.push({ ...base, kind: "approval_waiting", at: run.createdAt, ...reasons });
+    } else if (run.status === "failed") events.push({ ...base, kind: "review_failed" });
   }
   return events.sort(
     (a, b) => b.at.localeCompare(a.at) || b.key.localeCompare(a.key),
   );
 }
-
-const UNINSTALL_ACTIVITY: Readonly<Record<string, AppHistoryKind>> = {
-  "capsule.uninstall_scheduled": "uninstall_scheduled",
-  "capsule.uninstall_cancelled": "uninstall_cancelled",
-  "capsule.uninstall_blocked": "uninstall_blocked",
-};
 
 // --- what the app created ----------------------------------------------------------
 

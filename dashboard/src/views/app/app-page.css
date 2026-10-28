@@ -48,6 +48,7 @@
 .ap-problems { display: grid; gap: var(--tg-s-3); }
 .ap-problem { display: grid; gap: var(--tg-s-2); padding: var(--tg-s-4); border: 1px solid var(--tg-danger); border-left-width: 4px; border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); min-width: 0; }
 .ap-problem-warn { border-color: var(--tg-warn); }
+.ap-problem-info { border-color: var(--tg-info); }
 .ap-problem p { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; }
 .ap-problem .ap-detail { font-size: var(--tg-fs-xs); }
 
@@ -89,6 +90,7 @@
 .ap-history-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2) var(--tg-s-3); padding: var(--tg-s-3) 0; border-bottom: 1px solid var(--tg-line); min-width: 0; }
 .ap-history-row:last-child { border-bottom: 0; }
 .ap-history-link { display: inline-flex; align-items: center; gap: var(--tg-s-1); font-size: var(--tg-fs-sm); white-space: nowrap; }
+.ap-history-reasons { margin-top: var(--tg-s-1); }
 
 /* Uninstall impact. */
 .ap-impact { padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-warn); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); font-size: var(--tg-fs-sm); }

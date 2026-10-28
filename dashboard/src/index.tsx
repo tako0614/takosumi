@@ -1,5 +1,5 @@
 /* @refresh reload */
-import { lazy, onMount } from "solid-js";
+import { lazy, onMount, untrack } from "solid-js";
 import { render } from "solid-js/web";
 import {
   Navigate,
@@ -11,6 +11,11 @@ import {
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 import { initializeTakosumiRuntimeCapabilities } from "./lib/runtime-capabilities.ts";
 import { installHandoffTarget } from "./lib/app-handoff.ts";
+import {
+  appPageHref,
+  legacyAppTabSection,
+  legacyInstallLocatorCapsuleId,
+} from "./lib/app-links.ts";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
@@ -50,9 +55,7 @@ const ShellLayout = lazy(
   () => import("./views/account/components/shell/ShellLayout.tsx"),
 );
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
-const WorkloadDetailView = lazy(
-  () => import("./views/apps/WorkloadDetailView.tsx"),
-);
+const AppPage = lazy(() => import("./views/app/AppPage.tsx"));
 const InstallView = lazy(() => import("./views/new/InstallView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
@@ -106,12 +109,27 @@ function InstallEntryRoute() {
   return <Navigate href={`/new${location.search}`} />;
 }
 
-/** Legacy Capsule-detail paths -> `/workloads/:id`. */
-function RedirectLegacyWorkloadDetail() {
+/**
+ * Older app-page paths (`/workloads/:id[/:tab]`, `/services/…`,
+ * `/capsules/…`, `/apps/:id/:tab`) -> the canonical `/apps/:id`, with the old
+ * tab as the section fragment the page scrolls to.
+ */
+function RedirectLegacyAppPage() {
   const params = useParams();
-  const id = encodeURIComponent(params.id ?? "");
-  const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
-  return <Navigate href={`/workloads/${id}${tab}`} />;
+  return (
+    <Navigate href={appPageHref(params.id ?? "", legacyAppTabSection(params.tab))} />
+  );
+}
+
+/**
+ * The store and install page. An old `/new?capsule=<id>` link — that locator
+ * alone — opens the app's own page instead. Only the URL this route was
+ * entered with counts: the install page's own in-page navigation keeps it.
+ */
+function NewRoute() {
+  const location = useLocation();
+  const capsuleId = legacyInstallLocatorCapsuleId(untrack(() => location.search));
+  return capsuleId ? <Navigate href={appPageHref(capsuleId)} /> : <InstallView />;
 }
 
 /**
@@ -165,16 +183,16 @@ function App() {
 
       {/* Signed-in surface — ShellLayout owns AuthGuard + chrome. Primary
           destinations: / (ホーム), /new (ストア: browse AND install in one
-          page), /connections (接続), /account (アカウント). An app's page and
-          the run details opened from its history stay routable. */}
+          page), /connections (接続), /account (アカウント). An app's page
+          (`/apps/:id`, canonical) and the run details opened from its history
+          stay routable. */}
       <Route component={ShellLayout}>
         <Route path="/" component={AppListView} />
-        <Route path="/new" component={InstallView} />
+        <Route path="/new" component={NewRoute} />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/account" component={AccountView} />
         <Route path="/account/:section" component={AccountView} />
-        <Route path="/workloads/:id" component={WorkloadDetailView} />
-        <Route path="/workloads/:id/:tab" component={WorkloadDetailView} />
+        <Route path="/apps/:id" component={AppPage} />
         <Route path="/runs/:id" component={RunView} />
         {/* Notifications link grouped updates here. */}
         <Route path="/run-groups/:id" component={RunGroupView} />
@@ -195,7 +213,8 @@ function App() {
           /new, where lib/install-link.ts pre-fills the Git form — pre-fill
           only, the visitor always confirms before anything installs. A
           provider OAuth helper callback's /connections keeps its result query
-          too. */}
+          too. The all-apps list is ホーム, so /apps lands there; an app's
+          own page is /apps/:id. */}
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/" />} />
       <Route path="/workloads" component={() => <Navigate href="/" />} />
@@ -205,18 +224,13 @@ function App() {
       <Route path="/sources" component={() => <Navigate href="/" />} />
       <Route path="/services" component={() => <Navigate href="/" />} />
       <Route path="/capsules" component={() => <Navigate href="/" />} />
-      <Route path="/apps/:id" component={RedirectLegacyWorkloadDetail} />
-      <Route path="/apps/:id/:tab" component={RedirectLegacyWorkloadDetail} />
-      <Route path="/services/:id" component={RedirectLegacyWorkloadDetail} />
-      <Route
-        path="/services/:id/:tab"
-        component={RedirectLegacyWorkloadDetail}
-      />
-      <Route path="/capsules/:id" component={RedirectLegacyWorkloadDetail} />
-      <Route
-        path="/capsules/:id/:tab"
-        component={RedirectLegacyWorkloadDetail}
-      />
+      <Route path="/apps/:id/:tab" component={RedirectLegacyAppPage} />
+      <Route path="/workloads/:id" component={RedirectLegacyAppPage} />
+      <Route path="/workloads/:id/:tab" component={RedirectLegacyAppPage} />
+      <Route path="/services/:id" component={RedirectLegacyAppPage} />
+      <Route path="/services/:id/:tab" component={RedirectLegacyAppPage} />
+      <Route path="/capsules/:id" component={RedirectLegacyAppPage} />
+      <Route path="/capsules/:id/:tab" component={RedirectLegacyAppPage} />
       <Route path="/settings" component={() => <Navigate href="/account" />} />
       <Route
         path="/settings/account"

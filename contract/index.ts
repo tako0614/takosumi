@@ -101,6 +101,18 @@ export type {
   RepositoryInstallUxCompatibilityResult,
   CapsuleResourceSummary,
   CreateSourceCompatibilityCheckRequest,
+  CapsuleAppAction,
+  CapsuleAppIncompleteSection,
+  CapsuleAppProblem,
+  CapsuleAppProblemCode,
+  CapsuleAppProgress,
+  CapsuleAppResponse,
+  CapsuleAppRunSummary,
+  CapsuleAppScreen,
+  CapsuleAppState,
+  CapsuleAppUninstall,
+  CapsuleAppVersion,
+  CapsuleAppView,
 } from "./capsules.ts";
 export type {
   ProviderRequirement,
@@ -166,6 +178,9 @@ export type {
   RunGroupStatus,
   RunGroupType,
   RunLogsResponse,
+  RunPolicyLayer,
+  RunPolicyReason,
+  RunPolicyReasonCode,
   RunPolicyStatus,
   RunType,
 } from "./runs.ts";

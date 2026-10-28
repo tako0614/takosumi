@@ -69,7 +69,7 @@ function workspaceInitial(name: string): string {
  * previous workspace's object, so the switch returns to ホーム.
  */
 const ENTITY_SCOPED_ROUTES: readonly RegExp[] = [
-  /^\/workloads\/[^/]+/u,
+  /^\/apps\/[^/]+/u,
   /^\/runs\/[^/]+/u,
   /^\/run-groups\/[^/]+/u,
 ];
