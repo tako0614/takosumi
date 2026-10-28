@@ -7,6 +7,7 @@ import { migrateSourceOwnership, prepareSourceOwnershipMigration, type SourceOwn
   type SourceOwnershipMigrationResult, type SourceOwnershipMigrationStore } from "../../core/domains/sources/ownership-migration.ts";
 import { CloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
 import type { CloudflareWorkerEnv, R2Bucket, R2ObjectBody } from "./bindings.ts";
+import { storedServiceCompositionFromEnv } from "./stored-service-usage.ts";
 
 export const SOURCE_OWNERSHIP_MIGRATION_PATH = "/internal/platform/source-ownership-migration";
 const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
@@ -38,6 +39,20 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
   if (!env.TAKOSUMI_CONTROL_DB) return Response.json({ error: "control_db_unavailable" }, { status: 503 });
+  if (request.method === "POST") {
+    // The raw R2 copier does not record the physical stored-service snapshot.
+    // After DB commit, the Runner's ordinary read custody would reject the
+    // copied archive. Refuse before copying even when a test injects a copier.
+    try {
+      if (storedServiceCompositionFromEnv(env)) {
+        return Response.json({ error: "source_archive_custody_unavailable" },
+          { status: 503, headers: { "cache-control": "no-store" } });
+      }
+    } catch {
+      return Response.json({ error: "source_archive_custody_unavailable" },
+        { status: 503, headers: { "cache-control": "no-store" } });
+    }
+  }
   const store = dependencies.store ?? new CloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
     // Operator migration is DDL-free even in an OSS bootstrap composition.
     schemaMode: "predeployed",

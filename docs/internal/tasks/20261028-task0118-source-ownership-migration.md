@@ -5,6 +5,15 @@ Source belonged to one app. The route is `/internal/platform/source-ownership-mi
 and requires the existing deploy-control operator bearer. Nothing schedules it.
 The D1 handler always uses `predeployed` schema mode, including dry-run.
 
+The optional stored-service composition can run the read-only GET dry-run, but
+POST apply returns `503 source_archive_custody_unavailable` before any R2 copy
+or DB write. Its Runner reads require a matching physical stored-object usage
+record, while this migration's raw R2 copier cannot create that record for a
+new Source before its DB group commits. Migration in that composition is
+deferred until a reviewed custody-aware copier and adoption sequence exist.
+The ordinary OSS R2 path uses the copied archive after its size and digest
+checks; it does not require a `takosumi-run-id` metadata field on the copy.
+
 ## Before an apply
 
 1. Use the current reviewed release, hold the normal control-plane maintenance

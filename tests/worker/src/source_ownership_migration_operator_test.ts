@@ -71,6 +71,39 @@ test("protected endpoint is read-only by default and applies only an exact dry-r
   expect(store.current.source.ownerCapsuleId).toBe("cap_1");
 });
 
+test("stored-service composition refuses apply before R2 copy or DB commit", async () => {
+  const store = new FixtureStore();
+  store.current = { ...structuredClone(group), source: { ...group.source, ownerCapsuleId: "cap_1" },
+    snapshots: [{ id: "snap_foreign", origin: "git", workspaceId: "ws_1", sourceId: "src_legacy",
+      url: "https://example.test/repo.git", ref: "main", path: ".", resolvedCommit: "abc",
+      archiveRef: "workspaces/ws_1/sources/src_other/snapshots/snap_foreign/source.tar.zst",
+      archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1,
+      fetchedByRunId: "ssr_foreign", fetchedAt: "2026-10-01T00:00:00.000Z" }] };
+  let reads = 0, writes = 0, injectedCopies = 0;
+  const bucket = { get: async () => { reads++; return null; },
+    put: async () => { writes++; return null; } } as unknown as R2Bucket;
+  const storedEnv = { ...env, R2_SOURCE: bucket,
+    TAKOSUMI_STORED_SERVICE_USAGE: {}, TAKOSUMI_STORED_OBJECT_OWNERS: {} } as CloudflareWorkerEnv;
+  const dryRun = await handleSourceOwnershipMigrationOperatorRequest(new Request(`${origin}?sourceId=src_legacy`, {
+    headers: { authorization: `Bearer ${token}` },
+  }), storedEnv, { store });
+  expect(dryRun?.status).toBe(200);
+  const dry = await dryRun!.json() as { preparedAt: string; reportDigest: string };
+  const request = () => new Request(origin, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ sourceId: "src_legacy", preparedAt: dry.preparedAt, reportDigest: dry.reportDigest }),
+  });
+  for (const dependencies of [{ store }, { store, copier: { copyVerified: async () => { injectedCopies++; } } }]) {
+    const response = await handleSourceOwnershipMigrationOperatorRequest(request(), storedEnv, dependencies);
+    expect(response?.status).toBe(503);
+    expect(await response!.json()).toEqual({ error: "source_archive_custody_unavailable" });
+  }
+  expect(reads).toBe(0);
+  expect(writes).toBe(0);
+  expect(injectedCopies).toBe(0);
+  expect(store.commits).toBe(0);
+});
+
 test("R2 archive copier verifies bytes, uses create-only write, and rejects mismatched replay", async () => {
   const sourceKey = "workspaces/ws_1/sources/src_old/snapshots/snap_1/source.tar.zst";
   const targetKey = "workspaces/ws_1/sources/src_new/snapshots/snap_1/source.tar.zst";
