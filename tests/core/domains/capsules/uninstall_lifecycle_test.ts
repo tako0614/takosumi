@@ -320,6 +320,30 @@ async function activityActions(harness: Harness): Promise<readonly string[]> {
   })).map((event) => event.action);
 }
 
+async function insertRetiredDependency(
+  d1: SqliteFakeD1,
+  capsuleId: string,
+  at: string,
+): Promise<void> {
+  const legacyDependency = {
+    id: "legacy-uninstall-dependency",
+    workspaceId: "ws_uninstall001",
+    producerCapsuleId: "cap_legacy_producer",
+    consumerCapsuleId: capsuleId,
+    createdAt: at,
+  };
+  await d1.prepare(
+    `insert into installation_dependencies (
+       id, space_id, producer_installation_id, consumer_installation_id,
+       record_json, created_at
+     ) values (?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    legacyDependency.id, legacyDependency.workspaceId,
+    legacyDependency.producerCapsuleId, legacyDependency.consumerCapsuleId,
+    JSON.stringify(legacyDependency), legacyDependency.createdAt,
+  ).run();
+}
+
 const durableStores: readonly [
   string,
   () => Promise<{ store: OpenTofuControlStore; close(): Promise<void> }>,
@@ -624,6 +648,81 @@ test("a teardown Plan that is not delete-only is left for the owner", async () =
   expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId)).status).toBe(
     "active",
   );
+});
+
+test("retired dependency blocks scheduled teardown without a PlanRun or retry", async () => {
+  const d1 = new SqliteFakeD1();
+  const h = await appliedCapsule({ store: new CloudflareD1OpenTofuControlStore(d1) });
+  await insertRetiredDependency(d1, h.capsuleId, new Date(h.clock.ms).toISOString());
+  await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
+  await jumpToDue(h);
+  const planRunIdsBefore = (await h.store.listRunsByWorkspace("ws_uninstall001"))
+    .filter((run) => run.type === "plan")
+    .map((run) => run.id);
+
+  expect(await h.finalize()).toMatchObject({
+    scanned: 1, blocked: 1, failures: 0, destroyPlansCreated: 0,
+    destroysStarted: 0,
+  });
+  const uninstall = (await h.store.getCapsule(h.capsuleId))?.uninstall;
+  expect(uninstall).toMatchObject({
+    phase: "scheduled", blockedReason: "dependency_retired", destroyAttempts: 1,
+  });
+  expect(await h.store.getPlanRun(uninstall!.destroyPlanRunId!)).toBeUndefined();
+  expect((await h.store.listRunsByWorkspace("ws_uninstall001"))
+    .filter((run) => run.type === "plan")
+    .map((run) => run.id)).toEqual(planRunIdsBefore);
+  expect((await h.store.listActivityEvents("ws_uninstall001", { limit: 100 }))
+    .find((event) => event.action === "capsule.uninstall_blocked")?.metadata?.reason)
+    .toBe("dependency_retired");
+  expect(h.destroyJobs).toHaveLength(0);
+  expect(await h.finalize()).toMatchObject({ scanned: 0 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.destroyAttempts).toBe(1);
+  expect((await h.capsules.cancelCapsuleUninstall(h.capsuleId)).status).toBe("active");
+});
+
+test("retired dependency appearing after teardown Plan blocks Apply before dispatch", async () => {
+  const d1 = new SqliteFakeD1();
+  const h = await appliedCapsule({ store: new CloudflareD1OpenTofuControlStore(d1) });
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+    requester: { subject: "user_test" },
+  });
+  await jumpToDue(h);
+  let planCreates = 0;
+  let applyAdmissions = 0;
+
+  const result = await h.finalize({
+    controller: {
+      createCapsuleDestroyPlan: async (...args) => {
+        planCreates += 1;
+        const created = await h.controller.createCapsuleDestroyPlan(...args);
+        await insertRetiredDependency(d1, h.capsuleId, new Date(h.clock.ms).toISOString());
+        return created;
+      },
+      approveRun: (...args) => h.controller.approveRun(...args),
+      createApplyRun: (...args) => {
+        applyAdmissions += 1;
+        return h.controller.createApplyRun(...args);
+      },
+    },
+  });
+  expect(result).toMatchObject({
+    scanned: 1, destroyPlansCreated: 1, blocked: 1,
+    destroysStarted: 0, failures: 0,
+  });
+  expect(planCreates).toBe(1);
+  expect(applyAdmissions).toBe(1);
+  const uninstall = (await h.store.getCapsule(h.capsuleId))?.uninstall;
+  expect(uninstall).toMatchObject({
+    phase: "destroying", blockedReason: "dependency_retired", destroyAttempts: 1,
+  });
+  const planId = scheduledDestroyRunId("plan", scheduled.uninstall!.id, 1);
+  expect((await h.store.getPlanRun(planId))?.approval?.approvedBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect(await h.store.getApplyRun(scheduledDestroyRunId("apply", scheduled.uninstall!.id, 1)))
+    .toBeUndefined();
+  expect(h.destroyJobs).toHaveLength(0);
+  expect(await h.finalize()).toMatchObject({ scanned: 0 });
+  expect((await h.store.getCapsule(h.capsuleId))?.uninstall?.destroyAttempts).toBe(1);
 });
 
 test("unknown teardown changes are never approved unattended", async () => {

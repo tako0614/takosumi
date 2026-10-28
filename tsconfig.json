@@ -78,7 +78,6 @@
         "./contract/credential-recipe-host.ts"
       ],
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
-      "takosumi-graph": ["./lib/graph/src/mod.ts"],
       "takosumi-policy": ["./lib/policy/src/mod.ts"],
       "takosumi-opentofu-configuration": [
         "./lib/opentofu-configuration/src/mod.ts"
@@ -94,7 +93,6 @@
     "opentofu-modules",
     "contract",
     "lib/rootgen",
-    "lib/graph",
     "lib/opentofu-configuration",
     "accounts/contract",
     "accounts/service",

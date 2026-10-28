@@ -35,6 +35,7 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import { runCapsuleId } from "../../lib/run-approval.ts";
+import { runGroupFailures } from "../../lib/run-group-failures.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { isTerminalRunStatus } from "../../lib/run-logs.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
@@ -129,15 +130,26 @@ function Inner() {
     }
     return map;
   });
+  const failedMembers = createMemo(() => {
+    const current = snapshot();
+    if (!current) return [];
+    const runCapsuleIds = current.runs.flatMap((run) => {
+      const capsuleId = runCapsuleId(run);
+      return capsuleId ? [capsuleId] : [];
+    });
+    return runGroupFailures(current.runGroup.graphJson, runCapsuleIds);
+  });
 
   // AT-visible progress: member statuses flip silently in the list — mirror
   // the count into one polite live line ("5 件中 3 件が完了").
   const doneCount = createMemo(
     () =>
       (snapshot()?.runs ?? []).filter((r) => isTerminalRunStatus(r.status))
-        .length,
+        .length + failedMembers().length,
   );
-  const totalCount = createMemo(() => snapshot()?.runs.length ?? 0);
+  const totalCount = createMemo(
+    () => (snapshot()?.runs.length ?? 0) + failedMembers().length,
+  );
 
   // The manual 更新 button must go busy ONLY for a user-initiated refresh —
   // tying it to group.loading made it flicker (and evict focus) on every 5s
@@ -331,12 +343,12 @@ function Inner() {
                     title={
                       <span class="wa-title-row">
                         {t("runGroup.members")}
-                        <Badge tone="muted">{g().runs.length}</Badge>
+                        <Badge tone="muted">{totalCount()}</Badge>
                       </span>
                     }
                   />
                   <Show
-                    when={g().runs.length > 0}
+                    when={totalCount() > 0}
                     fallback={<p class="muted">{t("runGroup.membersEmpty")}</p>}
                   >
                     <ul class="wa-run-group-list">
@@ -347,6 +359,14 @@ function Inner() {
                             serviceName={capsuleNames().get(
                               runCapsuleId(run) ?? "",
                             )}
+                          />
+                        )}
+                      </For>
+                      <For each={failedMembers()}>
+                        {(failure) => (
+                          <RunGroupFailureRow
+                            capsuleId={failure.capsuleId}
+                            serviceName={capsuleNames().get(failure.capsuleId)}
                           />
                         )}
                       </For>
@@ -408,6 +428,34 @@ function RunGroupMemberRow(props: {
       >
         {t("runGroup.openRun")}
       </a>
+    </li>
+  );
+}
+
+function RunGroupFailureRow(props: {
+  readonly capsuleId: string;
+  readonly serviceName?: string | undefined;
+}) {
+  const name = () => props.serviceName;
+  return (
+    <li class="wa-run-group-row">
+      <div class="wa-run-group-main">
+        <a
+          class="wa-run-group-service"
+          href={appPageHref(props.capsuleId)}
+          aria-label={
+            name()
+              ? t("runGroup.openServiceAria", { name: name()! })
+              : undefined
+          }
+        >
+          {name() ?? t("runGroup.openService")}
+        </a>
+        <span class="wa-run-group-change">
+          {t("controlError.dependencyRetired")}
+        </span>
+      </div>
+      <StatusBadge status="failed" label={runStatusLabel} tone={runTone} />
     </li>
   );
 }

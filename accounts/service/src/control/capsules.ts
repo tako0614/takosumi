@@ -1,7 +1,7 @@
 /**
  * Session-authed Capsule (`/api/v1/capsules`)
  * control routes: read/patch/destroy-plan, plan / destroy-plan / drift-check,
- * backups, state-versions (deployments) list, dependencies create/list,
+ * backups, and state-versions (deployments) list,
  * provider-connection bindings. Extracted from `control-routes.ts` (P3 split).
  */
 import type {
@@ -155,7 +155,7 @@ export async function handleCapsules(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan ; .../dependencies.
+  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan.
   if (segments[0] === "capsules" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
     const capsule = await operations.capsules.getCapsule(capsuleId);

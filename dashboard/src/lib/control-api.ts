@@ -724,6 +724,8 @@ export interface RunGroupWithRuns {
     readonly workspaceId: string;
     readonly status?: RunGroupStatus;
     readonly type?: string;
+    /** Recorded member graph; the dashboard reads recognized pre-plan failures. */
+    readonly graphJson?: string;
   };
   readonly runs: readonly Run[];
 }
