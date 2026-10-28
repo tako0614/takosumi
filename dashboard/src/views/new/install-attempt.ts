@@ -106,7 +106,7 @@ export function appNameFromText(value: string): string | undefined {
   );
 }
 
-/** What the person chose before pressing Install. Nothing exists yet. */
+/** Inputs for starting an install or recreating an existing attempt. */
 export interface InstallCandidate {
   readonly url: string;
   /** The exact Git ref to read; empty means the repository default. */
@@ -116,6 +116,8 @@ export interface InstallCandidate {
   /** A module the link or listing named; only a hint the scan must prove. */
   readonly modulePath: string;
   readonly name?: string;
+  /** An existing attempt's environment; omitted on a brand-new install. */
+  readonly environment?: string;
   readonly authConnectionId?: string;
 }
 
@@ -138,15 +140,22 @@ export function attemptCreateRequest(
         ? { authConnectionId: candidate.authConnectionId }
         : {}),
     },
-    ...(name ? { capsule: { name } } : {}),
+    ...(name || candidate.environment !== undefined
+      ? {
+          capsule: {
+            ...(name ? { name } : {}),
+            ...(candidate.environment !== undefined ? { environment: candidate.environment } : {}),
+          },
+        }
+      : {}),
     ...(modulePath ? { options: { modulePath } } : {}),
   };
 }
 
 /**
  * Starting over after a failed or expired attempt reads the same app again:
- * same repository, version, module and name. Connection answers are chosen
- * again on the new sheet.
+ * same repository, version, module, name and environment. Connection answers
+ * are chosen again on the new sheet.
  */
 export function restartRequest(
   plan: GitInstallPlan,
@@ -157,6 +166,7 @@ export function restartRequest(
     sourcePath: plan.source.path,
     modulePath: plan.options.modulePath ?? "",
     name: plan.capsule.name,
+    environment: plan.capsule.environment,
     ...(plan.source.authConnectionId
       ? { authConnectionId: plan.source.authConnectionId }
       : {}),
@@ -452,8 +462,9 @@ export interface RetainedAnswers {
 /**
  * The value-free body of the attempt that replaces one whose Plan went out
  * of date: the same repository and Git connection, with the name, version,
- * module and connections as the person left them. Setting values are never
- * part of it; they go with the new attempt's confirming answer.
+ * module and connections as the person left them, retaining its environment.
+ * Setting values are never part of it; they go with the new attempt's
+ * confirming answer.
  */
 export function replanRequest(
   plan: GitInstallPlan,
@@ -465,6 +476,7 @@ export function replanRequest(
     sourcePath: plan.source.path,
     modulePath: answers.modulePath ?? plan.options.modulePath ?? "",
     name: answers.name,
+    environment: plan.capsule.environment,
     ...(plan.source.authConnectionId
       ? { authConnectionId: plan.source.authConnectionId }
       : {}),

@@ -308,11 +308,33 @@ describe("starting and starting over", () => {
     expect(appNameValue("")).toBeUndefined();
   });
 
+  test("recreating an install retains its environment even without an explicit name", () => {
+    const candidate = { url: "https://x.example/r.git", ref: "", sourcePath: ".", modulePath: "" };
+    expect(attemptCreateRequest({ ...candidate, environment: "integration" })).toEqual({
+      mode: "attempt",
+      source: { url: candidate.url },
+      capsule: { environment: "integration" },
+    });
+    expect(attemptCreateRequest({ ...candidate, name: "office", environment: "integration" }).capsule).toEqual({
+      name: "office",
+      environment: "integration",
+    });
+    expect(attemptCreateRequest({ ...candidate, name: "office" }).capsule).toEqual({ name: "office" });
+    expect(attemptCreateRequest(candidate).capsule).toBeUndefined();
+  });
+
+  test("Restart retains the existing integration environment", () => {
+    expect(restartRequest(plan({ capsule: { name: "office", environment: "integration" } })).capsule).toEqual({
+      name: "office",
+      environment: "integration",
+    });
+  });
+
   test("starting over reads the same app, version, module and name again", () => {
     expect(restartRequest(plan({ options: { modulePath: "infra", providerBindings: [{ provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_a" }] } }))).toEqual({
       mode: "attempt",
       source: { url: "https://github.com/example/office.git", ref: COMMIT },
-      capsule: { name: "office" },
+      capsule: { name: "office", environment: "production" },
       options: { modulePath: "infra" },
     });
   });
@@ -482,13 +504,25 @@ describe("answers kept when the install is prepared again", () => {
     expect(replanRequest(original, { name: "office-two", ref: COMMIT, modulePath: "deploy", providerBindings: bindings })).toEqual({
       mode: "attempt",
       source: { url: "https://github.com/example/office.git", ref: COMMIT, path: "apps", authConnectionId: "conn_git" },
-      capsule: { name: "office-two" },
+      capsule: { name: "office-two", environment: "production" },
       options: { modulePath: "deploy", providerBindings: bindings },
     });
     // The repository default stays the default; no setting value is ever part of it.
     const request = replanRequest(plan({ source: { ...original.source, ref: "HEAD", path: "." } }), { name: "office", ref: "HEAD", providerBindings: [] });
-    expect(request).toEqual({ mode: "attempt", source: { url: "https://github.com/example/office.git", authConnectionId: "conn_git" }, capsule: { name: "office" } });
+    expect(request).toEqual({ mode: "attempt", source: { url: "https://github.com/example/office.git", authConnectionId: "conn_git" }, capsule: { name: "office", environment: "production" } });
     expect(JSON.stringify(request)).not.toContain("variables");
+  });
+
+  test("replanning after edits retains integration while replacing the name and module", () => {
+    const request = replanRequest(plan({ capsule: { name: "office", environment: "integration" } }), {
+      name: "office-two",
+      ref: "v2.0.0",
+      modulePath: "deploy",
+      providerBindings: [],
+    });
+    expect(request.capsule).toEqual({ name: "office-two", environment: "integration" });
+    expect(request.source.ref).toBe("v2.0.0");
+    expect(request.options).toEqual({ modulePath: "deploy" });
   });
 });
 

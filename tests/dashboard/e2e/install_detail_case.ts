@@ -619,7 +619,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.attempts.log.creates[1]).toEqual({
         mode: "attempt",
         source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
-        capsule: { name: "cloudflare-service" },
+        capsule: { name: "cloudflare-service", environment: "production" },
         options: { modulePath: ".", providerBindings: [{ provider: cloudflare, moduleLocalName: "cloudflare", connectionId: "pc_only" }] },
       });
       const continues = f.attempts.log.answers.filter((answer) => (answer as { continue?: boolean }).continue === true);
@@ -785,7 +785,12 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       await problem.getByRole("button", { name: "Start over", exact: true }).click();
       await expect.poll(() => f.mutations.filter((m) => m === attemptPost).length).toBe(2);
       expect(f.mutations.filter((m) => m.startsWith("DELETE /api/v1/install-plans/"))).toHaveLength(1);
-      expect(f.attempts.log.creates[1]).toEqual(f.attempts.log.creates[0]);
+      expect(f.attempts.log.creates[1]).toEqual({
+        mode: "attempt",
+        source: { url: "https://github.com/example/cloudflare-service.git", ref: sourceCommit },
+        capsule: { name: "cloudflare-service", environment: "production" },
+        options: { modulePath: "." },
+      });
     });
     test("a reopened attempt is read only until the person continues", async ({ page }) => {
       const f = await detailFixture(page, base, false, false, "not_applicable", { roundsPerPhase: 3 });

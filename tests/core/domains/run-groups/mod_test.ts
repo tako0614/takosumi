@@ -19,6 +19,7 @@ function ids() { let n = 1; return (prefix: string) => `${prefix}_${String(n++).
 function service(legacyDependencyConsumerCapsuleIds: readonly string[] = []) {
   const store = new InMemoryOpenTofuControlStore({ legacyDependencyConsumerCapsuleIds });
   const jobs: OpenTofuPlanJob[] = [];
+  const activityEvents: { metadata: Record<string, unknown> }[] = [];
   const runner: OpenTofuRunner = {
     plan: async (job) => {
       jobs.push(job);
@@ -39,7 +40,13 @@ function service(legacyDependencyConsumerCapsuleIds: readonly string[] = []) {
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     now: (() => { let t = 1; return () => t++; })(), newId: ids(),
   });
-  return { store, controller, jobs, groups: new RunGroupsService({ store, controller, newId: ids() }) };
+  return {
+    store, controller, jobs, activityEvents,
+    groups: new RunGroupsService({
+      store, controller, newId: ids(),
+      activity: { record: async (event) => { activityEvents.push(event); return undefined; } },
+    }),
+  };
 }
 async function seed(store: InMemoryOpenTofuControlStore, name: string, status: "stale" | "active") {
   const { capsule } = await seedCapsuleModel(store, {
@@ -113,7 +120,7 @@ for (const kind of ["update", "drift"] as const) {
     : groups.createWorkspaceDriftCheck("ws_test001");
 
   test(`${kind} group records a retired member and continues an independent Capsule`, async () => {
-    const { store, groups, jobs } = service(["cap_blocked"]);
+    const { store, groups, jobs, activityEvents } = service(["cap_blocked"]);
     await seed(store, "blocked", status);
     await seed(store, "independent", status);
 
@@ -126,6 +133,12 @@ for (const kind of ["update", "drift"] as const) {
     expect(graph.order).toEqual([["cap_blocked", "cap_independent"]]);
     expect(graph.failures).toEqual({ cap_blocked: "dependency_retired" });
     expect(Object.keys(graph.runs)).toEqual(["cap_independent"]);
+    expect(activityEvents).toHaveLength(1);
+    expect(activityEvents[0]?.metadata).toMatchObject({
+      memberCapsuleIds: ["cap_blocked", "cap_independent"],
+      runIds: Object.values(graph.runs),
+      failures: graph.failures,
+    });
     expect(created.runs).toHaveLength(1);
     expect(created.runs[0]?.status).toBe("succeeded");
     const expectedStatus = "failed";

@@ -10,7 +10,7 @@
 route は、選択された control-ledger record の **部分的な export** です。
 完全な Workspace snapshot ではなく、OSS にこの形式を読む importer はありません。
 control bundle は `bundleVersion: 3` です。version 2 にあった `dependencies`、
-`dependencySnapshots`、`outputShares` の 3 section は廃止に伴って除外しました。
+`outputSharesGranted`、`outputSharesReceived` の 3 section は廃止に伴って除外しました。
 state / service-data manifest の独立した `bundleVersion: 1` は変わりません。
 そのため、次の surface は公開・mount しません。
 
