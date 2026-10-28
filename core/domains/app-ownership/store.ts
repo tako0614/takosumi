@@ -188,13 +188,10 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
 }
 
 export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
-  readonly #owners = new Map<string, CapsuleOwnership>();
   readonly #members = new Map<string, CapsuleMember>();
   readonly #billing = new Map<string, AccountBillingBinding>();
   constructor(control: OpenTofuControlStore) { super(control); }
   async getOwnership(id: string): Promise<CapsuleOwnership | undefined> {
-    const explicit = this.#owners.get(id);
-    if (explicit) return structuredClone(explicit);
     const capsule = await this.control.getCapsule(id);
     return capsule?.ownerAccountId ? {
       capsuleId: id,
@@ -216,7 +213,6 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
       ? control.setCapsuleOwnership(record)
       : !!await this.control.putCapsule({ ...capsule, ...fields });
     if (!changed) return false;
-    this.#owners.set(record.capsuleId, structuredClone(record));
     this.#members.delete(`${record.capsuleId}\0${record.ownerAccountId}`);
     control.deleteCapsuleMember?.(record.capsuleId, record.ownerAccountId);
     return true;
@@ -225,7 +221,7 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
     validOwnership(record);
     if (await this.getOwnership(record.capsuleId)) return false;
     const capsule = await this.control.getCapsule(record.capsuleId);
-    if (!capsule || this.#owners.has(record.capsuleId) || capsule.ownerAccountId) return false;
+    if (!capsule || capsule.ownerAccountId) return false;
     const control = this.control as import("../deploy-control/store.ts").InMemoryOpenTofuControlStore;
     const { capsuleId: _capsuleId, ...fields } = record;
     void _capsuleId;
@@ -233,7 +229,6 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
       ? control.setCapsuleOwnership(record, true)
       : !!await this.control.putCapsule({ ...capsule, ...fields });
     if (!changed) return false;
-    this.#owners.set(record.capsuleId, structuredClone(record));
     this.#members.delete(`${record.capsuleId}\0${record.ownerAccountId}`);
     control.deleteCapsuleMember?.(record.capsuleId, record.ownerAccountId);
     return true;

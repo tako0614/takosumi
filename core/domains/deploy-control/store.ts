@@ -6224,7 +6224,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putCapsule(capsuleInput: Capsule): Promise<Capsule> {
-    const capsule = normalizeCapsule(capsuleInput);
+    const current = this.#capsules.get(capsuleInput.id);
+    // Ordinary record writes cannot replace the separate ownership authority.
+    // SQL/D1 preserve the physical tuple in the same way.
+    const capsule = normalizeCapsule(current?.ownerAccountId ? {
+      ...capsuleInput,
+      ownerAccountId: current.ownerAccountId,
+      ownershipEpoch: current.ownershipEpoch ?? 0,
+      managementState: current.managementState ?? "active",
+      managementEpoch: current.managementEpoch ?? 0,
+      storageRoot: current.storageRoot ?? `apps/${current.id}`,
+    } : capsuleInput);
     for (const existing of this.#capsules.values()) {
       if (
         existing.id !== capsule.id &&

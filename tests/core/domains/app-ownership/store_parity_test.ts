@@ -59,6 +59,11 @@ test("app ownership and members have memory/Postgres/D1 authority parity", async
     expect(await ownership.resolveAppAccess("member", initial.capsuleId)).toMatchObject({ role: "owner", ownershipEpoch: 1 });
     expect(await ownership.listMembers(initial.capsuleId)).toEqual([]);
     expect(await ownership.resolveAppAccess("legacy-owner", initial.capsuleId)).toBeUndefined();
+    expect(await control.putCapsule({ ...capsule(), ownerAccountId: "stale-owner", ownershipEpoch: 0 }))
+      .toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
+    expect(await control.getCapsule(initial.capsuleId)).toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
+    expect(await ownership.resolveAppAccess("member", initial.capsuleId)).toMatchObject({ role: "owner", ownershipEpoch: 1 });
+    expect(await ownership.resolveAppAccess("stale-owner", initial.capsuleId)).toBeUndefined();
     expect(name).toBeTruthy();
   }
 });
