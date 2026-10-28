@@ -1407,6 +1407,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         await this.#requireCurrentAppAccess(applyForBudget.approval.approvedBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
       } else if (applyForBudget && (
         applyForBudget.approval ||
+        planForBudget.approval ||
         planForBudget.requiresApproval === true ||
         planForBudget.operation === "destroy"
       )) {
