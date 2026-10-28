@@ -1,3 +1,4 @@
+import { InMemoryGitInstallPlanStore } from "../../../../core/domains/install-plans/store.ts";
 import { expect, test } from "bun:test";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
@@ -176,3 +177,34 @@ test("destroyed public DELETE replay returns terminal Capsule and no reservation
   }
   expect(h.effects.immediatePlans).toBe(0);
 });
+
+for (const managementState of ["draining", "frozen"] as const) {
+  test(`destroyed unapplied DELETE and abandon replay cleanup while ${managementState}`, async () => {
+    const h = await fixture();
+    const current = (await h.ledger.getCapsule(h.seeded.capsule.id))!;
+    await h.ledger.putCapsule({ ...current, status: "destroyed", currentStateGeneration: 0 });
+    const authority = await h.core.workspaces.captureManagementAuthority(current.workspaceId);
+    const stopped = await h.ledger.beginWorkspaceDraining(current.workspaceId, authority);
+    expect(stopped.status).toBe("started");
+    if (managementState === "frozen") {
+      h.ledger.attachGitInstallPlanStore(new InMemoryGitInstallPlanStore(h.ledger));
+      expect((await h.ledger.freezeWorkspaceManagementIfQuiescent({
+        workspaceId: current.workspaceId, managementState: "draining", managementEpoch: authority.managementEpoch + 1,
+      })).status).toBe("frozen");
+    }
+    let revocations = 0;
+    h.core.interfaces.revokeCapsuleInterfaceLinks = async (workspaceId, capsuleId) => {
+      expect(workspaceId).toBe(current.workspaceId);
+      expect(capsuleId).toBe(current.id);
+      revocations += 1;
+    };
+    for (const [method, suffix] of [["DELETE", ""], ["POST", "/abandon"]]) {
+      const response = await h.request(method!, suffix!);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ alreadyDeleted: true, capsule: { status: "destroyed" } });
+    }
+    expect(revocations).toBe(2);
+    expect(h.effects.immediatePlans).toBe(0);
+    expect(await h.ledger.listRunsByWorkspace(current.workspaceId)).toHaveLength(0);
+  });
+}

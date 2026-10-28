@@ -165,6 +165,25 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       expect(h.errors).toEqual([]);
     });
 
+    test("keeps Store install status neutral while installed apps are loading", async ({ page }) => {
+      const h = await fixture(page, []);
+      let releaseRead!: () => void;
+      const read = new Promise<void>((resolve) => { releaseRead = resolve; });
+      await page.route("**/api/v1/workspaces/*/installed-apps", async (route) => {
+        await read;
+        return route.fulfill({ json: { installedApps: [], complete: true } });
+      });
+      await page.goto("/new");
+      const card = page.locator('[data-tcs-listing-id="example/installed-app"]');
+      await expect(card).toBeVisible();
+      await expect(card.getByTestId("store-installed-loading")).toBeVisible();
+      await expect(card.getByTestId("store-installed-unknown")).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "追加: 共有オフィス" })).toHaveCount(0);
+      releaseRead();
+      await expect(card.getByRole("button", { name: "追加: 共有オフィス" })).toBeEnabled();
+      expect(h.errors).toEqual([]);
+    });
+
     test("a person with no workspace can start Install and create one", async ({ page }) => {
       const h = await fixture(page, []);
       await page.addInitScript(() => localStorage.removeItem("takosumi.currentWorkspaceId"));

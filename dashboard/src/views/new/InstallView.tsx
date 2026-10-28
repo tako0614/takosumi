@@ -164,6 +164,7 @@ function StorePage(props: { readonly principalId: string }) {
         <StoreBrowser
           locale={locale()}
           installedApps={!installedApps.loading && !installedApps.error ? installedApps()?.installedApps : []}
+          installedAppsLoading={installedApps.loading}
           installedAppsComplete={!installedApps.loading && !installedApps.error ? installedApps()?.complete : false}
           onConfigure={choose}
           onSelectListing={choose}

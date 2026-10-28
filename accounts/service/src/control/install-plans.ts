@@ -708,7 +708,7 @@ async function discardAttemptRecord(
     check = await checkAbandonableCapsule(ctx, current, capsuleId);
     if (!check.ok) return check;
   }
-  if (check.capsule && check.capsule.status !== "destroyed") {
+  if (check.capsule) {
     try {
       await ctx.operations.capsules.abandonUnappliedCapsule(
         check.capsule.id,
