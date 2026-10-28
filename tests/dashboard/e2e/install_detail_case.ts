@@ -44,6 +44,7 @@ async function detailFixture(
   let connected = false;
   let retryCount = 0;
   let retryFailed = false;
+  let screensUnreadable = false;
   const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), id: "conn_inline_fixture", displayName: "My Cloudflare" };
   const attempts: InstallAttemptFixture = createInstallAttemptFixture({
     capsuleId: capId,
@@ -68,6 +69,53 @@ async function detailFixture(
   const plan = () => ({ id: retryCount ? `run_retry_fixture_${retryCount}` : planId, workspaceId: "ws_alpha", capsuleId: capId, type: "plan", status: retryCount && retryFailed ? "failed" : "succeeded", summary: { add: 2, change: 0, destroy: 0 }, planResources, policyStatus: "pass", createdBy: "portable-e2e", createdAt: retryCount ? new Date(Date.parse(now) + 120000 + retryCount * 1000).toISOString() : now });
   const apply = () => ({ ...plan(), id: applyId, planRunId: planId, type: "apply", status: applyStatus, errorCode: applyStatus === "failed" ? "runner_apply_failed" : undefined, createdAt: "2026-10-27T01:01:00.000Z" });
   const capsule = () => ({ id: capId, workspaceId: "ws_alpha", sourceId, name: "cloudflare-service", slug: "cloudflare-service", installConfigId: "cfg-default-opentofu-capsule", environment: "production", status: capsuleStatus, currentStateGeneration: capsuleStatus === "pending" ? 0 : 1, currentStateVersionId: capsuleStatus === "pending" ? undefined : "sv_inline", uninstall: capsuleStatus === "uninstalled" ? { phase: "scheduled", requestedAt: now, scheduledDestroyAt: "2026-11-03T01:00:00Z" } : undefined, createdAt: now, updatedAt: now });
+  // The control plane's view of the app (`GET /capsules/:id/app`), derived
+  // from the same fixture state the Capsule read reports.
+  const appView = () => {
+    const base = {
+      kind: "takosumi.capsule-app@v1", capsuleId: capId, workspaceId: "ws_alpha", projectId: "prj_alpha",
+      name: "cloudflare-service", environment: "production", status: capsuleStatus,
+      applied: capsuleStatus !== "pending" && capsuleStatus !== "destroyed", problems: [] as Record<string, unknown>[],
+      screens: [] as Record<string, unknown>[],
+      version: {
+        repository: { url: "https://github.com/example/cloudflare-service.git", defaultRef: sourceCommit },
+        ...(capsuleStatus !== "pending" && capsuleStatus !== "destroyed"
+          ? { current: { sourceSnapshotId: "snap_inline", ref: sourceCommit, path: ".", commit: sourceCommit } }
+          : {}),
+        updateAvailable: false, stale: false, autoUpdate: false,
+      },
+      progress: { revisionPreparing: false } as Record<string, unknown>,
+      uninstall: { mode: "scheduled", graceDays: 7 } as Record<string, unknown>,
+      observedAt: now,
+    };
+    const failedApply = { code: "run_failed", severity: "error", runId: applyId, runType: "apply", errorCode: "runner_apply_failed" };
+    switch (capsuleStatus) {
+      case "pending":
+        if (applied && applyStatus === "running") {
+          return { ...base, state: "installing", primaryAction: "none", progress: { revisionPreparing: false, run: { id: applyId, type: "apply", status: "running", createdAt: apply().createdAt } }, uninstall: { mode: "discard" } };
+        }
+        if (applied && applyStatus === "failed") {
+          return { ...base, state: "needs_attention", primaryAction: "retry", problems: [failedApply], uninstall: { mode: "discard" } };
+        }
+        return { ...base, state: "installing", primaryAction: "review", progress: { revisionPreparing: false, review: { runId: plan().id, runType: "plan" } }, uninstall: { mode: "discard" } };
+      case "active":
+        return screensUnreadable
+          ? { ...base, state: "installed", primaryAction: "open", incomplete: ["screens"] }
+          : { ...base, state: "installed", primaryAction: "open", screens: [{ interfaceId: "if_inline", name: "app.launcher", title: "Cloudflare Service", url: "https://apps.example.test/inline-app" }] };
+      case "error":
+        return { ...base, state: "needs_attention", primaryAction: "retry", problems: applyStatus === "failed" ? [failedApply] : [{ code: "capsule_error", severity: "error" }] };
+      case "uninstalled":
+        return {
+          ...base, state: "uninstall_scheduled", primaryAction: "cancel_uninstall",
+          problems: [{ code: "uninstall_scheduled", severity: "warning" }],
+          uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter: "2026-11-03T01:00:00Z", cancellable: true, blocked: false } },
+        };
+      case "disabled":
+        return { ...base, state: "stopped", primaryAction: "none", uninstall: { mode: "none" } };
+      default:
+        return { ...base, state: "uninstalled", primaryAction: "reinstall", uninstall: { mode: "none" } };
+    }
+  };
   if (oauth) await page.context().route("**/api/v1/connections/oauth/cloudflare/callback**", async (route) => {
     const url = new URL(route.request().url());
     connected = !url.searchParams.has("error");
@@ -103,6 +151,7 @@ async function detailFixture(
       // A capsule read always carries the configuration authority guard.
       return route.fulfill({ json: { capsule: capsule(), graceDays: 7, installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
     }
+    if (path === `/api/v1/capsules/${capId}/app`) return route.fulfill({ json: { app: appView() } });
     if (path === `/api/v1/capsules/${capId}/runs`) {
       const runs = applied ? [apply(), plan()] : [plan()];
       const types = url.searchParams.getAll("type");
@@ -113,6 +162,7 @@ async function detailFixture(
     if (path === `/api/v1/capsules/${capId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: capId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
     if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
     if (path === `/api/v1/capsules/${capId}/cancel-uninstall`) { capsuleStatus = "active"; return route.fulfill({ json: { capsule: capsule() } }); }
+    if (path === "/api/v1/state-versions/sv_inline/rollback-plan" && request.method() === "POST") { retryCount += 1; return route.fulfill({ status: 201, json: { run: plan() } }); }
     if (path === `/api/v1/capsules/${capId}/plan`) { retryCount += 1; return route.fulfill({ json: { run: plan() } }); }
     if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: applied ? [apply(), plan()] : [plan()] } });
     if (path.startsWith("/api/v1/runs/") && path.endsWith("/cost")) {
@@ -146,6 +196,7 @@ async function detailFixture(
     destroy: () => { capsuleStatus = "destroyed"; },
     problem: (status: string) => { capsuleStatus = status; },
     failRetry: (failed: boolean) => { retryFailed = failed; },
+    screensUnreadable: (value: boolean) => { screensUnreadable = value; },
     /** The confirming answer (`continue: true`) the page sent, if any. */
     continued: () => attempts.log.answers.find((answer) => (answer as { continue?: boolean } | undefined)?.continue === true) as
       { readonly variables?: Readonly<Record<string, unknown>>; readonly capsuleName?: string } | undefined,
@@ -724,24 +775,30 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
     test("Uninstall confirms once, restores its real reservation, and supports cancellation", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
+      // An old install-page locator opens the app's own page.
       await page.goto(`/new?capsule=${capId}`);
+      await expect(page).toHaveURL(new RegExp(`/apps/${capId}$`, "u"));
+      const appPage = page.getByTestId("app-page");
       const section = page.getByTestId("app-uninstall");
+      // The grace period shows before anything is scheduled.
+      await expect(section).toContainText("Its data stays for 7 days");
       await section.getByRole("button", { name: "Uninstall", exact: true }).click();
       await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
       expect(f.mutations.some((m) => m.startsWith("DELETE"))).toBe(false);
       await section.getByRole("button", { name: "Uninstall", exact: true }).click();
       await page.getByRole("dialog").getByRole("button", { name: "Uninstall", exact: true }).click();
-      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstalling");
-      await page.reload(); await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstalling");
+      await expect(appPage).toHaveAttribute("data-app-state", "uninstall_scheduled");
+      await page.reload(); await expect(appPage).toHaveAttribute("data-app-state", "uninstall_scheduled");
       expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
       // The scheduled uninstall is this app's problem until it runs.
       const scheduled = page.getByTestId("app-problems").locator('[data-problem="uninstall"]');
       await expect(scheduled).toContainText("will be uninstalled on");
       await expect(page.getByTestId("app-uninstall")).toHaveCount(0);
-      await scheduled.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+      await page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true }).click();
       await expect(page.getByRole("link", { name: "Open", exact: true })).toBeVisible();
       f.destroy(); await page.reload();
-      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "uninstalled");
+      await expect(appPage).toHaveAttribute("data-app-state", "uninstalled");
+      await expect(page.getByTestId("app-header").getByRole("link", { name: "Install again", exact: true })).toBeVisible();
     });
     test("returning to Store exits the installed detail without replaying any action", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();
@@ -755,24 +812,28 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations).toEqual([]);
     });
     test("launch read failure is retryable and a later failed update retains management", async ({ page }) => {
-      const f = await detailFixture(page, base); f.finish(); f.problem("error");
-      let failScreens = true;
-      await page.route("**/workspaces/ws_alpha/ui-surfaces**", (route) => failScreens
-        ? route.fulfill({ status: 503, json: { error: "fixture_read_unavailable" } }) : route.fallback());
-      await page.goto(`/new?capsule=${capId}`);
-      await expect(page.getByTestId("app-problems").locator('[data-problem="error"]')).toContainText("This app has a problem");
-      await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
+      const f = await detailFixture(page, base); f.finish(); f.screensUnreadable(true);
+      await page.goto(`/apps/${capId}`);
       const header = page.getByTestId("app-header");
-      await expect(header.getByRole("alert")).toContainText("Its screens couldn't be loaded");
-      failScreens = false;
+      // Screens the server could not read are named, never silently absent.
+      await expect(header.getByRole("alert")).toContainText("Couldn't read its screens.");
+      await expect(header.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+      f.screensUnreadable(false);
       await header.getByRole("button", { name: "Reload screens", exact: true }).click();
-      // The error app still has the state its last successful apply made;
-      // its authorized screen stays openable while the problem is shown.
       await expect(header.getByRole("link", { name: "Open", exact: true })).toBeVisible();
-      f.problem("disabled"); await page.reload();
+      await expect(header.getByRole("alert")).toHaveCount(0);
+      // A later problem is this app's, with the server's next step; the app
+      // stays manageable.
+      f.problem("error"); await page.reload();
+      await expect(page.getByTestId("app-problems").locator('[data-problem="capsule_error"]')).toContainText("This app has a problem");
+      await expect(header.getByRole("button", { name: "Review the installed version again", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toBeVisible();
+      f.problem("disabled"); await page.reload();
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Stopped.");
       await expect(page.getByRole("link", { name: "Open", exact: true })).toHaveCount(0);
+      // A stopped app cannot be scheduled for uninstall; it is removed by a
+      // reviewed plan instead.
+      await expect(page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
     });
     test("deletion confirmation includes dependent apps and failed dependency reads", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();

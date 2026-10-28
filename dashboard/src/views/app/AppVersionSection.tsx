@@ -8,9 +8,8 @@ import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import { RefreshCw, RotateCcw } from "lucide-solid";
 import { Button, Checkbox, FormField, Input, Skeleton } from "../../components/ui/index.ts";
 import type {
-  Capsule,
+  CapsuleAppVersion,
   PublicStateVersion,
-  SourceSnapshot,
 } from "../../lib/control-api.ts";
 import { repositoryLabel, versionLabel } from "../../lib/app-page.ts";
 import { t } from "../../i18n/index.ts";
@@ -19,18 +18,16 @@ import { AppSection, RelativeTime } from "./app-ui.tsx";
 const PREVIOUS_VERSIONS_SHOWN = 5;
 
 export default function AppVersionSection(props: {
-  readonly capsule: Capsule;
-  readonly sourceUrl?: string;
+  /** The server's version facts: current, newest, update, autoUpdate. */
+  readonly version: CapsuleAppVersion;
+  /** The server could not read part of the version facts. */
+  readonly versionIncomplete: boolean;
   readonly currentStateVersion?: PublicStateVersion;
   readonly stateVersions: readonly PublicStateVersion[];
   readonly stateVersionsLoading: boolean;
   readonly stateVersionsFailed: boolean;
   /** Version applied by each StateVersion, where it is known. */
   readonly versionLabels: ReadonlyMap<string, string>;
-  readonly newVersion?: SourceSnapshot;
-  readonly updateAvailable: boolean;
-  /** Stale because an app it uses changed, not because of a new version. */
-  readonly dependencyChanged: boolean;
   readonly revisionReady: boolean;
   readonly reviewBusy: boolean;
   readonly starting: boolean;
@@ -45,8 +42,14 @@ export default function AppVersionSection(props: {
 }): JSX.Element {
   const [requestedRef, setRequestedRef] = createSignal("");
   const [showAllPrevious, setShowAllPrevious] = createSignal(false);
-  const adopted = () => props.capsule.adoptedSourceRevision;
-  const current = () => versionLabel(adopted()?.ref, adopted()?.resolvedCommit);
+  const current = () => versionLabel(props.version.current?.ref, props.version.current?.commit);
+  // A newer commit of the same ref, or an app it uses changed (stale).
+  const updateAvailable = () => props.version.updateAvailable || props.version.stale;
+  const dependencyChanged = () => props.version.stale && !props.version.updateAvailable;
+  const newVersion = () =>
+    props.version.updateAvailable && props.version.latest
+      ? versionLabel(props.version.latest.ref, props.version.latest.commit)
+      : undefined;
   // Previous applied versions, newest first. The current one is not offered.
   const previous = createMemo(() =>
     [...props.stateVersions]
@@ -59,7 +62,7 @@ export default function AppVersionSection(props: {
 
   return (
     <AppSection
-      id="app-version"
+      id="version"
       title={t("app.version.title")}
       subtitle={t("app.version.subtitle")}
       testId="app-version"
@@ -68,12 +71,19 @@ export default function AppVersionSection(props: {
         <div>
           <dt>{t("app.version.current")}</dt>
           <dd>
-            <Show when={current()} fallback={<span class="ap-muted">{t("app.version.unknown")}</span>}>
+            <Show
+              when={current()}
+              fallback={
+                <span class="ap-muted" data-incomplete={props.versionIncomplete ? "version" : undefined}>
+                  {props.versionIncomplete ? t("app.incomplete.version") : t("app.version.unknown")}
+                </span>
+              }
+            >
               {(label) => <code data-testid="app-current-version">{label()}</code>}
             </Show>
           </dd>
         </div>
-        <Show when={props.sourceUrl}>
+        <Show when={props.version.repository?.url}>
           {(url) => (
             <div>
               <dt>{t("app.version.source")}</dt>
@@ -95,38 +105,36 @@ export default function AppVersionSection(props: {
         </Show>
       </dl>
 
-      <div class="ap-callout" classList={{ "ap-callout-info": props.updateAvailable }} data-testid="app-update">
+      <div class="ap-callout" classList={{ "ap-callout-info": updateAvailable() }} data-testid="app-update">
         <div>
           <strong>
-            {props.updateAvailable
-              ? props.dependencyChanged
+            {updateAvailable()
+              ? dependencyChanged()
                 ? t("app.version.dependencyChanged")
                 : t("app.version.updateAvailable")
               : t("app.version.checkTitle")}
           </strong>
-          <Show when={props.updateAvailable && props.newVersion}>
-            {(snapshot) => (
+          <Show when={newVersion()}>
+            {(label) => (
               <p>
                 {t("app.version.newVersion")}{" "}
-                <code data-testid="app-new-version">
-                  {versionLabel(snapshot().ref, snapshot().resolvedCommit)}
-                </code>
+                <code data-testid="app-new-version">{label()}</code>
               </p>
             )}
           </Show>
-          <Show when={!props.updateAvailable}>
+          <Show when={!updateAvailable()}>
             <p>{t("app.version.checkHint")}</p>
           </Show>
         </div>
         <Button
-          variant={props.updateAvailable ? "primary" : "secondary"}
+          variant={updateAvailable() ? "primary" : "secondary"}
           type="button"
           icon={<RefreshCw size={16} />}
           busy={props.starting}
           disabled={props.reviewBusy || !props.revisionReady}
           onClick={() => props.onUpdate()}
         >
-          {props.updateAvailable ? t("app.version.update") : t("app.version.check")}
+          {updateAvailable() ? t("app.version.update") : t("app.version.check")}
         </Button>
       </div>
 
@@ -141,7 +149,7 @@ export default function AppVersionSection(props: {
       <div class="ap-subsection">
         <h3>{t("app.version.autoTitle")}</h3>
         <Checkbox
-          checked={props.capsule.autoUpdate === true}
+          checked={props.version.autoUpdate === true}
           disabled={props.autoUpdateBusy}
           onChange={(event) => props.onAutoUpdate(event.currentTarget.checked)}
           label={t("app.version.autoLabel")}
@@ -219,7 +227,7 @@ export default function AppVersionSection(props: {
         <FormField label={t("app.version.pinLabel")} hint={t("app.version.pinHint")}>
           <Input
             value={requestedRef()}
-            placeholder={adopted()?.ref}
+            placeholder={props.version.current?.ref ?? props.version.repository?.defaultRef}
             spellcheck={false}
             autocomplete="off"
             onInput={(event) => setRequestedRef(event.currentTarget.value)}

@@ -29,7 +29,8 @@ describe("attempt-driven install page", () => {
   test("routes every install entry to the one /new view", () => {
     const router = read("dashboard/src/index.tsx");
     expect(router).toContain('const InstallView = lazy(() => import("./views/new/InstallView.tsx"))');
-    expect(router).toContain('<Route path="/new" component={InstallView} />');
+    expect(router).toContain('<Route path="/new" component={NewRoute} />');
+    expect(router).toContain("<InstallView />");
     expect(router).toContain('<Route path="/install" component={InstallEntryRoute} />');
     expect(router).toContain('<Route path="/store" component={() => <RedirectWithQuery to="/new" />} />');
     expect(router).not.toContain("NewAppView");

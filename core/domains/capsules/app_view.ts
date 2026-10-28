@@ -4,9 +4,9 @@
  * The Dashboard used to infer an app's state from Workspace-wide windows (the
  * newest 100 Runs and Activity events). This pure function computes it from
  * per-Capsule facts the control plane reads exactly: the Capsule row, its
- * newest lifecycle Run, whether the revision coordinator is preparing a
- * change, the health of the ProviderConnections its bindings use, the current
- * generation's screen materialization ledger, and whether the uninstall
+ * newest lifecycle Run, whether an install or revision coordinator is still
+ * preparing its Plan, the health of the ProviderConnections its bindings use, the
+ * current generation's screen materialization ledger, and whether the uninstall
  * commands would admit a cancel right now.
  *
  * It returns one state, one primary action and the ordered problem list. The
@@ -62,6 +62,12 @@ export interface CapsuleAppFacts {
   readonly capsule: CapsuleFacts;
   /** The newest lifecycle Run ({@link CAPSULE_APP_LIFECYCLE_RUN_TYPES}). */
   readonly latestRun?: CapsuleAppLatestRun;
+  /**
+   * An install or revision coordinator bound to this Capsule is still
+   * preparing its Plan (no Plan Run yet; an install attempt only for a
+   * never-applied Capsule and only until it stalls), so it owns the next
+   * plan: the app reads as in progress and offers no action that would plan.
+   */
   readonly revisionPreparing: boolean;
   readonly connectionIssues: readonly CapsuleAppConnectionIssue[];
   /** A dead-lettered screen materialization of the current generation. */

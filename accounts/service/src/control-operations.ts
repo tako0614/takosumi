@@ -121,6 +121,7 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunPlanOrigin,
   RunType,
   PublicRun,
 } from "takosumi-contract/runs";
@@ -706,6 +707,8 @@ export interface ControlPlaneOperations {
       readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
       /** Server-owned audit marker; never parsed from an HTTP request body. */
       readonly actor?: string;
+      /** The server flow creating this plan; never parsed from a request body. */
+      readonly origin?: RunPlanOrigin;
     },
   ): Promise<PlanRunResponse>;
   /**

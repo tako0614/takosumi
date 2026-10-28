@@ -936,3 +936,38 @@
   opacity: 1;
   background: color-mix(in srgb, currentcolor 12%, transparent);
 }
+
+/* Structured policy reasons of a Run (components/run/PolicyReasonList.tsx):
+   one readable line per reason with the provider or resource type it names. */
+.policy-reasons {
+  display: grid;
+  gap: var(--tg-s-1);
+  min-width: 0;
+  font-size: var(--tg-fs-sm);
+}
+.policy-reasons-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--tg-fg);
+}
+.policy-reasons ul {
+  display: grid;
+  gap: var(--tg-s-1);
+  margin: 0;
+  padding-left: var(--tg-s-5);
+  color: var(--tg-fg-muted);
+  line-height: 1.6;
+}
+.policy-reasons li {
+  overflow-wrap: anywhere;
+}
+.policy-reason-subject {
+  margin-left: var(--tg-s-2);
+  white-space: nowrap;
+}
+.policy-reason-subject code {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

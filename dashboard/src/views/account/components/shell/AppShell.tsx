@@ -39,20 +39,17 @@ export default function AppShell(props: Props) {
   // On SPA navigation, move focus to the content well so keyboard/AT users
   // land on the new page instead of staying on the old nav control.
   //
-  // Keyed on the page, NOT the raw pathname: detail screens put their tab strip
-  // in the trailing segment (`/workloads/:id/:tab`), and throwing focus out of
-  // the tab strip on every tab click made those strips unusable by keyboard.
-  // It also waits for the routing transition to settle — `location.pathname`
-  // flips as soon as the URL commits, which on a slow lazy route meant focusing
-  // <main> while it still held the PREVIOUS page.
+  // Keyed on the page, NOT the raw pathname: アカウント keeps its sections in
+  // the trailing segment (`/account/:section`), and throwing focus out of the
+  // section list on every click made it unusable by keyboard. An app's page
+  // keeps its sections in the fragment (`/apps/:id#settings`), which never
+  // changes the pathname. It also waits for the routing transition to settle
+  // — `location.pathname` flips as soon as the URL commits, which on a slow
+  // lazy route meant focusing <main> while it still held the PREVIOUS page.
   const pageKey = () => {
     const segments = location.pathname.split("/").filter(Boolean);
-    const isDetailTab =
-      segments.length === 3 &&
-      (segments[0] === "workloads" || segments[0] === "services");
-    // アカウント keeps its sections in the trailing segment (`/account/:section`).
     if (segments[0] === "account") return "account";
-    return isDetailTab ? segments.slice(0, 2).join("/") : location.pathname;
+    return location.pathname;
   };
   createEffect(
     on(

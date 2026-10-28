@@ -131,6 +131,8 @@ import {
 } from "../../components/ui/index.ts";
 import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
+import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
+import { appPageHref } from "../../lib/app-links.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import {
   createLastGoodValue,
@@ -1118,11 +1120,11 @@ function Inner() {
         t("controlError.sourceRevisionMismatch"),
       );
     }
-    // The same selector as the app page's problem card: a failed removal is
-    // retried as a removal, a first install keeps its reviewed pair, and an
-    // installed app's change re-reads the latest source.
-    const envelope = await retryPlanForRun(currentRun, capsule);
-    const newRunId = extractRunId(envelope);
+    // The same selector as the app page: a failed removal is retried as a
+    // removal, a first install keeps its reviewed pair, and an installed
+    // app's change repeats the change its plan records (never the Source's
+    // default ref).
+    const newRunId = await retryPlanForRun(currentRun, capsule);
     if (newRunId) {
       navigate(
         appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
@@ -1537,7 +1539,7 @@ function Inner() {
               {(id) => (
                 <Button
                   variant="ghost"
-                  href={`/workloads/${encodeURIComponent(id())}`}
+                  href={appPageHref(id())}
                 >
                   {t("run.backToApp")}
                 </Button>
@@ -1643,6 +1645,9 @@ function Inner() {
                       </div>
                     )}
                   </Show>
+                  {/* Why a policy stopped this plan or made it wait for an
+                      approval: structured codes, never the recorded prose. */}
+                  <PolicyReasonList reasons={r().policyReasons ?? []} />
 
                   {/* cost (backend values only). A failed read is an explicit
                       unknown-cost line, never silence; a rated-zero or
@@ -1724,7 +1729,8 @@ function Inner() {
                     </Show>
 
                     {/* Same-source first-install retries preserve their exact
-                        review; applied updates use planCapsuleUpdate. */}
+                        review; an installed app's change repeats the change
+                        its plan records (lib/run-retry.ts). */}
                     <Show
                       when={
                         Boolean(r().capsuleId) &&
@@ -1794,7 +1800,7 @@ function Inner() {
                             variant={
                               completedRunLaunchUrl() ? "secondary" : "primary"
                             }
-                            href={`/workloads/${encodeURIComponent(id())}`}
+                            href={appPageHref(id())}
                           >
                             {t("run.backToApp")}
                           </Button>
@@ -1825,7 +1831,7 @@ function Inner() {
                           setNeedsConfirm(false);
                           const id = capsuleId();
                           if (id)
-                            navigate(`/workloads/${encodeURIComponent(id)}`);
+                            navigate(appPageHref(id));
                         }}
                       >
                         {t("run.stopGoBack")}

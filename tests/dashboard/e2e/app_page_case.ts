@@ -3,8 +3,11 @@
  * fixture. The page is organised around keeping an installed app: open it,
  * see its state and problems, update or change its version, change its
  * settings and connections, see what it created and what it costs, read its
- * history, uninstall. Every change is reviewed in place and applies only from
- * the explicit "Allow and …" click.
+ * history, uninstall. Its state, primary action, problems and screens come
+ * from the control plane's app view (`GET /capsules/:id/app`) and its history
+ * from the app's own Runs (`GET /capsules/:id/runs`). Every change is
+ * reviewed in place and applies only from the explicit "Allow and …" click.
+ * `/apps/:id` is the canonical URL; older app URLs redirect there.
  */
 import { expect, test, type Page } from "@playwright/test";
 import {
@@ -12,7 +15,6 @@ import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
-  PORTABLE_UI_SURFACES,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import { resolvePortableOrigin } from "./portable-origin.ts";
@@ -70,6 +72,22 @@ function lifecycleRun(id: string, type: string, status: string, createdAt: strin
   return { id, workspaceId: "ws_alpha", capsuleId: CAPSULE_ID, type, status, createdBy: "portable-e2e", createdAt, ...extra };
 }
 
+/** A control-plane app view; tests override the state they exercise. */
+function appView(capsuleId: string, name: string, patch: Record<string, unknown> = {}) {
+  return {
+    kind: "takosumi.capsule-app@v1", capsuleId, workspaceId: "ws_alpha", projectId: "prj_alpha", name,
+    environment: "production", status: "active", applied: true, state: "installed", primaryAction: "open",
+    problems: [], screens: [], version: { updateAvailable: false, stale: false, autoUpdate: false },
+    progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
+    observedAt: "2026-10-28T00:00:00.000Z", ...patch,
+  };
+}
+
+/** One page of an app's Runs, newest first, as the server lists them. */
+function runPage(runs: readonly { readonly createdAt: string }[]) {
+  return { runs: [...runs].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
+}
+
 export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
@@ -87,6 +105,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const revisionPlanBodies: unknown[] = [];
       const configurationPlanBodies: unknown[] = [];
       const seenMutations: string[] = [];
+      const historyQueries: string[] = [];
       const adopted = () => updateApplied
         ? { sourceSnapshotId: "snap_main_new", ref: "main", path: ".", resolvedCommit: NEW_COMMIT }
         : { sourceSnapshotId: "snap_main_1", ref: "main", path: ".", resolvedCommit: PORTABLE_SOURCE_COMMIT };
@@ -109,8 +128,11 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         lifecycleRun("run_install_apply", "apply", "succeeded", "2026-10-01T00:04:00.000Z", { sourceSnapshotId: "snap_main_1" }),
         lifecycleRun("run_settings_apply", "apply", "succeeded", "2026-10-10T00:04:00.000Z", { sourceSnapshotId: "snap_main_1" }),
         ...(updateApplied ? [lifecycleRun(UPDATE_APPLY, "apply", "succeeded", new Date().toISOString(), { planRunId: UPDATE_PLAN, sourceSnapshotId: "snap_main_new" })] : []),
-        ...(failedLatest ? [lifecycleRun("run_failed_apply", "apply", "failed", "2099-01-01T00:00:00.000Z", { errorCode: "apply_failed" })] : []),
+        ...(failedLatest ? [failedApply] : []),
       ];
+      // A settings change whose apply failed: its plan records that origin.
+      const failedApply = lifecycleRun("run_failed_apply", "apply", "failed", "2099-01-01T00:00:00.000Z", { errorCode: "apply_failed", planRunId: "run_failed_settings_plan" });
+      const failedSettingsPlan = lifecycleRun("run_failed_settings_plan", "plan", "succeeded", "2098-12-31T23:59:00.000Z", { policyStatus: "pass", origin: { kind: "configuration" } });
       const updatePlan = {
         ...lifecycleRun(UPDATE_PLAN, "plan", "succeeded", "2026-10-20T00:00:00.000Z", { sourceSnapshotId: "snap_main_new" }),
         summary: { add: 1, change: 1, destroy: 0 }, policyStatus: "pass",
@@ -138,8 +160,32 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           if (request.method() === "PATCH") autoUpdate = (request.postDataJSON() as { autoUpdate: boolean }).autoUpdate;
           return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         }
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/app`) {
+          const screen = (id: string, title: string, url: string) => ({ interfaceId: `if_${id}`, name: `app.${id}`, title, url });
+          return route.fulfill({ json: { app: appView(CAPSULE_ID, PORTABLE_EXPECTATIONS.appName, {
+            screens: multipleSurfaces
+              // The server returns every screen in its declared order.
+              ? [screen("control", "Control panel", "https://apps.example.test/control"), screen("documentation", "Documentation", "https://apps.example.test/documentation")]
+              : [screen("launcher", PORTABLE_EXPECTATIONS.appName, PORTABLE_EXPECTATIONS.appUrl)],
+            version: {
+              repository: { url: "https://github.com/example/repository-office.git", defaultRef: "main" },
+              current: { sourceSnapshotId: adopted().sourceSnapshotId, ref: "main", path: ".", commit: adopted().resolvedCommit },
+              ...(stale && !updateApplied ? { latest: { sourceSnapshotId: "snap_main_new", ref: "main", commit: NEW_COMMIT, fetchedAt: "2026-10-19T00:00:00.000Z" } } : {}),
+              updateAvailable: stale && !updateApplied, stale: stale && !updateApplied, autoUpdate,
+            },
+            ...(failedLatest
+              ? {
+                  state: "needs_attention", primaryAction: "retry",
+                  problems: [{ code: "run_failed", severity: "error", runId: "run_failed_apply", runType: "apply", errorCode: "apply_failed" }],
+                }
+              : {}),
+          }) } });
+        }
+        if (path === `/api/v1/capsules/${CAPSULE_ID}/runs`) {
+          historyQueries.push(url.search);
+          return route.fulfill({ json: runPage(runs()) });
+        }
         if (path === `/api/v1/capsules/${CAPSULE_ID}/state-versions`) return route.fulfill({ json: { stateVersions: stateVersions() } });
-        if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: runs() } });
         if (path === `/api/v1/capsules/${CAPSULE_ID}/current-resource-inventory`) {
           return route.fulfill({ json: { inventory: {
             kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: CAPSULE_ID, workspaceId: "ws_alpha",
@@ -151,21 +197,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
               { address: "cloudflare_d1_database.cache", type: "cloudflare_d1_database", providerSource: CLOUDFLARE },
             ],
           } } });
-        }
-        if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces" && multipleSurfaces) {
-          const original = PORTABLE_UI_SURFACES.ws_alpha[0];
-          const surface = (id: string, title: string, sortOrder: number) => ({
-            ...original,
-            metadata: { ...original.metadata, id: `if_${id}`, name: `app.${id}` },
-            spec: {
-              ...original.spec,
-              document: { launcher: true, display: { title, sortOrder } },
-              inputs: { url: { source: "capsule_output", capsuleId: CAPSULE_ID, outputName: `${id}_url` } },
-            },
-            status: { ...original.status, resolvedInputs: { url: `https://apps.example.test/${id}` } },
-          });
-          // The API order differs from the screens' declared order.
-          return route.fulfill({ json: { interfaces: [surface("documentation", "Documentation", 20), surface("control", "Control panel", 10)] } });
         }
         if (path === "/api/v1/workspaces/ws_alpha/graph") {
           return route.fulfill({ json: {
@@ -230,7 +261,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           updateApplied = true;
           return route.fulfill({ status: 201, json: { run: updateApply } });
         }
-        for (const run of [updatePlan, updateApply, configPlan]) {
+        for (const run of [updatePlan, updateApply, configPlan, failedApply, failedSettingsPlan]) {
           if (path === `/api/v1/runs/${run.id}`) return route.fulfill({ json: { run } });
           if (path === `/api/v1/runs/${run.id}/cost`) return route.fulfill({ json: notApplicableCost(run.id) });
           if (path === `/api/v1/runs/${run.id}/logs`) return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
@@ -240,16 +271,24 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
 
       await page.setViewportSize({ width: 1440, height: 900 });
+      // An old app URL lands on the canonical page.
       await page.goto(`/workloads/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       const app = page.getByTestId("app-page");
       const header = page.getByTestId("app-header");
       await expect(header.getByRole("heading", { level: 1 })).toHaveText(PORTABLE_EXPECTATIONS.appName);
       await expect(page.getByTestId("app-state-sentence")).toHaveText("Ready to use.");
+      await expect(app).toHaveAttribute("data-app-state", "installed");
+      // History is the app's own lifecycle Runs, not a Workspace window.
+      await expect.poll(() => historyQueries.length).toBeGreaterThan(0);
+      expect(new URLSearchParams(historyQueries[0]).getAll("type").sort()).toEqual(["apply", "destroy_apply", "destroy_plan", "plan", "state_recovery"]);
       const open = header.getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
       await expect(open).toHaveAttribute("target", "_blank");
       await expect(open).toHaveAttribute("rel", "noreferrer noopener");
-      // The sections follow keeping an app, and nothing is folded away.
+      // The sections follow keeping an app, and nothing is folded away. The
+      // uninstall section states the grace period before anything is scheduled.
+      await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
       const sections = ["app-version", "app-settings", "app-created", "app-linked", "app-history", "app-uninstall"];
       const tops: number[] = [];
       for (const id of sections) {
@@ -326,7 +365,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(review.getByRole("heading", { name: "What the update changes" })).toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare R2 Bucket");
       await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
-      await expect(page).toHaveURL(new RegExp(`/workloads/${CAPSULE_ID}$`, "u"));
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       await capture(page, "app-update-review");
       // A clean Plan waits for consent: no Apply across Run poll intervals.
       await page.waitForTimeout(3_500);
@@ -353,7 +392,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const settingsReview = settings.getByTestId("app-review");
       await expect(settingsReview.getByRole("heading", { name: "What this changes" })).toBeVisible();
       await expect(settingsReview.getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
-      await expect(page).toHaveURL(new RegExp(`/workloads/${CAPSULE_ID}$`, "u"));
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       await settings.scrollIntoViewIfNeeded();
       await capture(page, "app-settings-review");
       await settingsReview.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -362,21 +401,41 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(settings.getByRole("textbox", { name: /^Region/u })).toHaveValue("initial");
       await expect(settings.getByRole("button", { name: "Review", exact: true })).toBeDisabled();
 
-      // A problem appears on the app it belongs to, with the next step first.
+      // A problem appears on the app it belongs to; the server's one primary
+      // action is the header's button, the card says what happened.
       failedLatest = true;
       await page.reload({ waitUntil: "domcontentloaded" });
-      const problem = app.getByTestId("app-problems").locator('[data-problem="failed-run"]');
+      await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+      const problem = app.getByTestId("app-problems").locator('[data-problem="run_failed"]');
       await expect(problem).toContainText("The last change couldn't be applied");
-      await expect(problem.getByRole("button", { name: "Review again", exact: true })).toBeVisible();
+      await expect(header.getByRole("button", { name: "Review again", exact: true })).toBeVisible();
+      await expect(problem.getByRole("button", { name: "Review again", exact: true })).toHaveCount(0);
+      // The screen the server still lists stays openable beside the primary action.
+      await expect(header.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
       await expect(problem.getByRole("link", { name: "See reason and logs" })).toHaveAttribute("href", "/runs/run_failed_apply");
       await expect(page.getByTestId("app-state-sentence")).toContainText("Something needs your attention");
-      await capture(page, "app-page-problem");
+      await capture(page, "app-page-needs-attention");
       failedLatest = false;
 
-      // An old tab link lands on its section of the one page.
-      await page.goto(`/workloads/${CAPSULE_ID}/danger`, { waitUntil: "domcontentloaded" });
-      await expect(page).toHaveURL(new RegExp(`/workloads/${CAPSULE_ID}/danger$`, "u"));
-      await expect(app.getByTestId("app-uninstall")).toBeInViewport();
+      // Old tab links land on their section of the one page, as a fragment.
+      for (const [from, section, testId] of [
+        [`/workloads/${CAPSULE_ID}/danger`, "danger", "app-uninstall"],
+        [`/workloads/${CAPSULE_ID}/settings`, "settings", "app-settings"],
+        [`/capsules/${CAPSULE_ID}/history`, "history", "app-history"],
+      ] as const) {
+        await page.goto(from, { waitUntil: "domcontentloaded" });
+        await expect(page, from).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#${section}$`, "u"));
+        await expect(app.getByTestId(testId)).toBeInViewport();
+      }
+      for (const from of [`/services/${CAPSULE_ID}`, `/apps/${CAPSULE_ID}/overview`, `/new?capsule=${CAPSULE_ID}`]) {
+        await page.goto(from, { waitUntil: "domcontentloaded" });
+        await expect(page, from).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
+        await expect(header.getByRole("heading", { level: 1 })).toHaveText(PORTABLE_EXPECTATIONS.appName);
+      }
+      // The jump links are the same fragments.
+      await app.getByRole("navigation", { name: "Sections on this page" }).getByRole("link", { name: "History" }).click();
+      await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}#history$`, "u"));
+      await expect(app.getByTestId("app-history")).toBeInViewport();
 
       expect(seenMutations).toEqual([
         `PATCH /api/v1/capsules/${CAPSULE_ID}`,
@@ -433,6 +492,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
           const rest = path.slice(`/api/v1/capsules/${app}`.length);
           if (rest === "") return route.fulfill({ json: { capsule: capsule(app), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
           if (rest === "/state-versions") return route.fulfill({ json: { stateVersions: [{ id: `sv_${app}`, workspaceId: "ws_alpha", capsuleId: app, environment: "production", generation: 1, createdByRunId: `run_install_${app}`, createdAt: now }] } });
+          if (rest === "/app") {
+            return route.fulfill({ json: { app: appView(app, apps[app].name, {
+              // Neither app has a screen: the primary action shows what it created.
+              primaryAction: "view_resources",
+              version: {
+                repository: { url: `https://github.com/example/${app}.git`, defaultRef: "main" },
+                current: { sourceSnapshotId: `snap_${app}`, ref: "main", path: ".", commit: PORTABLE_SOURCE_COMMIT },
+                updateAvailable: false, stale: apps[app].freshness === "stale", autoUpdate: false,
+              },
+            }) } });
+          }
+          if (rest === "/runs") return route.fulfill({ json: { runs: [] } });
           // Keep Alpha has no provider binding set at all.
           if (rest === "/provider-bindings") return route.fulfill({ json: { providerBindingSet: null } });
           if (rest === "/current-resource-inventory") return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: app, workspaceId: "ws_alpha", environment: "production", stateVersionId: `sv_${app}`, generation: 1, applyRunId: `run_install_${app}`, planRunId: `run_install_plan_${app}`, recordedAt: now, availability: "legacy_unavailable" } } });
@@ -460,7 +531,6 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now,
           } } });
         }
-        if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: [] } });
         if (path === "/api/v1/workspaces/ws_alpha/graph") {
           return route.fulfill({ json: {
             nodes: [{ capsuleId: "cap_keep_a", name: "Keep Alpha", environment: "production", status: "active" }, { capsuleId: "cap_keep_b", name: "Keep Beta", environment: "production", status: "active" }],
@@ -489,10 +559,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
 
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto("/workloads/cap_keep_a", { waitUntil: "domcontentloaded" });
+      await page.goto("/apps/cap_keep_a", { waitUntil: "domcontentloaded" });
       const app = page.getByTestId("app-page");
       const version = app.getByTestId("app-version");
       await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Alpha");
+      // No screen: the primary action shows what the app created.
+      await expect(page.getByTestId("app-header").getByRole("link", { name: "Open" })).toHaveCount(0);
+      await page.getByTestId("app-header").getByRole("button", { name: "See what it created", exact: true }).click();
+      await expect(app.getByTestId("app-created")).toBeInViewport();
 
       // Update → Cancel → Update: the second Update is a new request, not a
       // replay of the plan that was already returned.
@@ -550,7 +624,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await version.getByRole("button", { name: "Update", exact: true }).click();
       await expect(version.getByTestId("app-review")).toBeVisible();
       await app.getByTestId("app-linked").getByRole("link", { name: "Keep Beta" }).click();
-      await expect(page).toHaveURL(/\/workloads\/cap_keep_b$/u);
+      await expect(page).toHaveURL(/\/apps\/cap_keep_b$/u);
       await expect(page.getByTestId("app-header").getByRole("heading", { level: 1 })).toHaveText("Keep Beta");
       await expect(page.getByTestId("app-review")).toHaveCount(0);
       await expect(page.getByTestId("app-settings").getByRole("textbox", { name: /^Region/u })).toHaveValue("beta-region");
@@ -590,10 +664,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         ...lifecycleRun(`run_destroy_plan_${n}`, "destroy_plan", n === 1 ? "succeeded" : "waiting_approval", now),
         capsuleId: "cap_remove_c", summary: { add: 0, change: 0, destroy: 0 }, policyStatus: "pass",
       });
+      const failedApply = { ...lifecycleRun("run_failed_retry", "apply", "failed", "2026-10-02T00:00:00.000Z", { errorCode: "apply_failed", baseStateGeneration: 1, planRunId: "run_failed_retry_plan" }), capsuleId: "cap_retry_d" };
+      // The failed apply's plan records the change it was made for.
+      const failedPlan = (origin: Record<string, unknown>) => ({
+        ...lifecycleRun("run_failed_retry_plan", "plan", "succeeded", "2026-10-01T23:59:00.000Z", { baseStateGeneration: 1, policyStatus: "pass", origin }),
+        capsuleId: "cap_retry_d",
+      });
+      const revisionBodies: unknown[] = [];
       const runs = new Map<string, unknown>([
-        ["run_sync_retry", { ...lifecycleRun("run_sync_retry", "source_sync", "succeeded", now), capsuleId: undefined, sourceId: "src_retry_d", sourceSnapshotId: "snap_retry_2", ref: "main" }],
+        [failedApply.id, failedApply],
+        ["run_failed_retry_plan", failedPlan({ kind: "revision", ref: "v2" })],
       ]);
-      const failedApply = { ...lifecycleRun("run_failed_retry", "apply", "failed", "2026-10-02T00:00:00.000Z", { errorCode: "apply_failed", baseStateGeneration: 1 }), capsuleId: "cap_retry_d" };
+      const retryPlanRun = (id: string) => ({ ...lifecycleRun(id, "plan", "succeeded", now), capsuleId: "cap_retry_d", summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass", planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }] });
       const configFor = (id: string) => ({ installConfig: { id: `cfg_${id}`, workspaceId: "ws_alpha", name: id, policy: {}, variableMapping: {}, variablePresentation: [], outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now } });
 
       await page.route("**/api/v1/**", async (route) => {
@@ -613,33 +695,49 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             return route.fulfill({ json: { run: destroyPlan(removals) } });
           }
           if (rest === "") return route.fulfill({ json: { capsule: app, installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
+          if (rest === "/app") {
+            return route.fulfill({ json: { app: app.id === removeApp.id
+              // The stopped teardown can still be cancelled: that is the
+              // primary action, and uninstalling now stays on the card.
+              ? appView(app.id, app.name, {
+                  status: "uninstalled", state: "needs_attention", primaryAction: "cancel_uninstall",
+                  problems: [{ code: "uninstall_blocked", severity: "error", reason: "teardown_unconfirmed" }],
+                  uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "destroying", requestedAt: now, deleteAfter: now, cancellable: true, blocked: true } },
+                })
+              : appView(app.id, app.name, {
+                  status: "error", state: "needs_attention", primaryAction: "retry",
+                  problems: [{ code: "run_failed", severity: "error", runId: failedApply.id, runType: "apply", errorCode: "apply_failed" }],
+                }) } });
+          }
+          if (rest === "/runs") return route.fulfill({ json: runPage(app.id === retryApp.id ? [failedApply] : []) });
           if (rest === "/state-versions") return route.fulfill({ json: { stateVersions: [{ id: app.currentStateVersionId, workspaceId: "ws_alpha", capsuleId: app.id, environment: "production", generation: 1, createdByRunId: `run_install_${app.id}`, createdAt: now }] } });
           if (rest === "/provider-bindings") return route.fulfill({ json: { providerBindingSet: null } });
           if (rest === "/current-resource-inventory") return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: app.id, workspaceId: "ws_alpha", environment: "production", stateVersionId: app.currentStateVersionId, generation: 1, applyRunId: "run_x", planRunId: "run_y", recordedAt: now, availability: "legacy_unavailable" } } });
           if (rest === "/usage-summary") return route.fulfill({ json: { summary: { capsuleId: app.id, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
           if (rest === "/plan" && request.method() === "POST") {
             planBodies.push(request.postDataJSON());
-            const retryPlan = { ...lifecycleRun("run_retry_plan", "plan", "succeeded", now), capsuleId: app.id, summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass", planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["update"] }] };
-            runs.set("run_retry_plan", retryPlan);
-            return route.fulfill({ json: { run: retryPlan } });
+            return route.fulfill({ status: 500, json: { error: "retry_must_not_plan_the_default_ref" } });
+          }
+          // A failed version change is retried as the same version change.
+          if (rest === "/revision-plans" && request.method() === "POST") {
+            revisionBodies.push(request.postDataJSON());
+            runs.set("run_retry_revision", retryPlanRun("run_retry_revision"));
+            return route.fulfill({ status: 201, json: {
+              revisionPlan: { id: "grp_retry", operation: "revision", phase: "review_ready", generation: 1, capsuleId: app.id, planRunId: "run_retry_revision" },
+              nextAction: "review_run", links: { self: "/api/v1/revision-plans/grp_retry", run: "/api/v1/runs/run_retry_revision" },
+            } });
           }
         }
         if (path === "/api/v1/capsule-configs/cfg_cap_remove_c") return route.fulfill({ json: configFor("cap_remove_c") });
         if (path === "/api/v1/capsule-configs/cfg_cap_retry_d") return route.fulfill({ json: configFor("cap_retry_d") });
-        if (path === "/api/v1/workspaces/ws_alpha/runs") return route.fulfill({ json: { runs: [failedApply] } });
         if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
         if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
         if (path === "/api/v1/sources" && request.method() === "GET") return route.fulfill({ json: { sources: [] } });
-        // Try again on an installed app re-reads the latest source first.
-        if (path === "/api/v1/sources/src_retry_d/sync" && request.method() === "POST") return route.fulfill({ json: { run: { id: "run_sync_retry" } } });
-        if (path === "/api/v1/sources/src_retry_d/snapshots") {
-          return route.fulfill({ json: { snapshots: [{
-            id: "snap_retry_2", origin: "git", workspaceId: "ws_alpha", sourceId: "src_retry_d", url: "https://github.com/example/retry.git",
-            ref: "main", resolvedCommit: PORTABLE_SOURCE_COMMIT, path: ".", archiveRef: "fixture", archiveDigest: `sha256:${"e".repeat(64)}`,
-            archiveSizeBytes: 1, fetchedByRunId: "run_sync_retry", fetchedAt: now,
-          }] } });
+        // A failed rollback is retried as a rollback to the same version.
+        if (path === "/api/v1/state-versions/sv_retry_prev/rollback-plan" && request.method() === "POST") {
+          runs.set("run_retry_rollback", retryPlanRun("run_retry_rollback"));
+          return route.fulfill({ status: 201, json: { run: runs.get("run_retry_rollback") } });
         }
-        if (path === "/api/v1/sources/src_retry_d/compatibility-check" && request.method() === "POST") return route.fulfill({ json: { report: { id: "rep_retry_2" } } });
         const runMatch = path.match(/^\/api\/v1\/runs\/([^/]+)(\/[a-z]+)?$/u);
         if (runMatch && runs.has(runMatch[1]!)) {
           const [, id, suffix] = runMatch;
@@ -653,9 +751,14 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       });
 
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto("/workloads/cap_remove_c", { waitUntil: "domcontentloaded" });
+      await page.goto("/apps/cap_remove_c", { waitUntil: "domcontentloaded" });
       const problems = page.getByTestId("app-problems");
       const scheduled = problems.locator('[data-problem="uninstall"]');
+      await expect(scheduled).toContainText("was stopped because it couldn't be confirmed safe");
+      await expect(scheduled).toContainText("teardown_unconfirmed");
+      await expect(page.getByTestId("app-header").getByRole("button", { name: "Cancel uninstall", exact: true })).toBeVisible();
+      await expect(scheduled.getByRole("button", { name: "Cancel uninstall", exact: true })).toHaveCount(0);
+      await expect(page.getByTestId("app-uninstall")).toHaveCount(0);
       await scheduled.getByRole("button", { name: "Uninstall now", exact: true }).click();
       const review = problems.getByTestId("app-review");
       await expect(review.getByRole("heading", { name: "What uninstalling removes" })).toBeVisible();
@@ -678,22 +781,301 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(seenMutations.some((entry) => entry.endsWith("/approve"))).toBe(false);
       expect(seenMutations.some((entry) => entry.endsWith("/apply"))).toBe(false);
 
-      // Try again on an installed app's failed change re-reads the latest
-      // source and plans an update, exactly like the run page.
-      await page.goto("/workloads/cap_retry_d", { waitUntil: "domcontentloaded" });
-      const failed = page.getByTestId("app-problems").locator('[data-problem="failed-run"]');
-      await failed.getByRole("button", { name: "Review again", exact: true }).click();
+      // Try again on an installed app repeats the change that failed — the
+      // same version change, or the same rollback — never a plan of the
+      // Source's default ref.
+      await page.goto("/apps/cap_retry_d", { waitUntil: "domcontentloaded" });
+      await expect(page.getByTestId("app-problems").locator('[data-problem="run_failed"]')).toContainText("The last change couldn't be applied");
+      await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
       await expect(page.getByTestId("app-problems").getByTestId("app-review").getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
-      expect(planBodies).toEqual([{ compatibilityReportId: "rep_retry_2" }]);
+      expect(revisionBodies).toEqual([{ ref: "v2" }]);
+      runs.set("run_failed_retry_plan", failedPlan({ kind: "rollback", stateVersionId: "sv_retry_prev" }));
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.getByTestId("app-header").getByRole("button", { name: "Review again", exact: true }).click();
+      await expect(page.getByTestId("app-problems").getByTestId("app-review").getByRole("button", { name: "Allow and apply", exact: true })).toBeVisible();
+      expect(planBodies).toEqual([]);
       expect(seenMutations).toEqual([
         "DELETE /api/v1/capsules/cap_remove_c?immediate=true",
         "DELETE /api/v1/capsules/cap_remove_c?immediate=true",
-        "POST /api/v1/sources/src_retry_d/sync",
-        "POST /api/v1/sources/src_retry_d/compatibility-check",
-        "POST /api/v1/capsules/cap_retry_d/plan",
+        "POST /api/v1/capsules/cap_retry_d/revision-plans",
+        "POST /api/v1/state-versions/sv_retry_prev/rollback-plan",
       ]);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
+    });
+
+    test("each state the server reports reads as it is, with its one next step in place", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const errors = pageErrors(page);
+      const traffic = monitorDashboardTraffic(page, mode);
+      const origin = resolvePortableOrigin();
+      const seenMutations: string[] = [];
+      const ID = "cap_states_e";
+      const NAME = "State Echo";
+      const now = "2026-10-20T00:00:00.000Z";
+      type Scene = "uninstall_scheduled" | "updating" | "policy_blocked" | "installing" | "install_stalled" | "incomplete" | "uninstalled";
+      let scene: Scene = "uninstall_scheduled";
+      let viewUnavailable = false;
+      const capsule = () => ({
+        id: ID, workspaceId: "ws_alpha", name: NAME, slug: "state-echo", sourceId: "src_states_e", installConfigId: "cfg_states_e",
+        environment: "production",
+        ...(scene === "installing" || scene === "install_stalled" || scene === "uninstalled" ? { currentStateGeneration: 0 } : { currentStateVersionId: "sv_states_e", currentStateGeneration: 1 }),
+        status: scene === "uninstall_scheduled" ? "uninstalled" : scene === "uninstalled" ? "destroyed" : scene === "installing" || scene === "install_stalled" ? "pending" : "active",
+        // The version it last ran, kept on the record after uninstalling.
+        ...(scene === "uninstalled"
+          ? { adoptedSourceRevision: { sourceSnapshotId: "snap_states_e", ref: "v1.4.2", path: ".", resolvedCommit: PORTABLE_SOURCE_COMMIT } }
+          : {}),
+        createdAt: now, updatedAt: now,
+      });
+      const deleteAfter = "2099-01-08T00:00:00.000Z";
+      const blockedPlan = {
+        ...lifecycleRun("run_blocked_plan", "plan", "succeeded", "2026-10-21T00:00:00.000Z", { capsuleId: ID }),
+        policyStatus: "deny", summary: { add: 1, change: 0, destroy: 0 },
+        planResources: [{ address: "aws_s3_bucket.files", type: "aws_s3_bucket", actions: ["create"] }],
+        policyReasons: [
+          { code: "provider_not_allowed", layer: "provider", provider: "registry.opentofu.org/hashicorp/aws" },
+          { code: "resource_type_not_allowed", layer: "resource", resourceType: "aws_s3_bucket" },
+        ],
+      };
+      const updateApply = { ...lifecycleRun("run_states_apply", "apply", "running", "2026-10-22T00:00:00.000Z", { capsuleId: ID, planRunId: "run_states_plan" }) };
+      const installPlan = {
+        ...lifecycleRun("run_install_plan", "plan", "succeeded", "2026-10-23T00:00:00.000Z", { capsuleId: ID }),
+        policyStatus: "pass", summary: { add: 1, change: 0, destroy: 0 },
+        planResources: [{ address: "cloudflare_workers_script.app", type: "cloudflare_workers_script", actions: ["create"] }],
+      };
+      const runsById = new Map<string, Record<string, unknown>>([
+        [blockedPlan.id, blockedPlan], [updateApply.id, updateApply], [installPlan.id, installPlan],
+      ]);
+      // Older history: thirty-two applied changes, read twenty at a time.
+      const olderRuns = Array.from({ length: 32 }, (_, index) =>
+        lifecycleRun(`run_old_${String(index).padStart(2, "0")}`, "apply", "succeeded", new Date(Date.parse("2026-09-01T00:00:00.000Z") + index * 3_600_000).toISOString(), { capsuleId: ID }));
+      const screen = { interfaceId: "if_states_e", name: "app.launcher", title: NAME, url: "https://apps.example.test/state-echo" };
+      const view = () => {
+        switch (scene) {
+          case "uninstall_scheduled":
+            return appView(ID, NAME, {
+              status: "uninstalled", state: "uninstall_scheduled", primaryAction: "cancel_uninstall", screens: [screen],
+              problems: [{ code: "uninstall_scheduled", severity: "warning" }],
+              uninstall: { mode: "scheduled", graceDays: 7, scheduled: { phase: "scheduled", requestedAt: now, deleteAfter, cancellable: true, blocked: false, preDestroyExport: { status: "skipped" } } },
+            });
+          case "updating":
+            return appView(ID, NAME, {
+              state: "updating", primaryAction: "none",
+              progress: { revisionPreparing: false, run: { id: updateApply.id, type: "apply", status: "running", createdAt: updateApply.createdAt } },
+            });
+          case "policy_blocked":
+            return appView(ID, NAME, {
+              state: "needs_attention", primaryAction: "review", screens: [screen, { ...screen, interfaceId: "if_states_docs", name: "app.docs", title: "Docs", url: "https://apps.example.test/state-echo-docs" }],
+              problems: [{ code: "policy_blocked", severity: "error", runId: blockedPlan.id, runType: "plan" }],
+            });
+          case "installing":
+            return appView(ID, NAME, {
+              status: "pending", applied: false, state: "installing", primaryAction: "review",
+              progress: { revisionPreparing: false, review: { runId: installPlan.id, runType: "plan" } },
+              uninstall: { mode: "discard" },
+            });
+          case "install_stalled":
+            // The install attempt that owns this app stopped moving.
+            return appView(ID, NAME, {
+              status: "pending", applied: false, state: "needs_attention", primaryAction: "continue_install",
+              problems: [{ code: "install_incomplete", severity: "error" }],
+              progress: { revisionPreparing: false, installPlanId: "gip_states_e" },
+              uninstall: { mode: "discard" },
+            });
+          case "incomplete":
+            return appView(ID, NAME, { incomplete: ["screens", "version"] });
+          case "uninstalled":
+            return appView(ID, NAME, {
+              // A screen listed for a removed app is never offered.
+              status: "destroyed", applied: false, state: "uninstalled", primaryAction: "reinstall", screens: [screen],
+              version: { repository: { url: "https://github.com/example/state-echo.git", defaultRef: "main" }, updateAvailable: false, stale: false, autoUpdate: false },
+              uninstall: { mode: "none" },
+            });
+        }
+      };
+
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const path = url.pathname;
+        if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
+          seenMutations.push(`${request.method()} ${path}`);
+        }
+        const base = `/api/v1/capsules/${ID}`;
+        if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
+        if (path === `${base}/app`) {
+          return viewUnavailable
+            ? route.fulfill({ status: 404, json: { error: "fixture_route_not_found" } })
+            : route.fulfill({ json: { app: view() } });
+        }
+        if (path === `${base}/runs`) {
+          const all = scene === "policy_blocked" ? [blockedPlan, ...[...olderRuns].reverse()] : [];
+          const start = Number(url.searchParams.get("cursor") ?? "0");
+          const limit = Number(url.searchParams.get("limit") ?? "50");
+          const end = start + limit;
+          return route.fulfill({ json: { runs: all.slice(start, end), ...(end < all.length ? { nextCursor: String(end) } : {}) } });
+        }
+        if (path === "/api/v1/install-plans/gip_states_e/reconcile" && request.method() === "POST") {
+          return route.fulfill({ json: {
+            installPlan: {
+              id: "gip_states_e", workspaceId: "ws_alpha", phase: "reviewable", generation: 3,
+              capsuleId: ID, planRunId: installPlan.id, createdAt: now, updatedAt: now,
+            },
+            nextAction: "review_run",
+            userAction: { kind: "review_run", planRunId: installPlan.id },
+            links: { self: "/api/v1/install-plans/gip_states_e", run: `/api/v1/runs/${installPlan.id}` },
+          } });
+        }
+        if (path === `${base}/cancel-uninstall` && request.method() === "POST") {
+          scene = "incomplete";
+          return route.fulfill({ json: { capsule: capsule() } });
+        }
+        if (path === `${base}/state-versions`) {
+          return route.fulfill({ json: { stateVersions: scene === "installing" || scene === "uninstalled" ? [] : [{ id: "sv_states_e", workspaceId: "ws_alpha", capsuleId: ID, environment: "production", generation: 1, createdByRunId: "run_old_00", createdAt: now }] } });
+        }
+        if (path === `${base}/provider-bindings`) return route.fulfill({ json: { providerBindingSet: null } });
+        if (path === `${base}/current-resource-inventory`) return route.fulfill({ json: { inventory: { kind: "takosumi.capsule-current-resource-inventory@v1", capsuleId: ID, workspaceId: "ws_alpha", environment: "production", stateVersionId: "sv_states_e", generation: 1, applyRunId: "run_old_00", planRunId: "run_old_plan", recordedAt: now, availability: "legacy_unavailable" } } });
+        if (path === `${base}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId: ID, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
+        if (path === "/api/v1/capsule-configs/cfg_states_e") {
+          return route.fulfill({ json: { installConfig: { id: "cfg_states_e", workspaceId: "ws_alpha", name: NAME, sourceSelector: { url: "https://github.com/example/state-echo.git", path: "." }, modulePath: "deploy/opentofu", policy: {}, variableMapping: {}, variablePresentation: [], outputAllowlist: {}, interfaceBlueprints: [], createdAt: now, updatedAt: now } } });
+        }
+        if (path === "/api/v1/workspaces/ws_alpha/graph") return route.fulfill({ json: { nodes: [], edges: [] } });
+        if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: [] } });
+        const runMatch = path.match(/^\/api\/v1\/runs\/([^/]+)(\/[a-z]+)?$/u);
+        if (runMatch && runsById.has(runMatch[1]!)) {
+          const [, id, suffix] = runMatch;
+          if (suffix === "/cost") return route.fulfill({ json: { cost: { runId: id, billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+          if (suffix === "/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+          if (suffix === "/stream") return route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+          if (!suffix) return route.fulfill({ json: { run: runsById.get(id!) } });
+        }
+        return route.fallback();
+      });
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const app = page.getByTestId("app-page");
+      const header = page.getByTestId("app-header");
+      const problems = page.getByTestId("app-problems");
+
+      // Uninstall scheduled: its date, the export note, cancel as the one
+      // primary action; uninstalling now stays a secondary choice.
+      await page.goto(`/apps/${ID}`, { waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "uninstall_scheduled");
+      await expect(page.getByTestId("app-state-sentence")).toHaveText("Uninstall is scheduled.");
+      await expect(problems.getByRole("heading", { level: 2 })).toHaveText("Uninstall");
+      const scheduled = problems.locator('[data-problem="uninstall"]');
+      await expect(scheduled).toContainText(`${NAME} will be uninstalled on`);
+      await expect(scheduled).toContainText("This server can't export data");
+      await expect(scheduled.getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
+      // During the grace period the app keeps running and stays openable.
+      await expect(header.getByRole("link", { name: "Open", exact: true })).toHaveAttribute("href", "https://apps.example.test/state-echo");
+      await expect(app.getByTestId("app-uninstall")).toHaveCount(0);
+      await expect(app.getByRole("navigation", { name: "Sections on this page" }).getByRole("link", { name: "Uninstall" })).toHaveCount(0);
+      await capture(page, "app-page-uninstall-scheduled");
+      await header.getByRole("button", { name: "Cancel uninstall", exact: true }).click();
+      await expect(app).toHaveAttribute("data-app-state", "installed");
+
+      // Parts the server could not read say so instead of showing nothing.
+      await expect(header.getByRole("alert")).toHaveText("Couldn't read its screens.");
+      await expect(header.getByRole("button", { name: "Reload screens", exact: true })).toBeVisible();
+      await expect(app.getByTestId("app-version")).toContainText("Couldn't read its version");
+      // The grace period shows before anything is scheduled, and in the confirmation.
+      await expect(app.getByTestId("app-uninstall")).toContainText("Its data stays for 7 days");
+      await app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true }).click();
+      await expect(page.getByRole("dialog")).toContainText("keeps its data for 7 days");
+      await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+
+      // An update in progress is followed in place; nothing is applied from here.
+      scene = "updating";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "updating");
+      await expect(page.getByTestId("app-state-sentence")).toHaveText("Applying a change.");
+      await expect(problems.getByTestId("app-review")).toContainText("Applying");
+      await expect(header.getByRole("button")).toHaveCount(0);
+      // Nothing else changes the app while the server applies a change.
+      await expect(app.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall", exact: true })).toBeDisabled();
+      await expect(app.getByTestId("app-version").getByRole("button", { name: "Check for updates", exact: true })).toBeDisabled();
+      await capture(page, "app-page-updating");
+
+      // A policy block names its structured reasons on the card and in history;
+      // Review opens the blocked plan in place.
+      scene = "policy_blocked";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+      const blocked = problems.locator('[data-problem="policy_blocked"]');
+      await expect(blocked).toContainText("A policy stopped the last change");
+      await expect(blocked.getByTestId("policy-reasons")).toContainText("This provider isn't allowed by policy.");
+      await expect(blocked.getByTestId("policy-reasons")).toContainText("aws_s3_bucket");
+      const historyList = app.getByTestId("app-history-list");
+      const blockedRow = historyList.locator('[data-history-kind="policy_blocked"]');
+      await expect(blockedRow).toContainText("Stopped by a policy");
+      await expect(blockedRow).toContainText("This kind of resource isn't allowed by policy.");
+      // Every screen stays reachable as a secondary action beside Review.
+      await expect(header.getByRole("link", { name: /^Open\b.*State Echo/u })).toHaveAttribute("href", "https://apps.example.test/state-echo");
+      await header.getByRole("button", { name: "Other screens" }).click();
+      await expect(header.getByRole("menuitem", { name: "Docs" })).toHaveAttribute("href", "https://apps.example.test/state-echo-docs");
+      await page.keyboard.press("Escape");
+      await header.getByRole("button", { name: "Review", exact: true }).click();
+      const review = problems.getByTestId("app-review");
+      await expect(review).toContainText("This can't be applied");
+      // The card already names the reasons; the review does not repeat them.
+      await expect(review.getByTestId("policy-reasons")).toHaveCount(0);
+      await expect(blocked.getByTestId("policy-reasons")).toContainText("Why it was stopped");
+      await expect(review.getByRole("button", { name: /^Allow and/u })).toHaveCount(0);
+      await capture(page, "app-page-policy-blocked");
+      // History reads the server's pages: Show more appends the next one.
+      const historyRows = historyList.locator(":scope > li");
+      await expect(historyRows).toHaveCount(20);
+      await app.getByTestId("app-history").getByRole("button", { name: "Show more", exact: true }).click();
+      await expect(historyRows).toHaveCount(33);
+      await expect(app.getByTestId("app-history").getByRole("button", { name: "Show more", exact: true })).toHaveCount(0);
+
+      // A first install waiting for review shows its review in place; only
+      // the explicit click would apply it.
+      scene = "installing";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "installing");
+      await expect(page.getByTestId("app-state-sentence")).toHaveText("The install is waiting for your review.");
+      await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+      await expect(header.getByRole("button", { name: "Review", exact: true })).toHaveCount(0);
+      await expect(app.getByTestId("app-uninstall")).toContainText("hasn't created anything in your cloud yet");
+      await page.waitForTimeout(3_500);
+
+      // A stalled install is continued through the attempt that owns it, not
+      // by planning beside it.
+      scene = "install_stalled";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "needs_attention");
+      await header.getByRole("button", { name: "Continue installing", exact: true }).click();
+      await expect(problems.getByTestId("app-review").getByRole("button", { name: "Allow and install", exact: true })).toBeEnabled();
+
+      // An uninstalled app offers to install it again from its repository.
+      scene = "uninstalled";
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(app).toHaveAttribute("data-app-state", "uninstalled");
+      await expect(header.getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
+      const again = header.getByRole("link", { name: "Install again", exact: true });
+      const target = new URL((await again.getAttribute("href"))!, "https://dashboard.test");
+      expect(target.pathname).toBe("/new");
+      expect(target.searchParams.get("git")).toBe("https://github.com/example/state-echo.git");
+      // The version it last ran and its module path — not the Source's default ref.
+      expect(target.searchParams.get("ref")).toBe("v1.4.2");
+      expect(target.searchParams.get("sourcePath")).toBe(".");
+      expect(target.searchParams.get("path")).toBe("deploy/opentofu");
+
+      expect(seenMutations).toEqual([
+        `POST /api/v1/capsules/${ID}/cancel-uninstall`,
+        "POST /api/v1/install-plans/gip_states_e/reconcile",
+      ]);
+      expect(errors).toEqual([]);
+      traffic.assertNoFailures();
+
+      // A server that cannot serve the app view (a skewed deploy) leaves the
+      // app unreadable, not missing: only the app's own record says "not found".
+      viewUnavailable = true;
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(page.getByRole("heading", { name: "Couldn't load this app" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "App not found" })).toHaveCount(0);
     });
 
     test("Home shows every installed app with its state and opens only apps with a screen", async ({ page }) => {
@@ -729,8 +1111,8 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       // Only the app with an authorized screen opens; every app links to its page.
       await expect(card(PORTABLE_EXPECTATIONS.appName).getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
       await expect(card("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
-      await expect(card("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/workloads/cap_storage");
-      await expect(card("Mail Relay").getByRole("link", { name: "Check", exact: true })).toHaveAttribute("href", "/workloads/cap_mail");
+      await expect(card("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/apps/cap_storage");
+      await expect(card("Mail Relay").getByRole("link", { name: "Check", exact: true })).toHaveAttribute("href", "/apps/cap_mail");
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       await capture(page, "home-mixed");
       expect(errors).toEqual([]);

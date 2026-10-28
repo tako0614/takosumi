@@ -88,7 +88,8 @@ describe("page errors stay inside the page", () => {
       ["views/runs/RunView.tsx", "run"],
       ["views/runs/RunView.tsx", "capsule"],
       ["views/new/InstallExecution.tsx", "run"],
-      ["views/apps/WorkloadDetailView.tsx", "capsule"],
+      ["views/app/AppManagePage.tsx", "context"],
+      ["views/app/AppManagePage.tsx", "appView"],
     ];
     for (const [file, name] of cases) {
       const source = read(file);

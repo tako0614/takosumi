@@ -19,6 +19,7 @@ import type {
   RunExecutionAuthority,
   RunExecutionCommit,
   RunExecutionEvidence,
+  RunPlanOrigin,
 } from "./runs.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
@@ -415,6 +416,12 @@ export interface PlanRun {
    * PlanRun to `type: "drift_check"`. Absent for every other plan.
    */
   readonly driftCheck?: true;
+  /**
+   * The change flow that created this plan (version change, rollback or
+   * configuration change), written once by that flow's server entry point and
+   * projected onto the public Run so a retry can repeat the same flow.
+   */
+  readonly origin?: RunPlanOrigin;
 }
 
 /**

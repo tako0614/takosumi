@@ -132,6 +132,12 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
   expect(fixture.counts).toEqual({ sync: 1, compatibility: 1, plan: 1 });
   expect(fixture.approvalCalls).toBe(0);
   expect(fixture.applyCalls).toBe(0);
+  // The Plan records the version change it was made for, so a failed apply
+  // can be retried as the same change.
+  expect([...fixture.runs.values()].find((run) => run.type === "plan")?.origin).toEqual({
+    kind: "revision",
+    ref: "release/v2",
+  });
 
   const denied = await fixture.request(
     `/api/v1/revision-plans/${planId}`,
@@ -909,6 +915,7 @@ function revisionFixture(
         readonly compatibilityReportId?: string;
         readonly planRunId?: string;
         readonly actor?: string;
+        readonly origin?: Run["origin"];
       },
     ) => {
       const existing = runs.get(input.planRunId!);
@@ -931,6 +938,7 @@ function revisionFixture(
         sourceSnapshotId: input.sourceSnapshotId,
         compatibilityReportId: input.compatibilityReportId,
         baseStateGeneration: capsule.currentStateGeneration,
+        ...(input.origin ? { origin: input.origin } : {}),
         createdBy: input.actor!,
         createdAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
@@ -988,6 +996,7 @@ function revisionFixture(
 
   return {
     planStore,
+    runs,
     preparationStarted,
     releasePreparation: () => releasePreparationGate?.(),
     async beginDrain() {

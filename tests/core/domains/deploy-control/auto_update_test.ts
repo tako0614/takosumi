@@ -331,6 +331,8 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
   const autoPlan = planRuns.find((run) => run.autoApplyRequested === true);
   expect(autoPlan?.status).toBe("succeeded");
   expect(autoPlan?.appliedApplyRunId).toBeTruthy();
+  // It records the version change it made: the tracked ref's new commit.
+  expect(autoPlan?.origin).toEqual({ kind: "revision", ref: newSnapshot?.ref });
 });
 
 test("a running Plan can finish after drain and resume without minting a new-epoch automatic Apply", async () => {

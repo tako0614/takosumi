@@ -34,7 +34,7 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
     labelKey: "nav.home",
     icon: LayoutGrid,
     end: true,
-    alsoActiveOn: ["/workloads", "/runs", "/run-groups"],
+    alsoActiveOn: ["/apps", "/runs", "/run-groups"],
   },
   // ストア = browse + install in one page (`/new`).
   { href: "/new", labelKey: "nav.store", icon: Store },
@@ -47,7 +47,7 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
 export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/$/, "nav.home"],
   // An installed app's page is titled アプリ / App; ホーム stays selected.
-  [/^\/workloads(\/|$)/, "nav.app"],
+  [/^\/apps(\/|$)/, "nav.app"],
   [/^\/runs(\/|$)/, "nav.home"],
   [/^\/run-groups(\/|$)/, "nav.home"],
   [/^\/new(\/|$)/, "nav.store"],

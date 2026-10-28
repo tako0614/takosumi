@@ -420,6 +420,14 @@ async function stubProviderDestinationFixture(
       (answer as { continue?: boolean } | undefined)?.continue === true
     ) as ReturnType<ProviderDestinationFixtureState["continued"]>,
   };
+  // Whatever route answers it, an Apply posted for the reviewed Plan makes
+  // the app's own view report it applied.
+  let applied = false;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === `/api/v1/runs/${planRunId}/apply`) {
+      applied = true;
+    }
+  });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -444,6 +452,18 @@ async function stubProviderDestinationFixture(
     if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
       return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
     }
+    // The installed app's own reads (`/app`, `/runs`) once an install
+    // finishes: installed, with no screen unless a case adds one.
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e/app") return route.fulfill({ json: { app: {
+      kind: "takosumi.capsule-app@v1", capsuleId: "cap_provider_destination_e2e", workspaceId: "ws_alpha",
+      projectId: "prj_alpha", name: "cloudflare-service", environment: "production",
+      // Not applied until the review's Allow and install posted its Apply.
+      status: applied ? "active" : "pending", applied,
+      state: applied ? "installed" : "installing", primaryAction: applied ? "view_resources" : "review", problems: [], screens: [],
+      version: { updateAvailable: false, stale: false, autoUpdate: false },
+      progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
+      observedAt: "2026-08-01T00:00:00Z",
+    } } });
     if (path === "/api/v1/capsules/cap_provider_destination_e2e") return route.fulfill({ json: { capsule: {
       id: "cap_provider_destination_e2e", workspaceId: "ws_alpha", sourceId: "src_provider_destination_e2e",
       installConfigId: "cfg-default-opentofu-capsule", name: "cloudflare-service", slug: "cloudflare-service",
@@ -1051,6 +1071,18 @@ test.describe("Takosumi dashboard browser surface", () => {
           metadata: { applyRunId: "run_provider_apply_e2e", stateVersionId: "sv_provider_apply_e2e", capsuleId: "cap_provider_destination_e2e" },
           createdAt: activationAction === "release_activation.succeeded" ? "2026-08-01T00:00:02.000Z" : "2026-08-01T00:00:01.000Z",
         }] } });
+      }
+      if (path === "/api/v1/capsules/cap_provider_destination_e2e/app" && applyPosts.length > 0) {
+        // The installed app's page opens the screen the server lists.
+        return route.fulfill({ json: { app: {
+          kind: "takosumi.capsule-app@v1", capsuleId: "cap_provider_destination_e2e", workspaceId: "ws_alpha",
+          projectId: "prj_alpha", name: "readiness-service", environment: "production", status: "active",
+          applied: true, state: "installed", primaryAction: "open", problems: [],
+          screens: [{ interfaceId: "if_provider_readiness_e2e", name: "app.launcher", title: "Synthetic readiness service", url: "https://service.example.test/fixture" }],
+          version: { updateAvailable: false, stale: false, autoUpdate: false },
+          progress: { revisionPreparing: false }, uninstall: { mode: "scheduled", graceDays: 7 },
+          observedAt: "2026-08-01T00:00:00.000Z",
+        } } });
       }
       if (path === "/api/v1/workspaces/ws_alpha/ui-surfaces") {
         return route.fulfill({ json: { interfaces: [{

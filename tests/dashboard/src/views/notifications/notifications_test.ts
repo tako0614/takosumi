@@ -93,7 +93,7 @@ describe("Notifications", () => {
       createdAt: "2026-10-27T00:00:00.000Z",
     };
     expect(activityEventHref({ ...base, targetType: "run", targetId: "run_1" })).toBe("/runs/run_1");
-    expect(activityEventHref({ ...base, targetType: "capsule", targetId: "cap_1" })).toBe("/workloads/cap_1");
+    expect(activityEventHref({ ...base, targetType: "capsule", targetId: "cap_1" })).toBe("/apps/cap_1");
     expect(activityEventHref({ ...base, targetType: "connection", targetId: "pc_1" })).toBe("/connections");
     // Value sharing between workspaces has no screen any more.
     expect(activityEventHref({ ...base, targetType: "output_share", targetId: "share_1" })).toBeUndefined();
@@ -240,8 +240,8 @@ describe("Notifications", () => {
     expect(isFailureAction(deadLettered.action)).toBe(true);
     expect(isFailureAction(retryRequested.action)).toBe(false);
     // The app's page owns the retry; without an app id the link opens ホーム.
-    expect(activityEventHref(deadLettered)).toBe("/workloads/cap_app");
-    expect(activityEventHref(retryRequested)).toBe("/workloads/cap_app");
+    expect(activityEventHref(deadLettered)).toBe("/apps/cap_app");
+    expect(activityEventHref(retryRequested)).toBe("/apps/cap_app");
     expect(
       activityEventHref({ ...deadLettered, metadata: { errorCode: "x" } }),
     ).toBe("/");

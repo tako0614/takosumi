@@ -298,7 +298,7 @@ Add, role change, and remove responses carry neither field.
 
 `GET /api/v1/capsules/{capsuleId}/app` returns one view of an installed app.
 The control plane computes `state` and `primaryAction` from the Capsule, this
-Capsule's newest plan/apply Run, the revision coordinator, its
+Capsule's newest plan/apply Run, the revision and install coordinators, its
 ProviderConnections and its screen materialization ledger. It does not rely on
 a window of Workspace-wide Runs.
 
@@ -320,6 +320,11 @@ newest Run (`latestRun`) and the uninstall terms (`uninstall.mode`, the
 `scheduled.deleteAfter` once scheduled). It carries no secret, no Output value
 and no Interface input other than a screen's checked launch URL. Parts that a
 supporting read could not load are named in `incomplete`.
+`progress.revisionPreparing` is true only while an install or revision
+coordinator has not yet created its Plan Run (an install attempt only for a
+never-applied app, and not once it has stalled). `progress.installPlanId` names
+the install attempt that created the app; `continue_install` advances it with
+`POST /api/v1/install-plans/{installPlanId}/reconcile`.
 An uninstall record counts only while the Capsule is `uninstalled`, or while it
 is `error` after a provider-reached teardown failure and its newest Run is still
 a removal. A recorded `blockedReason` yields `uninstall_blocked` in either
@@ -425,6 +430,13 @@ A plan Run that policy blocked or that requires approval carries
 and `layer` come from a closed set (for example `provider_not_allowed` /
 `provider`, `approval_required_change` / `action`). The prose reasons are not
 returned; a reason this build does not recognize stays as `unclassified`.
+
+A plan Run created by a version change (automatic updates included), a
+rollback to an earlier StateVersion, a configuration change or a Workspace
+update carries `origin` (`{ kind: "revision", ref }`,
+`{ kind: "rollback", stateVersionId }`, `{ kind: "configuration" }` or
+`{ kind: "update" }`), so a client retrying a failed change plans the same
+change again instead of the Source's default ref.
 
 ### Credentials and Output sharing
 

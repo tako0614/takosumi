@@ -52,6 +52,7 @@ import {
   publicRun,
 } from "./shared.ts";
 import {
+  CAPSULE_APP_INSTALL_STALL_AFTER_MS,
   CAPSULE_APP_LIFECYCLE_RUN_TYPES,
   capsuleIsApplied,
   deriveCapsuleAppStatus,
@@ -158,17 +159,28 @@ async function readCapsuleAppView(
 
   // Facts that decide the state are required: a failed read fails the request
   // instead of answering with a state the control plane did not establish.
-  const [latestRun, revisionPreparing, connectionIssues, admission] = destroyed
-    ? [undefined, false, [], { schedule: false, cancel: false }] as const
+  const [latestRun, coordinator, connectionIssues, admission] = destroyed
+    ? [undefined, undefined, [], { schedule: false, cancel: false }] as const
     : await Promise.all([
         readLatestLifecycleRun(operations, capsule),
-        operations.gitInstallPlans.hasInFlightRevisionForCapsule(
+        // A coordinator row counts only until it creates its Plan Run (the
+        // Run then says what is happening), and an install row only while
+        // the Capsule was never applied.
+        operations.gitInstallPlans.preparingCoordinatorForCapsule(
           capsule.id,
           capsule.workspaceId,
+          { includeInstall: !applied },
         ),
         readConnectionIssues(operations, capsule),
         readUninstallAdmission(operations, capsule, applied),
       ]);
+  // An install attempt that has not moved for the stall window no longer
+  // holds the app: the person is offered continue_install, which advances
+  // that attempt through its own reconciliation.
+  const installAttempt = coordinator?.operation === "install" ? coordinator : undefined;
+  const installStalled = installAttempt !== undefined &&
+    now - Date.parse(installAttempt.updatedAt) >= CAPSULE_APP_INSTALL_STALL_AFTER_MS;
+  const revisionPreparing = coordinator !== undefined && !installStalled;
 
   const [installConfig, source, adopted, screens, screenFailure] = await Promise.all([
     optional(() => operations.capsules.getInstallConfig(capsule.installConfigId)),
@@ -245,6 +257,7 @@ async function readCapsuleAppView(
     version,
     progress: {
       revisionPreparing: !destroyed && revisionPreparing,
+      ...(installAttempt ? { installPlanId: installAttempt.id } : {}),
       ...(inFlightRun ? { run: runSummary(inFlightRun) } : {}),
       ...(review ? { review: { runId: review.id, runType: review.type } } : {}),
     },

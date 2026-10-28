@@ -1054,6 +1054,9 @@ test("StateVersion get + rollback-plan happy path; missing StateVersion is 404 (
   const rollbackRun = ((await rollbackRes.json()) as { run: Run }).run;
   expect(rollbackRun.id).not.toEqual(plan.planRun.id);
   expect(rollbackRun.sourceSnapshotId).toEqual(plan.planRun.sourceSnapshotId);
+  // The rollback Plan records the StateVersion it goes back to, so a failed
+  // apply is retried as the same rollback.
+  expect(rollbackRun.origin).toEqual({ kind: "rollback", stateVersionId });
 
   // Missing StateVersion is a typed 404.
   const missing = await app.request(

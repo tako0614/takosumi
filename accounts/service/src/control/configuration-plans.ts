@@ -1003,6 +1003,7 @@ async function createFreshPlanRun(input: {
         currentStateVersionId: input.expectedBaseStateVersionId,
       },
       actor: input.evidence.planCreatedBy,
+      origin: { kind: "configuration" },
     },
   );
   const observed = await input.ctx.operations.getPlanRun(created.planRun.id);

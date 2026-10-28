@@ -333,6 +333,13 @@ export function isOpenGitInstallAttemptPhase(phase: unknown): boolean {
   return phase !== "failed" && phase !== "discarded";
 }
 
+/** A coordinator row still preparing a Plan for one Capsule. */
+export interface PreparingGitPlanCoordinator {
+  readonly id: string;
+  readonly operation: "install" | "revision";
+  readonly updatedAt: string;
+}
+
 export interface GitInstallPlanStore {
   readonly durable: boolean;
   create(
@@ -347,6 +354,20 @@ export interface GitInstallPlanStore {
     capsuleId: string,
     workspaceId: string,
   ): Promise<boolean>;
+  /**
+   * The newest coordinator row still preparing a Plan for this Capsule: a
+   * non-terminal row (not `failed`, `reviewable` or `discarded`) that has not
+   * created its Plan Run yet. Once a Plan Run exists the Run itself says what
+   * is happening, so a row a client never reconciled past `planning` does not
+   * keep the Capsule busy. Install rows count only with `includeInstall`
+   * (a never-applied Capsule); an applied Capsule is never held by an install
+   * row. Scoped to the Capsule's Workspace so the read stays on its index.
+   */
+  preparingCoordinatorForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+    options: { readonly includeInstall: boolean },
+  ): Promise<PreparingGitPlanCoordinator | undefined>;
   /**
    * Private Workspace-wide quiescence observation. A terminal plan is settled
    * only after both reconciliation lease columns have been cleared.
@@ -470,6 +491,33 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
           plan.capsuleId === capsuleId &&
           plan.phase !== "failed" && plan.phase !== "reviewable",
       ),
+    );
+  }
+
+  preparingCoordinatorForCapsule(
+    capsuleId: string,
+    workspaceId: string,
+    options: { readonly includeInstall: boolean },
+  ): Promise<PreparingGitPlanCoordinator | undefined> {
+    const candidates = Array.from(this.#entries.values())
+      .map(({ plan }) => plan)
+      .filter((plan) =>
+        plan.workspaceId === workspaceId &&
+        plan.capsuleId === capsuleId &&
+        !isTerminalGitInstallPlanPhase(plan.phase) &&
+        plan.planRunId === undefined &&
+        (plan.operation === "revision" || options.includeInstall)
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+    const newest = candidates[0];
+    return Promise.resolve(
+      newest
+        ? {
+            id: newest.id,
+            operation: newest.operation === "revision" ? "revision" : "install",
+            updatedAt: newest.updatedAt,
+          }
+        : undefined,
     );
   }
 

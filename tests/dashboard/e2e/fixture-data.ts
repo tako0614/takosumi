@@ -186,6 +186,78 @@ export const PORTABLE_UI_SURFACES = {
   ],
 } as const;
 
+/** The authority guard every fixture Capsule read carries. */
+export const PORTABLE_AUTHORITY_GUARD = `sha256:${"a".repeat(64)}`;
+
+type PortableCapsule = (typeof PORTABLE_CAPSULES)[keyof typeof PORTABLE_CAPSULES][number];
+
+/** Every fixture Capsule, across Workspaces. */
+export function portableCapsule(id: string): PortableCapsule | undefined {
+  return Object.values(PORTABLE_CAPSULES)
+    .flatMap((capsules) => [...capsules])
+    .find((capsule) => capsule.id === id);
+}
+
+/** The applied install of one fixture Capsule. */
+export function portableCapsuleRuns(capsule: PortableCapsule) {
+  return [
+    {
+      id: `run_install_apply_${capsule.id}`,
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      type: "apply",
+      status: "succeeded",
+      createdBy: "portable-e2e",
+      createdAt: CREATED_AT,
+      finishedAt: CREATED_AT,
+    },
+  ];
+}
+
+/**
+ * The control plane's view of one fixture Capsule
+ * (`GET /api/v1/capsules/:id/app`): installed, its launcher as the one
+ * screen, nothing in progress, and a seven-day uninstall grace period.
+ */
+export function portableCapsuleApp(capsule: PortableCapsule) {
+  const launcher = (PORTABLE_UI_SURFACES[capsule.workspaceId as keyof typeof PORTABLE_UI_SURFACES] ?? [])
+    .find((item) => item.metadata.ownerRef.id === capsule.id);
+  const latestRun = portableCapsuleRuns(capsule)[0]!;
+  return {
+    kind: "takosumi.capsule-app@v1",
+    capsuleId: capsule.id,
+    workspaceId: capsule.workspaceId,
+    projectId: `prj_${capsule.workspaceId}`,
+    name: capsule.name,
+    environment: capsule.environment,
+    status: capsule.status,
+    applied: true,
+    state: "installed",
+    primaryAction: launcher ? "open" : "view_resources",
+    problems: [],
+    screens: launcher
+      ? [{
+          interfaceId: launcher.metadata.id,
+          name: launcher.metadata.name,
+          title: launcher.spec.document.display.title,
+          category: launcher.spec.document.display.category,
+          url: launcher.status.resolvedInputs.url,
+        }]
+      : [],
+    version: { updateAvailable: false, stale: false, autoUpdate: false },
+    progress: { revisionPreparing: false },
+    latestRun: {
+      id: latestRun.id,
+      type: latestRun.type,
+      status: latestRun.status,
+      createdAt: latestRun.createdAt,
+      finishedAt: latestRun.finishedAt,
+    },
+    uninstall: { mode: "scheduled", graceDays: 7 },
+    observedAt: CREATED_AT,
+  };
+}
+
 export function workspacesResponse() {
   return {
     workspaces: PORTABLE_WORKSPACES,

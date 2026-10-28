@@ -183,6 +183,7 @@ import type {
   RunCostInfo,
   RunEventsResponse,
   RunLogsResponse,
+  RunPlanOrigin,
   RunServiceDataRestoreResult,
   RunType,
 } from "takosumi-contract/runs";
@@ -1357,6 +1358,8 @@ export interface PlanRunInternalContext {
    * rejected by `createApplyRun`.
    */
   readonly driftCheck?: true;
+  /** The change flow creating this plan; stamped onto the PlanRun. */
+  readonly origin?: RunPlanOrigin;
   /**
    * Executes the ordinary plan/apply pair with OpenTofu refresh-only
    * semantics. This is execution evidence, not a new public Run type.
@@ -1458,6 +1461,12 @@ export interface CreateCapsulePlanInternal {
    * `waiting_approval`, and is rejected by `createApplyRun`.
    */
   readonly driftCheck?: true;
+  /**
+   * The change flow creating this plan (version change, rollback or
+   * configuration change). Server entry points set it; it is recorded on the
+   * PlanRun and projected onto the Run so a retry can repeat the same flow.
+   */
+  readonly origin?: RunPlanOrigin;
 }
 
 /**
@@ -2178,7 +2187,7 @@ export class OpenTofuController {
       stateVersion.capsuleId,
       false,
       context,
-      { sourceSnapshotId },
+      { sourceSnapshotId, origin: { kind: "rollback", stateVersionId } },
     );
   }
 
@@ -2343,6 +2352,8 @@ export class OpenTofuController {
           autoApplyRequested: true,
           sourceSnapshotId: input.snapshot.id,
           expectedWorkspaceManagementAuthority,
+          // An automatic update moves the app to its tracked ref's new commit.
+          origin: { kind: "revision", ref: input.snapshot.ref },
         },
       );
     } catch (error) {

@@ -56,7 +56,7 @@ export default function AppCreatedSection(props: {
 
   return (
     <AppSection
-      id="app-created"
+      id="created"
       title={t("app.created.title")}
       subtitle={t("app.created.subtitle")}
       testId="app-created"

@@ -12,7 +12,6 @@ import {
 import { ChevronDown, ExternalLink } from "lucide-solid";
 import { Button } from "../../components/ui/index.ts";
 import { formatDateTime, relativeTime, t } from "../../i18n/index.ts";
-import type { AuthorizedUiSurface } from "../../lib/ui-surface-interfaces.ts";
 
 /** Relative time ("5分前"), with the exact date and time on hover. */
 export function RelativeTime(props: { readonly iso: string }): JSX.Element {
@@ -55,13 +54,19 @@ export function AppSection(props: {
   );
 }
 
+/** One launchable screen as "Open" shows it: its display name and URL. */
+export interface OpenableScreen {
+  readonly name?: string;
+  readonly url: string;
+}
+
 /**
  * "Open" for an app's screens. One screen is one link; several screens keep
  * the declared primary screen on the button and list every other screen in a
  * menu next to it, so no screen is reachable only through the first one.
  */
 export function OpenAppButton(props: {
-  readonly surfaces: readonly AuthorizedUiSurface[];
+  readonly surfaces: readonly OpenableScreen[];
   readonly variant?: "primary" | "secondary";
   readonly size?: "sm" | "md";
   /** Shown for an unnamed screen. */
@@ -76,7 +81,7 @@ export function OpenAppButton(props: {
   let container: HTMLDivElement | undefined;
   const primary = () => props.surfaces[0];
   const others = () => props.surfaces.slice(1);
-  const surfaceName = (surface: AuthorizedUiSurface, index: number) =>
+  const surfaceName = (surface: OpenableScreen, index: number) =>
     surface.name ||
     (props.surfaces.length > 1
       ? t("app.open.screenN", { n: index + 1 })

@@ -8,6 +8,7 @@
  * has no screen, so its events are not links.
  */
 import type { ActivityEvent } from "./control-api.ts";
+import { appPageHref } from "./app-links.ts";
 
 export function activityEventHref(event: ActivityEvent): string | undefined {
   if (event.targetType === "run") {
@@ -17,7 +18,7 @@ export function activityEventHref(event: ActivityEvent): string | undefined {
     return `/run-groups/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "capsule") {
-    return `/workloads/${encodeURIComponent(event.targetId)}`;
+    return appPageHref(event.targetId);
   }
   if (event.targetType === "connection") {
     return "/connections";
@@ -27,7 +28,7 @@ export function activityEventHref(event: ActivityEvent): string | undefined {
     // owns the retry and ホーム shows which app needs attention.
     const capsuleId = event.metadata?.capsuleId;
     return typeof capsuleId === "string" && capsuleId
-      ? `/workloads/${encodeURIComponent(capsuleId)}`
+      ? appPageHref(capsuleId)
       : "/";
   }
   return undefined;

@@ -2,10 +2,14 @@ import { join, relative, resolve, sep } from "node:path";
 import { resolvePortablePort } from "./portable-origin.ts";
 import {
   createInstallAttemptFixture,
+  PORTABLE_AUTHORITY_GUARD,
   PORTABLE_CAPSULES,
   PORTABLE_SESSION_COOKIE,
   PORTABLE_UI_SURFACES,
   PORTABLE_WORKSPACES,
+  portableCapsule,
+  portableCapsuleApp,
+  portableCapsuleRuns,
   workspacesResponse,
 } from "./fixture-data.ts";
 
@@ -137,6 +141,20 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
   if (path.startsWith("/api/v1/install-plans/")) {
     const reply = await installAttemptResponse(request, url);
     if (reply) return reply;
+  }
+
+  // One installed app: its record, the control plane's view of it and its
+  // own Runs. Cases that need other states stub these per test.
+  const capsuleMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)(?:\/(app|runs))?$/u);
+  if (capsuleMatch && request.method === "GET") {
+    const capsule = portableCapsule(decodeURIComponent(capsuleMatch[1] ?? ""));
+    if (!capsule) return json({ error: "not_found" }, 404);
+    if (capsuleMatch[2] === "app") return json({ app: portableCapsuleApp(capsule) });
+    if (capsuleMatch[2] === "runs") return json({ runs: portableCapsuleRuns(capsule) });
+    return json({
+      capsule,
+      installConfigReAdoption: { authorityGuard: PORTABLE_AUTHORITY_GUARD },
+    });
   }
 
   if (path === "/.well-known/takosumi") {
