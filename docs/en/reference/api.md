@@ -474,8 +474,11 @@ To confirm displayed choices, send
 An explicit `interfaceLinks` answer takes precedence for that requirement. The server
 compares the echoed candidate IDs with the current candidate set, so a set that changed
 after the sheet opened is accepted when it still matches at submission time.
-`implicitInterfaceKeys` identifies requirements with an implicit selection in the sheet,
-including a sole-candidate auto-selection or “configure later”. These observations contain
+Different sets return 409 `interface_candidate_unavailable`. An omitted observation uses
+the captured sheet-open candidate set instead.
+The response's `installPlan.implicitInterfaceKeys` identifies implicit answers stored in
+`options.interfaceLinks`, including a sole-candidate auto-selection or “configure later”,
+so a restarted attempt can distinguish them from explicit choices. These observations contain
 IDs only, are never stored in `options`, and grant no authority.
 When Control D1 has not installed the Interface link store (schema before v76),
 the install sheet offers no candidates, returns `linkStoreUnavailable: true` with
