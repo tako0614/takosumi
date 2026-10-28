@@ -44,15 +44,18 @@
 - Preserve connection/Capsule errors ahead of review, report unknown installed
   summaries, and correct API shapes and automatic-selection exceptions in docs.
 - Validation requested: focused regressions, the complete local `bun run check`,
-  and real `check and test` success at all six final heads. Existing CI successes
-  are evidence; the previous local full-gate run had unrelated fixture timeouts
-  and was interrupted, so it is not a passing result.
+  and real `check and test` success at all six final heads. Passing GitHub Actions
+  runs are evidence for the exact heads they tested; confirm the final head of
+  each PR. The previous local full-gate run had unrelated fixture timeouts and
+  was interrupted, so it is not a passing result.
 
 ## Third review round
 
-- Clean up runtime Superseded state when retrying.
-- Retry install discard through the domain operation. Keep discard idempotent for
-  frozen and draining installs, and for destroyed Capsules.
+- After a runtime provider error, automatically clean up the post-create run using
+  the `Superseded` state so the next sign-in can recover.
+- Retry frozen and draining install discards through the domain operation. Keep
+  cleanup idempotent for already-destroyed Capsules, whose cleanup may bypass
+  active management admission; active Capsules remain behind that admission fence.
 - Keep Store loading copy neutral. Correct copy and documentation to match the
   implementation, including automatic InterfaceLink selection.
 - Parent must run the final complete local `bun run check`. Confirm real

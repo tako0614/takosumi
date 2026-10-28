@@ -112,11 +112,11 @@ When installing, choose a matching `Resolved` provider from another app in the s
 Workspace. Only Capsule-owned Interfaces can provide app-to-app links; Workspace-owned
 and operator-owned Interfaces are not link providers. With no candidates, the choice is
 set to later. Each requirement with exactly one non-private candidate is initially
-auto-selected. If multiple requirements auto-select the same sole candidate, the first
-requirement keeps it and later requirements return to provider-or-later choice. Explicitly
-selected providers are reserved before auto-selection, so a later auto-selection of that
-Interface also returns to choice. A private sole candidate or multiple candidates require
-an explicit provider or later choice.
+auto-selected. Among requirements auto-selecting the same sole candidate, the first
+keeps it and later requirements return to provider-or-later choice. Explicitly selected
+providers are reserved before auto-selection regardless of requirement order, so any
+requirement that would auto-select the same Interface returns to choice. A private sole
+candidate or multiple candidates require an explicit provider or later choice.
 An InterfaceLink stores the selected provider Interface and Capsule.
 Adding another provider, or losing access to the current one, never switches to another
 candidate automatically.
