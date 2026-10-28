@@ -18,7 +18,11 @@ export function startSourceRetirementSweeper(input: {
   ) => void;
   readonly intervalMs?: number;
   readonly initialDelayMs?: number;
+  readonly enabled?: boolean;
 }): { readonly tick: () => Promise<void>; readonly stop: () => void } {
+  if (input.enabled === false) {
+    return { tick: () => Promise.resolve(), stop: () => {} };
+  }
   let running: Promise<void> | undefined;
   let stopped = false;
   const tick = (): Promise<void> => {

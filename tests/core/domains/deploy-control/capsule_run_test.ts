@@ -12677,7 +12677,7 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
   ).toEqual([1, 2]);
 });
 
-test("committed destroy retires its owned Source and archive through the composed RunEngine", async () => {
+test("committed destroy defers owned Source archive retirement to recovery", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   const seeded = await seedRunnableCapsuleModel(store);
@@ -12712,6 +12712,10 @@ test("committed destroy retires its owned Source and archive through the compose
   });
   expect(result.applyRun.status).toBe("succeeded");
   expect((await store.getCapsule(seeded.capsule.id))?.status).toBe("destroyed");
+  expect(await store.getSource(seeded.capsule.sourceId)).toBeDefined();
+  expect(archived).toEqual([]);
+  expect(await sourcesService.retireOwnedSource(seeded.capsule.sourceId, "destroy recovery"))
+    .toBe("retired");
   expect(await store.getSource(seeded.capsule.sourceId)).toBeUndefined();
   expect(await store.listSourceSnapshots(seeded.capsule.sourceId)).toEqual([]);
   expect(archived).toEqual([seeded.snapshot.archiveRef]);
