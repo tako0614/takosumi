@@ -1462,6 +1462,10 @@ export async function prepareProviderCredentialFiles(
           : {}),
       },
       cleanup: async () => {
+        // A directory that cannot be removed poisons the lease but does not
+        // throw: callers run this in a `finally`, where a throw would replace
+        // an apply/destroy outcome the host still has to persist.
+        let removalFailed = false;
         try {
           try {
             if (session) {
@@ -1477,9 +1481,10 @@ export async function prepareProviderCredentialFiles(
               }
             }
           } finally {
-            await shredCredentialDir(ownedCredentialDir);
+            await shredCredentialDir(ownedCredentialDir).catch(() => { removalFailed = true; });
           }
-          phaseLease.release();
+          if (removalFailed) phaseLease.poison();
+          else phaseLease.release();
         } catch (error) {
           phaseLease.poison();
           throw error;

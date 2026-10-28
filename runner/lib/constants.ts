@@ -5,6 +5,7 @@
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 
+import { resolve } from "node:path";
 import { DEFAULT_OPENTOFU_CONFIGURATION_LIMITS } from "../../lib/opentofu-configuration/src/mod.ts";
 
 export const CAPSULE_COMPATIBILITY_MAX_FILES =
@@ -26,8 +27,11 @@ export const RUNNER_START_SERVER_ENV = "TAKOSUMI_RUNNER_START_SERVER";
 export const BACKUP_ADAPTERS_ENV = "TAKOSUMI_BACKUP_ADAPTERS_JSON";
 
 export const port = Number(Bun.env.PORT ?? "8080");
-export const RUN_ROOT =
-  Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs";
+// Admit relative operator configuration, but give every workspace/cleanup
+// caller the same absolute root before the credential deletion guard runs.
+export const RUN_ROOT = resolve(
+  Bun.env.TAKOSUMI_OPENTOFU_RUN_ROOT ?? "/tmp/takosumi-runs",
+);
 export const BASE_COMMAND_ENV_NAMES = [
   "PATH",
   "HOME",

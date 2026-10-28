@@ -5,14 +5,61 @@
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { readFile, readdir, realpath, rm, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { providerMatches as exactProviderSourceMatch } from "../../contract/provider-env-rules.ts";
 import type {
   OpenTofuRunAction,
   JsonRecord,
 } from "./types.ts";
-export async function shredCredentialDir(credentialDir: string): Promise<void> {
-  await rm(credentialDir, { recursive: true, force: true }).catch(() => {});
+
+type RemoveCredentialDir = (
+  path: string,
+  options: { readonly recursive: true; readonly force: true },
+) => Promise<void>;
+
+/**
+ * Removes one credential directory tree. A directory that is already gone is
+ * success, but every other failure is raised: credential files may remain, so
+ * callers must not release the sensitive-file phase lease or report success.
+ * What a caller then does with the failure is its own call (see
+ * prepareProviderCredentialFiles). The raised error is fixed and value-free
+ * (an errno code at most) because the raw `rm` error names the directory path.
+ * `remove` is a test seam only.
+ */
+export async function shredCredentialDir(
+  credentialDir: string,
+  remove: RemoveCredentialDir = rm,
+): Promise<void> {
+  assertShreddableCredentialDir(credentialDir);
+  try {
+    await remove(credentialDir, { recursive: true, force: true });
+  } catch (error) {
+    throw new Error(`credential directory cleanup failed: ${removalErrorCode(error)}`);
+  }
+}
+
+// A lexical last line of defence, not an ownership proof: it cannot know which
+// prefix a caller owns. It refuses what a recursive removal must never be aimed
+// at: a relative or non-normalized path (resolve() differs), the filesystem
+// root, or a top-level directory such as /tmp itself. Callers pass an absolute
+// run directory (mkdtemp under /tmp, or <run root>/<run>/source-credentials).
+export function assertShreddableCredentialDir(credentialDir: string): void {
+  const parent = dirname(credentialDir);
+  if (
+    resolve(credentialDir) !== credentialDir ||
+    parent === credentialDir ||
+    dirname(parent) === parent
+  ) {
+    throw new Error("credential directory path is unsafe");
+  }
+}
+
+function removalErrorCode(error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? (error as { readonly code?: unknown }).code
+      : undefined;
+  return typeof code === "string" && /^E[A-Z0-9]+$/.test(code) ? code : "UNKNOWN";
 }
 
 export async function pathExists(path: string): Promise<boolean> {
