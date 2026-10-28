@@ -148,6 +148,184 @@ test("same-provider permission change replaces the old grant with the new pinned
   expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "pairwise_consumer" })).access_token).toBe("runtime-token");
 });
 
+test("sign-in accepts reordered and reduced requirements without widening the active link", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  f.state.requirement = { ...requirement, permissions: ["mcp.write", "mcp.read"] };
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [f.state.requirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id))[0]?.spec.permissions.slice().sort()).toEqual(["mcp.read", "mcp.write"]);
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [f.state.requirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.spec.permissions)).toEqual([["mcp.read"]]);
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+  expect((await f.stores.links.get(link.id))?.state).toBe("active");
+});
+
+test("successive sign-ins narrow a grant despite older revoked rows for the same link", async () => {
+  const f = await fixture();
+  await f.link();
+  await f.ensure("alice");
+  for (const permissions of [["mcp.read"], ["mcp.write"]]) {
+    const nextRequirement = { ...requirement, permissions };
+    await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [nextRequirement] });
+  }
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.spec.permissions)).toEqual([["mcp.write"]]);
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+});
+
+test("a legacy replacement's revoked row does not deny its newer active same-link grant", async () => {
+  const f = await fixture();
+  await f.link();
+  await f.ensure("alice");
+  const nextRequirement = { ...requirement, permissions: ["mcp.read"] };
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [nextRequirement] });
+  const bindings = await f.service.listBindings(f.providers[0]!.metadata.id);
+  const old = bindings.find((b) => b.status.phase === "Revoked")!;
+  const preFix = { ...old, metadata: { ...old.metadata, generation: old.metadata.generation + 1 }, status: { ...old.status, conditions: old.status.conditions.map((condition) => ({ ...condition, reason: "Revoked" })) } };
+  expect(await f.stores.bindings.compareAndSet(preFix, old.metadata.generation)).toBe(true);
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [nextRequirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.spec.permissions)).toEqual([["mcp.read"]]);
+});
+
+test("reordering a requirement does not rotate its approved link", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  f.state.requirement = { ...requirement, permissions: ["mcp.write", "mcp.read"] };
+  const selected = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: link.generation });
+  expect(selected.id).toBe(link.id);
+  expect(selected.generation).toBe(link.generation);
+});
+
+test("a requirement increase grants only the approved overlap until a new link is approved", async () => {
+  const f = await fixture();
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  const [link] = await f.service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [f.state.requirement], selections: [{ requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, selection: "explicit" }] });
+  f.state.requirement = requirement;
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [requirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.spec.permissions)).toEqual([["mcp.read"]]);
+  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+  await expect(f.service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [requirement], selections: [{ requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, selection: "explicit" }] })).rejects.toThrow("selection changed");
+  const next = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: link!.generation });
+  expect(next.id).not.toBe(link!.id);
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [requirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.spec.permissions)).toEqual([["mcp.read", "mcp.write"]]);
+});
+
+test("stranded preparatory grant from an absent link is reclaimed on repoint", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure("alice");
+  const current = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const stale = { ...current, metadata: { ...current.metadata, id: "ifb_stranded", materializedFrom: { ...current.metadata.materializedFrom!, linkId: "ifl_missing" } }, spec: { ...current.spec, interfaceId: f.providers[1]!.metadata.id } };
+  expect(await f.stores.bindings.create(stale)).toBe(true);
+  const next = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: old.generation });
+  expect((await f.service.listBindings(f.providers[1]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.metadata.materializedFrom?.linkId)).toEqual([next.id]);
+  expect((await f.stores.bindings.get(stale.metadata.id))?.status.phase).toBe("Revoked");
+});
+
+test("competing preparation cannot leave the winning repoint without its principal grant", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure("alice");
+  let enteredReplace!: () => void;
+  let releaseReplace!: () => void;
+  const atReplace = new Promise<void>((resolve) => { enteredReplace = resolve; });
+  const blockedReplace = new Promise<void>((resolve) => { releaseReplace = resolve; });
+  const replace = f.stores.links.replace.bind(f.stores.links);
+  let first = true;
+  f.stores.links.replace = async (...args) => { if (first) { first = false; enteredReplace(); await blockedReplace; } return replace(...args); };
+  const winner = f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: old.generation });
+  await atReplace;
+  const prepared = (await f.service.listBindings(f.providers[1]!.metadata.id))[0]!;
+  let enteredRevoke!: () => void;
+  let releaseRevoke!: () => void;
+  const atRevoke = new Promise<void>((resolve) => { enteredRevoke = resolve; });
+  const blockedRevoke = new Promise<void>((resolve) => { releaseRevoke = resolve; });
+  const revoke = f.service.revokeBinding.bind(f.service);
+  let pause = true;
+  f.service.revokeBinding = async (...args) => { if (pause && args[1] === prepared.metadata.id) { pause = false; enteredRevoke(); await blockedRevoke; } return revoke(...args); };
+  const loser = f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: old.generation });
+  await atRevoke;
+  releaseReplace();
+  const selected = await winner;
+  releaseRevoke();
+  await expect(loser).rejects.toThrow();
+  expect((await f.service.listBindings(f.providers[1]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => b.metadata.materializedFrom?.linkId)).toEqual([selected.id]);
+  expect((await f.service.issueToken(f.providers[1]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+});
+
+test("linkId-less grant from an older generation is recreated during preparation", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure("alice");
+  const previous = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const revoke = f.service.revokeBinding.bind(f.service);
+  f.service.revokeBinding = async (...args) => { if (args[1] === previous.metadata.id) throw new Error("old cleanup interrupted"); return revoke(...args); };
+  await expect(f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: old.generation })).rejects.toThrow("old cleanup interrupted");
+  f.service.revokeBinding = revoke;
+  const stranded = { ...previous, metadata: { ...previous.metadata, generation: previous.metadata.generation + 1, materializedFrom: { ...previous.metadata.materializedFrom!, linkId: undefined } } };
+  expect(await f.stores.bindings.compareAndSet(stranded, previous.metadata.generation)).toBe(true);
+  const current = await f.stores.links.getCurrent({ consumerCapsuleId: "consumer", requirementKey: "tools" });
+  const next = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: current!.generation });
+  const bindings = await f.service.listBindings(f.providers[0]!.metadata.id);
+  expect(bindings.find((b) => b.metadata.id === previous.metadata.id)?.status.phase).toBe("Revoked");
+  expect(bindings.filter((b) => b.status.phase === "Ready").map((b) => b.metadata.materializedFrom?.linkId)).toEqual([next.id]);
+});
+
+test("a failed old-grant cleanup after link replacement converges at next sign-in", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure("alice");
+  const revoke = f.service.revokeBinding.bind(f.service);
+  let failed = false;
+  f.service.revokeBinding = async (...args) => { if (!failed) { failed = true; throw new Error("cleanup interrupted"); } return revoke(...args); };
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  await expect(f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: old.generation })).rejects.toThrow("cleanup interrupted");
+  f.service.revokeBinding = revoke;
+  const next = await f.stores.links.getCurrent({ consumerCapsuleId: "consumer", requirementKey: "tools" });
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [f.state.requirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => [b.metadata.materializedFrom?.linkId, b.spec.permissions])).toEqual([[next!.id, ["mcp.read"]]]);
+});
+
+test("a revoke that persists then throws still converges at next sign-in", async () => {
+  const f = await fixture();
+  const old = await f.link();
+  await f.ensure("alice");
+  const revoke = f.service.revokeBinding.bind(f.service);
+  let failed = false;
+  f.service.revokeBinding = async (...args) => { const result = await revoke(...args); if (!failed) { failed = true; throw new Error("projection interrupted"); } return result; };
+  f.state.requirement = { ...requirement, permissions: ["mcp.read"] };
+  await expect(f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: old.generation })).rejects.toThrow("projection interrupted");
+  f.service.revokeBinding = revoke;
+  const next = await f.stores.links.getCurrent({ consumerCapsuleId: "consumer", requirementKey: "tools" });
+  await f.service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId: "alice", requirements: [f.state.requirement] });
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready").map((b) => [b.metadata.materializedFrom?.linkId, b.spec.permissions])).toEqual([[next!.id, ["mcp.read"]]]);
+});
+
+test("an explicitly revoked current-link grant remains denied after stale cleanup", async () => {
+  const f = await fixture();
+  const link = await f.link();
+  await f.ensure("alice");
+  const binding = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  await f.service.revokeBinding(f.providers[0]!.metadata.id, binding.metadata.id);
+  await f.ensure("alice");
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready")).toHaveLength(0);
+  expect((await f.stores.links.get(link.id))?.state).toBe("active");
+});
+
+test("an explicitly revoked linkId-less current grant remains denied", async () => {
+  const f = await fixture();
+  await f.link();
+  await f.ensure("alice");
+  const binding = (await f.service.listBindings(f.providers[0]!.metadata.id))[0]!;
+  const linkless = { ...binding, metadata: { ...binding.metadata, generation: binding.metadata.generation + 1, materializedFrom: { ...binding.metadata.materializedFrom!, linkId: undefined } } };
+  expect(await f.stores.bindings.compareAndSet(linkless, binding.metadata.generation)).toBe(true);
+  await f.service.revokeBinding(f.providers[0]!.metadata.id, binding.metadata.id);
+  await f.ensure("alice");
+  expect((await f.service.listBindings(f.providers[0]!.metadata.id)).filter((b) => b.status.phase === "Ready")).toHaveLength(0);
+});
+
 test("same-provider version change revokes a linkId-less old grant before recreating it", async () => {
   const f = await fixture();
   const old = await f.link();
