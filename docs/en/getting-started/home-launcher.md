@@ -5,8 +5,8 @@ dashboard home (**Your apps**). **Open service** at the end of adding then opens
 new tab too. You declare it in the repository's `.well-known/takosumi.json`
 ([Repository manifest](../reference/repository-manifest.md)).
 
-A service without this declaration does not appear on the home screen. It is listed only under
-**Workloads**.
+An app without this declaration also gets a tile on the home screen, but its tile opens the app's
+page instead of a screen.
 
 ## What you need
 
@@ -106,8 +106,10 @@ to color tiles that have no icon (`site`, `storage`, `worker`), and does not sho
 | Short text of up to 16 characters | `📝` | A text icon (without `/`, `.`, or `:`) |
 
 `bindingRequests` asks Takosumi to give the person who adds the service permission to open the
-screen (`ui.open`). The home tile is shown only to people who have this permission, and only
-while the service is **Deployed** or **Update available**.
+screen (`ui.open`). The home tile opens the screen only for people who have this permission. The
+tile of an app whose install has not finished, or that is scheduled for uninstall or stopped, is
+drawn muted with a small mark (**Installing**, **Needs attention**, and so on), and opens the
+app's page.
 
 ## What the person adding sees
 
@@ -116,7 +118,7 @@ while the service is **Deployed** or **Update available**.
 2. On **Service added**, **Open service** opens the screen in a new tab.
 3. **Your apps** on the home screen shows a tile with the icon and `display.title` (or the
    service name if there is no title). Clicking it opens the screen in a new tab. Without an icon,
-   the tile shows the name's initials.
+   the tile shows the name's initials. **Manage** under the tile opens the app's page.
 
 If the URL cannot be confirmed within about 30 seconds, the screen says "The service was
 applied, but its launch link is not ready yet. Retry the check or open the service details."
@@ -126,8 +128,8 @@ The deployment has finished, so wait a little and check again.
 
 | What happens | Cause |
 | --- | --- |
-| The service is added, but no tile appears | `.well-known/takosumi.json` is not valid JSON, breaks the shape rules, or its `install.modules` key does not match the module folder. None of these is an error: the service is added as if there were no declaration |
-| A tile that was there disappeared | The service is neither **Deployed** nor **Update available** (for example **Error**, **Disabled**, or **Scheduled for deletion**) |
+| The tile opens the app's page instead of the screen | `.well-known/takosumi.json` is not valid JSON, breaks the shape rules, or its `install.modules` key does not match the module folder. None of these is an error: the service is added as if there were no declaration |
+| A tile that used to open the screen is muted and opens the app's page | The app is updating, scheduled for uninstall, or stopped. The tile's mark says which |
 | The pre-add check says "This app version's setup declaration needs to be fixed by its publisher." and shows **Cannot be added right now** | The shape is valid but does not fit the module (the `outputName` output is missing, or it is `sensitive`), or it asks for a permission the Takosumi you add to does not allow |
 | "The service was applied, but its launch link is not ready yet." keeps appearing | The output value does not meet the URL conditions above |
 

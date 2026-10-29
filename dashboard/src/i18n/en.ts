@@ -434,7 +434,6 @@ export const en: Record<keyof typeof ja, string> = {
   // --- Home -------------------------------------------------------------------
   "apps.title": "Apps",
   "apps.browse": "Find apps",
-  "apps.review": "Check",
   "apps.state.needsAttention": "Needs attention",
   "apps.state.updateAvailable": "Update available",
   "apps.state.installing": "Installing",
@@ -449,7 +448,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.start.titleEmpty": "Install your first app",
   "apps.start.bodyEmpty": "Choose one in the Store, or install from a Git repository link.",
   "apps.start.optionStore": "Find apps",
-  "apps.listIncomplete": "Some apps' screens couldn't be loaded, so some Open buttons may be missing.",
+  "apps.listIncomplete": "Some apps' screens couldn't be loaded, so tapping some apps may open their app page instead of the app.",
 
 
   // --- Installed app page -----------------------------------------------------
