@@ -4,9 +4,8 @@
  * The tracking authority already exists in the durable lifecycle ledger:
  * Capsule.currentStateVersionId -> StateVersion.createdByRunId -> ApplyRun ->
  * PlanRun.sourceSnapshotId. Restore-created StateVersions follow their exact
- * restoredFromStateVersionId edge recursively. This module deliberately does
- * not read or mutate Source.defaultRef: that field remains the shared Source's
- * default sync address, not per-Capsule deployment state.
+ * restoredFromStateVersionId edge recursively. The app-owned Source lane follows this adopted snapshot. The immutable
+ * execution provenance remains the StateVersion and PlanRun lineage.
  */
 
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
@@ -41,6 +40,7 @@ export async function getCapsuleAdoptedSourceSnapshot(
   store: CapsuleSourceRevisionReader,
   capsule: Capsule,
 ): Promise<SourceSnapshot | undefined> {
+  if (capsule.status === "destroyed") return undefined;
   if (!capsule.currentStateVersionId) {
     if (capsule.currentStateGeneration !== 0) {
       throw lineageMismatch(

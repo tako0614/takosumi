@@ -527,7 +527,7 @@ async function publicCapsuleWithAdoptedSourceRevision(
   capsule: Capsule,
 ): Promise<PublicCapsule> {
   const projected = publicCapsule(capsule);
-  if (!capsule.currentStateVersionId) return projected;
+  if (capsule.status === "destroyed" || !capsule.currentStateVersionId) return projected;
   const adoptedSourceRevision =
     await operations.getCapsuleAdoptedSourceRevision(capsule.id);
   return adoptedSourceRevision
