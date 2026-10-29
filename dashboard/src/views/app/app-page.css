@@ -112,29 +112,6 @@
   .ap-history-link { margin-left: auto; }
 }
 
-/* Home: every installed app as a card; Open for apps with a screen. */
-.ap-home { display: grid; gap: var(--tg-s-5); min-width: 0; }
-.ap-home-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--tg-s-3); }
-.ap-home-head h1 { margin: 0; font-size: var(--tg-fs-2xl); letter-spacing: -0.02em; }
-.ap-home-count { margin-left: var(--tg-s-2); color: var(--tg-fg-muted); font-size: var(--tg-fs-base); font-weight: 500; }
-.ap-app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: var(--tg-s-4); margin: 0; padding: 0; list-style: none; }
-.ap-app-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--tg-s-3) var(--tg-s-4); align-content: start; height: 100%; padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); box-shadow: var(--tg-shadow-xs); min-width: 0; }
-.ap-app-card[data-app-state="needs_attention"] { border-color: var(--tg-danger); }
-.ap-app-card[data-app-state="update_available"] { border-color: var(--tg-info); }
-.ap-app-face { width: 3.25rem; height: 3.25rem; display: grid; place-items: center; overflow: hidden; border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); border: 1px solid var(--tg-line); font-weight: 700; }
-.ap-app-face img { width: 100%; height: 100%; object-fit: cover; }
-.ap-app-info { display: grid; gap: var(--tg-s-1); min-width: 0; align-content: center; }
-.ap-app-name { color: var(--tg-fg); font-weight: 650; text-decoration: none; overflow-wrap: anywhere; }
-.ap-app-name:hover, .ap-app-name:focus-visible { text-decoration: underline; }
-.ap-app-card-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); }
-.ap-app-manage { margin-left: auto; font-size: var(--tg-fs-sm); }
-
-@media (max-width: 39.99rem) {
-  .ap-app-grid { grid-template-columns: minmax(0, 1fr); }
-  .ap-app-card-actions .ap-open, .ap-app-card-actions > .tg-btn { flex: 1 1 auto; }
-  .ap-app-card-actions .ap-open > .tg-btn:first-child { flex: 1 1 auto; justify-content: center; }
-}
-
 .ap-sharing-form { display: grid; gap: 1rem; max-width: 36rem; margin-block: 1.5rem; }
 .ap-sharing-members { display: grid; gap: .75rem; padding: 0; list-style: none; }
 .ap-sharing-members li { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; }

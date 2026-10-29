@@ -350,9 +350,10 @@
   color: var(--tg-fg);
 }
 /* ===== app launcher (home) =====
- * A phone-home-screen grid: each service is one tappable icon tile (icon +
- * name), no status text / timestamps / ops fields. Tapping opens the live app
- * (launch URL) or its service screen. Needs-attention is a corner dot. */
+ * A phone-home-screen grid: each app is one tappable icon tile (icon + name),
+ * no timestamps / ops fields. Tapping opens the app's screen, or the app page
+ * for an app without one. A state that needs a word (要対応, 更新あり,
+ * インストール中, …) is a corner dot plus a one-line caption. */
 /* Section heading above a shelf of tiles ("あなたのアプリ" / "さがす"). Keeps the
    home reading as a library of apps rather than a bare, unlabelled grid. */
 .av-section-head {
@@ -476,6 +477,13 @@
   color: var(--tg-k-default-fg);
   box-shadow: var(--tg-tile-shadow);
 }
+/* The icon plus its status dot. The dot sits beside the face (not inside it)
+ * so a muted face does not fade the dot. */
+.av-tile-face {
+  position: relative;
+  display: block;
+  width: 100%;
+}
 .av-tile-dot {
   position: absolute;
   top: 8px;
@@ -488,6 +496,21 @@
 }
 .av-tile-dot-alert {
   background: var(--tg-danger);
+}
+.av-tile-dot-info {
+  background: var(--tg-info);
+}
+.av-tile-dot-quiet {
+  background: var(--tg-fg-subtle);
+}
+/* An app that cannot be opened yet (installing, never applied, failed, being
+ * removed, stopped) keeps its tile, quieter; its tap opens the app page. */
+.av-tile-waiting .av-tile-icon {
+  opacity: 0.5;
+  filter: grayscale(0.6);
+}
+.av-tile-waiting .av-tile-name {
+  color: var(--tg-fg-muted);
 }
 .av-tile-name {
   max-width: 100%;
@@ -927,18 +950,32 @@
   font-size: var(--tg-fs-sm);
 }
 
-/* Launcher tile status caption under the name: 更新があります for an available
- * update, 確認が必要 / エラー when something failed. */
+/* Launcher tile captions under the name: the state in a word (要対応,
+ * 更新あり, インストール中, …) and who shared the app. Up to two lines each, so
+ * a phone-width tile does not cut a state word off. */
+.av-tile-captions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-width: 100%;
+  margin-top: calc(-1 * var(--tg-s-2));
+}
 .av-tile-state {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   max-width: 100%;
   font-size: var(--tg-fs-xs);
   line-height: 1.3;
   color: var(--tg-fg-subtle);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
-.av-tile-state-update {
+.av-tile-state-info {
+  color: var(--tg-info);
+}
+.av-tile-state-warn {
   color: var(--tg-warn);
 }
 .av-tile-state-alert {

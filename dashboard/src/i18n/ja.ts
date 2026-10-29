@@ -446,7 +446,6 @@ export const ja = {
   // --- Home -------------------------------------------------------------------
   "apps.title": "アプリ",
   "apps.browse": "アプリを探す",
-  "apps.review": "確認する",
   "apps.state.needsAttention": "要対応",
   "apps.state.updateAvailable": "更新あり",
   "apps.state.installing": "インストール中",
@@ -461,7 +460,7 @@ export const ja = {
   "apps.start.titleEmpty": "最初のアプリをインストールしましょう",
   "apps.start.bodyEmpty": "ストアから選ぶか、Gitリポジトリのリンクからインストールします。",
   "apps.start.optionStore": "アプリを探す",
-  "apps.listIncomplete": "一部のアプリの画面を読み込めませんでした。「開く」が出ていないアプリがあるかもしれません。",
+  "apps.listIncomplete": "一部のアプリの画面を読み込めませんでした。タップしてもアプリが開かず、アプリのページが開くものがあるかもしれません。",
 
 
   // --- Installed app page -----------------------------------------------------

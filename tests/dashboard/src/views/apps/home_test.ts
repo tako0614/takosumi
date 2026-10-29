@@ -1,8 +1,9 @@
 /**
- * Home (`/`) shows every installed app as the "keep my apps" overview
- * (TASK-0115): apps without a screen, installing, needing attention and with
- * an update all appear, each with its state in words, and Open appears only
- * for screens an authorized Interface provides.
+ * Home (`/`) is the app launcher: every installed app is an icon tile with its
+ * name under it. Apps that open come first; apps that cannot be opened yet
+ * (installing, never applied, failed, being removed, stopped) still get a
+ * muted tile with a status mark that opens the app page. Open targets come
+ * only from authorized screens.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -11,6 +12,7 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dir, "../../../../../dashboard/src");
 const home = readFileSync(resolve(root, "views/apps/AppListView.tsx"), "utf8");
 const router = readFileSync(resolve(root, "index.tsx"), "utf8");
+const css = readFileSync(resolve(root, "styles/app-views.css"), "utf8");
 
 describe("Home", () => {
   test("lists every installed app, not only apps with a screen", () => {
@@ -19,29 +21,62 @@ describe("Home", () => {
     expect(home).toContain("state: appState(inst)");
     expect(home).toContain("listAccessibleApps()");
     expect(home).toContain("getCapsuleApp(entry.capsuleId)");
-    // No app is dropped for lacking a screen.
+    // No app is dropped for lacking a screen, and nothing is folded away.
     expect(home).not.toContain("if (!surfaces) continue");
-    expect(home).toContain(".sort(compareHomeApps)");
-    expect(home).toContain("appStateRank(a.state) - appStateRank(b.state)");
+    expect(home).not.toContain("<details");
+    expect(home).toContain("sortHomeApps(home.error ? [] : home.latest?.apps ?? [], homeAppName, locale())");
   });
 
-  test("says each app's state in words and opens only authorized screens", () => {
+  test("draws each app as a launcher tile: icon or monogram, name under it", () => {
+    expect(home).toContain('<ul class="av-launcher">');
+    expect(home).toContain('data-testid="home-app"');
+    expect(home).toContain('class="av-tile-icon"');
+    expect(home).toContain("monogramFrameClass={kindClass(props.app.category)}");
+    expect(home).toContain('<span class="av-tile-name">{name()}</span>');
+    expect(home).not.toContain("ap-app-card");
+    expect(css).toContain(".av-launcher {");
+    expect(css).toContain("grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));");
+  });
+
+  test("an open tile opens only an authorized screen; every other tile opens the app page", () => {
+    expect(home).toContain("listAuthorizedUiSurfaces(id)");
+    expect(home).toContain("surfaces = openableScreens(view.screens);");
+    expect(home).toContain("homeAppOpens(props.app) ? props.app.surfaces[0]?.url : undefined");
+    expect(home).toContain('target="_blank"');
+    expect(home).toContain('rel="noreferrer noopener"');
+    expect(home).toContain('aria-label={t("app.open.aria", { name: name() })}');
+    expect(home).toContain("const pageHref = () => appPageHref(props.app.inst.id);");
+    expect(home).toContain("href={pageHref()} aria-label={name()}");
+    expect(home).toContain('t("apps.manageAria", { name: name() })');
+    expect(home).not.toContain("currentStateVersions");
+    expect(home).not.toContain("installConfigs");
+    expect(home).not.toContain("window.open");
+  });
+
+  test("apps that cannot be opened yet stay visible, muted, with a status mark in words", () => {
     for (const key of [
       "apps.state.needsAttention",
       "apps.state.updateAvailable",
       "apps.state.installing",
       "apps.state.uninstalling",
+      "apps.state.stopped",
     ]) {
       expect(home).toContain(`"${key}"`);
     }
-    expect(home).toContain("listAuthorizedUiSurfaces(id)");
-    expect(home).toContain("<OpenAppButton surfaces={props.app.surfaces}");
-    expect(home).not.toContain("currentStateVersions");
-    expect(home).not.toContain("installConfigs");
-    expect(home).not.toContain("window.open");
-    // Each card's name opens its app page; the card has one primary action.
-    expect(home).toContain("const pageHref = () => appPageHref(props.app.inst.id);");
-    expect(home).toContain('t("apps.manageAria", { name: name() })');
+    expect(home).toContain('homeAppWaiting(props.app) ? "av-tile av-tile-waiting" : "av-tile"');
+    expect(home).toContain("av-tile-dot av-tile-dot-${state().kind}");
+    // The words are the tile link's accessible description, not color alone.
+    expect(home).toContain("aria-describedby={describedBy()}");
+    expect(home).toContain('<span class="av-tile-captions" id={captionId}>');
+    expect(css).toContain(".av-tile-waiting .av-tile-icon {");
+    // A shared app still says who shared it.
+    expect(home).toContain('t("app.sharing.sharedBy", { name: props.app.ownerDisplayName ?? "" })');
+  });
+
+  test("keeps the app count and the find-apps entry", () => {
+    expect(home).toContain('<span class="av-section-head-count">{apps().length}</span>');
+    expect(home).toContain('<a class="av-tile av-tile-add" href="/new">');
+    expect(home).toContain('t("apps.browse")');
   });
 
   test("uses legacy list only when app ownership is unavailable and retains the first-run panel", () => {
@@ -52,7 +87,7 @@ describe("Home", () => {
     expect(home).toContain('href="/new"');
   });
 
-  test("a failed screen read keeps the apps and says Open may be missing", () => {
+  test("a failed screen read keeps the apps and says some may not open", () => {
     expect(home).toContain("home.latest?.surfacesFailed");
     expect(home).toContain('t("apps.listIncomplete")');
     expect(home).toContain("refetch()");
