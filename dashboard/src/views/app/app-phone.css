@@ -1,0 +1,31 @@
+/* 「スマホで使う」 (AppPhoneSection): QR code beside the URL and its share
+   actions, then both phones' add-to-home-screen steps. Stacks under 640px. */
+
+.ap-phone { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--tg-s-5); min-width: 0; }
+/* Dark modules on a fixed light ground in both themes: phone cameras read
+   dark-on-light codes most reliably. The quiet zone is inside the SVG. */
+.ap-phone-qr { width: 11rem; margin: 0; overflow: hidden; border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-fixed-light-bg); }
+.ap-phone-qr svg { display: block; width: 100%; height: auto; }
+.ap-phone-qr-bg { fill: var(--tg-fixed-light-bg); }
+.ap-phone-qr-fg { fill: var(--tg-fixed-light-fg); }
+.ap-phone-noqr { max-width: 11rem; }
+.ap-phone-body { display: grid; gap: var(--tg-s-3); align-content: start; min-width: 0; }
+.ap-phone-url { display: grid; gap: var(--tg-s-1); min-width: 0; }
+.ap-phone-label { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.ap-phone-url code { display: block; padding: var(--tg-s-2) var(--tg-s-3); border: 1px solid var(--tg-line); border-radius: var(--tg-r-sm); background: var(--tg-code-bg); color: var(--tg-code-fg); font-family: var(--tg-font-mono); font-size: var(--tg-fs-sm); line-height: 1.5; overflow-wrap: anywhere; user-select: all; }
+.ap-phone-actions { display: grid; gap: var(--tg-s-2); min-width: 0; }
+.ap-phone-feedback { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.ap-phone-feedback[data-outcome="copied"] { color: var(--tg-success-text, var(--tg-success)); }
+.ap-phone-feedback[data-outcome="failed"] { color: var(--tg-danger-text, var(--tg-danger)); }
+
+.ap-phone-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: var(--tg-s-3); margin: 0; padding: 0; list-style: none; }
+.ap-phone-step { display: grid; gap: var(--tg-s-1); align-content: start; padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); min-width: 0; }
+.ap-phone-step[data-current] { border-color: var(--tg-info); }
+.ap-phone-step strong { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); }
+.ap-phone-step p { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; overflow-wrap: anywhere; }
+
+@media (max-width: 39.99rem) {
+  .ap-phone { grid-template-columns: minmax(0, 1fr); }
+  .ap-phone-qr { justify-self: center; width: min(12rem, 100%); }
+  .ap-phone-noqr { max-width: none; }
+}

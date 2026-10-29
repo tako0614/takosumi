@@ -133,6 +133,7 @@ import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { appPageHref } from "../../lib/app-links.ts";
+import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import {
   createLastGoodValue,
@@ -1808,6 +1809,10 @@ function Inner() {
                       )}
                     </Show>
                   </div>
+
+                  <Show when={!appHandoff && r().status === "succeeded" && r().type === "apply" && completedRunLaunchUrl()}>
+                    {(url) => <AppPhoneSection url={url()} appName={appName() ?? ""} />}
+                  </Show>
 
                   {/* destructive double-confirmation */}
                   <Show
