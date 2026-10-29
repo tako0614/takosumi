@@ -125,6 +125,11 @@ export interface InterfaceLink {
     readonly revokedAt: string;
     readonly reason?: string;
   };
+  /** Set when a provider app manager declined a pending link. */
+  readonly declined?: {
+    readonly declinedBy: string;
+    readonly declinedAt: string;
+  };
   readonly requestedBy: string;
   readonly createdAt: string;
   readonly updatedAt: string;

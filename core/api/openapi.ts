@@ -1321,6 +1321,15 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
           },
           additionalProperties: false,
         },
+        declined: {
+          type: "object",
+          required: ["declinedBy", "declinedAt"],
+          properties: {
+            declinedBy: { type: "string", minLength: 1 },
+            declinedAt: { type: "string", format: "date-time" },
+          },
+          additionalProperties: false,
+        },
         requestedBy: { type: "string", minLength: 1 },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },

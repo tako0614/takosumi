@@ -25,7 +25,7 @@ import { installAttemptHref } from "../../lib/app-links.ts";
 import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { appUninstallBanner, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
-import { t, type MessageKey } from "../../i18n/index.ts";
+import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { AppSection } from "./app-ui.tsx";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
@@ -55,6 +55,7 @@ const PROBLEM_ACTION: Readonly<Partial<Record<CapsuleAppProblem["code"], Capsule
   interface_link_unavailable: "fix_interface_link",
   interface_link_degraded: "fix_interface_link",
   interface_link_unset: "fix_interface_link",
+  interface_link_approval_pending: "review_interface_link",
   policy_blocked: "retry",
   run_failed: "retry",
   capsule_error: "retry",
@@ -78,6 +79,7 @@ export function problemKey(problem: CapsuleAppProblem): string {
     problem.connectionId ?? "",
     problem.screenFailure?.id ?? "",
     problem.requirementKey ?? "",
+    problem.consumerCapsuleId ?? "",
   ].join("\u0000");
 }
 
@@ -124,6 +126,14 @@ export default function AppAttentionSection(props: {
       primary !== undefined && problemKey(primary) === problemKey(problem);
   };
   const cards = () => app().problems.filter((problem) => !UNINSTALL_CODES.has(problem.code));
+  /** The app asking for a link, by the usedBy row the problem names. */
+  const requesterName = (problem: CapsuleAppProblem) => {
+    const row = app().links?.usedBy.find((link) =>
+      (problem.interfaceLinkId !== undefined && link.linkId === problem.interfaceLinkId) ||
+      (link.consumerCapsuleId === problem.consumerCapsuleId && link.requirementKey === problem.requirementKey)
+    );
+    return row?.otherApp?.displayName?.[locale()] || row?.otherApp?.name || t("common.unknown");
+  };
   const cardKeys = createMemo(() => cards().map(problemKey), undefined, { equals: sameKeys });
   const cardByKey = () => new Map(cards().map((problem) => [problemKey(problem), problem]));
   const scheduled = () => app().uninstall.scheduled;
@@ -158,6 +168,10 @@ export default function AppAttentionSection(props: {
   const revisionWaits = () => appVersionChangeBusy(app());
   const screenProblemsUnknown = () => appViewIncomplete(app(), "screen_problems");
   const hasError = () => app().problems.some((problem) => problem.severity === "error");
+  // Only information (a link request) and nothing in progress: not "in progress".
+  const onlyNotices = () =>
+    cards().length > 0 && cards().every((problem) => problem.severity === "info") &&
+    !pendingReview() && !preparing() && !awaitingInput() && !stalledRevision() && props.reviewRunId === undefined;
   const visible = () =>
     app().state !== "uninstalled" &&
     (cards().length > 0 || showUninstallCard() || Boolean(pendingReview()) || preparing() ||
@@ -194,6 +208,12 @@ export default function AppAttentionSection(props: {
     const action = PROBLEM_ACTION[problem.code];
     if (!action || isPrimary(problem, action) || (props.canUninstall === false && (isAppRemovalRun(problem.runType) || problem.code === "uninstall_failed"))) return null;
     switch (action) {
+      case "review_interface_link":
+        return (
+          <Button variant="secondary" type="button" onClick={() => props.actions.fixInterfaceLink()}>
+            {t("app.action.reviewInterfaceLink")}
+          </Button>
+        );
       case "fix_interface_link":
         return (
           <Button variant="secondary" type="button" onClick={() => props.actions.fixInterfaceLink()}>
@@ -255,7 +275,9 @@ export default function AppAttentionSection(props: {
             ? t("app.problem.title")
             : showUninstallCard()
               ? t("app.uninstall.title")
-              : t("app.progress.title")
+              : onlyNotices()
+                ? t("app.problem.noticeTitle")
+                : t("app.progress.title")
         }
         testId="app-problems"
       >
@@ -328,7 +350,7 @@ export default function AppAttentionSection(props: {
               return (
                 <Show when={problem()}>
                   {(problem) => (
-              <article class="ap-problem" data-problem={problem().code}>
+              <article class={problem().severity === "info" ? "ap-problem ap-problem-info" : "ap-problem"} data-problem={problem().code}>
                 <Switch>
                   <Match when={problem().code === "interface_link_unavailable"}>
                     <strong>{t("app.problem.interfaceLinkUnavailable")}</strong>
@@ -338,6 +360,9 @@ export default function AppAttentionSection(props: {
                   </Match>
                   <Match when={problem().code === "interface_link_unset"}>
                     <strong>{t("app.problem.interfaceLinkUnset")}</strong>
+                  </Match>
+                  <Match when={problem().code === "interface_link_approval_pending"}>
+                    <strong>{t("app.problem.interfaceLinkApprovalPending", { name: requesterName(problem()) })}</strong>
                   </Match>
                   <Match when={problem().code === "connection_unavailable"}>
                     <strong>{t("app.problem.connection")}</strong>

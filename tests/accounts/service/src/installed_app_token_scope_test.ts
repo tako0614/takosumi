@@ -425,4 +425,50 @@ describe("review round 3: delegate uninstall, rollback and Interface approval", 
     expect((await h.call("PUT", `/capsules/${OTHER}/interface-links/tools`, h.appToken(OTHER), { interfaceId: owned, expectedGeneration: revoked.generation })).status).toBe(200);
     expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(OTHER, "tools"))).toMatchObject({ state: "pending_approval" });
   }, 180_000);
+
+  test("a delegate token approves or declines a pending link only within its user's role on the provider app", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.read"], delivery: { type: "oauth2" } } as const;
+    const consumer = (await h.ledger.getCapsule(OTHER))!;
+    const config = (await h.ledger.getInstallConfig(consumer.installConfigId))!;
+    await h.ledger.putInstallConfig({ ...config, requiredInterfaces: [requirement] });
+    const STRANGER_APP = "cap_stranger_provider";
+    await h.ledger.putCapsule({ ...consumer, id: STRANGER_APP, name: STRANGER_APP, slug: STRANGER_APP, updatedAt: NOW });
+    expect(await h.core.appOwnership.initializeOwnershipIfMissing({
+      capsuleId: STRANGER_APP, ownerAccountId: "acct_stranger", ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${STRANGER_APP}`,
+    })).toBe(true);
+    const iface = async (owner: string) => (await h.core.interfaces.create({
+      workspaceId: WORKSPACE, name: `${owner}-tools`, ownerRef: { kind: "Capsule", id: owner },
+      spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: `https://${owner}.example.test/mcp` } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } },
+    })).metadata.id;
+    const owned = await iface(THIRD_PARTY);
+    const stranger = await iface(STRANGER_APP);
+    const latest = async () => (await h.core.interfaces.getLatestCapsuleInterfaceLink(OTHER, "tools"))!;
+    let lastLink = { id: "" };
+    const decide = (providerId: string, verb: "approve" | "decline", credential: Record<string, string>, expectedGeneration: number) =>
+      h.call("POST", `/capsules/${providerId}/interface-links/${lastLink.id}/${verb}`, credential, { expectedGeneration });
+
+    // The user has no role on the stranger's app: its pending link stays pending.
+    expect((await h.call("PUT", `/capsules/${OTHER}/interface-links/tools`, h.session(USER), { interfaceId: stranger, expectedGeneration: 0 })).status).toBe(200);
+    lastLink = await latest();
+    expect(lastLink).toMatchObject({ state: "pending_approval", providerCapsuleId: STRANGER_APP });
+    expect(await decide(STRANGER_APP, "approve", h.appToken(DELEGATE), 1)).toMatchObject({ status: 403 });
+    expect(await decide(STRANGER_APP, "decline", h.appToken(DELEGATE), 1)).toMatchObject({ status: 403 });
+    // The provider app's own token never decides, even when it acts for that app's owner.
+    expect(await decide(STRANGER_APP, "approve", h.appToken(STRANGER_APP, WORKSPACE, "acct_stranger"), 1)).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect((await latest()).state).toBe("pending_approval");
+
+    // After an unlink, a link to an app the user owns, created by a non-delegate app token, waits.
+    expect((await h.call("DELETE", `/capsules/${OTHER}/interface-links/tools`, h.session(USER), { expectedGeneration: 1 })).status).toBe(200);
+    expect((await h.call("PUT", `/capsules/${OTHER}/interface-links/tools`, h.appToken(OTHER), { interfaceId: owned, expectedGeneration: 2 })).status).toBe(200);
+    lastLink = await latest();
+    expect(lastLink).toMatchObject({ state: "pending_approval", providerCapsuleId: THIRD_PARTY, generation: 3 });
+    // The consumer app's own token cannot decide for the provider; THIRD_PARTY's own token neither.
+    expect(await decide(THIRD_PARTY, "approve", h.appToken(OTHER), 3)).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await decide(THIRD_PARTY, "approve", h.appToken(THIRD_PARTY), 3)).toMatchObject({ status: 403, code: "app_access_denied" });
+    // The delegate acts for its user, who owns the provider app.
+    expect(await decide(THIRD_PARTY, "approve", h.appToken(DELEGATE), 3)).toMatchObject({ status: 200 });
+    expect(await latest()).toMatchObject({ state: "active", approval: { kind: "provider_approved", approvedBy: USER } });
+  }, 180_000);
 });

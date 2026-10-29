@@ -3,7 +3,9 @@ import type { D1PreparedStatement, D1Result } from "../../../../worker/src/bindi
 import type { WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
 import { TAKOSUMI_API_VERSION } from "takosumi-contract";
 import type { Interface, InterfaceBinding, InterfaceLink } from "takosumi-contract/interfaces";
-import { createD1InterfaceStores, createInMemoryInterfaceStores, createSqlInterfaceStores, type InterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import { createD1InterfaceStores, createInMemoryInterfaceStores, createSqlInterfaceStores, InterfaceService, type InterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
+import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
@@ -195,6 +197,55 @@ for (const backend of backends) {
       const newestGuard = { ...guard, managementEpoch: 3 };
       expect(await stores.links.compareAndSet(approved, 1, newestGuard)).toBe(true);
       expect(await stores.links.replace({ record: { ...replacement, generation: 4 }, expected: approved, revoked: revoke(approved) }, newestGuard)).toBe(true);
+    } finally { await close(); }
+  });
+
+  test(`InterfaceService provider approve and decline keep store parity and the management fence (${backend.label})`, async () => {
+    const { stores, close, setManagement } = await backend.setup();
+    try {
+      await setManagement("active", 1);
+      const requirement = { key: "storage", interface: { type: "example.storage", version: "1" }, permissions: ["storage.read", "storage.write"], delivery: { type: "oauth2" } } as const;
+      const capsules = new Map(["consumer", "consumer_two", "provider"].map((id) => [id, { id, workspaceId: "workspace", name: id, installConfigId: "config", status: "active" } as Capsule]));
+      const service = new InterfaceService({
+        stores, now: () => NOW, linkApprovalPolicy: { evaluate: async () => undefined }, oauth2ResourceAuthorizer: () => true,
+        credentialIssuer: { issuePrincipalOAuth2Token: async () => ({ accessToken: "runtime-token", expiresAt: "2026-10-28T00:01:00.000Z" }) },
+        capsules: {
+          getCapsule: async (id) => { const capsule = capsules.get(id); if (!capsule) throw new OpenTofuControllerError("not_found", "Capsule not found"); return capsule; },
+          getInstallConfig: async () => ({ requiredInterfaces: [requirement] }) as unknown as InstallConfig,
+        },
+      });
+      const iface = await service.create({ workspaceId: "workspace", name: "storage", ownerRef: { kind: "Capsule", id: "provider" }, spec: { type: "example.storage", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: "https://provider.example.test/storage" } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } } });
+      const select = async (capsuleId: string) => (await service.ensureCapsuleInterfaceLinks({ workspaceId: "workspace", capsuleId, requirements: [requirement], selections: [{ requirementKey: "storage", interfaceId: iface.metadata.id, selection: "explicit" }] }))[0]!;
+      const first = await select("consumer");
+      const second = await select("consumer_two");
+      expect([first.state, second.state]).toEqual(["pending_approval", "pending_approval"]);
+      expect((await service.listProviderInterfaceLinkRequests("provider")).map((record) => record.id).sort()).toEqual([first.id, second.id].sort());
+      const actor = { actorAccountId: "provider-owner", roles: [], requestId: "parity" };
+      const fence = (managementEpoch: number) => ({ assertCurrent: async (): Promise<WorkspaceManagementAuthority> => ({ workspaceId: "workspace", managementState: "active", managementEpoch }) });
+
+      await setManagement("frozen", 2);
+      await expect(service.approveInterfaceLink({ providerCapsuleId: "provider", linkId: first.id, expectedGeneration: first.generation }, actor, fence(1))).rejects.toMatchObject({ code: "conflict" });
+      expect(await stores.links.get(first.id)).toEqual(first);
+      await setManagement("active", 2);
+      await expect(service.declineInterfaceLink({ providerCapsuleId: "provider", linkId: second.id, expectedGeneration: second.generation }, actor, fence(1))).rejects.toMatchObject({ code: "conflict" });
+
+      await expect(service.approveInterfaceLink({ providerCapsuleId: "provider", linkId: first.id, expectedGeneration: first.generation, approvedPermissions: ["storage.read"] }, actor, fence(2))).rejects.toMatchObject({ code: "invalid_argument" });
+      const approved = await service.approveInterfaceLink({ providerCapsuleId: "provider", linkId: first.id, expectedGeneration: first.generation }, actor, fence(2));
+      expect(approved).toMatchObject({ state: "active", generation: 2, approvedPermissions: ["storage.read", "storage.write"], approval: { kind: "provider_approved", approvedBy: "provider-owner" } });
+      expect(await stores.links.get(first.id)).toEqual(approved);
+      const declined = await service.declineInterfaceLink({ providerCapsuleId: "provider", linkId: second.id, expectedGeneration: second.generation }, actor, fence(2));
+      expect(declined).toMatchObject({ state: "declined", generation: 2, approvedPermissions: [], declined: { declinedBy: "provider-owner" } });
+      expect(await stores.links.get(second.id)).toEqual(declined);
+      expect(await stores.links.getCurrent({ consumerCapsuleId: "consumer_two", requirementKey: "storage" })).toBeUndefined();
+      expect(await service.listProviderInterfaceLinkRequests("provider")).toEqual([]);
+
+      for (const capsuleId of ["consumer", "consumer_two"]) await service.ensureCapsuleRequiredInterfaces({ workspaceId: "workspace", capsuleId, principalId: `${capsuleId}_alice`, requirements: [requirement] });
+      const bindings = await service.listBindings(iface.metadata.id);
+      expect(bindings.map((binding) => [binding.spec.subjectRef.id, binding.spec.permissions])).toEqual([["consumer_alice", ["storage.read", "storage.write"]]]);
+      for (const permission of ["storage.read", "storage.write"]) {
+        expect((await service.issueToken(iface.metadata.id, { permission }, { workspaceId: "workspace", subjectId: "consumer_alice" })).access_token).toBe("runtime-token");
+      }
+      await expect(service.issueToken(iface.metadata.id, { permission: "storage.read" }, { workspaceId: "workspace", subjectId: "consumer_two_alice" })).rejects.toThrow("grant not found");
     } finally { await close(); }
   });
 

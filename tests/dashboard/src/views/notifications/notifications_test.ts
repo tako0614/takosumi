@@ -73,6 +73,25 @@ describe("Notifications", () => {
     }
   });
 
+  test("a provider's link decisions read as plain sentences, never raw actions", () => {
+    const previousLocale = locale();
+    const event = (action: string): ActivityEvent => ({
+      id: `evt_${action}`, workspaceId: "ws_alpha", action, targetType: "interface_link", targetId: "ifl_a",
+      metadata: { interfaceLinkId: "ifl_a", consumerCapsuleId: "cap_consumer", providerCapsuleId: "cap_provider" },
+      createdAt: "2026-10-29T00:00:00.000Z",
+    });
+    try {
+      setLocale("ja");
+      expect(describeActivityEvent(event("interface_link.approved")).title).toBe("連携の依頼を承認しました");
+      expect(describeActivityEvent(event("interface_link.declined")).title).toBe("連携の依頼を断りました");
+      setLocale("en");
+      expect(describeActivityEvent(event("interface_link.approved")).title).toBe("Approved a link request");
+      expect(describeActivityEvent(event("interface_link.declined")).title).toBe("Declined a link request");
+    } finally {
+      setLocale(previousLocale);
+    }
+  });
+
   test("notifications link to where each event is acted on, with no raw history screen", () => {
     expect(notificationsSource).not.toContain('href="/activity"');
     expect(notificationsSource).not.toContain("notif.viewRaw");
