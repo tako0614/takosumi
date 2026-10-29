@@ -201,11 +201,12 @@ describe("per-app ownership routes", () => {
     const ownership = port({ listTransfers: async () => transfers });
     const capsuleRoute = ["capsules", "cap1", "ownership-transfers"];
     const owner = await call(context("GET", "capsules/cap1/ownership-transfers?state=pending", "owner", ownership), capsuleRoute);
-    expect((await owner.json()).ownershipTransfers).toEqual(transfers);
+    const withNames = transfers.map((transfer) => ({ ...transfer, appDisplayName: "cap1", senderDisplayName: "Owner" }));
+    expect((await owner.json()).ownershipTransfers).toEqual(withNames);
     const recipient = await call(context("GET", "capsules/cap1/ownership-transfers?state=pending", "member", ownership), capsuleRoute);
-    expect((await recipient.json()).ownershipTransfers).toEqual([transfers[0]]);
+    expect((await recipient.json()).ownershipTransfers).toEqual([withNames[0]]);
     const incoming = await call(context("GET", "ownership-transfers?state=pending", "member", ownership), ["ownership-transfers"]);
-    expect((await incoming.json()).ownershipTransfers).toEqual([transfers[0]]);
+    expect((await incoming.json()).ownershipTransfers).toEqual([withNames[0]]);
     expect((await call(context("GET", "capsules/cap1/ownership-transfers?state=accepted", "owner", ownership), capsuleRoute)).status).toBe(400);
   });
 

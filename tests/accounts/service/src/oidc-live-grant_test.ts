@@ -121,6 +121,10 @@ async function liveGrantFixture() {
         },
       ],
     },
+    appOwnership: { getOwnership: async () => state.ownerAccountId ? {
+      capsuleId, ownerAccountId: state.ownerAccountId, ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}`,
+    } : undefined },
     appAccess: {
       resolveAppAccess: async (_subject: string, requestedCapsuleId: string) =>
         requestedCapsuleId === capsuleId && state.appRole

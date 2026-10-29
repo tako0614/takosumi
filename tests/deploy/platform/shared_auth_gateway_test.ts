@@ -464,3 +464,28 @@ test.each(["grant", "account", "membership"] as const)(
     expect(reads).toBe(1);
   },
 );
+
+test("trusted shared-auth cookies retain first-party authority for app members and transfers", async () => {
+  const accounts = new InMemoryAccountsStore();
+  accounts.saveAccount({ subject: "recipient" as never, createdAt: 1, updatedAt: 1 });
+  const authorization = {
+    resolveAppAccess: async () => ({ capsuleId: "cap_shared", role: "owner", ownerAccountId: "tsub_canonical", ownershipEpoch: 0 }),
+    listMembers: async () => ({ ownerAccountId: "tsub_canonical", ownershipEpoch: 0, members: [] }),
+    listTransfers: async () => [],
+    createTransfer: async () => ({ transferId: "transfer_shared", state: "pending" }),
+  };
+  const operations = { appAccess: authorization, appAuthorization: authorization,
+    capsules: { getCapsulesByIds: async () => [] } } as unknown as ControlPlaneOperations;
+  const env = configured(rpc) as CloudflareWorkerEnv;
+  const dependencies = { store: accounts, resolveOperations: async () => operations };
+  for (const path of ["/api/v1/capsules/cap_shared/members", "/api/v1/ownership-transfers"]) {
+    const response = await handlePlatformSharedAuthControlRequest(request(path), env, dependencies);
+    expect(response?.status).toBe(200);
+  }
+  const transfer = await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/ownership-transfers", {
+    method: "POST", headers: { cookie, origin, "content-type": "application/json" },
+    body: JSON.stringify({ toAccountId: "recipient" }),
+  }), env, dependencies);
+  expect(transfer?.status).toBe(201);
+  expect(await transfer?.json()).toEqual({ transferId: "transfer_shared", state: "pending" });
+});

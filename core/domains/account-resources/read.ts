@@ -32,7 +32,15 @@ function reader(query: Query, dialect: "postgres" | "d1"): AccountResourceReader
       const limit = clampPageLimit(page.limit);
       values.push(limit + 1);
       const legacyOwner = dialect === "postgres" ? "connection_json->>'ownerAccountId'" : "json_extract(connection_json,'$.ownerAccountId')";
-      const rows = await query<ConnectionRow>(`select id, owner_account_id, connection_json, created_at from ${prefix}connections where coalesce(owner_account_id, ${legacyOwner}) = ${parameter(1)}${after} order by created_at, id limit ${parameter(values.length)}`, values);
+      // Keep the physical owner predicate indexable; the null-owner branch is
+      // only the bounded pre-backfill compatibility read.
+      const rows = await query<ConnectionRow>(`select * from (
+        select id, owner_account_id, connection_json, created_at from ${prefix}connections
+          where owner_account_id = ${parameter(1)}${after}
+        union all
+        select id, owner_account_id, connection_json, created_at from ${prefix}connections
+          where owner_account_id is null and ${legacyOwner} = ${parameter(1)}${after}
+      ) owned_connections order by created_at, id limit ${parameter(values.length)}`, values);
       const connections = rows.map((row) => {
         const connection: ProviderConnection = typeof row.connection_json === "string" ? JSON.parse(row.connection_json) : row.connection_json;
         // The physical predicate is authority; JSON disagreement must not leak

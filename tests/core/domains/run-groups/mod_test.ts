@@ -2,6 +2,7 @@
 import { expect, test } from "bun:test";
 import { OpenTofuController, type OpenTofuPlanJob, type OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { computeGroupStatus, RunGroupsService } from "../../../../core/domains/run-groups/mod.ts";
 import type { Run } from "takosumi-contract/runs";
@@ -57,6 +58,13 @@ async function seed(store: InMemoryOpenTofuControlStore, name: string, status: "
   await seedProviderConnections(store, capsule);
   await store.putCapsule({ ...capsule, status });
 }
+async function seedOwnership(store: InMemoryOpenTofuControlStore, capsuleId: string) {
+  const ownership = new InMemoryAppOwnershipStore(store);
+  const capsule = (await store.getCapsule(capsuleId))!;
+  expect(await ownership.putOwnership({ capsuleId, ownerAccountId: "user_test", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}` }, 0)).toBe(true);
+  return ownership;
+}
 function fakeRun(status: Run["status"]): Run {
   return { id: `run_${status}`, workspaceId: "ws_test001", type: "plan", status, createdBy: "system", createdAt: "2026-10-28T00:00:00.000Z" };
 }
@@ -87,24 +95,41 @@ test("workspace update plans only source-stale Capsules in one unordered layer",
 test("trusted system RunGroup uses each current app owner for Runs and keeps system audit actor", async () => {
   const { store, controller } = service();
   await seed(store, "owned", "stale");
-  const capsule = (await store.getCapsule("cap_owned"))!;
-  await store.putCapsule({ ...capsule, ownerAccountId: "user_test", ownershipEpoch: 0,
-    managementState: "active", managementEpoch: 0 });
+  const appOwnership = await seedOwnership(store, "cap_owned");
   const events: unknown[] = [];
   const groups = new RunGroupsService({ store, controller, systemOwnedFlow: true,
-    actor: "system:run-group", activity: { record: async (event) => { events.push(event); return undefined; } } });
+    actor: "system:run-group", appOwnership, activity: { record: async (event) => { events.push(event); return undefined; } } });
   const result = await groups.createWorkspaceUpdate("ws_test001");
   expect(result.runs[0]?.createdBy).toBe("user_test");
   expect(events).toContainEqual(expect.objectContaining({ actorId: "system:run-group", action: "run_group.created" }));
 });
 
+test("trusted system RunGroup keeps the legacy system actor for ownerless stale apps", async () => {
+  const { store, controller } = service();
+  await seed(store, "legacy_ownerless", "stale");
+  const events: unknown[] = [];
+  const groups = new RunGroupsService({
+    store,
+    controller,
+    systemOwnedFlow: true,
+    actor: "system:run-group",
+    appOwnership: { getOwnership: async () => undefined } as never,
+    activity: { record: async (event) => { events.push(event); return undefined; } },
+  });
+  const result = await groups.createWorkspaceUpdate("ws_test001");
+  expect(result.runs[0]?.createdBy).toBe("system:run-group");
+  expect(events).toContainEqual(expect.objectContaining({
+    actorId: "system:run-group",
+    action: "run_group.created",
+  }));
+});
+
 test("public RunGroup actor must have current access to every owned app", async () => {
   const { store, controller } = service();
   await seed(store, "owned", "stale");
-  const capsule = (await store.getCapsule("cap_owned"))!;
-  await store.putCapsule({ ...capsule, ownerAccountId: "user_test", ownershipEpoch: 0,
-    managementState: "active", managementEpoch: 0 });
+  const appOwnership = await seedOwnership(store, "cap_owned");
   const groups = new RunGroupsService({ store, controller, systemOwnedFlow: true,
+    appOwnership,
     appAccess: { resolveAppAccess: async () => undefined,
       listAccessibleApps: async () => ({ apps: [] }) } });
   await expect(groups.createWorkspaceUpdate("ws_test001", "workspace_member"))

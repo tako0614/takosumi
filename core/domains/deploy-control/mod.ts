@@ -103,6 +103,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
+import { InMemoryAppOwnershipStore } from "../app-ownership/store.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -319,6 +320,11 @@ export type { RestoreRunLifecycleEvent } from "./run-engine/run_engine.ts";
 
 export function publicCapsule(capsule: Capsule): PublicCapsule {
   const {
+    ownerAccountId: _ownerAccountId,
+    ownershipEpoch: _ownershipEpoch,
+    managementState: _managementState,
+    managementEpoch: _managementEpoch,
+    storageRoot: _storageRoot,
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
     installingPrincipalId: _installingPrincipalId,
@@ -1098,6 +1104,8 @@ export function providersRequiringProviderBindings(
 export interface OpenTofuControllerDependencies {
   readonly validateUninstallRequester?: import("../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly store?: OpenTofuControlStore;
+  /** Physical app owner authority; Capsule JSON has no owner projection. */
+  readonly appOwnership?: Pick<import("../app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   /**
    * Explicit binding for the reference `opentofu.default` executor. It also
    * supplies optional source-sync/source-read methods to the Source domain.
@@ -1515,6 +1523,10 @@ export class OpenTofuController {
 
   constructor(dependencies: OpenTofuControllerDependencies = {}) {
     this.#store = dependencies.store ?? new InMemoryOpenTofuControlStore();
+    const appOwnership = dependencies.appOwnership ??
+      (this.#store instanceof InMemoryOpenTofuControlStore
+        ? new InMemoryAppOwnershipStore(this.#store)
+        : undefined);
     this.#runner = dependencies.runner;
     const runnerExecutors = new Map(dependencies.runnerExecutors ?? []);
     for (const executorId of runnerExecutors.keys()) {
@@ -1569,6 +1581,7 @@ export class OpenTofuController {
     this.#now = dependencies.now ?? (() => Date.now());
     this.#sourceLifecycle = new SourceLifecycleService({
       store: this.#store,
+      appOwnership,
       now: this.#now,
       newId: this.#newId,
       runRenewalIntervalMs: this.#runRenewalIntervalMs,
@@ -1618,6 +1631,7 @@ export class OpenTofuController {
     });
     this.#credentials = new RunCredentialBroker({
       store: this.#store,
+      appOwnership,
       newId: this.#newId,
       now: this.#now,
       ...(this.#vault ? { vault: this.#vault } : {}),
@@ -1695,6 +1709,7 @@ export class OpenTofuController {
     this.#seededProfiles = this.#seedRunnerProfiles(runnerProfiles);
     this.#runEngine = new RunEngine({
       store: this.#store,
+      appOwnership,
       validateUninstallRequester: dependencies.validateUninstallRequester,
       runnerExecutors: this.#runnerExecutors,
       sourcesService: this.#sourcesService,

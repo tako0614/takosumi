@@ -14,6 +14,7 @@ import type { OpenTofuController } from "../deploy-control/mod.ts";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { AppAccessResolver } from "../../../contract/app-access.ts";
+import type { AppOwnershipStore } from "../app-ownership/store.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
@@ -42,6 +43,8 @@ export interface RunGroupsServiceDependencies {
   /** Set only by the trusted service composition for system-owned group work. */
   readonly systemOwnedFlow?: boolean;
   readonly appAccess?: AppAccessResolver;
+  /** Canonical owner and ownership epoch for system-owned stale-app plans. */
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
 }
@@ -61,6 +64,7 @@ export class RunGroupsService {
   readonly #actor?: string;
   readonly #systemOwnedFlow: boolean;
   readonly #appAccess?: AppAccessResolver;
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #activity: ActivityRecorder;
 
   constructor(dependencies: RunGroupsServiceDependencies) {
@@ -74,6 +78,7 @@ export class RunGroupsService {
     this.#actor = dependencies.actor;
     this.#systemOwnedFlow = dependencies.systemOwnedFlow === true;
     this.#appAccess = dependencies.appAccess;
+    this.#appOwnership = dependencies.appOwnership;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
   }
 
@@ -294,24 +299,29 @@ export class RunGroupsService {
   }
 
   async #runActor(capsule: Capsule, actorAccountId?: string): Promise<string | undefined> {
+    const ownership = this.#appOwnership
+      ? await this.#appOwnership.getOwnership(capsule.id)
+      : undefined;
+    const ownerAccountId = ownership?.ownerAccountId;
+    const ownershipEpoch = ownership?.ownershipEpoch;
     if (actorAccountId) {
       if (actorAccountId.startsWith("system:")) {
         throw new OpenTofuControllerError("permission_denied", "System actor is not an account authority");
       }
-      if (!capsule.ownerAccountId) return actorAccountId;
+      if (!ownerAccountId) return actorAccountId;
       const access = await this.#appAccess?.resolveAppAccess(actorAccountId, capsule.id);
-      if (!access || access.ownerAccountId !== capsule.ownerAccountId ||
-        access.ownershipEpoch !== capsule.ownershipEpoch ||
+      if (!access || access.ownerAccountId !== ownerAccountId ||
+        (ownershipEpoch !== undefined && access.ownershipEpoch !== ownershipEpoch) ||
         (access.role !== "owner" && access.role !== "member")) {
         throw new OpenTofuControllerError("permission_denied", "RunGroup actor has no current app access");
       }
       return actorAccountId;
     }
     if (!this.#systemOwnedFlow) return this.#actor;
-    if (!capsule.ownerAccountId?.trim()) {
-      throw new OpenTofuControllerError("failed_precondition", "App owner is unavailable for scheduled RunGroup");
-    }
-    return capsule.ownerAccountId;
+    // Legacy Capsules without a backfilled app owner keep the historical
+    // system actor so stale auto-plans remain runnable after owner minting is
+    // deliberately skipped. Backfilled apps use their actual owner actor.
+    return ownerAccountId?.trim() || this.#actor;
   }
 
   /** Reads the member Runs of a parsed graph through the controller's getRun. */

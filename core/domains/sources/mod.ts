@@ -1,3 +1,5 @@
+import { InMemoryAppOwnershipStore, type AppOwnershipStore } from "../app-ownership/store.ts";
+import { InMemoryOpenTofuControlStore } from "../deploy-control/store.ts";
 import type { GitInstallPlanStore } from "../install-plans/store.ts";
 import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
 import { sourceCreatorPlanAllowsRetirement, sourceCreatorPlanMatchesSource } from "./retirement_policy.ts";
@@ -155,6 +157,7 @@ export interface EnsureOwnedSourceRequest {
 }
 
 export interface SourcesServiceDependencies {
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly store: OpenTofuControlStore;
   readonly plans?: Pick<GitInstallPlanStore, "get">;
   /** Host authority for opaque durable source-archive references. */
@@ -175,6 +178,7 @@ export interface SourcesServiceDependencies {
 }
 
 export class SourcesService {
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #store: OpenTofuControlStore;
   readonly #plans?: Pick<GitInstallPlanStore, "get">;
   readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
@@ -192,6 +196,8 @@ export class SourcesService {
 
   constructor(deps: SourcesServiceDependencies) {
     this.#store = deps.store;
+    this.#appOwnership = deps.appOwnership ?? (deps.store instanceof InMemoryOpenTofuControlStore
+      ? new InMemoryAppOwnershipStore(deps.store) : undefined);
     this.#plans = deps.plans;
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#enqueue = deps.enqueueSourceSync ?? (() => Promise.resolve());
@@ -894,10 +900,9 @@ export class SourcesService {
     }
 
     const runs: CreateSourceSyncResponse[] = [];
-    const ownerCapsule = stored.ownerCapsuleId
-      ? await this.#store.getCapsule(stored.ownerCapsuleId)
-      : undefined;
-    const reconciliationActor = ownerCapsule?.ownerAccountId;
+    const ownership = stored.ownerCapsuleId
+      ? await this.#appOwnership?.getOwnership(stored.ownerCapsuleId) : undefined;
+    const reconciliationActor = ownership?.ownerAccountId;
     for (const address of addresses.values()) {
       runs.push(await this.#createSync(stored.id, { intent: "observe", dedupe: true }, address, authority, reconciliationActor));
     }
@@ -1081,14 +1086,13 @@ export class SourcesService {
     const ownerCapsule = stored.ownerCapsuleId
       ? await this.#store.getCapsule(stored.ownerCapsuleId)
       : undefined;
-    const appAuthorityRequired = ownerCapsule !== undefined && (
-      ownerCapsule.ownerAccountId !== undefined || ownerCapsule.ownershipEpoch !== undefined ||
-      ownerCapsule.managementState !== undefined);
+    const ownership = ownerCapsule ? await this.#appOwnership?.getOwnership(ownerCapsule.id) : undefined;
+    const appAuthorityRequired = ownership !== undefined;
     // A Source is reserved before its initial Capsule exists. Legacy Capsules
     // also retain their Workspace admission until the ownership expand lands.
     if (appAuthorityRequired && (!actorAccountId?.trim() ||
-      ownerCapsule.ownerAccountId === undefined || ownerCapsule.managementState !== "active" ||
-      !Number.isSafeInteger(ownerCapsule.ownershipEpoch) || ownerCapsule.ownershipEpoch! < 0)) {
+      !ownership.ownerAccountId || ownership.managementState !== "active" ||
+      !Number.isSafeInteger(ownership.ownershipEpoch) || ownership.ownershipEpoch < 0)) {
       throw new OpenTofuControllerError("failed_precondition",
         "App-owned Source sync requires a trusted current actor and ownership epoch.",
         { reason: "app_access_denied" });
@@ -1112,7 +1116,7 @@ export class SourcesService {
       kind: "source_sync",
       workspaceId: stored.workspaceId,
       sourceId,
-      ...(appAuthorityRequired ? { actorAccountId, ownershipEpoch: ownerCapsule.ownershipEpoch } : {}),
+      ...(ownership ? { actorAccountId, ownershipEpoch: ownership.ownershipEpoch } : {}),
       url: stored.url,
       ref: runRef,
       path: runPath,
@@ -1829,9 +1833,10 @@ export class SourcesService {
   ): Promise<void> {
     const connection = await this.#store.getConnection(connectionId);
     const capsule = ownerCapsuleId ? await this.#store.getCapsule(ownerCapsuleId) : undefined;
-    if (connection?.scope === "workspace" && connection.workspaceId === workspaceId && capsule?.ownerAccountId === undefined) return;
-    if (connection && (connection.scope === "personal" || capsule?.ownerAccountId !== undefined || (ownerCapsuleId && !capsule))) {
-      const ownerAccountId = capsule?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
+    const ownership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
+    if (connection?.scope === "workspace" && connection.workspaceId === workspaceId && ownership === undefined) return;
+    if (connection && (connection.scope === "personal" || ownership !== undefined || (ownerCapsuleId && !capsule))) {
+      const ownerAccountId = ownership?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
       if (ownerAccountId && connection.ownerAccountId === ownerAccountId) return;
       throw new OpenTofuControllerError("connection_not_owned_by_app_owner", "Source connection is not owned by the app owner");
     }

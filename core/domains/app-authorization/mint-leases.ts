@@ -8,6 +8,8 @@ export interface AppMintLease {
   readonly id: string;
   readonly capsuleId: string;
   readonly runId: string;
+  /** Run claim captured at begin; a replacement runner cannot finish it. */
+  readonly runLeaseToken: string;
   readonly ownerAccountId: string;
   readonly ownershipEpoch: number;
   readonly managementEpoch: number;
@@ -185,8 +187,8 @@ function canonicalActors(snapshot: Snapshot, input: AppMintLeaseBeginInput): str
 }
 
 function newLease(input: AppMintLeaseBeginInput, actorAccountIds: readonly string[],
-  connections: readonly AppMintConnectionSnapshot[], now: number, ttlMs: number): AppMintLease {
-  return { id: crypto.randomUUID(), capsuleId: input.capsuleId, runId: input.runId,
+  connections: readonly AppMintConnectionSnapshot[], runLeaseToken: string, now: number, ttlMs: number): AppMintLease {
+  return { id: crypto.randomUUID(), capsuleId: input.capsuleId, runId: input.runId, runLeaseToken,
     ownerAccountId: input.expectedOwnerAccountId, ownershipEpoch: input.expectedOwnershipEpoch,
     managementEpoch: input.expectedManagementEpoch, actorAccountIds, connections, expiresAt: now + ttlMs,
     createdAt: new Date(now).toISOString() };
@@ -315,7 +317,7 @@ export class SqlAppMintLeaseStore implements AppMintLeaseStore {
       const snapshot = await this.#snapshot(tx, input);
       const ids = snapshot && canonicalActors(snapshot, input);
       if (!snapshot || !ids || !await this.#members(tx, snapshot.capsule, input.capsuleId, ids)) return undefined;
-      const lease = newLease(input, ids, snapshot.connections, validNow(this.#now), this.#ttlMs);
+      const lease = newLease(input, ids, snapshot.connections, snapshot.run.lease_token!, validNow(this.#now), this.#ttlMs);
       const guard = pgGuard(snapshot, input, ids, lease.connections, 9);
       await tx.query(`insert into takosumi_app_credential_mint_leases
         (id,capsule_id,run_id,owner_account_id,ownership_epoch,management_epoch,actor_account_ids_json,expires_at,created_at)
@@ -335,7 +337,7 @@ export class SqlAppMintLeaseStore implements AppMintLeaseStore {
       const row = (await tx.query<Record<string, unknown>>(
         `select * from takosumi_app_credential_mint_leases where id=$1 for update`, [lease.id])).rows[0];
       if (!sameLease(row, lease)) return false;
-      const ids = disposition === "issued" && snapshot && lease.expiresAt > validNow(this.#now)
+      const ids = disposition === "issued" && snapshot && snapshot.run.lease_token === lease.runLeaseToken && lease.expiresAt > validNow(this.#now)
         ? canonicalActors(snapshot, input) : undefined;
       if (ids && snapshot && await this.#members(tx, snapshot.capsule, lease.capsuleId, ids)) {
         const guard = pgGuard(snapshot, input, ids, lease.connections, 10);
@@ -431,7 +433,7 @@ export class D1AppMintLeaseStore implements AppMintLeaseStore {
     const snapshot = await this.#snapshot(input);
     const ids = snapshot && canonicalActors(snapshot, input);
     if (!snapshot || !ids) return undefined;
-    const lease = newLease(input, ids, snapshot.connections, validNow(this.#now), this.#ttlMs);
+    const lease = newLease(input, ids, snapshot.connections, snapshot.run.lease_token!, validNow(this.#now), this.#ttlMs);
     const guard = this.#guard(snapshot, input, ids, lease.connections);
     const result = await this.#db.prepare(`insert into app_credential_mint_leases
       (id,capsule_id,run_id,owner_account_id,ownership_epoch,management_epoch,actor_account_ids_json,expires_at,created_at)
@@ -446,7 +448,7 @@ export class D1AppMintLeaseStore implements AppMintLeaseStore {
     const input = leaseInput(lease);
     const snapshot = disposition === "issued" ? await this.#snapshot(input) : undefined;
     const ids = snapshot && canonicalActors(snapshot, input);
-    const authorized = !!(ids && snapshot && lease.expiresAt > validNow(this.#now));
+    const authorized = !!(ids && snapshot && snapshot.run.lease_token === lease.runLeaseToken && lease.expiresAt > validNow(this.#now));
     const guard = authorized ? this.#guard(snapshot!, input, ids!, lease.connections) : undefined;
     const first = this.#db.prepare(`delete from app_credential_mint_leases where id=? and capsule_id=?
       and run_id=? and owner_account_id=? and ownership_epoch=? and management_epoch=?
@@ -476,6 +478,7 @@ export class InMemoryAppMintLeaseStore implements AppMintLeaseStore {
   }
   async #snapshot(input: AppMintLeaseBeginInput): Promise<Snapshot | undefined> {
     const cap = await this.#store.getCapsule(input.capsuleId);
+    const ownership = this.#store.getCapsuleOwnership(input.capsuleId);
     const plan = await this.#store.getPlanRun(input.runId);
     const apply = plan ? undefined : await this.#store.getApplyRun(input.runId);
     const sourceRun = !plan && !apply ? await this.#store.getSourceSyncRun(input.runId) : undefined;
@@ -491,11 +494,11 @@ export class InMemoryAppMintLeaseStore implements AppMintLeaseStore {
     }
     const connections = connectionSnapshots(input, rows);
     if (!connections) return undefined;
-    const capsule: CapsuleRow = { owner_account_id: cap.ownerAccountId ?? null,
-      ownership_epoch: cap.ownershipEpoch ?? 0, management_state: cap.managementState ?? "active",
-      management_epoch: cap.managementEpoch ?? 0, space_id: cap.workspaceId, source_id: cap.sourceId ?? null };
+    const capsule: CapsuleRow = { owner_account_id: ownership?.ownerAccountId ?? null,
+      ownership_epoch: ownership?.ownershipEpoch ?? 0, management_state: ownership?.managementState ?? "active",
+      management_epoch: ownership?.managementEpoch ?? 0, space_id: cap.workspaceId, source_id: cap.sourceId ?? null };
     const row = (value: typeof run, kind: string): RunRow => ({ id: value.id, kind, status: value.status,
-      lease_token: value.status === "running" ? "in-memory" : null, space_id: value.workspaceId,
+      lease_token: this.#store.getRunLeaseToken(value.id) ?? null, space_id: value.workspaceId,
       installation_id: "capsuleId" in value ? value.capsuleId ?? null : null,
       source_id: "sourceId" in value ? value.sourceId ?? null : null, run_json: value });
     return { capsule, run: row(run, sourceRun ? "source_sync" : apply ? "apply" : "plan"), connections,
@@ -511,7 +514,7 @@ export class InMemoryAppMintLeaseStore implements AppMintLeaseStore {
     const snapshot = await this.#snapshot(input);
     const ids = snapshot && canonicalActors(snapshot, input);
     if (!snapshot || !ids || !this.#members(input.capsuleId, input.expectedOwnerAccountId, ids)) return undefined;
-    const lease = newLease(input, ids, snapshot.connections, validNow(this.#now), this.#ttlMs);
+    const lease = newLease(input, ids, snapshot.connections, snapshot.run.lease_token!, validNow(this.#now), this.#ttlMs);
     this.#leases.set(lease.id, lease);
     return lease;
   }
@@ -522,7 +525,7 @@ export class InMemoryAppMintLeaseStore implements AppMintLeaseStore {
     if (disposition !== "issued" || lease.expiresAt <= validNow(this.#now)) return false;
     const snapshot = await this.#snapshot(leaseInput(lease));
     const ids = snapshot && canonicalActors(snapshot, leaseInput(lease));
-    return !!(ids && snapshot &&
+    return !!(ids && snapshot && snapshot.run.lease_token === lease.runLeaseToken &&
       JSON.stringify(snapshot.connections) === JSON.stringify(lease.connections) &&
       this.#members(lease.capsuleId, lease.ownerAccountId, ids));
   }

@@ -2272,10 +2272,11 @@ async function createCapsule(
   }
   const requestedBindings = requestedProviderBindings(plan);
   const capsuleId = deterministicInitialCapsuleId(plan.id);
-  let currentOwner = plan.createdBy;
+  let currentOwner = ctx.session.subject;
   try {
     const existingCapsule = await operations.capsules.getCapsule(capsuleId);
-    if (existingCapsule.ownerAccountId) currentOwner = existingCapsule.ownerAccountId;
+    currentOwner = (await capsuleOwnerAuthority(operations, existingCapsule))
+      .ownerAccountId ?? currentOwner;
   } catch (error) {
     if (controllerErrorCode(error) !== "not_found") throw error;
   }
@@ -2846,9 +2847,10 @@ async function createOrObservePlanRun(
   const exactRunId = plan.planRunId ?? deterministicPlanRunId(plan.id);
   const capsule = await operations.capsules.getCapsule(plan.capsuleId!);
   assertCapsuleMatches(capsule, plan);
+  const ownership = await capsuleOwnerAuthority(operations, capsule);
   // The install plan's creator is the authenticated Principal captured at
   // creation. A synthetic coordinator id is only valid for legacy Capsules.
-  const planActor = capsule.ownerAccountId === undefined
+  const planActor = !ownership.canonical
     ? installPlanRunActor(plan.id)
     : plan.createdBy;
   let run: Run | undefined;
@@ -2875,7 +2877,7 @@ async function createOrObservePlanRun(
     plan,
     exactRunId,
     planActor,
-    existingRun && capsule.ownerAccountId !== undefined,
+    existingRun && ownership.canonical,
   );
   if (
     run.status === "failed" ||
@@ -2896,6 +2898,20 @@ async function createOrObservePlanRun(
     });
   }
   return progressed(plan, { planRunId: run.id });
+}
+
+async function capsuleOwnerAuthority(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<{ readonly canonical: boolean; readonly ownerAccountId?: string }> {
+  const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+  if (ownership) {
+    return { canonical: true, ownerAccountId: ownership.ownerAccountId };
+  }
+  const workspace = await operations.workspaces.getWorkspace(capsule.workspaceId);
+  return workspace.ownerUserId
+    ? { canonical: false, ownerAccountId: workspace.ownerUserId }
+    : { canonical: false };
 }
 
 /**

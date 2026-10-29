@@ -1594,6 +1594,7 @@ function corePlanElapsedDiagnostic(timings: CorePlanElapsedTimings): RunDiagnost
 export interface RunEngineDependencies {
   readonly validateUninstallRequester?: import("../../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly store: OpenTofuControlStore;
+  readonly appOwnership?: Pick<import("../../app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   /** Exact executor-id to runner adapter bindings supplied by the host. */
   readonly runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly sourcesService?: SourcesService;
@@ -1639,6 +1640,7 @@ export interface RunEngineDependencies {
 export class RunEngine {
   readonly #validateUninstallRequester?: import("../../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly #store: OpenTofuControlStore;
+  readonly #appOwnership?: Pick<import("../../app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   readonly #runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly #sourcesService?: SourcesService;
   readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
@@ -1693,6 +1695,7 @@ export class RunEngine {
   constructor(deps: RunEngineDependencies) {
     this.#validateUninstallRequester = deps.validateUninstallRequester;
     this.#store = deps.store;
+    this.#appOwnership = deps.appOwnership;
     this.#runnerExecutors = deps.runnerExecutors;
     this.#sourcesService = deps.sourcesService;
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
@@ -2466,8 +2469,9 @@ export class RunEngine {
     // Automatic app policy delegates authorization to its current owner;
     // audit keeps the system trigger distinct from that account principal.
     const eventActor = internal.autoApplyRequested ? "system:auto-update" : context.actor;
+    const appOwnership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
     const automaticProvenance = internal.autoApplyRequested
-      ? { automatic: true, ...(capsule?.ownerAccountId !== undefined && context.actor
+      ? { automatic: true, ...(appOwnership !== undefined && context.actor
         ? { authorizationAccountId: context.actor } : {}) }
       : {};
     let planRun: PlanRun = {
@@ -2475,8 +2479,8 @@ export class RunEngine {
       workspaceId,
       createdBy: context.actor ?? "system",
       ...(requestCapsuleId ? { capsuleId: requestCapsuleId } : {}),
-      ...(capsule?.ownerAccountId !== undefined
-        ? { ownershipEpoch: capsule.ownershipEpoch, appManagementEpoch: capsule.managementEpoch }
+      ...(appOwnership !== undefined
+        ? { ownershipEpoch: appOwnership.ownershipEpoch, appManagementEpoch: appOwnership.managementEpoch }
         : {}),
       ...(capsule
         ? {
@@ -4903,7 +4907,7 @@ export class RunEngine {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
     }
     const scheduledUninstall = plannedCapsule
-      ? scheduledUninstallPlanIdentity(planRun, plannedCapsule)
+      ? await this.#scheduledUninstallPlanIdentity(planRun, plannedCapsule)
       : undefined;
     if (scheduledUninstall && plannedCapsule) {
       await this.#requireScheduledUninstallAuthorization(plannedCapsule);
@@ -6810,7 +6814,7 @@ export class RunEngine {
     }
     if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
       const capsule = await this.#requireCapsule(planRun.capsuleId ?? "");
-      scheduledUninstallPlanIdentity(planRun, capsule);
+      await this.#scheduledUninstallPlanIdentity(planRun, capsule);
       await this.#requireScheduledUninstallAuthorization(capsule);
     }
     if (planRun.approval) {
@@ -9869,7 +9873,7 @@ export class RunEngine {
     // provider is exempt: its outcome must still be recorded.
     if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
-      scheduledUninstallPlanIdentity(planRun, plannedCapsule);
+      await this.#scheduledUninstallPlanIdentity(planRun, plannedCapsule);
       if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
         await this.#requireScheduledUninstallAuthorization(plannedCapsule);
       }
@@ -12418,6 +12422,14 @@ export class RunEngine {
     return capsule;
   }
 
+  async #scheduledUninstallPlanIdentity(planRun: PlanRun, capsule: Capsule): Promise<{
+    readonly id: string;
+    readonly destroyPlanRunId: string;
+  } | undefined> {
+    const ownership = await this.#appOwnership?.getOwnership(capsule.id);
+    return scheduledUninstallPlanIdentity(planRun, capsule, ownership?.ownerAccountId);
+  }
+
   async #requireScheduledUninstallAuthorization(capsule: Capsule): Promise<void> {
     const reason = await scheduledUninstallAuthorizationFailure(
       this.#store, capsule, this.#validateUninstallRequester,
@@ -12436,7 +12448,7 @@ export class RunEngine {
     if ((plan.origin?.kind !== "scheduled_uninstall" && plan.createdBy !== "system:scheduled-uninstall") ||
       applyRunProviderMutationDispatched(apply)) return;
     const current = await this.#requireCapsule(plan.capsuleId ?? "");
-    scheduledUninstallPlanIdentity(plan, current);
+    await this.#scheduledUninstallPlanIdentity(plan, current);
     await this.#requireScheduledUninstallAuthorization(current);
   }
 }
@@ -12459,6 +12471,7 @@ function scheduledUninstallRefusal(error: unknown): {
 function scheduledUninstallPlanIdentity(
   planRun: PlanRun,
   capsule: Capsule,
+  ownerAccountId: string | undefined,
 ): { readonly id: string; readonly destroyPlanRunId: string } | undefined {
   const origin = planRun.origin;
   const legacy = planRun.createdBy === "system:scheduled-uninstall";
@@ -12470,7 +12483,7 @@ function scheduledUninstallPlanIdentity(
     uninstall.destroyPlanRunId !== planRun.id ||
     (origin?.kind === "scheduled_uninstall" && (
       origin.uninstallId !== uninstall.id ||
-      planRun.createdBy !== capsule.ownerAccountId ||
+      planRun.createdBy !== (ownerAccountId ?? "system:scheduled-uninstall") ||
       planRun.id !== `plan_${uninstall.id.replace(/[^0-9a-zA-Z]/gu, "")}a${uninstall.destroyAttempts ?? 1}`
     ))
   ) {

@@ -50,12 +50,29 @@ import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/p
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 
 
-// Admission reads physical authority in the same locked Capsule statement.
-// Ordinary projections use the owner-preserving JSON mirror maintained by writes.
-const PG_CAPSULE_ADMISSION_JSON = `(installation_json - 'ownerAccountId' - 'ownershipEpoch' - 'managementState' - 'managementEpoch')
-  || case when owner_account_id is null then '{}'::jsonb else jsonb_build_object(
-    'ownerAccountId', owner_account_id, 'ownershipEpoch', ownership_epoch,
-    'managementState', management_state, 'managementEpoch', management_epoch) end`;
+// Admission compares the exact deployment snapshot. Ownership is read from
+// physical columns by the AppOwnershipStore and is never merged into JSON.
+const PG_CAPSULE_ADMISSION_JSON = `installation_json`;
+
+type PgCapsuleAdmissionOwnershipRow = {
+  readonly ownerAccountId: string | null;
+  readonly ownershipEpoch: number | string | null;
+  readonly managementState: string | null;
+  readonly managementEpoch: number | string | null;
+};
+
+function pgCapsuleForAppAdmission(
+  capsule: Capsule | undefined,
+  row: PgCapsuleAdmissionOwnershipRow | undefined,
+): Capsule | undefined {
+  if (!row?.ownerAccountId) return capsuleWithOwnershipForAdmission(capsule, undefined);
+  return capsuleWithOwnershipForAdmission(capsule, {
+    ownerAccountId: row.ownerAccountId,
+    ownershipEpoch: Number(row.ownershipEpoch),
+    managementState: row.managementState as "active" | "draining" | "frozen",
+    managementEpoch: Number(row.managementEpoch),
+  });
+}
 
 const pgLegacyUsageSelect = {
   id: pgSchema.usageEvents.id,
@@ -316,6 +333,8 @@ import {
   storeRunManagementAuthority,
   restoreRunCreationIdentityMatches,
   publicStoredRun,
+  capsuleWithoutOwnership,
+  capsuleWithOwnershipForAdmission,
   storeSourceSyncRun,
   sourceSyncRunSuccessIdentityMatches,
   storedCapsuleCompatibilityProviderGraph,
@@ -1945,15 +1964,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return result.rows[0]?.owner_account_id ?? undefined;
   }
 
-  async #initializeCapsulePhysicalOwner(capsule: Capsule, client: SqlClient = this.#client): Promise<void> {
-    if (!capsule.ownerAccountId) return;
+  async #initializeCapsulePhysicalOwner(ownership: CapsuleInitialAuthorityInput["initialOwnership"], slug: string, client: SqlClient = this.#client): Promise<void> {
+    if (!ownership) return;
     await client.query(`update takosumi_capsules set owner_account_id=coalesce(owner_account_id,$2),
       ownership_epoch=case when owner_account_id is null then $3 else ownership_epoch end,
       management_state=case when owner_account_id is null then $4 else management_state end,
       management_epoch=case when owner_account_id is null then $5 else management_epoch end,
       storage_root=coalesce(storage_root,$6), slug=coalesce(slug,$7)
-      where id=$1`, [capsule.id,capsule.ownerAccountId,capsule.ownershipEpoch ?? 0,
-      capsule.managementState ?? "active",capsule.managementEpoch ?? 0,capsule.storageRoot ?? `apps/${capsule.id}`,capsule.slug]);
+      where id=$1`, [ownership.capsuleId,ownership.ownerAccountId,ownership.ownershipEpoch,
+      ownership.managementState,ownership.managementEpoch,ownership.storageRoot,slug]);
   }
 
   async #initializeConnectionPhysicalOwner(
@@ -2115,7 +2134,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           expectedWorkspaceManagementAuthority,
         );
         if (run.capsuleId) {
-          const rows = await transaction.query<{
+          const rows = await transaction.query<PgCapsuleAdmissionOwnershipRow & {
             installConfigId: string | null;
             currentStateVersionId: string | null;
             executionAuthorityEpoch: number | string | null;
@@ -2125,6 +2144,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                install_config_id as "installConfigId",
                current_state_version_id as "currentStateVersionId",
                execution_authority_epoch as "executionAuthorityEpoch",
+               owner_account_id as "ownerAccountId",
+               ownership_epoch as "ownershipEpoch",
+               management_state as "managementState",
+               management_epoch as "managementEpoch",
                ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson"
              from takosumi_capsules
              where id = $1
@@ -2160,7 +2183,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
               input.expectedCapsulePlanAuthority,
             );
           }
-          if (!appPlanAdmission(capsule, run)) {
+          if (!appPlanAdmission(pgCapsuleForAppAdmission(capsule, row), run)) {
             throw new CapsulePlanCreationFenceConflictError(run.capsuleId);
           }
         }
@@ -2428,7 +2451,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         if (!capsuleApplyRunAdmissionFenceMatchesRun(run, expectedCapsule)) {
           throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
         }
-        const capsuleRows = await transaction.query<{
+        const capsuleRows = await transaction.query<PgCapsuleAdmissionOwnershipRow & {
           readonly id: string;
           readonly workspaceId: string;
           readonly environment: string;
@@ -2446,6 +2469,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
              current_state_version_id as "currentStateVersionId",
              status,
              execution_authority_epoch as "executionAuthorityEpoch",
+             owner_account_id as "ownerAccountId",
+             ownership_epoch as "ownershipEpoch",
+             management_state as "managementState",
+             management_epoch as "managementEpoch",
              ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson"
            from takosumi_capsules
           where id = $1
@@ -2495,7 +2522,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         const storedPlan = planRows.rows[0]
           ? parseJson(planRows.rows[0].runJson) as StoredRunRecord
           : undefined;
-        if (!appApplyAdmission(persistedCapsule,
+        if (!appApplyAdmission(pgCapsuleForAppAdmission(persistedCapsule, capsuleRow),
           storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
           throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
         }
@@ -3045,8 +3072,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             (isPlanRunRecord(current) || isApplyRunRecord(current)) && current.capsuleId !== undefined &&
             (input.kind === "plan" || input.kind === "apply")) {
             const observedCapsuleId = current.capsuleId;
-            const capsuleRows = await transaction.query<{ readonly capsuleJson: unknown }>(
-              `select ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson" from takosumi_capsules where id = $1 for update`,
+            const capsuleRows = await transaction.query<PgCapsuleAdmissionOwnershipRow & { readonly capsuleJson: unknown }>(
+              `select ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson",
+                      owner_account_id as "ownerAccountId",
+                      ownership_epoch as "ownershipEpoch",
+                      management_state as "managementState",
+                      management_epoch as "managementEpoch"
+                 from takosumi_capsules where id = $1 for update`,
               [observedCapsuleId],
             );
             // Lock the Run after the Capsule, matching transfer's lock order.
@@ -3092,7 +3124,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                 : undefined;
               plan = stored && isPlanRunRecord(stored) ? stored : undefined;
             }
-            if (!appClaimAdmission(capsule, plan, current,
+            if (!appClaimAdmission(pgCapsuleForAppAdmission(capsule, capsuleRows.rows[0]), plan, current,
               current.status === "running" && input.expectFrom.includes("running") &&
                 input.expectHeartbeatAt !== undefined)) {
               return undefined;
@@ -7115,14 +7147,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           updatedAt: values.updatedAt,
         },
       });
-    await this.#initializeCapsulePhysicalOwner(capsule);
-    return normalizeCapsuleRecord(capsule);
+    return capsuleWithoutOwnership(normalizeCapsuleRecord(capsule));
   }
 
   async createCapsuleInitialAuthority(
     input: CapsuleInitialAuthorityInput,
   ): Promise<CapsuleInitialAuthorityResult> {
-    const capsule = normalizeCapsuleRecord(input.capsule);
+    const capsule = capsuleWithoutOwnership(normalizeCapsuleRecord(input.capsule));
+    const ownership = input.initialOwnership;
+    if (ownership && ownership.capsuleId !== capsule.id) return { status: "conflict" };
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         input.expectedWorkspaceManagementAuthority,
@@ -7228,7 +7261,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             publicStoredInstallConfig(parseJson(configRows[0].json) as InstallConfig),
           ),
           stableJsonDigest(
-            normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule),
+            capsuleWithoutOwnership(normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule)),
           ),
           stableJsonDigest(parseJson(bindingRow.json)),
         ]);
@@ -7312,8 +7345,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         updatedAt: installConfig.updatedAt,
       });
       await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
-      await this.#initializeCapsulePhysicalOwner(capsule, transaction);
-      if (capsule.ownerAccountId) {
+      await this.#initializeCapsulePhysicalOwner(ownership, capsule.slug, transaction);
+      if (ownership) {
         await transaction.query(
           `insert into takosumi_capsule_members
              (capsule_id, account_id, status, added_by, created_at, updated_at)
@@ -7326,7 +7359,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
               and member.member_json ->> 'accountId'=member.account_id
               and (member.member_json -> 'roles' ? 'owner' or member.member_json -> 'roles' ? 'admin')
            on conflict (capsule_id, account_id) do nothing`,
-          [capsule.id, capsule.ownerAccountId, capsule.createdAt, capsule.workspaceId],
+          [capsule.id, ownership.ownerAccountId, capsule.createdAt, capsule.workspaceId],
         );
       }
       await db.insert(pgSchema.providerBindingSets).values({
@@ -7801,7 +7834,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.capsules)
         .set({
           installConfigId: updated.installConfigId,
-          capsuleJson: updated,
+          capsuleJson: capsuleWithoutOwnership(updated),
           updatedAt: updated.updatedAt,
           executionAuthorityEpoch: sql`${pgSchema.capsules.executionAuthorityEpoch} + 1`,
         })
@@ -8235,7 +8268,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.capsules)
         .set({
           status: updated.status,
-          capsuleJson: updated,
+          capsuleJson: capsuleWithoutOwnership(updated),
           updatedAt: updated.updatedAt,
         })
         .where(
@@ -8333,8 +8366,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.capsules)
         .set({
           ...(patch.status ? { status: patch.status } : {}),
-          capsuleJson:
-            sql`${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb`,
+          capsuleJson: sql`(${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb)
+            - 'ownerAccountId' - 'ownershipEpoch' - 'managementState' - 'managementEpoch' - 'storageRoot'`,
           updatedAt: input.updatedAt,
         })
         .where(
@@ -12743,7 +12776,7 @@ function installConfigJsonPreservingAuthority(config: InstallConfig): SQL {
 }
 
 function capsuleValues(capsule: Capsule) {
-  const normalized = normalizeCapsuleRecord(capsule);
+  const normalized = capsuleWithoutOwnership(normalizeCapsuleRecord(capsule));
   return {
     id: normalized.id,
     workspaceId: normalized.workspaceId,

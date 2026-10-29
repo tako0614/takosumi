@@ -794,7 +794,7 @@ async function revisionCompatibilityEvidence(
     requestDigest,
     runId: `ccr_${suffix}`,
     reportId: `caprep_${suffix}`,
-    createdBy: plan.createdBy,
+    createdBy: `git-revision-plan:${plan.id}:${suffix}`,
   };
 }
 

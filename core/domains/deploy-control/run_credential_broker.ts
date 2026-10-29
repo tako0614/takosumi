@@ -1,3 +1,4 @@
+import type { AppOwnershipStore } from "../app-ownership/store.ts";
 /**
  * Run-credential mint broker (§9 per-phase Credential Recipe materialization).
  *
@@ -87,6 +88,7 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
  * controller's own handles so ids and timestamps line up across both surfaces.
  */
 export interface RunCredentialBrokerDependencies {
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly store: OpenTofuControlStore;
   readonly newId: (prefix: string) => string;
   readonly now: () => number;
@@ -153,6 +155,7 @@ function emptyPlanCredentialBrokerTimings(): MutablePlanCredentialBrokerTimings 
  * controller methods.
  */
 export class RunCredentialBroker {
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
@@ -170,6 +173,7 @@ export class RunCredentialBroker {
 
   constructor(dependencies: RunCredentialBrokerDependencies) {
     this.#store = dependencies.store;
+    this.#appOwnership = dependencies.appOwnership;
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
     this.#vault = dependencies.vault;
@@ -725,7 +729,7 @@ export class RunCredentialBroker {
     if (byConnection.length === 0) return;
     const createdAt = new Date(this.#now()).toISOString();
     const capsuleId = planRun.capsuleContext?.capsuleId ?? planRun.capsuleId;
-    const capsule = capsuleId ? await this.#store.getCapsule(capsuleId) : undefined;
+    const ownership = capsuleId ? await this.#appOwnership?.getOwnership(capsuleId) : undefined;
     const applyRun = phase === "plan" ? undefined : await this.#store.getApplyRun(auditRunId);
     const actorAccountId = applyRun?.approval?.approvedBy ?? planRun.createdBy;
     const evidenceByConnection = groupProviderCredentialEvidence(evidence);
@@ -738,7 +742,7 @@ export class RunCredentialBroker {
         workspaceId: planRun.workspaceId,
         ...(capsuleId ? { capsuleId } : {}),
         connectionId: entry.connectionId,
-        ...(capsule?.ownerAccountId !== undefined
+        ...(ownership !== undefined
           ? {
               actorAccountId,
               connectionOwnerAccountId: resolved.find((candidate) =>

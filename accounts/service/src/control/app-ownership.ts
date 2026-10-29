@@ -303,7 +303,28 @@ async function listCapsuleTransfers(ctx: ControlDispatchContext, capsuleId: stri
     transfer.state === "pending" && (transfer.toAccountId === ctx.session.subject ||
       (access?.role === "owner" && transfer.fromAccountId === access.ownerAccountId)));
   if (access?.role !== "owner" && visible.length === 0) return denied(ctx.request);
-  return json({ ownershipTransfers: visible }, 200, { "cache-control": "no-store" });
+  return json({ ownershipTransfers: await pendingTransferViews(ctx, visible) }, 200, { "cache-control": "no-store" });
+}
+
+/** Recipient preview contains names only; no Capsule source, output or credentials. */
+async function pendingTransferViews(
+  ctx: ControlDispatchContext,
+  transfers: readonly AppOwnershipTransferRecord[],
+) {
+  const capsules = await ctx.operations.capsules.getCapsulesByIds([...new Set(transfers.map((row) => row.capsuleId))]);
+  const byId = new Map(capsules.map((capsule) => [capsule.id, capsule]));
+  return await Promise.all(transfers.map(async (transfer) => {
+    const capsule = byId.get(transfer.capsuleId);
+    const [sender, appView] = await Promise.all([
+      ctx.store.findAccount(transfer.fromAccountId as TakosumiSubject),
+      capsule ? readCapsuleAppView(ctx, capsule, Date.now()) : undefined,
+    ]);
+    return {
+      ...transfer,
+      appDisplayName: appView?.displayName || capsule?.name || transfer.capsuleId,
+      senderDisplayName: sender?.displayName?.trim() || transfer.fromAccountId,
+    };
+  }));
 }
 
 async function listIncomingTransfers(ctx: ControlDispatchContext): Promise<Response> {
@@ -315,7 +336,7 @@ async function listIncomingTransfers(ctx: ControlDispatchContext): Promise<Respo
   const visible = await Promise.all(transfers.map(async (transfer) =>
     transfer.toAccountId === ctx.session.subject && transfer.state === "pending" &&
       await capsuleWithinBearerScope(ctx, transfer.capsuleId) ? transfer : undefined));
-  return json({ ownershipTransfers: visible.filter((transfer) => transfer !== undefined) }, 200, {
+  return json({ ownershipTransfers: await pendingTransferViews(ctx, visible.filter((transfer) => transfer !== undefined)) }, 200, {
     "cache-control": "no-store",
   });
 }

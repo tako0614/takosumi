@@ -29,6 +29,12 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import {
+  D1AppOwnershipStore,
+  InMemoryAppOwnershipStore,
+  SqlAppOwnershipStore,
+  type AppOwnershipStore,
+} from "../../../../core/domains/app-ownership/store.ts";
+import {
   type BackupArtifactStore,
   BackupsService,
   InMemoryBackupArtifactStore,
@@ -84,6 +90,7 @@ interface Harness {
   readonly store: OpenTofuControlStore;
   readonly controller: OpenTofuController;
   readonly capsules: CapsulesService;
+  readonly appOwnership: AppOwnershipStore;
   readonly backups: BackupsService;
   readonly activity: ActivityService;
   readonly authorization: { validate: (requester: import("takosumi-contract/capsules").CapsuleUninstallRequester, workspaceId: string, validAtMs?: number) => Promise<boolean> };
@@ -105,6 +112,8 @@ async function appliedCapsule(
     readonly queueDestroy?: boolean;
     readonly preDestroy?: () => Promise<void>;
     readonly uninstallGraceDays?: number;
+    readonly ownerless?: boolean;
+    readonly appOwnership?: AppOwnershipStore;
   } = {},
 ): Promise<Harness> {
   const clock = { ms: START };
@@ -219,8 +228,10 @@ async function appliedCapsule(
     newId,
     now: () => new Date(clock.ms),
   });
+  const appOwnership = options.appOwnership ?? new InMemoryAppOwnershipStore(store);
   const controller: OpenTofuController = new OpenTofuController({
     store,
+    appOwnership,
     activity,
     ...(options.preDestroy ? { releaseActivator: { activate: async () => {
       await options.preDestroy!();
@@ -275,14 +286,22 @@ async function appliedCapsule(
   });
   expect(applied.applyRun.status).toBe("succeeded");
   expect((await store.getCapsule(seeded.capsule.id))?.status).toBe("active");
-  await store.putCapsule({ ...(await store.getCapsule(seeded.capsule.id))!,
-    ownerAccountId: "user_test", ownershipEpoch: 0,
-    managementState: "active", managementEpoch: 0 });
+  if (!options.ownerless) {
+    expect(await appOwnership.putOwnership({
+      capsuleId: seeded.capsule.id,
+      ownerAccountId: "user_test",
+      ownershipEpoch: 0,
+      managementState: "active",
+      managementEpoch: 0,
+      storageRoot: `apps/${seeded.capsule.id}`,
+    }, 0)).toBe(true);
+  }
 
   return Object.assign(harness, {
     store,
     controller,
     capsules,
+    appOwnership,
     backups,
     activity,
     clock,
@@ -298,6 +317,7 @@ async function appliedCapsule(
       finalizeDueCapsuleUninstalls({
         store,
         capsules,
+        appOwnership,
         controller,
         backups,
         activity,
@@ -349,47 +369,52 @@ async function insertRetiredDependency(
 
 const durableStores: readonly [
   string,
-  () => Promise<{ store: OpenTofuControlStore; close(): Promise<void> }>,
+  () => Promise<{ store: OpenTofuControlStore; appOwnership: AppOwnershipStore; close(): Promise<void> }>,
 ][] = [
   [
     "memory",
     async () => ({
-      store: new InMemoryOpenTofuControlStore(),
-      close: async () => {},
+      ...(() => {
+        const store = new InMemoryOpenTofuControlStore();
+        return { store, appOwnership: new InMemoryAppOwnershipStore(store), close: async () => {} };
+      })(),
     }),
   ],
   [
     "postgres",
     async () => {
       const client = await PGliteSqlClient.create();
+      const store = new SqlOpenTofuControlStore({ client });
       return {
-        store: new SqlOpenTofuControlStore({ client }),
+        store,
+        appOwnership: new SqlAppOwnershipStore(client, store),
         close: () => client.close(),
       };
     },
   ],
   [
     "d1",
-    async () => ({
-      store: new CloudflareD1OpenTofuControlStore(new SqliteFakeD1()),
-      close: async () => {},
-    }),
+    async () => {
+      const db = new SqliteFakeD1();
+      const store = new CloudflareD1OpenTofuControlStore(db);
+      return { store, appOwnership: new D1AppOwnershipStore(db, store), close: async () => {} };
+    },
   ],
 ];
 
 for (const [label, open] of durableStores) {
   test(`${label}: a scheduled uninstall survives the grace period, then exports and destroys`, async () => {
-    const { store, close } = await open();
+    const { store, appOwnership, close } = await open();
     try {
-      await scheduledUninstallRunsToCompletion(await appliedCapsule({ store }));
+      await scheduledUninstallRunsToCompletion(await appliedCapsule({ store, appOwnership }));
     } finally {
       await close();
     }
   });
   test(`${label}: waiting requests rotate with a frozen clock across finalizer ticks`, async () => {
-    const { store, close } = await open();
+    const { store, appOwnership, close } = await open();
     try {
-      const h = await appliedCapsule({ store });
+      const h = await appliedCapsule({ store, appOwnership });
       await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
       await jumpToDue(h);
       const current = (await store.getCapsule(h.capsuleId))!;
@@ -429,6 +454,37 @@ for (const [label, open] of durableStores) {
     }
   });
 }
+
+test("ownerless legacy scheduled uninstall keeps the system Run actor through teardown", async () => {
+  const h = await appliedCapsule({ ownerless: true });
+  const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
+    requester: { subject: "user_test" },
+  });
+  expect(scheduled.status).toBe("uninstalled");
+  await jumpToDue(h);
+  expect(await finalizeDueCapsuleUninstalls({
+    store: h.store,
+    capsules: h.capsules,
+    appOwnership: h.appOwnership,
+    controller: h.controller,
+    validateUninstallRequester: async () => true,
+    now: () => new Date(h.clock.ms),
+  })).toMatchObject({
+    destroyPlansCreated: 1,
+    destroysStarted: 1,
+    blocked: 0,
+    failures: 0,
+  });
+  const uninstall = (await h.store.getCapsule(h.capsuleId))!.uninstall!;
+  const plan = (await h.store.getPlanRun(uninstall.destroyPlanRunId!))!;
+  expect(plan.createdBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect(plan.approval?.approvedBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect(plan.auditEvents).toContainEqual(expect.objectContaining({
+    type: "plan.approved",
+    actor: SCHEDULED_UNINSTALL_ACTOR,
+  }));
+  expect(await h.appOwnership.getOwnership(h.capsuleId)).toBeUndefined();
+});
 
 async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
   const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
@@ -655,7 +711,8 @@ test("a teardown Plan that is not delete-only is left for the owner", async () =
 
 test("retired dependency blocks scheduled teardown without a PlanRun or retry", async () => {
   const d1 = new SqliteFakeD1();
-  const h = await appliedCapsule({ store: new CloudflareD1OpenTofuControlStore(d1) });
+  const store = new CloudflareD1OpenTofuControlStore(d1);
+  const h = await appliedCapsule({ store, appOwnership: new D1AppOwnershipStore(d1, store) });
   await insertRetiredDependency(d1, h.capsuleId, new Date(h.clock.ms).toISOString());
   await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { requester: { subject: "user_test" } });
   await jumpToDue(h);
@@ -686,7 +743,8 @@ test("retired dependency blocks scheduled teardown without a PlanRun or retry", 
 
 test("retired dependency appearing after teardown Plan blocks Apply before dispatch", async () => {
   const d1 = new SqliteFakeD1();
-  const h = await appliedCapsule({ store: new CloudflareD1OpenTofuControlStore(d1) });
+  const store = new CloudflareD1OpenTofuControlStore(d1);
+  const h = await appliedCapsule({ store, appOwnership: new D1AppOwnershipStore(d1, store) });
   const scheduled = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, {
     requester: { subject: "user_test" },
   });
@@ -1181,9 +1239,9 @@ test("an exported request says whether app data was part of the export", async (
 for (const [label, open] of durableStores) {
   for (const loss of ["removed", "demoted", "grant_expired", "grant_revoked", "account_deleted", "retained"] as const) {
     test(`${label}: deadline reauthorization refuses ${loss} requester`, async () => {
-      const { store, close } = await open();
+      const { store, appOwnership, close } = await open();
       try {
-        const h = await appliedCapsule({ store });
+        const h = await appliedCapsule({ store, appOwnership });
         const subject = "tsub_uninstall_admin" as const;
         const member = {
           id: "wm_425_admin",
@@ -1249,9 +1307,9 @@ for (const [label, open] of durableStores) {
 
 for (const [label, open] of durableStores) {
   test(`${label}: a PAT admitted with the six-hour margin blocks on delayed finalization and needs cancel/reschedule`, async () => {
-    const { store, close } = await open();
+    const { store, appOwnership, close } = await open();
     try {
-      const h = await appliedCapsule({ store });
+      const h = await appliedCapsule({ store, appOwnership });
       const subject = "tsub_delayed_uninstall" as const;
       const workspaceId = "ws_uninstall001";
       await store.putWorkspaceMember({
@@ -1329,9 +1387,9 @@ for (const graceDays of [0, 7]) {
 
 for (const [label, open] of durableStores) {
   test(`${label}: a requester-less legacy reservation stays blocked until explicit cancel and reschedule`, async () => {
-    const { store, close } = await open();
+    const { store, appOwnership, close } = await open();
     try {
-      const h = await appliedCapsule({ store });
+      const h = await appliedCapsule({ store, appOwnership });
       // Model the existing JSON row, including an actor audit that must not be
       // adopted as requester evidence by the finalizer or a scheduling replay.
       const legacy = await h.capsules.scheduleCapsuleUninstall(h.capsuleId, { actor: "user_test" });

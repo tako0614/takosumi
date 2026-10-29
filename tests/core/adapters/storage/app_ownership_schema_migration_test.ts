@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import type { D1Database } from "../../../../worker/src/bindings.ts";
 import { ensureD1OpenTofuLedgerSchema, verifyD1OpenTofuLedgerSchemaPredeployed } from "../../../../worker/src/d1_opentofu_store.ts";
 import { postgresStorageMigrationStatements } from "../../../../core/adapters/storage/migrations.ts";
@@ -86,7 +87,9 @@ test("v78 adds authorization tables without changing writer A v77 checksum", asy
   await verifyD1OpenTofuLedgerSchemaPredeployed(db, 77);
   await ensureD1OpenTofuLedgerSchema(db);
   expect(await db.prepare("select checksum from schema_migrations where version=77").first()).toEqual(original);
-  expect(await db.prepare("select name from schema_migrations where version=78").first()).toEqual({ name: "d1_app_authorization" });
+  expect(await db.prepare("select name,checksum from schema_migrations where version=78").first()).toEqual({
+    name: "d1_app_authorization", checksum: "sha256:434011ab063f22768f5e01b5be34f72d36c9cff594fd72878d9d4e35a2c6124b",
+  });
   await verifyD1OpenTofuLedgerSchemaPredeployed(db, 78);
   await db.exec("drop index app_credential_mint_leases_capsule_expiry");
   await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db, 78)).rejects.toThrow();
@@ -97,6 +100,8 @@ test("Postgres v124 adds authorization tables after unchanged v123 ownership", a
   try {
     expect((await client.query("select to_regclass('takosumi_capsule_ownership_transfers') as name")).rows).toEqual([{ name: null }]);
     const migration = postgresStorageMigrationStatements.find(entry => entry.version === 124)!;
+    expect(createHash("sha256").update(migration.sql).digest("hex"))
+      .toBe("6b22ceedd62b0aaea8c5875052aa47e192031f4a47a6899be2ab928afe7dcdda");
     await client.transaction(async transaction => {
       for (const statement of splitSqlStatements(migration.sql)) await transaction.query(statement);
     });

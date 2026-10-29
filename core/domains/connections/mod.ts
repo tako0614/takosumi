@@ -1,3 +1,5 @@
+import { InMemoryAppOwnershipStore, type AppOwnershipStore } from "../app-ownership/store.ts";
+import { InMemoryOpenTofuControlStore } from "../deploy-control/store.ts";
 /**
  * Connections domain: Provider Connection binding resolution.
  *
@@ -232,6 +234,7 @@ function compareText(left: string, right: string): number {
 }
 
 export interface ConnectionsServiceDependencies {
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
@@ -251,6 +254,7 @@ export interface ConnectionsServiceDependencies {
 }
 
 export class ConnectionsService {
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #store: OpenTofuControlStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
@@ -262,6 +266,8 @@ export class ConnectionsService {
 
   constructor(dependencies: ConnectionsServiceDependencies) {
     this.#store = dependencies.store;
+    this.#appOwnership = dependencies.appOwnership ?? (dependencies.store instanceof InMemoryOpenTofuControlStore
+      ? new InMemoryAppOwnershipStore(dependencies.store) : undefined);
     this.#newId =
       dependencies.newId ??
       ((prefix) =>
@@ -443,7 +449,7 @@ export class ConnectionsService {
   }
 
   async #resolveBindings(
-    capsule: Pick<Capsule, "workspaceId" | "ownerAccountId">,
+    capsule: Pick<Capsule, "workspaceId"> & Partial<Pick<Capsule, "id">>,
     bindings: ProviderBindings,
     policy: PolicyConfig | undefined,
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
@@ -548,7 +554,7 @@ export class ConnectionsService {
   }
 
   async #resolveBinding(
-    capsule: Pick<Capsule, "workspaceId" | "ownerAccountId">,
+    capsule: Pick<Capsule, "workspaceId"> & Partial<Pick<Capsule, "id">>,
     binding: ProviderBinding,
     policy: PolicyConfig | undefined,
   ): Promise<ResolvedCapsuleProviderBinding> {
@@ -569,8 +575,9 @@ export class ConnectionsService {
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
-    if (connection.scope === "personal" || (capsule.ownerAccountId !== undefined && connection.scope !== "operator")) {
-      const ownerAccountId = capsule.ownerAccountId ?? (await this.#store.getWorkspace(capsule.workspaceId))?.ownerUserId;
+    const ownership = capsule.id ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
+    if (connection.scope === "personal" || (ownership !== undefined && connection.scope !== "operator")) {
+      const ownerAccountId = ownership?.ownerAccountId ?? (await this.#store.getWorkspace(capsule.workspaceId))?.ownerUserId;
       if (!ownerAccountId || connection.ownerAccountId !== ownerAccountId) {
         throw new OpenTofuControllerError("permission_denied", "Connection is not owned by the app owner", {
           reason: "connection_not_owned_by_app_owner",
@@ -580,7 +587,7 @@ export class ConnectionsService {
     if (
       connection.scope === "workspace" &&
       connection.workspaceId !== capsule.workspaceId &&
-      capsule.ownerAccountId === undefined
+      ownership === undefined
     ) {
       throw new OpenTofuControllerError(
         "permission_denied",

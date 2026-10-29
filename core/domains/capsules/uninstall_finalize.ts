@@ -53,6 +53,7 @@ import { NOOP_ACTIVITY_RECORDER } from "../activity/mod.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import { applyExpectedGuardFromPlanRun } from "../deploy-control/mod.ts";
 import type { CapsulesService } from "./mod.ts";
+import type { AppOwnershipStore } from "../app-ownership/store.ts";
 import {
   scheduledUninstallAuthorizationFailure,
   UNINSTALL_AUTHORIZATION_REASONS,
@@ -108,6 +109,8 @@ const TRANSIENT_REFUSAL_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 export interface CapsuleUninstallFinalizerDependencies {
+  /** Canonical ownership authority; absent means a pre-backfill ownerless app. */
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly store: Pick<
     OpenTofuControlStore,
     | "listDueCapsuleUninstalls"
@@ -452,10 +455,11 @@ async function createTeardownPlan(
   uninstall: CapsuleUninstall,
   now: () => Date,
 ): Promise<StepOutcome> {
-  if (!capsule.ownerAccountId?.trim()) {
-    await block(deps, capsule, uninstall, SCHEDULED_DESTROY_BLOCKED_REASONS.ownerUnavailable);
-    return "blocked";
-  }
+  // Legacy Capsules created before ownership backfill have no app owner row.
+  // Keep their scheduled system actor so their teardown can finish; once an
+  // owner exists, every Run is still attributed to that account.
+  const owner = await scheduledUninstallOwner(deps, capsule);
+  const actor = owner || SCHEDULED_UNINSTALL_ACTOR;
   const attempt = (uninstall.destroyAttempts ?? 0) + 1;
   if (attempt > MAX_SCHEDULED_DESTROY_ATTEMPTS) {
     await block(
@@ -485,7 +489,7 @@ async function createTeardownPlan(
   try {
     response = await deps.controller.createCapsuleDestroyPlan(
       capsule.id,
-      { actor: capsule.ownerAccountId },
+      { actor },
       { planRunId, origin: { kind: "scheduled_uninstall", uninstallId: uninstall.id } },
     );
   } catch (error) {
@@ -552,7 +556,9 @@ async function startTeardown(
     return "waiting";
   }
   if (plan.appliedApplyRunId !== undefined) return "waiting";
-  if (!capsule.ownerAccountId?.trim() || plan.createdBy !== capsule.ownerAccountId) {
+  const owner = await scheduledUninstallOwner(deps, capsule);
+  const actor = owner || SCHEDULED_UNINSTALL_ACTOR;
+  if (plan.createdBy !== actor) {
     await block(deps, capsule, uninstall, SCHEDULED_DESTROY_BLOCKED_REASONS.ownerUnavailable);
     return "blocked";
   }
@@ -560,7 +566,7 @@ async function startTeardown(
   try {
     if (plan.approval === undefined) {
       await deps.controller.approveRun(plan.id, {
-        approvedBy: capsule.ownerAccountId,
+        approvedBy: actor,
         reason: `scheduled uninstall ${uninstall.id}`,
       });
     }
@@ -585,7 +591,7 @@ async function startTeardown(
         planRunId: approved.id,
         expected: applyExpectedGuardFromPlanRun(approved),
       },
-      { actor: capsule.ownerAccountId },
+      { actor },
       { applyRunId },
     );
   } catch (error) {
@@ -620,6 +626,14 @@ async function startTeardown(
     },
   });
   return "destroy_started";
+}
+
+async function scheduledUninstallOwner(
+  deps: CapsuleUninstallFinalizerDependencies,
+  capsule: Capsule,
+): Promise<string | undefined> {
+  const owner = (await deps.appOwnership?.getOwnership(capsule.id))?.ownerAccountId;
+  return owner?.trim() || undefined;
 }
 
 /**

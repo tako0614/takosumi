@@ -235,15 +235,15 @@ lightly edited for readers.
 | GET | `/api/v1/capsules/{capsuleId}/members` | Owner/member; only owner sees email |
 | POST | `/api/v1/capsules/{capsuleId}/members` | Owner; `{ email, consent: "connections_and_code" }`; verified account |
 | DELETE | `/api/v1/capsules/{capsuleId}/members/{accountId}` | Owner or the departing member; cancels their queued/pending approval runs atomically |
-| GET | `/api/v1/capsules/{capsuleId}/ownership-transfers?state=pending` | Owner or recipient; `{ ownershipTransfers: [...] }` |
-| GET | `/api/v1/ownership-transfers?state=pending` | Pending transfers addressed to caller; `{ ownershipTransfers: [...] }` |
-| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | Owner; `{ toAccountId }` |
+| GET | `/api/v1/capsules/{capsuleId}/ownership-transfers?state=pending` | Owner or recipient; `{ ownershipTransfers: [...] }` with app and sender display names |
+| GET | `/api/v1/ownership-transfers?state=pending` | Up to 50 pending transfers addressed to caller, with app and sender display names |
+| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | Owner; `{ toAccountId }`; at most 50 pending per recipient and 10 creations per sender per hour |
 | POST | `/api/v1/ownership-transfers/{transferId}/accept` | Recipient; drains runs, increments ownership epoch, resets provider bindings |
 | DELETE | `/api/v1/ownership-transfers/{transferId}` | Owner; cancels pending transfer |
 | GET, POST | `/api/v1/connections` | Account's own personal connections and bindable operator connections; new connections belong to caller |
 | GET | `/api/v1/connections?capsuleId=…&projection=labels` | Owner/member; owner's bindable connections as `{ id, provider, displayName }` only; IDs are for binding |
 | POST | `/api/v1/connections/oauth/{helperId}/start` | Account credential; omit workspaceId to create a personal connection owned by caller |
-| GET | `/api/v1/source-ref-resolutions?url=…` | Account credential; resolve a public Git source's stable SemVer tag |
+| GET | `/api/v1/source-ref-resolutions?url=…` | Account credential with write scope; starts a runner to resolve a public Git source's stable SemVer tag |
 | POST | `/api/v1/install-plans` | Account credential; `mode: "attempt"`, no workspace field; caller owns app |
 | GET | `/api/v1/usage` | Account credential; caller's payer usage only |
 

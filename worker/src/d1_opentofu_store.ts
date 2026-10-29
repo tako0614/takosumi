@@ -6961,7 +6961,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   // -- Capsule -----------------------------------------------------------
 
   async putCapsule(capsule: Capsule): Promise<Capsule> {
-    const normalized = normalizeCapsuleRecord(capsule);
+    const normalized = capsuleWithoutPhysicalOwnership(normalizeCapsuleRecord(capsule));
     await this.#ensureSchema();
     const ownershipColumnAvailable = await this.#v77Column("capsules", "owner_account_id");
     const values = {
@@ -6985,32 +6985,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     else {
       const legacyValues = {
         ...values,
-        recordJson: JSON.stringify(capsuleWithoutPhysicalOwnership(normalized)),
+        recordJson: JSON.stringify(normalized),
         executionAuthorityEpoch: 1,
       };
       const { executionAuthorityEpoch: _insertOnlyEpoch, ...legacyUpdate } = legacyValues;
       void _insertOnlyEpoch;
       await this.#drizzleUpsert(legacyCapsuleGuardTable, legacyValues, legacyUpdate);
     }
-    if (normalized.ownerAccountId && ownershipColumnAvailable) {
-      await this.db.prepare(`update capsules set owner_account_id=coalesce(owner_account_id,?),
-        ownership_epoch=case when owner_account_id is null then ? else ownership_epoch end,
-        management_state=case when owner_account_id is null then ? else management_state end,
-        management_epoch=case when owner_account_id is null then ? else management_epoch end,
-        storage_root=coalesce(storage_root,?) where id=?`).bind(normalized.ownerAccountId,
-          normalized.ownershipEpoch ?? 0,normalized.managementState ?? "active",normalized.managementEpoch ?? 0,
-          normalized.storageRoot ?? `apps/${normalized.id}`,normalized.id).run();
-    }
-    return ownershipColumnAvailable
-      ? normalized
-      : capsuleWithoutPhysicalOwnership(normalized);
+    return normalized;
   }
 
   async createCapsuleInitialAuthority(
     input: CapsuleInitialAuthorityInput,
   ): Promise<CapsuleInitialAuthorityResult> {
     assertD1AtomicCommitBatch(this.db, "createCapsuleInitialAuthority");
-    const capsule = normalizeCapsuleRecord(input.capsule);
+    const capsule = capsuleWithoutPhysicalOwnership(normalizeCapsuleRecord(input.capsule));
+    const ownership = input.initialOwnership;
+    if (ownership && ownership.capsuleId !== capsule.id) return { status: "conflict" };
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         input.expectedWorkspaceManagementAuthority,
@@ -7019,9 +7010,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
     await this.#ensureSchema();
     const ownershipColumnAvailable = await this.#v77Column("capsules", "owner_account_id");
-    const storedCapsule = ownershipColumnAvailable
-      ? capsule
-      : capsuleWithoutPhysicalOwnership(capsule);
+    const storedCapsule = capsule;
     const binding = input.providerBindingSet;
     if (
       input.installConfig.id !== capsule.installConfigId ||
@@ -7102,7 +7091,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
       const [configDigest, capsuleDigest, bindingDigest] = await Promise.all([
         stableJsonDigest(existingConfig),
-        stableJsonDigest(existingCapsule),
+        stableJsonDigest(capsuleWithoutPhysicalOwnership(existingCapsule)),
         stableJsonDigest(existingBinding),
       ]);
       return existingCapsuleRow.epoch === 1 &&
@@ -7196,26 +7185,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           updatedAt: capsule.updatedAt,
           executionAuthorityEpoch: 1,
         }),
-        ...(ownershipColumnAvailable && capsule.ownerAccountId ? [
+        ...(ownershipColumnAvailable && ownership ? [
           this.#orm.update(schema.capsules).set({
-            ownerAccountId: capsule.ownerAccountId,
-            ownershipEpoch: capsule.ownershipEpoch ?? 0,
-            managementState: capsule.managementState ?? "active",
-            managementEpoch: capsule.managementEpoch ?? 0,
-            storageRoot: capsule.storageRoot ?? `apps/${capsule.id}`,
+            ownerAccountId: ownership.ownerAccountId,
+            ownershipEpoch: ownership.ownershipEpoch,
+            managementState: ownership.managementState,
+            managementEpoch: ownership.managementEpoch,
+            storageRoot: ownership.storageRoot,
           }).where(eq(schema.capsules.id, capsule.id)),
           this.#orm.insert(capsuleMembersWriteTable).select(
             this.#orm.select({
               capsuleId: sql<string>`${capsule.id}`.as("capsuleId"),
               accountId: schema.workspaceMembers.accountId,
               status: sql<string>`'active'`.as("status"),
-              addedBy: sql<string>`${capsule.ownerAccountId}`.as("addedBy"),
+              addedBy: sql<string>`${ownership.ownerAccountId}`.as("addedBy"),
               createdAt: sql<string>`${capsule.createdAt}`.as("createdAt"),
               updatedAt: sql<string>`${capsule.createdAt}`.as("updatedAt"),
             }).from(schema.workspaceMembers).where(and(
               eq(schema.workspaceMembers.workspaceId, capsule.workspaceId),
               eq(schema.workspaceMembers.status, "active"),
-              ne(schema.workspaceMembers.accountId, capsule.ownerAccountId),
+              ne(schema.workspaceMembers.accountId, ownership.ownerAccountId),
               sql`json_extract(${schema.workspaceMembers.recordJson}, '$.status') = 'active'`,
               sql`json_extract(${schema.workspaceMembers.recordJson}, '$.workspaceId') = ${schema.workspaceMembers.workspaceId}`,
               sql`json_extract(${schema.workspaceMembers.recordJson}, '$.accountId') = ${schema.workspaceMembers.accountId}`,
@@ -7768,7 +7757,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
     const finalizeCapsuleRebind = this.#orm
       .update(schema.capsules)
-      .set({ recordJson: updated })
+      .set({ recordJson: capsuleWithoutPhysicalOwnership(updated) })
       .where(
         and(
           eq(schema.capsules.id, input.capsuleId),
@@ -8209,7 +8198,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         currentStateGeneration: updated.currentStateGeneration,
         currentOutputId: updated.currentOutputId ?? null,
         status: updated.status,
-        recordJson: normalizeCapsuleRecord(updated),
+        recordJson: capsuleWithoutPhysicalOwnership(normalizeCapsuleRecord(updated)),
         updatedAt: updated.updatedAt,
       })
       .where(
@@ -8256,7 +8245,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .update(schema.capsules)
       .set({
         status: updated.status,
-        recordJson: updated,
+        recordJson: capsuleWithoutPhysicalOwnership(updated),
         updatedAt: updated.updatedAt,
       })
       .where(
@@ -8472,10 +8461,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .update(schema.capsules)
       .set({
         status: "destroyed",
-        recordJson: sql`json_patch(
+        recordJson: sql`json_remove(json_patch(
           ${schema.capsules.recordJson},
           ${JSON.stringify({ status: "destroyed", updatedAt: input.updatedAt })}
-        )`,
+        ), '$.ownerAccountId', '$.ownershipEpoch', '$.managementState', '$.managementEpoch', '$.storageRoot')`,
         updatedAt: input.updatedAt,
       })
       .where(eligibility);
@@ -8686,7 +8675,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           currentStateGeneration: updated.currentStateGeneration,
           currentOutputId: updated.currentOutputId ?? null,
           status: updated.status,
-          recordJson: updated,
+          recordJson: capsuleWithoutPhysicalOwnership(updated),
           updatedAt: updated.updatedAt,
         })
         .where(eq(schema.capsules.id, updated.id)),
@@ -8835,7 +8824,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         }),
         this.#orm.update(schema.capsules).set({
           currentStateVersionId: state.id, currentStateGeneration: 1,
-          currentOutputId: null, status: "error", recordJson: updated,
+          currentOutputId: null, status: "error", recordJson: capsuleWithoutPhysicalOwnership(updated),
           updatedAt: updated.updatedAt,
           executionAuthorityEpoch: input.expectedExecutionAuthorityEpoch + 1,
         }).where(and(eq(schema.capsules.id, updated.id),
@@ -8976,7 +8965,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           currentStateGeneration: updated.currentStateGeneration,
           currentOutputId: updated.currentOutputId ?? null,
           status: updated.status,
-          recordJson: updated,
+          recordJson: capsuleWithoutPhysicalOwnership(updated),
           updatedAt: updated.updatedAt,
         })
         .where(eq(schema.capsules.id, updated.id)),
@@ -16655,8 +16644,34 @@ const D1_APP_OWNERSHIP_STATEMENTS = [
 ] as const;
 
 const D1_APP_AUTHORIZATION_STATEMENTS = [
-  ...D1_APP_OWNERSHIP_TRANSFER_SCHEMA,
-  ...D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA,
+  `create table if not exists capsule_ownership_transfers (
+    id text primary key,
+    capsule_id text not null,
+    from_account_id text not null,
+    to_account_id text not null,
+    ownership_epoch integer not null constraint capsule_ownership_transfers_epoch_check check (ownership_epoch >= 0),
+    drain_management_epoch integer,
+    state text not null constraint capsule_ownership_transfers_state_check check (state in ('pending','accepted','cancelled')),
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create unique index if not exists capsule_ownership_transfers_one_pending
+    on capsule_ownership_transfers (capsule_id) where state = 'pending'`,
+  `create index if not exists capsule_ownership_transfers_recipient
+    on capsule_ownership_transfers (to_account_id, state)`,
+  `create table if not exists app_credential_mint_leases (
+    id text primary key,
+    capsule_id text not null,
+    run_id text not null,
+    owner_account_id text not null,
+    ownership_epoch integer not null,
+    management_epoch integer not null,
+    actor_account_ids_json text not null,
+    expires_at integer not null,
+    created_at text not null
+  )`,
+  `create index if not exists app_credential_mint_leases_capsule_expiry
+    on app_credential_mint_leases (capsule_id, expires_at)`,
 ] as const;
 
 const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [

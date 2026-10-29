@@ -13,10 +13,12 @@ import type { AppAccessResolver } from "../../../../contract/app-access.ts";
 import type { D1Like } from "../../../../core/adapters/storage/d1.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { D1AppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
 setDefaultTimeout(30_000);
 const clients: PGliteSqlClient[] = [];
+const appOwnershipStores = new WeakMap<OpenTofuControlStore, AppOwnershipStore>();
 afterEach(async () => { await Promise.all(clients.splice(0).map((client) => client.close())); });
 
 const access: AppAccessResolver = {
@@ -30,7 +32,7 @@ async function fixtures(now: () => number) {
   const pg = await PGliteSqlClient.create();
   clients.push(pg);
   const d1 = new SqliteFakeD1();
-  return [
+  const result = [
     { label: "postgres", store: new SqlOpenTofuControlStore({ client: pg }) as OpenTofuControlStore,
       leases: new SqlAppMintLeaseStore(pg, { now }), ownership: new SqlAppAuthorizationStore(pg, access),
       async addMember(capsuleId: string, accountId: string) {
@@ -93,6 +95,9 @@ async function fixtures(now: () => number) {
         return row?.count ?? -1;
       } },
   ] as const;
+  appOwnershipStores.set(result[0].store, new SqlAppOwnershipStore(pg, result[0].store));
+  appOwnershipStores.set(result[1].store, new D1AppOwnershipStore(d1, result[1].store));
+  return result;
 }
 
 function plan(capsule: Capsule, id: string, createdBy = "owner"): PlanRun {
@@ -124,7 +129,10 @@ async function seedOwned(store: OpenTofuControlStore, id: string): Promise<Capsu
   const { capsule } = await seedCapsuleModel(store, { capsuleId: id });
   const owned: Capsule = { ...capsule, ownerAccountId: "owner", ownershipEpoch: 0,
     managementState: "active", managementEpoch: 0 };
-  await store.putCapsule(owned);
+  const authority = appOwnershipStores.get(store);
+  if (!authority) throw new Error("Owned fixture requires canonical ownership storage");
+  expect(await authority.initializeOwnershipIfMissing({ capsuleId: id, ownerAccountId: "owner", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${id}` })).toBe(true);
   return owned;
 }
 
@@ -254,7 +262,9 @@ test("Source mint requires the persisted app Source, actor, and running Run", as
     const original = (await store.getCapsule(`cap_mint_source_${label}`))!;
     const capsule: Capsule = { ...original, ownerAccountId: "owner", ownershipEpoch: 0,
       managementState: "active", managementEpoch: 0 };
-    await store.putCapsule(capsule);
+    expect(await appOwnershipStores.get(store)!.initializeOwnershipIfMissing({ capsuleId: capsule.id,
+      ownerAccountId: "owner", ownershipEpoch: 0, managementState: "active", managementEpoch: 0,
+      storageRoot: `apps/${capsule.id}` })).toBe(true);
     await store.putSource({ ...source, ownerCapsuleId: capsule.id, authConnectionId: "release-operator" });
     const queued: SourceSyncRun = { id: `source_run_${label}`, kind: "source_sync",
       workspaceId: capsule.workspaceId, sourceId: source.id, actorAccountId: "owner",
@@ -313,6 +323,7 @@ test("stored Connection revocation during driver wait blocks final credential re
 test("D1 transfer's final atomic guard rejects a lease inserted after its pre-read", async () => {
   const db = new SqliteFakeD1();
   const store = new CloudflareD1OpenTofuControlStore(db);
+  appOwnershipStores.set(store, new D1AppOwnershipStore(db, store));
   const capsule = await seedOwned(store, "cap_mint_final_guard");
   let armed = false;
   let batches = 0;
@@ -335,8 +346,8 @@ test("D1 transfer's final atomic guard rejects a lease inserted after its pre-re
   armed = true;
   await expect(ownership.acceptTransfer({ transferId: transfer.transferId,
     actorAccountId: "recipient" })).rejects.toThrow();
-  expect((await store.getCapsule(capsule.id))?.ownerAccountId).toBe("owner");
-  expect((await store.getCapsule(capsule.id))?.managementState).toBe("draining");
+  expect((await appOwnershipStores.get(store)!.getOwnership(capsule.id))?.ownerAccountId).toBe("owner");
+  expect((await appOwnershipStores.get(store)!.getOwnership(capsule.id))?.managementState).toBe("draining");
   await db.prepare(`delete from app_credential_mint_leases where id='inflight'`).run();
   expect((await ownership.acceptTransfer({ transferId: transfer.transferId,
     actorAccountId: "recipient" })).state).toBe("accepted");
@@ -352,11 +363,27 @@ test("an owned app cannot mint when its private lease table is absent", async ()
     ["d1", new CloudflareD1OpenTofuControlStore(d1), new D1AppMintLeaseStore(d1 as unknown as D1Like),
       async () => { await d1.prepare(`drop table app_credential_mint_leases`).run(); }],
   ] as const) {
+    appOwnershipStores.set(store, label === "postgres" ? new SqlAppOwnershipStore(pg, store) : new D1AppOwnershipStore(d1, store));
     const capsule = await seedOwned(store, `cap_mint_missing_${label}`);
     const running = await runningPlan(store, capsule, `plan_mint_missing_${label}`);
     await removeTable();
     await expect(leases.begin({ capsuleId: capsule.id, runId: running.id,
       expectedOwnerAccountId: "owner", expectedOwnershipEpoch: 0,
       expectedManagementEpoch: 0, expectedActorAccountIds: ["owner"], connections: releaseConnection }), label).rejects.toThrow();
+  }
+});
+
+test("mint issuance rejects a replacement Run claim with otherwise identical authority", async () => {
+  for (const fixture of await fixtures(() => 1_000)) {
+    const capsule = await seedOwned(fixture.store, `cap_claim_replaced_${fixture.label}`);
+    const run = await runningPlan(fixture.store, capsule, `plan_claim_replaced_${fixture.label}`);
+    const lease = await fixture.leases.begin({ capsuleId: capsule.id, runId: run.id,
+      expectedOwnerAccountId: "owner", expectedOwnershipEpoch: 0,
+      expectedManagementEpoch: 0, expectedActorAccountIds: ["owner"], connections: releaseConnection });
+    expect(lease, fixture.label).toBeDefined();
+    expect((await fixture.store.transitionRun({ id: run.id, kind: "plan", expectFrom: ["running"],
+      expectLeaseToken: `run-lease-${run.id}`, expectHeartbeatAt: 2, setLeaseToken: "replacement-claim", run })).won, fixture.label).toBe(true);
+    expect(await fixture.leases.finish(lease!, "issued"), fixture.label).toBe(false);
+    expect(await fixture.leaseCount(capsule.id), fixture.label).toBe(0);
   }
 });

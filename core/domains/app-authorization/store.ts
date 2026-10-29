@@ -85,6 +85,9 @@ async function sqlOwnershipEvent(tx: SqlClient, event: ReturnType<typeof ownersh
 const unavailable = () => new AppAuthorizationError("feature_unavailable", "App ownership storage is unavailable.");
 const conflict = (message: string) => new AppAuthorizationError("conflict", message);
 const pending = () => new AppAuthorizationError("ownership_transfer_pending", "App management is draining; retry after active Runs settle.");
+const MAX_RECIPIENT_PENDING_TRANSFERS = 50;
+const MAX_OWNER_TRANSFERS_PER_HOUR = 10;
+const transferLimit = () => new AppAuthorizationError("conflict", "Ownership transfer limit reached; retry later.");
 
 function schemaError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -405,8 +408,21 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
   async createTransfer(input: TransferCreationInput) {
     try {
       return await this.client.transaction(async (tx) => {
-        requireOwner(await this.#owner(tx, input.capsuleId, true), input);
+        const owner = requireOwner(await this.#owner(tx, input.capsuleId, true), input);
         if (input.toAccountId === input.actorAccountId) throw conflict("Owner cannot transfer to self.");
+        // Serialize limits across different Capsules and recipients.
+        await tx.query(`select pg_advisory_xact_lock(hashtext($1))`, [`transfer-sender:${input.actorAccountId}`]);
+        await tx.query(`select pg_advisory_xact_lock(hashtext($1))`, [`transfer-recipient:${input.toAccountId}`]);
+        const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const limits = await tx.query<{ pending_count: string | number; recent_count: string | number }>(
+          `select
+             (select count(*) from takosumi_capsule_ownership_transfers where to_account_id=$1 and state='pending') as pending_count,
+             (select count(*) from takosumi_capsule_ownership_transfers where from_account_id=$2 and created_at >= $3) as recent_count`,
+          [input.toAccountId, input.actorAccountId, cutoff],
+        );
+        if (!limits.rows[0]) throw unavailable();
+        if (Number(limits.rows[0].pending_count) >= MAX_RECIPIENT_PENDING_TRANSFERS ||
+          Number(limits.rows[0].recent_count) >= MAX_OWNER_TRANSFERS_PER_HOUR) throw transferLimit();
         const existing = await tx.query<{ id: string }>(
           `select id from takosumi_capsule_ownership_transfers where capsule_id=$1 and state='pending'`,
           [input.capsuleId],
@@ -420,6 +436,9 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
            values ($1,$2,$3,$4,$5,'pending',$6,$6)`,
           [transferId, input.capsuleId, input.actorAccountId, input.toAccountId, input.expectedOwnershipEpoch, now],
         );
+        await sqlOwnershipEvent(tx, ownershipEvent({ spaceId: owner.space_id, capsuleId: input.capsuleId,
+          actorId: input.actorAccountId, action: "app.ownership_transfer_created", targetId: input.toAccountId,
+          recipientAccountId: input.toAccountId }));
         return { transferId, state: "pending" as const };
       });
     } catch (error) { withSchemaError(error); }
@@ -435,7 +454,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
     try {
       const field = input.capsuleId ? "capsule_id" : "to_account_id";
       const rows = await this.client.query<TransferRow>(
-        `select * from takosumi_capsule_ownership_transfers where ${field}=$1 and state='pending' order by created_at,id`,
+        `select * from takosumi_capsule_ownership_transfers where ${field}=$1 and state='pending' order by created_at,id limit ${MAX_RECIPIENT_PENDING_TRANSFERS}`,
         [scope],
       );
       return rows.rows.map((row) => transferRecord(row)!);
@@ -450,11 +469,13 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         if (owner?.owner_account_id !== transfer.from_account_id || owner.ownership_epoch !== transfer.ownership_epoch) throw conflict("App ownership changed.");
         const now = new Date().toISOString();
         await tx.query(`update takosumi_capsule_ownership_transfers set state='cancelled',updated_at=$2 where id=$1`, [input.transferId, now]);
+        await sqlOwnershipEvent(tx, ownershipEvent({ spaceId: owner.space_id, capsuleId: transfer.capsule_id,
+          actorId: input.actorAccountId, action: "app.ownership_transfer_cancelled", targetId: transfer.to_account_id,
+          recipientAccountId: transfer.to_account_id }));
         if (owner.management_state === "draining") {
           if (transfer.drain_management_epoch !== owner.management_epoch) throw conflict("Another app management drain is active.");
           await tx.query(
-            `update takosumi_capsules set management_state='active',management_epoch=management_epoch+1,
-             installation_json=jsonb_set(jsonb_set(installation_json,'{managementState}','"active"'::jsonb),'{managementEpoch}',to_jsonb(management_epoch+1))
+            `update takosumi_capsules set management_state='active',management_epoch=management_epoch+1
              where id=$1`,
             [transfer.capsule_id],
           );
@@ -477,8 +498,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         // Persist drain on the first call; a caller retries after in-flight Runs settle.
         if (owner.management_state === "active") {
           await tx.query(
-            `update takosumi_capsules set management_state='draining',management_epoch=management_epoch+1,
-             installation_json=jsonb_set(jsonb_set(installation_json,'{managementState}','"draining"'::jsonb),'{managementEpoch}',to_jsonb(management_epoch+1))
+            `update takosumi_capsules set management_state='draining',management_epoch=management_epoch+1
              where id=$1`,
             [transfer.capsule_id],
           );
@@ -552,8 +572,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         await tx.query(`delete from takosumi_capsule_members where capsule_id=$1`, [transfer.capsule_id]);
         await tx.query(
           `update takosumi_capsules set owner_account_id=$2,ownership_epoch=ownership_epoch+1,
-           management_state='active',management_epoch=management_epoch+1,
-           installation_json=jsonb_set(jsonb_set(jsonb_set(jsonb_set(installation_json,'{ownerAccountId}',to_jsonb($2::text)),'{ownershipEpoch}',to_jsonb(ownership_epoch+1)),'{managementState}','"active"'::jsonb),'{managementEpoch}',to_jsonb(management_epoch+1))
+           management_state='active',management_epoch=management_epoch+1
            where id=$1`,
           [transfer.capsule_id, transfer.to_account_id],
         );
@@ -802,18 +821,26 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
   }
   async createTransfer(input: TransferCreationInput) {
     return this.#safe(async () => {
-      requireOwner((await this.#owner(input.capsuleId)) ?? undefined, input);
+      const owner = requireOwner((await this.#owner(input.capsuleId)) ?? undefined, input);
       if (input.actorAccountId === input.toAccountId) throw conflict("Owner cannot transfer to self.");
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       try {
         await this.#batch([
           this.#ownerGuard(input.capsuleId, input.actorAccountId, input.expectedOwnershipEpoch),
+          this.#guard(`(select count(*) from capsule_ownership_transfers where to_account_id=? and state='pending')<?`,
+            [input.toAccountId, MAX_RECIPIENT_PENDING_TRANSFERS]),
+          this.#guard(`(select count(*) from capsule_ownership_transfers where from_account_id=? and created_at>=?)<?`,
+            [input.actorAccountId, cutoff, MAX_OWNER_TRANSFERS_PER_HOUR]),
           this.db.prepare(
             `insert into capsule_ownership_transfers
              (id,capsule_id,from_account_id,to_account_id,ownership_epoch,state,created_at,updated_at)
              values (?,?,?,?,?,'pending',?,?)`,
           ).bind(id, input.capsuleId, input.actorAccountId, input.toAccountId, input.expectedOwnershipEpoch, now, now),
+          this.#event(ownershipEvent({ spaceId: owner.space_id, capsuleId: input.capsuleId,
+            actorId: input.actorAccountId, action: "app.ownership_transfer_created", targetId: input.toAccountId,
+            recipientAccountId: input.toAccountId })),
         ]);
       } catch (error) {
         if (/capsule_ownership_transfers_one_pending|UNIQUE constraint failed: capsule_ownership_transfers.capsule_id/i.test(String(error))) throw pending();
@@ -830,7 +857,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
     return this.#safe(async () => {
       const field = input.capsuleId ? "capsule_id" : "to_account_id";
       const rows = await this.db.prepare(
-        `select * from capsule_ownership_transfers where ${field}=? and state='pending' order by created_at,id`,
+        `select * from capsule_ownership_transfers where ${field}=? and state='pending' order by created_at,id limit ${MAX_RECIPIENT_PENDING_TRANSFERS}`,
       ).bind(input.capsuleId ?? input.toAccountId).all<TransferRow>();
       return (rows.results ?? []).map((row) => transferRecord(row)!);
     });
@@ -846,11 +873,13 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
         this.#transferGuard(transfer),
         this.#ownerGuard(transfer.capsule_id, transfer.from_account_id, transfer.ownership_epoch, owner.management_state),
         this.db.prepare(`update capsule_ownership_transfers set state='cancelled',updated_at=? where id=?`).bind(now, input.transferId),
+        this.#event(ownershipEvent({ spaceId: owner.space_id, capsuleId: transfer.capsule_id,
+          actorId: input.actorAccountId, action: "app.ownership_transfer_cancelled", targetId: transfer.to_account_id,
+          recipientAccountId: transfer.to_account_id })),
       ];
       if (owner.management_state === "draining") {
         statements.push(this.db.prepare(
-          `update capsules set management_state='active',management_epoch=management_epoch+1,
-           record_json=json_set(record_json,'$.managementState','active','$.managementEpoch',management_epoch+1)
+          `update capsules set management_state='active',management_epoch=management_epoch+1
            where id=?`,
         ).bind(transfer.capsule_id));
       }
@@ -949,8 +978,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
           this.db.prepare(`update capsule_ownership_transfers set drain_management_epoch=? where id=?`)
             .bind(owner.management_epoch + 1, transfer.id),
           this.db.prepare(
-            `update capsules set management_state='draining',management_epoch=management_epoch+1,
-             record_json=json_set(record_json,'$.managementState','draining','$.managementEpoch',management_epoch+1)
+            `update capsules set management_state='draining',management_epoch=management_epoch+1
              where id=?`,
           ).bind(transfer.capsule_id),
         );
@@ -1000,11 +1028,9 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
         this.db.prepare(`delete from capsule_members where capsule_id=?`).bind(transfer.capsule_id),
         this.db.prepare(
           `update capsules set owner_account_id=?,ownership_epoch=ownership_epoch+1,
-           management_state='active',management_epoch=management_epoch+1,
-           record_json=json_set(record_json,'$.ownerAccountId',?,'$.ownershipEpoch',ownership_epoch+1,
-             '$.managementState','active','$.managementEpoch',management_epoch+1)
+           management_state='active',management_epoch=management_epoch+1
            where id=?`,
-        ).bind(transfer.to_account_id, transfer.to_account_id, transfer.capsule_id),
+        ).bind(transfer.to_account_id, transfer.capsule_id),
         this.db.prepare(`update capsule_ownership_transfers set state='accepted',updated_at=? where id=?`).bind(now, input.transferId),
         ...notifications.map((accountId) => this.#event(ownershipEvent({ spaceId: owner.space_id,
           capsuleId: transfer.capsule_id, actorId: input.actorAccountId,

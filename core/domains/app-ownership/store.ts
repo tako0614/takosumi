@@ -220,29 +220,23 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
   readonly #billing = new Map<string, AccountBillingBinding>();
   constructor(control: OpenTofuControlStore) { super(control); }
   async getOwnership(id: string): Promise<CapsuleOwnership | undefined> {
-    const capsule = await this.control.getCapsule(id);
-    return capsule?.ownerAccountId ? {
-      capsuleId: id,
-      ownerAccountId: capsule.ownerAccountId,
-      ownershipEpoch: capsule.ownershipEpoch ?? 0,
-      managementState: capsule.managementState ?? "active",
-      managementEpoch: capsule.managementEpoch ?? 0,
-      storageRoot: capsule.storageRoot ?? `apps/${id}`,
-    } : undefined;
+    const control = this.control as import("../deploy-control/store.ts").InMemoryOpenTofuControlStore;
+    return typeof control.getCapsuleOwnership === "function"
+      ? control.getCapsuleOwnership(id)
+      : undefined;
   }
   async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);
     if (!validOwnershipEpochCas(record, expectedOwnershipEpoch)) return false;
-    const capsule = await this.control.getCapsule(record.capsuleId);
-    if (!capsule || (capsule.ownershipEpoch ?? 0) !== expectedOwnershipEpoch ||
-      (capsule.ownerAccountId != null && capsule.ownerAccountId !== record.ownerAccountId &&
+    const [capsule, current] = await Promise.all([
+      this.control.getCapsule(record.capsuleId), this.getOwnership(record.capsuleId),
+    ]);
+    if (!capsule || (current?.ownershipEpoch ?? 0) !== expectedOwnershipEpoch ||
+      (current != null && current.ownerAccountId !== record.ownerAccountId &&
         record.ownershipEpoch !== expectedOwnershipEpoch + 1)) return false;
     const control = this.control as import("../deploy-control/store.ts").InMemoryOpenTofuControlStore;
-    const { capsuleId: _capsuleId, ...fields } = record;
-    void _capsuleId;
-    const changed = typeof control.setCapsuleOwnership === "function"
-      ? control.setCapsuleOwnership(record, false, expectedOwnershipEpoch)
-      : !!await this.control.putCapsule({ ...capsule, ...fields });
+    const changed = typeof control.setCapsuleOwnership === "function" &&
+      control.setCapsuleOwnership(record, false, expectedOwnershipEpoch);
     if (!changed) return false;
     this.#members.delete(`${record.capsuleId}\0${record.ownerAccountId}`);
     control.deleteCapsuleMember?.(record.capsuleId, record.ownerAccountId);
@@ -252,13 +246,10 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
     validOwnership(record);
     if (await this.getOwnership(record.capsuleId)) return false;
     const capsule = await this.control.getCapsule(record.capsuleId);
-    if (!capsule || capsule.ownerAccountId) return false;
+    if (!capsule) return false;
     const control = this.control as import("../deploy-control/store.ts").InMemoryOpenTofuControlStore;
-    const { capsuleId: _capsuleId, ...fields } = record;
-    void _capsuleId;
-    const changed = typeof control.setCapsuleOwnership === "function"
-      ? control.setCapsuleOwnership(record, true)
-      : !!await this.control.putCapsule({ ...capsule, ...fields });
+    const changed = typeof control.setCapsuleOwnership === "function" &&
+      control.setCapsuleOwnership(record, true);
     if (!changed) return false;
     this.#members.delete(`${record.capsuleId}\0${record.ownerAccountId}`);
     control.deleteCapsuleMember?.(record.capsuleId, record.ownerAccountId);

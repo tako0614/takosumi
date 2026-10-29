@@ -10,6 +10,13 @@ import {
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import {
+  SourcesService,
+  type CompatibilityCheckManagementContext,
+  type InstallPlanCompatibilityCheckRequest,
+} from "../../../../core/domains/sources/mod.ts";
+import type { CapsuleCompatibilityAnalysis } from "../../../../core/domains/sources/capsule_compatibility.ts";
+import type { StoredSource } from "../../../../core/domains/deploy-control/store.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import {
   GIT_REVISION_PREPARATION_STALL_AFTER_MS,
@@ -38,6 +45,7 @@ const WORKSPACE = {
 
 test("Git revision plan reconciles an existing Capsule to one reviewable pinned Plan Run", async () => {
   const fixture = revisionFixture();
+  await fixture.enableRealSourcesService();
   const created = await fixture.request(
     "/api/v1/capsules/cap_revision/revision-plans",
     "POST",
@@ -135,7 +143,11 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
   expect(reviewable.links.reconcile).toBeUndefined();
   expect(fixture.counts).toEqual({ sync: 1, compatibility: 1, plan: 1 });
   expect([...fixture.runs.values()].find((run) => run.type === "compatibility_check")?.createdBy)
-    .toBe(WORKSPACE.ownerUserId);
+    .toMatch(/^git-revision-plan:[^:]+:[0-9a-f]{16}$/u);
+  const storedCompatibilityRun = await fixture.getStoredCompatibilityRun();
+  expect(storedCompatibilityRun?.createdBy).toBe(
+    [...fixture.runs.values()].find((run) => run.type === "compatibility_check")?.createdBy,
+  );
   expect([...fixture.runs.values()].find((run) => run.type === "plan")?.createdBy)
     .toBe(WORKSPACE.ownerUserId);
   expect(fixture.approvalCalls).toBe(0);
@@ -836,6 +848,7 @@ function revisionFixture(
   const snapshots = new Map<string, SourceSnapshot>();
   const reports = new Map<string, CapsuleCompatibilityReport>();
   const runs = new Map<string, Run>();
+  let realSourcesService: SourcesService | undefined;
   const counts = { sync: 0, compatibility: 0, plan: 0 };
   let approvalCalls = 0;
   let applyCalls = 0;
@@ -965,15 +978,8 @@ function revisionFixture(
     listRuns: async () => [...runs.values()],
     createSourceCompatibilityCheck: async (
       sourceId: string,
-      request: {
-        readonly sourceSnapshotId?: string;
-        readonly capsuleId?: string;
-        readonly installPlanIdentity?: {
-          readonly runId: string;
-          readonly reportId: string;
-          readonly createdBy: string;
-        };
-      },
+      request: InstallPlanCompatibilityCheckRequest,
+      managementContext?: CompatibilityCheckManagementContext,
     ) => {
       const identity = request.installPlanIdentity;
       if (!identity) throw new Error("compatibility identity missing");
@@ -983,6 +989,21 @@ function revisionFixture(
           "deterministic compatibility identity conflict",
           { reason: "compatibility_evidence_identity_conflict" },
         );
+      }
+      if (realSourcesService) {
+        if (!managementContext) {
+          throw new Error("compatibility management context missing");
+        }
+        const result = await realSourcesService.createCompatibilityCheck(
+          sourceId,
+          request,
+          managementContext,
+        );
+        counts.compatibility += 1;
+        if (result.run) runs.set(result.run.id, result.run);
+        reports.set(result.report.id, result.report);
+        lose("compatibility");
+        return result;
       }
       const existingRun = runs.get(identity.runId);
       const existingReport = reports.get(identity.reportId);
@@ -1118,6 +1139,36 @@ function revisionFixture(
     throw new Error(`lost ack ${kind}`);
   }
 
+  async function enableRealSourcesService(): Promise<void> {
+    const storedSource: StoredSource = {
+      ...source,
+      hookSecretHash: "revision-test-hook-secret-hash",
+      autoSync: false,
+    };
+    await Promise.all([
+      managementStore.putSource(storedSource),
+      managementStore.putCapsule(capsule),
+      managementStore.putInstallConfig(installConfig),
+    ]);
+    realSourcesService = new SourcesService({
+      store: managementStore,
+      compatibilityAnalyzer: {
+        analyze: async (): Promise<CapsuleCompatibilityAnalysis> => ({
+          level: "ready",
+          findings: [],
+          providerPackages: [],
+          rootProviderRequirements: [],
+          resources: [],
+          dataSources: [],
+          provisioners: [],
+          rootModuleVariables: [],
+          rootModuleVariableDeclarations: [],
+          rootModuleOutputs: [],
+        }),
+      },
+    });
+  }
+
   async function request(
     path: string,
     method = "GET",
@@ -1147,6 +1198,15 @@ function revisionFixture(
   return {
     planStore,
     runs,
+    enableRealSourcesService,
+    async getStoredCompatibilityRun() {
+      const run = [...runs.values()].find((candidate) =>
+        candidate.type === "compatibility_check"
+      );
+      return run
+        ? await managementStore.getCompatibilityCheckRun(run.id)
+        : undefined;
+    },
     preparationStarted,
     releasePreparation: () => releasePreparationGate?.(),
     async beginDrain() {
@@ -1223,7 +1283,7 @@ function revisionFixture(
         updatedAt: new Date().toISOString(),
       };
       syncRuns.set(id, succeeded);
-      snapshots.set(snapshotId, {
+      const snapshot: SourceSnapshot = {
         id: snapshotId,
         origin: "git",
         workspaceId: WORKSPACE.id,
@@ -1250,7 +1310,9 @@ function revisionFixture(
         },
         fetchedByRunId: canonicalSnapshotId ? "ssr_previous_observation" : current.id,
         fetchedAt: new Date().toISOString(),
-      });
+      };
+      snapshots.set(snapshotId, snapshot);
+      if (realSourcesService) void managementStore.putSourceSnapshot(snapshot);
     },
     request,
   };

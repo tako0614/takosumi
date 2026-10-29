@@ -220,15 +220,15 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | GET | `/api/v1/capsules/{capsuleId}/members` | 所有者・メンバー。メールは所有者にだけ表示 |
 | POST | `/api/v1/capsules/{capsuleId}/members` | 所有者。`{ email, consent: "connections_and_code" }`。確認済みアカウントを追加 |
 | DELETE | `/api/v1/capsules/{capsuleId}/members/{accountId}` | 所有者または離脱本人。本人の待機・承認待ちRunを同じ書き込みで取消 |
-| GET | `/api/v1/capsules/{capsuleId}/ownership-transfers?state=pending` | 所有者・受取人。`{ ownershipTransfers: [...] }` |
-| GET | `/api/v1/ownership-transfers?state=pending` | 本人宛の保留中譲渡。`{ ownershipTransfers: [...] }` |
-| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | 所有者。`{ toAccountId }` |
+| GET | `/api/v1/capsules/{capsuleId}/ownership-transfers?state=pending` | 所有者・受取人。`{ ownershipTransfers: [...] }`。各要素にアプリ名と送信者の表示名を含む |
+| GET | `/api/v1/ownership-transfers?state=pending` | 本人宛の保留中譲渡を最大50件返す。各要素にアプリ名と送信者の表示名を含む |
+| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | 所有者。`{ toAccountId }`。受取人の保留中譲渡は最大50件、送信者の作成は1時間に最大10件 |
 | POST | `/api/v1/ownership-transfers/{transferId}/accept` | 受取人。実行をdrainし、所有epochを増加、接続bindingをリセット |
 | DELETE | `/api/v1/ownership-transfers/{transferId}` | 所有者。保留中の譲渡を取消 |
 | GET, POST | `/api/v1/connections` | 本人の個人接続とoperatorのbindable接続。新規接続の所有者は本人 |
 | GET | `/api/v1/connections?capsuleId=…&projection=labels` | 所有者・メンバー。所有者の利用可能な接続を `{ id, provider, displayName }` だけで表示。`id` はbindingに必要な識別子 |
 | POST | `/api/v1/connections/oauth/{helperId}/start` | アカウント資格情報。workspaceId省略時は本人所有の個人接続を開始 |
-| GET | `/api/v1/source-ref-resolutions?url=…` | アカウント資格情報。公開Git sourceのstable SemVerタグを解決 |
+| GET | `/api/v1/source-ref-resolutions?url=…` | write scopeを持つアカウント資格情報。runnerを起動して公開Git sourceのstable SemVerタグを解決 |
 | POST | `/api/v1/install-plans` | アカウント資格情報。`mode: "attempt"`、workspace指定なし。本人がアプリ所有者 |
 | GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ |
 

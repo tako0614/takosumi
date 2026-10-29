@@ -1,3 +1,4 @@
+import { InMemoryAppOwnershipStore, type AppOwnershipStore } from "../../domains/app-ownership/store.ts";
 import { CredentialRecipeRefreshFailure } from "./driver_ports.ts";
 /**
  * In-process credential Vault broker (Phase 1A credential core).
@@ -407,6 +408,7 @@ export interface StaticSecretConnectionVaultDependencies {
   readonly store: OpenTofuControlStore;
   readonly crypto: SecretBoundaryCrypto;
   readonly appAccessResolver?: AppAccessResolver;
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly appMintLeases?: AppMintLeaseStore;
   /** Immutable, release-owned credentialless connections; never persisted here. */
   readonly operatorProviderConnections?: readonly ProviderConnection[];
@@ -445,6 +447,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   readonly #store: OpenTofuControlStore;
   readonly #crypto: SecretBoundaryCrypto;
   readonly #appAccessResolver?: AppAccessResolver;
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #appMintLeases?: AppMintLeaseStore;
   readonly #fetch: VaultFetch;
   readonly #now: () => Date;
@@ -465,6 +468,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     this.#store = deps.store;
     this.#crypto = deps.crypto;
     this.#appAccessResolver = deps.appAccessResolver;
+    this.#appOwnership = deps.appOwnership ?? (deps.store instanceof InMemoryOpenTofuControlStore
+      ? new InMemoryAppOwnershipStore(deps.store) : undefined);
     this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
     this.#appMintLeases = deps.appMintLeases ?? (deps.store instanceof InMemoryOpenTofuControlStore
@@ -1396,7 +1401,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const env: Record<string, string> = {};
     const applyForBudget = options?.runId ? await this.#store.getApplyRun(options.runId) : undefined;
     const planForBudget = options?.runId ? await this.#store.getPlanRun(applyForBudget?.planRunId ?? options.runId) : undefined;
-    const capsuleForMint = options?.capsuleId ? await this.#store.getCapsule(options.capsuleId) : undefined;
+    const capsuleForMint = options?.capsuleId ? await this.#capsuleWithOwnership(options.capsuleId) : undefined;
     if (options?.capsuleId && !capsuleForMint) {
       throw new ConnectionVaultError("failed_precondition", "Capsule is unavailable for credential mint");
     }
@@ -1612,6 +1617,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
   }
 
+  async #capsuleWithOwnership(capsuleId: string): Promise<Capsule | undefined> {
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule) return undefined;
+    const ownership = await this.#appOwnership?.getOwnership(capsuleId);
+    // Legacy JSON can survive a transfer; only the ownership port is authority.
+    return { ...capsule, ownerAccountId: ownership?.ownerAccountId,
+      ownershipEpoch: ownership?.ownershipEpoch, managementState: ownership?.managementState,
+      managementEpoch: ownership?.managementEpoch };
+  }
+
   async #beginAppMintLease(capsule: Capsule, runId: string | undefined,
     actorIds: readonly (string | undefined)[], connections: readonly AppMintConnectionBinding[]): Promise<AppMintLease> {
     if (!this.#appMintLeases || !runId || !capsule.ownerAccountId ||
@@ -1822,7 +1837,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         throw new ConnectionVaultError("failed_precondition", "Source credential authority changed");
       }
       if (source.ownerCapsuleId) {
-        const capsule = await this.#store.getCapsule(source.ownerCapsuleId);
+        const capsule = await this.#capsuleWithOwnership(source.ownerCapsuleId);
         sourceCapsule = capsule;
         sourceOwnerAccountId = capsule?.ownerAccountId ?? (capsule === undefined
           ? (await this.#store.getWorkspace(workspaceId))?.ownerUserId : undefined);
@@ -1850,7 +1865,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     if (connection.scope === "personal") {
       const source = sourceId ? await this.#store.getSource(sourceId) : undefined;
-      const capsule = source?.ownerCapsuleId ? await this.#store.getCapsule(source.ownerCapsuleId) : undefined;
+      const capsule = source?.ownerCapsuleId ? await this.#capsuleWithOwnership(source.ownerCapsuleId) : undefined;
       const expectedOwner = capsule?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
       if (!expectedOwner || connection.ownerAccountId !== expectedOwner) {
         throw new ConnectionVaultError("failed_precondition", "Source connection is not owned by the app owner", undefined, "connection_not_owned_by_app_owner");

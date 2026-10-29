@@ -1199,6 +1199,7 @@ export async function createTakosumiService(
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
           appAccessResolver: appAccess,
+          appOwnership: appOwnershipStore,
           ...(appMintLeases ? { appMintLeases } : {}),
           operatorProviderConnections: operatorProviderConnectionProjection,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
@@ -1252,6 +1253,7 @@ export async function createTakosumiService(
   // compositions fall back to the controller's inline dispatcher once the
   // controller is constructed.
   const sourcesService = new SourcesService({
+    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     plans: gitInstallPlanStore,
     enqueueSourceSync,
@@ -1291,6 +1293,7 @@ export async function createTakosumiService(
   });
   const connectionsService = new ConnectionsService({
     store: sharedOpenTofuStore,
+    appOwnership: appOwnershipStore,
     operatorProviderConnections: operatorProviderConnectionProjection,
     allowOperatorScopedProviderConnections:
       options.allowOperatorScopedProviderConnections === true,
@@ -1362,6 +1365,7 @@ export async function createTakosumiService(
     retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
   });
   opentofuController = new OpenTofuController({
+    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     validateUninstallRequester: options.validateUninstallRequester,
     ...(options.privateRunFiles
@@ -1429,6 +1433,7 @@ export async function createTakosumiService(
   // Status is computed from member runs at read time. Constructed after the
   // controller it drives.
   const runGroupsService = new RunGroupsService({
+    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     controller: opentofuController,
     actor: "system:run-group",
@@ -1909,6 +1914,7 @@ export async function createTakosumiService(
     finalizeDueCapsuleUninstalls: (finalizeOptions) =>
       finalizeDueCapsuleUninstalls(
         {
+          appOwnership: appOwnershipStore,
           store: sharedOpenTofuStore,
           capsules: capsulesService,
           controller: opentofuController,

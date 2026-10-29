@@ -53,6 +53,7 @@ import {
   parseProviderBindings,
 } from "./parse.ts";
 import { resolveRepoOwnedInstallModulePath } from "./repo-owned-install-config.ts";
+import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
   capsuleInstallConfigReAdoptionAuthoritySnapshot,
   hasValidDerivedTargetSeal,
@@ -222,7 +223,7 @@ export async function handleCapsuleConfigurationPlans(
     ctx.operations,
     authority.capsule.workspaceId,
     request.providerBindings,
-    authority.capsule.ownerAccountId,
+    (await capsuleOwnerAuthority(ctx.operations, authority.capsule)).ownerAccountId,
   );
   if (!resolvedBindings.ok) {
     return errorJson(
@@ -505,13 +506,14 @@ async function finishConfigurationPlan(input: {
       evidence,
     });
     assertConfigurationCompatibilityPolicy(compatibility, input.target);
+    const ownership = await capsuleOwnerAuthority(input.ctx.operations, current);
     await assertConfigurationPlanRun({
       run: existingPlan,
       capsule: current,
-      planActor: current.ownerAccountId === undefined
+      planActor: !ownership.canonical
         ? evidence.planCreatedBy
         : input.receipt.actorSubject,
-      allowLegacySyntheticActor: current.ownerAccountId !== undefined,
+      allowLegacySyntheticActor: ownership.canonical,
       source,
       sourceSnapshot,
       targetInstallConfig: input.target,
@@ -994,7 +996,11 @@ async function createFreshPlanRun(input: {
   readonly expectedBaseStateVersionId: string | undefined;
   readonly evidence: ConfigurationEvidenceIdentity;
 }): Promise<string> {
-  const planActor = input.capsule.ownerAccountId === undefined
+  const ownership = await capsuleOwnerAuthority(
+    input.ctx.operations,
+    input.capsule,
+  );
+  const planActor = !ownership.canonical
     ? input.evidence.planCreatedBy
     : input.ctx.session.subject;
   // Run persistence happens before private-input sidecars, notification, and
@@ -1034,6 +1040,20 @@ async function createFreshPlanRun(input: {
     evidence: input.evidence,
   });
   return run.id;
+}
+
+async function capsuleOwnerAuthority(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<{ readonly canonical: boolean; readonly ownerAccountId?: string }> {
+  const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+  if (ownership) {
+    return { canonical: true, ownerAccountId: ownership.ownerAccountId };
+  }
+  const workspace = await operations.workspaces.getWorkspace(capsule.workspaceId);
+  return workspace.ownerUserId
+    ? { canonical: false, ownerAccountId: workspace.ownerUserId }
+    : { canonical: false };
 }
 
 async function planRunIfPresent(

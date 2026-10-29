@@ -390,13 +390,9 @@ test("app-owned private Source refuses a mint without pinned run actor authority
     sourceUrl: HTTPS_REPO_URL,
   });
   await store.putSource({ ...source, ownerCapsuleId: capsule.id, authConnectionId: conn.id });
-  await store.putCapsule({
-    ...capsule,
-    ownerAccountId: conn.ownerAccountId,
-    ownershipEpoch: 1,
-    managementState: "active",
-    managementEpoch: 0,
-  });
+  expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: conn.ownerAccountId!,
+    ownershipEpoch: 1, managementState: "active", managementEpoch: 0,
+    storageRoot: `apps/${capsule.id}` })).toBe(true);
   await expect(vault.mintForPhase({
     workspaceId: "space_1",
     phase: "source",
@@ -405,7 +401,7 @@ test("app-owned private Source refuses a mint without pinned run actor authority
     sourceId: source.id,
     runId: "missing_run",
   })).rejects.toThrow(/Source app ownership authority changed/);
-  await store.putSourceSyncRun({
+  await store.beginSourceSyncRun({
     id: "owned_sync",
     kind: "source_sync",
     workspaceId: "space_1",
@@ -416,12 +412,15 @@ test("app-owned private Source refuses a mint without pinned run actor authority
     ref: "main",
     path: ".",
     archiveRef: "archive/owned",
-    status: "running",
+    status: "queued",
     createdAt: "2026-06-04T00:00:00.000Z",
     updatedAt: "2026-06-04T00:00:00.000Z",
     code: "running",
     message: "",
-  });
+  }, { workspaceId: "space_1", managementState: "active", managementEpoch: 1 });
+  const sync = (await store.getSourceSyncRun("owned_sync"))!;
+  expect((await store.transitionRun({ id: sync.id, kind: "source_sync", expectFrom: ["queued"],
+    setLeaseToken: "source-fixture-claim", run: { ...sync, status: "running" } })).won).toBe(true);
   const request = () => vault.mintForPhase({
     workspaceId: "space_1",
     phase: "source",
@@ -482,12 +481,18 @@ test("paused Source driver discards its credential when the app drains", async (
   await store.putSource({ ...source, ownerCapsuleId: capsule.id, authConnectionId: conn.id });
   const owned = { ...capsule, ownerAccountId: conn.ownerAccountId, ownershipEpoch: 1,
     managementState: "active" as const, managementEpoch: 0 };
-  await store.putCapsule(owned);
-  await store.putSourceSyncRun({ id: "owned_sync_paused", kind: "source_sync",
+  expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: owned.ownerAccountId!,
+      ownershipEpoch: 1, managementState: "active", managementEpoch: 0,
+      storageRoot: `apps/${capsule.id}` })).toBe(true);
+  await store.beginSourceSyncRun({ id: "owned_sync_paused", kind: "source_sync",
     workspaceId: "space_1", sourceId: source.id, actorAccountId: "fixture-owner",
     ownershipEpoch: 1, url: HTTPS_REPO_URL, ref: "main", path: ".",
-    archiveRef: "archive/owned-paused", status: "running",
-    createdAt: "2026-06-04T00:00:00.000Z", updatedAt: "2026-06-04T00:00:00.000Z" });
+    archiveRef: "archive/owned-paused", status: "queued",
+    createdAt: "2026-06-04T00:00:00.000Z", updatedAt: "2026-06-04T00:00:00.000Z" },
+    { workspaceId: "space_1", managementState: "active", managementEpoch: 1 });
+  const sync = (await store.getSourceSyncRun("owned_sync_paused"))!;
+  expect((await store.transitionRun({ id: sync.id, kind: "source_sync", expectFrom: ["queued"],
+    setLeaseToken: "source-fixture-claim", run: { ...sync, status: "running" } })).won).toBe(true);
   const pending = vault.mintForPhase({ workspaceId: "space_1", phase: "source",
     sourceConnectionId: conn.id, sourceUrl: HTTPS_REPO_URL,
     sourceId: source.id, runId: "owned_sync_paused" });
@@ -1470,15 +1475,21 @@ test("owned app pins a self-renewed Connection before mint and refuses drain dur
     const { capsule } = await seedCapsuleModel(store, { workspaceId: "space_1" });
     const owned = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 1,
       managementState: "active" as const, managementEpoch: 0 };
-    await store.putCapsule(owned);
-    const plan: PlanRun = { id: "plan_refresh", workspaceId: "space_1", capsuleId: capsule.id,
+    expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: owned.ownerAccountId!,
+      ownershipEpoch: 1, managementState: "active", managementEpoch: 0,
+      storageRoot: `apps/${capsule.id}` })).toBe(true);
+    const plan: PlanRun = { id: "plan_refresh", executionInputsDigest: "sha256:fixture-inputs", workspaceId: "space_1", capsuleId: capsule.id,
       createdBy: "fixture-owner", ownershipEpoch: 1, appManagementEpoch: 0,
       source: { kind: "git", url: HTTPS_REPO_URL, ref: "main" }, sourceDigest: "sha256:source",
       operation: "update", runnerProfileId: "runner", variablesDigest: "sha256:variables",
       requiredProviders: [conn.provider], status: "running",
       policy: { status: "passed", reasons: [], checkedAt: 1 },
       policyDecisionDigest: "sha256:policy", auditEvents: [], createdAt: 1, updatedAt: 1 };
-    await store.putPlanRun(plan);
+    expect((await store.preparePlanRun({ run: { ...plan, status: "queued" },
+      inputs: { planRunId: plan.id, variables: {} },
+      expectedWorkspaceManagementAuthority: { workspaceId: "space_1", managementState: "active", managementEpoch: 1 } })).status).toBe("created");
+    expect((await store.transitionRun({ id: plan.id, kind: "plan", expectFrom: ["queued"],
+      setLeaseToken: "provider-fixture-claim", run: plan })).won).toBe(true);
     now = new Date("2026-06-04T00:10:00.000Z");
     const pending = vault.mintForCapsuleProviderBindings("space_1",
       [{ provider: conn.provider, connectionId: conn.id }],
@@ -1511,8 +1522,9 @@ test("owned Apply mint checks its recorded requester after membership removal", 
     values: { GITHUB_TOKEN: "fixture-secret" },
   }, undefined, null));
   const { capsule } = await seedCapsuleModel(store, { workspaceId: "space_1" });
-  await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 1,
-    managementState: "active", managementEpoch: 0 });
+  expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: "fixture-owner",
+    ownershipEpoch: 1, managementState: "active", managementEpoch: 0,
+    storageRoot: `apps/${capsule.id}` })).toBe(true);
   const plan: PlanRun = { id: "plan_removed_requester", workspaceId: "space_1", capsuleId: capsule.id,
     createdBy: "fixture-owner", ownershipEpoch: 1, appManagementEpoch: 0,
     source: { kind: "git", url: HTTPS_REPO_URL, ref: "main" }, sourceDigest: "sha256:source",

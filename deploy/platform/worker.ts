@@ -1698,6 +1698,7 @@ export async function handlePlatformSharedAuthControlRequest(
       }),
       resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
       subject: identity.accountId,
+      credential: "session",
       requireCurrentMembership: true,
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),

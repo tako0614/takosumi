@@ -180,6 +180,11 @@ type PublicCapsuleInput = PublicCapsule &
       | "currentOutputId"
       | "autoUpdateAttemptSourceSnapshotId"
       | "installingPrincipalId"
+      | "ownerAccountId"
+      | "ownershipEpoch"
+      | "managementState"
+      | "managementEpoch"
+      | "storageRoot"
     >
   >;
 
@@ -188,6 +193,11 @@ export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     installingPrincipalId: _installingPrincipalId,
+    ownerAccountId: _ownerAccountId,
+    ownershipEpoch: _ownershipEpoch,
+    managementState: _managementState,
+    managementEpoch: _managementEpoch,
+    storageRoot: _storageRoot,
     ...publicRecord
   } = capsule;
   const uninstall = publicRecord.uninstall === undefined
@@ -640,12 +650,27 @@ export async function canAccessWorkspace(input: {
     }
     return workspaceAllowed;
   };
-  // App-only credentials without an issuance-time Workspace binding have no
-  // legacy Workspace authority, even when their subject is a member there.
-  if (!bearerAllowed || (input.session.appIds !== undefined && !input.session.workspaceId)) {
+  if (!bearerAllowed) {
     return await finish(false);
   }
-
+  if (input.session.appIds !== undefined && input.session.credential !== "oauth-access-token") {
+    // A PAT's Workspace binding identifies its issuance scope, not authority
+    // over every app in that Workspace. Only a live app grant may proceed.
+    if (!input.capsuleId || !input.session.appIds.includes(input.capsuleId) || !input.operations.appAccess) {
+      return await finish(false);
+    }
+    const access = await input.operations.appAccess.resolveAppAccess(input.session.subject, input.capsuleId);
+    input.assertActive?.();
+    if (!access || access.capsuleId !== input.capsuleId ||
+      !appActionAllowed(access.role, input.appAction ?? (input.session.requiredAccess === "write" ? "change_settings" : "view"))) {
+      return await finish(false);
+    }
+    const capsule = await input.operations.capsules.getCapsule(input.capsuleId);
+    input.assertActive?.();
+    return await finish(capsule.workspaceId === input.workspaceId);
+  }
+  // The OAuth compatibility path is limited to an issuance-bound Workspace.
+  if (input.session.appIds !== undefined && !input.session.workspaceId) return await finish(false);
 
   const workspace =
     input.workspace ??

@@ -102,6 +102,28 @@ describe("D1 app authorization mutation store", () => {
     expect(sqlite.prepare(`select count(*) as n from capsule_ownership_transfers`).get()).toEqual({ n: 0 });
   });
 
+  test("recipient pending and sender hourly transfer limits reject in the atomic batch", async () => {
+    for (const limit of ["recipient", "sender"] as const) {
+      const { sqlite, store } = fixture();
+      const count = limit === "recipient" ? 50 : 10;
+      const now = new Date().toISOString();
+      for (let index = 0; index < count; index++) {
+        sqlite.prepare(`insert into capsule_ownership_transfers
+          (id,capsule_id,from_account_id,to_account_id,ownership_epoch,state,created_at,updated_at)
+          values (?,?,?,?,4,?,?,?)`).run(`old_${index}`, `other_${index}`,
+            limit === "sender" ? "owner" : "other", limit === "recipient" ? "recipient" : `other_${index}`,
+            limit === "recipient" ? "pending" : "accepted", now, now);
+      }
+      await expect(store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner",
+        toAccountId: "recipient", expectedOwnershipEpoch: 4 })).rejects.toMatchObject({ code: "conflict" });
+      expect(sqlite.prepare(`select count(*) as n from capsule_ownership_transfers`).get()).toEqual({ n: count });
+      expect(sqlite.prepare(`select count(*) as n from audit_events`).get()).toEqual({ n: 0 });
+      if (limit === "recipient") {
+        expect((await store.listTransfers({ toAccountId: "recipient", state: "pending" })).length).toBe(50);
+      }
+    }
+  });
+
   test("member deletion or Run claim after read cannot cancel a live Run", async () => {
     for (const change of ["member", "run"] as const) {
       const { sqlite, store, beforeNextBatch } = fixture();
@@ -327,6 +349,7 @@ describe("D1 app authorization mutation store", () => {
     const consent = sqlite.prepare(`select record_json from audit_events where action='app.member_added'`).get() as { record_json: string };
     expect(JSON.parse(consent.record_json)).toMatchObject({ memberAccountId: "second", consent: "connections_and_code" });
     const transfer = await store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner", toAccountId: "new", expectedOwnershipEpoch: 4 });
+    expect(sqlite.prepare(`select count(*) as n from audit_events where action='app.ownership_transfer_created'`).get()).toEqual({ n: 1 });
     expect((await store.listTransfers({ capsuleId: "cap1", state: "pending" })).map((item) => item.transferId)).toEqual([transfer.transferId]);
     expect((await store.listTransfers({ toAccountId: "new", state: "pending" })).map((item) => item.transferId)).toEqual([transfer.transferId]);
     expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).state).toBe("accepted");
@@ -374,6 +397,7 @@ describe("D1 app authorization mutation store", () => {
     await expect(store.cancelTransfer({ transferId: transfer.transferId, actorAccountId: "member" })).rejects.toMatchObject({ code: "app_owner_only" });
     await store.cancelTransfer({ transferId: transfer.transferId, actorAccountId: "owner" });
     expect(sqlite.prepare(`select state from capsule_ownership_transfers where id=?`).get(transfer.transferId)).toEqual({ state: "cancelled" });
+    expect(sqlite.prepare(`select count(*) as n from audit_events where action='app.ownership_transfer_cancelled'`).get()).toEqual({ n: 1 });
   });
 
   test("transfer refuses a queued Source sync with ambiguous app linkage", async () => {

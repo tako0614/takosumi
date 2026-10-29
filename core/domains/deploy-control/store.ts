@@ -104,7 +104,7 @@ import type {
   Workspace,
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
-import type { CapsuleMember } from "../app-ownership/store.ts";
+import type { CapsuleMember, CapsuleOwnership } from "../app-ownership/store.ts";
 import { parseWorkspaceMemberRecord } from "./store_row_mappers.ts";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
@@ -2110,6 +2110,8 @@ export function capsuleLifecycleMutationAlreadyApplied(
 export interface CapsuleInitialAuthorityInput {
   readonly installConfig: InstallConfig;
   readonly capsule: Capsule;
+  /** Physical app ownership initialized atomically with the Capsule. */
+  readonly initialOwnership?: CapsuleOwnership;
   readonly providerBindingSet: ProviderBindingSet;
   readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
 }
@@ -2118,6 +2120,34 @@ export type CapsuleInitialAuthorityResult =
   | { readonly status: "created" | "replayed"; readonly capsule: Capsule }
   | { readonly status: "conflict" }
   | { readonly status: "source_owned_by_another_app" };
+
+/** Capsule JSON is an opaque deployment snapshot, never an ownership mirror. */
+export function capsuleWithoutOwnership(capsule: Capsule): Capsule {
+  const {
+    ownerAccountId: _ownerAccountId,
+    ownershipEpoch: _ownershipEpoch,
+    managementState: _managementState,
+    managementEpoch: _managementEpoch,
+    storageRoot: _storageRoot,
+    ...record
+  } = capsule;
+  void _ownerAccountId;
+  void _ownershipEpoch;
+  void _managementState;
+  void _managementEpoch;
+  void _storageRoot;
+  return record;
+}
+
+/** Transient admission view only; never store this object as Capsule JSON. */
+export function capsuleWithOwnershipForAdmission(
+  capsule: Capsule | undefined,
+  ownership: Pick<CapsuleOwnership, "ownerAccountId" | "ownershipEpoch" | "managementState" | "managementEpoch"> | undefined,
+): Capsule | undefined {
+  if (!capsule) return undefined;
+  const snapshot = capsuleWithoutOwnership(capsule);
+  return ownership ? { ...snapshot, ...ownership } : snapshot;
+}
 
 export interface CapsuleInstallConfigRebindInput {
   readonly capsuleId: string;
@@ -4377,6 +4407,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    * {@link transitionRun}.
    */
   readonly #runLeases = new Map<string, string>();
+
+  /** Private authority read for the in-memory credential issuance fence. */
+  getRunLeaseToken(runId: string): string | undefined {
+    return this.#runLeases.get(runId);
+  }
   readonly #scheduledSweepCursors = new Map<
     "workspaces" | "active_capsules" | "recoverable_runs",
     { readonly cursor: ScheduledSweepCursorPosition; readonly upper: ScheduledSweepCursorPosition }
@@ -4396,6 +4431,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #projects = new Map<string, Project>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #capsules = new Map<string, Capsule>();
+  readonly #capsuleOwnership = new Map<string, CapsuleOwnership>();
   readonly #capsuleExecutionAuthorityEpochs = new Map<string, number>();
   readonly #publicHostReservations = new Map<string, PublicHostReservation>();
   readonly #connections = new Map<string, ProviderConnection>();
@@ -4698,7 +4734,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     if (input.run.capsuleId !== undefined &&
-      !appPlanAdmission(this.#capsules.get(input.run.capsuleId), input.run)) {
+      !appPlanAdmission(this.#capsuleForAppAdmission(input.run.capsuleId), input.run)) {
       throw new CapsulePlanCreationFenceConflictError(input.run.capsuleId);
     }
     // No await or externally observable callback exists between these writes.
@@ -4826,7 +4862,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
       }
       const storedPlan = this.#runs.get(run.planRunId);
-      if (!appApplyAdmission(capsule,
+      if (!appApplyAdmission(this.#capsuleForAppAdmission(run.capsuleId),
         storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
         throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
       }
@@ -4910,7 +4946,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       const storedPlan = isPlanRunRecord(current)
         ? current
         : isApplyRunRecord(current) ? this.#runs.get(current.planRunId) : undefined;
-      if (!appClaimAdmission(this.#capsules.get(current.capsuleId),
+      if (!appClaimAdmission(this.#capsuleForAppAdmission(current.capsuleId),
         storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined,
         current, current.status === "running" && input.expectFrom.includes("running") &&
           input.expectHeartbeatAt !== undefined)) {
@@ -5203,6 +5239,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const source = this.#sources.get(run.sourceId);
     if (!source || source.workspaceId !== run.workspaceId || source.status !== "active" || source.retiringAt) {
       return { status: "conflict" };
+    }
+    if (source.ownerCapsuleId) {
+      const capsule = this.#capsules.get(source.ownerCapsuleId);
+      const ownership = this.#capsuleOwnership.get(source.ownerCapsuleId);
+      const actor = run.actorAccountId;
+      const member = actor ? this.#capsuleMembers.get(`${source.ownerCapsuleId}\0${actor}`) : undefined;
+      if (!capsule || capsule.workspaceId !== run.workspaceId ||
+        capsule.sourceId !== run.sourceId ||
+        (ownership !== undefined &&
+          (ownership.managementState !== "active" ||
+            (ownership.ownerAccountId !== actor && member?.status !== "active")))) {
+        return { status: "conflict" };
+      }
     }
     this.#runs.set(run.id, storeSourceSyncRun(run, expectedWorkspaceManagementAuthority));
     return { status: "created", run: publicStoredRun(run) };
@@ -6319,17 +6368,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putCapsule(capsuleInput: Capsule): Promise<Capsule> {
-    const current = this.#capsules.get(capsuleInput.id);
-    // Ordinary record writes cannot replace the separate ownership authority.
-    // SQL/D1 preserve the physical tuple in the same way.
-    const capsule = normalizeCapsule(current?.ownerAccountId ? {
-      ...capsuleInput,
-      ownerAccountId: current.ownerAccountId,
-      ownershipEpoch: current.ownershipEpoch ?? 0,
-      managementState: current.managementState ?? "active",
-      managementEpoch: current.managementEpoch ?? 0,
-      storageRoot: current.storageRoot ?? `apps/${current.id}`,
-    } : capsuleInput);
+    const capsule = normalizeCapsule(capsuleWithoutOwnership(capsuleInput));
     for (const existing of this.#capsules.values()) {
       if (
         existing.id !== capsule.id &&
@@ -6352,19 +6391,23 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(capsule);
   }
 
-  /** In-memory implementation of the same single-row ownership update as SQL/D1. */
-  setCapsuleOwnership(record: {
-    readonly capsuleId: string; readonly ownerAccountId: string; readonly ownershipEpoch: number;
-    readonly managementState: "active" | "draining" | "frozen"; readonly managementEpoch: number;
-    readonly storageRoot: string;
-  }, onlyIfMissing = false, expectedOwnershipEpoch?: number): boolean {
-    const current = this.#capsules.get(record.capsuleId);
-    if (!current || (onlyIfMissing && current.ownerAccountId) ||
-      (expectedOwnershipEpoch !== undefined && (current.ownershipEpoch ?? 0) !== expectedOwnershipEpoch)) return false;
-    this.#capsules.set(record.capsuleId, { ...current,
-      ownerAccountId: record.ownerAccountId, ownershipEpoch: record.ownershipEpoch,
-      managementState: record.managementState, managementEpoch: record.managementEpoch,
-      storageRoot: record.storageRoot });
+  /** In-memory implementation of the same separate physical tuple as SQL/D1. */
+  getCapsuleOwnership(capsuleId: string): CapsuleOwnership | undefined {
+    const record = this.#capsuleOwnership.get(capsuleId);
+    return record ? structuredClone(record) : undefined;
+  }
+
+  #capsuleForAppAdmission(capsuleId: string): Capsule | undefined {
+    return capsuleWithOwnershipForAdmission(
+      this.#capsules.get(capsuleId), this.#capsuleOwnership.get(capsuleId),
+    );
+  }
+
+  setCapsuleOwnership(record: CapsuleOwnership, onlyIfMissing = false, expectedOwnershipEpoch?: number): boolean {
+    const current = this.#capsuleOwnership.get(record.capsuleId);
+    if (!this.#capsules.has(record.capsuleId) || (onlyIfMissing && current) ||
+      (expectedOwnershipEpoch !== undefined && (current?.ownershipEpoch ?? 0) !== expectedOwnershipEpoch)) return false;
+    this.#capsuleOwnership.set(record.capsuleId, structuredClone(record));
     return true;
   }
 
@@ -6376,7 +6419,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     const { providerBindingSet } = input;
     const installConfig = publicStoredInstallConfig(input.installConfig);
-    const capsule = normalizeCapsule(input.capsule);
+    const capsule = normalizeCapsule(capsuleWithoutOwnership(input.capsule));
+    const ownership = input.initialOwnership;
+    if (ownership && ownership.capsuleId !== capsule.id) return Promise.resolve({ status: "conflict" });
     const exact =
       installConfig.id === capsule.installConfigId &&
       installConfig.workspaceId === capsule.workspaceId &&
@@ -6458,14 +6503,15 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     this.#installConfigs.set(installConfig.id, installConfig);
     this.#capsuleExecutionAuthorityEpochs.set(capsule.id, 1);
     this.#capsules.set(capsule.id, capsule);
+    if (ownership) this.#capsuleOwnership.set(capsule.id, structuredClone(ownership));
     this.#providerBindingSets.set(providerBindingSet.id, providerBindingSet);
-    if (capsule.ownerAccountId) {
+    if (ownership) {
       for (const member of this.#workspaceMembers.values()) {
-        if (member.workspaceId !== capsule.workspaceId || member.accountId === capsule.ownerAccountId ||
+        if (member.workspaceId !== capsule.workspaceId || member.accountId === ownership.ownerAccountId ||
           member.status !== "active" || !member.roles.some((role) => role === "owner" || role === "admin")) continue;
         this.#capsuleMembers.set(`${capsule.id}\0${member.accountId}`, {
           capsuleId: capsule.id, accountId: member.accountId, status: "active",
-          addedBy: capsule.ownerAccountId, createdAt: capsule.createdAt, updatedAt: capsule.createdAt,
+          addedBy: ownership.ownerAccountId, createdAt: capsule.createdAt, updatedAt: capsule.createdAt,
         });
       }
     }
@@ -6478,8 +6524,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putCapsuleMember(member: CapsuleMember): boolean {
-    const capsule = this.#capsules.get(member.capsuleId);
-    if (!capsule?.ownerAccountId || capsule.ownerAccountId === member.accountId) return false;
+    const ownership = this.#capsuleOwnership.get(member.capsuleId);
+    if (!ownership || ownership.ownerAccountId === member.accountId) return false;
     this.#capsuleMembers.set(`${member.capsuleId}\0${member.accountId}`, structuredClone(member));
     return true;
   }
@@ -6549,7 +6595,8 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getCapsuleStorageRoot(id: string): Promise<string | undefined> {
     const capsule = this.#capsules.get(id);
-    return Promise.resolve(capsule ? capsule.storageRoot ?? `workspaces/${capsule.workspaceId}/capsules/${capsule.id}` : undefined);
+    return Promise.resolve(capsule ? this.#capsuleOwnership.get(id)?.storageRoot ??
+      `workspaces/${capsule.workspaceId}/capsules/${capsule.id}` : undefined);
   }
 
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
@@ -8622,7 +8669,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
     if (existing) return existing;
     const payerAccountId = event.payerAccountId ??
-      (event.capsuleId ? (await this.getCapsule(event.capsuleId))?.ownerAccountId : undefined) ??
+      (event.capsuleId ? this.#capsuleOwnership.get(event.capsuleId)?.ownerAccountId : undefined) ??
       (await this.getWorkspace(event.workspaceId))?.ownerUserId;
     const normalized = normalizeUsageEvent(payerAccountId ? { ...event, payerAccountId } : event);
     this.#usageEvents.set(event.id, normalized);

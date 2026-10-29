@@ -84,6 +84,9 @@ describe("PostgreSQL app authorization mutation store", () => {
       expect(events.rows[0]?.event_json.consent).toBe("connections_and_code");
       const transfer = await store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner",
         toAccountId: "recipient", expectedOwnershipEpoch: 4 });
+      const created = await db.query<{ event_json: { recipientAccountId: string } }>(
+        `select event_json from takosumi_audit_events where action='app.ownership_transfer_created'`);
+      expect(created.rows.map((row) => row.event_json.recipientAccountId)).toEqual(["recipient"]);
       expect((await store.listTransfers({ capsuleId: "cap1", state: "pending" })).map((row) => row.transferId))
         .toEqual([transfer.transferId]);
       expect((await store.listTransfers({ toAccountId: "recipient", state: "pending" })).map((row) => row.transferId))
@@ -95,6 +98,29 @@ describe("PostgreSQL app authorization mutation store", () => {
       expect(notices.rows.map((row) => row.event_json.recipientAccountId).sort()).toEqual(["member", "owner", "second"]);
       expect((await db.query(`select account_id from takosumi_capsule_members`)).rows).toEqual([]);
     } finally { await db.close(); }
+  });
+  test("recipient and sender transfer limits are enforced in the SQL transaction", async () => {
+    for (const limit of ["recipient", "sender"] as const) {
+      const { db, store } = await fixture();
+      try {
+        const count = limit === "recipient" ? 50 : 10;
+        const now = new Date().toISOString();
+        for (let index = 0; index < count; index++) {
+          await db.query(`insert into takosumi_capsule_ownership_transfers
+            (id,capsule_id,from_account_id,to_account_id,ownership_epoch,state,created_at,updated_at)
+            values ($1,$2,$3,$4,4,$5,$6,$6)`, [`old_${index}`, `other_${index}`,
+              limit === "sender" ? "owner" : "other", limit === "recipient" ? "recipient" : `other_${index}`,
+              limit === "recipient" ? "pending" : "accepted", now]);
+        }
+        await expect(store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner",
+          toAccountId: "recipient", expectedOwnershipEpoch: 4 })).rejects.toMatchObject({ code: "conflict" });
+        const rows = await db.query<{ count: string }>(`select count(*) from takosumi_capsule_ownership_transfers`);
+        expect(Number(rows.rows[0]?.count)).toBe(count);
+        if (limit === "recipient") {
+          expect((await store.listTransfers({ toAccountId: "recipient", state: "pending" })).length).toBe(50);
+        }
+      } finally { await db.close(); }
+    }
   });
   test("member removal cancels queued Run atomically and rejects stale epoch", async () => {
     const { db, store } = await fixture();

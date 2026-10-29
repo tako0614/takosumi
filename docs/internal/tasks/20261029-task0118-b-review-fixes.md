@@ -57,3 +57,49 @@ published PR head must pass CI `check and test`. Current head SHAs, test counts
 and any remaining limits are recorded in `/root/dev/tmp/tk0118/B-fix-report.md`.
 App detail projections remain individually computed to preserve authoritative
 state; app inventory batches Capsule reads and shares owner profile lookups.
+
+## Third review, after foundation squash
+
+Merge `origin/main` at `8a183757f` normally into #654 and propagate to #663.
+The #654 merge has an empty tree diff from its pre-merge head `7bdb7ac0a`:
+A's original commits and the squash already carry the same foundation bytes.
+Only this worktree and these existing four PR branches are changed. The final
+heads remain unmerged; no deployment or live migration is authorized here.
+
+The revision compatibility identity remains the deterministic
+`git-revision-plan:<plan-id>:<suffix>` required by the real SourcesService;
+requesting account identity belongs to the Plan Run. Trusted first-party
+shared-auth ingress explicitly retains session authority. PAT app attenuation
+also applies to legacy Capsule routes, while the OAuth compatibility adapter
+retains its existing Workspace scope.
+
+Capsule JSON is a non-authoritative snapshot. New ownership tuples are passed
+separately during initial creation; stores persist them only in the ownership
+columns or the in-memory equivalent. Public projections omit all ownership,
+management, and storage-root internals, including stale fields on old JSON.
+Internal owner/epoch decisions read the ownership port, and artifact paths read
+`getCapsuleStorageRoot`. Ownerless pre-backfill Capsules retain the trusted
+legacy scheduled/system actor paths until the ownership record exists.
+
+Pending transfers include value-free app and sender names, have a bounded
+recipient list and recipient capacity, and creation is rate limited. Creation
+and cancellation are audited. Account source ref resolution requires write
+scope because resolving a ref starts runner work. Connection reads first query
+the physical owner column, with a separate null-owner compatibility branch.
+
+D1 v77 remains unchanged; D1 v78 and PostgreSQL v124 now embed literal SQL
+snapshots rather than importing mutable schema constants. Their emitted SQL
+and checksums remain identical. Mint issuance captures the original Run lease
+token and refuses a result after that claim is replaced.
+
+Local verification remains focused tests and affected static phases under the
+operator's SSD constraint; stop below 1.5 GB available and remove only outputs
+created by this round. Each published PR head must pass CI `check and test`.
+
+
+The JSON authority split necessarily includes a narrow follow-up in the
+Phase 2-owned `core/domains/sources/mod.ts`: sync admission, reconciliation actor
+and connection-owner reads must use the injected ownership port after JSON
+fields disappear. Source reservation, retirement, address/dedupe semantics and
+polling lifecycle are preserved. This is the only file-ownership overlap with
+Phase 2 in this review round, required to keep its existing source sync working.

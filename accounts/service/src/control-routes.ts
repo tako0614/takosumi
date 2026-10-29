@@ -441,6 +441,7 @@ function safeControlOperationsErrorName(error: unknown): string {
 export async function handleAuthenticatedControlRoute(
   context: ControlRouteContext & {
     readonly subject: string;
+    readonly credential?: "session";
     readonly workspaceId?: string;
     readonly requireCurrentMembership?: true;
     readonly reauthorizeBearer?: () => Promise<boolean>;
@@ -454,6 +455,7 @@ export async function handleAuthenticatedControlRoute(
       ...context,
       session: {
         subject: context.subject,
+        ...(context.credential ? { credential: context.credential } : {}),
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         requiredAccess: controlRouteRequiredScope(request),
         ...(context.requireCurrentMembership ? { requireCurrentMembership: true } : {}),
@@ -655,6 +657,10 @@ export async function handleControlRoute(
 function controlRouteRequiredScope(
   request: Request,
 ): Exclude<AccountsBearerRequiredScope, "admin"> {
+  // Source-ref resolution starts a runner job even though its HTTP method is GET.
+  const segments = normalizeControlRouteSegments(new URL(request.url).pathname.slice(API_V1_PREFIX.length));
+  if (request.method.toUpperCase() === "GET" &&
+    segments.length === 1 && segments[0] === "source-ref-resolutions") return "write";
   switch (request.method.toUpperCase()) {
     case "GET":
     case "HEAD":

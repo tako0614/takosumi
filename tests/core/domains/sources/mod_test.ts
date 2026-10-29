@@ -739,18 +739,16 @@ test("app-owned Source sync pins a trusted actor and ownership epoch", async () 
     workspaceId: "workspace_1",
   });
   await store.putSource({ ...source, ownerCapsuleId: capsule.id });
-  await store.putCapsule({
-    ...capsule,
-    ownerAccountId: "user_1",
-    ownershipEpoch: 3,
-    managementState: "active",
-  });
+  expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: "user_1", ownershipEpoch: 3,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}` })).toBe(true);
+  expect((await store.getCapsule(capsule.id))?.ownerAccountId).toBeUndefined();
   await expect(service.createSync(source.id)).rejects.toMatchObject({
     details: { reason: "app_access_denied" },
   });
   const { run } = await service.createSync(source.id, {}, undefined, "user_1");
   expect(run.actorAccountId).toBe("user_1");
   expect(run.ownershipEpoch).toBe(3);
+  expect((await store.getSourceSyncRun(run.id))?.actorAccountId).toBe("user_1");
 });
 
 test("createSync rejects a valid noncurrent Workspace management authority", async () => {
@@ -1593,10 +1591,9 @@ test("reconciliation keeps its captured authority while converging the owner lan
     currentStateVersionId: apply.stateVersionId,
     currentStateGeneration: 1,
     status: "active",
-    ownerAccountId: "user_1",
-    ownershipEpoch: 0,
-    managementState: "active",
   });
+  expect(store.setCapsuleOwnership({ capsuleId: seeded.capsule.id, ownerAccountId: "user_1", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${seeded.capsule.id}` })).toBe(true);
 
   const reconciling = service.createReconciliationSyncs(seeded.source.id);
   await store.enumerationStarted.promise;

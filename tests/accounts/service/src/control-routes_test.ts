@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { publicCapsule as controllerPublicCapsule } from "../../../../core/domains/deploy-control/mod.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import {
   createControlOperationsSharedAttempt,
@@ -12,6 +13,7 @@ import { handleStateVersions } from "../../../../accounts/service/src/control/st
 import {
   controllerErrorResponse,
   canAccessWorkspace,
+  publicCapsule,
   type ControlDispatchContext,
 } from "../../../../accounts/service/src/control/shared.ts";
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
@@ -51,6 +53,21 @@ const otherWorkspace = {
   handle: "other",
   displayName: "Other",
 };
+
+test("public Capsule projection strips physical ownership and storage coordinates", () => {
+  const capsule = {
+    id: "cap1", workspaceId: workspace.id, name: "App",
+    ownerAccountId: "owner", ownershipEpoch: 4,
+    managementState: "draining", managementEpoch: 8,
+    storageRoot: "private-root",
+  } as unknown as Parameters<typeof controllerPublicCapsule>[0];
+  for (const projected of [publicCapsule(capsule), controllerPublicCapsule(capsule)]) {
+    expect(projected).toMatchObject({ id: "cap1", name: "App" });
+    for (const field of ["ownerAccountId", "ownershipEpoch", "managementState", "managementEpoch", "storageRoot"]) {
+      expect(projected).not.toHaveProperty(field);
+    }
+  }
+});
 
 function workspaceAuthorizationOperations(input?: {
   readonly onGetWorkspace?: (workspaceId: string) => void;
@@ -175,7 +192,7 @@ test("ProviderConnection inventory is owner-only even for a Workspace member", a
   expect(inventoryReads).toBe(0);
 });
 
-test("appIds without a Workspace binding cannot use legacy Workspace authorization", async () => {
+test("app-scoped PATs cannot use legacy Workspace authorization even with a Workspace binding", async () => {
   const operations = workspaceAuthorizationOperations();
   expect(await canAccessWorkspace({
     operations,
@@ -187,10 +204,58 @@ test("appIds without a Workspace binding cannot use legacy Workspace authorizati
   expect(await canAccessWorkspace({
     operations,
     store: new InMemoryAccountsStore(),
-    session: { subject: "tsub_owner", appIds: ["cap1"], workspaceId: workspace.id },
+    session: { subject: "tsub_owner", credential: "personal-access-token", appIds: ["cap1"], workspaceId: workspace.id },
+    workspaceId: workspace.id,
+    capsuleId: "cap1",
+  })).toBe(false);
+  expect(await canAccessWorkspace({
+    operations,
+    store: new InMemoryAccountsStore(),
+    session: { subject: "tsub_owner", credential: "oauth-access-token", appIds: ["cap1"], workspaceId: workspace.id },
     workspaceId: workspace.id,
     capsuleId: "cap1",
   })).toBe(true);
+  let live = true;
+  const appOperations = {
+    ...operations,
+    appAccess: {
+      resolveAppAccess: async () => live
+        ? { capsuleId: "cap1", role: "owner", ownerAccountId: "tsub_owner", ownershipEpoch: 1 }
+        : undefined,
+    },
+    capsules: { getCapsule: async (id: string) => ({ id, workspaceId: workspace.id }) },
+  } as unknown as ControlPlaneOperations;
+  const pat = { subject: "tsub_owner", credential: "personal-access-token" as const,
+    appIds: ["cap1"], workspaceId: workspace.id };
+  expect(await canAccessWorkspace({ operations: appOperations, store: new InMemoryAccountsStore(),
+    session: pat, workspaceId: workspace.id, capsuleId: "cap1" })).toBe(true);
+  expect(await canAccessWorkspace({ operations: appOperations, store: new InMemoryAccountsStore(),
+    session: pat, workspaceId: workspace.id, capsuleId: "cap2" })).toBe(false);
+  live = false;
+  expect(await canAccessWorkspace({ operations: appOperations, store: new InMemoryAccountsStore(),
+    session: pat, workspaceId: workspace.id, capsuleId: "cap1" })).toBe(false);
+});
+
+test("source-ref GET needs write scope before starting a runner resolution", async () => {
+  const store = new InMemoryAccountsStore();
+  for (const [token, scopes] of [["read-source-ref", ["read"]], ["write-source-ref", ["write"]]] as const) {
+    store.savePersonalAccessToken(token, {
+      tokenId: token, tokenPrefix: "source", subject: "tsub_owner", name: "source ref",
+      scopes: [...scopes], createdAt: Date.now(),
+    });
+  }
+  let started = 0;
+  const operations = { resolveStableSourceTag: async () => { started++; return { tag: "v1.2.3" }; } } as unknown as ControlPlaneOperations;
+  const path = "/api/v1/source-ref-resolutions?url=https%3A%2F%2Fexample.test%2Frepo.git";
+  const denied = await authenticatedControlRequest({ store, operations, token: "read-source-ref", path });
+  expect(denied.status).toBe(403);
+  expect(started).toBe(0);
+  const trailing = await authenticatedControlRequest({ store, operations, token: "read-source-ref", path: "/api/v1/source-ref-resolutions/?url=https%3A%2F%2Fexample.test%2Frepo.git" });
+  expect(trailing.status).toBe(403);
+  expect(started).toBe(0);
+  const allowed = await authenticatedControlRequest({ store, operations, token: "write-source-ref", path });
+  expect(allowed.status).toBe(200);
+  expect(started).toBe(1);
 });
 
 test("Workspace-bound appIds reach the three legacy delegated Workspace routes", async () => {

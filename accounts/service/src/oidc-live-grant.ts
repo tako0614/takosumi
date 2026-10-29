@@ -218,7 +218,13 @@ export async function validateOidcLiveGrant(input: {
   // Legacy apps still read Workspace claims. For an owned Capsule, require
   // current app access before exposing the independent Workspace role; app
   // authority is carried only in app_role.
-  const role = capsule.ownerAccountId
+  let ownedApp: boolean;
+  try {
+    ownedApp = (await operations.appOwnership?.getOwnership(capsuleId)) !== undefined;
+  } catch {
+    return { ok: false, reason: "control_plane_unavailable" };
+  }
+  const role = ownedApp
     ? (appRole && workspaceRole ? workspaceRole : undefined)
     : workspaceRole;
   return {
