@@ -139,9 +139,10 @@ max_instances = 10
 # scheduled() handler scans active autoSync sources and enqueues a deduped
 # source_sync (the consumer ls-remotes and only snapshots when the ref moved).
 # Repository webhooks own low-latency updates; the hourly fallback bounds
-# runner Durable Object activation when a webhook is unavailable.
+# runner Durable Object activation when a webhook is unavailable. The daily
+# trigger retries terminal app-owned and orphan Source retirement.
 [triggers]
-crons = ["5 * * * *"]
+crons = ["5 * * * *", "15 3 * * *"]
 
 [vars]
 # Runtime environment selector. Every strict boot gate (durable run ledger,

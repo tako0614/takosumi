@@ -59,6 +59,27 @@ test("local source archive cleanup removes only the noncanonical allocated key",
   }
 });
 
+test("local Source retirement removes exact archives and resumes after deletion", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-source-retirement-"));
+  try {
+    const archiveStore = createFileSourceArchiveStore(join(directory, "archives"));
+    const runner = createLocalOpenTofuRunner({ archiveStore,
+      stateStore: createFileOpenTofuStateArtifactStore(join(directory, "state"), TEST_STATE_CRYPTO) });
+    const owned = "workspaces/workspace_1/sources/src_1/snapshots/snap_1/source.tar.zst";
+    const other = "workspaces/workspace_1/sources/src_2/snapshots/snap_2/source.tar.zst";
+    await archiveStore.write(owned, new Uint8Array([1]));
+    await archiveStore.write(other, new Uint8Array([2]));
+    const input = { workspaceId: "workspace_1", sourceId: "src_1", archiveRefs: [owned] };
+    await expect(runner.deleteRetiredSourceArchives!({ ...input, archiveRefs: [owned, other] })).rejects.toThrow();
+    await runner.deleteRetiredSourceArchives!(input);
+    await runner.deleteRetiredSourceArchives!(input);
+    await expect(archiveStore.read(owned)).rejects.toThrow();
+    expect(Array.from(await archiveStore.read(other))).toEqual([2]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("local OpenTofu runner executes generic release commands in restored source", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-runner-"));
   try {

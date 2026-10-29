@@ -12,6 +12,7 @@ import type { StorageStagingEnv } from "../../../deploy/platform/storage-staging
 const ROOT = resolve(import.meta.dir, "../../..");
 const NATIVE = `
 import { createStoredObjectOwnerResolver } from ${JSON.stringify(join(ROOT, "worker/src/stored-object-owner-resolver.ts"))};
+import { storedNativeVersion } from ${JSON.stringify(join(ROOT, "worker/src/stored-service-usage.ts"))};
 import { runnerStoredServiceBucket, createBackupStoredOwnerContext } from ${JSON.stringify(join(ROOT, "worker/src/stored-service-owner-context.ts"))};
 import { createStoredInventoryProducer } from ${JSON.stringify(join(ROOT, "worker/src/artifact-storage-inventory.ts"))};
 import { ObjectKeyArtifactReferenceAllocator } from ${JSON.stringify(join(ROOT, "core/adapters/storage/artifact-references.ts"))};
@@ -71,6 +72,23 @@ export default {
         const bucket = runnerStoredServiceBucket(buckets[input.bucketRole],composition(env,owners),env.DB,input);
         await bucket.put(input.key,new Uint8Array([9,8,7]),{customMetadata:{"takosumi-run-id":input.runId}});
         result = {ok:true};
+      } else if(input.operation === "retire") {
+        let activeKey = input.key;
+        const usage = {
+          ...composition(env,owners).usage,
+          async readStoredObject(ctx) {
+            const object = await buckets.source.head(activeKey);
+            return {workspaceId:ctx.workspaceId,revision:0,bytes:String(object?.size??0),versionDigest:object?await storedNativeVersion(object):null};
+          },
+          async prepareStoredObject(ctx) {
+            const intent = {operationRef:ctx.operationRef,expectedRevision:ctx.expectedRevision,kind:"delete",bytes:"0",contentDigest:null,state:"pending"};
+            return {dispatch:true,intent,dispatchToken:"f".repeat(64)};
+          },
+          async confirmStoredObject() {},
+        };
+        const bucket = runnerStoredServiceBucket(buckets.source,{usage,owners},env.DB,{bucketRole:"source",sourceRetirement:input.sourceRetirement,sourceRetirementBatch:input.sourceRetirementBatch});
+        for (const key of input.keys ?? [input.key]) { activeKey = key; await bucket.delete(key); }
+        result = {ok:true};
       } else if(input.operation === "backup") {
         const context = createBackupStoredOwnerContext(new ObjectKeyArtifactReferenceAllocator(),composition(env,owners),env.BACKUPS);
         const key = await context.allocator.allocate({kind:"backup_control",workspaceId:"workspace_original",backupId:"backup_prefinal"});
@@ -103,6 +121,7 @@ async function nativeFixture() {
     "create table artifacts(id text primary key,run_id text,object_key text)",
     "create table sources(id text primary key,space_id text,record_json text)",
     "create table source_snapshots(id text primary key,source_id text,record_json text)",
+    "create table audit_events(id text primary key,action text,target_type text,target_id text)",
     "create table backups(id text primary key,space_id text,record_json text)",
     "create table private_run_file_pointers(workspace_id text,capsule_id text,environment text,slot text,digest text,blob_id text,version integer)",
     "create table private_run_file_receipts(workspace_id text,capsule_id text,environment text,slot text,digest text,blob_id text)",
@@ -201,6 +220,103 @@ test("native preledger source write pins the original Run owner; forged ref and 
     expect((await call({ operation: "backup" })).status).toBe(503);
     expect(await db.prepare("select count(*) as n from backups").first("n")).toBe(0);
     expect(await (await runtime.getR2Bucket("BACKUPS")).head("workspaces/workspace_original/backups/backup_prefinal/control.json.zst.enc")).toBeNull();
+  } finally { await fixture.close(); }
+}, 30_000);
+
+test("native stored-service custody rechecks Source retirement before R2 deletion", async () => {
+  const fixture = await nativeFixture();
+  try {
+    const { db, runtime, call } = fixture;
+    await db.prepare("alter table sources add column status text").run();
+    await db.prepare("alter table capsules add column source_id text").run();
+    await db.prepare("alter table capsules add column status text").run();
+    const workspaceId = "workspace_original", sourceId = "source_one";
+    const key = `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_one/source.tar.zst`;
+    const source = { id: sourceId, workspaceId, status: "disabled", autoSync: false,
+      retiringAt: "2026-10-28T00:00:00.000Z", ownerCapsuleId: "capsule_one" };
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(sourceId, workspaceId, "disabled", JSON.stringify(source)).run();
+    await db.prepare("insert into capsules(id,space_id,source_id,status,record_json) values(?,?,?,?,?)")
+      .bind("capsule_one", workspaceId, sourceId, "destroyed", JSON.stringify({ id: "capsule_one",
+        workspaceId, sourceId, status: "destroyed" })).run();
+    await db.prepare("insert into source_snapshots values(?,?,?)")
+      .bind("snap_one", sourceId, JSON.stringify({ id: "snap_one", sourceId, workspaceId, archiveRef: key })).run();
+    const bucket = await runtime.getR2Bucket("SOURCE");
+    await bucket.put(key, "source bytes");
+    const request = { operation: "retire", key,
+      sourceRetirement: { workspaceId, sourceId, archiveRef: key } };
+    await db.prepare("update capsules set status='active',record_json=json_set(record_json,'$.status','active') where id='capsule_one'").run();
+    expect((await call(request)).status).toBe(503);
+    expect(await bucket.head(key)).not.toBeNull();
+    await db.prepare("update capsules set status='destroyed',record_json=json_set(record_json,'$.status','destroyed') where id='capsule_one'").run();
+    const foreignSource = { id: "source_other", workspaceId: "workspace_other", status: "active",
+      autoSync: true };
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(foreignSource.id, foreignSource.workspaceId, foreignSource.status, JSON.stringify(foreignSource)).run();
+    await db.prepare("insert into source_snapshots values(?,?,?)")
+      .bind("snap_shared", "source_other", JSON.stringify({ id: "snap_shared", sourceId: "source_other", workspaceId: "workspace_other", archiveRef: key })).run();
+    expect((await call(request)).status).toBe(503);
+    expect(await bucket.head(key)).not.toBeNull();
+    const marked = { ...foreignSource, status: "disabled", autoSync: false,
+      retiringAt: "2026-10-28T00:00:00.000Z" };
+    await db.prepare("update sources set status='disabled',record_json=? where id='source_other'")
+      .bind(JSON.stringify(marked)).run();
+    expect((await call(request)).status).toBe(200);
+    expect(await bucket.head(key)).toBeNull();
+    await bucket.put(key, "source bytes again");
+    await db.prepare("delete from fixture_usage").run();
+    await db.prepare("delete from sources where id='source_other'").run();
+    expect((await call(request)).status).toBe(503);
+    await db.prepare("insert into audit_events values('act_other','source.retired','source','source_other')").run();
+    expect((await call(request)).status).toBe(200);
+    expect(await bucket.head(key)).toBeNull();
+  } finally { await fixture.close(); }
+}, 30_000);
+
+test("native stored-service custody validates one bounded Source retirement batch", async () => {
+  const fixture = await nativeFixture();
+  try {
+    const { db, runtime, call } = fixture;
+    await db.prepare("alter table sources add column status text").run();
+    await db.prepare("alter table capsules add column source_id text").run();
+    await db.prepare("alter table capsules add column status text").run();
+    const workspaceId = "workspace_original", sourceId = "source_one";
+    const keys = ["snap_one", "snap_two"].map((id) =>
+      `workspaces/${workspaceId}/sources/${sourceId}/snapshots/${id}/source.tar.zst`);
+    const unselected = `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_three/source.tar.zst`;
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(sourceId, workspaceId, "disabled", JSON.stringify({ id: sourceId, workspaceId,
+        status: "disabled", autoSync: false, retiringAt: "2026-10-28T00:00:00.000Z" })).run();
+    for (let i = 0; i < keys.length; i++) {
+      const id = `snap_${i}`;
+      await db.prepare("insert into source_snapshots values(?,?,?)")
+        .bind(id, sourceId, JSON.stringify({ id, sourceId, workspaceId, archiveRef: keys[i] })).run();
+    }
+    await db.prepare("insert into source_snapshots values(?,?,?)")
+      .bind("snap_three", sourceId, JSON.stringify({ id: "snap_three", sourceId, workspaceId,
+        archiveRef: unselected })).run();
+    const bucket = await runtime.getR2Bucket("SOURCE");
+    await bucket.put(keys[0]!, "source bytes");
+    await bucket.put(keys[1]!, "source bytes");
+    await bucket.put(unselected, "source bytes");
+    const request = { operation: "retire", key: keys[0], keys,
+      sourceRetirementBatch: { workspaceId, sourceId, archiveRefs: keys } };
+    const foreign = { id: "source_other", workspaceId: "workspace_other", status: "active", autoSync: true };
+    await db.prepare("insert into sources(id,space_id,status,record_json) values(?,?,?,?)")
+      .bind(foreign.id, foreign.workspaceId, foreign.status, JSON.stringify(foreign)).run();
+    await db.prepare("insert into runs(id,space_id,source_id,type,status,run_json) values(?,?,?,?,?,?)")
+      .bind("sync_other", foreign.workspaceId, foreign.id, "source_sync", "succeeded",
+        JSON.stringify({ id: "sync_other", workspaceId: foreign.workspaceId, sourceId: foreign.id,
+          kind: "source_sync", status: "succeeded", archiveRef: unselected })).run();
+    expect((await call(request)).status).toBe(503);
+    expect(await bucket.head(keys[0]!)).not.toBeNull();
+    await db.prepare("update sources set status='disabled',record_json=? where id='source_other'")
+      .bind(JSON.stringify({ ...foreign, status: "disabled", autoSync: false,
+        retiringAt: "2026-10-28T00:00:00.000Z" })).run();
+    expect((await call(request)).status).toBe(200);
+    expect(await bucket.head(keys[0]!)).toBeNull();
+    expect(await bucket.head(keys[1]!)).toBeNull();
+    expect(await bucket.head(unselected)).not.toBeNull();
   } finally { await fixture.close(); }
 }, 30_000);
 

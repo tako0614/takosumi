@@ -1,3 +1,5 @@
+import { convergeOwnedSourceLane } from "../sources/owned-lane.ts";
+import { log } from "../../shared/log.ts";
 /**
  * Operator-only, state-only recovery of one failed initial Capsule create.
  *
@@ -382,5 +384,12 @@ export async function recoverFailedInitialCreateState(input: {
     return { status: "replayed", run: existing, stateVersion: currentState!, capsule };
   }
   await assertRecoveryCommitCandidate(command);
-  return await input.store.commitRecoveredState(command);
+  const result = await input.store.commitRecoveredState(command);
+  if (result.status !== "conflict") {
+    try { await convergeOwnedSourceLane(input.store, result.capsule.sourceId); }
+    catch (error) { log.warn("deploy_control.recovery_source_lane_convergence_failed", {
+      capsuleId: result.capsule.id, error: error instanceof Error ? error.name : "unknown",
+    }); }
+  }
+  return result;
 }

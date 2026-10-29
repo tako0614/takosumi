@@ -1,3 +1,7 @@
+import { BackupsService, InMemoryBackupArtifactStore } from "../../../../core/domains/backups/mod.ts";
+import { convergeOwnedSourceLane } from "../../../../core/domains/sources/owned-lane.ts";
+import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
@@ -120,6 +124,14 @@ async function claimRun(
   queued: SourceSyncRun = queuedRun(),
 ): Promise<SourceSyncRun> {
   await store.putWorkspace(workspace());
+  if (!(await store.getSource(queued.sourceId))) {
+    await store.putSource({
+      id: queued.sourceId, workspaceId: queued.workspaceId, name: "atomic source sync",
+      url: queued.url, defaultRef: queued.ref, defaultPath: queued.path,
+      status: "active", autoSync: false, hookSecretHash: "test-hash",
+      createdAt: CREATED_AT, updatedAt: CREATED_AT,
+    });
+  }
   await store.beginSourceSyncRun(queued, {
     workspaceId: WORKSPACE_ID,
     managementState: "active",
@@ -151,8 +163,11 @@ async function seedAppliedCapsule(input: {
   readonly resolvedCommit: string;
   readonly ref?: string;
   readonly path?: string;
+  readonly legacySharedSource?: boolean;
 }): Promise<Capsule> {
+  const ownedSourceId = await input.store.getSource(SOURCE_ID) ? `${SOURCE_ID}_${input.capsuleId}` : SOURCE_ID;
   const previous = sourceSnapshot(input.resolvedCommit, {
+    sourceId: ownedSourceId,
     id: input.snapshotId,
     ref: input.ref ?? "main",
     path: input.path ?? ".",
@@ -161,7 +176,7 @@ async function seedAppliedCapsule(input: {
   });
   const { capsule } = await seedCapsuleModel(input.store, {
     workspaceId: WORKSPACE_ID,
-    sourceId: SOURCE_ID,
+    sourceId: ownedSourceId,
     sourceUrl: queuedRun().url,
     ref: "main",
     snapshotId: previous.id,
@@ -169,7 +184,7 @@ async function seedAppliedCapsule(input: {
     installConfigId: `config_${input.capsuleId}`,
     name: input.capsuleId,
     withoutSnapshot: true,
-    legacySharedSource: true,
+    legacySharedSource: input.legacySharedSource,
   });
   await input.store.putSourceSnapshot(previous);
 
@@ -599,15 +614,14 @@ test("source-sync settlement atomically projects stale applied Capsules across s
     });
 
     expect(result.won, label).toBe(true);
-    const canonicalSnapshotId = `snapshot_same_${label}`;
+    const canonicalSnapshotId = SNAPSHOT_ID;
     expect(await store.getSourceSyncRun(RUN_ID), `${label}:run`).toMatchObject({
       ...terminal,
-      requestedSnapshotId: SNAPSHOT_ID,
       snapshotId: canonicalSnapshotId,
     });
     expect(result.snapshot?.id, `${label}:snapshot id`).toBe(canonicalSnapshotId);
     expect(await store.getSourceSnapshot(canonicalSnapshotId), `${label}:snapshot`).toEqual(result.snapshot);
-    expect(await store.getSourceSnapshot(SNAPSHOT_ID), `${label}:allocated snapshot`).toBeUndefined();
+    expect(await store.getSourceSnapshot(SNAPSHOT_ID), `${label}:allocated snapshot`).toBeDefined();
     expect((await store.getSource(SOURCE_ID))?.lastSeenCommit, `${label}:cursor`).toBe(
       `new-${label}`,
     );
@@ -711,7 +725,7 @@ test("source-sync settlement may fill a legacy missing Snapshot id without chang
   }
 });
 
-test("source-sync settlement rejects concurrent Capsule census changes before publishing", async () => {
+test("source-sync settlement ignores unrelated apps and fences changes to the owner", async () => {
   for (const [label, store] of settlementStores()) {
     const addedFixture = await seedSourceSettlementFixture(label, store);
     const late = await prepareAppliedCapsule(
@@ -722,7 +736,7 @@ test("source-sync settlement rejects concurrent Capsule census changes before pu
     await persistAppliedLineage(store, late, false);
     let interleaved = false;
     store.armAfterSourceSnapshotRead(
-      `snapshot_same_${label}`,
+      `snapshot_changed_${label}`,
       async () => {
         interleaved = true;
         // The lineage was prepared before the observation; only the Capsule
@@ -730,32 +744,10 @@ test("source-sync settlement rejects concurrent Capsule census changes before pu
         await store.putCapsule(late.capsule);
       },
     );
-    const first = store.commitSourceSyncSuccess({
-      terminalRun: addedFixture.terminal,
-      leaseToken: `lease_settlement_${label}`,
-      snapshot: addedFixture.snapshot,
-    });
-    await expect(first, `${label}: first commit`).rejects.toThrow(
-      "SourceSync settlement observations changed",
-    );
-    expect(interleaved, `${label}: interleave`).toBe(true);
-    await assertSettlementRefused(addedFixture, [
-      addedFixture.changed,
-      addedFixture.differentRef,
-      addedFixture.sameCommit,
-      late.capsule,
+    await assertSettlementCommitted(addedFixture, [addedFixture.changed.id], [
+      addedFixture.changed, addedFixture.differentRef, addedFixture.sameCommit, late.capsule,
     ]);
-
-    await assertSettlementCommitted(
-      addedFixture,
-      [addedFixture.changed.id, late.capsule.id],
-      [
-        addedFixture.changed,
-        addedFixture.differentRef,
-        addedFixture.sameCommit,
-        late.capsule,
-      ],
-    );
+    expect(interleaved, `${label}: unrelated app interleave`).toBe(true);
 
     const toggledStore: InterleavingSettlementStore =
       label === "memory"
@@ -765,7 +757,7 @@ test("source-sync settlement rejects concurrent Capsule census changes before pu
     let toggleInterleaved = false;
     const toggled = { ...toggledFixture.changed, autoUpdate: true };
     toggledStore.armAfterSourceSnapshotRead(
-      `snapshot_same_${label}`,
+      `snapshot_changed_${label}`,
       async () => {
         toggleInterleaved = true;
         await toggledStore.putCapsule(toggled);
@@ -804,7 +796,7 @@ test("source-sync settlement rejects provenance changes observed after a snapsho
     };
     let interleaved = false;
     store.armAfterSourceSnapshotRead(
-      `snapshot_same_${label}`,
+      `snapshot_changed_${label}`,
       async () => {
         interleaved = true;
         await store.putPlanRun(changedPlan);
@@ -873,10 +865,7 @@ test("source-sync settlement rejects a D1 Capsule physical/JSON tombstone mismat
   const store = new InterleavingD1SettlementStore(db);
   const fixture = await seedSourceSettlementFixture("physical_mismatch", store);
   const tombstone: Capsule = {
-    ...fixture.sameCommit,
-    id: "capsule_destroyed_physical_mismatch",
-    name: "destroyed-physical-mismatch",
-    slug: "destroyed-physical-mismatch",
+    ...fixture.changed,
     currentStateVersionId: undefined,
     currentStateGeneration: 0,
     status: "destroyed",
@@ -1476,3 +1465,114 @@ class SnapshotFailingSqlClient implements SqlClient {
     });
   }
 }
+
+test("scheduler marker writes during settlement preserve a successful owner observation", async () => {
+  for (const [label, store] of settlementStores()) {
+    const fixture = await seedSourceSettlementFixture(`marker_${label}`, store);
+    const marker = "2026-10-28T12:00:00.000Z";
+    store.armAfterSourceSnapshotRead(`snapshot_changed_marker_${label}`, async () => {
+      const source = (await store.getSource(SOURCE_ID))!;
+      expect((await store.writeSourceConfiguration({ expectedSource: source,
+        source: { ...source, lastAutoSyncAttemptAt: marker },
+      })).status).toBe("updated");
+    });
+    await assertSettlementCommitted(fixture, [fixture.changed.id], [fixture.changed]);
+    expect((await store.getSource(SOURCE_ID))?.lastAutoSyncAttemptAt, label).toBe(marker);
+  }
+});
+
+test("the owner has one adopted lane and webhook observation does not write a scheduler marker", async () => {
+  for (const [label, store] of await stores()) {
+    const capsule = await seedAppliedCapsule({ store, capsuleId: `lane_${label}`,
+      snapshotId: `adopted_lane_${label}`, resolvedCommit: "1".repeat(40), ref: "release", path: "infra/app" });
+    const service = new SourcesService({ store, artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator() });
+    const runs = await service.createReconciliationSyncs(SOURCE_ID);
+    expect(runs.length, label).toBe(1);
+    expect(runs[0]?.run, label).toMatchObject({ ref: "release", path: "infra/app" });
+    expect(await store.getSource(SOURCE_ID), label).toMatchObject({ defaultRef: "release", defaultPath: "infra/app", ownerCapsuleId: capsule.id });
+    expect((await store.getSource(SOURCE_ID))?.lastAutoSyncAttemptAt, label).toBeUndefined();
+    await service.createReconciliationSyncs(SOURCE_ID, { scheduled: true });
+    expect((await store.getSource(SOURCE_ID))?.lastAutoSyncAttemptAt, label).toBeDefined();
+    await expect(service.patchSource(SOURCE_ID, { defaultRef: "other" }), label).rejects.toMatchObject({
+      details: { reason: "source_lane_owned_by_app" },
+    });
+    await expect(service.patchSource(SOURCE_ID, { defaultPath: "other" }), label).rejects.toMatchObject({
+      details: { reason: "source_lane_owned_by_app" },
+    });
+  }
+});
+
+test("lane convergence follows restore provenance back to the older lane on every store", async () => {
+  for (const [label, store] of await stores()) {
+    const capsule = await seedAppliedCapsule({ store, capsuleId: `restore_lane_${label}`,
+      snapshotId: `old_lane_${label}`, resolvedCommit: "2".repeat(40), ref: "release/old", path: "old/subtree" });
+    const source = (await store.getSource(SOURCE_ID))!;
+    await store.writeSourceConfiguration({ expectedSource: source,
+      source: { ...source, defaultRef: "release/new", defaultPath: "new/subtree" } });
+    const restoreId = `restore_lane_run_${label}`;
+    const restoredStateId = `restored_lane_state_${label}`;
+    await store.putBackupRun({ id: restoreId, workspaceId: WORKSPACE_ID, capsuleId: capsule.id,
+      environment: capsule.environment, type: "restore", status: "succeeded", createdBy: "owner", createdAt: FINISHED_AT,
+      restoredFromStateVersionId: capsule.currentStateVersionId, restoredStateVersionId: restoredStateId });
+    await store.putStateVersion({ id: restoredStateId, workspaceId: WORKSPACE_ID, capsuleId: capsule.id,
+      environment: capsule.environment, generation: 2, stateRef: "restored", digest: "digest", createdByRunId: restoreId, createdAt: FINISHED_AT });
+    await store.putCapsule({ ...capsule, currentStateGeneration: 2, currentStateVersionId: restoredStateId, status: "stale" });
+    expect(await convergeOwnedSourceLane(store, SOURCE_ID), label).toMatchObject({ defaultRef: "release/old", defaultPath: "old/subtree" });
+    const expectedOwner = (await store.getCapsule(capsule.id))!;
+    const expectedSource = (await store.getSource(SOURCE_ID))!;
+    await store.putCapsule({ ...expectedOwner, status: "destroyed" });
+    expect(await store.writeSourceConfiguration({ expectedSource, expectedOwnerCapsule: expectedOwner,
+      source: { ...expectedSource, defaultRef: "stale-writer" } }), label).toEqual({ status: "conflict" });
+  }
+});
+
+
+test("a service-data backup receives the adopted snapshot rather than the newest observation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const capsule = await seedAppliedCapsule({ store, capsuleId: "backup_adopted",
+    snapshotId: "backup_adopted_snapshot", resolvedCommit: "4".repeat(40), ref: "old", path: "old/tree" });
+  const config = (await store.getInstallConfig(capsule.installConfigId))!;
+  await store.putInstallConfig({ ...config, backup: { enabled: true, mode: "provider_snapshot", adapterId: "test", outputPath: "backup" } });
+  await store.putSourceSnapshot(sourceSnapshot("5".repeat(40), { id: "backup_newest", ref: "new", path: "new/tree", fetchedAt: "2026-10-28T12:00:00.000Z" }));
+  let captured: string | undefined;
+  const service = new BackupsService({ store, artifactStore: new InMemoryBackupArtifactStore(),
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    stateObjectReader: { get: async () => new Uint8Array([1, 2, 3]) },
+    serviceDataRunner: { run: async (input) => {
+      captured = input.sourceSnapshot?.id;
+      return { status: "missing", reason: "test export" };
+    } },
+  });
+  await service.createBackup({ workspaceId: WORKSPACE_ID });
+  expect(captured).toBe("backup_adopted_snapshot");
+});
+
+
+test("ownerless legacy Source settlement preserves stale and auto-update candidates on all stores", async () => {
+  for (const [label, store] of await stores()) {
+    const first = await seedAppliedCapsule({ store, capsuleId: `legacy_${label}`,
+      snapshotId: `legacy_snapshot_${label}`, resolvedCommit: `legacy-old-${label}`,
+      legacySharedSource: true });
+    const second = await prepareAppliedCapsule(store, first, `legacy_second_${label}`);
+    await persistAppliedLineage(store, second, true);
+    await store.putCapsule({ ...second.capsule, autoUpdate: true });
+    expect((await store.getSource(SOURCE_ID))?.ownerCapsuleId, label).toBeUndefined();
+    const lease = `legacy_lease_${label}`;
+    const running = await claimRun(store, lease);
+    const result = await store.commitSourceSyncSuccess({ leaseToken: lease,
+      terminalRun: succeededRun(running, `legacy-new-${label}`),
+      snapshot: sourceSnapshot(`legacy-new-${label}`) });
+    expect(result.won, label).toBe(true);
+    expect(result.staleCapsules?.map((capsule) => capsule.id).sort(), label)
+      .toEqual([first.id, second.capsule.id].sort());
+    expect((await store.getCapsule(first.id))?.status, label).toBe("stale");
+    expect(await store.getCapsule(second.capsule.id), label).toMatchObject({ status: "stale", autoUpdate: true });
+    expect((await store.getSource(SOURCE_ID))?.ownerCapsuleId, label).toBeUndefined();
+    const source = (await store.getSource(SOURCE_ID))!;
+    expect(await store.writeSourceConfiguration({
+      source: { ...source, defaultRef: "release" }, expectedSource: source,
+      expectedOwnerCapsule: (await store.getCapsule(first.id))!,
+    }), label).toEqual({ status: "conflict" });
+    expect((await store.getSource(SOURCE_ID))?.defaultRef, label).toBe("main");
+  }
+});
