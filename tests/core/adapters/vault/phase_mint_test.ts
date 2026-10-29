@@ -493,7 +493,9 @@ test("paused Source driver discards its credential when the app drains", async (
     sourceId: source.id, runId: "owned_sync_paused" });
   await driverEntered;
   expect(active.size).toBe(1);
-  await store.putCapsule({ ...owned, managementState: "draining", managementEpoch: 1 });
+  expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: "fixture-owner",
+    ownershipEpoch: 1, managementState: "draining", managementEpoch: 1,
+    storageRoot: `apps/${capsule.id}` })).toBe(true);
   resume();
   await expect(pending).rejects.toThrow(/authority changed during credential mint/);
   expect(active.size).toBe(0);
@@ -1483,7 +1485,9 @@ test("owned app pins a self-renewed Connection before mint and refuses drain dur
       { phase: "plan", capsuleId: capsule.id, runId: plan.id });
     await entered;
     if (drain) {
-      await store.putCapsule({ ...owned, managementState: "draining", managementEpoch: 1 });
+      expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: "fixture-owner",
+        ownershipEpoch: 1, managementState: "draining", managementEpoch: 1,
+        storageRoot: `apps/${capsule.id}` })).toBe(true);
       resumeRefresh();
       await expect(pending).rejects.toThrow(/authority changed before credential mint/);
     } else {
@@ -1492,6 +1496,41 @@ test("owned app pins a self-renewed Connection before mint and refuses drain dur
     }
     expect(refreshes).toBe(1);
   }
+});
+
+test("owned Apply mint checks its recorded requester after membership removal", async () => {
+  const { store, vault } = makeVault({ appAccessResolver: {
+    resolveAppAccess: async (accountId, capsuleId) => accountId === "fixture-owner"
+      ? { capsuleId, role: "owner", ownerAccountId: "fixture-owner", ownershipEpoch: 1 }
+      : undefined,
+    listAccessibleApps: async () => ({ apps: [] }),
+  } });
+  const conn = await markVerified(store, await vault.register({
+    workspaceId: "space_1", provider: "registry.opentofu.org/integrations/github",
+    credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials" },
+    values: { GITHUB_TOKEN: "fixture-secret" },
+  }, undefined, null));
+  const { capsule } = await seedCapsuleModel(store, { workspaceId: "space_1" });
+  await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 1,
+    managementState: "active", managementEpoch: 0 });
+  const plan: PlanRun = { id: "plan_removed_requester", workspaceId: "space_1", capsuleId: capsule.id,
+    createdBy: "fixture-owner", ownershipEpoch: 1, appManagementEpoch: 0,
+    source: { kind: "git", url: HTTPS_REPO_URL, ref: "main" }, sourceDigest: "sha256:source",
+    operation: "update", runnerProfileId: "runner", variablesDigest: "sha256:variables",
+    requiredProviders: [conn.provider], status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy", auditEvents: [], createdAt: 1, updatedAt: 1 };
+  await store.putPlanRun(plan);
+  await store.putApplyRun({ id: "apply_removed_requester", planRunId: plan.id,
+    createdBy: "removed-member", workspaceId: "space_1", capsuleId: capsule.id,
+    operation: "update", runnerProfileId: "runner", status: "running",
+    expected: {} as never, stateBackend: { kind: "operator-managed", ref: "state" },
+    stateLock: { status: "pending", backendRef: "state" },
+    auditEvents: [], createdAt: 2, updatedAt: 2 } as never);
+  await expect(vault.mintForCapsuleProviderBindings("space_1", [
+    { provider: conn.provider, connectionId: conn.id },
+  ], { phase: "apply", capsuleId: capsule.id, runId: "apply_removed_requester" }))
+    .rejects.toThrow(/App access|authorized|access|member/i);
 });
 
 test("mintForCapsuleProviderBindings maps generic provider files to tofu credential files", async () => {

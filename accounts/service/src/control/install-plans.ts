@@ -109,6 +109,7 @@ import {
   resolveStoreBaseInstallConfig,
 } from "./sources.ts";
 import {
+  controllerErrorCode,
   requireWorkspaceAccess,
   resolveProviderBindings,
   type ControlDispatchContext,
@@ -382,8 +383,10 @@ export async function handleInstallPlans(
     if (!body || body.mode !== "attempt" || body.workspaceId !== undefined) {
       return errorJson("invalid_request", "A workspace-less install attempt is required.", 400, ctx.request);
     }
-    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
-    if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
+    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session, ctx.workspaceMutationsFrozen === false);
+    if (!namespace) return ctx.workspaceMutationsFrozen !== false
+      ? errorJson("workspace_frozen", "Workspace creation and membership changes are temporarily frozen.", 409, ctx.request)
+      : errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
     return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
   }
   if (segments[0] !== "install-plans" || segments.length < 2) {
@@ -2268,11 +2271,19 @@ async function createCapsule(
     }
   }
   const requestedBindings = requestedProviderBindings(plan);
+  const capsuleId = deterministicInitialCapsuleId(plan.id);
+  let currentOwner = plan.createdBy;
+  try {
+    const existingCapsule = await operations.capsules.getCapsule(capsuleId);
+    if (existingCapsule.ownerAccountId) currentOwner = existingCapsule.ownerAccountId;
+  } catch (error) {
+    if (controllerErrorCode(error) !== "not_found") throw error;
+  }
   const resolved = await resolveProviderBindings(
     operations,
     plan.workspaceId,
     requestedBindings,
-    plan.createdBy,
+    currentOwner,
   );
   if (!resolved.ok) {
     return failedPlan(plan, {
@@ -2280,7 +2291,6 @@ async function createCapsule(
       message: "A referenced Provider Connection is unavailable to this Workspace.",
     });
   }
-  const capsuleId = deterministicInitialCapsuleId(plan.id);
   const candidateCapsule: Capsule = {
     id: capsuleId,
     workspaceId: plan.workspaceId,

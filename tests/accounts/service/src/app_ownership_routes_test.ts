@@ -27,6 +27,7 @@ function port(overrides: Partial<AppOwnershipOperations> = {}): AppOwnershipOper
     removeMember: async () => {},
     createTransfer: async () => ({ transferId: "tx1", state: "pending" }),
     getTransfer: async () => ({ transferId: "tx1", capsuleId: "cap1", fromAccountId: "owner", toAccountId: "member", state: "pending" }),
+    listTransfers: async () => [{ transferId: "tx1", capsuleId: "cap1", fromAccountId: "owner", toAccountId: "member", state: "pending" }],
     acceptTransfer: async () => ({ transferId: "tx1", state: "accepted" }),
     cancelTransfer: async () => {},
     ...overrides,
@@ -49,11 +50,14 @@ function context(
   return {
     request,
     url: new URL(request.url),
-    session: { subject, ...(workspaceId ? { workspaceId } : {}), ...(appIds ? { appIds } : {}) },
+    session: { subject, credential: "session", ...(workspaceId ? { workspaceId } : {}), ...(appIds ? { appIds } : {}) },
     operations: {
       ...(ownership ? { appAuthorization: ownership, appAccess: ownership } : {}),
       listCapsuleRunsPage: async () => ({ items: [] }),
-      capsules: { getCapsule: async (id: string) => ({ id, workspaceId: "ws1" }) },
+      capsules: {
+        getCapsule: async (id: string) => ({ id, workspaceId: "ws1" }),
+        getCapsulesByIds: async () => [],
+      },
     },
     store: {
       findAccount: async (subject: string) => Object.values(accounts).find((account) => account.subject === subject),
@@ -61,6 +65,30 @@ function context(
         Object.values(accounts).find((account) => account.emailVerified && account.email === email),
     },
   } as unknown as ControlDispatchContext;
+}
+
+function oauthContext(method: string, path: string, subject: string, ownership: AppOwnershipOperations, body?: unknown): ControlDispatchContext {
+  const ctx = context(method, path, subject, ownership, body, "ws1", ["cap1"]);
+  return {
+    ...ctx,
+    session: {
+      ...ctx.session,
+      credential: "oauth-access-token",
+      uninstallRequester: { subject, grant: { kind: "oauth-access-token", tokenHash: "hash" } },
+    },
+  };
+}
+
+function patContext(method: string, path: string, subject: string, ownership: AppOwnershipOperations, body?: unknown): ControlDispatchContext {
+  const ctx = context(method, path, subject, ownership, body, "ws1", ["cap1"]);
+  return {
+    ...ctx,
+    session: {
+      ...ctx.session,
+      credential: "personal-access-token",
+      uninstallRequester: { subject, grant: { kind: "personal-access-token", tokenId: "pat1" } },
+    },
+  };
 }
 
 async function call(ctx: ControlDispatchContext, segments: string[]): Promise<Response> {
@@ -87,8 +115,8 @@ describe("per-app ownership routes", () => {
       }),
     });
     const ctx = context("GET", "apps", "owner", ownership, undefined, undefined, ["cap2"]);
-    (ctx.operations as unknown as { capsules: { getCapsule: () => Promise<never> } }).capsules = {
-      getCapsule: async () => { capsuleReads++; throw new Error("unexpected app read"); },
+    (ctx.operations as unknown as { capsules: { getCapsulesByIds: () => Promise<never[]> } }).capsules = {
+      getCapsulesByIds: async () => { capsuleReads++; throw new Error("unexpected app read"); },
     };
     const apps = await call(ctx, ["apps"]);
     expect(await apps.json()).toEqual({ apps: [] });
@@ -119,6 +147,66 @@ describe("per-app ownership routes", () => {
     const response = await call(context("POST", "ownership-transfers/tx1/accept", "member", port(), undefined, "ws2", ["cap1"]),
       ["ownership-transfers", "tx1", "accept"]);
     expect(response.status).toBe(403);
+  });
+
+  test("OAuth app grants cannot manage members or transfer ownership in either direction", async () => {
+    let mutations = 0;
+    const ownership = port({
+      addMember: async () => { mutations++; throw new Error("unexpected add"); },
+      removeMember: async () => { mutations++; throw new Error("unexpected remove"); },
+      createTransfer: async () => { mutations++; throw new Error("unexpected create"); },
+      acceptTransfer: async () => { mutations++; throw new Error("unexpected accept"); },
+      cancelTransfer: async () => { mutations++; throw new Error("unexpected cancel"); },
+    });
+    const attempts = [
+      ["GET", "capsules/cap1/members", "owner", undefined, ["capsules", "cap1", "members"]],
+      ["POST", "capsules/cap1/members", "owner", { email: "member@example.test", consent: "connections_and_code" }, ["capsules", "cap1", "members"]],
+      ["DELETE", "capsules/cap1/members/member", "owner", undefined, ["capsules", "cap1", "members", "member"]],
+      ["POST", "capsules/cap1/ownership-transfers", "owner", { toAccountId: "member" }, ["capsules", "cap1", "ownership-transfers"]],
+      ["DELETE", "ownership-transfers/tx1", "owner", undefined, ["ownership-transfers", "tx1"]],
+      ["POST", "ownership-transfers/tx1/accept", "member", undefined, ["ownership-transfers", "tx1", "accept"]],
+    ] as const;
+    for (const [method, path, subject, body, segments] of attempts) {
+      expect((await call(oauthContext(method, path, subject, ownership, body), [...segments])).status).toBe(403);
+    }
+    expect(mutations).toBe(0);
+  });
+
+  test("a scoped account PAT may manage membership and accept or cancel a transfer", async () => {
+    const calls: string[] = [];
+    const ownership = port({
+      addMember: async () => { calls.push("add"); return { accountId: "member", status: "active" }; },
+      createTransfer: async () => { calls.push("create"); return { transferId: "tx1", state: "pending" }; },
+      acceptTransfer: async () => { calls.push("accept"); return { transferId: "tx1", state: "accepted" }; },
+      cancelTransfer: async () => { calls.push("cancel"); },
+    });
+    expect((await call(patContext("POST", "capsules/cap1/members", "owner", ownership, {
+      email: "member@example.test", consent: "connections_and_code",
+    }), ["capsules", "cap1", "members"])).status).toBe(202);
+    expect((await call(patContext("POST", "capsules/cap1/ownership-transfers", "owner", ownership, {
+      toAccountId: "member",
+    }), ["capsules", "cap1", "ownership-transfers"])).status).toBe(201);
+    expect((await call(patContext("POST", "ownership-transfers/tx1/accept", "member", ownership),
+      ["ownership-transfers", "tx1", "accept"])).status).toBe(200);
+    expect((await call(patContext("DELETE", "ownership-transfers/tx1", "owner", ownership),
+      ["ownership-transfers", "tx1"])).status).toBe(204);
+    expect(calls).toEqual(["add", "create", "accept", "cancel"]);
+  });
+
+  test("pending transfer lists expose only current owner or intended recipient", async () => {
+    const transfers = [
+      { transferId: "tx1", capsuleId: "cap1", fromAccountId: "owner", toAccountId: "member", state: "pending" as const },
+      { transferId: "tx2", capsuleId: "cap1", fromAccountId: "owner", toAccountId: "other", state: "pending" as const },
+    ];
+    const ownership = port({ listTransfers: async () => transfers });
+    const capsuleRoute = ["capsules", "cap1", "ownership-transfers"];
+    const owner = await call(context("GET", "capsules/cap1/ownership-transfers?state=pending", "owner", ownership), capsuleRoute);
+    expect((await owner.json()).ownershipTransfers).toEqual(transfers);
+    const recipient = await call(context("GET", "capsules/cap1/ownership-transfers?state=pending", "member", ownership), capsuleRoute);
+    expect((await recipient.json()).ownershipTransfers).toEqual([transfers[0]]);
+    const incoming = await call(context("GET", "ownership-transfers?state=pending", "member", ownership), ["ownership-transfers"]);
+    expect((await incoming.json()).ownershipTransfers).toEqual([transfers[0]]);
+    expect((await call(context("GET", "capsules/cap1/ownership-transfers?state=accepted", "owner", ownership), capsuleRoute)).status).toBe(400);
   });
 
   test("member roster hides emails from members and unverified accounts", async () => {
@@ -174,10 +262,12 @@ describe("per-app ownership routes", () => {
     const body = { email: "member@example.test", consent: "connections_and_code" };
     expect((await call(context("POST", "capsules/cap1/members", "member", ownership, body), route)).status).toBe(403);
     expect((await call(context("POST", "capsules/cap1/members", "owner", ownership, { email: body.email }), route)).status).toBe(400);
-    expect((await call(context("POST", "capsules/cap1/members", "owner", ownership, { ...body, email: "unverified@example.test" }), route)).status).toBe(404);
+    const unknown = await call(context("POST", "capsules/cap1/members", "owner", ownership, { ...body, email: "unverified@example.test" }), route);
+    expect(unknown.status).toBe(202);
     const accepted = await call(context("POST", "capsules/cap1/members", "owner", ownership, body), route);
-    expect(accepted.status).toBe(201);
-    expect(calls).toEqual([{ capsuleId: "cap1", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 4 }]);
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual(await unknown.json());
+    expect(calls).toEqual([{ capsuleId: "cap1", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 4, consent: "connections_and_code" }]);
   });
 
   test("a member may leave but cannot remove another member", async () => {
@@ -247,5 +337,24 @@ describe("per-app ownership routes", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ apps: [] });
     expect((await call(context("GET", "apps?limit=0", "owner", port()), ["apps"])).status).toBe(400);
+  });
+
+  test("apps list batches Capsule rows after live AppAccess rechecks", async () => {
+    const ownership = port({ listAccessibleApps: async () => ({ apps: [
+      { capsuleId: "cap1", role: "owner", ownerAccountId: "owner", ownershipEpoch: 4 },
+      { capsuleId: "cap2", role: "owner", ownerAccountId: "owner", ownershipEpoch: 4 },
+    ] }) });
+    const ctx = context("GET", "apps", "owner", ownership);
+    const batches: string[][] = [];
+    (ctx.operations as unknown as { capsules: unknown }).capsules = {
+      getCapsulesByIds: async (ids: string[]) => {
+        batches.push(ids);
+        return ids.map((id) => ({ id, workspaceId: "ws1", status: "destroyed" }));
+      },
+      getCapsule: async () => { throw new Error("per-app Capsule query"); },
+    };
+    const response = await call(ctx, ["apps"]);
+    expect(await response.json()).toEqual({ apps: [] });
+    expect(batches).toEqual([["cap1", "cap2"]]);
   });
 });

@@ -292,12 +292,12 @@ the ledger row or indexes to accommodate an older binary. Local synthetic
 native fixtures are evidence for the implementation, not approval to apply a
 live database migration or qualify an operator's physical source.
 
-### Current catalog and additive Interface links (D1 76)
+### Additive Interface links and app ownership (D1 76–78)
 
-Current bootstrap targets 76. The compatible ordinary bridge accepts complete,
-checksummed heads 71 through 76 with the separate runtime floors above.
+Current bootstrap targets 78. The compatible ordinary bridge accepts complete,
+checksummed heads 71 through 78 with the separate runtime floors above.
 During the additive rollout, `verifyD1OpenTofuLedgerSchemaPredeployed` accepts
-complete v75 or v76 catalogs and their physical Financial source hooks. Staging
+complete v75 through v78 catalogs and their physical Financial source hooks. Staging
 and the dedicated auth release use this same read-only verifier, so v75 remains
 supported until the later fenced rollout. Indexed Backup reads retain their 74
 floor and recheck the exact index shapes.
@@ -307,7 +307,8 @@ rows or per-app ownership. On v75, link reads are empty and link writes return
 `failed_precondition`, while sign-in and Capsule retirement remain available.
 The table-absence probe retries after one second and failed probes are not
 cached. Per-app ownership expansion belongs to the later v77 migration. The
-production v75-to-v77 rollout is a separate operator action in one fenced
+production v75-to-v78 rollout adds the v78 transfer ledger and mint leases in
+the same window without modifying v77 checksums. It is a separate operator action in one fenced
 window; no rollout is performed by this code change. The historical production
 v66-to-v75 owner remains pinned to its v75 plan even when the default catalog
 advances.

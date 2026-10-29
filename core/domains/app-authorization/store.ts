@@ -24,6 +24,7 @@ export interface AppAuthorizationMutations extends AppAccessResolver {
   removeMember(input: MemberMutationInput): Promise<void>;
   createTransfer(input: TransferCreationInput): Promise<{ readonly transferId: string; readonly state: "pending" }>;
   getTransfer(transferId: string): Promise<AppAuthorizationTransfer | undefined>;
+  listTransfers(input: { readonly capsuleId?: string; readonly toAccountId?: string; readonly state: "pending" }): Promise<readonly AppAuthorizationTransfer[]>;
   acceptTransfer(input: { readonly transferId: string; readonly actorAccountId: string }): Promise<{ readonly transferId: string; readonly state: "pending" | "accepted" }>;
   cancelTransfer(input: { readonly transferId: string; readonly actorAccountId: string }): Promise<void>;
 }
@@ -33,6 +34,7 @@ export interface MemberMutationInput {
   readonly actorAccountId: string;
   readonly accountId: string;
   readonly expectedOwnershipEpoch: number;
+  readonly consent: "connections_and_code";
 }
 
 export interface TransferCreationInput {
@@ -62,6 +64,23 @@ type TransferRow = {
 };
 type RunRow = { id: string; kind: string; status: string; lease_token: string | null; run_json: unknown;
   source_id?: string | null; space_id?: string | null; source_space_id?: string | null; source_json?: unknown };
+
+function ownershipEvent(input: { spaceId: string; capsuleId: string; actorId: string; action: string;
+  targetId: string; consent?: "connections_and_code"; recipientAccountId?: string }) {
+  const createdAt = new Date().toISOString();
+  return { id: crypto.randomUUID(), workspaceId: input.spaceId, actorId: input.actorId,
+    action: input.action, targetType: "capsule", targetId: input.capsuleId,
+    memberAccountId: input.targetId, ...(input.consent ? { consent: input.consent } : {}),
+    ...(input.recipientAccountId ? { recipientAccountId: input.recipientAccountId } : {}), createdAt };
+}
+
+async function sqlOwnershipEvent(tx: SqlClient, event: ReturnType<typeof ownershipEvent>): Promise<void> {
+  await tx.query(`insert into takosumi_audit_events
+    (id,space_id,actor_id,action,target_type,target_id,run_id,event_json,created_at)
+    values ($1,$2,$3,$4,$5,$6,null,$7::jsonb,$8)`,
+    [event.id, event.workspaceId, event.actorId, event.action, event.targetType,
+      event.targetId, JSON.stringify(event), event.createdAt]);
+}
 
 const unavailable = () => new AppAuthorizationError("feature_unavailable", "App ownership storage is unavailable.");
 const conflict = (message: string) => new AppAuthorizationError("conflict", message);
@@ -210,8 +229,10 @@ function targetRuns(rows: readonly RunRow[], actor: string): { row: RunRow; canc
   return [...byId.values()].flatMap((row) => {
     if (row.status !== "queued" && row.status !== "waiting_approval") return [];
     const run = parseRunJson(row);
-    const createdBy = run.createdBy ?? planCreator(run.planRunId);
-    if (createdBy !== actor) return [];
+    const approval = run.approval && typeof run.approval === "object" && !Array.isArray(run.approval)
+      ? run.approval as Record<string, unknown> : undefined;
+    const requesters = [run.createdBy, planCreator(run.planRunId), approval?.approvedBy];
+    if (!requesters.includes(actor)) return [];
     return [{ row, cancelled: cancelledRun(row, now) }];
   });
 }
@@ -273,6 +294,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
     } catch (error) { withSchemaError(error); }
   }
   async addMember(input: MemberMutationInput): Promise<AppAuthorizationMember> {
+    if (input.consent !== "connections_and_code") throw new TypeError("Explicit member consent is required.");
     try {
       return await this.client.transaction(async (tx) => {
         const owner = requireOwner(await this.#owner(tx, input.capsuleId, true), input);
@@ -284,6 +306,9 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
            on conflict (capsule_id,account_id) do update set status='active',added_by=excluded.added_by,updated_at=excluded.updated_at`,
           [input.capsuleId, input.accountId, input.actorAccountId, now],
         );
+        await sqlOwnershipEvent(tx, ownershipEvent({ spaceId: owner.space_id, capsuleId: input.capsuleId,
+          actorId: input.actorAccountId, action: "app.member_added", targetId: input.accountId,
+          consent: input.consent }));
         return { accountId: input.accountId, status: "active" as const };
       });
     } catch (error) { withSchemaError(error); }
@@ -297,10 +322,14 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         if (input.accountId === owner.owner_account_id || (input.actorAccountId !== owner.owner_account_id && input.actorAccountId !== input.accountId)) {
           throw new AppAuthorizationError("app_owner_only", "Only the owner or departing member may remove membership.");
         }
-        // Canonical Plan/Apply admission locks Capsule before inserting Runs.
-        // Keep that order here; Source sync enqueue does not lock Capsule, so
-        // fence inserts while selecting and settling its run rows.
-        await tx.query(`lock table takosumi_runs in share row exclusive mode`);
+        const member = await tx.query<{ account_id: string }>(
+          `select account_id from takosumi_capsule_members where capsule_id=$1 and account_id=$2 for update`,
+          [input.capsuleId, input.accountId],
+        );
+        if (member.rows.length !== 1) throw new AppAuthorizationError("not_found", "Member was not found.");
+        // Source sync admission takes the Source lock and checks live membership.
+        // Plan/Apply admission takes the Capsule lock. Keep Capsule -> Source ->
+        // relevant Run rows, without locking every tenant's Runs table.
         if (owner.source_id) await tx.query(`select id from takosumi_sources where id=$1 for update`, [owner.source_id]);
         const rows = await tx.query<RunRow>(
           `select id,kind,status,lease_token,run_json from takosumi_runs
@@ -367,6 +396,9 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
           [input.capsuleId, input.accountId],
         );
         if (removed.rowCount !== 1) throw new AppAuthorizationError("not_found", "Member was not found.");
+        await sqlOwnershipEvent(tx, ownershipEvent({ spaceId: owner.space_id, capsuleId: input.capsuleId,
+          actorId: input.actorAccountId, action: "app.member_removed", targetId: input.accountId,
+          recipientAccountId: input.accountId }));
       });
     } catch (error) { withSchemaError(error); }
   }
@@ -395,6 +427,19 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
   async getTransfer(id: string) {
     try { return transferRecord(await this.#transfer(this.client, id, false)); }
     catch (error) { withSchemaError(error); }
+  }
+  async listTransfers(input: { capsuleId?: string; toAccountId?: string; state: "pending" }) {
+    if (input.state !== "pending" || Boolean(input.capsuleId) === Boolean(input.toAccountId)) throw new TypeError("Exactly one transfer scope is required.");
+    const scope = input.capsuleId ?? input.toAccountId;
+    if (!scope) throw new TypeError("Transfer scope is required.");
+    try {
+      const field = input.capsuleId ? "capsule_id" : "to_account_id";
+      const rows = await this.client.query<TransferRow>(
+        `select * from takosumi_capsule_ownership_transfers where ${field}=$1 and state='pending' order by created_at,id`,
+        [scope],
+      );
+      return rows.rows.map((row) => transferRecord(row)!);
+    } catch (error) { withSchemaError(error); }
   }
   async cancelTransfer(input: { transferId: string; actorAccountId: string }): Promise<void> {
     try {
@@ -426,9 +471,8 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         if (owner?.owner_account_id !== transfer.from_account_id || owner.ownership_epoch !== transfer.ownership_epoch ||
           (owner.management_state !== "active" && owner.management_state !== "draining")) throw conflict("App ownership changed.");
         if (owner.management_state === "draining" && transfer.drain_management_epoch !== owner.management_epoch) throw conflict("Another app management drain is active.");
-        // #lockedTransfer took Capsule then transfer. Keep Runs last, matching
-        // canonical admission's Capsule -> Runs order while fencing Source sync.
-        await tx.query(`lock table takosumi_runs in share row exclusive mode`);
+        // #lockedTransfer took Capsule then transfer; Source sync admission
+        // takes the Source lock and fences management before inserting Runs.
         if (owner.source_id) await tx.query(`select id from takosumi_sources where id=$1 for update`, [owner.source_id]);
         // Persist drain on the first call; a caller retries after in-flight Runs settle.
         if (owner.management_state === "active") {
@@ -500,10 +544,12 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         if (minting.rows.length > 0) return { transferId: input.transferId, state: "pending" as const };
         const now = new Date().toISOString();
         await tx.query(`delete from takosumi_provider_env_binding_sets where installation_id=$1`, [transfer.capsule_id]);
-        // The owner is represented only by capsules.owner_account_id. A prior
-        // member row for the recipient must not survive the ownership swap.
-        await tx.query(`delete from takosumi_capsule_members where capsule_id=$1 and account_id=$2`,
-          [transfer.capsule_id, transfer.to_account_id]);
+        // The recipient did not consent to retaining the previous owner's
+        // delegates. Capture every recipient before removing all memberships.
+        const notify = await tx.query<{ account_id: string }>(
+          `select account_id from takosumi_capsule_members where capsule_id=$1 order by account_id for update`,
+          [transfer.capsule_id]);
+        await tx.query(`delete from takosumi_capsule_members where capsule_id=$1`, [transfer.capsule_id]);
         await tx.query(
           `update takosumi_capsules set owner_account_id=$2,ownership_epoch=ownership_epoch+1,
            management_state='active',management_epoch=management_epoch+1,
@@ -512,6 +558,11 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
           [transfer.capsule_id, transfer.to_account_id],
         );
         await tx.query(`update takosumi_capsule_ownership_transfers set state='accepted',updated_at=$2 where id=$1`, [input.transferId, now]);
+        for (const accountId of new Set([transfer.from_account_id, ...notify.rows.map((row) => row.account_id)])) {
+          await sqlOwnershipEvent(tx, ownershipEvent({ spaceId: owner.space_id, capsuleId: transfer.capsule_id,
+            actorId: input.actorAccountId, action: "app.ownership_transferred", targetId: accountId,
+            recipientAccountId: accountId }));
+        }
         return { transferId: input.transferId, state: "accepted" as const };
       });
     } catch (error) { withSchemaError(error); }
@@ -532,6 +583,12 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
   #batch(statements: readonly D1LikePreparedStatement[]) {
     if (!this.db.batch) throw unavailable();
     return this.db.batch(statements);
+  }
+  #event(event: ReturnType<typeof ownershipEvent>): D1LikePreparedStatement {
+    return this.db.prepare(`insert into audit_events
+      (id,space_id,actor_id,action,target_type,target_id,run_id,created_at,record_json)
+      values (?,?,?,?,?,?,null,?,?)`).bind(event.id, event.workspaceId, event.actorId,
+        event.action, event.targetType, event.targetId, event.createdAt, JSON.stringify(event));
   }
   #guard(condition: string, values: readonly unknown[]): D1LikePreparedStatement {
     // A failed guard attempts an impossible CHECK value and rolls back every
@@ -596,8 +653,9 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
     });
   }
   async addMember(input: MemberMutationInput): Promise<AppAuthorizationMember> {
+    if (input.consent !== "connections_and_code") throw new TypeError("Explicit member consent is required.");
     return this.#safe(async () => {
-      requireOwner((await this.#owner(input.capsuleId)) ?? undefined, input);
+      const owner = requireOwner((await this.#owner(input.capsuleId)) ?? undefined, input);
       if (input.accountId === input.actorAccountId) throw conflict("Owner cannot be a member.");
       const now = new Date().toISOString();
       await this.#batch([
@@ -607,6 +665,9 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
            values (?,?,'active',?,?,?)
            on conflict(capsule_id,account_id) do update set status='active',added_by=excluded.added_by,updated_at=excluded.updated_at`,
         ).bind(input.capsuleId, input.accountId, input.actorAccountId, now, now),
+        this.#event(ownershipEvent({ spaceId: owner.space_id,
+          capsuleId: input.capsuleId, actorId: input.actorAccountId, action: "app.member_added",
+          targetId: input.accountId, consent: input.consent })),
       ]);
       return { accountId: input.accountId, status: "active" };
     });
@@ -692,20 +753,28 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
           [input.capsuleId, input.accountId, input.capsuleId],
         ),
       ];
-      for (const row of all) {
+      // Group exact row CAS predicates into bounded statements. D1 executes
+      // the entire batch transactionally; splitting into multiple batches
+      // would allow membership to disappear after only some Runs settled.
+      for (let offset = 0; offset < all.length; offset += 20) {
+        const group = all.slice(offset, offset + 20);
         statements.push(this.#guard(
-          `exists(select 1 from runs where id=? and status=? and run_json=? and lease_token is ?)`,
-          [row.id, row.status, row.run_json, row.lease_token],
+          group.map(() => `exists(select 1 from runs where id=? and status=? and run_json=? and lease_token is ?)`)
+            .join(" and "),
+          group.flatMap((row) => [row.id, row.status, row.run_json, row.lease_token]),
         ));
       }
-      for (const row of sourceRows) {
+      for (let offset = 0; offset < sourceRows.length; offset += 8) {
+        const group = sourceRows.slice(offset, offset + 8);
         statements.push(this.#guard(
-          `exists(select 1 from runs r join sources s on s.id=r.source_id
+          group.map(() => `exists(select 1 from runs r join sources s on s.id=r.source_id
            where r.id=? and r.status=? and r.run_json=? and r.lease_token is ?
              and r.source_id=? and r.space_id=? and s.space_id=? and s.record_json=?
-             and exists(select 1 from capsules c where c.id=? and c.space_id=? and c.source_id=?))`,
-          [row.id, row.status, row.run_json, row.lease_token, row.source_id, row.space_id,
-            row.source_space_id, row.source_json, input.capsuleId, owner.space_id, owner.source_id],
+             and exists(select 1 from capsules c where c.id=? and c.space_id=? and c.source_id=?))`)
+            .join(" and "),
+          group.flatMap((row) => [row.id, row.status, row.run_json, row.lease_token,
+            row.source_id, row.space_id, row.source_space_id, row.source_json,
+            input.capsuleId, owner.space_id, owner.source_id]),
         ));
       }
       for (const { row, cancelled } of cancels) {
@@ -724,6 +793,10 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
         ).bind(JSON.stringify(revokedSourceSync(row, input.accountId, now)), row.id));
       }
       statements.push(this.db.prepare(`delete from capsule_members where capsule_id=? and account_id=?`).bind(input.capsuleId, input.accountId));
+      statements.push(this.#event(ownershipEvent({ spaceId: owner.space_id, capsuleId: input.capsuleId,
+        actorId: input.actorAccountId, action: "app.member_removed", targetId: input.accountId,
+        recipientAccountId: input.accountId })));
+      if (statements.length > 480) throw conflict("Too many active Runs for atomic member removal.");
       await this.#batch(statements);
     });
   }
@@ -751,6 +824,16 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
   }
   async getTransfer(id: string) {
     return this.#safe(async () => transferRecord((await this.#transfer(id)) ?? undefined));
+  }
+  async listTransfers(input: { capsuleId?: string; toAccountId?: string; state: "pending" }) {
+    if (input.state !== "pending" || Boolean(input.capsuleId) === Boolean(input.toAccountId)) throw new TypeError("Exactly one transfer scope is required.");
+    return this.#safe(async () => {
+      const field = input.capsuleId ? "capsule_id" : "to_account_id";
+      const rows = await this.db.prepare(
+        `select * from capsule_ownership_transfers where ${field}=? and state='pending' order by created_at,id`,
+      ).bind(input.capsuleId ?? input.toAccountId).all<TransferRow>();
+      return (rows.results ?? []).map((row) => transferRecord(row)!);
+    });
   }
   async cancelTransfer(input: { transferId: string; actorAccountId: string }): Promise<void> {
     return this.#safe(async () => {
@@ -781,19 +864,6 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       if (owner?.owner_account_id !== transfer.from_account_id || owner.ownership_epoch !== transfer.ownership_epoch ||
         (owner.management_state !== "active" && owner.management_state !== "draining")) throw conflict("App ownership changed.");
       if (owner.management_state === "draining" && transfer.drain_management_epoch !== owner.management_epoch) throw conflict("Another app management drain is active.");
-      if (owner.management_state === "active") {
-        await this.#batch([
-          this.#transferGuard(transfer),
-          this.#ownerGuard(transfer.capsule_id, transfer.from_account_id, transfer.ownership_epoch),
-          this.db.prepare(`update capsule_ownership_transfers set drain_management_epoch=? where id=?`).bind(owner.management_epoch + 1, transfer.id),
-          this.db.prepare(
-            `update capsules set management_state='draining',management_epoch=management_epoch+1,
-             record_json=json_set(record_json,'$.managementState','draining','$.managementEpoch',management_epoch+1)
-             where id=?`,
-          ).bind(transfer.capsule_id),
-        ]);
-        transfer.drain_management_epoch = owner.management_epoch + 1;
-      }
       const queuedResult = await this.db.prepare(
         `select id,type as kind,status,lease_token,run_json from runs
          where installation_id=? and status in ('queued','waiting_approval') limit 81`,
@@ -820,7 +890,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       const nowMs = Date.now();
       const settleStatements: D1LikePreparedStatement[] = [
         this.#transferGuard(transfer),
-        this.#ownerGuard(transfer.capsule_id, transfer.from_account_id, transfer.ownership_epoch, "draining"),
+        this.#ownerGuard(transfer.capsule_id, transfer.from_account_id, transfer.ownership_epoch, owner.management_state),
         this.#guard(
           `not exists(select 1 from runs where installation_id=? and status in ('queued','waiting_approval')
            and id not in (${queuedRows.map(() => "?").join(",") || "''"}))`,
@@ -874,7 +944,20 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
         ).bind(JSON.stringify(failedSourceSync(row, nowMs, "app_ownership_transfer_draining",
           "App ownership transfer stopped this source sync before it started.")), row.id));
       }
+      if (owner.management_state === "active") {
+        settleStatements.push(
+          this.db.prepare(`update capsule_ownership_transfers set drain_management_epoch=? where id=?`)
+            .bind(owner.management_epoch + 1, transfer.id),
+          this.db.prepare(
+            `update capsules set management_state='draining',management_epoch=management_epoch+1,
+             record_json=json_set(record_json,'$.managementState','draining','$.managementEpoch',management_epoch+1)
+             where id=?`,
+          ).bind(transfer.capsule_id),
+        );
+      }
+      if (settleStatements.length > 480) throw conflict("Too many active Runs for atomic transfer drain.");
       await this.#batch(settleStatements);
+      if (owner.management_state === "active") transfer.drain_management_epoch = owner.management_epoch + 1;
       const active = await this.db.prepare(
         `select r.id from runs r left join sources s on s.id=r.source_id
          where (r.installation_id=? or (r.type='source_sync' and json_extract(s.record_json,'$.ownerCapsuleId')=?))
@@ -886,9 +969,18 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       ).bind(transfer.capsule_id, Date.now()).first<{ id: string }>();
       if (minting) return { transferId: input.transferId, state: "pending" as const };
       const now = new Date().toISOString();
-      await this.#batch([
+      const members = await this.db.prepare(`select account_id from capsule_members where capsule_id=?`)
+        .bind(transfer.capsule_id).all<{ account_id: string }>();
+      const memberIds = (members.results ?? []).map((row) => row.account_id);
+      const notifications = [...new Set([transfer.from_account_id, ...memberIds])];
+      const finalStatements: D1LikePreparedStatement[] = [
         this.#transferGuard(transfer),
         this.#ownerGuard(transfer.capsule_id, transfer.from_account_id, transfer.ownership_epoch, "draining"),
+        this.#guard(
+          `not exists(select 1 from capsule_members where capsule_id=? and account_id not in (select value from json_each(?)))
+           and (select count(*) from capsule_members where capsule_id=?)=?`,
+          [transfer.capsule_id, JSON.stringify(memberIds), transfer.capsule_id, memberIds.length],
+        ),
         this.#guard(`not exists(select 1 from app_credential_mint_leases where capsule_id=? and expires_at>?)`,
           [transfer.capsule_id, Date.now()]),
         this.#guard(
@@ -905,7 +997,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
           [transfer.capsule_id, transfer.capsule_id],
         ),
         this.db.prepare(`delete from provider_env_binding_sets where installation_id=?`).bind(transfer.capsule_id),
-        this.db.prepare(`delete from capsule_members where capsule_id=? and account_id=?`).bind(transfer.capsule_id, transfer.to_account_id),
+        this.db.prepare(`delete from capsule_members where capsule_id=?`).bind(transfer.capsule_id),
         this.db.prepare(
           `update capsules set owner_account_id=?,ownership_epoch=ownership_epoch+1,
            management_state='active',management_epoch=management_epoch+1,
@@ -914,7 +1006,13 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
            where id=?`,
         ).bind(transfer.to_account_id, transfer.to_account_id, transfer.capsule_id),
         this.db.prepare(`update capsule_ownership_transfers set state='accepted',updated_at=? where id=?`).bind(now, input.transferId),
-      ]);
+        ...notifications.map((accountId) => this.#event(ownershipEvent({ spaceId: owner.space_id,
+          capsuleId: transfer.capsule_id, actorId: input.actorAccountId,
+          action: "app.ownership_transferred", targetId: accountId,
+          recipientAccountId: accountId }))),
+      ];
+      if (finalStatements.length > 480) throw conflict("Too many members for atomic ownership transfer.");
+      await this.#batch(finalStatements);
       return { transferId: input.transferId, state: "accepted" as const };
     });
   }

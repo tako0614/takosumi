@@ -11,7 +11,7 @@ export interface AccountResourceReader {
 }
 
 type UsageRow = Parameters<typeof usageEventFromRow>[0] & { payerAccountId: string };
-type ConnectionRow = { id: string; connection_json: string | ProviderConnection; created_at: string };
+type ConnectionRow = { id: string; owner_account_id: string | null; connection_json: string | ProviderConnection; created_at: string };
 type Query = <T extends Record<string, unknown>>(sql: string, values: readonly (string | number)[]) => Promise<readonly T[]>;
 
 /** Reads only public connection metadata and usage; never touches sealed blobs. */
@@ -31,13 +31,14 @@ function reader(query: Query, dialect: "postgres" | "d1"): AccountResourceReader
       const after = keyset(page, values);
       const limit = clampPageLimit(page.limit);
       values.push(limit + 1);
-      const rows = await query<ConnectionRow>(`select id, connection_json, created_at from ${prefix}connections where owner_account_id = ${parameter(1)}${after} order by created_at, id limit ${parameter(values.length)}`, values);
+      const legacyOwner = dialect === "postgres" ? "connection_json->>'ownerAccountId'" : "json_extract(connection_json,'$.ownerAccountId')";
+      const rows = await query<ConnectionRow>(`select id, owner_account_id, connection_json, created_at from ${prefix}connections where coalesce(owner_account_id, ${legacyOwner}) = ${parameter(1)}${after} order by created_at, id limit ${parameter(values.length)}`, values);
       const connections = rows.map((row) => {
         const connection: ProviderConnection = typeof row.connection_json === "string" ? JSON.parse(row.connection_json) : row.connection_json;
         // The physical predicate is authority; JSON disagreement must not leak
         // another person's connection metadata or widen a malformed scope.
-        if (connection.id !== row.id || connection.ownerAccountId !== accountId || connection.scope === "operator") throw new Error("Connection ownership projection is inconsistent");
-        return connection;
+        if (connection.id !== row.id || (row.owner_account_id ?? connection.ownerAccountId) !== accountId || connection.scope === "operator") throw new Error("Connection ownership projection is inconsistent");
+        return row.owner_account_id === null ? connection : { ...connection, ownerAccountId: row.owner_account_id };
       });
       return pageFromProbe(connections, limit);
     },

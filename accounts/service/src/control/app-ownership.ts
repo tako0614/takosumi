@@ -40,6 +40,7 @@ export interface AppOwnershipOperations extends AppAccessResolver {
     readonly actorAccountId: string;
     readonly accountId: string;
     readonly expectedOwnershipEpoch: number;
+    readonly consent: "connections_and_code";
   }): Promise<AppMemberRecord>;
   removeMember(input: {
     readonly capsuleId: string;
@@ -54,6 +55,11 @@ export interface AppOwnershipOperations extends AppAccessResolver {
     readonly expectedOwnershipEpoch: number;
   }): Promise<{ readonly transferId: string; readonly state: "pending" }>;
   getTransfer(transferId: string): Promise<AppOwnershipTransferRecord | undefined>;
+  listTransfers(input: {
+    readonly capsuleId?: string;
+    readonly toAccountId?: string;
+    readonly state: "pending";
+  }): Promise<readonly AppOwnershipTransferRecord[]>;
   acceptTransfer(input: {
     readonly transferId: string;
     readonly actorAccountId: string;
@@ -91,12 +97,21 @@ function accountSessionOnly(ctx: ControlDispatchContext): Response | undefined {
     : undefined;
 }
 
+/** An app OAuth grant cannot change account membership or ownership. */
+function accountManagementCredential(ctx: ControlDispatchContext): Response | undefined {
+  return (ctx.session.credential === "session" &&
+      ctx.session.uninstallRequester?.grant === undefined) ||
+      (ctx.session.credential === "personal-access-token" &&
+        ctx.session.uninstallRequester?.grant?.kind === "personal-access-token")
+    ? undefined
+    : denied(ctx.request);
+}
+
 function appPort(ctx: ControlDispatchContext): AppAccessResolver | undefined {
   const operations = ctx.operations as typeof ctx.operations & {
     readonly appAccess?: AppAccessResolver;
-    readonly appAuthorization?: AppOwnershipOperations;
   };
-  return operations.appAccess ?? operations.appAuthorization;
+  return operations.appAccess;
 }
 
 function ownershipPort(ctx: ControlDispatchContext): AppOwnershipOperations | undefined {
@@ -169,17 +184,32 @@ async function listApps(ctx: ControlDispatchContext): Promise<Response> {
     ...(cursor ? { cursor } : {}),
   });
   if (page.apps.length > limit) return controlPlaneUnavailable();
-  const apps = await Promise.all(page.apps.map(async (entry) => {
+  const authorized = await Promise.all(page.apps.map(async (entry) => {
     if (!bearerAppAllows(ctx.session, entry.capsuleId)) return undefined;
     // A stale page may outlive revocation. Recheck before reading any app facts.
     const live = await port.resolveAppAccess(ctx.session.subject, entry.capsuleId);
     if (!live || live.ownerAccountId !== entry.ownerAccountId || live.ownershipEpoch !== entry.ownershipEpoch) return undefined;
-    const capsule = await ctx.operations.capsules.getCapsule(entry.capsuleId);
+    return live;
+  }));
+  const liveAccesses = authorized.filter((entry) => entry !== undefined);
+  const capsules = liveAccesses.length > 0
+    ? await ctx.operations.capsules.getCapsulesByIds(liveAccesses.map((entry) => entry.capsuleId))
+    : [];
+  const capsuleById = new Map(capsules.map((capsule) => [capsule.id, capsule]));
+  const owners = new Map<string, ReturnType<typeof ctx.store.findAccount>>();
+  const apps = await Promise.all(liveAccesses.map(async (live) => {
+    const capsule = capsuleById.get(live.capsuleId);
+    if (!capsule) return undefined;
     if (ctx.session.workspaceId && capsule.workspaceId !== ctx.session.workspaceId) return undefined;
     if (capsule.status === "destroyed") return undefined;
+    let ownerRead = owners.get(live.ownerAccountId);
+    if (!ownerRead) {
+      ownerRead = ctx.store.findAccount(live.ownerAccountId as TakosumiSubject);
+      owners.set(live.ownerAccountId, ownerRead);
+    }
     const [view, owner] = await Promise.all([
       readCapsuleAppView(ctx, capsule, Date.now()),
-      ctx.store.findAccount(live.ownerAccountId as TakosumiSubject),
+      ownerRead,
     ]);
     return {
       capsuleId: capsule.id,
@@ -236,24 +266,58 @@ async function addMember(ctx: ControlDispatchContext, capsuleId: string): Promis
   }
   const account = await ctx.store.findAccountByVerifiedEmail(email);
   if (!account || account.emailVerified !== true || account.email?.trim().toLowerCase() !== email.toLowerCase()) {
-    return errorJson("not_found", "No verified Takosumi account was found for that email.", 404, ctx.request);
+    return json({ accepted: true }, 202, { "cache-control": "no-store" });
   }
   if (account.subject === access.ownerAccountId) {
     return errorJson("invalid_request", "The app owner cannot be added as a member.", 400, ctx.request);
   }
   try {
-    const member = await port.addMember({
+    await port.addMember({
       capsuleId,
       actorAccountId: ctx.session.subject,
       accountId: account.subject,
       expectedOwnershipEpoch: access.ownershipEpoch,
+      consent: "connections_and_code",
     });
-    return json({ member: { ...await profile(ctx, member.accountId, true), status: member.status } }, 201, {
-      "cache-control": "no-store",
-    });
+    return json({ accepted: true }, 202, { "cache-control": "no-store" });
   } catch (error) {
     return mutationError(error, ctx.request);
   }
+}
+
+function pendingState(ctx: ControlDispatchContext): Response | undefined {
+  const state = ctx.url.searchParams.get("state");
+  return state === null || state === "pending" ? undefined
+    : errorJson("invalid_request", "state must be pending.", 400, ctx.request);
+}
+
+async function listCapsuleTransfers(ctx: ControlDispatchContext, capsuleId: string): Promise<Response> {
+  const port = ownershipPort(ctx);
+  if (!port || !appPort(ctx)) return controlPlaneUnavailable();
+  const invalid = pendingState(ctx);
+  if (invalid) return invalid;
+  if (!await capsuleWithinBearerScope(ctx, capsuleId)) return denied(ctx.request);
+  const access = await accessTo(ctx, capsuleId);
+  const transfers = await port.listTransfers({ capsuleId, state: "pending" });
+  const visible = transfers.filter((transfer) => transfer.capsuleId === capsuleId &&
+    transfer.state === "pending" && (transfer.toAccountId === ctx.session.subject ||
+      (access?.role === "owner" && transfer.fromAccountId === access.ownerAccountId)));
+  if (access?.role !== "owner" && visible.length === 0) return denied(ctx.request);
+  return json({ ownershipTransfers: visible }, 200, { "cache-control": "no-store" });
+}
+
+async function listIncomingTransfers(ctx: ControlDispatchContext): Promise<Response> {
+  const port = ownershipPort(ctx);
+  if (!port) return controlPlaneUnavailable();
+  const invalid = pendingState(ctx);
+  if (invalid) return invalid;
+  const transfers = await port.listTransfers({ toAccountId: ctx.session.subject, state: "pending" });
+  const visible = await Promise.all(transfers.map(async (transfer) =>
+    transfer.toAccountId === ctx.session.subject && transfer.state === "pending" &&
+      await capsuleWithinBearerScope(ctx, transfer.capsuleId) ? transfer : undefined));
+  return json({ ownershipTransfers: visible.filter((transfer) => transfer !== undefined) }, 200, {
+    "cache-control": "no-store",
+  });
 }
 
 async function removeMember(ctx: ControlDispatchContext, capsuleId: string, targetId: string): Promise<Response> {
@@ -342,12 +406,15 @@ export async function handleAppOwnership(
   const isApps = segments[0] === "apps" && segments.length === 1;
   const isMembers = segments[0] === "capsules" && segments[2] === "members" &&
     (segments.length === 3 || segments.length === 4);
-  const isCreateTransfer = segments[0] === "capsules" && segments[2] === "ownership-transfers" && segments.length === 3;
+  const isCapsuleTransfers = segments[0] === "capsules" && segments[2] === "ownership-transfers" && segments.length === 3;
+  const isIncomingTransfers = segments[0] === "ownership-transfers" && segments.length === 1;
   const isTransfer = segments[0] === "ownership-transfers" && segments.length >= 2 && segments.length <= 3;
-  if (!isApps && !isMembers && !isCreateTransfer && !isTransfer) return undefined;
+  if (!isApps && !isMembers && !isCapsuleTransfers && !isIncomingTransfers && !isTransfer) return undefined;
   const scoped = accountSessionOnly(ctx);
   if (scoped) return scoped;
   if (isApps) return method === "GET" ? listApps(ctx) : methodNotAllowed("GET");
+  const credential = accountManagementCredential(ctx);
+  if (credential) return credential;
   if (isMembers) {
     const capsuleId = accountId(segments[1]);
     if (!capsuleId) return errorJson("invalid_request", "Invalid capsule ID.", 400, ctx.request);
@@ -360,11 +427,14 @@ export async function handleAppOwnership(
     if (!targetId) return errorJson("invalid_request", "Invalid account ID.", 400, ctx.request);
     return method === "DELETE" ? removeMember(ctx, capsuleId, targetId) : methodNotAllowed("DELETE");
   }
-  if (isCreateTransfer) {
+  if (isCapsuleTransfers) {
     const capsuleId = accountId(segments[1]);
     if (!capsuleId) return errorJson("invalid_request", "Invalid capsule ID.", 400, ctx.request);
-    return method === "POST" ? createTransfer(ctx, capsuleId) : methodNotAllowed("POST");
+    if (method === "POST") return createTransfer(ctx, capsuleId);
+    if (method === "GET") return listCapsuleTransfers(ctx, capsuleId);
+    return methodNotAllowed("GET, POST");
   }
+  if (isIncomingTransfers) return method === "GET" ? listIncomingTransfers(ctx) : methodNotAllowed("GET");
   const transferId = accountId(segments[1]);
   if (!transferId) return errorJson("invalid_request", "Invalid transfer ID.", 400, ctx.request);
   if (segments.length === 3 && segments[2] === "accept") {

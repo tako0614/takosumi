@@ -74,3 +74,33 @@ test("Postgres v123 expands ownership atomically without replacing legacy rows",
     expect((await client.query("select account_id from takosumi_capsule_members")).rows).toEqual([{ account_id: "member" }]);
   } finally { await client.close(); }
 });
+
+
+test("v78 adds authorization tables without changing writer A v77 checksum", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 77 });
+  const original = await db.prepare("select checksum from schema_migrations where version=77").first();
+  expect(original).toEqual({ checksum: "sha256:086155184f9fc95a1800c26e699f54ef2559f53182f6d81168c1fd42acb9d35d" });
+  expect(await db.prepare("select name from sqlite_master where name='capsule_ownership_transfers'").first()).toBeNull();
+  expect(await db.prepare("select name from sqlite_master where name='app_credential_mint_leases'").first()).toBeNull();
+  await verifyD1OpenTofuLedgerSchemaPredeployed(db, 77);
+  await ensureD1OpenTofuLedgerSchema(db);
+  expect(await db.prepare("select checksum from schema_migrations where version=77").first()).toEqual(original);
+  expect(await db.prepare("select name from schema_migrations where version=78").first()).toEqual({ name: "d1_app_authorization" });
+  await verifyD1OpenTofuLedgerSchemaPredeployed(db, 78);
+  await db.exec("drop index app_credential_mint_leases_capsule_expiry");
+  await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db, 78)).rejects.toThrow();
+});
+
+test("Postgres v124 adds authorization tables after unchanged v123 ownership", async () => {
+  const client = await PGliteSqlClient.createThroughMigrationVersion(123);
+  try {
+    expect((await client.query("select to_regclass('takosumi_capsule_ownership_transfers') as name")).rows).toEqual([{ name: null }]);
+    const migration = postgresStorageMigrationStatements.find(entry => entry.version === 124)!;
+    await client.transaction(async transaction => {
+      for (const statement of splitSqlStatements(migration.sql)) await transaction.query(statement);
+    });
+    expect((await client.query("select to_regclass('takosumi_capsule_ownership_transfers') as name")).rows).toEqual([{ name: "takosumi_capsule_ownership_transfers" }]);
+    expect((await client.query("select to_regclass('takosumi_app_credential_mint_leases') as name")).rows).toEqual([{ name: "takosumi_app_credential_mint_leases" }]);
+  } finally { await client.close(); }
+});

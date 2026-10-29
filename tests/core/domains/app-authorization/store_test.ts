@@ -9,6 +9,7 @@ import { D1AppAuthorizationStore } from "../../../../core/domains/app-authorizat
 function fixture() {
   const sqlite = new Database(":memory:");
   let beforeBatch: (() => void) | undefined;
+  let lastBatchSize = 0;
   sqlite.exec(`create table capsules (
     id text primary key, owner_account_id text, ownership_epoch integer not null,
     management_state text not null, management_epoch integer not null,
@@ -26,6 +27,9 @@ function fixture() {
   create table sources (id text primary key, record_json text not null, space_id text);
   create table runs_inputs (plan_run_id text primary key, inputs_json text not null);
   create table provider_env_binding_sets (installation_id text not null, record_json text not null);
+  create table audit_events (id text primary key, space_id text not null, actor_id text,
+    action text not null, target_type text not null, target_id text not null,
+    run_id text, created_at text not null, record_json text not null);
   insert into capsules values ('cap1','owner',4,'active',0,
     '{"id":"cap1","ownerAccountId":"owner","ownershipEpoch":4,"managementState":"active","managementEpoch":0}', 'src1', 'ws1');
   insert into capsule_members values ('cap1','member','active','owner','2026-01-01','2026-01-01');
@@ -43,6 +47,7 @@ function fixture() {
       return make([]);
     },
     async batch(statements) {
+      lastBatchSize = statements.length;
       const hook = beforeBatch;
       beforeBatch = undefined;
       hook?.();
@@ -70,6 +75,7 @@ function fixture() {
     async listAccessibleApps() { return { apps: [] }; },
   };
   return { sqlite, store: new D1AppAuthorizationStore(d1, access),
+    lastBatchSize() { return lastBatchSize; },
     beforeNextBatch(hook: () => void) { beforeBatch = hook; } };
 }
 
@@ -82,7 +88,7 @@ describe("D1 app authorization mutation store", () => {
   test("owner epoch change after read rolls back the entire guarded batch as a conflict", async () => {
     const { sqlite, store, beforeNextBatch } = fixture();
     beforeNextBatch(() => sqlite.prepare(`update capsules set ownership_epoch=5 where id='cap1'`).run());
-    await expect(store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 4 }))
+    await expect(store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 4, consent: "connections_and_code" }))
       .rejects.toMatchObject({ code: "conflict" });
     expect(sqlite.prepare(`select account_id from capsule_members order by account_id`).all()).toEqual([{ account_id: "member" }]);
     expect(sqlite.prepare(`select ownership_epoch from capsules where id='cap1'`).get()).toEqual({ ownership_epoch: 5 });
@@ -155,15 +161,15 @@ describe("D1 app authorization mutation store", () => {
     const { sqlite, store, beforeNextBatch } = fixture();
     beforeNextBatch(() => sqlite.prepare(`create trigger reject_new_member before insert on capsule_members
       begin select raise(abort, 'unrelated storage failure'); end`).run());
-    await expect(store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 4 }))
+    await expect(store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 4, consent: "connections_and_code" }))
       .rejects.toThrow("unrelated storage failure");
   });
 
   test("member add rejects stale owner epoch and persists active membership", async () => {
     const { sqlite, store } = fixture();
-    await expect(store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 3 })).rejects.toMatchObject({ code: "conflict" });
+    await expect(store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 3, consent: "connections_and_code" })).rejects.toMatchObject({ code: "conflict" });
     expect(sqlite.prepare(`select count(*) as n from capsule_members`).get()).toEqual({ n: 1 });
-    expect(await store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 4 })).toEqual({ accountId: "new", status: "active" });
+    expect(await store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 4, consent: "connections_and_code" })).toEqual({ accountId: "new", status: "active" });
     expect((await store.listMembers("cap1")).members).toHaveLength(2);
   });
 
@@ -276,6 +282,58 @@ describe("D1 app authorization mutation store", () => {
     expect(sqlite.prepare(`select status from runs where id='plan1'`).get()).toEqual({ status: "succeeded" });
   });
 
+  test("queued Apply requested by removed member is cancelled even when Plan creator differs", async () => {
+    const { sqlite, store } = fixture();
+    const plan = { id: "plan1", status: "succeeded", createdBy: "owner", createdAt: 1, updatedAt: 1, auditEvents: [] };
+    const apply = { id: "apply1", planRunId: "plan1", status: "queued", createdBy: "member",
+      approval: { approvedBy: "member" }, createdAt: 2, updatedAt: 2, auditEvents: [] };
+    sqlite.prepare(`insert into runs (id,installation_id,type,status,lease_token,run_json) values (?,?,?,?,?,?)`)
+      .run("plan1", "cap1", "plan", "succeeded", null, JSON.stringify(plan));
+    sqlite.prepare(`insert into runs (id,installation_id,type,status,lease_token,run_json) values (?,?,?,?,?,?)`)
+      .run("apply1", "cap1", "apply", "queued", null, JSON.stringify(apply));
+    await store.removeMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 4 });
+    expect(sqlite.prepare(`select status from runs where id='apply1'`).get()).toEqual({ status: "cancelled" });
+  });
+
+  test("large member revocation settles Plans and Source syncs in one bounded atomic batch", async () => {
+    const { sqlite, store, lastBatchSize } = fixture();
+    sqlite.prepare(`insert into sources (id,record_json,space_id) values (?,?,?)`)
+      .run("src1", JSON.stringify({ id: "src1", workspaceId: "ws1", ownerCapsuleId: "cap1" }), "ws1");
+    for (let index = 0; index < 80; index++) {
+      const id = `plan${index}`;
+      sqlite.prepare(`insert into runs (id,installation_id,type,status,lease_token,run_json) values (?,?,?,?,?,?)`)
+        .run(id, "cap1", "plan", "queued", null,
+          JSON.stringify({ id, status: "queued", createdBy: "member", createdAt: 1, updatedAt: 1, auditEvents: [] }));
+      sqlite.prepare(`insert into runs_inputs values (?,?)`).run(id, "{}");
+      const sourceId = `sync${index}`;
+      sqlite.prepare(`insert into runs (id,installation_id,type,status,lease_token,run_json,source_id,space_id)
+        values (?,?,?,?,?,?,?,?)`).run(sourceId, null, "source_sync", "queued", null,
+          JSON.stringify({ id: sourceId, kind: "source_sync", workspaceId: "ws1", sourceId: "src1",
+            actorAccountId: "member", status: "queued", createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z" }), "src1", "ws1");
+    }
+    await store.removeMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "member",
+      expectedOwnershipEpoch: 4 });
+    expect(lastBatchSize()).toBeLessThan(480);
+    expect(sqlite.prepare(`select count(*) as n from runs where status='cancelled'`).get()).toEqual({ n: 80 });
+    expect(sqlite.prepare(`select count(*) as n from runs where status='failed'`).get()).toEqual({ n: 80 });
+    expect(sqlite.prepare(`select count(*) as n from capsule_members`).get()).toEqual({ n: 0 });
+  });
+
+  test("member consent and ownership transfer notices are durable", async () => {
+    const { sqlite, store } = fixture();
+    await store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "second",
+      expectedOwnershipEpoch: 4, consent: "connections_and_code" });
+    const consent = sqlite.prepare(`select record_json from audit_events where action='app.member_added'`).get() as { record_json: string };
+    expect(JSON.parse(consent.record_json)).toMatchObject({ memberAccountId: "second", consent: "connections_and_code" });
+    const transfer = await store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner", toAccountId: "new", expectedOwnershipEpoch: 4 });
+    expect((await store.listTransfers({ capsuleId: "cap1", state: "pending" })).map((item) => item.transferId)).toEqual([transfer.transferId]);
+    expect((await store.listTransfers({ toAccountId: "new", state: "pending" })).map((item) => item.transferId)).toEqual([transfer.transferId]);
+    expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).state).toBe("accepted");
+    expect(sqlite.prepare(`select count(*) as n from audit_events where action='app.ownership_transferred'`).get()).toEqual({ n: 3 });
+    expect(sqlite.prepare(`select count(*) as n from capsule_members`).get()).toEqual({ n: 0 });
+  });
+
   test("transfer drains, blocks active Runs, then swaps owner and clears bindings atomically", async () => {
     const { sqlite, store } = fixture();
     sqlite.prepare(`insert into capsule_members values ('cap1','new','active','owner','2026-01-01','2026-01-01')`).run();
@@ -307,7 +365,7 @@ describe("D1 app authorization mutation store", () => {
     expect(await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).toEqual({ transferId: transfer.transferId, state: "accepted" });
     expect(sqlite.prepare(`select owner_account_id,ownership_epoch,management_state from capsules where id='cap1'`).get()).toEqual({ owner_account_id: "new", ownership_epoch: 5, management_state: "active" });
     expect(sqlite.prepare(`select count(*) as n from provider_env_binding_sets`).get()).toEqual({ n: 0 });
-    expect(sqlite.prepare(`select account_id from capsule_members order by account_id`).all()).toEqual([{ account_id: "member" }]);
+    expect(sqlite.prepare(`select account_id from capsule_members order by account_id`).all()).toEqual([]);
   });
 
   test("only current owner cancels transfer and clears drain", async () => {
@@ -329,6 +387,7 @@ describe("D1 app authorization mutation store", () => {
     const transfer = await store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner", toAccountId: "new", expectedOwnershipEpoch: 4 });
     await expect(store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).rejects.toMatchObject({ code: "conflict" });
     expect(sqlite.prepare(`select owner_account_id,ownership_epoch from capsules where id='cap1'`).get()).toEqual({ owner_account_id: "owner", ownership_epoch: 4 });
+    expect(sqlite.prepare(`select management_state from capsules where id='cap1'`).get()).toEqual({ management_state: "active" });
     expect(sqlite.prepare(`select status from runs where id='sync1'`).get()).toEqual({ status: "queued" });
   });
 

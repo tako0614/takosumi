@@ -2741,6 +2741,7 @@ export class RunEngine {
       | "sourceSnapshotId"
       | "planRunId"
       | "expectedWorkspaceManagementAuthority"
+      | "origin"
     > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
@@ -4937,6 +4938,7 @@ export class RunEngine {
     const applyRun: ApplyRun = {
       id: exactApplyRunId ?? this.#newId("apply"),
       planRunId: planRun.id,
+      createdBy: context.actor ?? planRun.approval?.approvedBy ?? planRun.createdBy,
       workspaceId: planRun.workspaceId,
       ...(applyCapsuleId ? { capsuleId: applyCapsuleId } : {}),
       operation: planRun.operation,
@@ -6276,9 +6278,13 @@ export class RunEngine {
           planRunId: planRun.id,
           expected: applyExpectedGuardFromPlanRun(planRun),
         },
-        { actor: "system:auto-update" },
+        { actor: planRun.createdBy },
         { expectedWorkspaceManagementAuthority: authority },
       );
+      await this.#recordActivity({ workspaceId: planRun.workspaceId,
+        actorId: "system:auto-update", action: "capsule.auto_update_apply_started",
+        targetType: "capsule", targetId: planRun.capsuleId ?? planRun.id,
+        metadata: { planRunId: planRun.id } });
     } catch (error) {
       await this.#recordActivity({
         workspaceId: planRun.workspaceId,
@@ -6802,7 +6808,7 @@ export class RunEngine {
       }
       throw new OpenTofuControllerError("not_found", `run ${id} not found`);
     }
-    if (planRun.createdBy === "system:scheduled-uninstall") {
+    if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
       const capsule = await this.#requireCapsule(planRun.capsuleId ?? "");
       scheduledUninstallPlanIdentity(planRun, capsule);
       await this.#requireScheduledUninstallAuthorization(capsule);
@@ -9864,7 +9870,7 @@ export class RunEngine {
     if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
       scheduledUninstallPlanIdentity(planRun, plannedCapsule);
-      if (planRun.createdBy === "system:scheduled-uninstall") {
+      if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
         await this.#requireScheduledUninstallAuthorization(plannedCapsule);
       }
     }
@@ -12427,7 +12433,8 @@ export class RunEngine {
   }
 
   async #requireLiveScheduledUninstallAuthorization(plan: PlanRun, apply: ApplyRun): Promise<void> {
-    if (plan.createdBy !== "system:scheduled-uninstall" || applyRunProviderMutationDispatched(apply)) return;
+    if ((plan.origin?.kind !== "scheduled_uninstall" && plan.createdBy !== "system:scheduled-uninstall") ||
+      applyRunProviderMutationDispatched(apply)) return;
     const current = await this.#requireCapsule(plan.capsuleId ?? "");
     scheduledUninstallPlanIdentity(plan, current);
     await this.#requireScheduledUninstallAuthorization(current);
@@ -12453,12 +12460,19 @@ function scheduledUninstallPlanIdentity(
   planRun: PlanRun,
   capsule: Capsule,
 ): { readonly id: string; readonly destroyPlanRunId: string } | undefined {
-  if (planRun.createdBy !== "system:scheduled-uninstall") return undefined;
+  const origin = planRun.origin;
+  const legacy = planRun.createdBy === "system:scheduled-uninstall";
+  if (origin?.kind !== "scheduled_uninstall" && !legacy) return undefined;
   const uninstall = capsule.uninstall;
   if (
     planRun.operation !== "destroy" || capsule.status !== "uninstalled" ||
     uninstall === undefined || uninstall.phase === "cancelled" || uninstall.blockedReason !== undefined ||
-    uninstall.destroyPlanRunId !== planRun.id
+    uninstall.destroyPlanRunId !== planRun.id ||
+    (origin?.kind === "scheduled_uninstall" && (
+      origin.uninstallId !== uninstall.id ||
+      planRun.createdBy !== capsule.ownerAccountId ||
+      planRun.id !== `plan_${uninstall.id.replace(/[^0-9a-zA-Z]/gu, "")}a${uninstall.destroyAttempts ?? 1}`
+    ))
   ) {
     throw new OpenTofuControllerError(
       "failed_precondition",

@@ -45,6 +45,9 @@ async function fixture() {
   create table takosumi_sources (id text primary key, source_json jsonb not null, space_id text);
   create table takosumi_plan_run_inputs (plan_run_id text primary key, inputs_json jsonb not null);
   create table takosumi_provider_env_binding_sets (installation_id text not null, profile_json jsonb not null);
+  create table takosumi_audit_events (id text primary key, space_id text not null, actor_id text,
+    action text not null, target_type text not null, target_id text not null,
+    run_id text, event_json jsonb not null, created_at text not null);
   insert into takosumi_capsules values ('cap1','owner',4,'active',0,
     '{"id":"cap1","ownerAccountId":"owner","ownershipEpoch":4,"managementState":"active","managementEpoch":0}', 'src1', 'ws1');
   insert into takosumi_capsule_members values ('cap1','member','active','owner','2026-01-01','2026-01-01');
@@ -71,6 +74,28 @@ async function fixture() {
 }
 
 describe("PostgreSQL app authorization mutation store", () => {
+  test("member consent and pending transfers remain queryable and audited", async () => {
+    const { db, store } = await fixture();
+    try {
+      await store.addMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "second",
+        expectedOwnershipEpoch: 4, consent: "connections_and_code" });
+      const events = await db.query<{ event_json: { consent: string } }>(
+        `select event_json from takosumi_audit_events where action='app.member_added'`);
+      expect(events.rows[0]?.event_json.consent).toBe("connections_and_code");
+      const transfer = await store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner",
+        toAccountId: "recipient", expectedOwnershipEpoch: 4 });
+      expect((await store.listTransfers({ capsuleId: "cap1", state: "pending" })).map((row) => row.transferId))
+        .toEqual([transfer.transferId]);
+      expect((await store.listTransfers({ toAccountId: "recipient", state: "pending" })).map((row) => row.transferId))
+        .toEqual([transfer.transferId]);
+      expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "recipient" })).state)
+        .toBe("accepted");
+      const notices = await db.query<{ event_json: { recipientAccountId: string } }>(
+        `select event_json from takosumi_audit_events where action='app.ownership_transferred'`);
+      expect(notices.rows.map((row) => row.event_json.recipientAccountId).sort()).toEqual(["member", "owner", "second"]);
+      expect((await db.query(`select account_id from takosumi_capsule_members`)).rows).toEqual([]);
+    } finally { await db.close(); }
+  });
   test("member removal cancels queued Run atomically and rejects stale epoch", async () => {
     const { db, store } = await fixture();
     try {
@@ -162,7 +187,7 @@ describe("PostgreSQL app authorization mutation store", () => {
       expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).state).toBe("accepted");
       expect((await db.query(`select owner_account_id,ownership_epoch from takosumi_capsules where id='cap1'`)).rows[0]).toEqual({ owner_account_id: "new", ownership_epoch: 5 });
       expect((await db.query(`select * from takosumi_provider_env_binding_sets`)).rows).toHaveLength(0);
-      expect((await db.query(`select account_id from takosumi_capsule_members order by account_id`)).rows).toEqual([{ account_id: "member" }]);
+      expect((await db.query(`select account_id from takosumi_capsule_members order by account_id`)).rows).toEqual([]);
     } finally { await db.close(); }
   });
 

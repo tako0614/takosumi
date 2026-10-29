@@ -12,6 +12,8 @@ import {
 } from "../deploy-control/errors.ts";
 import type { OpenTofuController } from "../deploy-control/mod.ts";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import type { Capsule } from "takosumi-contract/capsules";
+import type { AppAccessResolver } from "../../../contract/app-access.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
@@ -37,12 +39,16 @@ export interface RunGroupsServiceDependencies {
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
   readonly actor?: string;
+  /** Set only by the trusted service composition for system-owned group work. */
+  readonly systemOwnedFlow?: boolean;
+  readonly appAccess?: AppAccessResolver;
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
 }
 
 export interface CreateWorkspaceDriftCheckOptions {
   readonly limit?: number;
+  readonly actorAccountId?: string;
   /** Internal scheduled page. Revalidate membership/status without widening it. */
   readonly capsuleIds?: readonly string[];
 }
@@ -53,6 +59,8 @@ export class RunGroupsService {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #actor?: string;
+  readonly #systemOwnedFlow: boolean;
+  readonly #appAccess?: AppAccessResolver;
   readonly #activity: ActivityRecorder;
 
   constructor(dependencies: RunGroupsServiceDependencies) {
@@ -64,11 +72,13 @@ export class RunGroupsService {
         `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#actor = dependencies.actor;
+    this.#systemOwnedFlow = dependencies.systemOwnedFlow === true;
+    this.#appAccess = dependencies.appAccess;
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
   }
 
   /** Creates one independent plan for each source-stale Capsule. */
-  async createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRuns> {
+  async createWorkspaceUpdate(workspaceId: string, actorAccountId?: string): Promise<RunGroupWithRuns> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const capsules = await this.#store.listCapsules(workspaceId);
     const members = new Set(
@@ -87,13 +97,19 @@ export class RunGroupsService {
     const failures: Record<string, "dependency_retired"> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
+    const byId = new Map(capsules.map((capsule) => [capsule.id, capsule]));
+    const actors = new Map<string, string | undefined>();
+    for (const capsuleId of members) {
+      actors.set(capsuleId, await this.#runActor(byId.get(capsuleId)!, actorAccountId));
+    }
     for (const layer of layers) {
       for (const capsuleId of layer) {
         let response;
         try {
+          const actor = actors.get(capsuleId);
           response = await this.#controller.createCapsulePlan(
             capsuleId,
-            this.#actor ? { actor: this.#actor } : {},
+            actor ? { actor } : {},
             // A Workspace update re-plans each app's tracked ref as configured;
             // a retry of one member repeats exactly that.
             { runGroupId, origin: { kind: "update" } },
@@ -123,7 +139,7 @@ export class RunGroupsService {
     // and pre-plan failure reasons using identifier/reason metadata only.
     await this.#activity.record({
       workspaceId,
-      ...(this.#actor ? { actorId: this.#actor } : {}),
+      ...(actorAccountId || this.#actor ? { actorId: actorAccountId ?? this.#actor } : {}),
       action: "run_group.created",
       targetType: "run_group",
       targetId: runGroup.id,
@@ -173,14 +189,20 @@ export class RunGroupsService {
     const failures: Record<string, "dependency_retired"> = {};
     const memberRuns: Run[] = [];
     const runGroupId = this.#newId("rg");
+    const byId = new Map(capsules.map((capsule) => [capsule.id, capsule]));
+    const actors = new Map<string, string | undefined>();
+    for (const capsuleId of capsuleIds) {
+      actors.set(capsuleId, await this.#runActor(byId.get(capsuleId)!, options.actorAccountId));
+    }
 
     for (const layer of layers) {
       for (const capsuleId of layer) {
         let response;
         try {
+          const actor = actors.get(capsuleId);
           response = await this.#controller.createCapsuleDriftCheck(
             capsuleId,
-            this.#actor ? { actor: this.#actor } : {},
+            actor ? { actor } : {},
             { runGroupId },
           );
         } catch (error) {
@@ -205,7 +227,7 @@ export class RunGroupsService {
     await this.#store.putRunGroup(runGroup);
     await this.#activity.record({
       workspaceId,
-      ...(this.#actor ? { actorId: this.#actor } : {}),
+      ...(options.actorAccountId || this.#actor ? { actorId: options.actorAccountId ?? this.#actor } : {}),
       action: "run_group.created",
       targetType: "run_group",
       targetId: runGroup.id,
@@ -247,19 +269,49 @@ export class RunGroupsService {
    * not awaiting approval is skipped (the approve call would reject it), so this
    * is safe to call repeatedly.
    */
-  async approveRunGroup(id: string): Promise<RunGroupWithRuns | undefined> {
+  async approveRunGroup(id: string, actorAccountId?: string): Promise<RunGroupWithRuns | undefined> {
     requireNonEmptyString(id, "runGroupId");
     const stored = await this.#store.getRunGroup(id);
     if (!stored) return undefined;
     const graph = parseWorkspaceUpdateGraph(stored.graphJson);
-    for (const run of await this.#memberRuns(graph)) {
-      if (run.status !== "waiting_approval") continue;
+    const awaiting = (await this.#memberRuns(graph)).filter((run) => run.status === "waiting_approval");
+    const approvals = [] as { readonly runId: string; readonly actor?: string }[];
+    for (const run of awaiting) {
+      const capsule = run.capsuleId ? await this.#store.getCapsule(run.capsuleId) : undefined;
+      if (!capsule || capsule.workspaceId !== stored.workspaceId) {
+        throw new OpenTofuControllerError("failed_precondition", "RunGroup member app is unavailable");
+      }
+      const actor = await this.#runActor(capsule, actorAccountId);
+      approvals.push({ runId: run.id, actor });
+    }
+    for (const approval of approvals) {
       await this.#controller.approveRun(
-        run.id,
-        this.#actor ? { approvedBy: this.#actor } : {},
+        approval.runId,
+        approval.actor ? { approvedBy: approval.actor } : {},
       );
     }
     return await this.getRunGroup(id);
+  }
+
+  async #runActor(capsule: Capsule, actorAccountId?: string): Promise<string | undefined> {
+    if (actorAccountId) {
+      if (actorAccountId.startsWith("system:")) {
+        throw new OpenTofuControllerError("permission_denied", "System actor is not an account authority");
+      }
+      if (!capsule.ownerAccountId) return actorAccountId;
+      const access = await this.#appAccess?.resolveAppAccess(actorAccountId, capsule.id);
+      if (!access || access.ownerAccountId !== capsule.ownerAccountId ||
+        access.ownershipEpoch !== capsule.ownershipEpoch ||
+        (access.role !== "owner" && access.role !== "member")) {
+        throw new OpenTofuControllerError("permission_denied", "RunGroup actor has no current app access");
+      }
+      return actorAccountId;
+    }
+    if (!this.#systemOwnedFlow) return this.#actor;
+    if (!capsule.ownerAccountId?.trim()) {
+      throw new OpenTofuControllerError("failed_precondition", "App owner is unavailable for scheduled RunGroup");
+    }
+    return capsule.ownerAccountId;
   }
 
   /** Reads the member Runs of a parsed graph through the controller's getRun. */

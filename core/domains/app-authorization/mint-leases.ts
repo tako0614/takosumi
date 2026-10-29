@@ -86,10 +86,13 @@ function connectionSnapshots(input: AppMintLeaseBeginInput,
         record?.id !== binding.id || record.status !== "verified") return undefined;
       const { ownerAccountId: _ignored, ...body } = record;
       void _ignored;
-      const projected = row.owner_account_id ? { ...body, ownerAccountId: row.owner_account_id } : body;
+      const ownerAccountId = row.owner_account_id ??
+        (typeof record.ownerAccountId === "string" && record.ownerAccountId.trim()
+          ? record.ownerAccountId : null);
+      const projected = ownerAccountId ? { ...body, ownerAccountId } : body;
       if (stableStringify(projected) !== stableStringify(JSON.parse(JSON.stringify(binding.expectedConnection)))) return undefined;
       snapshots.push({ id: binding.id, authority: "stored", status: row.status,
-        ownerAccountId: row.owner_account_id,
+        ownerAccountId,
         connectionJson: typeof row.connection_json === "string" ? row.connection_json
           : JSON.stringify(row.connection_json) });
     }
@@ -123,8 +126,8 @@ function jsonString(value: unknown): string {
 }
 
 function actors(value: readonly string[]): string[] | undefined {
-  if (!Array.isArray(value) || !value.length || value.length > 2 ||
-    value.some((actor) => typeof actor !== "string" || !actor.trim())) return undefined;
+  if (!Array.isArray(value) || !value.length || value.length > 3 ||
+    value.some((actor) => typeof actor !== "string" || !actor.trim() || actor.startsWith("system:"))) return undefined;
   return [...new Set(value)].sort();
 }
 
@@ -168,12 +171,13 @@ function canonicalActors(snapshot: Snapshot, input: AppMintLeaseBeginInput): str
       planRecord.capsuleId !== input.capsuleId || planRecord.workspaceId !== capsule.space_id ||
       planRecord.ownershipEpoch !== capsule.ownership_epoch ||
       planRecord.appManagementEpoch !== capsule.management_epoch) return undefined;
-    const approval = object(record.approval);
+    const approval = object(record.approval) ?? object(planRecord.approval);
     const approvalRequired = record.approval !== undefined || planRecord.approval !== undefined ||
       planRecord.requiresApproval === true || planRecord.operation === "destroy";
     if (approvalRequired && !approval?.approvedBy) return undefined;
-    ids = actors(approval ? [planRecord.createdBy as string, approval.approvedBy as string]
-      : [planRecord.createdBy as string]);
+    ids = actors(approval
+      ? [planRecord.createdBy as string, record.createdBy as string, approval.approvedBy as string]
+      : [planRecord.createdBy as string, record.createdBy as string]);
   } else return undefined;
   const expected = actors(input.expectedActorAccountIds);
   return ids && expected && ids.length === expected.length && ids.every((id, index) => id === expected[index])
@@ -249,7 +253,8 @@ function pgGuard(snapshot: Snapshot, input: AppMintLeaseBeginInput, ids: readonl
       conditions.push(`not exists(select 1 from takosumi_connections c where c.id=${bind(connection.id)})`);
     } else {
       conditions.push(`exists(select 1 from takosumi_connections c where c.id=${bind(connection.id)}
-        and c.status='verified' and c.owner_account_id is not distinct from ${bind(connection.ownerAccountId ?? null)}
+        and c.status='verified' and coalesce(c.owner_account_id,
+          nullif(c.connection_json::jsonb->>'ownerAccountId','')) is not distinct from ${bind(connection.ownerAccountId ?? null)}
         and c.connection_json::jsonb=${bind(connection.connectionJson ?? null)}::jsonb)`);
     }
   }
@@ -414,7 +419,8 @@ export class D1AppMintLeaseStore implements AppMintLeaseStore {
         exists(select 1 from connections c where c.id=json_extract(j.value,'$.id')))
       or (json_extract(j.value,'$.authority')='stored' and not exists(
         select 1 from connections c where c.id=json_extract(j.value,'$.id') and c.status='verified'
-          and c.owner_account_id is json_extract(j.value,'$.ownerAccountId')
+          and coalesce(c.owner_account_id,nullif(json_extract(c.connection_json,'$.ownerAccountId'),''))
+            is json_extract(j.value,'$.ownerAccountId')
           and c.connection_json=json_extract(j.value,'$.connectionJson'))))`);
     params.push(JSON.stringify(pinned));
     return { sql: conditions.join(" and "), params };

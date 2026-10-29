@@ -6,6 +6,7 @@ export interface PublicSessionControlEndpoint {
   readonly path: string;
   readonly summary: string;
   readonly auth: "account-session";
+  readonly queryParameters?: readonly Record<string, unknown>[];
 }
 
 /**
@@ -20,6 +21,9 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     { method: "GET", path: "/api/v1/capsules/{capsuleId}/members", summary: "Read app owner and members; email is owner-only", auth: "account-session" },
     { method: "POST", path: "/api/v1/capsules/{capsuleId}/members", summary: "Add a verified member with owner consent", auth: "account-session" },
     { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/members/{accountId}", summary: "Remove a member and cancel their waiting runs atomically", auth: "account-session" },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/ownership-transfers", summary: "List pending app transfers visible to the owner or recipient", auth: "account-session", queryParameters: [{ name: "state", in: "query", schema: { type: "string", enum: ["pending"], default: "pending" } }] },
+    { method: "GET", path: "/api/v1/ownership-transfers", summary: "List pending app transfers addressed to the caller", auth: "account-session", queryParameters: [{ name: "state", in: "query", schema: { type: "string", enum: ["pending"], default: "pending" } }] },
+    { method: "GET", path: "/api/v1/source-ref-resolutions", summary: "Resolve the current stable SemVer tag of a public Git source", auth: "account-session", queryParameters: [{ name: "url", in: "query", required: true, schema: { type: "string", format: "uri" } }] },
     { method: "POST", path: "/api/v1/capsules/{capsuleId}/ownership-transfers", summary: "Offer app ownership to another account", auth: "account-session" },
     { method: "POST", path: "/api/v1/ownership-transfers/{transferId}/accept", summary: "Accept ownership after draining; reset provider bindings", auth: "account-session" },
     { method: "DELETE", path: "/api/v1/ownership-transfers/{transferId}", summary: "Cancel a pending app ownership transfer", auth: "account-session" },
@@ -529,6 +533,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       path: "/api/v1/connections",
       summary: "List Connections",
       auth: "account-session",
+      queryParameters: [
+        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "App whose owner's bindable connection labels are requested." },
+        { name: "projection", in: "query", schema: { type: "string", enum: ["labels"] }, description: "Requires capsuleId and returns only binding id, provider, and displayName." },
+        { name: "cursor", in: "query", schema: { type: "string" } },
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+      ],
     },
     {
       method: "POST",

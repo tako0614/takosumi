@@ -49,7 +49,7 @@ async function fixtures(now: () => number) {
       async addConnection(id: string) {
         await pg.query(`insert into takosumi_connections
           (id,space_id,provider,status,connection_json,created_at,updated_at,owner_account_id)
-          values ($1,null,'fixture','verified',$2::jsonb,'now','now','owner')`,
+          values ($1,null,'fixture','verified',$2::jsonb,'now','now',null)`,
         [id, JSON.stringify({ id, status: "verified", ownerAccountId: "owner" })]);
       },
       async revokeConnection(id: string) {
@@ -80,7 +80,7 @@ async function fixtures(now: () => number) {
       async addConnection(id: string) {
         await d1.prepare(`insert into connections
           (id,space_id,provider,status,connection_json,created_at,updated_at,owner_account_id)
-          values (?,null,'fixture','verified',?,'now','now','owner')`)
+          values (?,null,'fixture','verified',?,'now','now',null)`)
           .bind(id, JSON.stringify({ id, status: "verified", ownerAccountId: "owner" })).run();
       },
       async revokeConnection(id: string) {
@@ -152,6 +152,19 @@ test("durable mint lease keeps a settled Run transfer pending while a driver is 
   }
 });
 
+test("synthetic system Run actors never receive app credential authority", async () => {
+  for (const fixture of await fixtures(() => 1_000)) {
+    const capsule = await seedOwned(fixture.store, `cap_system_actor_${fixture.label}`);
+    const run = await runningPlan(fixture.store, capsule, `plan_system_actor_${fixture.label}`,
+      "system:arbitrary");
+    const lease = await fixture.leases.begin({ capsuleId: capsule.id, runId: run.id,
+      expectedOwnerAccountId: "owner", expectedOwnershipEpoch: 0,
+      expectedManagementEpoch: 0, expectedActorAccountIds: ["system:arbitrary"],
+      connections: releaseConnection });
+    expect(lease, fixture.label).toBeUndefined();
+  }
+});
+
 test("mint finish discards after actor revocation, expiry, or canonical actor mismatch", async () => {
   let now = 1_000;
   for (const fixture of await fixtures(() => now)) {
@@ -192,15 +205,17 @@ test("mint lease issues once while authority remains current", async () => {
   }
 });
 
-test("Apply mint derives both creator and approver from persisted Plan and Apply", async () => {
+test("Apply mint derives Plan creator, Apply requester and approver from persisted Runs", async () => {
   for (const fixture of await fixtures(() => 1_000)) {
     const { label, store, leases, addMember, revoke } = fixture;
     const capsule = await seedOwned(store, `cap_mint_apply_${label}`);
     await addMember(capsule.id, "creator");
+    await addMember(capsule.id, "requester");
     await addMember(capsule.id, "approver");
     const running = await runningPlan(store, capsule, `plan_mint_apply_${label}`, "creator");
     const queued: ApplyRun = {
       id: `apply_mint_${label}`, planRunId: running.id, workspaceId: capsule.workspaceId,
+      createdBy: "requester",
       capsuleId: capsule.id, operation: "update", runnerProfileId: "runner", status: "queued",
       approval: { approvedBy: "approver", approvedAt: 2 },
       expected: { planRunId: running.id, capsuleId: capsule.id,
@@ -222,11 +237,11 @@ test("Apply mint derives both creator and approver from persisted Plan and Apply
     expect(claimed.won, label).toBe(true);
     const input = { capsuleId: capsule.id, runId: queued.id,
       expectedOwnerAccountId: "owner", expectedOwnershipEpoch: 0,
-      expectedManagementEpoch: 0, expectedActorAccountIds: ["creator", "approver"], connections: releaseConnection };
-    expect(await leases.begin({ ...input, expectedActorAccountIds: ["creator"] }), label).toBeUndefined();
+      expectedManagementEpoch: 0, expectedActorAccountIds: ["creator", "requester", "approver"], connections: releaseConnection };
+    expect(await leases.begin({ ...input, expectedActorAccountIds: ["creator", "approver"] }), label).toBeUndefined();
     const lease = await leases.begin(input);
     expect(lease, label).toBeDefined();
-    await revoke(capsule.id, "approver");
+    await revoke(capsule.id, "requester");
     expect(await leases.finish(lease!, "issued"), label).toBe(false);
   }
 });
@@ -304,7 +319,7 @@ test("D1 transfer's final atomic guard rejects a lease inserted after its pre-re
   const intercepted: D1Like = {
     prepare(query) { return db.prepare(query); },
     async batch(statements) {
-      if (armed && ++batches === 3) {
+      if (armed && ++batches === 2) {
         await db.prepare(`insert into app_credential_mint_leases
           (id,capsule_id,run_id,owner_account_id,ownership_epoch,management_epoch,
            actor_account_ids_json,expires_at,created_at) values (?,?,?,?,?,?,?,?,?)`)

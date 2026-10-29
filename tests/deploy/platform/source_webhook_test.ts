@@ -496,7 +496,7 @@ test("stale Capsule auto-plan is opt-in", () => {
 });
 
 test("stale Capsule auto-plan creates one pending update plan per stale Capsule", async () => {
-  const planned: string[] = [];
+  const planned: { capsuleId: string; actor: string }[] = [];
   const result = await planStaleCapsuleUpdates(
     {
       workspaces: {
@@ -512,6 +512,7 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
               ? [
                   {
                     id: "inst_needs_plan",
+                    ownerAccountId: "owner_account",
                     workspaceId,
                     projectId: "prj_default",
                     sourceId: "src_default",
@@ -526,6 +527,7 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
                   },
                   {
                     id: "inst_has_plan",
+                    ownerAccountId: "owner_account",
                     workspaceId,
                     projectId: "prj_default",
                     sourceId: "src_default",
@@ -567,15 +569,15 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
             }),
           ]),
       },
-      createCapsulePlan: (capsuleId) => {
-        planned.push(capsuleId);
+      createCapsulePlan: (capsuleId, options) => {
+        planned.push({ capsuleId, actor: options.actor });
         return Promise.resolve({});
       },
     },
     { workspaceLimit: 10, runLookback: 50 },
   );
 
-  expect(planned).toEqual(["inst_needs_plan"]);
+  expect(planned).toEqual([{ capsuleId: "inst_needs_plan", actor: "owner_account" }]);
   expect(result).toEqual({
     workspacesScanned: 1,
     staleCapsulesScanned: 2,

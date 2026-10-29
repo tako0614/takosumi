@@ -161,6 +161,67 @@ test("release-owned ProviderConnection projection bypasses the durable provider 
   expect(durableListReads).toBe(0);
 });
 
+test("ProviderConnection inventory is owner-only even for a Workspace member", async () => {
+  let inventoryReads = 0;
+  const operations = {
+    ...workspaceAuthorizationOperations(),
+    members: { getMember: async () => ({ workspaceId: workspace.id, accountId: "tsub_member", status: "active", roles: ["member"] }) },
+    connections: { listProviderConnections: async () => { inventoryReads++; return []; } },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/provider-connections?workspaceId=ws_owner");
+  const ctx = { ...context(operations, request), session: { subject: "tsub_member" } };
+  const response = await handleProviderConnections(ctx, ["provider-connections"], "GET");
+  expect(response?.status).toBe(403);
+  expect(inventoryReads).toBe(0);
+});
+
+test("appIds without a Workspace binding cannot use legacy Workspace authorization", async () => {
+  const operations = workspaceAuthorizationOperations();
+  expect(await canAccessWorkspace({
+    operations,
+    store: new InMemoryAccountsStore(),
+    session: { subject: "tsub_owner", appIds: ["cap1"] },
+    workspaceId: workspace.id,
+    capsuleId: "cap1",
+  })).toBe(false);
+  expect(await canAccessWorkspace({
+    operations,
+    store: new InMemoryAccountsStore(),
+    session: { subject: "tsub_owner", appIds: ["cap1"], workspaceId: workspace.id },
+    workspaceId: workspace.id,
+    capsuleId: "cap1",
+  })).toBe(true);
+});
+
+test("Workspace-bound appIds reach the three legacy delegated Workspace routes", async () => {
+  for (const bound of [true, false]) {
+    const store = new InMemoryAccountsStore();
+    const token = `fixture-delegated-${bound}`;
+    store.savePersonalAccessToken(token, {
+      tokenId: `pat_delegated_${bound}`, tokenPrefix: "fixture", subject: "tsub_owner",
+      name: "delegated", scopes: ["read", "write"],
+      ...(bound ? { workspaceId: workspace.id } : {}),
+      appIds: ["cap1"], createdAt: Date.now(),
+    });
+    for (const [path, method] of [
+      [`/api/v1/workspaces/${workspace.id}/capsules`, "GET"],
+      [`/api/v1/workspaces/${workspace.id}/install-plans`, "GET"],
+      [`/api/v1/workspaces/${workspace.id}/install-plans`, "POST"],
+      [`/api/v1/workspaces/${workspace.id}/ui-surfaces`, "GET"],
+    ] as const) {
+      let initializations = 0;
+      const url = new URL(`https://app.example.test${path}`);
+      const response = await handleControlRoute({
+        request: new Request(url, { method, headers: { authorization: `Bearer ${token}` } }),
+        url, store,
+        resolveOperations: async () => { initializations++; return undefined; },
+      });
+      expect(response?.status).toBe(bound ? 503 : 403);
+      expect(initializations).toBe(bound ? 1 : 0);
+    }
+  }
+});
+
 test("Workspace-scoped PAT and OAuth credentials cannot select another Workspace", async () => {
   for (const credential of ["pat", "oauth"] as const) {
     const store = new InMemoryAccountsStore();
@@ -4054,6 +4115,7 @@ test(`Capsule ${deletion} schedules grace with the session actor and captured au
       ),
       session: {
         subject: "tsub_owner",
+        credential: "session",
         uninstallRequester: { subject: "tsub_owner" },
       },
     },
@@ -4114,6 +4176,7 @@ test("Capsule uninstall and cancel fail closed on a host without scheduled unins
         ),
         session: {
           subject: "tsub_owner",
+          credential: "session",
           uninstallRequester: { subject: "tsub_owner" },
         },
       },
@@ -4246,4 +4309,18 @@ test("browser-bound provider callbacks reject copied authorization URLs before t
   expect(response?.headers.get("location")).toContain("connected=1");
   expect(response?.headers.get("set-cookie")).toContain("Max-Age=0");
   expect(exchanges).toBe(1);
+});
+
+
+test("app-bound PAT reaches only its app Connection labels projection", async () => {
+  const store = new InMemoryAccountsStore();
+  store.savePersonalAccessToken("labels-fixture", { tokenId: "pat_labels", tokenPrefix: "fixture", subject: "tsub_owner", name: "labels", scopes: ["read"], appIds: ["cap1"], createdAt: Date.now() });
+  for (const [query, expected] of [["?capsuleId=cap1&projection=labels", 503], ["?capsuleId=cap2&projection=labels", 403], ["?capsuleId=cap1", 403], ["", 403]] as const) {
+    let initializations = 0;
+    const url = new URL(`https://app.example.test/api/v1/connections${query}`);
+    const response = await handleControlRoute({ request: new Request(url, { headers: { authorization: "Bearer labels-fixture" } }), url, store,
+      resolveOperations: async () => { initializations++; return undefined; } });
+    expect(response?.status).toBe(expected);
+    expect(initializations).toBe(expected === 503 ? 1 : 0);
+  }
 });

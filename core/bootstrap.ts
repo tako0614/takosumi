@@ -938,7 +938,9 @@ export interface TakosumiOperations {
         readonly browserBindingRequired?: boolean;
         start(input: {
           readonly subject: string;
-          readonly workspaceId: string;
+          readonly workspaceId?: string;
+          readonly scope?: "personal" | "workspace";
+          readonly ownerAccountId?: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
           readonly scopeHints?: import("takosumi-contract/connections").ConnectionScopeHints;
@@ -1429,6 +1431,9 @@ export async function createTakosumiService(
   const runGroupsService = new RunGroupsService({
     store: sharedOpenTofuStore,
     controller: opentofuController,
+    actor: "system:run-group",
+    systemOwnedFlow: true,
+    appAccess,
     activity: activityService,
   });
   // A cancelled uninstall must not leave the finalizer's unapproved teardown
@@ -2119,7 +2124,9 @@ export async function createTakosumiService(
                     ),
                     principal: { actor: "dashboard-session" },
                     body: {
-                      workspaceId: input.workspaceId,
+                      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+                      ...(input.scope ? { scope: input.scope } : {}),
+                      ...(input.ownerAccountId ? { ownerAccountId: input.ownerAccountId } : {}),
                       // Sign the authenticated subject INTO the OAuth state so the
                       // cross-site callback can authorize without a session cookie.
                       subject: input.subject,

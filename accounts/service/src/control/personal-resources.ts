@@ -10,12 +10,14 @@ export async function personalResourceNamespace(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   session: ControlSession,
+  createIfMissing = true,
 ): Promise<Workspace | undefined> {
   if (session.workspaceId !== undefined || session.appIds !== undefined) return undefined;
   const existing = (await operations.workspaces.listWorkspacesByOwner(session.subject))
     .filter((workspace) => workspace.type === "personal" && !workspace.archivedAt && workspace.ownerUserId === session.subject)
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0];
   if (existing) return existing;
+  if (!createIfMissing) return undefined;
   const ensure = operations.workspaces.ensurePersonalWorkspace;
   if (!ensure) return undefined;
   const account = await store.findAccount(session.subject as TakosumiSubject);

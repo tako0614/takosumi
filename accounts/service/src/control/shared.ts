@@ -126,6 +126,8 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
  */
 export interface ControlSession {
   readonly subject: string;
+  /** Exact credential kind resolved by the Accounts bearer dispatcher. */
+  readonly credential?: "session" | "personal-access-token" | "oauth-access-token";
   /** Trusted shared-account composition requires a current active membership,
    * including for the Workspace's recorded owner. Ordinary OSS sessions retain
    * their existing owner authority. Never read this option from an HTTP field. */
@@ -635,7 +637,11 @@ export async function canAccessWorkspace(input: {
     }
     return workspaceAllowed;
   };
-  if (!bearerAllowed) return await finish(false);
+  // App-only credentials without an issuance-time Workspace binding have no
+  // legacy Workspace authority, even when their subject is a member there.
+  if (!bearerAllowed || (input.session.appIds !== undefined && !input.session.workspaceId)) {
+    return await finish(false);
+  }
 
 
   const workspace =

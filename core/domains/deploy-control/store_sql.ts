@@ -114,13 +114,13 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumn
   if (!expected.ownerAccountId) return and(
     sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`,
     expected.workspaceId
-      ? sql`${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId})`
+      ? sql`(${pgSchema.connections.ownerAccountId} is null or ${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId}))`
       : isNull(pgSchema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
     sql`(${pgSchema.connections.connectionJson}::jsonb - 'ownerAccountId') = ${JSON.stringify(legacy)}::jsonb`,
-    eq(pgSchema.connections.ownerAccountId, ownerAccountId),
+    sql`coalesce(${pgSchema.connections.ownerAccountId}, ${pgSchema.connections.connectionJson}->>'ownerAccountId') = ${ownerAccountId}`,
   )!;
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
@@ -1948,7 +1948,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       void _ignored;
       return result.rows[0]?.owner_account_id
         ? { ...record, ownerAccountId: result.rows[0].owner_account_id }
-        : record;
+        : connection;
     }));
   }
 
@@ -3243,12 +3243,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           return { won: false as const };
         }
 
-        // Lock the complete Workspace Capsule census before the held Run.
-        // Normal Capsule admission and lifecycle writes take this Workspace
-        // lock first, so the census cannot gain or lose a row during settlement.
+        // Take only this Source owner's Capsule lock before its Run lock,
+        // matching transfer admission order while keeping other apps independent.
         const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
           transaction,
           input.terminalRun.workspaceId,
+          input.terminalRun.sourceId,
         );
 
         // The locked reread preserves same-lease heartbeat semantics and
@@ -3306,13 +3306,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           throw new SourceSyncSettlementConflictError();
         }
 
-        // Lock only the Source owner before resolving adopted lineage. Normal
-        // lifecycle writes share the outer Workspace lock.
-        const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
-          transaction,
-          input.terminalRun.workspaceId,
-          input.terminalRun.sourceId,
-        );
+
 
 
         // The Source cursor is part of this same settlement. Lock its exact
@@ -3546,6 +3540,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       const source = sourceRows.rows[0] ? sourceFromPgRow(sourceRows.rows[0]) : undefined;
       if (!source || source.workspaceId !== run.workspaceId || source.status !== "active" || source.retiringAt) {
         return { status: "conflict" as const };
+      }
+      // Member removal and transfer hold this same Source row lock. Check
+      // current access after acquiring it so a revoked actor cannot enqueue
+      // a new Run immediately after the cancellation transaction commits.
+      if (source.ownerCapsuleId && await this.#v77Column("takosumi_capsules", "owner_account_id", transaction)) {
+        const authority = await transaction.query<{ id: string }>(
+          `select c.id from takosumi_capsules c where c.id=$1 and c.space_id=$2 and c.source_id=$3
+            and (c.owner_account_id is null or (c.management_state='active' and
+              (c.owner_account_id=$4 or exists(select 1 from takosumi_capsule_members m
+                where m.capsule_id=c.id and m.account_id=$4 and m.status='active'))))`,
+          [source.ownerCapsuleId, run.workspaceId, run.sourceId, run.actorAccountId ?? null],
+        );
+        if (authority.rows.length !== 1) return { status: "conflict" as const };
       }
       const stored = storeSourceSyncRun(
         run,

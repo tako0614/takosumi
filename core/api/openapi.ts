@@ -95,6 +95,7 @@ export interface PublicSessionOpenApiEndpoint {
   readonly path: string;
   readonly summary: string;
   readonly auth: "account-session";
+  readonly queryParameters?: readonly Record<string, unknown>[];
 }
 
 export function createTakosumiOpenApiDocument(
@@ -160,7 +161,10 @@ export function createTakosumiOpenApiDocument(
       summary: endpoint.summary,
       tags: ["accountsControl"],
       security: [{ accountSession: [] }, { accountsBearer: [] }],
-      parameters: [...path.matchAll(/\{([^}]+)\}/gu)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } })),
+      parameters: [
+        ...[...path.matchAll(/\{([^}]+)\}/gu)].map((match) => ({ name: match[1], in: "path", required: true, schema: { type: "string" } })),
+        ...(endpoint.queryParameters ?? []),
+      ],
       responses: { "200": { description: "Successful operation; response shape is documented in the public API reference." }, default: { description: "Standard error envelope (error.code, error.message, error.requestId)." } },
       "x-takos-auth": "account-session",
     } };

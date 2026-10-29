@@ -95,6 +95,7 @@ export const SCHEDULED_DESTROY_BLOCKED_REASONS = {
   applyFailed: "destroy_apply_failed",
   finalizeFailed: "finalize_failed",
   exportIncomplete: "pre_destroy_export_incomplete",
+  ownerUnavailable: "app_owner_unavailable",
 } as const;
 
 /**
@@ -124,7 +125,7 @@ export interface CapsuleUninstallFinalizerDependencies {
     createCapsuleDestroyPlan(
       capsuleId: string,
       context: { readonly actor?: string },
-      internal: { readonly planRunId?: string },
+      internal: { readonly planRunId?: string; readonly origin?: { readonly kind: "scheduled_uninstall"; readonly uninstallId: string } },
     ): Promise<PlanRunResponse>;
     approveRun(
       id: string,
@@ -451,6 +452,10 @@ async function createTeardownPlan(
   uninstall: CapsuleUninstall,
   now: () => Date,
 ): Promise<StepOutcome> {
+  if (!capsule.ownerAccountId?.trim()) {
+    await block(deps, capsule, uninstall, SCHEDULED_DESTROY_BLOCKED_REASONS.ownerUnavailable);
+    return "blocked";
+  }
   const attempt = (uninstall.destroyAttempts ?? 0) + 1;
   if (attempt > MAX_SCHEDULED_DESTROY_ATTEMPTS) {
     await block(
@@ -480,8 +485,8 @@ async function createTeardownPlan(
   try {
     response = await deps.controller.createCapsuleDestroyPlan(
       capsule.id,
-      { actor: SCHEDULED_UNINSTALL_ACTOR },
-      { planRunId },
+      { actor: capsule.ownerAccountId },
+      { planRunId, origin: { kind: "scheduled_uninstall", uninstallId: uninstall.id } },
     );
   } catch (error) {
     if (!isPermanentRefusal(error) || !marked.uninstall) throw error;
@@ -547,11 +552,15 @@ async function startTeardown(
     return "waiting";
   }
   if (plan.appliedApplyRunId !== undefined) return "waiting";
+  if (!capsule.ownerAccountId?.trim() || plan.createdBy !== capsule.ownerAccountId) {
+    await block(deps, capsule, uninstall, SCHEDULED_DESTROY_BLOCKED_REASONS.ownerUnavailable);
+    return "blocked";
+  }
   if (await blockUnauthorizedRequester(deps, capsule, uninstall)) return "blocked";
   try {
     if (plan.approval === undefined) {
       await deps.controller.approveRun(plan.id, {
-        approvedBy: SCHEDULED_UNINSTALL_ACTOR,
+        approvedBy: capsule.ownerAccountId,
         reason: `scheduled uninstall ${uninstall.id}`,
       });
     }
@@ -576,7 +585,7 @@ async function startTeardown(
         planRunId: approved.id,
         expected: applyExpectedGuardFromPlanRun(approved),
       },
-      { actor: SCHEDULED_UNINSTALL_ACTOR },
+      { actor: capsule.ownerAccountId },
       { applyRunId },
     );
   } catch (error) {

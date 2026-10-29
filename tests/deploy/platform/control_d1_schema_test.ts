@@ -668,10 +668,10 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(77);
-  expect(plan.migrations).toHaveLength(74);
+  expect(plan.migrations.at(-1)?.version).toBe(78);
+  expect(plan.migrations).toHaveLength(75);
   expect(plan.migrations.at(-1)?.name).toBe(
-    "d1_app_ownership",
+    "d1_app_authorization",
   );
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(false);
   expect(
@@ -4053,7 +4053,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 77 });
+    ).toEqual({ version: 78 });
     await expect(
       database
         .prepare(

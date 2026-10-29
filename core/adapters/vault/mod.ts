@@ -1415,8 +1415,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         throw new ConnectionVaultError("failed_precondition", "App ownership authority changed before credential mint");
       }
       await this.#requireCurrentAppAccess(planForBudget.createdBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
-      if (applyForBudget?.approval?.approvedBy) {
-        await this.#requireCurrentAppAccess(applyForBudget.approval.approvedBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      if (applyForBudget?.createdBy) {
+        await this.#requireCurrentAppAccess(applyForBudget.createdBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      }
+      const approver = applyForBudget?.approval?.approvedBy ?? planForBudget.approval?.approvedBy;
+      if (approver) {
+        await this.#requireCurrentAppAccess(approver, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
       } else if (applyForBudget && (
         applyForBudget.approval ||
         planForBudget.approval ||
@@ -1467,7 +1471,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     const mintLease = capsuleForMint?.ownerAccountId !== undefined && entries.length > 0
       ? await this.#beginAppMintLease(capsuleForMint, options?.runId,
-        [planForBudget?.createdBy, ...(applyForBudget?.approval?.approvedBy ? [applyForBudget.approval.approvedBy] : [])],
+        [planForBudget?.createdBy, ...(applyForBudget?.createdBy ? [applyForBudget.createdBy] : []),
+          ...(applyForBudget?.approval?.approvedBy ?? planForBudget?.approval?.approvedBy
+            ? [applyForBudget?.approval?.approvedBy ?? planForBudget?.approval?.approvedBy] : [])],
         [...prepared.values()].map(({ connection }) => ({ id: connection.id,
           authority: this.#operatorProviderConnections.has(connection.id) ? "release-owned" as const : "stored" as const,
           expectedConnection: connection })))

@@ -24,7 +24,7 @@ test("D1 mutation store uses the actual current ledger tables", async () => {
     "2026-01-01", "2026-01-01", "owner", 0, "active", 0,
   ).run();
   const store = new D1AppAuthorizationStore(db as unknown as D1Like, emptyAccess);
-  expect(await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 })).toEqual({ accountId: "member", status: "active" });
+  expect(await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0, consent: "connections_and_code" })).toEqual({ accountId: "member", status: "active" });
   expect((await store.listMembers("cap_real")).members).toEqual([{ accountId: "member", status: "active" }]);
   await db.prepare(`insert into sources (id,space_id,status,record_json,created_at,updated_at) values (?,?,?,?,?,?)`)
     .bind("src_real", "ws_real", "active", JSON.stringify({ id: "src_real", workspaceId: "ws_real", ownerCapsuleId: "cap_real" }), "2026-01-01", "2026-01-01").run();
@@ -36,7 +36,7 @@ test("D1 mutation store uses the actual current ledger tables", async () => {
   await store.removeMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 });
   expect((await db.prepare(`select status from runs where id='sync_real'`).first())).toEqual({ status: "failed" });
   expect((await db.prepare(`select count(*) as n from capsule_members where capsule_id='cap_real'`).first())).toEqual({ n: 0 });
-  await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 });
+  await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0, consent: "connections_and_code" });
   for (const [id, status] of [["plan_queued", "queued"], ["plan_waiting", "waiting_approval"]] as const) {
     const run = { id, workspaceId: "ws_real", capsuleId: "cap_real", status, createdBy: "owner", createdAt: 1, updatedAt: 1, auditEvents: [] };
     await db.prepare(`insert into runs (id,space_id,installation_id,type,status,run_json,created_at)
@@ -47,14 +47,14 @@ test("D1 mutation store uses the actual current ledger tables", async () => {
     .bind("sync_transfer", "ws_real", "src_real", "source_sync", "queued",
       JSON.stringify({ ...sync, id: "sync_transfer", actorAccountId: "owner" }), "2026-01-01").run();
   const transfer = await store.createTransfer({ capsuleId: "cap_real", actorAccountId: "owner", toAccountId: "new", expectedOwnershipEpoch: 0 });
-  await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 0 });
+  await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 0, consent: "connections_and_code" });
   expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).state).toBe("accepted");
   expect((await db.prepare(`select owner_account_id,ownership_epoch from capsules where id='cap_real'`).first())).toEqual({ owner_account_id: "new", ownership_epoch: 1 });
   expect((await db.prepare(`select status from runs where id='plan_queued'`).first())).toEqual({ status: "cancelled" });
   expect((await db.prepare(`select status from runs where id='plan_waiting'`).first())).toEqual({ status: "cancelled" });
   expect((await db.prepare(`select status from runs where id='sync_transfer'`).first())).toEqual({ status: "failed" });
   expect((await db.prepare(`select count(*) as n from runs_inputs`).first())).toEqual({ n: 0 });
-  expect((await db.prepare(`select account_id from capsule_members where capsule_id='cap_real'`).all()).results).toEqual([{ account_id: "member" }]);
+  expect((await db.prepare(`select account_id from capsule_members where capsule_id='cap_real'`).all()).results).toEqual([]);
 });
 
 test("PostgreSQL mutation store uses the actual current ledger tables", async () => {
@@ -70,7 +70,7 @@ test("PostgreSQL mutation store uses the actual current ledger tables", async ()
       "2026-01-01", "2026-01-01", "owner", 0, "active", 0,
     ]);
     const store = new SqlAppAuthorizationStore(client, emptyAccess);
-    expect(await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 })).toEqual({ accountId: "member", status: "active" });
+    expect(await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0, consent: "connections_and_code" })).toEqual({ accountId: "member", status: "active" });
     expect((await store.listMembers("cap_real")).members).toEqual([{ accountId: "member", status: "active" }]);
     await client.query(`insert into takosumi_sources (id,space_id,status,source_json,created_at,updated_at)
       values ($1,$2,$3,$4::jsonb,$5,$6)`, ["src_real", "ws_real", "active",
@@ -83,7 +83,7 @@ test("PostgreSQL mutation store uses the actual current ledger tables", async ()
     await store.removeMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 });
     expect((await client.query(`select status from takosumi_runs where id='sync_real'`)).rows[0]).toEqual({ status: "failed" });
     expect((await client.query(`select count(*)::integer as n from takosumi_capsule_members where capsule_id='cap_real'`)).rows[0]).toEqual({ n: 0 });
-    await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 });
+    await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0, consent: "connections_and_code" });
     for (const [id, status] of [["plan_queued", "queued"], ["plan_waiting", "waiting_approval"]] as const) {
       const run = { id, workspaceId: "ws_real", capsuleId: "cap_real", status, createdBy: "owner", createdAt: 1, updatedAt: 1, auditEvents: [] };
       await client.query(`insert into takosumi_runs (id,space_id,installation_id,kind,status,run_json,created_at)
@@ -94,7 +94,7 @@ test("PostgreSQL mutation store uses the actual current ledger tables", async ()
       values ($1,$2,$3,$4,$5,$6::jsonb,$7)`, ["sync_transfer", "ws_real", "src_real", "source_sync", "queued",
       JSON.stringify({ ...sync, id: "sync_transfer", actorAccountId: "owner" }), "2026-01-01"]);
     const transfer = await store.createTransfer({ capsuleId: "cap_real", actorAccountId: "owner", toAccountId: "new", expectedOwnershipEpoch: 0 });
-    await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 0 });
+    await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "new", expectedOwnershipEpoch: 0, consent: "connections_and_code" });
     expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).state).toBe("accepted");
     expect((await client.query(`select owner_account_id,ownership_epoch from takosumi_capsules where id='cap_real'`)).rows[0]).toEqual({ owner_account_id: "new", ownership_epoch: 1 });
     expect((await client.query(`select id,status from takosumi_runs where id in ('plan_queued','plan_waiting') order by id`)).rows).toEqual([
@@ -102,6 +102,6 @@ test("PostgreSQL mutation store uses the actual current ledger tables", async ()
     ]);
     expect((await client.query(`select status from takosumi_runs where id='sync_transfer'`)).rows[0]).toEqual({ status: "failed" });
     expect((await client.query(`select * from takosumi_plan_run_inputs`)).rows).toHaveLength(0);
-    expect((await client.query(`select account_id from takosumi_capsule_members where capsule_id='cap_real'`)).rows).toEqual([{ account_id: "member" }]);
+    expect((await client.query(`select account_id from takosumi_capsule_members where capsule_id='cap_real'`)).rows).toEqual([]);
   } finally { await client.close(); }
 });

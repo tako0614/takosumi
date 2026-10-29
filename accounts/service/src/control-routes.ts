@@ -65,6 +65,7 @@ import {
 } from "./control/account-workspace-views.ts";
 import { handleProjects } from "./control/projects.ts";
 import { handleAppOwnership } from "./control/app-ownership.ts";
+import { handleSourceRefResolutions } from "./control/source-ref-resolutions.ts";
 import { handleUsage } from "./control/usage.ts";
 import { handleInstallPlans } from "./control/install-plans.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
@@ -126,6 +127,7 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   apps: handleAppOwnership,
   usage: handleUsage,
   "ownership-transfers": handleAppOwnership,
+  "source-ref-resolutions": handleSourceRefResolutions,
   workspaces: handleWorkspaces,
   projects: handleProjects,
   "install-plans": handleInstallPlans,
@@ -476,7 +478,16 @@ async function dispatchAuthenticatedControlRoute(
   // App-bound tokens cannot enumerate or mutate account-wide resources. Keep
   // this before Control initialization; app-resource handlers still intersect
   // the exact app fence with live AppAccess after resolving their resource.
+  const legacyWorkspaceAppRoute = segments[0] === "workspaces" && segments.length === 3 &&
+    context.session.workspaceId === segments[1] &&
+    ((segments[2] === "capsules" && request.method.toUpperCase() === "GET") ||
+      (segments[2] === "install-plans" && ["GET", "POST"].includes(request.method.toUpperCase())) ||
+      (segments[2] === "ui-surfaces" && request.method.toUpperCase() === "GET"));
+  const appConnectionLabels = segments.length === 1 && segments[0] === "connections" &&
+    request.method.toUpperCase() === "GET" && url.searchParams.get("projection") === "labels" &&
+    context.session.appIds?.includes(url.searchParams.get("capsuleId") ?? "") === true;
   if (context.session.appIds !== undefined &&
+    !legacyWorkspaceAppRoute && !appConnectionLabels &&
     !["apps", "capsules", "runs", "state-versions", "sources", "compatibility-reports", "install-plans", "revision-plans", "capsule-configs", "ownership-transfers"].includes(segments[0] ?? "")) {
     return appendServerTiming(errorJson("app_access_denied", "This credential is restricted to its apps.", 403, request), timings);
   }
@@ -627,6 +638,7 @@ export async function handleControlRoute(
       ...context,
       session: {
         subject: bearer.auth.subject,
+        credential: bearer.auth.credential,
         uninstallRequester: bearer.auth.uninstallRequester,
         ...(bearer.auth.appIds !== undefined ? { appIds: bearer.auth.appIds } : {}),
         ...(bearer.auth.workspaceId

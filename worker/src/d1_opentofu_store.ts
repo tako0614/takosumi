@@ -2647,7 +2647,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         .first<{ owner_account_id: string | null }>();
       const { ownerAccountId: _ignored, ...record } = connection;
       void _ignored;
-      return row?.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id } : record;
+      return row?.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id } : connection;
     }));
   }
 
@@ -3859,13 +3859,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     // Retirement closes admission before archive cleanup. Fence the indexed
     // Source row in the same transaction as the create-only Run insert; a
     // preflight getSource() would race a concurrent retirement.
+    const appActorGuard = await this.#v77Column("capsules", "owner_account_id")
+      ? sql`(json_extract(source.record_json, '$.ownerCapsuleId') is null
+          or exists (select 1 from capsules owner
+            where owner.id=json_extract(source.record_json, '$.ownerCapsuleId')
+              and owner.space_id=${run.workspaceId} and owner.source_id=${run.sourceId}
+              and (owner.owner_account_id is null or (owner.management_state='active'
+                and (owner.owner_account_id=${run.actorAccountId ?? null}
+                  or exists (select 1 from capsule_members member where member.capsule_id=owner.id
+                    and member.account_id=${run.actorAccountId ?? null} and member.status='active'))))))`
+      : sql`1`;
     const sourceGuard = this.#orm.select({ guard: sql<number>`case when
       exists (select 1 from ${schema.sources} source
         where source.id = ${run.sourceId}
           and source.space_id = ${run.workspaceId}
           and source.status = 'active'
           and json_extract(source.record_json, '$.status') = 'active'
-          and json_extract(source.record_json, '$.retiringAt') is null)
+          and json_extract(source.record_json, '$.retiringAt') is null
+          and ${appActorGuard})
       or exists (select 1 from ${schema.runs} existing where existing.id = ${run.id})
       then 1 else json_extract('source_sync_source_inactive', '$') end` })
       .from(sql`(select 1) as source_sync_source_guard`);
@@ -13980,12 +13991,12 @@ function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumn
   if (!expected.ownerAccountId) return and(
     eq(schema.connections.connectionJson, expected),
     expected.workspaceId
-      ? sql`${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId})`
+      ? sql`(${schema.connections.ownerAccountId} is null or ${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId}))`
       : isNull(schema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
-    eq(schema.connections.ownerAccountId, ownerAccountId),
+    sql`coalesce(${schema.connections.ownerAccountId}, json_extract(${schema.connections.connectionJson}, '$.ownerAccountId')) = ${ownerAccountId}`,
     or(
       eq(schema.connections.connectionJson, expected),
       sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
@@ -16593,6 +16604,9 @@ const D1_APP_OWNERSHIP_STATEMENTS = [
     created_at text not null,
     updated_at text not null
   )`,
+] as const;
+
+const D1_APP_AUTHORIZATION_STATEMENTS = [
   ...D1_APP_OWNERSHIP_TRANSFER_SCHEMA,
   ...D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA,
 ] as const;
@@ -20034,6 +20048,13 @@ ${D1_INTERFACE_LINK_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_APP_OWNERSHIP_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_APP_OWNERSHIP_STATEMENTS); },
   },
+  {
+    version: 78,
+    name: "d1_app_authorization",
+    checksumSource: () => `expand: TASK-0118 Phase 6 transfer ledger and credential mint leases. No existing ownership migration is changed.\n${D1_APP_AUTHORIZATION_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_APP_AUTHORIZATION_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_APP_AUTHORIZATION_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -21103,6 +21124,20 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
     hasColumns("credential_mint_events", [["actor_account_id", "text", 0], ["connection_owner_account_id", "text", 0], ["ownership_epoch", "integer", 0]]);
     check("capsule_members", [["capsule_id", "text", 1, 1], ["account_id", "text", 1, 2], ["status", "text", 1], ["added_by", "text", 0], ["created_at", "text", 1], ["updated_at", "text", 1]]);
     check("account_billing_bindings", [["account_id", "text", 0, 1], ["billing_authority", "text", 1], ["billing_ref", "text", 1], ["organization_ref", "text", 0], ["created_at", "text", 1], ["updated_at", "text", 1]]);
+    for (const [name, statement] of [["capsule_members", D1_APP_OWNERSHIP_STATEMENTS[5]], ["account_billing_bindings", D1_APP_OWNERSHIP_STATEMENTS[12]]] as const) {
+      if (normalizedD1IndexSql(tables.get(name)?.sql ?? null) !== normalizedD1IndexSql(statement)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+    for (const [name, column, expected] of [
+      ["capsules", "ownership_epoch", "0"], ["capsules", "management_state", "'active'"], ["capsules", "management_epoch", "0"],
+    ] as const) {
+      if (tables.get(name)?.columns.find(item => item.name === column)?.defaultValue !== expected) throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+    const memberIndex = tables.get("capsule_members")!.indexes.find(index => index.name === "capsule_members_account_status_idx");
+    if (!memberIndex || memberIndex.unique !== 0 || memberIndex.partial !== 0 || stableStringify(memberIndex.columns) !== stableStringify(["account_id", "status"]) ||
+      normalizedD1IndexSql(memberIndex.sql) !== normalizedD1IndexSql(D1_APP_OWNERSHIP_STATEMENTS[6])) throw new Error("D1 OpenTofu predeployed schema verification failed");
+
+  }
+  if (head >= 78) {
     check("capsule_ownership_transfers", [["id", "text", 0, 1], ["capsule_id", "text", 1],
       ["from_account_id", "text", 1], ["to_account_id", "text", 1], ["ownership_epoch", "integer", 1],
       ["drain_management_epoch", "integer", 0], ["state", "text", 1], ["created_at", "text", 1],
@@ -21121,17 +21156,6 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
       normalizedD1IndexSql(mintLeaseIndex.sql) !== normalizedD1IndexSql(D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA[1])) {
       throw new Error("D1 OpenTofu predeployed schema verification failed");
     }
-    for (const [name, statement] of [["capsule_members", D1_APP_OWNERSHIP_STATEMENTS[5]], ["account_billing_bindings", D1_APP_OWNERSHIP_STATEMENTS[12]]] as const) {
-      if (normalizedD1IndexSql(tables.get(name)?.sql ?? null) !== normalizedD1IndexSql(statement)) throw new Error("D1 OpenTofu predeployed schema verification failed");
-    }
-    for (const [name, column, expected] of [
-      ["capsules", "ownership_epoch", "0"], ["capsules", "management_state", "'active'"], ["capsules", "management_epoch", "0"],
-    ] as const) {
-      if (tables.get(name)?.columns.find(item => item.name === column)?.defaultValue !== expected) throw new Error("D1 OpenTofu predeployed schema verification failed");
-    }
-    const memberIndex = tables.get("capsule_members")!.indexes.find(index => index.name === "capsule_members_account_status_idx");
-    if (!memberIndex || memberIndex.unique !== 0 || memberIndex.partial !== 0 || stableStringify(memberIndex.columns) !== stableStringify(["account_id", "status"]) ||
-      normalizedD1IndexSql(memberIndex.sql) !== normalizedD1IndexSql(D1_APP_OWNERSHIP_STATEMENTS[6])) throw new Error("D1 OpenTofu predeployed schema verification failed");
     const transfer = tables.get("capsule_ownership_transfers")!;
     if (normalizedD1IndexSql(transfer.sql) !== normalizedD1IndexSql(
       D1_APP_OWNERSHIP_TRANSFER_SCHEMA[0].replace(/^create table if not exists /u, "create table "))) {
@@ -21205,7 +21229,7 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
 }
 
 /** Runtime floors never weaken complete catalog and physical qualification. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77): Promise<void> {
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   let structures: string | null;
@@ -21235,11 +21259,11 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion:
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 = 76,
+  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78 = 76,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76 && head !== 77) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76 && head !== 77 && head !== 78) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
   const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

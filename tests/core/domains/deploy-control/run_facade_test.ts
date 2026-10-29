@@ -158,7 +158,8 @@ test("getRun projects a succeeded plan + its apply run", async () => {
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
-  });
+  }, { actor: "apply_requester" });
+  expect(applyRun.createdBy).toBe("apply_requester");
   const applyView = await controller.getRun(applyRun.id);
   expect(applyView.type).toBe("apply");
   expect(applyView.status).toBe("succeeded");

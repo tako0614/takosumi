@@ -467,13 +467,13 @@ export interface ControlPlaneOperations {
   };
   // --- RunGroups (§19 / §24) ---
   readonly runGroups: {
-    createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRunsLike>;
+    createWorkspaceUpdate(workspaceId: string, actorAccountId?: string): Promise<RunGroupWithRunsLike>;
     createWorkspaceDriftCheck(
       workspaceId: string,
-      options?: { readonly limit?: number },
+      options?: { readonly limit?: number; readonly actorAccountId?: string },
     ): Promise<RunGroupWithRunsLike>;
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
-    approveRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
+    approveRunGroup(id: string, actorAccountId?: string): Promise<RunGroupWithRunsLike | undefined>;
   };
   listInterfaceMaterializationFailures(
     workspaceId: string,
@@ -611,7 +611,9 @@ export interface ControlPlaneOperations {
          */
         start(input: {
           readonly subject: string;
-          readonly workspaceId: string;
+          readonly workspaceId?: string;
+          readonly scope?: "personal" | "workspace";
+          readonly ownerAccountId?: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
           readonly scopeHints?: ConnectionScopeHints;

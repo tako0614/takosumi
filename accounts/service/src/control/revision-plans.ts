@@ -609,7 +609,7 @@ async function createOrObserveRevisionPlanRun(
       planRunId: exactRunId,
       expectedWorkspaceManagementAuthority:
         plan.workspaceManagementAuthority,
-      actor: revisionPlanRunActor(plan.id),
+      actor: plan.createdBy,
       origin: { kind: "revision", ref: plan.revision.targetRef },
     });
     run = await operations.getRun(created.planRun.id);
@@ -794,7 +794,7 @@ async function revisionCompatibilityEvidence(
     requestDigest,
     runId: `ccr_${suffix}`,
     reportId: `caprep_${suffix}`,
-    createdBy: `git-revision-plan:${plan.id}:${suffix}`,
+    createdBy: plan.createdBy,
   };
 }
 
@@ -901,7 +901,7 @@ function assertRevisionRunMatches(
     run.compatibilityReportId !== plan.compatibilityReportId ||
     run.baseStateGeneration !== plan.revision.base.capsuleStateGeneration ||
     run.type !== "plan" ||
-    run.createdBy !== revisionPlanRunActor(plan.id)
+    run.createdBy !== plan.createdBy
   ) {
     throw permanent(
       "plan_run_identity_conflict",
@@ -1106,10 +1106,6 @@ function revisionPlanId(): string {
 function deterministicPlanRunId(planId: string): string {
   const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
   return `plan_${suffix.padStart(16, "0")}`;
-}
-
-function revisionPlanRunActor(planId: string): string {
-  return `git-revision-plan:${planId}`;
 }
 
 function digestSuffix(digest: string): string {

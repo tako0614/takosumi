@@ -23,6 +23,7 @@ import {
   createCloudflareWorker,
   rejectDisallowedCloudflarePresentedSession,
 } from "../accounts-cloudflare/src/handler.ts";
+import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   D1AccountsStore,
   handleAuthenticatedControlRoute,
@@ -4238,7 +4239,8 @@ export interface StaleCapsuleAutoPlanOperations {
       options?: { readonly limit?: number },
     ): Promise<readonly Run[]>;
   };
-  createCapsulePlan(capsuleId: string): Promise<unknown>;
+  createCapsulePlan(capsuleId: string, options: { readonly actor: string }): Promise<unknown>;
+  readonly activity?: Pick<ActivityRecorder, "record">;
 }
 
 export interface OpenTofuRunRepairScheduler {
@@ -4456,10 +4458,21 @@ export async function planStaleCapsuleUpdates(
     );
     for (const capsule of staleCapsules) {
       if (pendingPlanCapsuleIds.has(capsule.id)) continue;
+      if (!capsule.ownerAccountId?.trim()) {
+        console.warn("scheduled.stale_auto_plan_owner_unavailable");
+        continue;
+      }
       try {
-        await operations.createCapsulePlan(capsule.id);
+        await operations.createCapsulePlan(capsule.id, { actor: capsule.ownerAccountId });
         pendingPlanCapsuleIds.add(capsule.id);
         plansCreated += 1;
+        try {
+          await operations.activity?.record({ workspaceId: workspace.id,
+            actorId: "system:stale-auto-plan", action: "capsule.stale_auto_plan_created",
+            targetType: "capsule", targetId: capsule.id, metadata: {} });
+        } catch {
+          console.warn("scheduled.stale_auto_plan_activity_failed");
+        }
       } catch {
         // Best-effort: one bad Capsule must not abort other update plans.
         console.warn("scheduled.stale_auto_plan_create_failed");

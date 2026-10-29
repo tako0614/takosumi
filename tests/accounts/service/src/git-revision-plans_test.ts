@@ -134,6 +134,10 @@ test("Git revision plan reconciles an existing Capsule to one reviewable pinned 
   });
   expect(reviewable.links.reconcile).toBeUndefined();
   expect(fixture.counts).toEqual({ sync: 1, compatibility: 1, plan: 1 });
+  expect([...fixture.runs.values()].find((run) => run.type === "compatibility_check")?.createdBy)
+    .toBe(WORKSPACE.ownerUserId);
+  expect([...fixture.runs.values()].find((run) => run.type === "plan")?.createdBy)
+    .toBe(WORKSPACE.ownerUserId);
   expect(fixture.approvalCalls).toBe(0);
   expect(fixture.applyCalls).toBe(0);
   // The Plan records the version change it was made for, so a failed apply

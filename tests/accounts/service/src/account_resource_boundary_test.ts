@@ -56,7 +56,9 @@ test("D1 account resource reader filters physical owners and payers before pagin
 
   await db.prepare("update connections set connection_json = ?1 where id = 'conn_a1'")
     .bind(JSON.stringify({ id: "conn_a1", ownerAccountId: "account_b", scope: "personal" })).run();
-  await expect(reader.listConnections("account_a", {})).rejects.toThrow("inconsistent");
+  expect((await reader.listConnections("account_a", {})).items[0]?.ownerAccountId).toBe("account_a");
+  await db.prepare("update connections set owner_account_id = null where id = 'conn_a2'").run();
+  expect((await reader.listConnections("account_a", {})).items.map((item) => item.id)).toEqual(["conn_a1", "conn_a2"]);
 });
 
 test("Postgres account resource reader preserves physical owner and payer filters", async () => {
@@ -87,6 +89,8 @@ test("Postgres account resource reader preserves physical owner and payer filter
     },
   } as unknown as SqlClient;
   const reader = sqlAccountResourceReader(client);
+  expect((await reader.listConnections("account_a", {})).items.map((item) => item.id)).toEqual(["conn_a"]);
+  await db.exec(`update takosumi_connections set owner_account_id=null where id='conn_a'`);
   expect((await reader.listConnections("account_a", {})).items.map((item) => item.id)).toEqual(["conn_a"]);
   const usage = (await reader.listUsage("account_a", {})).items;
   expect(usage.map((item) => item.id)).toEqual(["usage_a"]);
@@ -231,7 +235,7 @@ test("installed-app OAuth bearer cannot use account resources or another app", a
       url, store, operations,
     });
   };
-  expect((await call("capsules/cap_allowed/members"))?.status).toBe(200);
+  expect((await call("capsules/cap_allowed/members"))?.status).toBe(403);
   expect((await call("capsules/cap_victim/members"))?.status).toBe(403);
   expect((await call("usage"))?.status).toBe(403);
   expect((await call("connections"))?.status).toBe(403);

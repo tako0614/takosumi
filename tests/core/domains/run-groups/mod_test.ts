@@ -84,6 +84,56 @@ test("workspace update plans only source-stale Capsules in one unordered layer",
   expect((await groups.getRunGroup(created.runGroup.id))?.runs).toHaveLength(2);
 });
 
+test("trusted system RunGroup uses each current app owner for Runs and keeps system audit actor", async () => {
+  const { store, controller } = service();
+  await seed(store, "owned", "stale");
+  const capsule = (await store.getCapsule("cap_owned"))!;
+  await store.putCapsule({ ...capsule, ownerAccountId: "user_test", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0 });
+  const events: unknown[] = [];
+  const groups = new RunGroupsService({ store, controller, systemOwnedFlow: true,
+    actor: "system:run-group", activity: { record: async (event) => { events.push(event); return undefined; } } });
+  const result = await groups.createWorkspaceUpdate("ws_test001");
+  expect(result.runs[0]?.createdBy).toBe("user_test");
+  expect(events).toContainEqual(expect.objectContaining({ actorId: "system:run-group", action: "run_group.created" }));
+});
+
+test("public RunGroup actor must have current access to every owned app", async () => {
+  const { store, controller } = service();
+  await seed(store, "owned", "stale");
+  const capsule = (await store.getCapsule("cap_owned"))!;
+  await store.putCapsule({ ...capsule, ownerAccountId: "user_test", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0 });
+  const groups = new RunGroupsService({ store, controller, systemOwnedFlow: true,
+    appAccess: { resolveAppAccess: async () => undefined,
+      listAccessibleApps: async () => ({ apps: [] }) } });
+  await expect(groups.createWorkspaceUpdate("ws_test001", "workspace_member"))
+    .rejects.toMatchObject({ code: "permission_denied" });
+  expect(await controller.listRuns("ws_test001")).toHaveLength(0);
+});
+
+test("public RunGroup approval records its current app member, not the system trigger", async () => {
+  const { store } = service();
+  await seed(store, "owned", "stale");
+  const capsule = (await store.getCapsule("cap_owned"))!;
+  await store.putCapsule({ ...capsule, ownerAccountId: "user_test", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0 });
+  await store.putRunGroup({ id: "rg_member_approval", workspaceId: "ws_test001",
+    type: "workspace_update", status: "waiting_approval",
+    graphJson: JSON.stringify({ order: [["cap_owned"]], runs: { cap_owned: "plan_member" } }),
+    createdAt: "2026-10-28T00:00:00.000Z" });
+  const approvedBy: string[] = [];
+  const groups = new RunGroupsService({ store, systemOwnedFlow: true, actor: "system:run-group",
+    controller: { getRun: async () => ({ id: "plan_member", status: "waiting_approval",
+      capsuleId: "cap_owned" }), approveRun: async (_id: string, input: { approvedBy?: string }) => {
+        approvedBy.push(input.approvedBy!); return undefined; } } as never,
+    appAccess: { resolveAppAccess: async (accountId, capsuleId) => accountId === "member"
+      ? { capsuleId, role: "member", ownerAccountId: "user_test", ownershipEpoch: 0 }
+      : undefined, listAccessibleApps: async () => ({ apps: [] }) } });
+  await groups.approveRunGroup("rg_member_approval", "member");
+  expect(approvedBy).toEqual(["member"]);
+});
+
 test("workspace update with no stale Capsule refuses the group", async () => {
   const { store, groups } = service();
   await seed(store, "active", "active");

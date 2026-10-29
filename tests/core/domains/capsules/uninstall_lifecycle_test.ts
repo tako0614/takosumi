@@ -275,6 +275,9 @@ async function appliedCapsule(
   });
   expect(applied.applyRun.status).toBe("succeeded");
   expect((await store.getCapsule(seeded.capsule.id))?.status).toBe("active");
+  await store.putCapsule({ ...(await store.getCapsule(seeded.capsule.id))!,
+    ownerAccountId: "user_test", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0 });
 
   return Object.assign(harness, {
     store,
@@ -486,8 +489,8 @@ async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
   // The teardown went through the ordinary approval gate, named for the request.
   const plan = (await h.store.getPlanRun(uninstall.destroyPlanRunId!))!;
   expect(plan.operation).toBe("destroy");
-  expect(plan.createdBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
-  expect(plan.approval?.approvedBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect(plan.createdBy).toBe("user_test");
+  expect(plan.approval?.approvedBy).toBe("user_test");
   expect(plan.approval?.reason).toBe(`scheduled uninstall ${uninstall.id}`);
   expect(plan.approval?.approvedAt).toBeGreaterThanOrEqual(
     Date.parse(uninstall.scheduledDestroyAt),
@@ -497,15 +500,15 @@ async function scheduledUninstallRunsToCompletion(h: Harness): Promise<void> {
   );
   expect(approvalAudit).toHaveLength(1);
   expect(approvalAudit[0]).toMatchObject({
-    actor: SCHEDULED_UNINSTALL_ACTOR,
+    actor: "user_test",
     at: plan.approval!.approvedAt,
-    data: { approvedBy: SCHEDULED_UNINSTALL_ACTOR },
+    data: { approvedBy: "user_test" },
   });
   const approvalActivity = (await h.activity.list("ws_uninstall001", 500))
     .filter((event) => event.action === "run.approved" && event.runId === plan.id);
   expect(approvalActivity).toHaveLength(1);
   expect(approvalActivity[0]).toMatchObject({
-    actorId: SCHEDULED_UNINSTALL_ACTOR,
+    actorId: "user_test",
     metadata: {
       approvedAt: new Date(plan.approval!.approvedAt).toISOString(),
       reason: `scheduled uninstall ${uninstall.id}`,
@@ -717,7 +720,7 @@ test("retired dependency appearing after teardown Plan blocks Apply before dispa
     phase: "destroying", blockedReason: "dependency_retired", destroyAttempts: 1,
   });
   const planId = scheduledDestroyRunId("plan", scheduled.uninstall!.id, 1);
-  expect((await h.store.getPlanRun(planId))?.approval?.approvedBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect((await h.store.getPlanRun(planId))?.approval?.approvedBy).toBe("user_test");
   expect(await h.store.getApplyRun(scheduledDestroyRunId("apply", scheduled.uninstall!.id, 1)))
     .toBeUndefined();
   expect(h.destroyJobs).toHaveLength(0);
@@ -896,7 +899,7 @@ test("cancelling after Apply refusal makes its system-approved teardown permanen
   expect(kept.status).toBe("active");
   expect(kept.uninstall?.phase).toBe("cancelled");
   const oldPlan = (await h.store.getPlanRun(blocked.uninstall!.destroyPlanRunId!))!;
-  expect(oldPlan.approval?.approvedBy).toBe(SCHEDULED_UNINSTALL_ACTOR);
+  expect(oldPlan.approval?.approvedBy).toBe("user_test");
   const applyOldPlan = () => h.controller.createApplyRun({
     planRunId: oldPlan.id,
     expected: applyExpectedGuardFromPlanRun(oldPlan),

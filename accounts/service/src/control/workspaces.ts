@@ -512,7 +512,7 @@ export async function handleWorkspaces(
     }
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await workspacePlanUpdate(operations, workspaceId);
+      return await workspacePlanUpdate(operations, workspaceId, ctx.session.subject);
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -530,7 +530,7 @@ export async function handleWorkspaces(
       return jsonStatus(
         await operations.runGroups.createWorkspaceDriftCheck(
           workspaceId,
-          limit !== undefined ? { limit } : {},
+          { ...(limit !== undefined ? { limit } : {}), actorAccountId: ctx.session.subject },
         ),
         201,
       );
@@ -1570,9 +1570,10 @@ async function workspaceActivity(
 async function workspacePlanUpdate(
   operations: ControlPlaneOperations,
   workspaceId: string,
+  actorAccountId: string,
 ): Promise<Response> {
   return jsonStatus(
-    await operations.runGroups.createWorkspaceUpdate(workspaceId),
+    await operations.runGroups.createWorkspaceUpdate(workspaceId, actorAccountId),
     201,
   );
 }

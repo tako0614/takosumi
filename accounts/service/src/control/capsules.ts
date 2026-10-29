@@ -278,6 +278,12 @@ export async function handleCapsules(
           { reason: "capsule_uninstall_requester_unavailable" },
         );
       }
+      if (!(ctx.session.credential === "session" &&
+          ctx.session.uninstallRequester?.grant === undefined) &&
+        !(ctx.session.credential === "personal-access-token" &&
+          ctx.session.uninstallRequester?.grant?.kind === "personal-access-token")) {
+        return errorJson("forbidden", "Uninstall requires an account session or personal access token.", 403, request);
+      }
       if (capsule.status === "destroyed") {
         return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
       }

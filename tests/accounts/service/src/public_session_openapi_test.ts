@@ -25,3 +25,13 @@ test("Core without an Accounts composition does not claim unmounted app routes",
   expect(document.paths["/api/v1/apps"]).toBeUndefined();
   expect(document["x-takos-public-session-endpoint-count"]).toBeUndefined();
 });
+
+
+test("app transfer and personal source resolution query contracts reach composed OpenAPI", () => {
+  const document = createTakosumiOpenApiDocument({ publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS });
+  for (const path of ["/api/v1/capsules/{capsuleId}/ownership-transfers", "/api/v1/ownership-transfers"]) {
+    expect(document.paths[path]?.get?.parameters).toContainEqual({ name: "state", in: "query", schema: { type: "string", enum: ["pending"], default: "pending" } });
+  }
+  expect(document.paths["/api/v1/source-ref-resolutions"]?.get?.parameters).toContainEqual({ name: "url", in: "query", required: true, schema: { type: "string", format: "uri" } });
+  expect(document.paths["/api/v1/connections"]?.get?.parameters?.some(parameter => parameter.name === "projection")).toBe(true);
+});

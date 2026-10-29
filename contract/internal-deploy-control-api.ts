@@ -476,6 +476,8 @@ export interface RunDiagnostic {
 export interface ApplyRun {
   readonly id: string;
   readonly planRunId: string;
+  /** Account that requested this Apply, retained for member revocation. */
+  readonly createdBy?: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly stateVersionId?: string;
