@@ -34,7 +34,13 @@ async function stores(): Promise<readonly [string, OpenTofuControlStore, SetPhys
   const memory = new InMemoryOpenTofuControlStore();
   const d1 = new SqliteFakeD1();
   return [
-    ["memory", memory, async (capsule) => { await memory.putCapsule(capsule); }],
+    ["memory", memory, async (capsule) => {
+      if (!capsule.ownerAccountId) throw new Error("Fixture ownership is required");
+      const current = await memory.getCapsule(capsule.id);
+      memory.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: capsule.ownerAccountId,
+        ownershipEpoch: capsule.ownershipEpoch ?? 0, managementState: capsule.managementState ?? "active",
+        managementEpoch: capsule.managementEpoch ?? 0, storageRoot: current?.storageRoot ?? `apps/${capsule.id}` });
+    }],
     ["postgres", new SqlOpenTofuControlStore({ client }), async (capsule) => {
       await client.query(`update takosumi_capsules set owner_account_id=$2, ownership_epoch=$3,
         management_state=$4, management_epoch=$5 where id=$1`,
@@ -192,7 +198,7 @@ test("owned app incomplete metadata fails closed while legacy provider-free Plan
   }
 });
 
-test("actual v77 transfer drains running work and refuses old Plan admission with physical authority", async () => {
+test("actual v78 transfer drains running work and refuses old Plan admission with physical authority", async () => {
   const access: AppAccessResolver = {
     async resolveAppAccess() { return undefined; },
     async listAccessibleApps() { return { apps: [] }; },
@@ -333,7 +339,7 @@ test("postgres current and pre-v77 SourceSync settlement lock Capsule before hel
   }
 });
 
-test("v77 D1 readiness refuses a missing transfer table or index", async () => {
+test("v78 D1 readiness refuses a missing transfer table or index", async () => {
   for (const statement of [
     `drop table capsule_ownership_transfers`,
     `drop index capsule_ownership_transfers_one_pending`,

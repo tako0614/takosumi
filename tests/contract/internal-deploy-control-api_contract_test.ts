@@ -48,7 +48,6 @@ test("Deploy Control API v1 error code and HTTP status table is frozen", () => {
     "not_found",
     "failed_precondition",
     "dependency_retired",
-    "workspace_frozen",
     "resource_exhausted",
     "method_not_allowed",
     "not_implemented",
