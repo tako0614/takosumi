@@ -38,7 +38,6 @@ export const en: Record<keyof typeof ja, string> = {
   "app.sharing.removeAria": "Remove {name} as a member",
   "app.sharing.pending": "Waiting for the recipient to accept ownership.",
   "app.sharing.cancelTransfer": "Cancel transfer",
-  "app.sharing.transferId": "Transfer ID",
   "app.sharing.acceptTransfer": "Accept ownership",
   "app.sharing.acceptConfirm": "Become this app\u2019s owner and payer. Existing members and connections will be cleared; set your own connections and choose whom to share with.",
   "app.sharing.ownerConnectionsOnly": "Only the owner\u2019s connections can be used. Choices are unavailable, so the current connections are kept.",
