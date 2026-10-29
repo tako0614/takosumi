@@ -536,3 +536,33 @@ test("recovery commit and provenance reader reject mismatched Plan context or so
     );
   }
 });
+
+test("a recovered app's owner-only SourceSync settles on all stores", async () => {
+  for (const [label, store] of await stores()) {
+    const command = await fixture(store, `sync_${label}`);
+    expect((await store.commitRecoveredState(command)).status, label).toBe("committed");
+    const source = command.expectedSource;
+    const run = {
+      id: `sync_recovered_${label}`, kind: "source_sync" as const, workspaceId: source.workspaceId,
+      sourceId: source.id, url: source.url, ref: source.defaultRef, path: source.defaultPath,
+      archiveRef: `workspaces/${source.workspaceId}/sources/${source.id}/snapshots/next/source.tar.zst`,
+      snapshotId: `snapshot_recovered_next_${label}`, intent: "observe" as const, status: "queued" as const,
+      createdAt: NOW, updatedAt: NOW,
+    };
+    expect((await store.beginSourceSyncRun(run, command.expectedWorkspaceManagement)).status, label).toBe("created");
+    const running = { ...run, status: "running" as const, startedAt: NOW };
+    expect((await store.transitionRun({ id: run.id, kind: "source_sync", expectFrom: ["queued"],
+      run: running, setLeaseToken: "recovery-sync-lease" })).won, label).toBe(true);
+    const snapshot = { ...command.expectedSourceSnapshot, id: run.snapshotId, fetchedByRunId: run.id,
+      fetchedAt: NOW, resolvedCommit: "3".repeat(40), archiveRef: run.archiveRef,
+      repositoryInstallMetadata: { status: "absent" as const }, repositoryManifest: { status: "absent" as const },
+      repositoryModules: { status: "ready" as const, scopePath: source.defaultPath, modules: [] } };
+    const result = await store.commitSourceSyncSuccess({
+      terminalRun: { ...running, status: "succeeded", finishedAt: NOW, resolvedCommit: snapshot.resolvedCommit,
+        archiveDigest: snapshot.archiveDigest, archiveSizeBytes: snapshot.archiveSizeBytes },
+      snapshot, leaseToken: "recovery-sync-lease",
+    });
+    expect(result.won, label).toBe(true);
+    expect(result.snapshot?.id, label).toBe(snapshot.id);
+  }
+});

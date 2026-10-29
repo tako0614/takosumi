@@ -662,14 +662,18 @@ function casRefusal(
  * 4. One lease-free CAS records the terminal `discarded` phase and scrubs
  *    retained private inputs.
  *
- * The Source is never deleted: polling this attempt turned on is turned off.
+ * Source retirement follows the committed terminal transition. A failed
+ * cleanup is retried by a repeated discard or the scheduled sweeper.
  */
 async function discardAttemptRecord(
   ctx: ControlDispatchContext,
   observed: StoredGitInstallPlan,
   diagnostic: GitInstallPlanDiagnostic,
 ): Promise<DiscardResult> {
-  if (observed.phase === "discarded") return { ok: true, plan: observed };
+  if (observed.phase === "discarded") {
+    await retireAttemptSource(ctx, observed);
+    return { ok: true, plan: observed };
+  }
   const store = ctx.operations.gitInstallPlans;
   const capsuleId = attemptCapsuleCandidate(observed);
   let check = await checkAbandonableCapsule(ctx, observed, capsuleId);
@@ -744,32 +748,29 @@ async function discardAttemptRecord(
     at: completedAt,
   });
   if (result.status !== "updated") return casRefusal(result.status);
-  await stopAttemptSourcePolling(ctx, result.plan);
+  await retireAttemptSource(ctx, result.plan);
   return { ok: true, plan: result.plan };
 }
 
 /**
- * Best effort and never destructive: polling that this attempt itself turned
- * on is turned back off unless an active app now uses the Source. The Source
- * is always kept, because no store can prove atomically that no other
- * install plan is about to reuse it.
+ * Retirement is best effort after terminal commit. The deterministic Source
+ * id covers a crash between Source creation and plan progress persistence.
  */
-async function stopAttemptSourcePolling(
+async function retireAttemptSource(
   ctx: ControlDispatchContext,
   plan: StoredGitInstallPlan,
 ): Promise<void> {
-  if (plan.sourcePollingEnabledByAttempt !== true || !plan.sourceId) return;
+  if (plan.mode !== "attempt") return;
   try {
-    const { source } = await ctx.operations.getSource(plan.sourceId);
-    if (!source.autoSync) return;
-    const inUse = (await ctx.operations.capsules.listCapsules(plan.workspaceId))
-      .some((capsule) =>
-        capsule.sourceId === source.id && capsule.status !== "destroyed"
-      );
-    if (inUse) return;
-    await ctx.operations.patchSource(source.id, { autoSync: false });
-  } catch {
-    // The discarded record is already terminal; polling is only a preference.
+    await ctx.operations.retireOwnedSource(
+      deterministicInstallSourceId(plan.id),
+      "install attempt discarded",
+    );
+  } catch (error) {
+    console.warn("install_attempt.source_retirement_failed", {
+      installPlanId: plan.id,
+      errorName: error instanceof Error ? error.name : "unknown",
+    });
   }
 }
 
@@ -817,7 +818,10 @@ async function discardInstallAttempt(
       ctx.request,
     );
   }
-  if (stored.phase === "discarded") return await installPlanJson(ctx, stored);
+  if (stored.phase === "discarded") {
+    await retireAttemptSource(ctx, stored);
+    return await installPlanJson(ctx, stored);
+  }
   if (stored.generation !== expectedGeneration) {
     return generationConflict(ctx);
   }
@@ -1652,7 +1656,6 @@ async function advanceSource(
     assertInstallSourceMatchesPlan(created.source, plan, sourceId);
     return progressed(plan, {
       sourceId,
-      ...(plan.mode === "attempt" ? { sourceCreatedByAttempt: true } : {}),
     });
   }
 
@@ -2845,11 +2848,7 @@ async function createOrObservePlanRun(
     });
   }
   if (run.status === "succeeded" || run.status === "waiting_approval") {
-    if (await enableInstallSourcePolling(plan, operations)) {
-      if (plan.mode === "attempt" && plan.sourceCreatedByAttempt === true) {
-        plan = { ...plan, sourcePollingEnabledByAttempt: true };
-      }
-    }
+    await enableInstallSourcePolling(plan, operations);
     return progressed(plan, {
       planRunId: run.id,
       phase: "reviewable",
@@ -2861,7 +2860,7 @@ async function createOrObservePlanRun(
 
 /**
  * The install-owned Source follows its Git ref once the app is reviewable.
- * Only attempt mode tracks this for best-effort discard reversal.
+ * Retirement closes the Source on a discarded attempt.
  */
 async function enableInstallSourcePolling(
   plan: StoredGitInstallPlan,

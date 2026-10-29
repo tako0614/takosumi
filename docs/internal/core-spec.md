@@ -92,7 +92,7 @@ New Git installs allocate a dedicated Source with a deterministic install-plan-d
 an immutable `ownerCapsuleId`, and private `createdByInstallPlanId` provenance in existing JSON.
 Initial Capsule authority claims or verifies the Source in the same store commit; another
 Capsule's owner or reference is refused. An unowned preflight Source is claimed once. Existing
-historically shared Sources remain migration custody; no new install discovers Sources by name
+historically shared Sources are split by the operator migration before normal owner-only reconciliation; no new install discovers Sources by name
 or borrows another plan's sync. Install and revision coordinators distinguish requested snapshot
 allocation from the canonical same-lane snapshot returned after deduplication.
 
@@ -103,9 +103,22 @@ PlanRun.sourceSnapshotId`. Restore StateVersions follow their exact
 derived SourceSnapshot ref/path lane after the first apply; only the initial
 source sync uses its reviewed Git pin or Source default coordinate. Every plan
 uses a module path selected from the immutable snapshot scan; `Source.defaultPath`
-is never a module fallback. A revision plan cannot
-change tracking before apply, and no Capsule revision operation mutates the
-shared `Source.defaultRef` / `defaultPath`.
+is never a module fallback. `Source.defaultRef` / `defaultPath` are the owning app's tracking lane. An owner-and-state
+CAS converges them from the adopted snapshot after Apply, Restore and recovery, at revision
+creation, and before reconciliation. A revision target becomes adopted only after Apply.
+Public PATCH cannot change an owned Source lane (`source_lane_owned_by_app`); revision
+bases pin Source authentication, not these derived defaults. Reconciliation creates one
+observation sync, and settlement reads and updates only the owning Capsule. Scheduler-only
+`lastAutoSyncAttemptAt` is excluded from the settlement read fence.
+
+Discard, successful Destroy and abandonment retire the app's Source. Retirement disables
+sync admission and polling, defers while a sync is queued/running, deletes owned archives
+through storage custody, then atomically removes snapshots and the Source with `source.retired`.
+Snapshot/Run rows remain the deletion work list until object deletion succeeds. Foreign archive
+references prevent retirement until the operator migration has copied and repointed them.
+A daily sweep recovers interrupted retirement and expired unclaimed preflight Sources.
+Destroyed Capsules remain readable without adopted Source revision. Backups use the adopted
+snapshot, and update availability compares both ref and source subtree.
 
 Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
 ledgers. OpenTofu Outputs remain ordinary module values; an Interface may

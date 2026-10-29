@@ -82,14 +82,14 @@ OAuth について: access token の既定の有効期間は 5 分で、既定�
 | `uninstall.blockedReason` | 理由 |
 | --- | --- |
 | `pre_destroy_export_incomplete` | データの書き出しを始めたまま、15 分たっても結果が記録されません |
-| `dependency_retired` | 削除の Plan が Capsule に残る旧 Dependency 設定のため拒否されました。database operator に残存設定の保守を依頼し、予約を取り消してから新しく予約します |
+| `dependency_retired` | 削除の Plan または Apply が Capsule に残る旧 Dependency 設定のため拒否されました。database operator に残存設定の保守を依頼し、予約を取り消してから新しく予約します |
 | `destroy_plan_cancelled` | 削除の Plan を誰かが取り消しました |
 | `destroy_plan_failed` | 削除の Plan が、合わせて 3 回の試行で完了しませんでした |
 | `destroy_plan_missing` | 記録した削除の Plan が見つかりません（試行の上限に達したとき、または削除のデプロイに進む段階で）。Plan の作成が一時的な理由で拒否された場合も、試行を 1 回と数えます |
 | `destroy_plan_refused` | 削除の Plan の作成が、時間をおいても通らない理由で拒否されました |
 | `destroy_plan_unverifiable` | 削除の Plan が、作った時点のサービスと合いません（状態や実行の権限が変わった、policy を通っていない、変更の一覧が無いなど） |
 | `destroy_plan_not_delete_only` | 削除の Plan に、削除以外の変更（import を含む）が含まれています |
-| `destroy_apply_refused` | 削除のデプロイかその承認が、時間をおいても通らない理由で拒否されました。権限の理由で拒否された場合は、上の 3 つの理由のどれかが記録されます |
+| `destroy_apply_refused` | 削除のデプロイかその承認が、時間をおいても通らない理由で拒否されました。権限の理由で拒否された場合は、`dependency_retired` または上の 3 つの権限の理由のどれかが記録されます |
 | `destroy_apply_failed` | 削除のデプロイが、失敗、取り消し、期限切れのいずれかで終わりました |
 | `finalize_failed` | 削除の処理での予期しない失敗が、合わせて 6 回に達しました |
 
