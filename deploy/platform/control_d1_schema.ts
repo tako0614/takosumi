@@ -65,6 +65,18 @@ export const CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD = Symbol(
 export const CONTROL_D1_PRODUCTION_V66_V75_TARGET = 75 as const;
 const CONTROL_D1_PRODUCTION_V66_V75_TAIL = [67, 68, 69, 70, 71, 72, 73, 74, 75] as const;
 
+/**
+ * Separate fixed owner transition for the TASK-0118 rollout (v75 -> v79). It
+ * starts only from the canonical v75 ledger that the v66 -> v75 lane leaves,
+ * after the v71-v79-compatible platform Worker serves; never argv-selected.
+ */
+export const CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD = Symbol(
+  "takosumi-control-d1-schema-production-v75-v79",
+);
+export const CONTROL_D1_PRODUCTION_V75_V79_TARGET = 79 as const;
+const CONTROL_D1_PRODUCTION_V75_V79_BASELINE = 75 as const;
+const CONTROL_D1_PRODUCTION_V75_V79_TAIL = [76, 77, 78, 79] as const;
+
 
 /**
  * Tables deliberately retired by the current OSS control-ledger migration
@@ -347,7 +359,8 @@ export interface ControlD1SchemaApplyOptions {
   };
   /** @internal owner-surface selector; never supplied by public argv. */
   readonly internalGuard?: typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD |
-    typeof CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD;
+    typeof CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD |
+    typeof CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD;
 }
 
 export interface ControlD1SchemaFenceResult {
@@ -451,6 +464,9 @@ export async function applyControlD1Schema(
   if (options.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD) {
     await assertControlD1ProductionV66V75ApplyPreflight(database, plan, options);
   }
+  if (options.internalGuard === CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD) {
+    await assertControlD1ProductionV75V79ApplyPreflight(database, plan, options);
+  }
   const successorIdentity = {
     sourceCommit: options.sourceCommit,
     manifestDigest: plan.manifestDigest,
@@ -477,7 +493,8 @@ export async function applyControlD1Schema(
       database,
       successorIdentity,
       options.activatedAt,
-      options.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD
+      options.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD ||
+        options.internalGuard === CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD
         ? { requireQuiescentRuns: true } : undefined,
     );
   }
@@ -565,6 +582,7 @@ export async function assertControlD1ProductionV66V69ApplyPreflight(
   },
 ): Promise<{ readonly mode: "new" | "resume"; readonly actualHead: number; readonly pendingMigrationVersions: readonly number[] }> {
   return assertControlD1ProductionTransitionApplyPreflight(database, plan, options, {
+    baseline: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
     target: CONTROL_D1_PRODUCTION_V66_V69_TARGET, tail: CONTROL_D1_PRODUCTION_V66_V69_TAIL,
     failurePrefix: "production_v66_v69",
   });
@@ -586,8 +604,39 @@ export async function assertControlD1ProductionV66V75ApplyPreflight(
   },
 ): Promise<{ readonly mode: "new" | "resume"; readonly actualHead: number; readonly pendingMigrationVersions: readonly number[] }> {
   const result = await assertControlD1ProductionTransitionApplyPreflight(database, plan, options, {
+    baseline: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
     target: CONTROL_D1_PRODUCTION_V66_V75_TARGET, tail: CONTROL_D1_PRODUCTION_V66_V75_TAIL,
     failurePrefix: "production_v66_v75",
+  });
+  await assertControlD1NoActiveRuns(database);
+  return result;
+}
+
+/**
+ * Read-only admission for the fixed production v75 -> v79 owner lane: a fresh
+ * run starts only on the exact canonical v75 ledger with no active fence; a
+ * retry resumes only the same exact active fence at canonical v75 through v79.
+ * Queued/running Runs and retained leases refuse before any fence batch.
+ */
+export async function assertControlD1ProductionV75V79ApplyPreflight(
+  database: D1Database, plan: ControlD1SchemaPlan, options: {
+    readonly sourceCommit: string;
+    readonly environment: string;
+    readonly databaseId?: string;
+    readonly databaseRole?: ControlD1MaintenanceDatabaseRole;
+    readonly releasePolicy?: ControlD1MaintenanceReleasePolicy;
+    readonly sourceExportSha256?: string;
+    readonly retainMaintenanceFence?: boolean;
+    readonly activePredecessorFence?: {
+      readonly sourceCommit: string;
+      readonly manifestDigest: string;
+    };
+  },
+): Promise<{ readonly mode: "new" | "resume"; readonly actualHead: number; readonly pendingMigrationVersions: readonly number[] }> {
+  const result = await assertControlD1ProductionTransitionApplyPreflight(database, plan, options, {
+    baseline: CONTROL_D1_PRODUCTION_V75_V79_BASELINE,
+    target: CONTROL_D1_PRODUCTION_V75_V79_TARGET, tail: CONTROL_D1_PRODUCTION_V75_V79_TAIL,
+    failurePrefix: "production_v75_v79",
   });
   await assertControlD1NoActiveRuns(database);
   return result;
@@ -609,7 +658,12 @@ async function assertControlD1ProductionTransitionApplyPreflight(
       readonly manifestDigest: string;
     };
   },
-  transition: { readonly target: number; readonly tail: readonly number[]; readonly failurePrefix: string },
+  transition: {
+    readonly baseline: number;
+    readonly target: number;
+    readonly tail: readonly number[];
+    readonly failurePrefix: string;
+  },
 ): Promise<{
   readonly mode: "new" | "resume";
   readonly actualHead: number;
@@ -644,7 +698,7 @@ async function assertControlD1ProductionTransitionApplyPreflight(
   const state = await readControlD1MaintenanceState(database);
   const baseline = canonicalControlD1MigrationPrefix(
     plan,
-    CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+    transition.baseline,
   );
   if (!baseline) {
     throw new ControlD1SchemaError(`${transition.failurePrefix}_plan_baseline_missing`);
@@ -653,14 +707,14 @@ async function assertControlD1ProductionTransitionApplyPreflight(
 
   if (sameControlD1MigrationLedger(actual, baseline)) {
     if (state.status === "active") {
-      if (!matchesControlD1ProductionV66V69Fence(state, plan, options)) {
+      if (!matchesControlD1ProductionTransitionFence(state, plan, options)) {
         throw new ControlD1SchemaError(`${transition.failurePrefix}_fence_mismatch`);
       }
       return {
         mode: "resume",
-        actualHead: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+        actualHead: transition.baseline,
         pendingMigrationVersions: productionTransitionPendingVersions(
-          CONTROL_D1_PRODUCTION_V66_V69_BASELINE, transition,
+          transition.baseline, transition,
         ),
       };
     }
@@ -669,9 +723,9 @@ async function assertControlD1ProductionTransitionApplyPreflight(
     }
     return {
       mode: "new",
-      actualHead: CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+      actualHead: transition.baseline,
       pendingMigrationVersions: productionTransitionPendingVersions(
-        CONTROL_D1_PRODUCTION_V66_V69_BASELINE, transition,
+        transition.baseline, transition,
       ),
     };
   }
@@ -695,7 +749,7 @@ async function assertControlD1ProductionTransitionApplyPreflight(
     if (state.status !== "active") {
       throw new ControlD1SchemaError(`${transition.failurePrefix}_active_fence_required`);
     }
-    if (!matchesControlD1ProductionV66V69Fence(state, plan, options)) {
+    if (!matchesControlD1ProductionTransitionFence(state, plan, options)) {
       throw new ControlD1SchemaError(`${transition.failurePrefix}_fence_mismatch`);
     }
     return {
@@ -753,12 +807,16 @@ function canonicalControlD1MigrationPrefix(
 
 function assertControlD1ProductionTransitionTail(
   plan: ControlD1SchemaPlan,
-  transition: { readonly tail: readonly number[]; readonly failurePrefix: string },
+  transition: {
+    readonly baseline: number;
+    readonly tail: readonly number[];
+    readonly failurePrefix: string;
+  },
 ): void {
   const actualTail = plan.migrations
     .filter(
       (migration) =>
-        migration.version > CONTROL_D1_PRODUCTION_V66_V69_BASELINE,
+        migration.version > transition.baseline,
     )
     .map((migration) => migration.version);
   if (stableJson(actualTail) !== stableJson(transition.tail)) {
@@ -782,7 +840,8 @@ function sameControlD1MigrationLedger(
   return stableJson(actual) === stableJson(expected);
 }
 
-function matchesControlD1ProductionV66V69Fence(
+/** The exact retained production in-place fence every fixed owner lane reuses. */
+function matchesControlD1ProductionTransitionFence(
   state: Awaited<ReturnType<typeof readControlD1MaintenanceState>>,
   plan: ControlD1SchemaPlan,
   options: {
