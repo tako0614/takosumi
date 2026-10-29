@@ -109,3 +109,95 @@ test("Postgres v124 adds authorization tables after unchanged v123 ownership", a
     expect((await client.query("select to_regclass('takosumi_app_credential_mint_leases') as name")).rows).toEqual([{ name: "takosumi_app_credential_mint_leases" }]);
   } finally { await client.close(); }
 });
+
+const LIST_VISIBILITY_INDEXES = [
+  ["usage_events", "usage_events_workspace_created_idx", ["workspace_id", "created_at", "id"]],
+  ["backups", "backups_space_created_idx", ["space_id", "created_at", "id"]],
+  ["capsules", "capsules_space_source_idx", ["space_id", "source_id"]],
+  ["connections", "connections_owner_created_idx", ["owner_account_id", "created_at", "id"]],
+  ["capsule_ownership_transfers", "capsule_ownership_transfers_capsule_state_epoch_idx", ["capsule_id", "state", "ownership_epoch"]],
+] as const;
+
+test("D1 v79 adds list visibility indexes atomically after unchanged v76-v78 and is verified read-only", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 78 });
+  const earlier = (await db.prepare("select version,name,checksum from schema_migrations where version>=76 order by version").all()).results;
+  expect(earlier.map((row) => (row as { checksum: string }).checksum).slice(1)).toEqual([
+    "sha256:086155184f9fc95a1800c26e699f54ef2559f53182f6d81168c1fd42acb9d35d",
+    "sha256:434011ab063f22768f5e01b5be34f72d36c9cff594fd72878d9d4e35a2c6124b",
+  ]);
+  await db.prepare(`insert into usage_events(id,workspace_id,kind,quantity,usd_micros,rating_status,source,idempotency_key,created_at)
+    values('usage_retained','ws','runner_minute',1,0,'unrated','runner','usage_retained','2026-10-29T00:00:00.000Z')`).run();
+  // A v78 target still boots read-only under the code that knows v79.
+  const v78 = readOnlyD1(db);
+  await verifyD1OpenTofuLedgerSchemaPredeployed(v78.db);
+  expect(v78.statements.every(query => /^(?:select|pragma|with)\b/iu.test(query.trim()))).toBe(true);
+
+  const failing: D1Database = {
+    prepare: query => db.prepare(query),
+    async batch(statements) {
+      return db.batch([...statements, db.prepare("insert into nonexistent_list_index_fixture values (1)")]);
+    },
+  };
+  await expect(ensureD1OpenTofuLedgerSchema(failing)).rejects.toThrow();
+  expect(await db.prepare("select version from schema_migrations where version=79").first()).toBeNull();
+  expect(await db.prepare("select name from sqlite_master where type='index' and name='usage_events_workspace_created_idx'").first()).toBeNull();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+  expect((await db.prepare("select version,name,checksum from schema_migrations where version>=76 and version<79 order by version").all()).results).toEqual(earlier);
+  expect(await db.prepare("select version,name from schema_migrations where version=79").first()).toEqual({ version: 79, name: "d1_app_list_visibility_indexes" });
+  for (const [table, name, columns] of LIST_VISIBILITY_INDEXES) {
+    const listed = (await db.prepare(`pragma index_list(${table})`).all<{ name: string; unique: number; partial: number }>()).results ?? [];
+    expect(listed.filter((index) => index.name === name).map(({ unique, partial }) => ({ unique, partial })), name).toEqual([{ unique: 0, partial: 0 }]);
+    const keyColumns = (await db.prepare(`pragma index_info(${name})`).all<{ name: string }>()).results?.map((row) => row.name);
+    expect(keyColumns, name).toEqual([...columns]);
+  }
+  expect(await db.prepare("select id from usage_events").all()).toMatchObject({ results: [{ id: "usage_retained" }] });
+
+  const v79 = readOnlyD1(db);
+  await verifyD1OpenTofuLedgerSchemaPredeployed(v79.db);
+  expect(v79.statements.every(query => /^(?:select|pragma|with)\b/iu.test(query.trim()))).toBe(true);
+  const indexSql = new Map(((await db.prepare("select name,sql from sqlite_master where type='index'").all<{ name: string; sql: string }>()).results ?? [])
+    .map((row) => [row.name, row.sql]));
+  for (const [, name] of LIST_VISIBILITY_INDEXES) {
+    const sql = indexSql.get(name)!;
+    await db.exec(`drop index ${name}`);
+    await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db), name).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+    await db.exec(sql);
+    await verifyD1OpenTofuLedgerSchemaPredeployed(db);
+  }
+  // Last: bun:sqlite keeps an EXPLAIN statement open, which would lock DDL above.
+  const plan = (await db.prepare(`explain query plan select id from usage_events
+    where workspace_id = 'ws' order by created_at desc, id desc limit 10`).all<{ detail: string }>()).results ?? [];
+  expect(plan.map((row) => row.detail).join("\n")).toContain("usage_events_workspace_created_idx");
+});
+
+test("Postgres v125 adds the same list visibility indexes after unchanged v124", async () => {
+  const client = await PGliteSqlClient.createThroughMigrationVersion(124);
+  try {
+    const migration = postgresStorageMigrationStatements.find(entry => entry.version === 125)!;
+    expect(migration.id).toBe("deploy.app_list_visibility.indexes");
+    expect(createHash("sha256").update(postgresStorageMigrationStatements.find(entry => entry.version === 124)!.sql).digest("hex"))
+      .toBe("6b22ceedd62b0aaea8c5875052aa47e192031f4a47a6899be2ab928afe7dcdda");
+    const statements = splitSqlStatements(migration.sql);
+    await expect(client.transaction(async transaction => {
+      for (const statement of statements) await transaction.query(statement);
+      throw new Error("rollback fixture");
+    })).rejects.toThrow("rollback fixture");
+    expect((await client.query("select to_regclass('takosumi_usage_events_workspace_created_idx') as name")).rows).toEqual([{ name: null }]);
+    await client.transaction(async transaction => { for (const statement of statements) await transaction.query(statement); });
+    for (const [table, name, columns] of LIST_VISIBILITY_INDEXES) {
+      const pgName = name === "backups_space_created_idx" ? "takosumi_backups_space_created_id_idx" : `takosumi_${name}`;
+      const rows = (await client.query(
+        `select a.attname as column_name, i.indisunique as is_unique, i.indpred is not null as is_partial
+           from pg_index i join pg_class c on c.oid = i.indexrelid
+           join lateral unnest(i.indkey) with ordinality as k(attnum, position) on true
+           join pg_attribute a on a.attrelid = i.indrelid and a.attnum = k.attnum
+          where c.relname = $1 and i.indrelid = $2::regclass order by k.position`,
+        [pgName, `takosumi_${table}`],
+      )).rows as { column_name: string; is_unique: boolean; is_partial: boolean }[];
+      expect(rows.map((row) => row.column_name), pgName).toEqual([...columns]);
+      expect(rows.every((row) => !row.is_unique && !row.is_partial), pgName).toBe(true);
+    }
+  } finally { await client.close(); }
+});

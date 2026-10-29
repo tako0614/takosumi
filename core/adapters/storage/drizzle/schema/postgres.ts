@@ -120,6 +120,7 @@ export const capsuleOwnershipTransfers = pgTable(names.capsuleOwnershipTransfers
   check("takosumi_capsule_ownership_transfers_state_check", sql`${table.state} in ('pending','accepted','cancelled')`),
   uniqueIndex("takosumi_capsule_ownership_transfers_one_pending").on(table.capsuleId).where(sql`${table.state} = 'pending'`),
   index("takosumi_capsule_ownership_transfers_recipient").on(table.toAccountId, table.state),
+  index("takosumi_capsule_ownership_transfers_capsule_state_epoch_idx").on(table.capsuleId, table.state, table.ownershipEpoch),
 ]);
 
 export const appCredentialMintLeases = pgTable(names.appCredentialMintLeases, {
@@ -265,6 +266,7 @@ export const connections = pgTable(
   (table) => [
     index("takosumi_connections_space_idx").on(table.workspaceId),
     index("takosumi_connections_status_idx").on(table.status),
+    index("takosumi_connections_owner_created_idx").on(table.ownerAccountId, table.createdAt, table.id),
   ],
 );
 
@@ -382,6 +384,7 @@ export const capsules = pgTable(
       table.workspaceId,
       table.id,
     ),
+    index("takosumi_capsules_space_source_idx").on(table.workspaceId, table.sourceId),
   ],
 );
 
@@ -695,6 +698,7 @@ export const usageEvents = pgTable(
     uniqueIndex("takosumi_usage_events_idempotency_key_unique").on(
       table.idempotencyKey,
     ),
+    index("takosumi_usage_events_workspace_created_idx").on(table.workspaceId, table.createdAt, table.id),
   ],
 );
 
@@ -812,6 +816,7 @@ export const backups = pgTable(
   (table) => [
     index("takosumi_backups_space_idx").on(table.workspaceId, table.createdAt),
     index("takosumi_backups_installation_idx").on(table.capsuleId),
+    index("takosumi_backups_space_created_id_idx").on(table.workspaceId, table.createdAt, table.id),
   ],
 );
 
