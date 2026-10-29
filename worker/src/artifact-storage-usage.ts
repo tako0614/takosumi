@@ -157,10 +157,26 @@ async function custodyCall<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
+type ArtifactStorageUsageOptions = {
+  readonly maxCiphertextBytes?: number;
+  /** Trusted Capsule-to-Workspace lookup for the workspace-less `apps/` key. */
+  readonly resolveAppWorkspace?: (capsuleId: string) => Promise<string | undefined>;
+};
+
 /** Only explicitly declared immutable state-version objects enter this lane. */
-function stateArtifactWorkspace(key: string): string | undefined {
-  const match = /^workspaces\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/(?:capsules|resources)\/[A-Za-z0-9][A-Za-z0-9_.-]*\/environments\/[A-Za-z0-9][A-Za-z0-9_.-]*\/state-versions\/[0-9]{8,}\.tfstate\.enc$/u.exec(key);
-  return match?.[1];
+async function stateArtifactWorkspace(
+  key: string,
+  options: ArtifactStorageUsageOptions,
+): Promise<string | undefined> {
+  const legacy = /^workspaces\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/(?:capsules|resources)\/[A-Za-z0-9][A-Za-z0-9_.-]*\/environments\/[A-Za-z0-9][A-Za-z0-9_.-]*\/state-versions\/[0-9]{8,}\.tfstate\.enc$/u.exec(key);
+  if (legacy) return legacy[1];
+  const app = /^apps\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/environments\/[A-Za-z0-9][A-Za-z0-9_.-]*\/state-versions\/[0-9]{8,}\.tfstate\.enc$/u.exec(key);
+  if (!app) return undefined;
+  const workspaceId = await options.resolveAppWorkspace?.(app[1]!);
+  if (typeof workspaceId !== "string" || !TOKEN.test(workspaceId)) {
+    throw new Error("artifact storage custody is unavailable");
+  }
+  return workspaceId;
 }
 
 /**
@@ -169,14 +185,13 @@ function stateArtifactWorkspace(key: string): string | undefined {
  * No browser/provider request can choose the custody port or mutation facts.
  */
 export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStorageUsagePort | undefined,
-  options: { readonly maxCiphertextBytes?: number } = {}): R2Bucket {
+  usageOptions: ArtifactStorageUsageOptions = {}): R2Bucket {
   if (!port) return bucket;
-  const cap = options.maxCiphertextBytes ?? 64 * 1024 * 1024 + 33;
+  const cap = usageOptions.maxCiphertextBytes ?? 64 * 1024 * 1024 + 33;
   if (!Number.isSafeInteger(cap) || cap < 1)
     throw new Error("artifact storage source byte bound is unavailable");
-  const reconcile = async (object: R2ObjectBody, key: string, prepared?: PreparedArtifactRetention,
-    expectedDigest?: string): Promise<R2ObjectBody> => {
-    const workspaceId = stateArtifactWorkspace(key)!;
+  const reconcile = async (object: R2ObjectBody, key: string, workspaceId: string,
+    prepared?: PreparedArtifactRetention, expectedDigest?: string): Promise<R2ObjectBody> => {
     const metadata = object.customMetadata;
     if (object.key !== key || !Number.isSafeInteger(object.size) || object.size < 0 || object.size > cap ||
       metadata?.["takosumi-workspace-id"] !== workspaceId ||
@@ -204,21 +219,21 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
   };
   return {
     async get(key) {
+      const workspaceId = await stateArtifactWorkspace(key, usageOptions);
       const object = await bucket.get(key);
-      if (!object || !stateArtifactWorkspace(key)) return object;
+      if (!object || !workspaceId) return object;
       // A completed-state adoption after a lost billing ACK must converge the
       // existing raw receipt before publishing terminal artifact authority.
-      return await reconcile(object, key);
+      return await reconcile(object, key, workspaceId);
     },
     head: key => bucket.head(key),
     list: options => bucket.list(options),
     async put(key, value, options) {
-      const workspaceId = stateArtifactWorkspace(key);
-      if (!workspaceId) return await bucket.put(key, value, options);
       if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value))
         throw new Error("artifact storage source requires exact encrypted bytes");
-      // Freeze exact bytes and metadata before the first asynchronous custody
-      // call; a mutable caller buffer cannot change what the ACK will attest.
+      // Snapshot mutable inputs before the first await. App-key owner lookup is
+      // asynchronous, so it must not create a window for the caller to change
+      // the bytes or metadata that the eventual receipt describes.
       const bytes = new Uint8Array(value instanceof ArrayBuffer
         ? new Uint8Array(value)
         : new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
@@ -227,6 +242,8 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
         ...options, httpMetadata: { ...options.httpMetadata },
         onlyIf: options.onlyIf === undefined ? undefined : { ...options.onlyIf },
       };
+      const workspaceId = await stateArtifactWorkspace(key, usageOptions);
+      if (!workspaceId) return await bucket.put(key, value, options);
       if (
         metadataInput["takosumi-workspace-id"] !== workspaceId ||
         metadataInput["takosumi-logical-target-state-ref"] !== key ||
@@ -260,12 +277,12 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
       }
       const observed = await bucket.get(key);
       if (!observed) throw new Error("artifact storage write is unconfirmed");
-      const acknowledged = await reconcile(observed, key, prepared, encryptedDigest);
+      const acknowledged = await reconcile(observed, key, workspaceId, prepared, encryptedDigest);
       // A failed condition remains null, while exact existing custody recovers.
       return writeResult === null ? null : acknowledged;
     },
     async delete(key) {
-      const workspaceId = stateArtifactWorkspace(key);
+      const workspaceId = await stateArtifactWorkspace(key, usageOptions);
       if (!workspaceId) return await bucket.delete(key);
       const prior = await bucket.head(key);
       const artifactRef = await artifactStorageReference(key);

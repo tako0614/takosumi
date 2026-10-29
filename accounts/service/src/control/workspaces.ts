@@ -1329,7 +1329,7 @@ async function listWorkspaceCapsules(
   const capsules = await Promise.all(
     items.map(async (capsule): Promise<PublicCapsule> => {
       const projected = publicCapsule(capsule);
-      if (!capsule.currentStateVersionId) return projected;
+      if (capsule.status === "destroyed" || !capsule.currentStateVersionId) return projected;
       const adoptedSourceRevision =
         await operations.getCapsuleAdoptedSourceRevision(capsule.id);
       return adoptedSourceRevision

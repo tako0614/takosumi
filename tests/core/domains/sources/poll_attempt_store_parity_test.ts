@@ -34,13 +34,28 @@ test("all stores advance failed polls without a Run and quarantine broken applie
       const first = sources[0]!;
       const next = sources[1]!;
       // The missing host allocator is retryable and fails before Run creation.
-      await expect(service.createReconciliationSyncs(first.id)).rejects.toMatchObject({ code: "not_implemented" });
+      await expect(service.createReconciliationSyncs(first.id, { scheduled: true })).rejects.toMatchObject({ code: "not_implemented" });
       expect((await store.getSource(first.id))?.status, label).toBe("active");
       expect((await store.getSource(first.id))?.lastAutoSyncAttemptAt, label).toBe("2026-10-28T00:00:00.000Z");
       expect((await store.listAutoSyncSourcesDue(1))[0]?.id, label).toBe(next.id);
       expect((await service.getSource(first.id)).source, label).not.toHaveProperty("lastAutoSyncAttemptAt");
       expect(await store.listSourceSyncRuns(first.id), label).toEqual([]);
 
+      const initialCapsule = {
+        id: "cap_broken_poll", workspaceId: first.workspaceId, projectId: "project_poll",
+        name: "broken", slug: "broken", sourceId: first.id, installConfigId: "config_poll",
+        environment: "production", status: "pending" as const, currentStateGeneration: 0,
+        createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+      expect((await store.createCapsuleInitialAuthority({
+        capsule: initialCapsule,
+        installConfig: { id: "config_poll", workspaceId: first.workspaceId, name: "broken",
+          variableMapping: {}, outputAllowlist: {}, policy: {},
+          createdAt: initialCapsule.createdAt, updatedAt: initialCapsule.updatedAt },
+        providerBindingSet: { id: "bindings_poll", workspaceId: first.workspaceId,
+          capsuleId: initialCapsule.id, environment: "production", bindings: [],
+          createdAt: initialCapsule.createdAt, updatedAt: initialCapsule.updatedAt },
+      })).status, label).toBe("created");
       await store.putCapsule({
         id: "cap_broken_poll", workspaceId: first.workspaceId, projectId: "project_poll",
         name: "broken", slug: "broken", sourceId: first.id, installConfigId: "config_poll",
@@ -48,7 +63,7 @@ test("all stores advance failed polls without a Run and quarantine broken applie
         currentStateVersionId: "state_missing", createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
       });
-      await expect(service.createReconciliationSyncs(first.id)).rejects.toMatchObject({ code: "failed_precondition" });
+      await expect(service.createReconciliationSyncs(first.id, { scheduled: true })).rejects.toMatchObject({ code: "failed_precondition" });
       expect((await store.getSource(first.id))?.status, label).toBe("error");
       expect((await store.listAutoSyncSourcesDue(25)).map((source) => source.id), label).toEqual([next.id]);
     }

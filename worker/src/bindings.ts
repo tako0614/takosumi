@@ -129,6 +129,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * operator load-shedding knob for runner-backed source_sync runs.
    */
   readonly TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH?: string;
+  /** Set to 0 to disable automatic Source archive retirement. */
+  readonly TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED?: string;
   /**
    * Local/private probe ingress opt-in for the `/internal/v1/*` HTTP seam.
    * Production edge deployments omit this so generic internal APIs stay 404.
@@ -288,6 +290,8 @@ export interface R2Bucket {
 }
 
 export interface R2PutOptions {
+  /** R2 validates the streamed object against this SHA-256 checksum. */
+  readonly sha256?: ArrayBuffer | string;
   readonly httpMetadata?: {
     readonly contentType?: string;
   };
@@ -330,6 +334,8 @@ export interface R2Object {
 }
 
 export interface R2ObjectBody extends R2Object {
+  /** Native R2 stream; older minimal adapters may expose only arrayBuffer. */
+  readonly body?: ReadableStream<Uint8Array>;
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
