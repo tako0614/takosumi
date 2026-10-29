@@ -4,6 +4,7 @@ import { stableJsonDigest, stableStringify } from "../../../core/adapters/source
 import {
   inventorySourceOwnershipGroup,
   prepareSourceOwnershipMigration,
+  sourceOwnershipMigrationReadFailureReason,
   type SourceOwnershipMigrationGroup,
   type SourceOwnershipMigrationMutation,
   type SourceOwnershipMigrationStore,
@@ -76,9 +77,9 @@ export async function inspectPostgresSourceOwnershipBackfill(
     let group: SourceOwnershipMigrationGroup | undefined;
     try {
       group = await store.readGroup(sourceId);
-    } catch {
+    } catch (error) {
       reports.push({ version: 1, sourceId, preparedAt, status: "refused",
-        action: "unavailable", reason: "group_read_failed" });
+        action: "unavailable", reason: sourceOwnershipMigrationReadFailureReason(error) });
       continue;
     }
     if (!group) {

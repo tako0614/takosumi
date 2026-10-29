@@ -15,6 +15,7 @@ import type { RepositoryManifestDocument } from "takosumi-contract/repository-ma
 import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import {
   CapsuleStateVersionGuardConflict,
+  classifyStoredCapsuleCompatibilityProviderColumn,
   InMemoryOpenTofuControlStore,
   parseStoredCapsuleCompatibilityProviderGraph,
   type OpenTofuControlStore,
@@ -933,6 +934,53 @@ test("compatibility provider graph storage rejects the retired flat array", () =
       providers: [],
     })
   ).toThrow(/unsupported field/);
+});
+
+test("provider column classification recognizes the retired flat array without converting it", () => {
+  expect(classifyStoredCapsuleCompatibilityProviderColumn({
+    providerPackages: [{ source: "registry.opentofu.org/hashicorp/random", allowed: true }],
+    rootProviderRequirements: [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random" }],
+  })).toBe("graph");
+  // Every field a release before 2026-08-27 could write, plus the empty list
+  // written when analysis found no provider or failed.
+  expect(classifyStoredCapsuleCompatibilityProviderColumn([])).toBe("retired_flat_array");
+  expect(classifyStoredCapsuleCompatibilityProviderColumn([
+    // 2026-07-29 .. 08-27 analyzer requirement.
+    { source: "registry.opentofu.org/cloudflare/cloudflare", localName: "cloudflare",
+      versionConstraint: "~> 4.0", aliases: ["zone"], allowed: true, credentialRequired: true },
+    // 2026-06-20 .. 06-27 ownership enrichment.
+    { source: "registry.opentofu.org/hashicorp/aws", aliases: [], allowed: false,
+      ownershipOptions: ["own_key"] },
+    // 2026-06-09 .. 06-20 catalog credential-source enrichment.
+    { source: "registry.opentofu.org/cloudflare/cloudflare", aliases: [], allowed: true,
+      credentialSources: ["takosumi_managed", "user_env_set"] },
+    { source: "registry.opentofu.org/hashicorp/random", allowed: true },
+  ])).toBe("retired_flat_array");
+  // 2026-08-27 provider-neutral requirement, still stored as a flat list.
+  expect(classifyStoredCapsuleCompatibilityProviderColumn([
+    { source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random", allowed: true },
+    { source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare",
+      childAlias: "zone", version: "4.52.0", allowed: true, credentialRequired: true },
+  ])).toBe("retired_flat_array");
+  for (const damaged of [
+    "graph",
+    null,
+    { providerPackages: [], rootProviderRequirements: [], providers: [] },
+    [null],
+    [{ allowed: true }],
+    [{ source: "registry.opentofu.org/hashicorp/random" }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: "yes" }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, aliases: [1] }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, credentialSources: ["own_key"] }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, credentialSources: "user_env_set" }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, unexpected: true }],
+    // The two element shapes never mix, and the provider-neutral one is closed too.
+    [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random", allowed: true, aliases: [] }],
+    [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random" }],
+    [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "", allowed: true }],
+  ]) {
+    expect(() => classifyStoredCapsuleCompatibilityProviderColumn(damaged)).toThrow();
+  }
 });
 
 test("Postgres and D1 report reads reject a retired flat provider row", async () => {

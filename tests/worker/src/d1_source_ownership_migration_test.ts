@@ -266,6 +266,204 @@ test("D1 split releases the old report's moved Capsule association", async () =>
   expect(inventorySourceOwnershipGroup(newGroup!).action).toBe("none");
 });
 
+/** `providers_json` exactly as releases before the two-layer graph stored it. */
+const RETIRED_FLAT_PROVIDERS = [
+  { source: "registry.opentofu.org/cloudflare/cloudflare", localName: "cloudflare",
+    versionConstraint: "~> 4.0", aliases: ["zone"], allowed: true, credentialRequired: true },
+  { source: "registry.opentofu.org/hashicorp/random", aliases: [], allowed: true },
+];
+
+async function seedD1Snapshot(store: CloudflareD1OpenTofuControlStore, owner: string, id: string) {
+  const archiveRef = `workspaces/${workspaceId}/sources/${owner}/snapshots/${id}/source.tar.zst`;
+  await store.putSourceSyncRun({ id: `ssr_${id}`, kind: "source_sync", workspaceId, sourceId: owner, url,
+    ref: "main", path: ".", archiveRef, status: "succeeded", snapshotId: id, createdAt: t0, updatedAt: t0 });
+  await store.putSourceSnapshot({ id, origin: "git", workspaceId, sourceId: owner, url,
+    ref: "main", path: ".", resolvedCommit: "a".repeat(40), archiveRef,
+    archiveDigest: `sha256:${"a".repeat(64)}`, archiveSizeBytes: 1, fetchedByRunId: `ssr_${id}`, fetchedAt: t0 });
+}
+
+/** Physical row as an older release wrote it; never goes through the current report writer. */
+async function insertStoredD1Report(db: InterleavedD1, row: { readonly id: string; readonly sourceId: string | null;
+  readonly capsuleId?: string; readonly sourceSnapshotId: string; readonly providersJson: string }) {
+  await db.prepare(`insert into capsule_compatibility_reports
+    (id, source_id, installation_id, source_snapshot_id, module_path, level, findings_json,
+     providers_json, resources_json, data_sources_json, provisioners_json,
+     root_module_variables_json, root_module_variable_declarations_json, root_module_outputs_json, created_at)
+    values (?, ?, ?, ?, '.', 'ready', ?, ?, '[]', '[]', '[]', '["region"]', null, '[]', ?)`)
+    .bind(row.id, row.sourceId, row.capsuleId ?? null, row.sourceSnapshotId,
+      JSON.stringify([{ severity: "warning", code: "legacy_finding" }]), row.providersJson,
+      "2026-07-01T00:00:00.000Z").run();
+}
+
+async function physicalD1Reports(db: InterleavedD1) {
+  return (await db.prepare("select * from capsule_compatibility_reports order by id")
+    .all<Record<string, string | null>>()).results ?? [];
+}
+
+test("D1 split moves retired flat compatibility reports with their exact stored text", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a", "cap_b"]);
+  await seedD1Snapshot(store, sourceId, "snap_legacy");
+  // Non-canonical spacing proves the copy is the stored text, not a re-encoding.
+  const legacyText = JSON.stringify(RETIRED_FLAT_PROVIDERS, null, 1);
+  await insertStoredD1Report(db, { id: "report_legacy_bound", sourceId, capsuleId: "cap_b",
+    sourceSnapshotId: "snap_legacy", providersJson: legacyText });
+  await insertStoredD1Report(db, { id: "report_legacy_empty", sourceId,
+    sourceSnapshotId: "snap_legacy", providersJson: "[]" });
+  await store.putCompatibilityCheckRun({ id: "check_legacy", workspaceId, sourceId, capsuleId: "cap_b",
+    type: "compatibility_check", status: "succeeded", sourceSnapshotId: "snap_legacy",
+    compatibilityReportId: "report_legacy_bound" });
+  // The ordinary reader keeps refusing the retired shape (the staging failure).
+  await expect(store.getCapsuleCompatibilityReport("report_legacy_bound")).rejects.toThrow(/must be an object/);
+  const before = await physicalD1Reports(db);
+  const now = "2026-10-28T00:00:00.000Z";
+  const [dry] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => { throw new Error("dry-run copied archive"); } }, { now });
+  expect(dry).toMatchObject({ status: "dry_run", inventory: { action: "split", splitCapsuleIds: ["cap_b"] } });
+  const [applied] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now });
+  expect(applied?.status).toBe("committed");
+  expect(applied?.planDigest).toBe(dry?.planDigest);
+  const movedSourceId = (await store.getCapsule("cap_b"))!.sourceId;
+  const movedGroup = (await store.readGroup(movedSourceId))!;
+  const after = await physicalD1Reports(db);
+  const originalBound = before.find((row) => row.id === "report_legacy_bound")!;
+  const copy = after.find((row) => row.source_id === movedSourceId)!;
+  expect(after).toHaveLength(3);
+  expect(after.find((row) => row.id === "report_legacy_bound")).toEqual({ ...originalBound, installation_id: null });
+  expect(after.find((row) => row.id === "report_legacy_empty"))
+    .toEqual(before.find((row) => row.id === "report_legacy_empty"));
+  expect(copy).toEqual({ ...originalBound, id: copy.id, source_id: movedSourceId,
+    source_snapshot_id: movedGroup.snapshots[0]!.id });
+  expect(copy.providers_json).toBe(legacyText);
+  expect(movedGroup.compatibilityRuns[0]?.compatibilityReportId).toBe(copy.id);
+  await expect(store.getCapsuleCompatibilityReport(String(copy.id))).rejects.toThrow(/must be an object/);
+  expect((await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => { throw new Error("unexpected retry copy"); } }))
+    .map((result) => [result.inventory.sourceId, result.status]).sort())
+    .toEqual([[movedSourceId, "unchanged"], [sourceId, "unchanged"]].sort());
+});
+
+test("D1 migration blocks only the group holding an unreadable compatibility report", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, []);
+  await seedD1Snapshot(store, sourceId, "snap_retire");
+  await insertStoredD1Report(db, { id: "report_retire", sourceId, sourceSnapshotId: "snap_retire",
+    providersJson: JSON.stringify(RETIRED_FLAT_PROVIDERS) });
+  const damagedId = "src_damaged_d1";
+  await store.putSource({ ...(await store.getSource(sourceId))!, id: damagedId, name: "damaged" });
+  await seedD1Snapshot(store, damagedId, "snap_damaged");
+  await insertStoredD1Report(db, { id: "report_damaged", sourceId: damagedId,
+    sourceSnapshotId: "snap_damaged", providersJson: "[{\"source\":" });
+  await expect(store.readGroup(damagedId))
+    .rejects.toThrow("source_ownership_migration_compatibility_report_unreadable:report_damaged");
+  const now = "2026-10-28T00:00:00.000Z";
+  const results = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => { throw new Error("unexpected copy"); } }, { apply: true, now });
+  expect(results.map((result) => [result.inventory.sourceId, result.status, result.inventory.action,
+    result.inventory.reason])).toEqual([
+    [damagedId, "blocked", "blocked", "source_ownership_migration_compatibility_report_unreadable"],
+    [sourceId, "committed", "retire", undefined]]);
+  expect((await store.getSource(sourceId))?.retiringAt).toBe(now);
+  expect((await store.getSource(damagedId))?.retiringAt).toBeUndefined();
+});
+
+async function addD1Capsule(db: InterleavedD1, store: CloudflareD1OpenTofuControlStore, owner: string,
+  id: string, extra: Partial<Capsule> = {}) {
+  await store.putCapsule({ id, workspaceId, projectId: "prj_migration_d1", name: id, slug: id,
+    sourceId: owner, installConfigId: `cfg_${id}`, environment: "production", currentStateGeneration: 0,
+    status: "active", createdAt: t0, updatedAt: t0, ...extra });
+  await db.prepare(`insert into install_configs (id, space_id, record_json, created_at, updated_at)
+    values (?, ?, ?, ?, ?)`)
+    .bind(`cfg_${id}`, workspaceId, JSON.stringify({ id: `cfg_${id}`, workspaceId, name: `config ${id}`,
+      createdAt: t0, updatedAt: t0 }), t0, t0).run();
+}
+
+test("D1 split keeps a report without a Source and the moved app's reference to it", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a", "cap_b"]);
+  await seedD1Snapshot(store, sourceId, "snap_june");
+  await insertStoredD1Report(db, { id: "report_unscoped", sourceId: null, capsuleId: "cap_b",
+    sourceSnapshotId: "snap_june", providersJson: JSON.stringify(RETIRED_FLAT_PROVIDERS) });
+  await store.putCapsule({ ...(await store.getCapsule("cap_b"))!, compatibilityReportId: "report_unscoped" });
+  const before = await physicalD1Reports(db);
+  const now = "2026-10-28T00:00:00.000Z";
+  const [dry] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { now });
+  expect(dry).toMatchObject({ status: "dry_run", inventory: { action: "split", splitCapsuleIds: ["cap_b"],
+    notices: [{ code: "legacy_unscoped_report_kept", count: 1 }] } });
+  const [applied] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now });
+  expect(applied?.status).toBe("committed");
+  expect(await physicalD1Reports(db)).toEqual(before);
+  const moved = (await store.getCapsule("cap_b"))!;
+  expect(moved.sourceId).not.toBe(sourceId);
+  expect(moved.compatibilityReportId).toBe("report_unscoped");
+  expect((await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => { throw new Error("unexpected retry copy"); } }))
+    .map((result) => [result.inventory.sourceId, result.status]).sort())
+    .toEqual([[moved.sourceId, "unchanged"], [sourceId, "unchanged"]].sort());
+});
+
+test("D1 blocks only the groups whose apps share one report without a Source", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a"]);
+  await seedD1Snapshot(store, sourceId, "snap_june_shared");
+  await insertStoredD1Report(db, { id: "report_unscoped_shared", sourceId: null, capsuleId: "cap_a",
+    sourceSnapshotId: "snap_june_shared", providersJson: "[]" });
+  const template = (await store.getSource(sourceId))!;
+  await store.putSource({ ...template, id: "src_borrower_d1", name: "borrower" });
+  await addD1Capsule(db, store, "src_borrower_d1", "cap_borrower", { compatibilityReportId: "report_unscoped_shared" });
+  await store.putSource({ ...template, id: "src_unrelated_d1", name: "unrelated" });
+  const now = "2026-10-28T00:00:00.000Z";
+  const results = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => { throw new Error("unexpected copy"); } }, { apply: true, now });
+  expect(results.map((result) => [result.inventory.sourceId, result.status, result.inventory.reason])).toEqual([
+    ["src_borrower_d1", "blocked", "compatibility_report_unscoped_shared"],
+    [sourceId, "blocked", "compatibility_report_unscoped_shared"],
+    ["src_unrelated_d1", "committed", undefined]]);
+  expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
+  expect((await store.getSource("src_borrower_d1"))?.ownerCapsuleId).toBeUndefined();
+});
+
+test("D1 split copies a report reached only through a referenced check by its copy id", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, ["cap_a", "cap_b"]);
+  await seedD1Snapshot(store, sourceId, "snap_check");
+  // No Capsule binding and no direct reference: the moved app's install plan
+  // names the check, and the check names the report.
+  await store.putCapsuleCompatibilityReport({ id: "report_via_check", sourceId,
+    sourceSnapshotId: "snap_check", modulePath: ".", level: "ready", findings: [],
+    providerPackages: [], rootProviderRequirements: [], resources: [], dataSources: [],
+    provisioners: [], createdAt: t0 });
+  await store.putCompatibilityCheckRun({ id: "check_via_plan", workspaceId, sourceId,
+    type: "compatibility_check", status: "succeeded", sourceSnapshotId: "snap_check",
+    compatibilityReportId: "report_via_check" });
+  const plan = { id: "install_via_check", workspaceId, actorSubject: "account:owner_migration_d1",
+    idempotencyKeyHash: "via_check", requestDigest: "digest", createdBy: "owner_migration_d1",
+    source: { name: "repo", url, ref: "main", path: "." },
+    capsule: { name: "cap_b", environment: "production" }, options: {},
+    sourceId, sourceSyncRunId: "ssr_snap_check", sourceSnapshotId: "snap_check",
+    compatibilityCheckRunId: "check_via_plan", capsuleId: "cap_b", phase: "reviewable", generation: 1,
+    createdAt: t0, updatedAt: t0 } as StoredGitInstallPlan;
+  await db.prepare(`insert into git_install_plans
+    (id, workspace_id, actor_subject, idempotency_key_hash, request_digest,
+      phase, generation, record_json, created_at, updated_at)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(plan.id, plan.workspaceId, plan.actorSubject, plan.idempotencyKeyHash, plan.requestDigest,
+      plan.phase, plan.generation, JSON.stringify(plan), plan.createdAt, plan.updatedAt).run();
+  const [result] = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now: "2026-10-28T00:00:00.000Z" });
+  expect(result?.status).toBe("committed");
+  const movedSourceId = (await store.getCapsule("cap_b"))!.sourceId;
+  const movedGroup = (await store.readGroup(movedSourceId))!;
+  expect(movedGroup.reports).toHaveLength(1);
+  expect(movedGroup.reports[0]).toMatchObject({ sourceId: movedSourceId,
+    sourceSnapshotId: movedGroup.snapshots[0]?.id });
+  expect(movedGroup.compatibilityRuns[0]?.compatibilityReportId).toBe(movedGroup.reports[0]?.id);
+  expect(movedGroup.gitPlans[0]?.compatibilityCheckRunId).toBe(movedGroup.compatibilityRuns[0]?.id);
+});
+
 test("D1 normalizes a foreign archive reference on an already owned Source", async () => {
   const db = new InterleavedD1();
   const store = await fixture(db, ["cap_a"], "cap_a");

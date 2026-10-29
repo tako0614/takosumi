@@ -268,7 +268,8 @@ export function parseStoredCapsuleRootModuleVariableDeclarations(
  * The physical column name is private storage history. Its current value is a
  * two-layer graph: every reachable package for policy/supply-chain checks and
  * the selected root's exact identities for bindings/root generation. An old
- * provider array is deliberately not inferred as either layer.
+ * provider array is deliberately not inferred as either layer (see
+ * `classifyStoredCapsuleCompatibilityProviderColumn` for that retired shape).
  */
 export interface StoredCapsuleCompatibilityProviderGraph {
   readonly providerPackages: CapsuleCompatibilityReport["providerPackages"];
@@ -365,6 +366,139 @@ export function parseStoredCapsuleCompatibilityProviderGraph(
       },
     ),
   };
+}
+
+/**
+ * Which representation a stored `providers_json` value uses.
+ *
+ * - `graph`: the current closed two-layer value accepted by
+ *   `parseStoredCapsuleCompatibilityProviderGraph`.
+ * - `retired_flat_array`: the value releases wrote before the two-layer graph
+ *   (first written 2026-08-27). It is a bare JSON array with one object per
+ *   child-module provider, each in one of the two retired element shapes
+ *   below. An analysis that found no provider, or failed, wrote `[]`.
+ *
+ *   Analyzer requirement (2026-06-07 .. 2026-08-27 17:07 UTC). The analyzer
+ *   result was stored as is, plus the per-era enrichment keys:
+ *
+ *   ```ts
+ *   {
+ *     source: string;               // always
+ *     allowed: boolean;             // always
+ *     aliases?: string[];           // configuration alias names
+ *     versionConstraint?: string;
+ *     credentialSources?: ("takosumi_managed" | "user_env_set")[];
+ *                                   // 2026-06-09 .. 06-20 (catalog enrichment)
+ *     ownershipOptions?: string[];  // 2026-06-20 .. 06-27 (ownership enrichment)
+ *     credentialRequired?: boolean; // since 2026-07-14
+ *     localName?: string;           // since 2026-07-29
+ *   }
+ *   ```
+ *
+ *   Provider-neutral requirement (2026-08-27 17:07 UTC until the graph; the
+ *   pre-squash `f93f163ef` and `94d3de2ea` builds):
+ *
+ *   ```ts
+ *   {
+ *     source: string;
+ *     moduleLocalName: string;
+ *     allowed: boolean;
+ *     childAlias?: string;
+ *     version?: string;
+ *     credentialRequired?: boolean;
+ *   }
+ *   ```
+ *
+ * Classification never converts one shape into the other: a flat list has a
+ * single layer, so it can be neither the package-policy layer nor the root's
+ * exact identities. Ordinary report readers keep rejecting it. Only a caller
+ * that moves a stored report without interpreting its analysis, such as the
+ * operator Source ownership migration, uses this function. Anything else
+ * (malformed graph, scalar, field outside both element shapes) is a damaged row
+ * and throws.
+ */
+export type StoredCapsuleCompatibilityProviderColumnShape =
+  | "graph"
+  | "retired_flat_array";
+
+const RETIRED_CREDENTIAL_SOURCES: ReadonlySet<unknown> = new Set([
+  "takosumi_managed",
+  "user_env_set",
+]);
+
+export function classifyStoredCapsuleCompatibilityProviderColumn(
+  value: unknown,
+): StoredCapsuleCompatibilityProviderColumnShape {
+  if (!Array.isArray(value)) {
+    parseStoredCapsuleCompatibilityProviderGraph(value);
+    return "graph";
+  }
+  value.forEach((entry, index) => {
+    const label = `stored Capsule compatibility retired providers[${index}]`;
+    const providerNeutral =
+      typeof entry === "object" &&
+      entry !== null &&
+      "moduleLocalName" in entry;
+    const requirement = providerNeutral
+      ? closedRecord(entry, ["source", "moduleLocalName", "allowed"], label, [
+          "childAlias",
+          "version",
+          "credentialRequired",
+        ])
+      : closedRecord(entry, ["source", "allowed"], label, [
+          "aliases",
+          "versionConstraint",
+          "credentialSources",
+          "ownershipOptions",
+          "credentialRequired",
+          "localName",
+        ]);
+    requiredStoredString(requirement.source, `${label}.source`);
+    requiredStoredBoolean(requirement.allowed, `${label}.allowed`);
+    if (providerNeutral) {
+      requiredStoredString(
+        requirement.moduleLocalName,
+        `${label}.moduleLocalName`,
+      );
+    }
+    for (const field of [
+      "versionConstraint",
+      "localName",
+      "childAlias",
+      "version",
+    ] as const) {
+      if (requirement[field] !== undefined) {
+        requiredStoredString(requirement[field], `${label}.${field}`);
+      }
+    }
+    if (requirement.credentialRequired !== undefined) {
+      requiredStoredBoolean(
+        requirement.credentialRequired,
+        `${label}.credentialRequired`,
+      );
+    }
+    for (const field of ["aliases", "ownershipOptions"] as const) {
+      const list = requirement[field];
+      if (
+        list !== undefined &&
+        (!Array.isArray(list) ||
+          list.some((item) => typeof item !== "string"))
+      ) {
+        throw new TypeError(`${label}.${field} must be an array of strings`);
+      }
+    }
+    const credentialSources = requirement.credentialSources;
+    if (
+      credentialSources !== undefined &&
+      (!Array.isArray(credentialSources) ||
+        credentialSources.some((item) => !RETIRED_CREDENTIAL_SOURCES.has(item)))
+    ) {
+      throw new TypeError(
+        `${label}.credentialSources must list takosumi_managed or user_env_set`,
+      );
+    }
+  });
+  return "retired_flat_array";
 }
 
 function closedRecord(

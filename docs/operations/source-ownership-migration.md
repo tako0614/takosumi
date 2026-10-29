@@ -35,6 +35,23 @@ PostgreSQL では `takosumi_sources`、`takosumi_source_snapshots`、`takosumi_r
 
 D1 の既存 HTTP operator は `scripts/operator-source-ownership.ts`。全 group の dry-run は read-only で、
 1 group の準備エラーはその group の `blocked` 理由として返し、他 group の棚卸しを続ける。
+互換性レポートは識別子（Source・アプリ・SourceSnapshot）だけを付け替え、分析結果の列は保存されたまま運ぶ。
+`providers_json` として受け付ける形は次の3つだけで、どれも新しい形へ変換しない。
+- 現在の形: `{ providerPackages, rootProviderRequirements }`。
+- 平たい配列（2026-06-07〜08-27 17:07 UTC）: 要素は `source`・`allowed` が必須で、ほかに持てるのは
+  `aliases`・`versionConstraint`・`credentialSources`（`takosumi_managed`／`user_env_set`、06-09〜06-20）・
+  `ownershipOptions`（06-20〜06-27）・`credentialRequired`（07-14〜）・`localName`（07-29〜）だけ。空の `[]` も含む。
+- 平たい配列（2026-08-27 17:07 UTC〜二層の形まで）: 要素は `source`・`moduleLocalName`・`allowed` が必須で、
+  ほかに持てるのは `childAlias`・`version`・`credentialRequired` だけ。
+
+JSON が壊れている、または上のどれでもないレポートは、その group だけを
+`source_ownership_migration_compatibility_report_unreadable` で `blocked` にする。
+
+`source_id` が NULL のレポート（2026-07-14 より前）は、参照するアプリがすべてその group にあれば
+group を止めない。retire と backfill では触らない。split でもコピーせず、Source も推測しない。移すアプリは元の行を
+参照したままにして、dry-run の `inventory.notices` に `legacy_unscoped_report_kept` の件数を出す。
+別の group のアプリも同じレポートを参照している場合や、split の後にそうなる場合は、関係する group だけを
+`compatibility_report_unscoped_shared` で `blocked` にする。
 適用には対象 Source の正確な `preparedAt` と `reportDigest` を使う。
 詳細な引数と guarded SQL は [移行の記録と手順](../internal/tasks/20261028-task0118-source-ownership-migration.md) を参照。
 
