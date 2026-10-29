@@ -43,6 +43,7 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { InstallScreen } from "./InstallSheet.tsx";
+import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import {
   appNameFromText,
   attemptProblemKey,
@@ -591,7 +592,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
           </Match>
         </Switch>
       }>
-        {(done) => (
+        {(done) => (<>
           <section class="iv-workbench iv-centered" role="status" data-testid="install-complete">
             <h2 data-stage-heading tabindex="-1">{t("installStore.completeTitle")}</h2>
             <p>{handoff() ? t("installStore.completeHint") : t("installStore.completeOpenHint")}</p>
@@ -632,7 +633,10 @@ function AppInstallPage(props: { readonly principalId: string }) {
               </Button>
             </div>
           </section>
-        )}
+          <Show when={!handoff() && done().url}>
+            {(url) => <AppPhoneSection url={url()} appName={title()} />}
+          </Show>
+        </>)}
       </Show>
     </main>
   );

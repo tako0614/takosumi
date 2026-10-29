@@ -1,0 +1,31 @@
+{
+  "id": "/",
+  "name": "Takosumi",
+  "short_name": "Takosumi",
+  "description": "Install apps from Git into your own cloud and open them from one home screen.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#f6f7f9",
+  "background_color": "#f7f7f8",
+  "icons": [
+    {
+      "src": "/icons/takosumi-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/takosumi-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/takosumi-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

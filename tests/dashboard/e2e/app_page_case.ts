@@ -1360,5 +1360,55 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
     });
+
+    test("use on your phone: QR code, share and copy of the screen Open offers, and both phones' steps", async ({ page }) => {
+      await page.addInitScript(() => {
+        localStorage.setItem("tg_lang", "en");
+        // A share sheet and clipboard the test can read, on any host browser.
+        const record = window as unknown as { phoneShares: unknown[]; phoneCopies: string[] };
+        record.phoneShares = [];
+        record.phoneCopies = [];
+        Object.defineProperty(Navigator.prototype, "share", {
+          configurable: true,
+          value: async (data: unknown) => { record.phoneShares.push(data); },
+        });
+        Object.defineProperty(Navigator.prototype, "canShare", { configurable: true, value: () => true });
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: { writeText: async (text: string) => { record.phoneCopies.push(text); } },
+        });
+      });
+      // The portable fixture's own app view and screen. The fixture does not
+      // answer every per-app read, so this case checks page errors only.
+      const errors = pageErrors(page);
+      await page.goto(`/apps/${CAPSULE_ID}`, { waitUntil: "domcontentloaded" });
+      const phone = page.getByTestId("app-phone");
+      await expect(phone.getByRole("heading", { name: "Use on your phone" })).toBeVisible();
+      await expect(phone.getByRole("img", { name: `QR code that opens ${PORTABLE_EXPECTATIONS.appName}` })).toBeVisible();
+      await expect(phone.getByTestId("app-phone-url")).toHaveText(PORTABLE_EXPECTATIONS.appUrl);
+      await expect(phone).toContainText("People who only use this app just need this URL.");
+      // Both phones' steps are on screen; nothing waits behind a disclosure.
+      await expect(phone.getByText("iPhone and iPad (Safari)", { exact: true })).toBeVisible();
+      await expect(phone.getByText("Android (Chrome)", { exact: true })).toBeVisible();
+      await expect(phone.locator("details, summary, [aria-expanded]")).toHaveCount(0);
+      // It sits after the problems and before Version, beside the one primary Open.
+      expect(await page.evaluate(() => {
+        const ids = [...document.querySelectorAll("[data-testid=app-page] > section[id]")].map((node) => node.id);
+        return ids.indexOf("phone") >= 0 && ids.indexOf("phone") < ids.indexOf("version");
+      })).toBe(true);
+      await expect(phone.locator(".tg-btn-primary")).toHaveCount(0);
+
+      await phone.getByRole("button", { name: "Copy URL", exact: true }).click();
+      await expect(phone.getByRole("status")).toHaveText("URL copied.");
+      expect(await page.evaluate(() => (window as unknown as { phoneCopies: string[] }).phoneCopies))
+        .toEqual([PORTABLE_EXPECTATIONS.appUrl]);
+      await phone.getByRole("button", { name: "Share URL", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => (window as unknown as { phoneShares: unknown[] }).phoneShares))
+        .toEqual([{ title: PORTABLE_EXPECTATIONS.appName, url: PORTABLE_EXPECTATIONS.appUrl }]);
+
+      await phone.scrollIntoViewIfNeeded();
+      await capture(page, "app-phone-section");
+      expect(errors).toEqual([]);
+    });
   });
 }

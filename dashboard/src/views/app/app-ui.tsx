@@ -30,11 +30,13 @@ export function AppSection(props: {
   readonly actions?: JSX.Element;
   readonly children: JSX.Element;
   readonly testId?: string;
+  /** An extra class for a section that is also shown outside the app page. */
+  readonly class?: string;
 }): JSX.Element {
   return (
     <section
       id={props.id}
-      class="tg-card ap-section"
+      class={props.class ? `tg-card ap-section ${props.class}` : "tg-card ap-section"}
       aria-labelledby={`${props.id}-title`}
       data-testid={props.testId}
     >
