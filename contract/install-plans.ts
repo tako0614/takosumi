@@ -478,6 +478,8 @@ export interface GitInstallPlanReviewSummary {
   readonly interfaces: readonly {
     readonly requirementKey: string;
     readonly choice: GitInstallPlanInterfaceChoice;
+    /** Current selected Interface label, when its metadata is available. */
+    readonly displayName?: string;
     readonly autoSelected: boolean;
   }[];
   readonly settings: readonly {

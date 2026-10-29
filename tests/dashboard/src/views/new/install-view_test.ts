@@ -126,6 +126,10 @@ describe("attempt-driven install page", () => {
     expect(read("dashboard/src/views/new/install-view.css")).not.toContain("text-security");
   });
 
+  test("a reopened review prefers current Interface display names and retains an id fallback", () => {
+    expect(sheet).toContain('link.displayName || link.choice.interfaceId');
+  });
+
   test("a reopened review asks the app where it stands before offering the apply", () => {
     const review = between(sheet, "function PlanReview(", "export function InstallScreen(");
     expect(review).toContain("getCapsuleApp(capsuleId)");

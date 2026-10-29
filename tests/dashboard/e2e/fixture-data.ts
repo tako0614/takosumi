@@ -654,6 +654,9 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
     const interfaces = interfaceRows(attempt).flatMap((row) => row.choice ? [{
       requirementKey: row.requirementKey,
       choice: row.choice,
+      ...(row.choice.kind === "interface"
+        ? { displayName: row.candidates.find((candidate) => row.choice?.kind === "interface" && candidate.id === row.choice.interfaceId)?.name }
+        : {}),
       autoSelected: row.autoSelected,
     }] : []);
     return {

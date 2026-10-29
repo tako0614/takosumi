@@ -22,7 +22,7 @@
   390px and desktop with screenshot inspection; touched static gate phases.
   The operator explicitly forbids the local complete gate/full test suite
   because the shared SSD is nearly full. CI must pass `check and test` on the
-  final PR head. Stop if `/root/dev` has less than 2 GB free; promptly remove
+  final PR head. Stop if `/root/dev` has less than 1.5 GB free; promptly remove
   only this task's generated outputs. Use Bun 1.4.0 and SSD temporary paths.
 - Reversal: revert this code and documentation change; persisted data and the
   existing Plan/Apply authority are unchanged. No schema/data migration.
@@ -47,3 +47,15 @@
   the replacement now obtains its own sheet and retains only public drafts.
 - Main integration preserves the upstream retirement of the obsolete Source
   revision updater; its deleted helper/API is not restored by the stack merge.
+
+Final review follow-up: enrich only committed connection IDs with personal labels
+owned by the current app owner, checking ownership again after the reads. Do not
+list the owner's connection inventory. Resolve selected Interface names within
+the plan's Workspace and expose an optional display label to the review sheet.
+Presentation reads fail independently: missing reviewed config omits settings,
+missing binding set omits connections, missing base config redacts setting
+values, and missing labels retain committed IDs. Canonical attempt authorization
+and its GET-only behavior remain outside these optional read error boundaries.
+The accepted presentation requires an existing matching base config before any
+public value is returned. Propagate #662 normally and use focused tests/static
+checks locally; the full gate runs in CI under the shared SSD limit.

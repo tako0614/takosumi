@@ -39,7 +39,7 @@ import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connect
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { isSecretKey } from "takosumi-contract/redaction";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import type { CapsuleRequiredInterface } from "takosumi-contract/interfaces";
+import type { CapsuleRequiredInterface, Interface } from "takosumi-contract/interfaces";
 import { accountsOidcModuleVariableProfile } from "../../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
 import type {
@@ -559,30 +559,35 @@ export function effectiveInterfaceLinks(
  */
 export function committedAttemptReviewSummary(input: {
   readonly plan: StoredGitInstallPlan;
-  readonly installConfig: InstallConfig;
+  readonly installConfig?: InstallConfig;
   readonly baseConfig?: InstallConfig;
-  readonly bindingSet: ProviderBindingSet;
+  readonly bindingSet?: ProviderBindingSet;
   readonly connections: readonly ProviderConnection[];
+  readonly interfaces?: readonly Interface[];
 }): GitInstallPlanReviewSummary {
-  const { plan, installConfig, bindingSet } = input;
+  const { plan, installConfig, baseConfig, bindingSet } = input;
   const displayNames = new Map(input.connections.map((connection) => [
     connection.id,
     connection.displayName || connection.id,
   ]));
-  const trustedRepositoryPresentation =
-    installConfig.installExperience?.repositoryInstallUx?.status === "accepted" &&
+  const interfaceNames = new Map((input.interfaces ?? []).map((value) => [
+    value.metadata.id, value.metadata.name,
+  ]));
+  const trustedRepositoryPresentation = baseConfig !== undefined &&
+    typeof plan.installConfigBaseId === "string" &&
+    installConfig?.installExperience?.repositoryInstallUx?.status === "accepted" &&
     installConfig.internal?.sourceSnapshotId === plan.sourceSnapshotId &&
     typeof installConfig.internal?.repositoryInstallUxDigest === "string" &&
-    input.baseConfig?.id === plan.installConfigBaseId;
+    baseConfig.id === plan.installConfigBaseId;
   const presented = new Map(
-    (installConfig.variablePresentation ?? []).map((entry) => [entry.name, entry]),
+    (installConfig?.variablePresentation ?? []).map((entry) => [entry.name, entry]),
   );
   return {
-    modulePath: installConfig.modulePath ?? plan.installModulePath ??
+    modulePath: installConfig?.modulePath ?? plan.installModulePath ??
       plan.attemptFacts?.inputs?.modulePath ?? plan.options.modulePath ?? ".",
     appName: plan.capsule.name,
     environment: plan.capsule.environment,
-    connections: bindingSet.bindings.map((binding) => ({
+    connections: (bindingSet?.bindings ?? []).map((binding) => ({
       provider: binding.provider,
       moduleLocalName: binding.moduleLocalName ?? binding.provider.split("/").at(-1) ?? "",
       ...(binding.childAlias !== undefined ? { childAlias: binding.childAlias } : {}),
@@ -596,19 +601,22 @@ export function committedAttemptReviewSummary(input: {
     interfaces: (plan.options.interfaceLinks ?? []).map((link) => ({
       requirementKey: link.requirementKey,
       choice: link.choice,
+      ...(link.choice.kind === "interface" && interfaceNames.get(link.choice.interfaceId)
+        ? { displayName: interfaceNames.get(link.choice.interfaceId) }
+        : {}),
       autoSelected: plan.autoSelectedInterfaceKeys?.includes(link.requirementKey) === true,
     })),
-    settings: (plan.attemptFacts?.inputs?.variables ?? []).map((variable) => {
+    settings: (installConfig ? plan.attemptFacts?.inputs?.variables ?? [] : []).map((variable) => {
       const set = Object.prototype.hasOwnProperty.call(
-        installConfig.variableMapping,
+        installConfig?.variableMapping ?? {},
         variable.name,
       );
       const declaration = presented.get(variable.name);
       const publicValue = trustedRepositoryPresentation &&
         variable.sensitive === false &&
         declaration !== undefined && declaration.secret !== true &&
-        !Object.prototype.hasOwnProperty.call(input.baseConfig!.variableMapping, variable.name) &&
-        !input.baseConfig!.variablePresentation?.some((entry) => entry.name === variable.name) &&
+        !Object.prototype.hasOwnProperty.call(baseConfig.variableMapping, variable.name) &&
+        !baseConfig.variablePresentation?.some((entry) => entry.name === variable.name) &&
         !isSecretKey(variable.name);
       return {
         name: variable.name,
@@ -616,7 +624,7 @@ export function committedAttemptReviewSummary(input: {
         set,
         ...(publicValue ? { type: variable.type, required: variable.required } : {}),
         ...(set && publicValue
-          ? { value: installConfig.variableMapping[variable.name] as JsonValue }
+          ? { value: installConfig?.variableMapping[variable.name] as JsonValue }
           : {}),
       };
     }),

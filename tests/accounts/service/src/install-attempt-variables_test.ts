@@ -173,6 +173,12 @@ test("committed review exposes only values backed by accepted non-secret reposit
   });
   expect(untrusted.settings[0]).toEqual({ name: "public_url", sensitive: true, set: true });
   expect(JSON.stringify(untrusted)).not.toContain("https://app.example.test");
+  const missingBase = committedAttemptReviewSummary({
+    plan: { ...plan, installConfigBaseId: undefined }, installConfig,
+    bindingSet, connections: [],
+  });
+  expect(missingBase.settings[0]).toEqual({ name: "public_url", sensitive: true, set: true });
+  expect(JSON.stringify(missingBase)).not.toContain("https://app.example.test");
   const operatorOwned = committedAttemptReviewSummary({
     plan, installConfig,
     baseConfig: { ...baseConfig, variableMapping: { public_url: "operator-private-value" } },

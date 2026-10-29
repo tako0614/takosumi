@@ -909,7 +909,7 @@ export function InstallScreen(props: {
                   <strong>{interfaceLabel(link.requirementKey)}</strong>
                   <Show when={link.autoSelected}><Badge>{t("installStore.interfaces.automatic")}</Badge></Show>
                 </div>
-                <p class="iv-connection-name">{link.choice.kind === "interface" ? link.choice.interfaceId : t("installStore.interfaces.later")}</p>
+                <p class="iv-connection-name">{link.choice.kind === "interface" ? link.displayName || link.choice.interfaceId : t("installStore.interfaces.later")}</p>
               </article>
             )}
           </For>
