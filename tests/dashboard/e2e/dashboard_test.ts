@@ -430,7 +430,7 @@ async function stubProviderDestinationFixture(
       return route.fulfill({ json: { providerConnections } });
     }
     if (path === "/api/v1/capsules/cap_provider_destination_e2e/runs") return route.fulfill({ json: { runs: [] } });
-    if (path === "/api/v1/source-ref-resolutions/stable-semver" && request.method() === "POST") {
+    if (path === "/api/v1/source-ref-resolutions" && request.method() === "GET") {
       return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
     }
     // The installed app's own reads (`/app`, `/runs`) once an install

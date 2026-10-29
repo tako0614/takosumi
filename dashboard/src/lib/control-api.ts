@@ -72,6 +72,7 @@ import {
   normalizeInstallConfigSourcePath,
 } from "takosumi-contract";
 import { gitPlanProgressSignature } from "./git-plan-progress.ts";
+import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account
@@ -2477,7 +2478,18 @@ export async function resolveStableSourceTag(
   workspaceId: string | undefined,
   url: string,
 ): Promise<StableSourceTagResolutionResponse> {
-  const options = { method: "POST", body: { url } } as const;
+  let publicUrl: URL;
+  try {
+    publicUrl = new URL(url.trim());
+  } catch {
+    throw new ControlApiError(400, "invalid_request", "A public HTTPS Git URL is required.");
+  }
+  if (publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password || publicUrl.hash ||
+    hasCredentialQueryParams(publicUrl.searchParams) || !installedAppSourceIsMatchable(url)) {
+    throw new ControlApiError(400, "invalid_request", "A public HTTPS Git URL is required.");
+  }
+  const safeUrl = publicUrl.toString();
+  const options = { method: "POST", body: { url: safeUrl } } as const;
   if (!await appOwnershipAvailable()) {
     const legacyId = await legacyInstallWorkspaceId(workspaceId);
     if (!legacyId) throw new ControlApiError(404, "feature_unavailable", "Legacy source resolution is unavailable on this server.");
@@ -2487,7 +2499,7 @@ export async function resolveStableSourceTag(
   }
   try {
     return await controlFetch<StableSourceTagResolutionResponse>(
-      `${BASE}/source-ref-resolutions/stable-semver`, options,
+      `${BASE}/source-ref-resolutions${query({ url: safeUrl })}`,
     );
   } catch (error) {
     if (!isMissingControlRoute(error)) throw error;
@@ -3602,10 +3614,10 @@ export interface AppOwnershipTransfer {
 async function listOwnershipTransfers(path: string, signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
   try {
     return await fetchAllPages<AppOwnershipTransfer>(path, (body) => {
-      if (!Array.isArray(body.transfers)) {
+      if (!Array.isArray(body.ownershipTransfers)) {
         throw new ControlApiError(502, "invalid_ownership_transfers_response", "Ownership transfers returned an invalid response.");
       }
-      return body.transfers.filter((row): row is AppOwnershipTransfer => isRecord(row) && row.state === "pending" &&
+      return body.ownershipTransfers.filter((row): row is AppOwnershipTransfer => isRecord(row) && row.state === "pending" &&
         [row.transferId, row.capsuleId, row.fromAccountId, row.toAccountId].every((value) => typeof value === "string" && value.length > 0));
     }, { signal });
   } catch (error) {
@@ -3629,33 +3641,38 @@ export async function listPersonalUsagePage(workspaceId?: string, options: { rea
   return { usageEvents: body.usageEvents ?? [], ...(body.nextCursor ? { nextCursor: body.nextCursor } : {}) };
 }
 
-/** TASK-0118 client extension: a marked label-only projection prevents an old
- * server that ignores query parameters from being mistaken for app authority. */
+/** The app-authorized label projection never carries credential/owner metadata. */
 export interface AppConnectionChoice {
   readonly id: string;
-  readonly displayName: string;
+  readonly displayName?: string;
   readonly providerSource: string;
-  readonly scope: "personal" | "operator";
 }
-export async function getAppConnectionChoices(capsuleId: string, ownerAccountId: string): Promise<readonly AppConnectionChoice[] | undefined> {
-  let body: {
-    readonly projection?: string;
-    readonly ownerAccountId?: string;
-    readonly connections?: readonly (AppConnectionChoice & { readonly ownerAccountId?: string; readonly operatorBindable?: boolean })[];
-  };
+export async function getAppConnectionChoices(capsuleId: string): Promise<readonly AppConnectionChoice[] | undefined> {
   try {
-    body = await controlFetch(`${BASE}/connections${query({ capsuleId, projection: "labels" })}`);
+    return await fetchAllPages<AppConnectionChoice>(`${BASE}/connections${query({ capsuleId, projection: "labels" })}`, (body) => {
+      if (!isRecord(body) || Object.keys(body).some((key) => key !== "connections" && key !== "nextCursor") ||
+        !Array.isArray(body.connections) || (body.nextCursor !== undefined && typeof body.nextCursor !== "string")) {
+        throw new ControlApiError(502, "invalid_connection_labels_response", "Connection labels returned an invalid response.");
+      }
+      return body.connections.map((row: unknown) => {
+        // Old servers may ignore projection=labels and return complete rows.
+        // Reject that response rather than treating private metadata as labels.
+        if (!isRecord(row) || Object.keys(row).some((key) => !["id", "provider", "displayName"].includes(key)) ||
+          typeof row.id !== "string" || row.id.trim() === "" || typeof row.provider !== "string" || row.provider.trim() === "" ||
+          (row.displayName !== undefined && typeof row.displayName !== "string")) {
+          throw new ControlApiError(502, "invalid_connection_labels_response", "Connection labels returned an invalid response.");
+        }
+        return {
+          id: row.id,
+          providerSource: normalizeProviderSourceAddress(row.provider),
+          ...(typeof row.displayName === "string" ? { displayName: row.displayName } : {}),
+        };
+      });
+    });
   } catch (error) {
     if (isMissingControlRoute(error)) return undefined;
     throw error;
   }
-  if (body.projection !== "app-owner-connection-labels" || body.ownerAccountId !== ownerAccountId) return undefined;
-  return (body.connections ?? []).filter((row) =>
-    typeof row.id === "string" && row.id !== "" && typeof row.displayName === "string" && row.displayName !== "" &&
-    typeof row.providerSource === "string" && row.providerSource !== "" &&
-    ((row.scope === "personal" && row.ownerAccountId === ownerAccountId) ||
-      (row.scope === "operator" && row.operatorBindable === true)),
-  ).map(({ id, displayName, providerSource, scope }) => ({ id, displayName, providerSource, scope }));
 }
 
 export const getAppConnectionLabels = getAppConnectionChoices;
