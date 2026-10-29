@@ -46,7 +46,7 @@ async function detailFixture(
   let retryCount = 0;
   let retryFailed = false;
   let screensUnreadable = false;
-  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), id: "conn_inline_fixture", displayName: "My Cloudflare" };
+  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), scope: "personal", ownerAccountId: "sub_portable_e2e", workspaceId: undefined, id: "conn_inline_fixture", displayName: "My Cloudflare" };
   const attempts: InstallAttemptFixture = createInstallAttemptFixture({
     capsuleId: capId,
     planRunId: planId,

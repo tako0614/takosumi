@@ -120,6 +120,10 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
   if (path === "/api/v1/apps" && request.method === "GET") {
     return json({ apps: PORTABLE_APPS });
   }
+  if (request.method === "GET" && (path === "/api/v1/ownership-transfers" ||
+    /^\/api\/v1\/capsules\/[^/]+\/ownership-transfers$/u.test(path))) {
+    return json({ transfers: [] });
+  }
   if (path === "/api/v1/connections" && request.method === "GET") {
     if (url.searchParams.get("projection") === "labels") {
       const capsuleId = url.searchParams.get("capsuleId");

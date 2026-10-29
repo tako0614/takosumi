@@ -54,6 +54,7 @@ import {
   getCapsule,
   getAppMembers,
   getAppConnectionChoices,
+  resetAppOwnershipCache,
   getCapsuleApp,
   getCapsuleConfigurationContext,
   getCapsuleProviderBindingSet,
@@ -383,6 +384,7 @@ export default function AppManagePage(props: {
   };
 
   const refreshAll = async () => {
+    resetAppOwnershipCache();
     clearCaches();
     await Promise.allSettled([
       refetchApp(),
@@ -1209,7 +1211,7 @@ export default function AppManagePage(props: {
                 capsuleId={capsuleId()}
                 role={appRole()}
                 accountId={props.accountId ?? props.principalId}
-                connectionNames={isSettled(connections) ? (settledValue(connections) ?? []).map((connection) => connection.displayName || connection.id) : undefined}
+                connectionNames={isSettled(connections) ? (settledValue(connections) ?? []).filter((connection) => connection.scope !== "operator").map((connection) => connection.displayName || connection.id) : undefined}
                 onChanged={refreshAll}
                 onAvailability={setSharingAvailable}
               />

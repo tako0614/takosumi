@@ -71,13 +71,13 @@ describe("dashboard shell navigation layout", () => {
     }
   });
 
-  test("the primary nav is home / store / account", () => {
+  test("the primary nav is home / store / connections / account", () => {
     const primary = navSource.slice(
       navSource.indexOf("export const PRIMARY_NAV"),
       navSource.indexOf("export const SECTION_TITLES"),
     );
     const hrefs = [...primary.matchAll(/href: "([^"]+)"/gu)].map((m) => m[1]);
-    expect(hrefs).toEqual(["/", "/new", "/account"]);
+    expect(hrefs).toEqual(["/", "/new", "/connections", "/account"]);
     expect(primary).toContain('labelKey: "nav.home"');
     expect(primary).toContain('labelKey: "nav.store"');
     expect(primary).toContain('labelKey: "nav.account"');
@@ -141,7 +141,10 @@ describe("dashboard shell navigation layout", () => {
     expect(topBarSource).not.toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
     expect(topBarSource).toContain("<UserMenu />");
-    expect(topBarSource).not.toContain("WorkspaceSwitcher");
+    expect(topBarSource).toContain("WorkspaceSwitcher");
+    const switcher = read("views/account/components/shell/WorkspaceSwitcher.tsx");
+    expect(switcher).toContain("!await appOwnershipAvailable()");
+    expect(switcher).toContain("legacy() === true");
     expect(sidebarSource).not.toContain("WorkspaceSwitcher");
     expect(topBarSource).not.toContain("Wordmark");
   });

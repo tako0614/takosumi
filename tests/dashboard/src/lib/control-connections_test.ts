@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   getCapsuleProviderBindingSet,
   listConnections,
@@ -6,6 +6,8 @@ import {
   listProviderConnections,
   listProviderConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
+  appOwnershipAvailable,
+  resetAppOwnershipCache,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -16,6 +18,7 @@ function stubFetch(): () => readonly string[] {
     calls.push(typeof input === "string" ? input : String(input));
     return new Response(
       JSON.stringify({
+        apps: [],
         connections: [],
         providerConnections: [],
       }),
@@ -26,8 +29,10 @@ function stubFetch(): () => readonly string[] {
 }
 
 afterEach(() => {
+  resetAppOwnershipCache();
   globalThis.fetch = realFetch;
 });
+beforeEach(() => { resetAppOwnershipCache(); });
 
 describe("connection list clients", () => {
   test("lists personal connections without a workspace", async () => {
@@ -36,7 +41,7 @@ describe("connection list clients", () => {
     expect(await listProviderConnections()).toEqual([]);
     expect(calls()).toEqual([
       "/api/v1/apps", "/api/v1/connections",
-      "/api/v1/apps", "/api/v1/apps", "/api/v1/connections",
+      "/api/v1/connections",
     ]);
   });
 
@@ -44,21 +49,23 @@ describe("connection list clients", () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input); calls.push(url);
-      return Response.json({}, { status: url === "/api/v1/apps" ? 404 : 200 });
+      return Response.json(url === "/api/v1/apps" ? { error: { code: "route_not_found" } } : {}, { status: url === "/api/v1/apps" ? 404 : 200 });
     }) as typeof fetch;
     expect(await listConnections(" space_1 ")).toEqual([]);
     expect(await listProviderConnections(" space_1 ")).toEqual([]);
     expect(await listReleaseOwnedProviderConnectionsWithSignal(" space_1 ")).toEqual([]);
     expect(calls).toEqual([
       "/api/v1/apps", "/api/v1/connections?workspaceId=space_1",
-      "/api/v1/apps", "/api/v1/provider-connections?workspaceId=space_1",
+      "/api/v1/provider-connections?workspaceId=space_1",
       "/api/v1/provider-connections?workspaceId=space_1&projection=release-owned",
     ]);
   });
 
   test("propagate cancellation to both connection discovery requests", async () => {
     const signals: AbortSignal[] = [];
-    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) =>
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/apps") return Promise.resolve(Response.json({ apps: [] }));
+      return (
       new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         if (!signal) {
@@ -71,7 +78,9 @@ describe("connection list clients", () => {
           () => reject(new DOMException("aborted", "AbortError")),
           { once: true },
         );
-      })) as typeof fetch;
+      }));
+    }) as typeof fetch;
+    await appOwnershipAvailable();
 
     const controller = new AbortController();
     const pending = Promise.all([
@@ -82,7 +91,7 @@ describe("connection list clients", () => {
         controller.signal,
       ),
     ]);
-    await Promise.resolve();
+    for (let round = 0; round < 20 && signals.length < 3; round += 1) await Promise.resolve();
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });

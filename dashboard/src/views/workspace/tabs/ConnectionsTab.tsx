@@ -54,6 +54,7 @@ import {
 import {
   type ProviderConnection,
   connectionSetupCatalog,
+  appOwnershipAvailable,
   listProviderConnections,
   revokeConnection,
   testConnection,
@@ -131,7 +132,7 @@ export default function ConnectionsTab(props: {
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
     createResource(
-      () => ({ workspaceId: workspaceId() }),
+      () => ({ workspaceId: workspaceId() ?? (currentWorkspaceId() || undefined) }),
       ({ workspaceId: id }) => listProviderConnections(id || currentWorkspaceId() || undefined),
     );
   const [credentialRecipes] = createResource(connectionSetupCatalog);
@@ -196,7 +197,7 @@ export default function ConnectionsTab(props: {
     apps.map((app) => app.name).join(locale() === "ja" ? "、" : ", ");
 
   const afterConnectionCreated = async (connection: ProviderConnection) => {
-    const workspace = workspaceId();
+    const workspace = await appOwnershipAvailable() ? undefined : workspaceId() ?? (currentWorkspaceId() || undefined);
     const matchesScope = workspace
       ? connection.workspaceId === workspace
       : connection.scope !== "operator";
@@ -734,7 +735,7 @@ export default function ConnectionsTab(props: {
       {/* ----- register form ----- */}
       <ConnectionCreateForm
         open={shouldShowCreateForm()}
-        workspaceId={workspaceId() || currentWorkspaceId() || undefined}
+        workspaceId={workspaceId()}
         setupCatalog={credentialRecipes}
         initialProviderSource={props.initialProviderSource}
         onCreated={afterConnectionCreated}

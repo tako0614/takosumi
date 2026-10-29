@@ -19,6 +19,8 @@ const calls: Call[] = [];
 let handlers: Record<string, (...args: never[]) => Promise<unknown>> = {};
 let inFlight = 0;
 let maxInFlight = 0;
+let personalOwnership = false;
+let discoverInstallWorkspace: ((workspaceId?: string) => Promise<string | undefined>) | undefined;
 
 function scripted(name: string) {
   return async (...args: unknown[]) => {
@@ -43,6 +45,10 @@ mock.module(apiPath, () => ({
   answerGitInstallAttempt: scripted("answerGitInstallAttempt"),
   discardGitInstallAttempt: scripted("discardGitInstallAttempt"),
   resolveStableSourceTag: scripted("resolveStableSourceTag"),
+  appOwnershipAvailable: async () => personalOwnership,
+  legacyInstallWorkspaceId: async (workspaceId?: string) => discoverInstallWorkspace
+    ? await discoverInstallWorkspace(workspaceId)
+    : personalOwnership ? undefined : workspaceId,
   // The real delay schedule is kept; the pause itself is virtual (see mount).
 }));
 
@@ -127,6 +133,8 @@ function inputs(overrides: Record<string, unknown> = {}): GitInstallPlanUserActi
 }
 
 function reset(next: typeof handlers) {
+  personalOwnership = false;
+  discoverInstallWorkspace = undefined;
   calls.length = 0;
   handlers = next;
   inFlight = 0;
@@ -176,7 +184,7 @@ function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: nu
       fromStore: () => mountOptions.fromStore ?? false,
     });
   });
-  return { attempt, dispose, attemptId, left, pauses, clock };
+  return { attempt, dispose, attemptId, setAttemptId, left, pauses, clock };
 }
 
 /** A reconcile that only ends when the page aborts it. */
@@ -407,6 +415,93 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  test("personal installs ignore a stale selected workspace and retain the retry key", async () => {
+    let creates = 0;
+    reset({
+      createGitInstallAttempt: async () => {
+        if (++creates === 1) throw new api.ControlApiError(503, "unavailable", "unavailable");
+        return respond(inputs(), 0);
+      },
+    });
+    personalOwnership = true;
+    const page = mount();
+    try {
+      await page.attempt.start(candidate, { fromStore: false });
+      setCurrentWorkspaceId("ws_stale_other");
+      await settle();
+      await page.attempt.start(candidate, { fromStore: false });
+      expect(page.attempt.view().stage).toBe("provide_inputs");
+      const starts = calls.filter(({ name }) => name === "createGitInstallAttempt");
+      expect(starts).toHaveLength(2);
+      expect(starts[0]!.args[0]).toBeUndefined();
+      expect(starts[1]!.args).toEqual(starts[0]!.args);
+    } finally {
+      page.dispose();
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("an install cannot post after its workspace or URL changes during context discovery", async () => {
+    for (const changed of ["workspace", "url"] as const) {
+      reset({ getGitInstallPlan: async () => respond(inputs(), 0) });
+      const discovery = deferred<string | undefined>();
+      discoverInstallWorkspace = () => discovery.promise;
+      const page = mount();
+      try {
+        const starting = page.attempt.start(candidate, { fromStore: false });
+        await settle();
+        if (changed === "workspace") setCurrentWorkspaceId("ws_other");
+        else page.setAttemptId(ID);
+        discovery.resolve("ws_alpha");
+        await starting;
+        expect(calls.some(({ name }) => name === "createGitInstallAttempt")).toBe(false);
+      } finally {
+        page.dispose();
+        setCurrentWorkspaceId("ws_alpha");
+      }
+    }
+  });
+
+  test("an install cannot post after its legacy workspace changes while resolving a Store release", async () => {
+    const resolution = deferred<{ tag: string; commit: string }>();
+    reset({ resolveStableSourceTag: async () => await resolution.promise });
+    const page = mount();
+    try {
+      const starting = page.attempt.start(candidate, { fromStore: true });
+      await until(() => calls.some(({ name }) => name === "resolveStableSourceTag"), "source resolver");
+      setCurrentWorkspaceId("ws_other");
+      resolution.resolve({ tag: "v1.0.0", commit: "a".repeat(40) });
+      await starting;
+      expect(calls.some(({ name }) => name === "createGitInstallAttempt")).toBe(false);
+    } finally {
+      page.dispose();
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("personal attempts resume and replan despite a stale selected workspace", async () => {
+    const second = "gip_00000000000000b2";
+    reset({
+      getGitInstallPlan: async () => respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 4),
+      discardGitInstallAttempt: async () => respond({ kind: "none" }, 5, "discarded"),
+      createGitInstallAttempt: async () => respond(inputs(), 0, undefined, second),
+    });
+    personalOwnership = true;
+    setCurrentWorkspaceId("ws_stale_other");
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "review", "personal review");
+      setCurrentWorkspaceId("ws_stale_changed");
+      page.attempt.changeVersion("v2.0.0");
+      await until(() => page.attemptId() === second, "personal replacement");
+      expect(page.left).toEqual([]);
+      expect(calls.find(({ name }) => name === "createGitInstallAttempt")?.args[0]).toBeUndefined();
+    } finally {
+      page.dispose();
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
   test("Install without a workspace starts directly and resumes by scoped attempt id", async () => {
     reset({
       createGitInstallAttempt: async () => withoutWorkspace(respond(inputs(), 0)),
@@ -509,7 +604,7 @@ describe("install attempt controller", () => {
     setCurrentWorkspaceId("");
     try {
       for (const status of [404, 503]) {
-        reset({ resolveStableSourceTag: async () => { throw new api.ControlApiError(status, "unavailable", "unavailable"); } });
+        reset({ resolveStableSourceTag: async () => { throw new api.ControlApiError(status, status === 404 ? "route_not_found" : "unavailable", "unavailable"); } });
         const page = mount();
         await page.attempt.start(candidate, { fromStore: true });
         expect(page.attempt.view().stage).toBe("candidate");

@@ -22,7 +22,7 @@ interface Props {
 
 /**
  * Dashboard chrome: a persistent left sidebar (primary nav: home / store /
- * account) + a top bar (section title / notifications / profile menu) over the
+ * connections / account) + a top bar (section title / notifications / profile menu) over the
  * content well, with mobile bottom tabs carrying the same destinations.
  */
 export default function AppShell(props: Props) {

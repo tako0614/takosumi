@@ -305,7 +305,7 @@ test("apps uninstall calls the app-scoped uninstall route", async () => {
     return Response.json({ capsule: { id: "cap_owned", status: "uninstalled" } }, { status: 202 });
   }) as typeof fetch;
   try {
-    expect(await main(["apps", "uninstall", "cap_owned", "--url", "https://takosumi.example.test", "--token", "account-pat"], quietIo)).toBe(0);
+    expect(await main(["apps", "uninstall", "cap_owned", "--yes", "--url", "https://takosumi.example.test", "--token", "account-pat"], quietIo)).toBe(0);
     expect(new URL(request!.url).pathname).toBe("/api/v1/capsules/cap_owned/uninstall");
     expect(request!.method).toBe("POST");
     expect(await request!.json()).toEqual({});
@@ -333,4 +333,36 @@ test("apps help names Accounts PAT auth and uses Japanese app terminology", asyn
     if (originalLanguage === undefined) delete process.env.TAKOSUMI_LANG;
     else process.env.TAKOSUMI_LANG = originalLanguage;
   }
+});
+
+
+test("apps uninstall requires explicit confirmation before any API call", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const stderr: string[] = [];
+  globalThis.fetch = (async () => { calls += 1; return Response.json({}); }) as typeof fetch;
+  try {
+    for (const flags of [[], ["--yes=false"], ["--yes=true"]]) {
+      expect(await main(["apps", "uninstall", "cap_owned", ...flags, "--url", "https://takosumi.example.test", "--token", "account-pat"],
+        { stdout: quietIo.stdout, stderr: (line) => stderr.push(line) })).toBe(2);
+    }
+    expect(calls).toBe(0);
+    expect(stderr.every((line) => line.includes("--yes"))).toBe(true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+
+test("a business not_found response never retries install under another scope", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Request[] = [];
+  globalThis.fetch = (async (input, init) => {
+    requests.push(new Request(input, init));
+    return Response.json({ error: { code: "not_found", message: "Selected source was not found." } }, { status: 404 });
+  }) as typeof fetch;
+  try {
+    expect(await main(["apps", "install", "--git", "https://git.example.test/private.git", "--workspace", "ws_legacy",
+      "--url", "https://takosumi.example.test", "--token", "account-pat"], quietIo)).toBe(1);
+    expect(requests).toHaveLength(1);
+    expect(new URL(requests[0]!.url).pathname).toBe("/api/v1/install-plans");
+  } finally { globalThis.fetch = originalFetch; }
 });

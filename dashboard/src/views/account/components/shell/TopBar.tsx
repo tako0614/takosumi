@@ -13,12 +13,14 @@ import { A, useLocation } from "@solidjs/router";
 import {
   createEffect,
   createMemo,
+  createResource,
   createSignal,
   onCleanup,
   Show,
 } from "solid-js";
 import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
+import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { SECTION_TITLES } from "./nav.ts";
 import {
   attentionCount,
@@ -26,11 +28,14 @@ import {
   refreshWorkspaceNotificationFeed,
   workspaceNotificationFeed,
 } from "../../../../lib/notifications.ts";
+import { appOwnershipAvailable } from "../../../../lib/control-api.ts";
 import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
 import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
   const loc = useLocation();
+  const [personalApps] = createResource(() => appOwnershipAvailable());
+  const legacyNotifications = () => !personalApps.error && personalApps() === false;
   const sectionTitle = () => {
     const hit = SECTION_TITLES.find(([re]) => re.test(loc.pathname));
     return hit ? t(hit[1]) : "";
@@ -41,7 +46,7 @@ export default function TopBar() {
   // the badge simply keeps its last known count.
   createEffect(() => {
     void loc.pathname;
-    const workspaceId = currentWorkspaceId();
+    const workspaceId = legacyNotifications() ? currentWorkspaceId() : "";
     if (!workspaceId) return;
     void refreshWorkspaceNotificationFeed(workspaceId).catch(() => {});
   });
@@ -51,7 +56,7 @@ export default function TopBar() {
   onCleanup(onNotificationsAcknowledged(() => setAckTick((n) => n + 1)));
   const badge = createMemo(() => {
     void ackTick();
-    const workspaceId = currentWorkspaceId();
+    const workspaceId = legacyNotifications() ? currentWorkspaceId() : "";
     if (!workspaceId) return 0;
     return attentionCount(workspaceNotificationFeed(workspaceId), workspaceId);
   });
@@ -62,6 +67,7 @@ export default function TopBar() {
         {(title) => <span class="topbar-title">{title()}</span>}
       </Show>
       <div class="topbar-actions">
+        <WorkspaceSwitcher />
         <A
           href="/notifications"
           class="topbar-icon-btn topbar-bell"

@@ -42,7 +42,8 @@ import {
   type PlatformContribution,
 } from "../../../lib/platform-contributions.ts";
 import { hasPlatformExtensionCapability } from "../../../lib/runtime-capabilities.ts";
-import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
+import { readSession } from "../../account/lib/session.ts";
+import { listWorkspacesCached } from "../../../lib/workspace-list.ts";
 import { createServiceNames } from "../../../lib/service-names.ts";
 import { intlLocale, type MessageKey, t } from "../../../i18n/index.ts";
 import {
@@ -92,6 +93,22 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
       ).some((contribution) => contribution.presentation === "native"),
   );
 
+  // Commercial extensions retain their billing reference during the additive
+  // migration. Resolve an owned personal reference without relabeling legacy
+  // workspace-wide usage as the signed-in person's charges.
+  const [commercialWorkspace] = createResource(
+    () => props.workspaceId || (commercialBillingEnabled() ? "personal" : null),
+    async (scope) => {
+      if (scope !== "personal") return scope;
+      const session = await readSession();
+      if (!session) return undefined;
+      const identities = new Set([session.subject, session.primaryAccountId]);
+      const owned = (await listWorkspacesCached()).filter((workspace) =>
+        workspace.type === "personal" && identities.has(workspace.ownerUserId) && !workspace.archivedAt);
+      return [...owned].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))[0]?.id;
+    },
+  );
+
   const loadUsage = async (append: boolean) => {
     if (usageLoading()) return;
     setUsageLoading(true);
@@ -104,7 +121,7 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
       };
       const page = props.workspaceId
         ? await listWorkspaceUsagePage(props.workspaceId, options)
-        : await listPersonalUsagePage(currentWorkspaceId() || undefined, options);
+        : await listPersonalUsagePage(undefined, options);
       setUsageRows((rows) =>
         append ? [...rows, ...page.usageEvents] : page.usageEvents,
       );
@@ -157,7 +174,10 @@ export default function BillingTab(props: { readonly workspaceId?: string }) {
         </Match>
       </Switch>
 
-      <Show when={props.workspaceId} keyed>
+      <Show when={commercialWorkspace.error}>
+        <Toast tone="error">{friendlyError(commercialWorkspace.error, t).message}</Toast>
+      </Show>
+      <Show when={!commercialWorkspace.error && commercialWorkspace()} keyed>
         {(workspaceId) => (
           <For
             each={platformContributionsForSlot(

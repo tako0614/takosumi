@@ -443,6 +443,7 @@ export interface InstallAttemptFixtureConnection {
   readonly status: string;
   readonly scope: string;
   readonly workspaceId?: string;
+  readonly ownerAccountId?: string;
 }
 
 export interface InstallAttemptFixtureRequirement {
@@ -536,9 +537,10 @@ function proposedAttemptName(url: string): string {
   return last.toLowerCase().replace(/[^a-z0-9-]+/gu, "-").replace(/^-|-$/gu, "").slice(0, 63) || "app";
 }
 
-function offerable(connection: InstallAttemptFixtureConnection, provider: string, workspaceId: string): boolean {
+function offerable(connection: InstallAttemptFixtureConnection, provider: string, workspaceId: string, ownerAccountId: string): boolean {
   if (connection.providerSource !== provider || connection.status !== "verified") return false;
   return connection.scope === "operator" ||
+    (connection.scope === "personal" && connection.ownerAccountId === ownerAccountId) ||
     (connection.scope === "workspace" && (connection.workspaceId === undefined || connection.workspaceId === workspaceId));
 }
 
@@ -560,7 +562,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
   const requirementRows = (attempt: StoredAttempt) =>
     (options.requirements ?? []).map((requirement) => {
       const candidates = (options.connections?.() ?? [])
-        .filter((connection) => offerable(connection, requirement.provider, attempt.workspaceId))
+        .filter((connection) => offerable(connection, requirement.provider, attempt.workspaceId, attempt.createdBy))
         .map((connection) => ({
           id: connection.id,
           displayName: connection.displayName || connection.id,

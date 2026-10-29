@@ -1,5 +1,5 @@
 /**
- * Primary navigation: a persistent left rail with home, store and account.
+ * Primary navigation: a persistent left rail with home, store, connections and account.
  */
 import { A, useLocation } from "@solidjs/router";
 import { ArrowLeft } from "lucide-solid";
