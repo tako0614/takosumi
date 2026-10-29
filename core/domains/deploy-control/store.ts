@@ -268,7 +268,8 @@ export function parseStoredCapsuleRootModuleVariableDeclarations(
  * The physical column name is private storage history. Its current value is a
  * two-layer graph: every reachable package for policy/supply-chain checks and
  * the selected root's exact identities for bindings/root generation. An old
- * provider array is deliberately not inferred as either layer.
+ * provider array is deliberately not inferred as either layer (see
+ * `classifyStoredCapsuleCompatibilityProviderColumn` for that retired shape).
  */
 export interface StoredCapsuleCompatibilityProviderGraph {
   readonly providerPackages: CapsuleCompatibilityReport["providerPackages"];
@@ -365,6 +366,90 @@ export function parseStoredCapsuleCompatibilityProviderGraph(
       },
     ),
   };
+}
+
+/**
+ * Which representation a stored `providers_json` value uses.
+ *
+ * - `graph`: the current closed two-layer value accepted by
+ *   `parseStoredCapsuleCompatibilityProviderGraph`.
+ * - `retired_flat_array`: the value every release wrote before the two-layer
+ *   graph (2026-08-27). It is a bare JSON array holding the retired
+ *   `CapsuleProviderRequirement` list, one object per child-module provider:
+ *
+ *   ```ts
+ *   {
+ *     source: string;              // always
+ *     allowed: boolean;            // always
+ *     aliases?: string[];          // configuration alias names
+ *     versionConstraint?: string;
+ *     localName?: string;          // since 2026-07-29
+ *     credentialRequired?: boolean; // since 2026-07-14
+ *     ownershipOptions?: string[];  // 2026-06-20..06-27 only
+ *   }
+ *   ```
+ *
+ *   An analysis that found no provider, or failed, wrote `[]`.
+ *
+ * Classification never converts one shape into the other: a flat list has a
+ * single layer, so it can be neither the package-policy layer nor the root's
+ * exact identities. Ordinary report readers keep rejecting it. Only a caller
+ * that moves a stored report without interpreting its analysis, such as the
+ * operator Source ownership migration, uses this function. Anything else
+ * (malformed graph, scalar, unknown element field) is a damaged row and throws.
+ */
+export type StoredCapsuleCompatibilityProviderColumnShape =
+  | "graph"
+  | "retired_flat_array";
+
+const RETIRED_PROVIDER_REQUIREMENT_OPTIONAL_KEYS = [
+  "aliases",
+  "versionConstraint",
+  "localName",
+  "credentialRequired",
+  "ownershipOptions",
+] as const;
+
+export function classifyStoredCapsuleCompatibilityProviderColumn(
+  value: unknown,
+): StoredCapsuleCompatibilityProviderColumnShape {
+  if (!Array.isArray(value)) {
+    parseStoredCapsuleCompatibilityProviderGraph(value);
+    return "graph";
+  }
+  value.forEach((entry, index) => {
+    const label = `stored Capsule compatibility retired providers[${index}]`;
+    const requirement = closedRecord(
+      entry,
+      ["source", "allowed"],
+      label,
+      RETIRED_PROVIDER_REQUIREMENT_OPTIONAL_KEYS,
+    );
+    requiredStoredString(requirement.source, `${label}.source`);
+    requiredStoredBoolean(requirement.allowed, `${label}.allowed`);
+    for (const field of ["versionConstraint", "localName"] as const) {
+      if (requirement[field] !== undefined) {
+        requiredStoredString(requirement[field], `${label}.${field}`);
+      }
+    }
+    if (requirement.credentialRequired !== undefined) {
+      requiredStoredBoolean(
+        requirement.credentialRequired,
+        `${label}.credentialRequired`,
+      );
+    }
+    for (const field of ["aliases", "ownershipOptions"] as const) {
+      const list = requirement[field];
+      if (
+        list !== undefined &&
+        (!Array.isArray(list) ||
+          list.some((item) => typeof item !== "string"))
+      ) {
+        throw new TypeError(`${label}.${field} must be an array of strings`);
+      }
+    }
+  });
+  return "retired_flat_array";
 }
 
 function closedRecord(

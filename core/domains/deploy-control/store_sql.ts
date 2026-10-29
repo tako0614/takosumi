@@ -143,8 +143,9 @@ import {
 } from "./operator_state_recovery.ts";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
-import { inventorySourceOwnershipGroup, type SourceOwnershipMigrationGroup,
-  type SourceOwnershipMigrationMutation, type SourceOwnershipMigrationStore } from "../sources/ownership-migration.ts";
+import { inventorySourceOwnershipGroup, sourceOwnershipMigrationReportFromRow, sourceOwnershipSplitCopyId,
+  type SourceOwnershipMigrationGroup, type SourceOwnershipMigrationMutation,
+  type SourceOwnershipMigrationStore } from "../sources/ownership-migration.ts";
 import type { StoredGitInstallPlan } from "../install-plans/store.ts";
 import {
   clampPageLimit,
@@ -12548,11 +12549,10 @@ async function pgReadSourceOwnershipGroup(
         or installation_id in (select id from takosumi_capsules where source_id = $1)
       order by id`, [sourceId],
   );
-  const reports = reportRows.rows.map((row) => {
-    const report = pgCompatibilityReportFromSettlementRow(row);
-    if (!report) throw new Error(`source_ownership_migration_report_row_drift:${row.id}`);
-    return report;
-  });
+  // The migration moves reports without interpreting them, so rows from older
+  // releases (for example a retired flat providers_json array) are carried
+  // verbatim rather than read through the current report contract.
+  const reports = reportRows.rows.map((row) => sourceOwnershipMigrationReportFromRow(row, parseJson));
   const gitPlanRows = await client.query<{
     id: string; workspaceId: string; phase: string; generation: number;
     reconcileLeaseToken: string | null; recordJson: unknown;
@@ -12794,32 +12794,41 @@ async function pgCommitSourceOwnershipGroup(
         [snapshot.id, snapshot.sourceId, JSON.stringify(snapshot), snapshot.fetchedAt],
       );
     }
+    const originalReportsByCopyId = new Map(await Promise.all(expected.reports.map(async (old) =>
+      [await sourceOwnershipSplitCopyId("cgr", old.id, split.capsuleId), old] as const)));
     for (const report of split.reports) {
-      if (report.sourceId !== freshSource.id ||
+      const original = originalReportsByCopyId.get(report.id);
+      if (!original || report.sourceId !== freshSource.id ||
         (report.capsuleId !== undefined && report.capsuleId !== split.capsuleId) ||
-        !split.snapshots.some((snapshot) => snapshot.id === report.sourceSnapshotId)) {
+        !split.snapshots.some((snapshot) => snapshot.id === report.sourceSnapshotId) ||
+        report.sourceSnapshotId !==
+          await sourceOwnershipSplitCopyId("snap", original.sourceSnapshotId, split.capsuleId) ||
+        stableStringify(report) !== stableStringify({ ...original, id: report.id,
+          sourceId: report.sourceId, sourceSnapshotId: report.sourceSnapshotId })) {
         throw new TypeError("invalid split compatibility report");
       }
-      const normalized = normalizeStoredCapsuleCompatibilityReport(report);
-      await transaction.query(
+      // Only identity changes. Copy the stored analysis columns from the
+      // original row this transaction just re-read and compared, so a report
+      // written by an older release keeps its exact stored shape.
+      const copied = await transaction.query(
         `insert into takosumi_capsule_compatibility_reports
           (id, source_id, installation_id, source_snapshot_id, module_path,
            level, findings_json, providers_json, resources_json, data_sources_json,
            provisioners_json, root_module_variables_json,
            root_module_variable_declarations_json, root_module_outputs_json, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb,
-                 $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15)`,
-        [normalized.id, normalized.sourceId ?? null, normalized.capsuleId ?? null,
-          normalized.sourceSnapshotId, normalized.modulePath ?? null, normalized.level,
-          JSON.stringify(normalized.findings),
-          JSON.stringify(storedCapsuleCompatibilityProviderGraph(normalized)),
-          JSON.stringify(normalized.resources), JSON.stringify(normalized.dataSources),
-          JSON.stringify(normalized.provisioners),
-          JSON.stringify(normalized.rootModuleVariables ?? []),
-          normalized.rootModuleVariableDeclarations
-            ? JSON.stringify(normalized.rootModuleVariableDeclarations) : null,
-          JSON.stringify(normalized.rootModuleOutputs ?? []), normalized.createdAt],
+         select $1, $2, $3, $4, module_path,
+                level, findings_json, providers_json, resources_json, data_sources_json,
+                provisioners_json, root_module_variables_json,
+                root_module_variable_declarations_json, root_module_outputs_json, created_at
+           from takosumi_capsule_compatibility_reports
+          where id = $5 and source_id = $6
+         returning id`,
+        [report.id, report.sourceId, report.capsuleId ?? null, report.sourceSnapshotId,
+          original.id, source.id],
       );
+      if (copied.rows.length !== 1) {
+        throw new Error("Source ownership migration lost compatibility report row");
+      }
     }
     for (const run of split.compatibilityRuns) {
       if (run.type !== "compatibility_check" || run.sourceId !== freshSource.id ||

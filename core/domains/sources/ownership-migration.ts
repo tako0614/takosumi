@@ -8,11 +8,12 @@
  */
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { ActivityEvent } from "takosumi-contract/activity";
-import type { Capsule, CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
-import type { StoredInstallConfig, StoredSource } from "../deploy-control/store.ts";
+import { classifyStoredCapsuleCompatibilityProviderColumn, type StoredInstallConfig, type StoredSource }
+  from "../deploy-control/store.ts";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import type { StoredGitInstallPlan } from "../install-plans/store.ts";
@@ -26,6 +27,107 @@ export interface SourceOwnershipMigrationCapsule {
   readonly adoptedSnapshotId?: string;
 }
 
+/**
+ * One stored compatibility report as this migration moves it.
+ *
+ * The migration only re-points a report's identity (Source, Capsule and
+ * SourceSnapshot); it never interprets the analysis. Every other stored column
+ * is carried verbatim in `stored`, so the per-group CAS and the plan digest
+ * still cover it and a split copies it unchanged. A report written by an older
+ * release, such as one whose `providers_json` is the retired flat array, is
+ * therefore moved as history: it is neither rejected by the current report
+ * contract nor upgraded into gate evidence its analysis never produced.
+ */
+export interface SourceOwnershipMigrationReport {
+  readonly id: string;
+  /** Physical `source_id`; reports from before 2026-07-14 may have none. */
+  readonly sourceId: string | null;
+  readonly capsuleId?: string;
+  readonly sourceSnapshotId: string;
+  readonly stored: SourceOwnershipMigrationStoredReport;
+}
+
+/** Non-identity report columns exactly as stored, JSON columns decoded. */
+export interface SourceOwnershipMigrationStoredReport {
+  readonly modulePath: string | null;
+  readonly level: string;
+  readonly findings: unknown;
+  /** Current two-layer provider graph or the retired flat array. */
+  readonly providers: unknown;
+  readonly resources: unknown;
+  readonly dataSources: unknown;
+  readonly provisioners: unknown;
+  readonly rootModuleVariables: unknown;
+  readonly rootModuleVariableDeclarations: unknown;
+  readonly rootModuleOutputs: unknown;
+  readonly createdAt: string;
+}
+
+/** Physical report columns with logical names; JSON columns still encoded. */
+export interface SourceOwnershipMigrationReportRow {
+  readonly id: unknown;
+  readonly sourceId: unknown;
+  readonly capsuleId: unknown;
+  readonly sourceSnapshotId: unknown;
+  readonly modulePath: unknown;
+  readonly level: unknown;
+  readonly findingsJson: unknown;
+  readonly providersJson: unknown;
+  readonly resourcesJson: unknown;
+  readonly dataSourcesJson: unknown;
+  readonly provisionersJson: unknown;
+  readonly rootModuleVariablesJson: unknown;
+  readonly rootModuleVariableDeclarationsJson: unknown;
+  readonly rootModuleOutputsJson: unknown;
+  readonly createdAt: unknown;
+}
+
+/**
+ * Read one stored report row for this migration without applying the current
+ * report contract. Identity columns, JSON encoding and the provider column's
+ * shape (current graph or retired flat array) are still checked, so a damaged
+ * row fails its own group with `compatibility_report_unreadable`.
+ */
+export function sourceOwnershipMigrationReportFromRow(
+  row: SourceOwnershipMigrationReportRow,
+  decodeJson: (value: unknown) => unknown,
+): SourceOwnershipMigrationReport {
+  const id = typeof row.id === "string" && row.id ? row.id : "unknown";
+  const unreadable = () => new Error(`source_ownership_migration_compatibility_report_unreadable:${id}`);
+  const text = (value: unknown) => typeof value === "string" && value.trim().length > 0;
+  if (!text(row.id) || !text(row.sourceSnapshotId) || !text(row.level) || !text(row.createdAt) ||
+    (row.sourceId !== null && !text(row.sourceId)) ||
+    (row.capsuleId !== null && !text(row.capsuleId)) ||
+    (row.modulePath !== null && typeof row.modulePath !== "string")) {
+    throw unreadable();
+  }
+  let stored: SourceOwnershipMigrationStoredReport;
+  try {
+    stored = {
+      modulePath: row.modulePath as string | null,
+      level: row.level as string,
+      findings: decodeJson(row.findingsJson),
+      providers: decodeJson(row.providersJson),
+      resources: decodeJson(row.resourcesJson),
+      dataSources: decodeJson(row.dataSourcesJson),
+      provisioners: decodeJson(row.provisionersJson),
+      rootModuleVariables: decodeJson(row.rootModuleVariablesJson),
+      rootModuleVariableDeclarations: row.rootModuleVariableDeclarationsJson === null
+        ? null : decodeJson(row.rootModuleVariableDeclarationsJson),
+      rootModuleOutputs: decodeJson(row.rootModuleOutputsJson),
+      createdAt: row.createdAt as string,
+    };
+    classifyStoredCapsuleCompatibilityProviderColumn(stored.providers);
+  } catch {
+    throw unreadable();
+  }
+  return {
+    id, sourceId: row.sourceId as string | null,
+    ...(row.capsuleId !== null ? { capsuleId: row.capsuleId as string } : {}),
+    sourceSnapshotId: row.sourceSnapshotId as string, stored,
+  };
+}
+
 export interface SourceOwnershipMigrationGroup {
   readonly source: StoredSource;
   readonly capsules: readonly SourceOwnershipMigrationCapsule[];
@@ -33,7 +135,7 @@ export interface SourceOwnershipMigrationGroup {
   readonly syncRuns: readonly SourceSyncRun[];
   readonly compatibilityRuns: readonly Run[];
   readonly planRuns: readonly PlanRun[];
-  readonly reports: readonly CapsuleCompatibilityReport[];
+  readonly reports: readonly SourceOwnershipMigrationReport[];
   readonly gitPlans: readonly StoredGitInstallPlan[];
   /** Exact private rows used by this Source's Capsules and install plans. */
   readonly installConfigs: readonly StoredInstallConfig[];
@@ -75,7 +177,7 @@ export interface SourceOwnershipMigrationSplit {
   readonly syncRuns: readonly SourceSyncRun[];
   readonly compatibilityRuns: readonly Run[];
   readonly planRuns: readonly PlanRun[];
-  readonly reports: readonly CapsuleCompatibilityReport[];
+  readonly reports: readonly SourceOwnershipMigrationReport[];
   readonly gitPlans: readonly StoredGitInstallPlan[];
   /** Insert-only copies whose SourceSnapshot pins now name this split lane. */
   readonly installConfigs: readonly { readonly originalId: string; readonly config: StoredInstallConfig }[];
@@ -94,7 +196,7 @@ export interface SourceOwnershipMigrationMutation {
   /** Historical old-Source checks no longer claim the moved Capsule. */
   readonly retainedCompatibilityRuns: readonly Run[];
   /** Historical old-Source reports no longer claim the moved Capsule. */
-  readonly retainedReports: readonly CapsuleCompatibilityReport[];
+  readonly retainedReports: readonly SourceOwnershipMigrationReport[];
   readonly splits: readonly SourceOwnershipMigrationSplit[];
   readonly archiveCopies: readonly SourceOwnershipMigrationArchiveCopy[];
   readonly activity: readonly ActivityEvent[];
@@ -245,7 +347,7 @@ export async function prepareSourceOwnershipMigration(
   const retainedSnapshots: SourceSnapshot[] = [];
   const retainedSyncRuns: SourceSyncRun[] = [];
   const retainedCompatibilityRuns: Run[] = [];
-  const retainedReports: CapsuleCompatibilityReport[] = [];
+  const retainedReports: SourceOwnershipMigrationReport[] = [];
   const retainedCopies: SourceOwnershipMigrationArchiveCopy[] = [];
   const canonicalSnapshots = new Map<string, SourceSnapshot>();
   for (const snapshot of group.snapshots) {
@@ -422,7 +524,7 @@ async function prepareSplit(
         ? await deterministicId("snap", run.requestedSnapshotId, capsuleId, "split") : undefined };
   }));
   const reportIds = new Map(await Promise.all(originalReports.map(async (report) =>
-    [report.id, await deterministicId("cgr", report.id, capsuleId, "split")] as const)));
+    [report.id, await sourceOwnershipSplitCopyId("cgr", report.id, capsuleId)] as const)));
   const compatibilityRunIds = new Map(await Promise.all(originalCompatibilityRuns.map(async (run) =>
     [run.id, await deterministicId("run", run.id, capsuleId, "split")] as const)));
   const reports = originalReports.map((report) => ({ ...report, id: reportIds.get(report.id)!,
@@ -493,11 +595,31 @@ function blockedResult(
     status: "blocked", copies: 0, bytes: 0 };
 }
 
-function preparationFailureReason(error: unknown): string {
+/** Stable reason for a coded migration error; never includes the row id or raw diagnostics. */
+function codedFailureReason(error: unknown, fallback: string): string {
   if (error instanceof Error && /^source_ownership_migration_[a-z_]+(?::[^:]*)?$/.test(error.message)) {
     return error.message.split(":", 1)[0]!;
   }
-  return "preparation_failed";
+  return fallback;
+}
+
+function preparationFailureReason(error: unknown): string {
+  return codedFailureReason(error, "preparation_failed");
+}
+
+/**
+ * Reason recorded when a group cannot be read. A coded adapter refusal, such as
+ * `source_ownership_migration_compatibility_report_unreadable`, names the row
+ * class; anything else (database unavailable, fence raised) stays
+ * `group_read_failed`. Either way only that group is blocked.
+ */
+export function sourceOwnershipMigrationReadFailureReason(error: unknown): string {
+  return codedFailureReason(error, "group_read_failed");
+}
+
+/** Id of the split copy of `originalId` for `capsuleId`; adapters use it to find each copy's original row. */
+export async function sourceOwnershipSplitCopyId(prefix: string, originalId: string, capsuleId: string): Promise<string> {
+  return await deterministicId(prefix, originalId, capsuleId, "split");
 }
 
 /** The approval digest covers every planned row and archive copy except a newly generated verifier hash. */
@@ -531,7 +653,7 @@ export async function migrateSourceOwnership(
   for (const id of ids) {
     let group: SourceOwnershipMigrationGroup | undefined;
     try { group = await store.readGroup(id); }
-    catch { results.push(blockedResult(id, "group_read_failed")); continue; }
+    catch (error) { results.push(blockedResult(id, sourceOwnershipMigrationReadFailureReason(error))); continue; }
     if (!group) { results.push(blockedResult(id, "source_missing")); continue; }
     let inventory: SourceOwnershipMigrationInventory;
     try { inventory = inventorySourceOwnershipGroup(group, now); }

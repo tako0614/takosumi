@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
-import type { Capsule, CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { StoredInstallConfig, StoredSource } from "../../../../core/domains/deploy-control/store.ts";
 import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
 import { inventorySourceOwnershipGroup, migrateSourceOwnership, prepareSourceOwnershipMigration,
-  sourceOwnershipMigrationPlanDigest,
+  sourceOwnershipMigrationPlanDigest, sourceOwnershipMigrationReportFromRow,
   type SourceOwnershipMigrationGroup, type SourceOwnershipMigrationMutation,
+  type SourceOwnershipMigrationReport, type SourceOwnershipMigrationReportRow,
   type SourceOwnershipMigrationStore } from "../../../../core/domains/sources/ownership-migration.ts";
 
 const allocator = new ObjectKeyArtifactReferenceAllocator();
@@ -51,11 +52,35 @@ function plan(id: string, capsuleId: string, snapshotId: string, reportId?: stri
     compatibilityReportId: reportId, status: "succeeded" } as unknown as PlanRun;
 }
 
-function report(id: string, sourceId: string, snapshotId: string): CapsuleCompatibilityReport {
-  return { id, sourceId, sourceSnapshotId: snapshotId, level: "ready", findings: [], providerPackages: [],
-    rootProviderRequirements: [], resources: [], dataSources: [], provisioners: [],
-    createdAt: "2026-10-01T00:00:00.000Z" };
+const CURRENT_PROVIDER_GRAPH = { providerPackages: [], rootProviderRequirements: [] };
+
+/** `providers_json` exactly as releases before the two-layer graph stored it. */
+const RETIRED_FLAT_PROVIDERS = [
+  { source: "registry.opentofu.org/cloudflare/cloudflare", localName: "cloudflare",
+    versionConstraint: "~> 4.0", aliases: ["zone"], allowed: true, credentialRequired: true },
+  { source: "registry.opentofu.org/hashicorp/random", aliases: [], allowed: true },
+];
+
+function report(id: string, sourceId: string, snapshotId: string,
+  providers: unknown = CURRENT_PROVIDER_GRAPH): SourceOwnershipMigrationReport {
+  return { id, sourceId, sourceSnapshotId: snapshotId, stored: { modulePath: null, level: "ready",
+    findings: [], providers, resources: [], dataSources: [], provisioners: [],
+    rootModuleVariables: [], rootModuleVariableDeclarations: null, rootModuleOutputs: [],
+    createdAt: "2026-10-01T00:00:00.000Z" } };
 }
+
+function reportRow(overrides: Partial<SourceOwnershipMigrationReportRow> = {}): SourceOwnershipMigrationReportRow {
+  return { id: "cgr_row", sourceId: "src_row", capsuleId: null, sourceSnapshotId: "snap_row",
+    modulePath: ".", level: "ready", findingsJson: "[]", providersJson: JSON.stringify(RETIRED_FLAT_PROVIDERS),
+    resourcesJson: "[]", dataSourcesJson: "[]", provisionersJson: "[]", rootModuleVariablesJson: "[]",
+    rootModuleVariableDeclarationsJson: null, rootModuleOutputsJson: "[]",
+    createdAt: "2026-07-01T00:00:00.000Z", ...overrides };
+}
+
+const decodeText = (value: unknown) => {
+  if (typeof value !== "string") throw new TypeError("not text");
+  return JSON.parse(value);
+};
 
 function gitPlan(id: string, capsuleId: string, sourceId: string, snapshotId: string,
   syncRunId: string, reportId: string): StoredGitInstallPlan {
@@ -395,6 +420,101 @@ describe("operator Source ownership migration", () => {
   });
 });
 
+
+describe("stored compatibility reports from older releases", () => {
+  test("the migration row reader carries retired and current provider columns verbatim", () => {
+    const legacy = sourceOwnershipMigrationReportFromRow(reportRow(), decodeText);
+    expect(legacy).toEqual({ id: "cgr_row", sourceId: "src_row", sourceSnapshotId: "snap_row",
+      stored: { modulePath: ".", level: "ready", findings: [], providers: RETIRED_FLAT_PROVIDERS,
+        resources: [], dataSources: [], provisioners: [], rootModuleVariables: [],
+        rootModuleVariableDeclarations: null, rootModuleOutputs: [], createdAt: "2026-07-01T00:00:00.000Z" } });
+    expect(sourceOwnershipMigrationReportFromRow(reportRow({ providersJson: "[]" }), decodeText).stored.providers)
+      .toEqual([]);
+    const current = sourceOwnershipMigrationReportFromRow(reportRow({ capsuleId: "cap_b",
+      providersJson: JSON.stringify(CURRENT_PROVIDER_GRAPH) }), decodeText);
+    expect(current.capsuleId).toBe("cap_b");
+    expect(current.stored.providers).toEqual(CURRENT_PROVIDER_GRAPH);
+    // Pre-2026-08 levels and analysis payloads are history, not current contract input.
+    expect(sourceOwnershipMigrationReportFromRow(reportRow({ level: "auto_capsulized" }), decodeText).stored.level)
+      .toBe("auto_capsulized");
+    // Reports from before 2026-07-14 could omit the Source; inventory decides scope.
+    expect(sourceOwnershipMigrationReportFromRow(reportRow({ sourceId: null }), decodeText).sourceId).toBeNull();
+  });
+
+  test("the migration row reader refuses damaged rows with a coded reason", () => {
+    for (const overrides of [
+      { providersJson: JSON.stringify("graph") },
+      { providersJson: JSON.stringify({ providerPackages: [], rootProviderRequirements: [], providers: [] }) },
+      { providersJson: JSON.stringify([{ source: "registry.opentofu.org/hashicorp/random", allowed: true,
+        unexpected: true }]) },
+      { providersJson: JSON.stringify([{ source: "registry.opentofu.org/hashicorp/random" }]) },
+      { providersJson: "[{\"source\":" },
+      { findingsJson: "not json" },
+      { sourceSnapshotId: "" },
+      { createdAt: null },
+    ] satisfies Partial<SourceOwnershipMigrationReportRow>[]) {
+      expect(() => sourceOwnershipMigrationReportFromRow(reportRow(overrides), decodeText))
+        .toThrow(/^source_ownership_migration_compatibility_report_unreadable:cgr_row$/);
+    }
+  });
+
+  test("a retired flat report no longer fails its group: dry-run plans and apply moves it unchanged", async () => {
+    const base = group("src_legacy_reports", [["cap_a", "active"], ["cap_b", "active"]]);
+    const snap = snapshot("snap_legacy", base.source.id, "ssr_legacy");
+    const observed: SourceOwnershipMigrationGroup = { ...base, snapshots: [snap],
+      syncRuns: [syncRun("ssr_legacy", base.source.id, snap.id)],
+      compatibilityRuns: [{ ...compatibilityRun("check_legacy", base.source.id, snap.id, "cgr_legacy_bound"),
+        capsuleId: "cap_b" }],
+      reports: [
+        { ...report("cgr_legacy_bound", base.source.id, snap.id, RETIRED_FLAT_PROVIDERS), capsuleId: "cap_b" },
+        report("cgr_legacy_empty", base.source.id, snap.id, []),
+      ] };
+    const store = new FixtureStore();
+    store.groups.set(base.source.id, observed);
+    const now = "2026-10-28T00:00:00.000Z";
+    const [dry] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, { now });
+    expect(dry).toMatchObject({ status: "dry_run", inventory: { action: "split", splitCapsuleIds: ["cap_b"] } });
+    const [applied] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+      { apply: true, now });
+    expect(applied?.status).toBe("committed");
+    expect(applied?.planDigest).toBe(dry?.planDigest);
+    const retained = store.groups.get(base.source.id)!;
+    const moved = [...store.groups.values()].find((entry) => entry.source.ownerCapsuleId === "cap_b")!;
+    expect(retained.reports.map((entry) => [entry.id, entry.capsuleId, entry.stored.providers])).toEqual([
+      ["cgr_legacy_bound", undefined, RETIRED_FLAT_PROVIDERS], ["cgr_legacy_empty", undefined, []]]);
+    expect(moved.reports).toHaveLength(1);
+    expect(moved.reports[0]).toMatchObject({ sourceId: moved.source.id, capsuleId: "cap_b",
+      sourceSnapshotId: moved.snapshots[0]?.id, stored: observed.reports[0]!.stored });
+    expect(moved.compatibilityRuns[0]?.compatibilityReportId).toBe(moved.reports[0]?.id);
+  });
+
+  test("an unreadable report blocks only its own group with a coded reason", async () => {
+    const store = new FixtureStore();
+    store.groups.set("src_damaged", group("src_damaged", [["cap_damaged", "active"]]));
+    store.groups.set("src_fine", group("src_fine", [["cap_fine", "active"]]));
+    const damaging: SourceOwnershipMigrationStore = {
+      listSourceIds: () => store.listSourceIds(),
+      readGroup: (id) => id === "src_damaged"
+        ? Promise.reject(new Error("source_ownership_migration_compatibility_report_unreadable:cgr_damaged"))
+        : store.readGroup(id),
+      commitGroup: (mutation) => store.commitGroup(mutation),
+    };
+    const results = await migrateSourceOwnership(damaging, allocator, { copyVerified: async () => {} },
+      { apply: true, now: "2026-10-28T00:00:00.000Z" });
+    expect(results.map((result) => [result.inventory.sourceId, result.status, result.inventory.reason])).toEqual([
+      ["src_damaged", "blocked", "source_ownership_migration_compatibility_report_unreadable"],
+      ["src_fine", "committed", undefined]]);
+    expect(JSON.stringify(results)).not.toContain("cgr_damaged");
+  });
+
+  test("a report without a Source blocks its group by scope, not as a read failure", () => {
+    const base = group("src_unscoped_report", [["cap_a", "active"]]);
+    const snap = snapshot("snap_unscoped", base.source.id, "ssr_unscoped");
+    expect(inventorySourceOwnershipGroup({ ...base, snapshots: [snap],
+      reports: [{ ...report("cgr_unscoped", base.source.id, snap.id, []), sourceId: null }] }))
+      .toMatchObject({ action: "blocked", reason: "compatibility_report_source_scope_mismatch" });
+  });
+});
 
 test("migration cannot claim disabled or retiring legacy Sources for live apps", async () => {
   for (const state of [

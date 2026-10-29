@@ -89,7 +89,12 @@ from its adopted snapshot. A cloned Source gets a fresh random webhook verifier 
 webhook before using it; the old verifier is never duplicated.
 The original compatibility report and producer Run remain as Source history,
 with their moved Capsule association cleared after the app-specific clone is
-created. Both resulting groups can be inventoried again without treating that
+created. The migration never interprets a report's analysis: it re-points
+identity columns and copies every other stored column verbatim, so reports
+written before the two-layer provider graph (a flat `providers_json` array,
+before 2026-08-27) move unchanged instead of failing their group. A report row
+with malformed JSON or an unrecognized provider column blocks only its group as
+`source_ownership_migration_compatibility_report_unreadable`. Both resulting groups can be inventoried again without treating that
 history as a foreign Capsule reference. InstallConfig rows are guarded with
 the group and retain their other private fields.
 The CLI automatically resumes verified archive copies in bounded POST batches

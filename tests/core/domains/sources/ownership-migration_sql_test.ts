@@ -339,6 +339,144 @@ test("Postgres split carries standalone Capsule compatibility evidence without a
     .toEqual([[moved.id, "unchanged"], [source.id, "unchanged"]].sort());
 });
 
+/** `providers_json` exactly as releases before the two-layer graph stored it. */
+const RETIRED_FLAT_PROVIDERS = [
+  { source: "registry.opentofu.org/cloudflare/cloudflare", localName: "cloudflare",
+    versionConstraint: "~> 4.0", aliases: ["zone"], allowed: true, credentialRequired: true },
+  { source: "registry.opentofu.org/hashicorp/random", aliases: [], allowed: true },
+];
+const LEGACY_REPORT_AT = "2026-07-01T00:00:00.000Z";
+
+async function seedSnapshot(client: PGliteSqlClient, source: StoredSource, id: string): Promise<SourceSnapshot> {
+  const sync: SourceSyncRun = { id: `sync_${id}`, kind: "source_sync",
+    workspaceId: source.workspaceId, sourceId: source.id, url: source.url,
+    ref: "main", path: ".", archiveRef: `workspaces/${source.workspaceId}/sources/${source.id}/snapshots/${id}/source.tar.zst`,
+    status: "succeeded", snapshotId: id, createdAt: NOW, updatedAt: NOW };
+  const snapshot: SourceSnapshot = { id, origin: "git", workspaceId: source.workspaceId,
+    sourceId: source.id, url: source.url, ref: "main", path: ".", resolvedCommit: "abc123",
+    archiveRef: sync.archiveRef, archiveDigest: "sha256:abc", archiveSizeBytes: 42,
+    fetchedByRunId: sync.id, fetchedAt: NOW };
+  await client.query(
+    `insert into takosumi_runs (id, kind, space_id, source_id, status, created_at, run_json)
+     values ($1, 'source_sync', $2, $3, $4, $5, $6::jsonb)`,
+    [sync.id, sync.workspaceId, sync.sourceId, sync.status, sync.createdAt, JSON.stringify(sync)],
+  );
+  await client.query(
+    `insert into takosumi_source_snapshots (id, source_id, snapshot_json, fetched_at)
+     values ($1, $2, $3::jsonb, $4)`,
+    [snapshot.id, snapshot.sourceId, JSON.stringify(snapshot), snapshot.fetchedAt],
+  );
+  return snapshot;
+}
+
+/** Physical row as an older release wrote it; never goes through the current report writer. */
+async function insertStoredReport(client: PGliteSqlClient, row: { readonly id: string;
+  readonly sourceId: string; readonly capsuleId?: string; readonly sourceSnapshotId: string;
+  readonly providers: unknown }): Promise<void> {
+  await client.query(
+    `insert into takosumi_capsule_compatibility_reports
+      (id, source_id, installation_id, source_snapshot_id, module_path, level,
+       findings_json, providers_json, resources_json, data_sources_json, provisioners_json,
+       root_module_variables_json, root_module_variable_declarations_json,
+       root_module_outputs_json, created_at)
+     values ($1, $2, $3, $4, '.', 'ready', $5::jsonb, $6::jsonb, '[]'::jsonb, '[]'::jsonb,
+             '[]'::jsonb, '["region"]'::jsonb, null, '[]'::jsonb, $7)`,
+    [row.id, row.sourceId, row.capsuleId ?? null, row.sourceSnapshotId,
+      JSON.stringify([{ severity: "warning", code: "legacy_finding" }]),
+      JSON.stringify(row.providers), LEGACY_REPORT_AT],
+  );
+}
+
+interface PhysicalReport {
+  id: string; sourceId: string | null; capsuleId: string | null; sourceSnapshotId: string;
+  modulePath: string | null; level: string; findings: unknown; providers: unknown;
+  rootModuleVariables: unknown; rootModuleVariableDeclarations: unknown; createdAt: string;
+}
+
+async function physicalReports(client: PGliteSqlClient): Promise<PhysicalReport[]> {
+  return (await client.query<PhysicalReport>(
+    `select id, source_id as "sourceId", installation_id as "capsuleId",
+            source_snapshot_id as "sourceSnapshotId", module_path as "modulePath", level,
+            findings_json as "findings", providers_json as "providers",
+            root_module_variables_json as "rootModuleVariables",
+            root_module_variable_declarations_json as "rootModuleVariableDeclarations",
+            created_at as "createdAt"
+       from takosumi_capsule_compatibility_reports order by id`)).rows;
+}
+
+test("Postgres split moves retired flat compatibility reports with their stored shape", async () => {
+  const { client, store, source } = await fixture(["cap_a", "cap_b"]);
+  const snapshot = await seedSnapshot(client, source, "snap_legacy");
+  await insertStoredReport(client, { id: "report_legacy_bound", sourceId: source.id,
+    capsuleId: "cap_b", sourceSnapshotId: snapshot.id, providers: RETIRED_FLAT_PROVIDERS });
+  await insertStoredReport(client, { id: "report_legacy_empty", sourceId: source.id,
+    sourceSnapshotId: snapshot.id, providers: [] });
+  const check = { id: "check_legacy", workspaceId: source.workspaceId, sourceId: source.id,
+    capsuleId: "cap_b", sourceSnapshotId: snapshot.id, compatibilityReportId: "report_legacy_bound",
+    type: "compatibility_check", status: "succeeded", createdAt: NOW };
+  await client.query(
+    `insert into takosumi_runs
+      (id, kind, space_id, source_id, installation_id, status, created_at, run_json)
+     values ($1, 'compatibility_check', $2, $3, $4, $5, $6, $7::jsonb)`,
+    [check.id, check.workspaceId, check.sourceId, check.capsuleId, check.status,
+      check.createdAt, JSON.stringify(check)],
+  );
+  // The ordinary reader keeps refusing the retired shape.
+  await expect(store.getCapsuleCompatibilityReport("report_legacy_bound")).rejects.toThrow(/must be an object/);
+  const before = await physicalReports(client);
+  const allocator = new ObjectKeyArtifactReferenceAllocator();
+  const [dry] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, { now: NOW });
+  expect(dry).toMatchObject({ status: "dry_run", inventory: { action: "split", splitCapsuleIds: ["cap_b"] } });
+  const [applied] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+    { apply: true, now: NOW });
+  expect(applied?.status).toBe("committed");
+  expect(applied?.planDigest).toBe(dry?.planDigest);
+  const moved = (await store.listSources()).find((item) => item.ownerCapsuleId === "cap_b")!;
+  const movedGroup = (await store.readGroup(moved.id))!;
+  const after = await physicalReports(client);
+  const originalBound = before.find((row) => row.id === "report_legacy_bound")!;
+  const copy = after.find((row) => row.sourceId === moved.id)!;
+  expect(after).toHaveLength(3);
+  expect(after.find((row) => row.id === "report_legacy_bound"))
+    .toEqual({ ...originalBound, capsuleId: null });
+  expect(after.find((row) => row.id === "report_legacy_empty"))
+    .toEqual(before.find((row) => row.id === "report_legacy_empty"));
+  expect(copy).toEqual({ ...originalBound, id: copy.id, sourceId: moved.id,
+    sourceSnapshotId: movedGroup.snapshots[0]!.id });
+  expect(copy.providers).toEqual(RETIRED_FLAT_PROVIDERS);
+  expect(movedGroup.compatibilityRuns[0]?.compatibilityReportId).toBe(copy.id);
+  await expect(store.getCapsuleCompatibilityReport(copy.id)).rejects.toThrow(/must be an object/);
+  const rerun = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} });
+  expect(rerun.map((item) => [item.inventory.sourceId, item.status]).sort())
+    .toEqual([[moved.id, "unchanged"], [source.id, "unchanged"]].sort());
+});
+
+test("Postgres migration blocks only the group holding an unreadable compatibility report", async () => {
+  const { client, store, source } = await fixture([]);
+  const snapshot = await seedSnapshot(client, source, "snap_retire");
+  await insertStoredReport(client, { id: "report_retire", sourceId: source.id,
+    sourceSnapshotId: snapshot.id, providers: RETIRED_FLAT_PROVIDERS });
+  const damaged: StoredSource = { ...source, id: "src_damaged", name: "damaged" };
+  await client.query(
+    `insert into takosumi_sources (id, space_id, status, source_json, created_at, updated_at)
+     values ($1, $2, $3, $4::jsonb, $5, $6)`,
+    [damaged.id, damaged.workspaceId, damaged.status, JSON.stringify(damaged), NOW, NOW],
+  );
+  const damagedSnapshot = await seedSnapshot(client, damaged, "snap_damaged");
+  await insertStoredReport(client, { id: "report_damaged", sourceId: damaged.id,
+    sourceSnapshotId: damagedSnapshot.id, providers: [{ source: "registry.opentofu.org/hashicorp/random" }] });
+  await expect(store.readGroup(damaged.id))
+    .rejects.toThrow("source_ownership_migration_compatibility_report_unreadable:report_damaged");
+  const results = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now: "2026-10-30T00:00:00.000Z" });
+  expect(results.map((item) => [item.inventory.sourceId, item.status, item.inventory.action,
+    item.inventory.reason])).toEqual([
+    [damaged.id, "blocked", "blocked", "source_ownership_migration_compatibility_report_unreadable"],
+    [source.id, "committed", "retire", undefined]]);
+  expect((await store.getSource(source.id))?.retiringAt).toBe("2026-10-30T00:00:00.000Z");
+  expect((await store.getSource(damaged.id))?.retiringAt).toBeUndefined();
+});
+
 test("Postgres SourceSync admission rejects disabled and retiring Sources but replays exact rows", async () => {
   const { client, store, source } = await fixture([]);
   const sync: SourceSyncRun = { id: "sync_before_retire", kind: "source_sync",

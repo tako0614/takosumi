@@ -1,12 +1,13 @@
 import { sourceCreatorPlanAllowsRetirement } from "../../core/domains/sources/retirement_policy.ts";
-import { inventorySourceOwnershipGroup } from "../../core/domains/sources/ownership-migration.ts";
+import { inventorySourceOwnershipGroup, sourceOwnershipMigrationReportFromRow } from
+  "../../core/domains/sources/ownership-migration.ts";
 /**
  * Operator-only Source ownership repair against the existing D1 schema.
  * Every observed physical row and each group membership count is fenced inside
  * the same D1 batch as the writes. A failed fence aborts that transaction.
  */
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
-import type { Capsule, CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
 import { isPlanRunRecord, type StoredInstallConfig, type StoredRunRecord, type StoredSource } from
@@ -127,6 +128,12 @@ function checkedJson(value: unknown, label: string): string {
   return serialized;
 }
 
+/** D1 stores JSON columns as text; any other physical value is a damaged row. */
+function decodeD1JsonColumn(value: unknown): unknown {
+  if (typeof value !== "string") throw new TypeError("D1 Source ownership JSON column is not text");
+  return JSON.parse(value);
+}
+
 function parseRun<T>(row: PhysicalRow): T {
   const value = parseJson<unknown>(row, "run_json");
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
@@ -150,7 +157,6 @@ export interface SourceOwnershipLineageReader {
   getStateRecoveryRun(id: string): ReturnType<import("../../core/domains/deploy-control/store.ts").OpenTofuControlStore["getStateRecoveryRun"]>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot | undefined>;
-  getCapsuleCompatibilityReport(id: string): Promise<CapsuleCompatibilityReport | undefined>;
 }
 
 export async function readD1SourceOwnershipGroup(
@@ -241,14 +247,19 @@ export async function readD1SourceOwnershipGroup(
       await getCapsuleAdoptedSourceSnapshot(reader, capsule);
     return { capsule, ...(adopted ? { adoptedSnapshotId: adopted.id } : {}) };
   }));
-  const reports = await Promise.all(table("capsule_compatibility_reports").map(async (row) => {
-    const report = await reader.getCapsuleCompatibilityReport(String(row.id));
-    if (!report || report.id !== row.id || report.sourceSnapshotId !== row.source_snapshot_id ||
-      report.sourceId !== row.source_id || (report.capsuleId ?? null) !== row.installation_id) {
-      throw new Error(`D1 Source ownership report changed: ${row.id}`);
-    }
-    return report;
-  }));
+  // Reports come from the same physical rows the commit fences. The migration
+  // never interprets analysis output, so rows from older releases (for
+  // example a retired flat providers_json array) are carried verbatim instead
+  // of being read through the current report contract.
+  const reports = table("capsule_compatibility_reports").map((row) => sourceOwnershipMigrationReportFromRow({
+    id: row.id, sourceId: row.source_id, capsuleId: row.installation_id,
+    sourceSnapshotId: row.source_snapshot_id, modulePath: row.module_path ?? null, level: row.level,
+    findingsJson: row.findings_json, providersJson: row.providers_json, resourcesJson: row.resources_json,
+    dataSourcesJson: row.data_sources_json, provisionersJson: row.provisioners_json,
+    rootModuleVariablesJson: row.root_module_variables_json,
+    rootModuleVariableDeclarationsJson: row.root_module_variable_declarations_json ?? null,
+    rootModuleOutputsJson: row.root_module_outputs_json, createdAt: row.created_at,
+  }, decodeD1JsonColumn));
   const directRunRows = await pagedRows(db, "runs", `(source_id = ? or installation_id in
     (select id from capsules where source_id = ?)) and
     status in ('queued', 'running', 'waiting_approval')`, [sourceId, sourceId]);
@@ -265,14 +276,6 @@ export async function readD1SourceOwnershipGroup(
     ...table("git_install_plans").filter((row) => row.reconcile_lease_token !== null)
       .map((row) => `git_install_plan:${row.id}`),
   ];
-  // Report getters use a separate read. Keep the group tied to exactly the
-  // physical rows captured for its commit fence, even under concurrent edits.
-  const reportScope = observed.find((entry) => entry.table === "capsule_compatibility_reports")!;
-  const reportRowsAgain = await pagedRows(db, "capsule_compatibility_reports",
-    reportScope.where, reportScope.args);
-  if (JSON.stringify(reportRowsAgain) !== JSON.stringify(table("capsule_compatibility_reports"))) {
-    throw new Error("D1 Source ownership report inventory changed");
-  }
   const group: SourceOwnershipMigrationGroup = {
     source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans,
     installConfigs, inFlightRunIds,

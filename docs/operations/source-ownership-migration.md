@@ -35,6 +35,10 @@ PostgreSQL では `takosumi_sources`、`takosumi_source_snapshots`、`takosumi_r
 
 D1 の既存 HTTP operator は `scripts/operator-source-ownership.ts`。全 group の dry-run は read-only で、
 1 group の準備エラーはその group の `blocked` 理由として返し、他 group の棚卸しを続ける。
+互換性レポートは識別子（Source・アプリ・SourceSnapshot）だけを付け替え、分析結果の列は保存されたまま運ぶ。
+2026-08-27 より前の形（`providers_json` が平たい配列）のレポートも読めて、split ではそのままコピーする。
+JSON が壊れている、または既知のどの形でもないレポートは、その group だけを
+`source_ownership_migration_compatibility_report_unreadable` で `blocked` にする。
 適用には対象 Source の正確な `preparedAt` と `reportDigest` を使う。
 詳細な引数と guarded SQL は [移行の記録と手順](../internal/tasks/20261028-task0118-source-ownership-migration.md) を参照。
 
