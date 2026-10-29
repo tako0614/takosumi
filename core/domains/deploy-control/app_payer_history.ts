@@ -8,15 +8,41 @@
  * `updated_at`, written once by the pending -> accepted CAS together with the
  * owner swap; accepted rows are terminal and never written again.
  *
- * The payer of an event at time T is the owner whose epoch interval contains
- * T. Missing rows, epoch gaps, discontinuous owners, absent or non-canonical
- * acceptance times, non-increasing acceptance times, an unplaceable event time
- * or a transfer drain that may be fixing the boundary of the current interval
- * all resolve to no payer. The current owner is never substituted.
+ * Wrongly charging an account is worse than leaving an event unattributed.
+ * The meter's `createdAt` is a claim on the meter's clock for an aggregated
+ * measurement, while acceptance times are server clock instants. So an event
+ * stands for usage somewhere in a span around its claimed time (see
+ * {@link meterEventSpan}), and it is attributed only when that whole span lies
+ * inside one owner's interval. Missing rows, epoch gaps, discontinuous owners,
+ * absent or non-canonical acceptance times, non-increasing acceptance times,
+ * an unplaceable event time, or a transfer drain that may be fixing the end of
+ * the current interval all resolve to no payer. The current owner is never
+ * substituted.
  */
 
 /** Accepted transfers one lookup walks back from the current owner. */
 export const APP_OWNERSHIP_HISTORY_MAX_TRANSFERS = 64;
+
+/**
+ * Guard G around a meter's claimed event time, in milliseconds.
+ *
+ * G must cover the meter's aggregation window plus meter/server clock skew.
+ * `UsageEvent` carries no usage window, and `createdAt` may name either end of
+ * an aggregated bucket. Independent meters therefore must aggregate over at
+ * most one hour (the coarsest unit in use, such as `storage.gb_hour`). Their
+ * clocks must also stay within one hour of the server's. Two hours covers
+ * both. A coarser producer needs a window-aware usage input before its events
+ * can be attributed across a transfer.
+ */
+export const APP_PAYER_BOUNDARY_GUARD_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Oldest claimed event time trusted when the choice is between owners
+ * (`ownership_epoch > 0`), relative to the server's recording time. Seven days
+ * absorbs delayed batch reports and retry backlogs. Older claims cannot select
+ * which account pays.
+ */
+export const APP_PAYER_MAX_LATENESS_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface AppOwnershipTransferRecord {
   /** The epoch this transfer ended; the recipient holds `ownershipEpoch + 1`. */
@@ -35,11 +61,13 @@ export interface AppOwnershipHistory {
   readonly ownerAccountId: string;
   readonly ownershipEpoch: number;
   /**
-   * A pending transfer is draining the app (`management_state = 'draining'`
-   * with the transfer's drain epoch). Its acceptance time can be fixed before
-   * the owner swap commits, so the current open interval has no known end.
+   * Present while a pending transfer is draining the app
+   * (`management_state = 'draining'` with that transfer's drain epoch): the
+   * pending row's `created_at`. Its acceptance can be stamped before the owner
+   * swap commits, so the current open interval ends at an unknown instant no
+   * earlier than this.
    */
-  readonly transferDraining: boolean;
+  readonly drainingTransferCreatedAt?: string;
   /**
    * Accepted transfers walked back from the current owner, newest first: each
    * row ending `owner -> previous owner`, stopping one row after the first
@@ -47,6 +75,16 @@ export interface AppOwnershipHistory {
    * reached (including duplicates at one epoch) so that ambiguity is visible.
    */
   readonly transfers: readonly AppOwnershipTransferRecord[];
+}
+
+/** Server-side facts that bound where a meter event's usage can lie. */
+export interface MeterEventPlacement {
+  /** The meter's claimed event time (`createdAt`, canonical ISO instant). */
+  readonly at: string;
+  /** Server clock milliseconds when the event is recorded. */
+  readonly recordedAt: number;
+  /** The app's creation time; no usage precedes it. */
+  readonly appCreatedAt: string;
 }
 
 /** In-memory row of the physical ownership transfer ledger. */
@@ -69,7 +107,7 @@ export interface AppOwnershipHistoryRow extends Record<string, unknown> {
   readonly from_account_id: unknown;
   readonly to_account_id: unknown;
   readonly accepted_at: unknown;
-  readonly transfer_draining: unknown;
+  readonly draining_transfer_created_at: unknown;
 }
 
 /**
@@ -79,7 +117,7 @@ export interface AppOwnershipHistoryRow extends Record<string, unknown> {
  * has no capsule index and this read adds no DDL). The walk stops one row
  * after the first acceptance at or before `at` (lexical ISO comparison is
  * only the stop bound; the resolver re-checks every instant) or at the depth
- * bound. Parameters: 1 capsule id, 2 event time, 3 depth bound.
+ * bound. Parameters: 1 capsule id, 2 walk-stop instant, 3 depth bound.
  */
 export function appOwnershipHistorySql(input: {
   readonly capsules: string;
@@ -99,13 +137,14 @@ export function appOwnershipHistorySql(input: {
    where chain.settled < 2 and chain.depth < ${p}3
 )
 select chain.depth, chain.ownership_epoch, chain.from_account_id, chain.to_account_id, chain.accepted_at,
-  head.transfer_draining
+  head.draining_transfer_created_at
   from chain cross join (
-    select exists(
-      select 1 from ${capsules} c join ${transfers} pending on pending.capsule_id = c.id
+    select (
+      select pending.created_at from ${capsules} c join ${transfers} pending on pending.capsule_id = c.id
        where c.id = ${p}1 and c.management_state = 'draining' and pending.state = 'pending'
          and pending.drain_management_epoch = c.management_epoch
-    ) as transfer_draining
+       limit 1
+    ) as draining_transfer_created_at
   ) head
  order by chain.depth`;
 }
@@ -117,10 +156,12 @@ export function appOwnershipHistoryFromRows(rows: readonly AppOwnershipHistoryRo
     return undefined;
   }
   const text = (value: unknown) => typeof value === "string" ? value : "";
+  const draining = head.draining_transfer_created_at;
   return {
     ownerAccountId: head.to_account_id,
     ownershipEpoch: Number(head.ownership_epoch),
-    transferDraining: head.transfer_draining === true || head.transfer_draining === 1,
+    // A draining row with an unreadable time stays present (and fails closed).
+    ...(draining === null || draining === undefined ? {} : { drainingTransferCreatedAt: text(draining) }),
     transfers: rest.map((row) => ({
       ownershipEpoch: Number(row.ownership_epoch),
       fromAccountId: text(row.from_account_id),
@@ -150,16 +191,33 @@ function accountId(value: unknown): value is string {
 }
 
 /**
- * The owner whose epoch interval contains `at`, or undefined when the history
- * cannot establish exactly one. Intervals are half-open: an event at an
- * acceptance instant belongs to the recipient.
+ * Server-clock span that must contain the usage an event reports:
+ * `[max(at - G, app creation), min(at + G, recordedAt)]`. The upper clamp holds
+ * because usage happens before the server receives its report. Undefined when
+ * the claim is unplaceable: not a canonical instant, earlier than the app's
+ * creation, or later than the recording time plus G.
  */
-export function appPayerAtEventTime(history: AppOwnershipHistory, at: string): string | undefined {
-  const eventAt = canonicalInstant(at);
+export function meterEventSpan(event: MeterEventPlacement): { readonly start: number; readonly end: number } | undefined {
+  const eventAt = canonicalInstant(event.at);
+  const createdAt = Date.parse(event.appCreatedAt);
+  if (eventAt === undefined || !Number.isFinite(createdAt) || !Number.isFinite(event.recordedAt) ||
+    eventAt < createdAt || eventAt > event.recordedAt + APP_PAYER_BOUNDARY_GUARD_MS) return undefined;
+  const start = Math.max(eventAt - APP_PAYER_BOUNDARY_GUARD_MS, createdAt);
+  const end = Math.min(eventAt + APP_PAYER_BOUNDARY_GUARD_MS, event.recordedAt);
+  return start <= end ? { start, end } : undefined;
+}
+
+/**
+ * The single owner whose interval contains the event's whole usage span, or
+ * undefined when the history cannot establish exactly one. Intervals are
+ * half-open, `[acceptance, next acceptance)`.
+ */
+export function appPayerAtEventTime(history: AppOwnershipHistory, event: MeterEventPlacement): string | undefined {
+  const span = meterEventSpan(event);
   const epoch = history.ownershipEpoch;
-  if (eventAt === undefined || !accountId(history.ownerAccountId) || !Number.isSafeInteger(epoch) || epoch < 0) {
-    return undefined;
-  }
+  if (!span || !accountId(history.ownerAccountId) || !Number.isSafeInteger(epoch) || epoch < 0) return undefined;
+  // Selecting between owners trusts the meter's claim only within bounded lateness.
+  if (epoch > 0 && canonicalInstant(event.at)! < event.recordedAt - APP_PAYER_MAX_LATENESS_MS) return undefined;
   // Every reached row must continue one chain back from the current owner:
   // epochs E-1, E-2, ... exactly once, owner continuity, and strictly
   // decreasing acceptance times.
@@ -173,19 +231,28 @@ export function appPayerAtEventTime(history: AppOwnershipHistory, at: string): s
     acceptances.push(acceptedAt);
     holder = transfer.fromAccountId;
   }
-  // The newest acceptance at or before the event starts its interval.
-  const index = acceptances.findIndex((acceptedAt) => acceptedAt <= eventAt);
+  // An acceptance inside the span splits the usage between owners.
+  if (acceptances.some((acceptedAt) => acceptedAt > span.start && acceptedAt <= span.end)) return undefined;
+  // The newest acceptance at or before the span starts its interval.
+  const index = acceptances.findIndex((acceptedAt) => acceptedAt <= span.start);
+  let payer: string;
   if (index === -1) {
-    // Every reached acceptance is after the event: only a walk that reached
+    // Every reached acceptance is after the span: only a walk that reached
     // epoch 0 proves the original owner.
     if (acceptances.length !== epoch) return undefined;
-    if (epoch === 0 && history.transferDraining) return undefined;
-    return holder;
+    payer = holder;
+  } else {
+    const found = history.transfers[index]!;
+    // The interval's own start boundary must sit on a reached chain row too.
+    if (found.ownershipEpoch > 0 && index + 1 >= history.transfers.length) return undefined;
+    payer = found.toAccountId;
   }
-  // A transfer drain may already have stamped the end of the open interval.
-  if (index === 0 && history.transferDraining) return undefined;
-  const found = history.transfers[index]!;
-  // The interval's own start boundary must sit on a reached chain row too.
-  if (found.ownershipEpoch > 0 && index + 1 >= history.transfers.length) return undefined;
-  return found.toAccountId;
+  // A transfer drain can already have stamped the end of the open interval,
+  // never earlier than its pending row's creation.
+  const openInterval = index === 0 || (index === -1 && epoch === 0);
+  if (openInterval && history.drainingTransferCreatedAt !== undefined) {
+    const drainCreatedAt = canonicalInstant(history.drainingTransferCreatedAt);
+    if (drainCreatedAt === undefined || span.end >= drainCreatedAt) return undefined;
+  }
+  return payer;
 }

@@ -4313,8 +4313,9 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   /** Canonical physical owner/epoch for billing; undefined on legacy schemas. */
   getAppBillingOwnership(capsuleId: string): Promise<Pick<Capsule, "ownerAccountId" | "ownershipEpoch"> | undefined>;
   /**
-   * Independent-meter payer history: the physical owner tuple, whether a
-   * transfer drain is in flight, and the accepted transfers walked back from
+   * Independent-meter payer history: the physical owner tuple, the creation
+   * time of a pending transfer that is draining the app (if any), and the
+   * accepted transfers walked back from
    * the current owner to one row past the first acceptance at or before `at`
    * (at most APP_OWNERSHIP_HISTORY_MAX_TRANSFERS rows), read as one
    * consistent snapshot. Undefined when the owner is not yet backfilled or
@@ -8721,8 +8722,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     const rows = [...this.#capsuleOwnershipTransfers.values()]
       .filter((row) => row.capsuleId === capsuleId)
       .sort((a, b) => a.id.localeCompare(b.id));
-    const transferDraining = owner.managementState === "draining" && rows.some((row) =>
-      row.state === "pending" && row.drainManagementEpoch === owner.managementEpoch);
+    const draining = owner.managementState === "draining"
+      ? rows.find((row) => row.state === "pending" && row.drainManagementEpoch === owner.managementEpoch)
+      : undefined;
     // Same breadth-first walk as the SQL/D1 recursive read, including its
     // lexical stop condition and the duplicates it would reach.
     const transfers: AppOwnershipTransferRecord[] = [];
@@ -8741,7 +8743,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       }
       frontier = next;
     }
-    return { ownerAccountId: owner.ownerAccountId, ownershipEpoch: owner.ownershipEpoch, transferDraining, transfers };
+    return {
+      ownerAccountId: owner.ownerAccountId, ownershipEpoch: owner.ownershipEpoch,
+      ...(draining ? { drainingTransferCreatedAt: draining.createdAt } : {}), transfers,
+    };
   }
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {

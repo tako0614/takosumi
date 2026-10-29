@@ -14,6 +14,8 @@ import {
   type AppOwnershipStore,
 } from "../../../../core/domains/app-ownership/store.ts";
 import {
+  APP_PAYER_BOUNDARY_GUARD_MS as G,
+  APP_PAYER_MAX_LATENESS_MS,
   appPayerAtEventTime,
   type AppOwnershipHistory,
   type CapsuleOwnershipTransferRow,
@@ -27,11 +29,14 @@ import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_clie
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const WS = "ws_transfer_payer";
-const CREATED = "2026-09-01T00:00:00.000Z";
-const A0 = "2026-10-01T00:00:00.000Z";
-const A1 = "2026-10-10T00:00:00.000Z";
+const CREATED = "2026-10-01T00:00:00.000Z";
+const A0 = "2026-10-23T00:00:00.000Z";
+const MID = "2026-10-24T00:00:00.000Z";
+const A1 = "2026-10-25T00:00:00.000Z";
+const DRAIN = "2026-10-27T00:00:00.000Z";
 const NOW = "2026-10-28T00:00:00.000Z";
 const at = (iso: string, deltaMs: number) => new Date(Date.parse(iso) + deltaMs).toISOString();
+const LATE = at(NOW, -APP_PAYER_MAX_LATENESS_MS - 1);
 
 const clients: PGliteSqlClient[] = [];
 afterEach(async () => { await Promise.all(clients.splice(0).map((client) => client.close())); });
@@ -90,10 +95,11 @@ async function lanes(): Promise<readonly Lane[]> {
   return result;
 }
 
-async function seedApp(lane: Lane, capsuleId: string, ownerAccountId = "first_owner"): Promise<void> {
+async function seedApp(lane: Lane, capsuleId: string, createdAt = CREATED): Promise<void> {
+  const ownerAccountId = "first_owner";
   const capsule: Capsule = { id: capsuleId, workspaceId: WS, projectId: `prj_${capsuleId}`, name: capsuleId,
     slug: capsuleId, sourceId: `src_${capsuleId}`, installConfigId: `cfg_${capsuleId}`, environment: "production",
-    currentStateGeneration: 0, status: "active", createdAt: CREATED, updatedAt: CREATED };
+    currentStateGeneration: 0, status: "active", createdAt, updatedAt: createdAt };
   await lane.control.putCapsule(capsule);
   expect(await lane.ownership.initializeOwnershipIfMissing({ capsuleId, ownerAccountId, ownershipEpoch: 0,
     managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}` })).toBe(true);
@@ -128,79 +134,114 @@ function meter(lane: Lane, now: () => number = () => Date.parse(NOW)) {
 }
 
 const history = (input: Partial<AppOwnershipHistory> = {}): AppOwnershipHistory => ({
-  ownerAccountId: "third", ownershipEpoch: 2, transferDraining: false,
+  ownerAccountId: "third", ownershipEpoch: 2,
   transfers: [
     { ownershipEpoch: 1, fromAccountId: "second", toAccountId: "third", acceptedAt: A1 },
     { ownershipEpoch: 0, fromAccountId: "first", toAccountId: "second", acceptedAt: A0 },
   ],
   ...input,
 });
+const event = (eventAt: string, recordedAt = NOW) =>
+  ({ at: eventAt, recordedAt: Date.parse(recordedAt), appCreatedAt: CREATED });
+const payer = (input: AppOwnershipHistory, eventAt: string) => appPayerAtEventTime(input, event(eventAt));
 
-test("resolver places an event in exactly one half-open ownership interval", () => {
-  expect(appPayerAtEventTime(history(), at(A0, -1))).toBe("first");
-  expect(appPayerAtEventTime(history(), A0)).toBe("second");
-  expect(appPayerAtEventTime(history(), at(A1, -1))).toBe("second");
-  expect(appPayerAtEventTime(history(), A1)).toBe("third");
-  expect(appPayerAtEventTime(history({ ownerAccountId: "first", ownershipEpoch: 0, transfers: [] }), NOW)).toBe("first");
-  // A walk stopped one row past the interval still proves it and its start.
-  const A2 = "2026-10-20T00:00:00.000Z";
+test("resolver attributes only usage spans that lie inside one ownership interval", () => {
+  // Usage spans [T - G, min(T + G, recordedAt)]; a boundary inside it splits ownership.
+  expect(payer(history(), at(A0, -G - 1))).toBe("first");
+  expect(payer(history(), at(A0, -G))).toBeUndefined();
+  expect(payer(history(), A0)).toBeUndefined();
+  expect(payer(history(), at(A0, G - 1))).toBeUndefined();
+  expect(payer(history(), at(A0, G))).toBe("second");
+  expect(payer(history(), MID)).toBe("second");
+  expect(payer(history(), at(A1, -G - 1))).toBe("second");
+  expect(payer(history(), at(A1, G))).toBe("third");
+  expect(payer(history(), NOW)).toBe("third");
+  // Usage happens before its report reaches the server: the span ends at recordedAt.
+  expect(payer(history(), at(NOW, G))).toBe("third");
+  expect(payer(history(), at(NOW, G + 1))).toBeUndefined();
+  // No usage precedes the app; the span starts no earlier than its creation.
+  const initial = history({ ownerAccountId: "first", ownershipEpoch: 0, transfers: [] });
+  expect(payer(initial, at(CREATED, -1))).toBeUndefined();
+  expect(payer(initial, at(CREATED, 1))).toBe("first");
+  // Bounded lateness applies only when the claim selects between owners.
+  expect(payer(initial, LATE)).toBe("first");
+  expect(payer(history(), LATE)).toBeUndefined();
+  // A walk stopped one row past the span's interval still proves it and its start.
+  const A2 = "2026-10-27T00:00:00.000Z";
   const stopped = history({ ownerAccountId: "fourth", ownershipEpoch: 3, transfers: [
     { ownershipEpoch: 2, fromAccountId: "third", toAccountId: "fourth", acceptedAt: A2 },
     history().transfers[0]!,
   ] });
-  expect(appPayerAtEventTime(stopped, NOW)).toBe("fourth");
-  expect(appPayerAtEventTime(stopped, at(A2, -1))).toBeUndefined();
+  expect(payer(stopped, NOW)).toBe("fourth");
+  expect(payer(stopped, at(A2, -G - 1))).toBeUndefined();
 });
 
 test("resolver refuses incomplete, ambiguous or unplaceable history", () => {
   const [newer, older] = history().transfers;
   for (const [label, input, eventAt] of [
-    ["invalid event time", history(), "2026-10-20"],
-    ["non-canonical event time", history(), "2026-10-20T00:00:00Z"],
+    ["invalid event time", history(), "2026-10-26"],
+    ["non-canonical event time", history(), "2026-10-26T00:00:00Z"],
     ["missing preceding boundary", history({ transfers: [newer] }), NOW],
-    ["walk ends before epoch 0", history({ transfers: [newer] }), at(A1, -1)],
+    ["walk ends before epoch 0", history({ transfers: [newer] }), MID],
     ["epoch gap", history({ ownershipEpoch: 3 }), NOW],
     ["owner discontinuity", history({ ownerAccountId: "fourth" }), NOW],
     ["chain discontinuity", history({ transfers: [newer, { ...older, toAccountId: "other" }] }), NOW],
     ["duplicate epoch", history({ transfers: [newer, newer, older] }), NOW],
-    ["self transfer", history({ transfers: [newer, { ...older, fromAccountId: "second" }] }), at(A0, -1)],
+    ["self transfer", history({ transfers: [newer, { ...older, fromAccountId: "second" }] }), at(A0, -G - 1)],
     ["missing acceptance time", history({ transfers: [newer, { ...older, acceptedAt: "" }] }), NOW],
-    ["non-canonical acceptance time", history({ transfers: [{ ...newer, acceptedAt: "2026-10-10 00:00:00" }, older] }), NOW],
+    ["non-canonical acceptance time", history({ transfers: [{ ...newer, acceptedAt: "2026-10-25 00:00:00" }, older] }), NOW],
     ["non-increasing acceptance time", history({ transfers: [newer, { ...older, acceptedAt: A1 }] }), NOW],
-    ["draining current interval", history({ transferDraining: true }), NOW],
-    ["draining initial interval", history({ ownerAccountId: "first", ownershipEpoch: 0, transfers: [], transferDraining: true }), NOW],
+    ["draining current interval", history({ drainingTransferCreatedAt: DRAIN }), NOW],
+    ["draining with unreadable creation", history({ drainingTransferCreatedAt: "" }), at(A1, G)],
+    ["draining initial interval", history({ ownerAccountId: "first", ownershipEpoch: 0, transfers: [],
+      drainingTransferCreatedAt: DRAIN }), NOW],
     ["missing owner", history({ ownerAccountId: "" }), NOW],
     ["invalid epoch", history({ ownershipEpoch: -1 }), NOW],
   ] as const) {
-    expect({ label, payer: appPayerAtEventTime(input, eventAt) }).toEqual({ label, payer: undefined });
+    expect({ label, payer: payer(input, eventAt) }).toEqual({ label, payer: undefined });
   }
-  // A drain only leaves the open interval unknown; closed intervals stay proven.
-  expect(appPayerAtEventTime(history({ transferDraining: true }), at(A1, -1))).toBe("second");
+  expect(appPayerAtEventTime(history(), { ...event(NOW), appCreatedAt: "not a time" })).toBeUndefined();
+  // A drain leaves only usage that may reach its acceptance unknown.
+  expect(payer(history({ drainingTransferCreatedAt: DRAIN }), MID)).toBe("second");
+  expect(payer(history({ drainingTransferCreatedAt: DRAIN }), at(A1, G))).toBe("third");
+  expect(payer(history({ drainingTransferCreatedAt: DRAIN }), at(DRAIN, -G - 1))).toBe("third");
+  expect(payer(history({ drainingTransferCreatedAt: DRAIN }), at(DRAIN, -G))).toBeUndefined();
 });
 
 test("independent meters follow the accepted transfer ledger with memory/Postgres/D1 parity", async () => {
   for (const lane of await lanes()) {
     const record = meter(lane);
+    await seedApp(lane, "cap_zero");
+    // A never-transferred app has one owner for any placeable claim.
+    expect([lane.name, await record("cap_zero"), await record("cap_zero", LATE),
+      await record("cap_zero", at(CREATED, -1)), await record("cap_zero", at(NOW, G + 1))])
+      .toEqual([lane.name, "first_owner", "first_owner", undefined, undefined]);
+
     await seedApp(lane, "cap_one");
     expect([lane.name, await record("cap_one")]).toEqual([lane.name, "first_owner"]);
     // Pending and cancelled rows are not payer history.
     await lane.insertTransfer({ id: "cap_one_cancelled", capsuleId: "cap_one", fromAccountId: "first_owner",
       toAccountId: "someone_else", ownershipEpoch: 0, state: "cancelled", createdAt: CREATED, updatedAt: at(A0, -60_000) });
     await transfer(lane, "cap_one", "first_owner", "second_owner", 0, A0);
-    expect([lane.name, await record("cap_one", at(A0, -1)), await record("cap_one", A0), await record("cap_one")])
-      .toEqual([lane.name, "first_owner", "second_owner", "second_owner"]);
-    // An event after the record time cannot be placed in this snapshot.
-    expect([lane.name, await record("cap_one", at(NOW, 1))]).toEqual([lane.name, undefined]);
+    // A late report placed well before the acceptance stays with the old owner;
+    // one whose usage span reaches the acceptance belongs to neither.
+    expect([lane.name, await record("cap_one", at(A0, -G - 1)), await record("cap_one", at(A0, -G)),
+      await record("cap_one", A0), await record("cap_one", at(A0, G)), await record("cap_one")])
+      .toEqual([lane.name, "first_owner", undefined, undefined, "second_owner", "second_owner"]);
+    expect([lane.name, await record("cap_one", at(NOW, G + 1)), await record("cap_one", LATE),
+      await record("cap_one", at(CREATED, -1))]).toEqual([lane.name, undefined, undefined, undefined]);
 
     await seedApp(lane, "cap_two");
     await transfer(lane, "cap_two", "first_owner", "second_owner", 0, A0);
     await transfer(lane, "cap_two", "second_owner", "third_owner", 1, A1);
-    expect([lane.name, await record("cap_two", at(A0, -1)), await record("cap_two", A0),
-      await record("cap_two", at(A1, -1)), await record("cap_two", A1), await record("cap_two")])
-      .toEqual([lane.name, "first_owner", "second_owner", "second_owner", "third_owner", "third_owner"]);
+    expect([lane.name, await record("cap_two", at(A0, -G - 1)), await record("cap_two", at(A0, G)),
+      await record("cap_two", MID), await record("cap_two", at(A1, -G - 1)), await record("cap_two", A1),
+      await record("cap_two", at(A1, G)), await record("cap_two")])
+      .toEqual([lane.name, "first_owner", "second_owner", "second_owner", "second_owner", undefined,
+        "third_owner", "third_owner"]);
 
     const second = await listPayerUsage(lane.control, "second_owner");
-    expect([lane.name, second.usageEvents.length]).toEqual([lane.name, 4]);
+    expect([lane.name, second.usageEvents.length]).toEqual([lane.name, 5]);
     expect([lane.name, second.usageEvents.every((row) => row.payerAccountId === "second_owner")]).toEqual([lane.name, true]);
   }
 });
@@ -209,7 +250,7 @@ test("incomplete or ambiguous transfer history stays unattributed on memory/Post
   for (const lane of await lanes()) {
     const record = meter(lane);
     const unattributed = async (capsuleId: string, label: string) => {
-      expect([lane.name, label, await record(capsuleId, at(A0, -1)), await record(capsuleId, at(A1, -1)),
+      expect([lane.name, label, await record(capsuleId, at(A0, -G - 1)), await record(capsuleId, MID),
         await record(capsuleId)]).toEqual([lane.name, label, undefined, undefined, undefined]);
     };
     // An ownership change without its accepted ledger row.
@@ -223,7 +264,7 @@ test("incomplete or ambiguous transfer history stays unattributed on memory/Post
     await unattributed("cap_gap", "epoch gap");
     // The acceptance time is not a recorded canonical instant.
     await seedApp(lane, "cap_time");
-    await transfer(lane, "cap_time", "first_owner", "second_owner", 0, A0, { updatedAt: "2026-10-01 00:00:00" });
+    await transfer(lane, "cap_time", "first_owner", "second_owner", 0, A0, { updatedAt: "2026-10-23 00:00:00" });
     await unattributed("cap_time", "non-canonical acceptance time");
     await seedApp(lane, "cap_empty_time");
     await transfer(lane, "cap_empty_time", "first_owner", "second_owner", 0, A0, { updatedAt: "" });
@@ -247,17 +288,17 @@ test("incomplete or ambiguous transfer history stays unattributed on memory/Post
   }
 });
 
-test("a transfer drain leaves only the current interval unattributed on memory/Postgres/D1", async () => {
+test("a transfer drain leaves only usage that may reach its acceptance unattributed on memory/Postgres/D1", async () => {
   for (const lane of await lanes()) {
     const record = meter(lane);
     await seedApp(lane, "cap_drain");
     await transfer(lane, "cap_drain", "first_owner", "second_owner", 0, A0);
     await lane.insertTransfer({ id: "cap_drain_pending", capsuleId: "cap_drain", fromAccountId: "second_owner",
-      toAccountId: "third_owner", ownershipEpoch: 1, state: "pending", createdAt: A1, updatedAt: A1 });
+      toAccountId: "third_owner", ownershipEpoch: 1, state: "pending", createdAt: DRAIN, updatedAt: DRAIN });
     // A pending transfer that has not started draining does not move the boundary.
     expect([lane.name, await record("cap_drain")]).toEqual([lane.name, "second_owner"]);
     await lane.insertTransfer({ id: "cap_drain_other", capsuleId: "cap_other", fromAccountId: "x", toAccountId: "y",
-      ownershipEpoch: 0, drainManagementEpoch: 3, state: "pending", createdAt: A1, updatedAt: A1 });
+      ownershipEpoch: 0, drainManagementEpoch: 3, state: "pending", createdAt: DRAIN, updatedAt: DRAIN });
     await setOwner(lane, "cap_drain", "second_owner", 1, 1, { state: "draining", epoch: 3 });
     // Draining for another reason (no transfer drain epoch) keeps attribution.
     expect([lane.name, await record("cap_drain")]).toEqual([lane.name, "second_owner"]);
@@ -267,17 +308,20 @@ test("a transfer drain leaves only the current interval unattributed on memory/P
     await seedApp(lane, "cap_drain");
     await transfer(lane, "cap_drain", "first_owner", "second_owner", 0, A0);
     await lane.insertTransfer({ id: "cap_drain_pending", capsuleId: "cap_drain", fromAccountId: "second_owner",
-      toAccountId: "third_owner", ownershipEpoch: 1, drainManagementEpoch: 3, state: "pending", createdAt: A1, updatedAt: A1 });
+      toAccountId: "third_owner", ownershipEpoch: 1, drainManagementEpoch: 3, state: "pending", createdAt: DRAIN, updatedAt: DRAIN });
     await setOwner(lane, "cap_drain", "second_owner", 1, 1, { state: "draining", epoch: 3 });
-    expect([lane.name, await record("cap_drain", at(A0, -1)), await record("cap_drain", A0), await record("cap_drain")])
-      .toEqual([lane.name, "first_owner", undefined, undefined]);
+    // The pending acceptance is stamped after DRAIN: usage that ends before it
+    // still belongs to the current owner.
+    expect([lane.name, await record("cap_drain", at(A0, -G - 1)), await record("cap_drain", MID),
+      await record("cap_drain", at(DRAIN, -G - 1)), await record("cap_drain", at(DRAIN, -G)), await record("cap_drain")])
+      .toEqual([lane.name, "first_owner", "second_owner", "second_owner", undefined, undefined]);
   }
 });
 
 test("Postgres and D1 acceptance stamps the boundary later meters use", async () => {
   for (const lane of (await lanes()).filter((current) => current.authorization)) {
     const record = meter(lane, () => Date.now());
-    await seedApp(lane, "cap_accept");
+    await seedApp(lane, "cap_accept", "2020-01-01T00:00:00.000Z");
     const authorization = lane.authorization!;
     const { transferId } = await authorization.createTransfer({ capsuleId: "cap_accept", actorAccountId: "first_owner",
       toAccountId: "second_owner", expectedOwnershipEpoch: 0 });
@@ -288,7 +332,8 @@ test("Postgres and D1 acceptance stamps the boundary later meters use", async ()
       ?.transfers[0]?.acceptedAt;
     expect([lane.name, typeof acceptedAt === "string" && Date.parse(acceptedAt) >= before])
       .toEqual([lane.name, true]);
-    expect([lane.name, await record("cap_accept", at(acceptedAt!, -1)), await record("cap_accept", acceptedAt!),
-      await record("cap_accept")]).toEqual([lane.name, "first_owner", "second_owner", "second_owner"]);
+    // Live usage within G of the acceptance cannot be split between owners.
+    expect([lane.name, await record("cap_accept", at(acceptedAt!, -G - 1)), await record("cap_accept"),
+      await record("cap_accept", at(acceptedAt!, G))]).toEqual([lane.name, "first_owner", undefined, "second_owner"]);
   }
 });

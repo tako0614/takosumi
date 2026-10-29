@@ -16,7 +16,7 @@ import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/bil
 import type { Workspace } from "takosumi-contract/workspaces";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { BillingService } from "./billing_service.ts";
-import { appPayerAtEventTime } from "./app_payer_history.ts";
+import { appPayerAtEventTime, meterEventSpan, type MeterEventPlacement } from "./app_payer_history.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 
@@ -131,14 +131,12 @@ export class UsageReportingService {
   ): Promise<{ readonly usageEvent: UsageEvent }> {
     requireNonEmptyString(workspaceId, "workspaceId");
     await this.#requireWorkspace(workspaceId);
-    if (input.capsuleId) {
-      const capsule = await this.#store.getCapsule(input.capsuleId);
-      if (!capsule || capsule.workspaceId !== workspaceId) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
-          "usage capsuleId must belong to the Workspace",
-        );
-      }
+    const capsule = input.capsuleId ? await this.#store.getCapsule(input.capsuleId) : undefined;
+    if (input.capsuleId && (!capsule || capsule.workspaceId !== workspaceId)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage capsuleId must belong to the Workspace",
+      );
     }
     const recordedAt = this.#now();
     const usageEvent = normalizeMeteredUsageEvent(
@@ -147,27 +145,31 @@ export class UsageReportingService {
       () => this.#newId("usage"),
       () => new Date(recordedAt).toISOString(),
     );
-    const identity = input.capsuleId
-      ? await this.#meterPayer(input.capsuleId, usageEvent.createdAt, recordedAt)
+    const identity = capsule
+      ? await this.#meterPayer(capsule.id, { at: usageEvent.createdAt, recordedAt, appCreatedAt: capsule.createdAt })
       : undefined;
     return { usageEvent: await this.#store.putUsageEvent({ ...usageEvent, ...identity }) };
   }
 
   /**
-   * The owner whose ownership interval contains the event time, from the
-   * accepted transfer ledger. A producer runId is not Core reservation
-   * authority, and an unprovable payer stays absent: never the current owner.
+   * The one owner whose ownership interval contains the event's whole usage
+   * span, from the accepted transfer ledger. A producer runId is not Core
+   * reservation authority. An unprovable payer stays absent; it is never the
+   * current owner by default.
    */
-  async #meterPayer(capsuleId: string, eventAt: string, recordedAt: number): Promise<AppBillingIdentity | undefined> {
+  async #meterPayer(capsuleId: string, event: MeterEventPlacement): Promise<AppBillingIdentity | undefined> {
     const ownership = await this.#billing.resolveAppBillingOwnership(capsuleId);
-    // The ledger snapshot can only place instants it has already seen; a later
-    // acceptance could still start a new owner's interval before this event.
-    if (Date.parse(eventAt) > recordedAt) return undefined;
-    const history = await this.#store.getAppOwnershipHistory(capsuleId, eventAt);
-    // No owner tuple or ledger yet (pre-backfill / legacy schema): no transfer
-    // can have been accepted, so only the initial owner of epoch 0 applies.
-    if (!history) return ownership.ownershipEpoch === 0 ? ownership.identity : undefined;
-    const payerAccountId = appPayerAtEventTime(history, eventAt);
+    const span = meterEventSpan(event);
+    if (!span) return undefined;
+    // Walk until the boundary at or before the span start, so every acceptance
+    // that could fall inside the span is read.
+    const history = await this.#store.getAppOwnershipHistory(capsuleId, new Date(span.start).toISOString()) ??
+      // No owner tuple or ledger yet (pre-backfill / legacy schema): no transfer
+      // can have been accepted, so only the initial owner of epoch 0 applies.
+      (ownership.ownershipEpoch === 0
+        ? { ownerAccountId: ownership.identity.payerAccountId, ownershipEpoch: 0, transfers: [] }
+        : undefined);
+    const payerAccountId = history ? appPayerAtEventTime(history, event) : undefined;
     return payerAccountId ? { capsuleId, payerAccountId } : undefined;
   }
 }

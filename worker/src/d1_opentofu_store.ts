@@ -11344,7 +11344,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     await this.#ensureSchema();
     // D1 has no row locks. Its acceptance commits `management_state =
     // 'draining'` before stamping the acceptance time, so this one-statement
-    // snapshot reports that window as `transfer_draining`.
+    // snapshot reports that window with the draining transfer's creation time.
     try {
       const result = await this.db.prepare(appOwnershipHistorySql({
         capsules: "capsules", transfers: "capsule_ownership_transfers", placeholder: "?",
