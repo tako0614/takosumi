@@ -84,6 +84,51 @@ The freeze permits only canonical, authenticated owner-bound personal Workspace
 singleton bootstrap for a fresh account. Organization creation and membership
 mutations stay frozen; the bootstrap cannot select an arbitrary owner.
 
+## Phase 6b authorization cutover check
+
+Phase 6b switches app management authorization from Workspace membership to
+the app's owner/member role. The code keeps the old Workspace decision for any
+Capsule without an ownership row, so a v75/v76 target and Capsules the backfill
+has not reached behave exactly as before. Once a Capsule has an ownership row,
+only its owner and members can manage it. The rollout gate is "no unexpected
+difference between the two rules", checked read-only instead of by sampling
+production traffic.
+
+```sh
+bun scripts/verify-app-access-cutover.ts --adapter=/absolute/operator/ownership-target.ts
+bun scripts/verify-app-access-cutover.ts --adapter=/absolute/operator/ownership-target.ts --fail-on-difference
+```
+
+It uses the same operator adapter module as the backfill
+(`openOwnershipBackfill()`), never writes, needs no mutation freeze and ignores
+`workspaceMutationsFrozen`. Use read-only credentials where available. For every
+live Capsule and every account that can manage it under either rule, it compares
+three access classes (`view`, `manage`, `owner_only`) between the legacy
+Workspace decision and the per-app decision after the backfill. Capsules
+without an ownership row are projected with the backfill's own inference
+(Workspace owner becomes the owner, active owner/admin members become members),
+so it can run before the backfill (including on D1 v75) and again after it.
+
+The JSON report lists `differences` with a `reason`:
+
+- `workspace_reader_not_app_member`: a Workspace `member`/`viewer` could read
+  the app; they are not migrated and lose access. Confirm or add them as app
+  members before the cutover.
+- `workspace_manager_not_app_owner`: a Workspace admin becomes an app member and
+  loses owner-only actions (uninstall, transfer, member management).
+- `workspace_manager_not_app_member`: a Workspace owner/admin is outside an
+  explicit app roster (a new or transferred app) and loses the app.
+- `app_role_without_workspace_role`: an app owner/member without Workspace
+  membership gains the app (for example after a transfer).
+
+Each difference is a decision by design of TASK-0118; review them, not just the
+count. The Phase 0 production inventory (5 Workspaces, 2 owners, 0 non-owner
+members) is expected to report `differenceCount: 0`. The report contains
+account and Capsule ids; keep it with the private backfill inventory, not in a
+public repository or ticket. Bearer restrictions (PAT `appIds`, Workspace-bound
+tokens) are identical under both rules and are not part of this comparison;
+installed-app OAuth tokens are always the intersection of both rules.
+
 Failure recovery preserves the additive schema and existing storage roots.
 Use a reviewed forward repair for incorrect backfill data. Do not drop the new
 columns/tables or re-run against an unreviewed target as a rollback.

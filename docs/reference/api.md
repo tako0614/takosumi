@@ -236,6 +236,30 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 
 PATには `appIds` を指定できます。実効権限はscopeと現在のアプリ内の役割の積です。アプリに束縛したPATはアカウント全体の個人接続や使用量を読めません。旧Workspace route・claimは互換期間だけ維持します。インストールされたアプリへのOIDCサインインは全アカウントに開き、`takosumi.capsule_id` でアプリを示します。現在の所有者・メンバーだけに `takosumi.app_role` を発行します。
 
+### アプリ管理の権限
+
+アプリに所有記録 (`capsules.owner_account_id`) があるとき、管理操作の可否はそのアプリでの役割だけで決まります。Workspaceの所有者・管理者であっても、アプリの所有者・メンバーでなければ管理できません。逆に、アプリの所有者・メンバーはWorkspaceのメンバーでなくても管理できます。アプリを使うだけの人はメンバーではなく、アプリ自身のURLとアクセス規則で利用します。
+
+| 操作 (`AppAction`) | 所有者 | メンバー | 主なroute |
+| --- | --- | --- | --- |
+| 表示 (`view`) | 可 | 可 | `GET /capsules/{id}` と配下のGET、そのアプリのRun・StateVersion・Source・InstallConfig・互換レポートのGET |
+| 設定変更 (`change_settings`) | 可 | 可 | `PATCH /capsules/{id}`、`configuration-plans`、`install-config-re-adoptions`、`backups`、所有Sourceの `PATCH`・hook secret |
+| 更新 (`update`) | 可 | 可 | `plan`、`revision-plans`、`drift-check`、所有Sourceの `sync`・`compatibility-check`、通常のRunの承認・適用・取消 |
+| ロールバック (`rollback`) | 可 | 可 | `POST /state-versions/{id}/rollback-plan`、restore Runの承認 |
+| 接続の選択 (`choose_connection`) | 可 | 可 | `providerBindings` を含む `configuration-plans`。選べるのは所有者の接続とoperatorのbindable接続だけ |
+| Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}` |
+| アンインストール (`uninstall`) | 可 | 不可 | `DELETE /capsules/{id}`、`uninstall`・`cancel-uninstall`・`abandon`・`destroy-plan`、destroy Runの承認・適用・取消、所有Sourceの `DELETE` |
+| 所有者の譲渡 (`transfer_ownership`) | 可 | 不可 | `ownership-transfers` |
+| メンバー管理 (`manage_members`) | 可 | 不可 | `members` の追加・削除 (メンバー本人の離脱は可) |
+
+拒否は `403 app_access_denied` (役割がない) または `403 app_owner_only` (所有者だけの操作) です。所有記録の確認と役割の読み取りの間に所有者が変わった場合は `409 conflict` を返し、再試行を求めます。完了したアンインストール後も、残っている所有記録の所有者・メンバーは履歴を表示できます。
+
+資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリのOAuthアクセストークンは権限を広げません。アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通り、メンバー管理・譲渡・アンインストールには使えません。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も同じく両方を要求します。
+
+Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者のいないpreflight Source、Workspaceの接続) はPhase 9まで従来のWorkspace判定で互換提供します。一覧には引き続き表示されますが、所有記録のあるアプリへの操作はアプリでの判定を通ります。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
+
+**移行中の扱い。** 所有記録がまだ使えないアプリは、そのリクエストに限り従来のWorkspace判定で決めます。対象は、所有ストアがない構成、D1 v77 / Postgres v123 より前のschema、backfillがまだ所有記録を書いていないアプリです。所有記録が書かれた時点から、そのアプリはアプリでの判定だけになります。従来判定を使ったことは、IDを含まない構造化ログ `app_authorization_workspace_fallback` (`reason` は `ownership_store_unavailable`・`ownership_schema_unavailable`・`capsule_not_backfilled`) に、isolateごとに5分に1回まとめて残します。追加の確認queryは発行せず、所有ストアの既存のschema確認を使います。
+
 ### Account views
 
 | メソッド | パス                          | 説明                                                      |

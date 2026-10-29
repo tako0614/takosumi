@@ -251,6 +251,30 @@ Member addition returns `202 { accepted: true }` for both unknown emails and ver
 
 PATs may set `appIds`; effective permission is token scopes intersected with the caller's current app role. App-bound credentials cannot read account-wide personal resources. Workspace routes and claims remain compatibility surfaces. Installed-app OIDC accepts any account and always identifies the app with `takosumi.capsule_id`; only current managers receive `takosumi.app_role`. Nonmembers receive no management role.
 
+### App management permissions
+
+Once an app has an ownership row (`capsules.owner_account_id`), the caller's role in that app is the only management authority. A Workspace owner or admin who is not the app's owner or member cannot manage it, and an app owner or member does not need Workspace membership. People who only use an app are not members; the app's own URL and access rules decide that.
+
+| Action (`AppAction`) | Owner | Member | Main routes |
+| --- | --- | --- | --- |
+| `view` | yes | yes | `GET /capsules/{id}` and its GET sub-routes; GET of that app's Runs, StateVersions, Sources, InstallConfigs and compatibility reports |
+| `change_settings` | yes | yes | `PATCH /capsules/{id}`, `configuration-plans`, `install-config-re-adoptions`, `backups`, owned Source `PATCH` and hook secret |
+| `update` | yes | yes | `plan`, `revision-plans`, `drift-check`, owned Source `sync` and `compatibility-check`, approve/apply/cancel of ordinary Runs |
+| `rollback` | yes | yes | `POST /state-versions/{id}/rollback-plan`, approval of restore Runs |
+| `choose_connection` | yes | yes | `configuration-plans` with `providerBindings`; only the owner's connections and bindable operator connections can be chosen |
+| `change_interface_link` | yes | yes | `PUT`/`DELETE /capsules/{id}/interface-links/{key}` |
+| `uninstall` | yes | no | `DELETE /capsules/{id}`, `uninstall`, `cancel-uninstall`, `abandon`, `destroy-plan`, approve/apply/cancel of destroy Runs, owned Source `DELETE` |
+| `transfer_ownership` | yes | no | `ownership-transfers` |
+| `manage_members` | yes | no | adding or removing `members` (a member may leave) |
+
+Refusals are `403 app_access_denied` (no app role) or `403 app_owner_only` (owner-only action). If ownership changes between the ownership read and the role read, the request fails with `409 conflict` and should be retried. After an uninstall completes, the retained owner and members can still read the app's history.
+
+Credential restrictions apply before any role: an app outside a PAT's `appIds`, or an app in another Workspace than a Workspace-bound PAT or OAuth token, is refused. An installed app's own OAuth access token never gains authority: it passes only when both the app role and the legacy Workspace decision allow the request, and it cannot manage members, transfer ownership or uninstall. Shared-account compositions that require current membership (`requireCurrentMembership`) likewise need both.
+
+Workspace-level routes (lists, Workspace settings, Workspace creation, unowned preflight Sources, Workspace connections) keep the legacy Workspace decision as compatibility surfaces until Phase 9. Lists still show the apps, but actions on an app with an ownership row go through the per-app decision. Workspace bulk actions (`plan-update`, `drift-check`, Workspace backup, Interface materialization retries) require the Workspace decision and, in addition, that the action is allowed on every app in the Workspace that has an ownership row.
+
+**During the rollout.** An app whose ownership row is not usable yet is decided by the legacy Workspace rule for that request: when the composition has no ownership store, when the schema predates D1 v77 / Postgres v123, or when the backfill has not written the app's owner yet. From the moment an ownership row exists, that app is decided per app only. Each fallback is reported as the id-free structured log `app_authorization_workspace_fallback` (`reason` is `ownership_store_unavailable`, `ownership_schema_unavailable` or `capsule_not_backfilled`), aggregated per isolate at most once every five minutes. No extra probe query is issued; the ownership store's existing schema check is reused.
+
 ### Account views
 
 | Method | Path | Description |
