@@ -279,7 +279,7 @@ test("a nonmember can sign in to an installed app without management or Workspac
   expect(body.workspace_memberships).toBeUndefined();
 });
 
-test("migrated app claims do not inherit former Workspace authority", async () => {
+test("owned app exposes the Workspace compatibility role only with live app access", async () => {
   const { store, state, operations } = await liveGrantFixture();
   state.ownerAccountId = "tsub_other_owner";
   state.appRole = undefined;
@@ -300,7 +300,13 @@ test("migrated app claims do not inherit former Workspace authority", async () =
   const withAppAccess = await handleUserInfo({ request, store, clients: new Map(), operations });
   expect(withAppAccess.status).toBe(200);
   expect((await withAppAccess.json() as { takosumi: unknown }).takosumi).toEqual({
-    capsule_id: capsuleId, workspace_id: workspaceId, role: "member", app_role: "member",
+    capsule_id: capsuleId, workspace_id: workspaceId, role: "owner", app_role: "member",
+  });
+
+  state.memberRoles = ["admin"];
+  const withAdminWorkspaceRole = await handleUserInfo({ request, store, clients: new Map(), operations });
+  expect((await withAdminWorkspaceRole.json() as { takosumi: unknown }).takosumi).toEqual({
+    capsule_id: capsuleId, workspace_id: workspaceId, role: "admin", app_role: "member",
   });
 });
 
@@ -477,6 +483,26 @@ test("authorize materializes required Interfaces for the exact pairwise Principa
     .principalId;
   expect(principalId).not.toBe(accountSubject);
   expect(principalId.length).toBeGreaterThan(20);
+});
+
+test("app member outside the Workspace still materializes required Interfaces", async () => {
+  const { store, state, operations, installConfig, requiredInterfaceCalls } = await liveGrantFixture();
+  state.ownerAccountId = "tsub_other_owner";
+  state.memberStatus = "suspended";
+  installConfig.requiredInterfaces = [{
+    key: "ai", interface: { type: "takosumi.ai.gateway", version: "1" },
+    permissions: ["ai.chat"], delivery: { type: "oauth2" },
+  }];
+  store.saveOidcClient({
+    ...store.findOidcClient(clientId)!,
+    activationDigest: await oidcClientActivationDigest({
+      workspaceId, capsuleId, executionAuthorityEpoch: 1,
+      installConfig: installConfig as InstallConfig,
+    }),
+  });
+  const response = await handleAuthorize({ ...authorizeRequest(), flow, clients: new Map(), store, operations });
+  expect(response.status).toBe(302);
+  expect(requiredInterfaceCalls).toHaveLength(1);
 });
 
 test("composition OIDC client may request one live Workspace-bound Principal token", async () => {

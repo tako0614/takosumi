@@ -215,11 +215,11 @@ export async function validateOidcLiveGrant(input: {
     // Resolver outage cannot confer management authority to an ID token.
   }
   const workspaceRole = await currentWorkspaceRole(operations, capsule.workspaceId, subject);
-  // Legacy apps may still depend on Workspace claims. Once a Capsule has its
-  // own owner, those claims must never elevate a former Workspace member or
-  // let a Workspace owner impersonate an app owner.
+  // Legacy apps still read Workspace claims. For an owned Capsule, require
+  // current app access before exposing the independent Workspace role; app
+  // authority is carried only in app_role.
   const role = capsule.ownerAccountId
-    ? (appRole && workspaceRole ? appRole : undefined)
+    ? (appRole && workspaceRole ? workspaceRole : undefined)
     : workspaceRole;
   return {
     ok: true,
