@@ -9580,7 +9580,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       pgSchema.connections,
       pgSchema.connections.connectionJson,
       {
-        where: isNull(pgSchema.connections.workspaceId),
+        where: and(
+          isNull(pgSchema.connections.workspaceId),
+          sql`${pgSchema.connections.connectionJson}->>'scope'='operator'`,
+        ),
         orderBy: [
           asc(pgSchema.connections.createdAt),
           asc(pgSchema.connections.id),
