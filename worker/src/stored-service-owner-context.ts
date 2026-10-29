@@ -1,6 +1,7 @@
 /** Local, non-RPC allocation capture. Core remains the allocation authority;
  * none of these contexts can be obtained by supplying a Workspace UID. */
 import type { ArtifactReferenceAllocation, ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import { isInstallPlanSourceReservation } from "../../core/domains/install-plans/source-reservation.ts";
 import type { BackupArtifactWriteControl } from "../../core/domains/backups/mod.ts";
 import type { Run } from "takosumi-contract/runs";
 import { publicStoredRun, runManagementAuthority } from "../../core/domains/deploy-control/store.ts";
@@ -373,6 +374,31 @@ function unreleasedForeignSourceArchiveQuery(refPredicate: string): string {
     ), 0) limit 1`;
 }
 
+async function assertRetiredSourceOwner(
+  db: D1Database,
+  input: { readonly workspaceId: string; readonly sourceId: string },
+  source: Record<string, unknown>,
+): Promise<void> {
+  if (typeof source.ownerCapsuleId !== "string") return;
+  const owners = await storedOwnerRows(db,
+    "select id, space_id, source_id, status, record_json from capsules where id = ? limit 2", [source.ownerCapsuleId]);
+  if (owners.length === 0 && isInstallPlanSourceReservation({
+    id: input.sourceId, ownerCapsuleId: source.ownerCapsuleId,
+    createdByInstallPlanId: typeof source.createdByInstallPlanId === "string" ? source.createdByInstallPlanId : undefined,
+  })) {
+    const references = await storedOwnerRows(db,
+      "select id from capsules where source_id = ? or json_extract(record_json, '$.sourceId') = ? limit 1", [input.sourceId, input.sourceId]);
+    if (references.length === 0) return;
+  }
+  if (owners.length !== 1) throw new StoredServiceUsageError();
+  const owner = owners[0]!, record = storedOwnerRecord(owner.record_json);
+  if (owner.id !== source.ownerCapsuleId || owner.space_id !== input.workspaceId ||
+    owner.source_id !== input.sourceId || owner.status !== "destroyed" ||
+    record.id !== owner.id || record.workspaceId !== owner.space_id ||
+    record.sourceId !== owner.source_id || record.status !== owner.status)
+    throw new StoredServiceUsageError();
+}
+
 /** Re-check the persisted retirement fence before every R2 delete dispatch.
  * Another Source's historical reference means this object remains in custody. */
 export async function assertStoredRetiredSourceArchiveDeletion(
@@ -394,17 +420,7 @@ export async function assertStoredRetiredSourceArchiveDeletion(
   const capsules = await storedOwnerRows(db,
     "select id from capsules where source_id = ? and status is not 'destroyed' limit 1", [input.sourceId]);
   if (capsules.length) throw new StoredServiceUsageError();
-  if (typeof source.ownerCapsuleId === "string") {
-    const owners = await storedOwnerRows(db,
-      "select id, space_id, source_id, status, record_json from capsules where id = ? limit 2", [source.ownerCapsuleId]);
-    if (owners.length !== 1) throw new StoredServiceUsageError();
-    const owner = owners[0]!, record = storedOwnerRecord(owner.record_json);
-    if (owner.id !== source.ownerCapsuleId || owner.space_id !== input.workspaceId ||
-      owner.source_id !== input.sourceId || owner.status !== "destroyed" ||
-      record.id !== owner.id || record.workspaceId !== owner.space_id ||
-      record.sourceId !== owner.source_id || record.status !== owner.status)
-      throw new StoredServiceUsageError();
-  }
+  await assertRetiredSourceOwner(db, input, source);
   const active = await storedOwnerRows(db,
     `select id from runs where type = 'source_sync' and status in ('queued', 'running')
       and (source_id = ? or (source_id is null and
@@ -466,17 +482,7 @@ export async function assertStoredRetiredSourceArchiveDeletions(
   const capsules = await storedOwnerRows(db,
     "select id from capsules where source_id = ? and status is not 'destroyed' limit 1", [input.sourceId]);
   if (capsules.length) throw new StoredServiceUsageError();
-  if (typeof source.ownerCapsuleId === "string") {
-    const owners = await storedOwnerRows(db,
-      "select id, space_id, source_id, status, record_json from capsules where id = ? limit 2", [source.ownerCapsuleId]);
-    if (owners.length !== 1) throw new StoredServiceUsageError();
-    const owner = owners[0]!, record = storedOwnerRecord(owner.record_json);
-    if (owner.id !== source.ownerCapsuleId || owner.space_id !== input.workspaceId ||
-      owner.source_id !== input.sourceId || owner.status !== "destroyed" ||
-      record.id !== owner.id || record.workspaceId !== owner.space_id ||
-      record.sourceId !== owner.source_id || record.status !== owner.status)
-      throw new StoredServiceUsageError();
-  }
+  await assertRetiredSourceOwner(db, input, source);
   const active = await storedOwnerRows(db,
     `select id from runs where type = 'source_sync' and status in ('queued', 'running')
       and (source_id = ? or (source_id is null and

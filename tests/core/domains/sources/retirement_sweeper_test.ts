@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import type { Capsule } from "takosumi-contract/capsules";
-import type { StoredSource } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore, type StoredSource } from "../../../../core/domains/deploy-control/store.ts";
+import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../../core/domains/install-plans/source-reservation.ts";
 import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
 import {
   sweepRetiredSources,
@@ -150,6 +152,8 @@ test("deterministic orphan retirement requires scoped creator evidence and a ful
     ["invalid_expiry", { phase: "awaiting_input", mode: "attempt", expiresAt: "invalid" }, false],
     ["invalid_terminal_time", { phase: "discarded", completedAt: "invalid" }, false],
     ["wrong_workspace", { phase: "discarded", workspaceId: "ws_other" }, false],
+    ["wrong_source", { phase: "discarded", sourceId: "src_other" }, false],
+    ["revision", { phase: "discarded", operation: "revision" }, false],
     ["creation_in_progress", { phase: "creating_capsule", mode: "attempt", creationAttempted: true, expiresAt: cutoff }, false],
   ];
   for (const [id, extra, expected] of cases) {
@@ -171,7 +175,7 @@ test("deterministic orphan retirement requires scoped creator evidence and a ful
 });
 
 test("deterministic orphan sweep preserves any existing Capsule and paginates references including destroyed rows", async () => {
-  const creator = plan("plan_capsule", "discarded", { capsuleId: "cap_creator" });
+  const creator = plan("plan_capsule", "discarded", { capsuleId: deterministicInitialCapsuleId("plan_capsule") });
   const row = source("src_capsule", 48, { createdByInstallPlanId: creator.id });
   const { calls, dependencies } = fixture([row], [creator], [{ id: creator.capsuleId } as Capsule]);
   await sweepRetiredSources(dependencies);
@@ -190,4 +194,51 @@ test("deterministic orphan sweep preserves any existing Capsule and paginates re
   expect(calls).toEqual([]);
   expect(pages).toHaveLength(4);
   expect(pages.every((page) => (page as { includeDestroyed: boolean }).includeDestroyed)).toBe(true);
+});
+
+test("sweep retires actual pre-Capsule reservations, including a lost Source acknowledgement", async () => {
+  for (const kind of ["discarded", "failed", "expired"] as const) {
+    for (const lostAck of [false, true]) {
+      const planId = `git_reserved_${kind}_${lostAck}`;
+      const sourceId = deterministicInstallSourceId(planId);
+      const creator = plan(planId, kind === "expired" ? "awaiting_input" : kind, {
+        ...(kind === "failed" ? {} : { mode: "attempt" as const }),
+        sourceId: lostAck ? undefined : sourceId,
+        expiresAt: "2026-10-27T11:00:00.000Z",
+      });
+      const { dependencies } = fixture([], [creator]);
+      const store = new InMemoryOpenTofuControlStore();
+      await store.putWorkspace({ id: "ws_one", handle: "one", displayName: "One", type: "personal",
+        ownerUserId: "user_one", createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" });
+      const service = new SourcesService({ store, plans: dependencies.plans, now: () => NOW });
+      await service.ensureOwnedSource({ id: sourceId, workspaceId: "ws_one", name: "Reserved",
+        ownerCapsuleId: deterministicInitialCapsuleId(planId), createdByInstallPlanId: planId,
+        url: "https://example.com/repo.git", ref: "main", path: ".", createdAt: "2026-10-25T00:00:00.000Z" });
+      const result = await sweepRetiredSources({ ...dependencies, store,
+        retireOwnedSource: (id, reason) => service.retireOwnedSource(id, reason) });
+      expect(result, `${kind}/${lostAck}`).toMatchObject({ attempted: 1, retired: 1, failures: 0 });
+      expect(await store.getSource(sourceId)).toBeUndefined();
+    }
+  }
+});
+
+test("destructive admission rechecks the reserved Source creator and keeps changed evidence active", async () => {
+  const planId = "git_creator_recheck";
+  for (const extra of [{ sourceId: "src_other" }, { workspaceId: "ws_other" },
+    { operation: "revision" as const }, { phase: "awaiting_input" as const, mode: "attempt" as const, expiresAt: new Date(NOW.getTime() + 3_600_000).toISOString() },
+    { capsuleId: "cap_other" }]) {
+    const sourceId = deterministicInstallSourceId(planId);
+    const creator = plan(planId, "discarded", extra);
+    const store = new InMemoryOpenTofuControlStore();
+    await store.putWorkspace({ id: "ws_one", handle: "one", displayName: "One", type: "personal",
+      ownerUserId: "user_one", createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() });
+    const service = new SourcesService({ store, now: () => NOW, plans: { get: async () => creator } });
+    await service.ensureOwnedSource({ id: sourceId, workspaceId: "ws_one", name: "Reserved",
+      ownerCapsuleId: deterministicInitialCapsuleId(planId), createdByInstallPlanId: planId,
+      url: "https://example.com/repo.git", ref: "main", path: ".", createdAt: "2026-10-25T00:00:00.000Z" });
+    await expect(service.retireOwnedSource(sourceId, "recovery")).rejects.toMatchObject({
+      details: { reason: "source_owner_not_destroyed" },
+    });
+    expect(await store.getSource(sourceId)).toMatchObject({ status: "active" });
+  }
 });

@@ -1,6 +1,7 @@
 import type { OpenTofuControlStore, StoredSource } from "../deploy-control/store.ts";
 import type { GitInstallPlanStore } from "../install-plans/store.ts";
-import { sourceCreatorPlanAllowsRetirement } from "./retirement_policy.ts";
+import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
+import { sourceCreatorPlanAllowsRetirement, sourceCreatorPlanMatchesSource } from "./retirement_policy.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
@@ -82,7 +83,8 @@ async function retirementReason(
   )) return undefined;
   if (source.ownerCapsuleId) {
     const owner = await deps.store.getCapsule(source.ownerCapsuleId);
-    return owner?.status === "destroyed" ? "owner capsule destroyed" : undefined;
+    if (owner) return owner.status === "destroyed" ? "owner capsule destroyed" : undefined;
+    if (!isInstallPlanSourceReservation(source)) return undefined;
   }
   if (source.retiringAt) return "retry pending source retirement";
   // Legacy independent repositories still require an operator mark. Only a
@@ -90,7 +92,7 @@ async function retirementReason(
   if (!source.createdByInstallPlanId || !Number.isFinite(Date.parse(source.createdAt)) ||
     Date.parse(source.createdAt) + DAY_MS > now) return undefined;
   const creator = await deps.plans.get(source.createdByInstallPlanId);
-  if (!creator || creator.workspaceId !== source.workspaceId ||
+  if (!creator || !sourceCreatorPlanMatchesSource(source, creator) ||
     !sourceCreatorPlanAllowsRetirement(creator, now)) return undefined;
   if (creator.capsuleId && await deps.store.getCapsule(creator.capsuleId)) return undefined;
   let cursor: string | undefined;
