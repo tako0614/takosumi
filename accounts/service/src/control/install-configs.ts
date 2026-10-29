@@ -123,6 +123,7 @@ import { publicInstallConfigRecord } from "../../../../core/domains/capsules/pub
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import { requireAppAccess } from "./app-authorization.ts";
 
 export async function handleInstallConfigs(
   ctx: ControlDispatchContext,
@@ -139,13 +140,31 @@ export async function handleInstallConfigs(
     const installConfigId = decodeURIComponent(segments[1] ?? "");
     const config = await operations.capsules.getInstallConfig(installConfigId);
     if (config.workspaceId !== undefined) {
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId: config.workspaceId,
-        session: ctx.session,
-      });
-      if (!auth.ok) return auth.response;
+      // A per-install config belongs to the app that uses it; a selectable
+      // Workspace config is a Workspace template and stays Workspace-scoped.
+      const owners = await installConfigOwnerCapsuleIds(operations, config);
+      if (owners.length === 0) {
+        const auth = await requireWorkspaceAccess({
+          operations,
+          store,
+          workspaceId: config.workspaceId,
+          session: ctx.session,
+        });
+        if (!auth.ok) return auth.response;
+      }
+      for (const capsuleId of owners) {
+        const auth = await requireAppAccess({
+          operations,
+          store,
+          session: ctx.session,
+          workspaceId: config.workspaceId,
+          capsuleId,
+          action: "view",
+          ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+          ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+        });
+        if (!auth.ok) return auth.response;
+      }
     }
     if (method === "GET") {
       return json({ installConfig: publicInstallConfig(config) });
@@ -153,6 +172,18 @@ export async function handleInstallConfigs(
     return methodNotAllowed("GET");
   }
   return undefined;
+}
+
+async function installConfigOwnerCapsuleIds(
+  operations: ControlPlaneOperations,
+  config: InstallConfig,
+): Promise<readonly string[]> {
+  const reAdopted = config.internal?.reAdoption?.capsuleId;
+  if (reAdopted) return [reAdopted];
+  if (isSelectableInstallConfig(config) || config.workspaceId === undefined) return [];
+  return [...new Set((await operations.capsules.listCapsules(config.workspaceId))
+    .filter((capsule) => capsule.installConfigId === config.id && capsule.workspaceId === config.workspaceId)
+    .map((capsule) => capsule.id))];
 }
 
 export function publicInstallConfig(

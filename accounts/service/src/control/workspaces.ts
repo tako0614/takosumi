@@ -116,6 +116,8 @@ import {
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
+import { requireWorkspaceAppsAccess } from "./app-authorization.ts";
+import type { AppAction } from "takosumi-contract/app-access";
 import {
   booleanValue,
   connectionCredentialFiles,
@@ -206,6 +208,11 @@ export async function handleWorkspaces(
       session: ctx.session,
     });
     if (!auth.ok) return auth.response;
+    // Workspace-level bulk actions still need the Workspace decision above,
+    // but must not reach an app with an ownership row that the caller cannot
+    // manage per app.
+    const appsAuth = await workspaceBulkAppAuthorization(ctx, workspaceId, segments, method);
+    if (appsAuth && !appsAuth.ok) return appsAuth.response;
     if (segments.length === 2) {
       if (method === "GET")
         return json({
@@ -533,6 +540,31 @@ export async function handleWorkspaces(
     }
   }
   return undefined;
+}
+
+async function workspaceBulkAppAuthorization(
+  ctx: ControlDispatchContext,
+  workspaceId: string,
+  segments: readonly string[],
+  method: string,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response } | undefined> {
+  if (method !== "POST") return undefined;
+  const leaf = segments[2];
+  const common = {
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  };
+  let action: AppAction | undefined;
+  if ((leaf === "plan-update" || leaf === "drift-check") && segments.length === 3) action = "update";
+  else if (leaf === "backups" && segments.length === 3) action = "change_settings";
+  else if (leaf === "interface-materialization-failures" && segments.length === 5 && segments[4] === "retries") action = "update";
+  // Workspace backup restores are retired above (404); app restores go
+  // through the Run approval of the restore Run (rollback).
+  if (!action) return undefined;
+  return await requireWorkspaceAppsAccess({ ...common, workspaceId, action });
 }
 
 function isLauncherDocument(

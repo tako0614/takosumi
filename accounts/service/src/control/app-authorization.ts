@@ -9,6 +9,8 @@
  */
 import { appActionAllowed, type AppAccess, type AppAction } from "takosumi-contract/app-access";
 import type { Capsule } from "takosumi-contract/install-configs";
+import type { Run } from "takosumi-contract/runs";
+import type { PublicPlanRun } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleOwnership } from "../../../../core/domains/app-ownership/store.ts";
 import { isMissingOwnershipSchemaError } from "../../../../core/domains/app-ownership/store.ts";
 import { bearerAppAllows, bearerWorkspaceAllows } from "../account-session.ts";
@@ -253,4 +255,77 @@ export async function requireResourceAccess(
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
   return result.ok ? { ok: true, authority: "workspace" } : result;
+}
+
+/**
+ * Workspace-level bulk actions (Workspace update, drift check, Workspace
+ * backup, restore without an explicit app) still require the Workspace
+ * decision, which the caller has already applied. They must not reach an app
+ * with an ownership row unless the caller may perform `action` on that app.
+ */
+export async function requireWorkspaceAppsAccess(
+  input: AuthorizationContext & { readonly workspaceId: string; readonly action: AppAction },
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+  if (!input.operations.appOwnership) {
+    // Without an ownership port no app can be owned yet; skip the listing.
+    await reportFallback(input.diagnostics, "ownership_store_unavailable");
+    return { ok: true };
+  }
+  const capsules = await input.operations.capsules.listCapsules(input.workspaceId);
+  input.assertActive?.();
+  for (const capsule of capsules) {
+    if (capsule.workspaceId !== input.workspaceId || capsule.status === "destroyed") continue;
+    const fence = await readOwnershipFence(input.operations, capsule.id);
+    input.assertActive?.();
+    if (fence.kind === "fallback") {
+      if (fence.reason !== "capsule_not_backfilled") {
+        // No ownership schema or port: no app in this Workspace is owned yet.
+        await reportFallback(input.diagnostics, fence.reason);
+        return { ok: true };
+      }
+      continue;
+    }
+    const result = await decideOwnedApp({
+      ...input,
+      capsuleId: capsule.id,
+      capsule,
+      workspaceId: input.workspaceId,
+      action: input.action,
+    }, fence.ownership);
+    if (!result.ok) return result;
+  }
+  return { ok: true };
+}
+
+/** The Capsule a Run belongs to, including Source-scoped Runs of an owned Source. */
+export async function runCapsuleId(
+  operations: ControlPlaneOperations,
+  run: Pick<Run, "capsuleId" | "sourceId" | "subject">,
+): Promise<string | undefined> {
+  if (run.capsuleId) return run.capsuleId;
+  if (run.subject?.kind === "capsule") return run.subject.id;
+  const sourceId = run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : undefined);
+  if (!sourceId) return undefined;
+  const { source } = await operations.getSource(sourceId);
+  return typeof source.ownerCapsuleId === "string" && source.ownerCapsuleId ? source.ownerCapsuleId : undefined;
+}
+
+/** Destroy work is uninstall (owner only); restore is a rollback. */
+export function runAppAction(
+  run: Pick<Run, "type" | "origin">,
+  intent: "view" | "operate",
+): AppAction {
+  if (intent === "view") return "view";
+  if (run.type === "destroy_plan" || run.type === "destroy_apply" ||
+    run.origin?.kind === "scheduled_uninstall") return "uninstall";
+  if (run.type === "restore" || run.origin?.kind === "rollback") return "rollback";
+  if (run.origin?.kind === "configuration") return "change_settings";
+  return "update";
+}
+
+export function planRunAppAction(planRun: Pick<PublicPlanRun, "operation" | "origin">): AppAction {
+  if (planRun.operation === "destroy" || planRun.origin?.kind === "scheduled_uninstall") return "uninstall";
+  if (planRun.origin?.kind === "rollback") return "rollback";
+  if (planRun.origin?.kind === "configuration") return "change_settings";
+  return "update";
 }

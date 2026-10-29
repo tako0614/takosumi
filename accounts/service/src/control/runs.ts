@@ -108,6 +108,14 @@ import {
   resolveProviderBindings,
 } from "./shared.ts";
 import {
+  planRunAppAction,
+  requireAppAccess,
+  requireResourceAccess,
+  runAppAction,
+  runCapsuleId,
+} from "./app-authorization.ts";
+import type { AppAction } from "takosumi-contract/app-access";
+import {
   booleanValue,
   connectionCredentialFiles,
   connectionScopeHints,
@@ -157,11 +165,12 @@ export async function handleRuns(
         const auth = await measureRequestPhaseOperation(
           ctx.diagnostics,
           "run_get_access",
-          () => requireWorkspaceAccess({
+          async () => requireResourceAccess({
             operations,
             store,
             workspaceId: run.workspaceId,
-            ...(run.capsuleId ? { capsuleId: run.capsuleId } : {}),
+            capsuleId: await runCapsuleId(operations, run),
+            action: "view",
             session: ctx.session,
             assertActive,
             ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
@@ -178,12 +187,19 @@ export async function handleRuns(
         : await runGetWithinDeadline(read);
     }
     const run = await operations.getRun(runId);
-    const auth = await requireWorkspaceAccess({
+    // Approve, apply and cancel act on the Run's app: destroy work is
+    // uninstall (owner only), restore is rollback, other plans are updates.
+    const operate = method !== "GET" && method !== "HEAD";
+    const runCapsule = await runCapsuleId(operations, run);
+    const auth = await requireResourceAccess({
       operations,
       store,
       workspaceId: run.workspaceId,
-      ...(run.capsuleId ? { capsuleId: run.capsuleId } : {}),
+      capsuleId: runCapsule,
+      action: runAppAction(run, operate ? "operate" : "view"),
       session: ctx.session,
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
@@ -231,7 +247,7 @@ export async function handleRuns(
       // that pushes the run on every status/heartbeat/summary change and closes
       // at a terminal status — so the dashboard subscribes instead of polling.
       // The stream repeats Workspace access checks while the request is open.
-      return runStatusStream(ctx, runId, run, ctx.runStreamTiming);
+      return runStatusStream(ctx, runId, run, ctx.runStreamTiming, runCapsule);
     }
   }
   return undefined;
@@ -293,6 +309,8 @@ export function runStatusStream(
     readonly now: () => number;
     readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
   } = { now: Date.now, wait: waitForRunPoll },
+  /** The Run's app, resolved once by the caller; absent for Workspace-level Runs. */
+  capsuleId: string | undefined = initialRun.capsuleId,
 ): Response {
   const { operations, request, store, session } = ctx;
   const workspaceId = initialRun.workspaceId;
@@ -339,11 +357,12 @@ export function runStatusStream(
         try {
           if (!session.reauthorizeBearer || !(await session.reauthorizeBearer()))
             return false;
-          const auth = await requireWorkspaceAccess({
+          const auth = await requireResourceAccess({
             operations,
             store,
             workspaceId,
-            ...(initialRun.capsuleId ? { capsuleId: initialRun.capsuleId } : {}),
+            capsuleId,
+            action: "view",
             session,
           });
           if (!auth.ok || cancelled) return false;
@@ -442,15 +461,8 @@ export async function handleRunGroups(
     if (!existing) return errorJson("not_found", "not found", 404);
     const runGroupWorkspaceId = existing.runGroup.workspaceId;
     if (!runGroupWorkspaceId) return errorJson("not_found", "not found", 404);
-    const auth = await requireWorkspaceAccess({
-      operations,
-      store,
-      workspaceId: runGroupWorkspaceId,
-      ...(existing.runs.length > 0 && existing.runs.every((run) => run.capsuleId === existing.runs[0]?.capsuleId) && existing.runs[0]?.capsuleId
-        ? { capsuleId: existing.runs[0].capsuleId }
-        : {}),
-      session: ctx.session,
-    });
+    const auth = await requireRunGroupAccess(ctx, runGroupWorkspaceId, existing.runs,
+      method !== "GET" && method !== "HEAD" ? "operate" : "view");
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -462,6 +474,53 @@ export async function handleRunGroups(
     }
   }
   return undefined;
+}
+
+/**
+ * A RunGroup spans Runs; every app it touches decides for itself and Runs
+ * without an app keep the Workspace decision.
+ */
+async function requireRunGroupAccess(
+  ctx: ControlDispatchContext,
+  workspaceId: string,
+  runs: readonly Pick<Run, "capsuleId" | "sourceId" | "subject" | "type" | "origin">[],
+  intent: "view" | "operate",
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+  const actions = new Map<string, AppAction>();
+  let workspaceLevel = runs.length === 0;
+  for (const run of runs) {
+    const capsuleId = await runCapsuleId(ctx.operations, run);
+    if (!capsuleId) {
+      workspaceLevel = true;
+      continue;
+    }
+    const action = runAppAction(run, intent);
+    const current = actions.get(capsuleId);
+    // Keep the strictest action per app (uninstall is owner only).
+    if (current === undefined || (action === "uninstall" && current !== "uninstall")) actions.set(capsuleId, action);
+  }
+  for (const [capsuleId, action] of actions) {
+    const auth = await requireAppAccess({
+      operations: ctx.operations,
+      store: ctx.store,
+      session: ctx.session,
+      workspaceId,
+      capsuleId,
+      action,
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+    });
+    if (!auth.ok) return auth;
+  }
+  if (workspaceLevel) {
+    return await requireWorkspaceAccess({
+      operations: ctx.operations,
+      store: ctx.store,
+      session: ctx.session,
+      workspaceId,
+    });
+  }
+  return { ok: true };
 }
 
 async function approveRun(
@@ -495,11 +554,12 @@ async function applyPlanRun(
   planRunId: string,
 ): Promise<Response> {
   const { planRun } = await operations.getPlanRun(planRunId);
-  const auth = await requireWorkspaceAccess({
+  const auth = await requireResourceAccess({
     operations,
     store,
     workspaceId: planRun.workspaceId,
-    ...(planRun.capsuleId ? { capsuleId: planRun.capsuleId } : {}),
+    capsuleId: planRun.capsuleId,
+    action: planRunAppAction(planRun),
     session,
   });
   if (!auth.ok) return auth.response;

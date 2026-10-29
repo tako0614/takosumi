@@ -338,11 +338,62 @@ describe("per-app authorization after the ownership row exists", () => {
 });
 
 describe("resources addressed by their own id resolve their app first", () => {
+  test("Runs decide on their Capsule, destroy work is owner-only and restore is rollback", async () => {
+    const h = await fixture();
+    const member = h.headers.session(APP_MEMBER);
+    const owner = h.headers.session(APP_OWNER);
+    const admin = h.headers.session(WORKSPACE_ADMIN);
+    expect((await h.call("GET", "/runs/run_plan", member)).status).toBe(200);
+    expect(await h.call("GET", "/runs/run_plan", admin)).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("POST", "/runs/run_plan/approve", member, {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", "/runs/run_destroy/approve", member, {})).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect(await h.call("POST", "/runs/run_destroy/cancel", member, {})).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect(await h.call("POST", "/runs/run_destroy/approve", owner, {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", "/runs/run_restore/approve", member, {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", "/runs/run_plan/approve", admin, {})).toMatchObject({ status: 403, code: "app_access_denied" });
+  }, 180_000);
+
+  test("a Source-scoped Run of an app's own Source belongs to that app", async () => {
+    const h = await fixture();
+    expect((await h.call("GET", "/runs/run_sync", h.headers.session(APP_MEMBER))).status).toBe(200);
+    expect(await h.call("GET", "/runs/run_sync", h.headers.session(WORKSPACE_ADMIN)))
+      .toMatchObject({ status: 403, code: "app_access_denied" });
+    // A Run of an unowned preflight Source stays on the Workspace decision.
+    expect((await h.call("GET", "/runs/run_workspace", h.headers.session(WORKSPACE_ADMIN))).status).toBe(200);
+    expect(await h.call("GET", "/runs/run_workspace", h.headers.session(APP_MEMBER)))
+      .toMatchObject({ status: 403, code: "forbidden" });
+  }, 180_000);
+
   test("StateVersions decide on their Capsule", async () => {
     const h = await fixture();
     expect((await h.call("GET", "/state-versions/sv_authz", h.headers.session(APP_MEMBER))).status).toBe(200);
     expect(await h.call("GET", "/state-versions/sv_authz", h.headers.session(WORKSPACE_OWNER)))
       .toMatchObject({ status: 403, code: "app_access_denied" });
+  }, 180_000);
+
+  test("an app's own Source is the app's; an unowned preflight Source stays Workspace-scoped", async () => {
+    const h = await fixture();
+    const member = h.headers.session(APP_MEMBER);
+    const admin = h.headers.session(WORKSPACE_ADMIN);
+    expect((await h.call("GET", "/sources/src_owned", member)).status).toBe(200);
+    expect(await h.call("GET", "/sources/src_owned", admin)).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("PATCH", "/sources/src_owned", member, {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("DELETE", "/sources/src_owned", member)).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect((await h.call("DELETE", "/sources/src_owned", h.headers.session(APP_OWNER))).code).not.toMatch(/^app_|forbidden/u);
+    expect((await h.call("GET", "/sources/src_unowned", admin)).status).toBe(200);
+    expect(await h.call("GET", "/sources/src_unowned", member)).toMatchObject({ status: 403, code: "forbidden" });
+  }, 180_000);
+
+  test("Workspace bulk actions no longer reach an owned app through Workspace roles", async () => {
+    const h = await fixture();
+    expect(await h.call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(WORKSPACE_OWNER)))
+      .toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("POST", `/workspaces/${WORKSPACE}/drift-check`, h.headers.session(WORKSPACE_ADMIN), {}))
+      .toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(DUAL)))
+      .toMatchObject({ status: 409, message: "reached" });
+    // Workspace lists stay Workspace compat until Phase 9.
+    expect((await h.call("GET", `/workspaces/${WORKSPACE}/capsules`, h.headers.session(WORKSPACE_ADMIN))).status).toBe(200);
   }, 180_000);
 });
 
@@ -366,6 +417,7 @@ describe("rollout fallback: a Capsule without an ownership row keeps the Workspa
       .toMatchObject({ status: 403, code: "forbidden" });
     expect(await call("GET", `/capsules/${CAPSULE}`, h.headers.session(APP_MEMBER)))
       .toMatchObject({ status: 403, code: "forbidden" });
+    expect((await call("POST", `/workspaces/${WORKSPACE}/plan-update`, h.headers.session(WORKSPACE_OWNER))).message).toBe("reached");
     expect(reasons.length).toBeGreaterThan(0);
     expect(new Set(reasons)).toEqual(new Set(["capsule_not_backfilled"]));
   }, 180_000);

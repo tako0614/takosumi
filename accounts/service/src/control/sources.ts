@@ -139,6 +139,8 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import { requireAppAccess, requireResourceAccess } from "./app-authorization.ts";
+import type { AppAction } from "takosumi-contract/app-access";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string }>,
@@ -152,6 +154,29 @@ function sourceWorkspaceIdentityMissing(): Response {
     "source is missing Workspace identity",
     500,
   );
+}
+
+/** An app's Source decides per app; an unowned preflight Source per Workspace. */
+function sourceOwnerCapsuleId(source: Readonly<{ ownerCapsuleId?: string }>): string | undefined {
+  return stringValue(source.ownerCapsuleId);
+}
+
+async function requireSourceAccess(
+  ctx: ControlDispatchContext,
+  source: Readonly<{ ownerCapsuleId?: string }>,
+  workspaceId: string,
+  action: AppAction,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+  return await requireResourceAccess({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId,
+    capsuleId: sourceOwnerCapsuleId(source),
+    action,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
 }
 
 export async function handleSources(
@@ -177,7 +202,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({ operations, store, workspaceId, session: ctx.session });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "change_settings");
       if (!auth.ok) return auth.response;
       if ((await request.text()).length !== 0) {
         return errorJson("invalid_request", "Hook secret rotation accepts no request body.", 400);
@@ -213,12 +238,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "update");
       if (!auth.ok) return auth.response;
       const response = await operations.createSourceSync(sourceId, {
         dedupe: true,
@@ -238,12 +258,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "view");
       if (!auth.ok) return auth.response;
       const page = parseControlPageParams(url);
       if (!page.ok) return page.response;
@@ -267,12 +282,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "view");
       if (!auth.ok) return auth.response;
       const sourceSnapshot = await operations.getSourceSnapshot(
         sourceSnapshotId,
@@ -299,12 +309,7 @@ export async function handleSources(
         .captureManagementAuthority(workspaceId)
         .then((authority) => ({ ok: true as const, authority }))
         .catch((error) => ({ ok: false as const, error }));
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "update");
       if (!auth.ok) return auth.response;
       const body = await readOptionalJsonObject(request);
       if (body === null) {
@@ -332,6 +337,23 @@ export async function handleSources(
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const capsuleId = stringValue(body.capsuleId);
+      if (capsuleId && capsuleId !== sourceOwnerCapsuleId(source)) {
+        // A check that targets an existing app also needs that app's update
+        // permission, independently of the Source's own authority.
+        const target = await operations.capsules.getCapsule(capsuleId);
+        const targetAuth = await requireAppAccess({
+          operations,
+          store,
+          session: ctx.session,
+          workspaceId: target.workspaceId,
+          capsuleId: target.id,
+          capsule: target,
+          action: "update",
+          ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+          ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+        });
+        if (!targetAuth.ok) return targetAuth.response;
+      }
       // A manual compatibility check may select an existing DB-owned
       // InstallConfig. Repository compilation uses the generic host config.
       const installConfigId = stringValue(body.installConfigId);
@@ -565,12 +587,11 @@ export async function handleSources(
           return { ok: false as const, error };
         }
       })() : undefined;
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      // Removing an app's own Source removes what the app is built from, so
+      // it is owner-only like uninstall; unowned preflight Sources stay
+      // Workspace-scoped.
+      const auth = await requireSourceAccess(ctx, source, workspaceId,
+        method === "GET" || method === "HEAD" ? "view" : method === "DELETE" ? "uninstall" : "change_settings");
       if (!auth.ok) return auth.response;
       if (method === "GET") {
         return json({ source: publicSource(source) });
@@ -587,9 +608,8 @@ export async function handleSources(
         return json({ ...response, source: publicSource(response.source) });
       }
       if (method === "DELETE") {
-        // Write scope already gated above: only an owner/admin member with a
-        // Workspace-wide credential reaches here (member sessions and
-        // read-only bearers observe 403 from `requireWorkspaceAccess`).
+        // Write scope already gated above: the app owner for an app's Source,
+        // or an owner/admin Workspace member for an unowned preflight Source.
         if (!captured) throw new Error("Source deletion authority was not captured");
         if (!captured.ok) throw captured.error;
         const response = await operations.deleteSource(
@@ -673,19 +693,28 @@ export async function handleCompatibilityReports(
     const reportId = decodeURIComponent(segments[1] ?? "");
     const response = await operations.getCompatibilityReport(reportId);
     const report = response.report;
-    const reportWorkspaceId = report.sourceId
-      ? sourceWorkspaceId((await operations.getSource(report.sourceId)).source)
+    const reportSource = report.sourceId
+      ? (await operations.getSource(report.sourceId)).source
+      : undefined;
+    const reportWorkspaceId = reportSource
+      ? sourceWorkspaceId(reportSource)
       : report.capsuleId
         ? (await operations.capsules.getCapsule(report.capsuleId)).workspaceId
         : undefined;
     if (!reportWorkspaceId) {
       return errorJson("not_found", "compatibility report not found", 404);
     }
-    const auth = await requireWorkspaceAccess({
+    // A report about an app (directly or through its own Source) is that
+    // app's view; a preflight report on an unowned Source stays Workspace.
+    const auth = await requireResourceAccess({
       operations,
       store,
-      workspaceId: reportWorkspaceId,
       session: ctx.session,
+      workspaceId: reportWorkspaceId,
+      capsuleId: report.capsuleId ?? (reportSource ? sourceOwnerCapsuleId(reportSource) : undefined),
+      action: "view",
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
     if (!auth.ok) return auth.response;
     return json(await publicCompatibilityReportResponse(operations, response));
