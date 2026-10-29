@@ -42,6 +42,7 @@ test("Phase 0 shape (owners only, no other members) reports no difference", asyn
   expect(report).toEqual({
     capsulesChecked: 2,
     capsulesProjectedFromBackfill: 1,
+    sourcesChecked: 0,
     pairsChecked: 2,
     differenceCount: 0,
     differencesByClass: { view: 0, manage: 0, owner_only: 0 },
@@ -108,3 +109,68 @@ test("a predeployed D1 v75 target is compared from the backfill projection", asy
   const report = await planAppAccessCutoverDiff({ control, ownership: new D1AppOwnershipStore(db, control) });
   expect(report).toMatchObject({ capsulesChecked: 1, capsulesProjectedFromBackfill: 1, pairsChecked: 1, differenceCount: 0 });
 }, 180_000);
+
+test("an owner row written before its roster is compared as the live code decides", async () => {
+  const control = new InMemoryOpenTofuControlStore();
+  const ownership = new InMemoryAppOwnershipStore(control);
+  await control.putWorkspace(workspace("ws_mid", "ws_owner"));
+  await control.putWorkspaceMember(member("ws_mid", "admin", "admin"));
+  await control.putCapsule(capsule("cap_mid", "ws_mid"));
+  // Backfill wrote the legacy-default owner row; the member batch has not run.
+  await ownership.initializeOwnershipIfMissing({
+    capsuleId: "cap_mid", ownerAccountId: "ws_owner", ownershipEpoch: 0, managementState: "active",
+    managementEpoch: 0, storageRoot: "workspaces/ws_mid/capsules/cap_mid",
+  });
+  const report = await planAppAccessCutoverDiff({ control, ownership });
+  expect(report.differences.map((row) => `${row.accountId} ${row.accessClass} ${row.reason} ${row.affectsBothRequiredCredentials}`)).toEqual([
+    "admin view workspace_manager_not_app_member true",
+    "admin manage workspace_manager_not_app_member true",
+    "admin owner_only workspace_manager_not_app_member true",
+  ]);
+});
+
+test("labels and legacy read model: role-less members read, readers who are app members gain", async () => {
+  const control = new InMemoryOpenTofuControlStore();
+  const ownership = new InMemoryAppOwnershipStore(control);
+  await control.putWorkspace(workspace("ws_labels", "ws_owner"));
+  await control.putWorkspaceMember(member("ws_labels", "reader_member", "viewer"));
+  await control.putWorkspaceMember({ ...member("ws_labels", "roleless", "viewer"), roles: [] });
+  await control.putCapsule(capsule("cap_labels", "ws_labels"));
+  await ownership.initializeOwnershipIfMissing({
+    capsuleId: "cap_labels", ownerAccountId: "ws_owner", ownershipEpoch: 0, managementState: "active",
+    managementEpoch: 0, storageRoot: "apps/cap_labels",
+  });
+  expect(await ownership.putMember({ capsuleId: "cap_labels", accountId: "reader_member", status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+  const report = await planAppAccessCutoverDiff({ control, ownership });
+  expect(report.differences.map((row) => `${row.accountId} ${row.accessClass} ${row.workspaceDecision}->${row.appDecision} ${row.reason} ${row.affectsBothRequiredCredentials}`)).toEqual([
+    "reader_member manage false->true app_role_beyond_workspace_role false",
+    "roleless view true->false workspace_reader_not_app_member true",
+  ]);
+});
+
+test("an ownerless Source needs every app built from it", async () => {
+  const control = new InMemoryOpenTofuControlStore();
+  const ownership = new InMemoryAppOwnershipStore(control);
+  await control.putWorkspace(workspace("ws_src", "ws_owner"));
+  await control.putSource({
+    id: "src_shared", workspaceId: "ws_src", name: "shared", url: "https://git.example.test/app.git",
+    defaultRef: "main", defaultPath: ".", status: "active", createdAt: NOW, updatedAt: NOW,
+    hookSecretHash: "hash", autoSync: false,
+  } as never);
+  for (const id of ["cap_a", "cap_b"]) {
+    await control.putCapsule({ ...capsule(id, "ws_src"), sourceId: "src_shared" });
+    await ownership.initializeOwnershipIfMissing({
+      capsuleId: id, ownerAccountId: "ws_owner", ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${id}`,
+    });
+  }
+  expect(await ownership.putMember({ capsuleId: "cap_a", accountId: "only_a", status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+  const report = await planAppAccessCutoverDiff({ control, ownership });
+  expect(report.sourcesChecked).toBe(1);
+  expect(report.differences.filter((row) => row.sourceId === "src_shared").map((row) => `${row.accountId} ${row.accessClass} ${row.appDecision}`))
+    .toEqual([]);
+  expect(report.differences.filter((row) => row.capsuleId === "cap_a").map((row) => `${row.accountId} ${row.accessClass}`))
+    .toEqual(["only_a view", "only_a manage"]);
+  // only_a manages cap_a but not cap_b, so the shared Source is not theirs.
+  expect(report.differences.some((row) => row.sourceId === "src_shared" && row.accountId === "only_a")).toBe(false);
+});

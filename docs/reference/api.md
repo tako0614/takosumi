@@ -254,11 +254,15 @@ PATには `appIds` を指定できます。実効権限はscopeと現在のア�
 
 拒否は `403 app_access_denied` (役割がない) または `403 app_owner_only` (所有者だけの操作) です。所有記録の確認と役割の読み取りの間に所有者が変わった場合は `409 conflict` を返し、再試行を求めます。完了したアンインストール後も、残っている所有記録の所有者・メンバーは履歴を表示できます。
 
-資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリのOAuthアクセストークンは権限を広げません。アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通り、メンバー管理・譲渡・アンインストールには使えません。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も同じく両方を要求します。
+Sourceは所有アプリ (`ownerCapsuleId`) のものです。所有アプリの無い既存のSourceは、それを使う稼働中のアプリすべてのものとして扱い、所有記録のある各アプリでその操作が許されることを要求します (どのアプリにも所有記録が無いときだけWorkspace判定)。そのSourceの `source_sync` Runと互換レポートも同じです。Sourceが削除済みのRunはアプリに属さないものとしてWorkspace判定で決めます。
 
-Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者のいないpreflight Source、Workspaceの接続) はPhase 9まで従来のWorkspace判定で互換提供します。一覧には引き続き表示されますが、所有記録のあるアプリへの操作はアプリでの判定を通ります。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
+Interface linkは、要求者が提供側アプリでも `change_interface_link` を持つとき (所有記録の無い提供側はWorkspace判定) だけ作成時に承認されます。それ以外は `pending_approval` で作られます。
 
-**移行中の扱い。** 所有記録がまだ使えないアプリは、そのリクエストに限り従来のWorkspace判定で決めます。対象は、所有ストアがない構成、D1 v77 / Postgres v123 より前のschema、backfillがまだ所有記録を書いていないアプリです。所有記録が書かれた時点から、そのアプリはアプリでの判定だけになります。従来判定を使ったことは、IDを含まない構造化ログ `app_authorization_workspace_fallback` (`reason` は `ownership_store_unavailable`・`ownership_schema_unavailable`・`capsule_not_backfilled`) に、isolateごとに5分に1回まとめて残します。追加の確認queryは発行せず、所有ストアの既存のschema確認を使います。
+資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリのOAuthアクセストークンは権限を広げません。アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通ります。アンインストール (`destroy-plan`、`DELETE /capsules/{id}`、destroy Runの承認・適用を含む)・譲渡・メンバー管理は、所有記録の有無にかかわらず `403` で、他のアプリのInterfaceを承認することもありません。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も同じく両方を要求します。
+
+Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者のいないpreflight Source、Workspaceの接続) はPhase 9まで従来のWorkspace判定で互換提供します。ただし一覧 (`/workspaces/{id}/capsules`・`runs`・`activity`・`current-state-versions`・`backups`・`installed-apps`・`interface-materialization-failures`、`/dashboard/overview`、`/sources?workspaceId=`) は、所有記録のあるアプリのうち呼び出し元が表示できないアプリの行を含めません。所有記録のあるアプリへの操作はアプリでの判定を通ります。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
+
+**移行中の扱い。** 所有記録がまだ使えないアプリは、そのリクエストに限り従来のWorkspace判定で決めます。対象は、所有ストアがない構成、D1 v77 / Postgres v123 より前のschema、backfillがまだ所有記録を書いていないアプリです。所有記録が書かれた時点から、そのアプリはアプリでの判定だけになります。従来判定を使ったことは、IDを含まない構造化ログ `app_authorization_workspace_fallback` (`reason` は `ownership_store_unavailable`・`ownership_schema_unavailable`・`capsule_not_backfilled`) に、isolateごとに5分に1回まとめて残します。判定ごとに所有記録を1回読み、所有記録があるときは役割の解決でもう一度読みます。所有ストアの既存のschema確認を使い、D1 v77より前では「schemaが無い」結果を60秒保持するので、判定ごとの確認queryは発生しません。
 
 ### Account views
 
