@@ -1,11 +1,16 @@
 import { expect, spyOn, test } from "bun:test";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
+import type { SqlClient, SqlParameters, SqlTransaction } from "../../../../core/adapters/storage/sql.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   InMemoryOpenTofuControlStore, type OpenTofuControlStore, type StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import {
+  deterministicInitialCapsuleId, deterministicInstallSourceId,
+} from "../../../../core/domains/install-plans/source-reservation.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -43,6 +48,40 @@ async function seed(store: OpenTofuControlStore, ownerCapsuleId?: string): Promi
     status: "succeeded", createdAt: NOW, updatedAt: NOW, finishedAt: NOW };
   await store.putSourceSyncRun(run);
   return source;
+}
+
+async function seedReservation(
+  store: OpenTofuControlStore,
+  label: string,
+  identity: Partial<Pick<StoredSource, "id" | "ownerCapsuleId" | "createdByInstallPlanId">> = {},
+): Promise<StoredSource> {
+  const original = await seed(store);
+  const createdByInstallPlanId = `git_retirement_${label}`;
+  const id = deterministicInstallSourceId(createdByInstallPlanId);
+  const source = { ...original, id, createdByInstallPlanId,
+    ownerCapsuleId: deterministicInitialCapsuleId(createdByInstallPlanId),
+    status: "disabled" as const, autoSync: false, retiringAt: NOW, ...identity };
+  await store.putSource(source);
+  await store.putSourceSnapshot({ ...(await store.getSourceSnapshot("snapshot_retirement"))!,
+    id: `snapshot_${label}`, sourceId: source.id,
+    archiveRef: `workspaces/${WS}/sources/${source.id}/snapshots/snapshot_${label}/source.tar.zst` });
+  return (await store.getSource(source.id))!;
+}
+
+function reservationRetirementInput(source: StoredSource, label: string) {
+  return { expectedSource: source,
+    expectedWorkspaceManagementAuthority: { workspaceId: WS, managementState: "active" as const, managementEpoch: 1 },
+    expectedSnapshotCount: 1, expectedSourceSyncRunCount: 0,
+    activity: { id: `act_reservation_${label}`, workspaceId: WS, action: "source.retired",
+      targetType: "source", targetId: source.id, metadata: {}, createdAt: NOW } };
+}
+
+function reservationCapsule(source: StoredSource, label: string, owner: boolean): Capsule {
+  return { id: owner ? source.ownerCapsuleId! : `cap_${label}`,
+    workspaceId: WS, projectId: "project_retirement", name: label, slug: label,
+    sourceId: owner ? SRC : source.id, installConfigId: "config_retirement",
+    environment: "production", status: "destroyed", currentStateGeneration: 0,
+    createdAt: NOW, updatedAt: NOW };
 }
 
 test("retirement keeps its work list after custody failure, then resumes across all stores", async () => {
@@ -104,6 +143,140 @@ test("retirement requires a present destroyed owner before marking or atomic del
     }
   } finally {
     await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("atomic retirement accepts a missing reserved owner and preserves the destroyed-owner path", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      for (const label of ["accepted", "destroyed_owner"]) {
+        const source = await seedReservation(store, label);
+        if (label === "destroyed_owner") {
+          await store.putCapsule({ ...reservationCapsule(source, label, true), sourceId: source.id });
+        }
+        expect(await store.retireSource(reservationRetirementInput(source, `${name}_${label}`)), name)
+          .toMatchObject({ status: "deleted" });
+        expect(await store.getSource(source.id), name).toBeUndefined();
+        expect(await store.listSourceSnapshots(source.id), name).toEqual([]);
+      }
+      expect(await store.listActivityEvents(WS), name).toHaveLength(2);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("atomic reservation retirement preserves existing owners and all-status Capsule references", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      for (const [label, owner, status, references] of [
+        ["owner_active", true, "active", true],
+        ["owner_mismatch", true, "destroyed", false],
+        ["other_active", false, "active", true],
+        ["other_destroyed", false, "destroyed", true],
+      ] as const) {
+        const source = await seedReservation(store, label);
+        await store.putCapsule({ id: owner ? source.ownerCapsuleId! : `cap_${label}`,
+          workspaceId: WS, projectId: "project_retirement", name: label, slug: label,
+          sourceId: references ? source.id : SRC, installConfigId: "config_retirement",
+          environment: "production", status, currentStateGeneration: 0, createdAt: NOW, updatedAt: NOW });
+        expect(await store.retireSource(reservationRetirementInput(source, `${name}_${label}`)), `${name}:${label}`)
+          .toMatchObject({ status: "blocked" });
+        expect(await store.getSource(source.id), name).toBeDefined();
+        expect(await store.listSourceSnapshots(source.id), name).toHaveLength(1);
+      }
+      expect(await store.listActivityEvents(WS), name).toEqual([]);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("a missing owner is not a reservation without exact creator-derived Source and owner ids", async () => {
+  const fixtures = await adapters();
+  try {
+    for (const { name, store } of fixtures) {
+      for (const [label, identity] of [
+        ["wrong_source", { id: "source_not_reserved" }],
+        ["wrong_owner", { ownerCapsuleId: "cap_not_reserved" }],
+        ["missing_creator", { createdByInstallPlanId: undefined }],
+      ] as const) {
+        const source = await seedReservation(store, label, identity);
+        expect(await store.retireSource(reservationRetirementInput(source, `${name}_${label}`)), name)
+          .toMatchObject({ status: "blocked", blockers: ["source_owner_not_destroyed"] });
+        expect(await store.getSource(source.id), name).toBeDefined();
+      }
+      expect(await store.listActivityEvents(WS), name).toEqual([]);
+    }
+  } finally {
+    await Promise.all(fixtures.map((fixture) => fixture.close()));
+  }
+}, 30_000);
+
+test("D1 reservation retirement rechecks Capsule absence when the final batch starts", async () => {
+  class LateCapsuleD1 extends SqliteFakeD1 {
+    beforeBatch?: () => Promise<void>;
+    override async batch<T = unknown>(statements: Parameters<SqliteFakeD1["batch"]>[0]) {
+      const before = this.beforeBatch;
+      this.beforeBatch = undefined;
+      if (before) await before();
+      return await super.batch<T>(statements);
+    }
+  }
+  const db = new LateCapsuleD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  for (const owner of [false, true]) {
+    const label = `late_d1_${owner}`;
+    const source = await seedReservation(store, label);
+    db.beforeBatch = () => store.putCapsule(reservationCapsule(source, label, owner)).then(() => {});
+    expect((await store.retireSource(reservationRetirementInput(source, label))).status).not.toBe("deleted");
+    expect(await store.getSource(source.id)).toBeDefined();
+    expect(await store.listSourceSnapshots(source.id)).toHaveLength(1);
+  }
+  expect(await store.listActivityEvents(WS)).toEqual([]);
+});
+
+test("Postgres reservation retirement rechecks Capsule absence in its final delete", async () => {
+  const pg = await PGliteSqlClient.create();
+  let lateCapsule: Capsule | undefined;
+  const client: SqlClient = {
+    query: (sql, parameters) => pg.query(sql, parameters),
+    transaction: (body) => pg.transaction((transaction) => {
+      const guarded: SqlTransaction = {
+        async query<Row extends Record<string, unknown>>(sql: string, parameters?: SqlParameters) {
+          if (sql.startsWith("delete from takosumi_sources s") && lateCapsule) {
+            const capsule = lateCapsule;
+            lateCapsule = undefined;
+            await transaction.query(`insert into takosumi_capsules
+              (id, space_id, project_id, name, environment, source_id, install_config_id,
+               status, installation_json, created_at, updated_at)
+              values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)`,
+              [capsule.id, capsule.workspaceId, capsule.projectId, capsule.name, capsule.environment,
+                capsule.sourceId, capsule.installConfigId, capsule.status, JSON.stringify(capsule), NOW, NOW]);
+          }
+          return await transaction.query<Row>(sql, parameters);
+        },
+        transaction: (nested) => Promise.resolve(nested(guarded)),
+      };
+      return body(guarded);
+    }),
+  };
+  const store = new SqlOpenTofuControlStore({ client });
+  try {
+    for (const owner of [false, true]) {
+      const label = `late_pg_${owner}`;
+      const source = await seedReservation(store, label);
+      lateCapsule = reservationCapsule(source, label, owner);
+      expect(await store.retireSource(reservationRetirementInput(source, label))).toMatchObject({ status: "conflict" });
+      expect(lateCapsule).toBeUndefined();
+      expect(await store.getSource(source.id)).toBeDefined();
+      expect(await store.listSourceSnapshots(source.id)).toHaveLength(1);
+    }
+    expect(await store.listActivityEvents(WS)).toEqual([]);
+  } finally {
+    await pg.close();
   }
 }, 30_000);
 

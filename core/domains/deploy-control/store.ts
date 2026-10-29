@@ -56,6 +56,7 @@ import {
   SourceSyncSettlementConflictError,
 } from "./source_sync_settlement.ts";
 import type { InMemoryGitInstallPlanStore } from "../install-plans/store.ts";
+import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
 import {
   interfaceIntentBlocksWorkspaceManagement,
   runBlocksWorkspaceManagement,
@@ -7997,14 +7998,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       if (error instanceof WorkspaceManagementAdmissionConflictError) return { status: "conflict" };
       throw error;
     }
+    let missingOwnerReservation = false;
     if (current.ownerCapsuleId && (() => {
       const owner = this.#capsules.get(current.ownerCapsuleId);
-      return !owner || owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
+      if (!owner) {
+        missingOwnerReservation = isInstallPlanSourceReservation(current);
+        return !missingOwnerReservation;
+      }
+      return owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
         owner.status !== "destroyed";
     })()) return { status: "blocked", blockers: ["source_owner_not_destroyed"] };
     for (const capsule of this.#capsules.values()) {
       if (capsule.sourceId !== current.id) continue;
-      if (capsule.status !== "destroyed")
+      if (missingOwnerReservation || capsule.status !== "destroyed")
         return { status: "blocked", blockers: ["source_referenced_by_capsule"] };
     }
     if (this.#hasInFlightSourceRunSync(current))

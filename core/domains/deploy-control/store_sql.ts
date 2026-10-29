@@ -1,5 +1,6 @@
 import { POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY, POSTGRES_SOURCE_RETIREMENT_ARCHIVE_BLOCKER_QUERY, POSTGRES_SOURCE_RETIREMENT_ARCHIVE_REFS_PAGE_QUERY } from "../../adapters/storage/source-archive-reference-query.ts";
 import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../workspaces/financial-source.ts";
+import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
 /**
  * SQL-backed OpenTofu deployment-control-plane ledger (core-spec.md §27).
  *
@@ -10107,6 +10108,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       if (stableStringify(current) !== stableStringify(expectedSource) ||
         current.status !== "disabled" || current.autoSync || !current.retiringAt)
         return { status: "conflict" as const };
+      let missingOwnerReservation = false;
       if (current.ownerCapsuleId) {
         const owners = await transaction.query<{
           id: string; workspaceId: string; sourceId: string | null; status: string; capsuleJson: unknown;
@@ -10115,7 +10117,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
               from takosumi_capsules where id = $1`, [current.ownerCapsuleId]);
         const owner = owners.rows[0];
         const record = owner ? parseJson(owner.capsuleJson) as Capsule : undefined;
-        if (!owner || !record || owner.id !== current.ownerCapsuleId ||
+        if (!owner && isInstallPlanSourceReservation(current)) {
+          missingOwnerReservation = true;
+        } else if (!owner || !record || owner.id !== current.ownerCapsuleId ||
           owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
           owner.status !== "destroyed" || record.id !== owner.id ||
           record.workspaceId !== owner.workspaceId || record.sourceId !== owner.sourceId ||
@@ -10124,7 +10128,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         }
       }
       const live = await transaction.query(
-        `select 1 from takosumi_capsules where source_id = $1 and status <> 'destroyed' limit 1`, [current.id],
+        missingOwnerReservation
+          ? `select 1 from takosumi_capsules where source_id = $1
+              or installation_json ->> 'sourceId' = $1 or id = $2 limit 1`
+          : `select 1 from takosumi_capsules where source_id = $1 and status <> 'destroyed' limit 1`,
+        missingOwnerReservation ? [current.id, current.ownerCapsuleId] : [current.id],
       );
       if (live.rows.length) return { status: "blocked" as const, blockers: ["source_referenced_by_capsule"] };
       const inflight = await transaction.query(
@@ -10141,12 +10149,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       if (Number(census.rows[0]?.snapshots) !== input.expectedSnapshotCount ||
         Number(census.rows[0]?.runs) !== input.expectedSourceSyncRunCount)
         return { status: "conflict" as const };
-      await transaction.query(`delete from takosumi_source_snapshots where source_id = $1`, [current.id]);
       const deleted = await transaction.query(
-        `delete from takosumi_sources where id = $1 and space_id = $2 returning id`,
-        [current.id, current.workspaceId],
+        `delete from takosumi_sources s where id = $1 and space_id = $2
+          and (not $3::boolean or not exists (select 1 from takosumi_capsules c
+            where c.id = $4 or c.source_id = s.id or c.installation_json ->> 'sourceId' = s.id))
+          returning id`,
+        [current.id, current.workspaceId, missingOwnerReservation, current.ownerCapsuleId ?? null],
       );
       if (deleted.rows.length !== 1) return { status: "conflict" as const };
+      await transaction.query(`delete from takosumi_source_snapshots where source_id = $1`, [current.id]);
       await transaction.query(
         `insert into takosumi_audit_events
           (id, space_id, actor_id, action, target_type, target_id, run_id, event_json, created_at)

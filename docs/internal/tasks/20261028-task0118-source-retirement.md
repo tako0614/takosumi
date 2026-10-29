@@ -38,3 +38,4 @@ Implementation and focused regression coverage are complete. Complete-gate and C
 - Report: `/root/dev/tmp/tk0118/phase2-fix2-report.md`.
 
 - The sweeper and #649 operator inventory share the creator-plan predicate. Discard/non-attempt failure grace uses `completedAt` (or `updatedAt` for retained records); expiry grace uses `expiresAt`. Recent terminal transitions and resumable failed attempts remain protected.
+- Independent review found normal install Sources already reserve their owner id before Capsule creation. Recover those reservations only with matching deterministic Source/owner/creator scope, terminal/expiry evidence and any-status Capsule absence. Keep arbitrary missing owners blocked in service, physical custody, and all final store guards; cover lost Source acknowledgements.

@@ -1221,6 +1221,7 @@ export async function createTakosumiService(
   // controller is constructed.
   const sourcesService = new SourcesService({
     store: sharedOpenTofuStore,
+    plans: gitInstallPlanStore,
     enqueueSourceSync,
     ...(options.opentofuRunner?.deleteRetiredSourceArchives
       ? { deleteRetiredSourceArchives: (input) =>

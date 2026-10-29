@@ -1,4 +1,5 @@
 import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../../core/domains/workspaces/financial-source.ts";
+import { isInstallPlanSourceReservation } from "../../core/domains/install-plans/source-reservation.ts";
 /**
  * D1-backed control-plane ledger (core-spec.md §27) — Workspace-direct Capsule
  * model.
@@ -9846,12 +9847,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     } catch {
       return { status: "conflict" };
     }
+    let missingOwnerReservation = false;
     if (current.ownerCapsuleId) {
       const owner = await this.getCapsule(current.ownerCapsuleId);
-      if (!owner || owner.id !== current.ownerCapsuleId ||
+      if (!owner && isInstallPlanSourceReservation(current)) {
+        missingOwnerReservation = true;
+      } else if (!owner || owner.id !== current.ownerCapsuleId ||
         owner.workspaceId !== current.workspaceId || owner.sourceId !== current.id ||
         owner.status !== "destroyed")
         return { status: "blocked", blockers: ["source_owner_not_destroyed"] };
+    }
+    if (missingOwnerReservation && await this.db.prepare(`select 1 from capsules
+      where source_id = ? or json_extract(record_json, '$.sourceId') = ? or id = ? limit 1`)
+      .bind(current.id, current.id, current.ownerCapsuleId).first()) {
+      return { status: "blocked", blockers: ["source_referenced_by_capsule"] };
     }
     const blockers = await this.#sourceDeleteBlockers(current.id, current.workspaceId);
     if (blockers.length) return { status: "blocked", blockers };
@@ -9860,7 +9869,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       and json_extract(record_json, '$.retiringAt') is not null
       and exists (select 1 from workspaces where workspaces.id = sources.space_id
         and workspaces.management_state = 'active' and workspaces.management_epoch = ?)
-      and (nullif(json_extract(sources.record_json, '$.ownerCapsuleId'), '') is null
+      and (${missingOwnerReservation
+        ? `not exists (select 1 from capsules c
+            where c.id = json_extract(sources.record_json, '$.ownerCapsuleId')
+              or c.source_id = sources.id or json_extract(c.record_json, '$.sourceId') = sources.id)`
+        : `nullif(json_extract(sources.record_json, '$.ownerCapsuleId'), '') is null
         or exists (select 1 from capsules owner
           where owner.id = json_extract(sources.record_json, '$.ownerCapsuleId')
             and owner.space_id = sources.space_id and owner.source_id = sources.id
@@ -9868,7 +9881,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             and json_extract(owner.record_json, '$.id') = owner.id
             and json_extract(owner.record_json, '$.workspaceId') = owner.space_id
             and json_extract(owner.record_json, '$.sourceId') = owner.source_id
-            and json_extract(owner.record_json, '$.status') = 'destroyed'))
+            and json_extract(owner.record_json, '$.status') = 'destroyed')`})
       and not exists (select 1 from capsules where capsules.source_id = sources.id and capsules.status <> 'destroyed')
       and not exists (select 1 from runs where runs.source_id = sources.id and runs.status in ('queued', 'running'))
       and not exists (select 1 from runs where runs.installation_id in
