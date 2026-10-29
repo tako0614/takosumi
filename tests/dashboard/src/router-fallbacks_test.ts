@@ -85,7 +85,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     }
   });
 
-  test("home, store and account are first-class routes; legacy connections redirect to Account", () => {
+  test("home, store, connections and account are first-class routes", () => {
     expect(source).toContain('<Route path="/" component={AppListView} />');
     // `/new` is the store and install page; an old `?capsule=` locator alone
     // opens that app's page instead.
@@ -93,7 +93,10 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain('resolveLegacyAppUrl("/new", untrack(() => location.search))');
     expect(source).toContain("appPage ? <Navigate href={appPage} /> : <InstallView />");
     expect(source).toContain(
-      '<Route path="/connections" component={() => <RedirectWithQuery to="/account/connections" />} />',
+      '<Route path="/connections" component={ConnectionsView} />',
+    );
+    expect(source).toContain(
+      '<Route path="/account/connections" component={() => <RedirectWithQuery to="/connections" />} />',
     );
     expect(source).toContain('<Route path="/account" component={AccountView} />');
     expect(source).toContain('<Route path="/account/billing" component={() => <RedirectWithQuery to="/account/usage" />} />');
@@ -129,7 +132,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
       ["/members", "/account"],
       ["/backups", "/account"],
       ["/output-shares", "/account"],
-      ["/providers", "/account/connections"],
+      ["/providers", "/connections"],
       ["/account/settings", "/account"],
       ["/account/profile", "/account"],
       ["/account/sessions", "/account"],
@@ -153,7 +156,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain('<Route\n        path="/advanced/workspace/:tab"');
     expect(source).toContain('<Route\n        path="/workspace/settings/:tab"');
     expect(source).toContain('case "members":\n      return "/account";');
-    expect(source).toContain('case "connections":\n      return "/account/connections";');
+    expect(source).toContain('case "connections":\n      return "/connections";');
     expect(source).toContain('case "billing":\n      return "/account/usage";');
     expect(source).toContain('case "interface-recovery":\n      return "/";');
     expect(source).toContain('default:\n      return "/account";');

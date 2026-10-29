@@ -96,6 +96,11 @@ describe("dashboard shell navigation layout", () => {
     expect(topBarSource).not.toContain("const SECTION_TITLES");
     expect(ja["nav.home"]).toBe("ホーム");
     expect(ja["nav.store"]).toBe("ストア");
+    const connections = read("views/workspace/ConnectionsView.tsx");
+    expect(connections).toContain('<PageHeader title={t("nav.connections")} />');
+    expect(connections).toContain('<ConnectionsTab />');
+    expect(connections).not.toContain("Navigate");
+    expect(ja["nav.connections"]).toBe("接続");
     expect(ja["nav.account"]).toBe("アカウント");
     expect(en["nav.account"]).toBe("Account");
   });
@@ -106,6 +111,7 @@ describe("dashboard shell navigation layout", () => {
       ["/^\\/apps(\\/|$)/", "nav.app"],
       ["/^\\/runs(\\/|$)/", "nav.home"],
       ["/^\\/new(\\/|$)/", "nav.store"],
+      ["/^\\/connections(\\/|$)/", "nav.connections"],
       ["/^\\/account(\\/|$)/", "nav.account"],
       ["/^\\/notifications(\\/|$)/", "nav.notifications"],
     ] as const) {

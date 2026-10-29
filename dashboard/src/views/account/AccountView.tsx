@@ -1,4 +1,4 @@
-/** Account profile, personal connections and personal usage. */
+/** Account profile and personal usage. */
 import "../../styles/wave-b.css";
 import "../../styles/wave-c.css";
 import "../../styles/account-views.css";
@@ -8,12 +8,11 @@ import Page from "./components/auth/Page.tsx";
 import type { SessionRecord } from "./lib/session.ts";
 import ProfileSection from "./sections/ProfileSection.tsx";
 import TakosumiApiKeysCard from "./components/TakosumiApiKeysCard.tsx";
-import ConnectionsTab from "../workspace/tabs/ConnectionsTab.tsx";
 import BillingTab from "../workspace/tabs/BillingTab.tsx";
 import { type MessageKey, t } from "../../i18n/index.ts";
 import { PageHeader, Tabs } from "../../components/ui/index.ts";
 
-export type AccountSection = "me" | "connections" | "usage" | "cli";
+export type AccountSection = "me" | "usage" | "cli";
 
 export const ACCOUNT_SECTIONS: readonly {
   readonly id: AccountSection;
@@ -21,7 +20,6 @@ export const ACCOUNT_SECTIONS: readonly {
   readonly labelKey: MessageKey;
 }[] = [
   { id: "me", href: "/account", labelKey: "account.section.me" },
-  { id: "connections", href: "/account/connections", labelKey: "account.section.connections" },
   { id: "usage", href: "/account/usage", labelKey: "account.section.usage" },
   { id: "cli", href: "/account/cli", labelKey: "account.section.cli" },
 ];
@@ -61,9 +59,6 @@ function Inner(props: { readonly session: SessionRecord }) {
             <Switch>
               <Match when={current() === "me"}>
                 <ProfileSection session={props.session} />
-              </Match>
-              <Match when={current() === "connections"}>
-                <ConnectionsTab />
               </Match>
               <Match when={current() === "usage"}>
                 <BillingTab />
