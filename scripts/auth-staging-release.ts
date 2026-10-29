@@ -29,6 +29,106 @@ function identityContinuityDigest(secrets: Readonly<Record<string, string>>): st
   return digest(JSON.stringify(IDENTITY_CONTINUITY_SECRETS.map((name) => [name, digest(secrets[name] ?? "")])));
 }
 
+const SIGNING_KEY_SECRET = "TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK";
+const SESSION_SALT_SECRET = "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT";
+const KEY_ID_VAR = "TAKOSUMI_ACCOUNTS_ES256_KEY_ID";
+const PREVIOUS_JWKS_VAR = "TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS";
+/** Deriving every RP `sub` and upstream account link, these never rotate in place. */
+const SUBJECT_IDENTITY_SECRETS: readonly string[] = ["TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET", "TAKOSUMI_ACCOUNTS_SUBJECT_SECRET"];
+
+/** The only identity secrets an explicit, reviewed rotation may replace on a
+ * served issuer. A new signing key keeps every subject; a new session salt
+ * keeps every subject but ends every issuer session. */
+export const AUTH_STAGING_ROTATABLE_IDENTITY = { "session-salt": SESSION_SALT_SECRET, "signing-key": SIGNING_KEY_SECRET } as const;
+export type AuthStagingIdentityRotationScope = keyof typeof AUTH_STAGING_ROTATABLE_IDENTITY;
+
+/** The issuer's ES256 key signs only ID tokens, which live 300 seconds for the
+ * shared-account clients; the issuer never verifies its own tokens. A previous
+ * public key stays in JWKS at least this long after the rotation is served, so
+ * an ID token signed just before activation still verifies at its RP. */
+export const AUTH_STAGING_SIGNING_KEY_MIN_OVERLAP_MS = 15 * 60 * 1000;
+
+export type AuthStagingIdentityRotation = Readonly<{
+  kind: "takosumi.auth-staging-identity-rotation@v1";
+  rotate: readonly AuthStagingIdentityRotationScope[];
+  fromContinuityDigest: string;
+  toContinuityDigest: string;
+  signingKey: Readonly<{ fromKid: string; toKid: string; publishedKids: readonly string[]; minimumOverlapSeconds: number }> | null;
+  sessions: "all-invalidated" | "preserved";
+  statement: readonly string[];
+  confirmation: string;
+}>;
+
+export type AuthStagingIdentityRotationInput = Readonly<{
+  rotate: readonly AuthStagingIdentityRotationScope[];
+  /** The bundle the served issuer was released with. */
+  previousSecrets: Readonly<Record<string, string>>;
+  previousSecretsSha256: string;
+  confirmation: string;
+  acknowledgeSessionInvalidation: boolean;
+}>;
+
+/** `--rotate-identity` value: a comma list of `signing-key` and `session-salt`. */
+export function parseAuthStagingIdentityRotation(value: string): readonly AuthStagingIdentityRotationScope[] {
+  const parts = value.split(",");
+  if (parts.some((part) => /pairwise|subject/iu.test(part))) throw new Error("auth_staging_identity_rotation_subject_refused");
+  if (new Set(parts).size !== parts.length || parts.some((part) => !Object.hasOwn(AUTH_STAGING_ROTATABLE_IDENTITY, part))) throw new Error("auth_staging_identity_rotation_invalid");
+  return (parts as AuthStagingIdentityRotationScope[]).sort();
+}
+
+/**
+ * Local half of a reviewed identity rotation: proves that, between the served
+ * bundle and the new one, exactly the named identity secrets changed and every
+ * other secret is byte-identical, that a new signing key is published beside
+ * the previous public key, and states the consequences. The confirmation names
+ * the served and the new continuity digests. Nothing here reads a provider.
+ */
+export async function createAuthStagingIdentityRotation(target: AuthStagingTarget, secrets: Readonly<Record<string, string>>, previousSecrets: Readonly<Record<string, string>>, scopes: readonly AuthStagingIdentityRotationScope[]): Promise<AuthStagingIdentityRotation> {
+  const rotate = parseAuthStagingIdentityRotation(scopes.join(","));
+  validateSecrets(secrets, target);
+  validateSecrets(previousSecrets, target);
+  await validateSigningSecrets(secrets, target);
+  const rotated = new Set<string>(rotate.map((scope) => AUTH_STAGING_ROTATABLE_IDENTITY[scope]));
+  for (const name of target.requiredSecrets) {
+    const unchanged = secrets[name] === previousSecrets[name];
+    if (rotated.has(name)) {
+      if (unchanged) throw new Error("auth_staging_identity_rotation_unchanged");
+    } else if (!unchanged) {
+      if (SUBJECT_IDENTITY_SECRETS.includes(name)) throw new Error("auth_staging_identity_rotation_subject_refused");
+      throw new Error((IDENTITY_CONTINUITY_SECRETS as readonly string[]).includes(name) ? "auth_staging_identity_rotation_scope_exceeded" : "auth_staging_identity_rotation_non_identity_changed");
+    }
+  }
+  let signingKey: AuthStagingIdentityRotation["signingKey"] = null;
+  if (rotate.includes("signing-key")) {
+    const next = signingKeyPoint(secrets), previous = signingKeyPoint(previousSecrets);
+    if (next.x === previous.x && next.y === previous.y) throw new Error("auth_staging_identity_rotation_unchanged");
+    const toKid = target.vars[KEY_ID_VAR]!;
+    const published = previousPublicKeys(target.vars[PREVIOUS_JWKS_VAR]);
+    const overlap = published.filter((key) => key.x === previous.x && key.y === previous.y);
+    if (overlap.length !== 1 || overlap[0]!.kid === toKid || published.some((key) => key.x === next.x && key.y === next.y)) throw new Error("auth_staging_identity_rotation_overlap_missing");
+    signingKey = { fromKid: String(overlap[0]!.kid), toKid, publishedKids: [toKid, ...published.map((key) => String(key.kid))], minimumOverlapSeconds: AUTH_STAGING_SIGNING_KEY_MIN_OVERLAP_MS / 1000 };
+  }
+  const sessions = rotate.includes("session-salt") ? "all-invalidated" : "preserved";
+  const fromContinuityDigest = identityContinuityDigest(previousSecrets), toContinuityDigest = identityContinuityDigest(secrets);
+  const statement = [
+    ...(signingKey ? [`Signing key ${signingKey.toKid} replaces ${signingKey.fromKid}. Only ${signingKey.toKid} signs from activation; public JWKS keeps ${signingKey.fromKid} for verification only, until --retire-previous-key ${signingKey.fromKid} runs at least ${signingKey.minimumOverlapSeconds / 60} minutes after activation.`] : []),
+    sessions === "all-invalidated"
+      ? "The new session hash salt invalidates every issuer account session: every user must sign in again. RP refresh grants, access tokens and personal access tokens are not keyed by the salt and stay valid until they expire or are revoked."
+      : "Issuer account sessions are preserved.",
+    "Pairwise and subject secrets, every other secret, variable, registration and resource, the source commit and the artifact stay exactly as served.",
+  ];
+  return { kind: "takosumi.auth-staging-identity-rotation@v1", rotate, fromContinuityDigest, toContinuityDigest, signingKey, sessions, statement,
+    confirmation: `rotate-identity:${rotate.join(",")}:${fromContinuityDigest}:${toContinuityDigest}` };
+}
+
+function stageConfigDigest(bindings: readonly NativeBinding[], vars: Readonly<Record<string, string>>, requiredSecrets: readonly string[], jwksSha256: string): string {
+  return digest(JSON.stringify({ bindings, vars, requiredSecrets: requiredSecrets.slice().sort(), jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON, placement: AUTH_STAGING_PLACEMENT }));
+}
+
+function stageAuthorityDigest(configDigest: string, secretsSha256: string): string {
+  return digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256 }));
+}
+
 export type AuthStagingTarget = Readonly<{
   kind: "takosumi.auth-staging-target@v1";
   environment: "staging";
@@ -146,8 +246,8 @@ export function authStagingResourceBindings(canonicalConfig: string, target: Aut
 
 export function createAuthStagingPlan(target: AuthStagingTarget, canonicalConfig: string, artifact: Uint8Array): AuthStagingPlan {
   const bindings = authStagingResourceBindings(canonicalConfig, target);
-  const configDigest = digest(JSON.stringify({ bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON, placement: AUTH_STAGING_PLACEMENT }));
-  const authorityDigest = digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256: target.secretsSha256 }));
+  const configDigest = stageConfigDigest(bindings, target.vars, target.requiredSecrets, target.jwksSha256);
+  const authorityDigest = stageAuthorityDigest(configDigest, target.secretsSha256);
   const body = { kind: "takosumi.auth-staging-plan@v1" as const, sourceCommit: target.sourceCommit, targetDigest: digest(JSON.stringify(target)), configDigest, artifactDigest: digest(artifact), authorityDigest, bindings, requiredSecrets: target.requiredSecrets };
   return { ...body, confirmation: digest(JSON.stringify(body)) };
 }
@@ -247,20 +347,35 @@ export async function executeAuthStagingRelease(input: {
   secrets: Readonly<Record<string, string>>;
   confirmation: string;
   reviewer?: string;
+  /** Reviewed replacement of the served signing key and/or session salt. */
+  identityRotation?: AuthStagingIdentityRotationInput;
+  /** Kids of previous public keys to drop from a served JWKS after the overlap. */
+  retirePreviousKeys?: readonly string[];
 }, runtime: AuthStagingReleaseRuntime): Promise<Readonly<Record<string, unknown>>> {
-  const { target, plan, action } = input;
+  const { target, plan, action, identityRotation, retirePreviousKeys } = input;
   // Revalidate the closed target and bytes before any provider request.
   parseAuthStagingTarget(target);
   assertPlanClosure(plan, target);
   if (digest(input.artifact) !== plan.artifactDigest || input.confirmation !== plan.confirmation ||
       plan.targetDigest !== digest(JSON.stringify(target))) throw new Error("auth_staging_confirmation_mismatch");
   if (action !== "code" && (!input.reviewer || !/^[^\r\n]{3,128}$/u.test(input.reviewer))) throw new Error("auth_staging_independent_review_required");
+  if ((identityRotation || retirePreviousKeys) && (action !== "authority" || (identityRotation && retirePreviousKeys))) throw new Error("auth_staging_identity_rotation_action_invalid");
   if (action === "code" || action === "authority") {
     validateSecrets(input.secrets, target);
     await validateSigningSecrets(input.secrets, target);
     try { upstreamOAuthOptionsFromEnvironment({ ...target.vars, ...input.secrets }); }
     catch { throw new Error("auth_staging_upstream_configuration_invalid"); }
   }
+  let rotation: AuthStagingIdentityRotation | undefined;
+  if (identityRotation) {
+    if (!SHA.test(identityRotation.previousSecretsSha256)) throw new Error("auth_staging_identity_rotation_secrets_required");
+    rotation = await createAuthStagingIdentityRotation(target, input.secrets, identityRotation.previousSecrets, identityRotation.rotate);
+    const invalidates = rotation.sessions === "all-invalidated";
+    if (invalidates && !identityRotation.acknowledgeSessionInvalidation) throw new Error("auth_staging_session_invalidation_unacknowledged");
+    if (!invalidates && identityRotation.acknowledgeSessionInvalidation) throw new Error("auth_staging_session_invalidation_not_rotated");
+    if (identityRotation.confirmation !== rotation.confirmation) throw new Error("auth_staging_identity_rotation_confirmation_mismatch");
+  }
+  if (retirePreviousKeys) assertRetirementRequest(retirePreviousKeys, target);
   const script = `/workers/scripts/${AUTH_STAGING_WORKER}`;
   const settings = await runtime.provider.request("GET", `${script}/script-settings`);
   let touched = false;
@@ -278,7 +393,8 @@ export async function executeAuthStagingRelease(input: {
     if (settings === null) throw new Error("auth_staging_bootstrap_required");
     const canonicalNamespaces = await assertCanonicalBindings(runtime.provider, target, plan);
     await runtime.verifySchema(target, plan.bindings);
-    predecessor = servingVersion(await runtime.provider.request("GET", `${script}/deployments`));
+    const deployments = await runtime.provider.request("GET", `${script}/deployments`);
+    predecessor = servingVersion(deployments);
     if (action === "topology") {
       const version = await runtime.provider.request("GET", `${script}/versions/${predecessor}`);
       assertAuthStagingVersion(version, plan, target);
@@ -298,9 +414,20 @@ export async function executeAuthStagingRelease(input: {
     // that is already served; its domain and retry schedule stay attached and
     // the new Version is read back publicly before the change is reported.
     const active = action === "code" || (action === "authority" && await topologyActive(runtime.provider));
+    // A route-less slot serves no identity; it takes new secrets without rotation.
+    if ((rotation || retirePreviousKeys) && !active) throw new Error("auth_staging_identity_rotation_requires_served_issuer");
     await assertTopology(runtime.provider, target, active);
     validateSecrets(input.secrets, target);
-    if (action === "authority" && active) assertIdentityContinuity(await runtime.provider.request("GET", `${script}/versions/${predecessor}`), input.secrets, target);
+    let retiredKids: readonly string[] | undefined;
+    if (action === "authority" && active) {
+      const served = await runtime.provider.request("GET", `${script}/versions/${predecessor}`);
+      if (rotation && identityRotation) assertIdentityRotation(served, plan, target, rotation, identityRotation);
+      else if (retirePreviousKeys) retiredKids = assertPreviousKeyRetirement(served, deployments, plan, target, input.secrets, retirePreviousKeys);
+      else {
+        assertIdentityContinuity(served, input.secrets, target);
+        assertJwksContinuity(served, target);
+      }
+    }
     if (action === "code") {
       const before = await runtime.provider.request("GET", `${script}/versions/${predecessor}`);
       // Source/artifact may differ; all authority, stores, registrations and private
@@ -317,6 +444,8 @@ export async function executeAuthStagingRelease(input: {
     uploadedVersion = upload.id;
     const version = await runtime.provider.request("GET", `${script}/versions/${uploadedVersion}`);
     assertAuthStagingVersion(version, plan, target);
+    // The Version records this bundle's identity; later releases are compared with it.
+    if (plainText(predecessorBindings(version), IDENTITY_CONTINUITY_BINDING) !== identityContinuityDigest(input.secrets)) throw new Error("auth_staging_binding_identity_mismatch");
     assertCanonicalNamespaces(version, canonicalNamespaces);
     const placementTarget = uploadedPlacementTarget(version);
     // Lost upload/activation acknowledgements are never retried. Current serving
@@ -327,7 +456,14 @@ export async function executeAuthStagingRelease(input: {
     assertAuthStagingPlacement(await runtime.provider.request("GET", `${script}/settings`), placementTarget);
     await assertTopology(runtime.provider, target, active);
     if (active) await runtime.publicReadback(uploadedVersion, plan);
-    return { status: action === "code" ? "ready" : active ? "authority-ready-served" : "authority-ready-route-disabled", sourceCommit: target.sourceCommit, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest, releaseTag, predecessor, version: uploadedVersion, reversal: "explicit owner code restore to recorded predecessor while schema compatible; no database rollback" };
+    const result = { status: action === "code" ? "ready" : active ? "authority-ready-served" : "authority-ready-route-disabled", sourceCommit: target.sourceCommit, artifactDigest: plan.artifactDigest, authorityDigest: plan.authorityDigest, releaseTag, predecessor, version: uploadedVersion, reversal: "explicit owner code restore to recorded predecessor while schema compatible; no database rollback" };
+    if (rotation) {
+      return { ...result, status: "identity-rotated-served", reversal: "restoring the predecessor re-serves the replaced identity; after an exposure repair forward with another reviewed rotation",
+        identityRotation: { rotate: rotation.rotate, fromContinuityDigest: rotation.fromContinuityDigest, toContinuityDigest: rotation.toContinuityDigest, sessions: rotation.sessions,
+          signingKey: rotation.signingKey && { ...rotation.signingKey, retireNotBefore: new Date(Date.now() + AUTH_STAGING_SIGNING_KEY_MIN_OVERLAP_MS).toISOString() } } };
+    }
+    if (retiredKids) return { ...result, status: "previous-key-retired-served", retiredKids };
+    return result;
   } catch (error) {
     if (!touched) throw error;
     const reason = error instanceof Error && /^auth_staging_[a-z0-9_]+$/u.test(error.message) ? error.message : "dependency_failed";
@@ -389,8 +525,8 @@ export function assertAuthStagingPlacement(value: unknown, target: number): void
 }
 
 function assertPlanClosure(plan: AuthStagingPlan, target: AuthStagingTarget): void {
-  const configDigest = digest(JSON.stringify({ bindings: plan.bindings, vars: target.vars, requiredSecrets: target.requiredSecrets.slice().sort(), jwksSha256: target.jwksSha256, compatibility_date: AUTH_STAGING_COMPATIBILITY_DATE, compatibility_flags: ["nodejs_compat"], handlers: ["fetch", "scheduled"], retryCron: AUTH_STAGING_RETRY_CRON, placement: AUTH_STAGING_PLACEMENT }));
-  const authorityDigest = digest(JSON.stringify({ kind: "takosumi.auth-staging-authority@v1", configDigest, secretsSha256: target.secretsSha256 }));
+  const configDigest = stageConfigDigest(plan.bindings, target.vars, target.requiredSecrets, target.jwksSha256);
+  const authorityDigest = stageAuthorityDigest(configDigest, target.secretsSha256);
   const body = { kind: "takosumi.auth-staging-plan@v1", sourceCommit: target.sourceCommit, targetDigest: digest(JSON.stringify(target)), configDigest, artifactDigest: plan.artifactDigest, authorityDigest, bindings: plan.bindings, requiredSecrets: target.requiredSecrets };
   if (plan.kind !== body.kind || plan.sourceCommit !== target.sourceCommit ||
       plan.configDigest !== configDigest || plan.authorityDigest !== authorityDigest ||
@@ -468,6 +604,139 @@ function assertIdentityContinuity(predecessor: unknown, secrets: Readonly<Record
   }
   const keyId = bindings.find((binding) => record(binding) && binding.name === "TAKOSUMI_ACCOUNTS_ES256_KEY_ID");
   if (!record(keyId) || keyId.type !== "plain_text" || keyId.text !== target.vars.TAKOSUMI_ACCOUNTS_ES256_KEY_ID) throw new Error("auth_staging_identity_continuity_changed");
+}
+
+/** A served issuer's public key set changes only through a reviewed rotation
+ * or retirement, never as a side effect of another authority change. */
+function assertJwksContinuity(predecessor: unknown, target: AuthStagingTarget): void {
+  const bindings = predecessorBindings(predecessor);
+  if (plainText(bindings, KEY_ID_VAR) !== target.vars[KEY_ID_VAR] ||
+      plainText(bindings, PREVIOUS_JWKS_VAR) !== target.vars[PREVIOUS_JWKS_VAR]) throw new Error("auth_staging_jwks_continuity_changed");
+}
+
+/** Provider half of a reviewed rotation: the served Version must record the
+ * reviewed `from` digest, serve the key the new JWKS keeps as previous, and
+ * differ from this release only by the rotated identity fields. */
+function assertIdentityRotation(predecessor: unknown, plan: AuthStagingPlan, target: AuthStagingTarget, rotation: AuthStagingIdentityRotation, input: AuthStagingIdentityRotationInput): void {
+  const bindings = predecessorBindings(predecessor);
+  const recorded = plainText(bindings, IDENTITY_CONTINUITY_BINDING);
+  // A predecessor from before the digest first takes an ordinary authority release.
+  if (recorded === undefined) throw new Error("auth_staging_identity_rotation_predecessor_unrecorded");
+  if (recorded !== rotation.fromContinuityDigest) throw new Error("auth_staging_identity_rotation_predecessor_mismatch");
+  const servedKeyId = plainText(bindings, KEY_ID_VAR), servedPrevious = plainText(bindings, PREVIOUS_JWKS_VAR);
+  if (servedKeyId === undefined) throw new Error("auth_staging_identity_rotation_predecessor_mismatch");
+  if (rotation.signingKey) {
+    if (servedKeyId !== rotation.signingKey.fromKid) throw new Error("auth_staging_identity_rotation_predecessor_mismatch");
+    // Every key the new JWKS keeps as previous is already served; none is introduced.
+    const served = servedPublicJwks(input.previousSecrets, servedKeyId, servedPrevious);
+    if (previousPublicKeys(target.vars[PREVIOUS_JWKS_VAR]).some((key) => !served.some((current) => sameJwk(current, key)))) throw new Error("auth_staging_identity_rotation_overlap_missing");
+  } else if (servedKeyId !== target.vars[KEY_ID_VAR] || servedPrevious !== target.vars[PREVIOUS_JWKS_VAR]) throw new Error("auth_staging_jwks_continuity_changed");
+  assertServedIdentityOnlyChange(predecessor, plan, target, { keyId: servedKeyId, previous: servedPrevious, signingSecrets: input.previousSecrets, secretsSha256: input.previousSecretsSha256 });
+}
+
+function assertRetirementRequest(kids: readonly string[], target: AuthStagingTarget): void {
+  const published = [target.vars[KEY_ID_VAR], ...previousPublicKeys(target.vars[PREVIOUS_JWKS_VAR]).map((key) => key.kid)];
+  if (kids.length === 0 || new Set(kids).size !== kids.length ||
+      kids.some((kid) => !/^[A-Za-z0-9._-]{3,128}$/u.test(kid) || published.includes(kid))) throw new Error("auth_staging_previous_key_retirement_invalid");
+}
+
+/** Drops previous public keys from a served JWKS once the overlap has passed.
+ * The signing key, every secret and every other field stay as served. */
+function assertPreviousKeyRetirement(predecessor: unknown, deployments: unknown, plan: AuthStagingPlan, target: AuthStagingTarget, secrets: Readonly<Record<string, string>>, retire: readonly string[]): readonly string[] {
+  assertIdentityContinuity(predecessor, secrets, target);
+  const bindings = predecessorBindings(predecessor);
+  const servedKeyId = plainText(bindings, KEY_ID_VAR), servedPrevious = plainText(bindings, PREVIOUS_JWKS_VAR);
+  if (servedKeyId === undefined || servedKeyId !== target.vars[KEY_ID_VAR]) throw new Error("auth_staging_jwks_continuity_changed");
+  const served = previousPublicKeys(servedPrevious);
+  if (served.length === 0) throw new Error("auth_staging_previous_key_absent");
+  const kept = previousPublicKeys(target.vars[PREVIOUS_JWKS_VAR]);
+  if (kept.some((key) => !served.some((current) => sameJwk(current, key)))) throw new Error("auth_staging_previous_key_retirement_invalid");
+  const retired = served.map((key) => String(key.kid)).filter((kid) => !kept.some((key) => key.kid === kid)).sort();
+  if (retired.length === 0 || JSON.stringify(retired) !== JSON.stringify([...retire].sort())) throw new Error("auth_staging_previous_key_retirement_mismatch");
+  // The newest deployment is no earlier than the one that published the key.
+  if (Date.now() - servingSince(deployments) < AUTH_STAGING_SIGNING_KEY_MIN_OVERLAP_MS) throw new Error("auth_staging_previous_key_overlap_active");
+  assertServedIdentityOnlyChange(predecessor, plan, target, { keyId: servedKeyId, previous: servedPrevious, signingSecrets: secrets, secretsSha256: target.secretsSha256 });
+  return retired;
+}
+
+/**
+ * Identity-only proof against the served Version: the same source commit and
+ * artifact, and its recorded authority digest recomputes from this target and
+ * plan with only the served key id, previous public keys, JWKS digest and
+ * secret bundle digest substituted. Every other variable, registration,
+ * resource, required secret name, placement and schedule is therefore exactly
+ * as served, and the served bundle is exactly the one supplied.
+ */
+function assertServedIdentityOnlyChange(predecessor: unknown, plan: AuthStagingPlan, target: AuthStagingTarget,
+  served: { keyId: string; previous: string | undefined; signingSecrets: Readonly<Record<string, string>>; secretsSha256: string }): void {
+  const bindings = predecessorBindings(predecessor);
+  if (plainText(bindings, "TAKOSUMI_AUTH_SOURCE_COMMIT") !== target.sourceCommit ||
+      plainText(bindings, "TAKOSUMI_AUTH_ARTIFACT_DIGEST") !== plan.artifactDigest) throw new Error("auth_staging_identity_only_code_changed");
+  const authority = plainText(bindings, "TAKOSUMI_AUTH_AUTHORITY_DIGEST");
+  const jwksSha256 = publicJwksDigest(servedPublicJwks(served.signingSecrets, served.keyId, served.previous));
+  const vars = servedVarCandidates(target.vars, served.keyId, served.previous).find((candidate) =>
+    stageAuthorityDigest(stageConfigDigest(plan.bindings, candidate, target.requiredSecrets, jwksSha256), served.secretsSha256) === authority);
+  if (!vars || authority === undefined) throw new Error("auth_staging_identity_only_authority_changed");
+  try { assertAuthStagingVersion(predecessor, { ...plan, authorityDigest: authority }, { ...target, vars }); }
+  catch { throw new Error("auth_staging_identity_only_predecessor_mismatch"); }
+}
+
+/** The served variables in each order the reviewed target can encode them:
+ * the target's own order, with the served previous public keys at every
+ * position when the target dropped or moved them. */
+function servedVarCandidates(vars: Readonly<Record<string, string>>, keyId: string, previous: string | undefined): Record<string, string>[] {
+  const base = Object.entries(vars).filter(([name]) => name !== PREVIOUS_JWKS_VAR)
+    .map(([name, text]): [string, string] => [name, name === KEY_ID_VAR ? keyId : text]);
+  if (previous === undefined) return [Object.fromEntries(base)];
+  return Array.from({ length: base.length + 1 }, (_, index) => Object.fromEntries([...base.slice(0, index), [PREVIOUS_JWKS_VAR, previous], ...base.slice(index)]));
+}
+
+function servedPublicJwks(secrets: Readonly<Record<string, string>>, keyId: string, previous: string | undefined): Record<string, unknown>[] {
+  const current = signingKeyPoint(secrets);
+  return [{ kty: "EC", crv: "P-256", x: current.x, y: current.y, kid: keyId, use: "sig", alg: "ES256" }, ...previousPublicKeys(previous)];
+}
+
+/** The same JWK Set or JWK array shape the issuer reads, public keys only. */
+function previousPublicKeys(text: string | undefined): Record<string, unknown>[] {
+  try {
+    const parsed: unknown = text ? JSON.parse(text) : [];
+    const keys: unknown = Array.isArray(parsed) ? parsed : record(parsed) ? parsed.keys : undefined;
+    if (!Array.isArray(keys) || keys.some((key) => !record(key) || Object.hasOwn(key, "d") || key.kty !== "EC" || key.crv !== "P-256" ||
+        typeof key.kid !== "string" || typeof key.x !== "string" || typeof key.y !== "string")) throw new Error();
+    return keys as Record<string, unknown>[];
+  } catch { throw new Error("auth_staging_signing_configuration_invalid"); }
+}
+
+function signingKeyPoint(secrets: Readonly<Record<string, string>>): { x: string; y: string } {
+  try {
+    const value: unknown = JSON.parse(secrets[SIGNING_KEY_SECRET]!);
+    if (!record(value) || value.kty !== "EC" || value.crv !== "P-256" || typeof value.x !== "string" || typeof value.y !== "string") throw new Error();
+    return { x: value.x, y: value.y };
+  } catch { throw new Error("auth_staging_signing_configuration_invalid"); }
+}
+
+const sameJwk = (left: Record<string, unknown>, right: Record<string, unknown>) =>
+  ["kty", "crv", "x", "y", "kid"].every((field) => left[field] === right[field]);
+
+function predecessorBindings(value: unknown): readonly unknown[] {
+  if (!record(value) || !record(value.resources) || !Array.isArray(value.resources.bindings)) throw new Error("auth_staging_identity_continuity_unverifiable");
+  return value.resources.bindings;
+}
+
+function plainText(bindings: readonly unknown[], name: string): string | undefined {
+  const matches = bindings.filter((binding) => record(binding) && binding.name === name);
+  if (matches.length === 0) return undefined;
+  const binding = matches[0];
+  if (matches.length !== 1 || !record(binding) || binding.type !== "plain_text" || typeof binding.text !== "string") throw new Error("auth_staging_identity_continuity_unverifiable");
+  return binding.text;
+}
+
+/** `created_on` of the serving deployment, as the Workers deployments API lists it. */
+function servingSince(value: unknown): number {
+  const created = record(value) && Array.isArray(value.deployments) && record(value.deployments[0]) ? value.deployments[0].created_on : undefined;
+  const at = typeof created === "string" ? Date.parse(created) : Number.NaN;
+  if (!Number.isFinite(at) || at > Date.now() + 60_000) throw new Error("auth_staging_previous_key_overlap_unverifiable");
+  return at;
 }
 
 async function topologyActive(provider: AuthStagingProvider): Promise<boolean> {
@@ -584,13 +853,21 @@ export async function runAuthStagingRelease(surface: string, argv: readonly stri
   const actions: Record<string, string> = { "takosumi-auth-staging-bootstrap": "bootstrap", "takosumi-auth-staging-authority": "authority", "takosumi-auth-staging-code": "code", "takosumi-auth-staging-topology": "topology" };
   if (!actions[surface] || (action !== "plan" && action !== "apply")) throw new Error("auth_staging_action_invalid");
   const options: Record<string, string> = {};
+  let acknowledgeSessionInvalidation = false;
   for (let index = 1; index < argv.length; index += 2) {
     const flag = argv[index];
+    if (flag === "--acknowledge-session-invalidation" && !acknowledgeSessionInvalidation) { acknowledgeSessionInvalidation = true; index -= 1; continue; }
     const value = argv[index + 1];
-    if (!flag || !["--target", "--canonical-config", "--secrets", "--confirm", "--reviewer"].includes(flag) || value === undefined || options[flag]) throw new Error("auth_staging_arguments_invalid");
+    if (!flag || !["--target", "--canonical-config", "--secrets", "--confirm", "--reviewer", "--rotate-identity", "--previous-secrets", "--confirm-rotation", "--retire-previous-key"].includes(flag) || value === undefined || Object.hasOwn(options, flag)) throw new Error("auth_staging_arguments_invalid");
     options[flag] = value;
   }
   if (!options["--target"] || !options["--canonical-config"]) throw new Error("auth_staging_arguments_invalid");
+  // Identity rotation and key retirement are modes of the reviewed authority surface only.
+  const rotate = options["--rotate-identity"] === undefined ? undefined : parseAuthStagingIdentityRotation(options["--rotate-identity"]);
+  const retire = options["--retire-previous-key"]?.split(",");
+  const rotationOnly = acknowledgeSessionInvalidation || options["--previous-secrets"] !== undefined || options["--confirm-rotation"] !== undefined;
+  if ((rotate || retire || rotationOnly) && surface !== "takosumi-auth-staging-authority") throw new Error("auth_staging_identity_rotation_action_invalid");
+  if ((rotate && retire) || (rotationOnly && !rotate)) throw new Error("auth_staging_arguments_invalid");
   const targetBytes = privateFile(options["--target"]);
   const canonicalBytes = privateFile(options["--canonical-config"]);
   const target = parseAuthStagingTarget(privateJson(targetBytes));
@@ -601,18 +878,28 @@ export async function runAuthStagingRelease(surface: string, argv: readonly stri
   const artifact = new Uint8Array(await build.outputs[0]!.arrayBuffer());
   await assertSelectedSource(target);
   const plan = createAuthStagingPlan(target, new TextDecoder().decode(canonicalBytes), artifact);
-  if (action === "plan") { process.stdout.write(`${JSON.stringify(plan)}\n`); return; }
+  // A rotation reads the new and the served bundle locally and states its
+  // continuity digests; neither plan form reads a provider.
+  if (rotate && (!options["--secrets"] || !options["--previous-secrets"])) throw new Error("auth_staging_identity_rotation_secrets_required");
+  const previous = rotate ? secretBundle(options["--previous-secrets"]!) : undefined;
+  if (retire) assertRetirementRequest(retire, target);
+  if (action === "plan") {
+    const rotation = rotate && previous ? await createAuthStagingIdentityRotation(target, secretBundle(options["--secrets"]!, target.secretsSha256).secrets, previous.secrets, rotate) : undefined;
+    const retirement = retire ? { retire: [...retire].sort(), publishedKids: [target.vars[KEY_ID_VAR], ...previousPublicKeys(target.vars[PREVIOUS_JWKS_VAR]).map((key) => key.kid)] } : undefined;
+    process.stdout.write(`${JSON.stringify({ ...plan, ...(rotation ? { identityRotation: rotation } : {}), ...(retirement ? { previousKeyRetirement: retirement } : {}) })}\n`);
+    return;
+  }
   if (!options["--confirm"]) throw new Error("auth_staging_confirmation_required");
+  if (rotate && !options["--confirm-rotation"]) throw new Error("auth_staging_identity_rotation_confirmation_required");
   let secrets: Record<string, string> = {};
   if (actions[surface] === "authority" || actions[surface] === "code") {
     if (!options["--secrets"]) throw new Error("auth_staging_secrets_required");
-    const bytes = privateFile(options["--secrets"]);
-    if (digest(bytes) !== target.secretsSha256) throw new Error("auth_staging_secret_custody_mismatch");
-    const value = privateJson(bytes);
-    if (!record(value) || Object.values(value).some((text) => typeof text !== "string")) throw new Error("auth_staging_secret_bundle_invalid");
-    secrets = Object.fromEntries(Object.entries(value).map(([name, text]) => [name, String(text)]));
+    secrets = secretBundle(options["--secrets"], target.secretsSha256).secrets;
     validateSecrets(secrets, target);
   }
+  const identityRotation: AuthStagingIdentityRotationInput | undefined = rotate && previous
+    ? { rotate, previousSecrets: previous.secrets, previousSecretsSha256: previous.sha256, confirmation: options["--confirm-rotation"]!, acknowledgeSessionInvalidation }
+    : undefined;
   const token = await authToken(target.accountId);
   const provider = nativeProvider(target, token);
   const runtime: AuthStagingReleaseRuntime = {
@@ -639,7 +926,8 @@ export async function runAuthStagingRelease(surface: string, argv: readonly stri
     publicReadback: (version, currentPlan) => verifyPublicAuthStaging(version, currentPlan, target.jwksSha256),
   };
   try {
-    const result = await executeAuthStagingRelease({ action: actions[surface] as "bootstrap" | "authority" | "code" | "topology", target, plan, artifact, secrets, confirmation: options["--confirm"], reviewer: options["--reviewer"] }, runtime);
+    const result = await executeAuthStagingRelease({ action: actions[surface] as "bootstrap" | "authority" | "code" | "topology", target, plan, artifact, secrets, confirmation: options["--confirm"], reviewer: options["--reviewer"],
+      ...(identityRotation ? { identityRotation } : {}), ...(retire ? { retirePreviousKeys: retire } : {}) }, runtime);
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     if (error instanceof AuthStagingIncompleteError) process.stdout.write(`${JSON.stringify({ status: "incomplete", ...error.recovery, next: "Read exact provider version/deployment/domain history; no mutation retried; preserve schema and repair forward." })}\n`);
@@ -696,6 +984,16 @@ async function assertSelectedSource(target: AuthStagingTarget): Promise<void> {
   if (source.commit !== target.sourceCommit || source.status || !sameGitRemote(git("remote", "get-url", "origin"), target.repository)) throw new Error("auth_staging_source_mismatch");
   try { git("merge-base", "--is-ancestor", target.sourceCommit, "origin/main"); }
   catch { throw new Error("auth_staging_source_not_merged"); }
+}
+
+/** A private secret bundle: values are never printed; only its digest leaves. */
+function secretBundle(path: string, pinnedSha256?: string): { secrets: Record<string, string>; sha256: string } {
+  const bytes = privateFile(path);
+  const sha256 = digest(bytes);
+  if (pinnedSha256 !== undefined && sha256 !== pinnedSha256) throw new Error("auth_staging_secret_custody_mismatch");
+  const value = privateJson(bytes);
+  if (!record(value) || Object.values(value).some((text) => typeof text !== "string")) throw new Error("auth_staging_secret_bundle_invalid");
+  return { secrets: Object.fromEntries(Object.entries(value).map(([name, text]) => [name, String(text)])), sha256 };
 }
 
 function privateJson(bytes: Uint8Array): unknown {
