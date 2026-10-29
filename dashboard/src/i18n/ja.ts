@@ -22,7 +22,6 @@ export const ja = {
   "controlError.ownershipTransferPending": "所有権の譲渡中です。完了または取り消しの後にもう一度お試しください。",
   "controlError.retiredManagement": "この操作は利用できなくなりました。メンバーはアプリの共有から管理してください。",
   "account.apiKeys.scopeRestricted": "制限あり",
-  "account.section.connections": "接続",
   "account.section.usage": "料金と利用量",
   "installStore.error.sourceRefRequired": "インストールする版を入力してください。",
   "workspace.switcherAria": "アプリの場所を切り替え（現在: {name}）",

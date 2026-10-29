@@ -366,3 +366,35 @@ test("a business not_found response never retries install under another scope", 
     expect(new URL(requests[0]!.url).pathname).toBe("/api/v1/install-plans");
   } finally { globalThis.fetch = originalFetch; }
 });
+
+for (const envelope of ["flat", "nested"] as const) {
+  for (const command of ["list", "install"] as const) {
+    test(`apps ${command} falls back on the ${envelope} route-not-found envelope`, async () => {
+      const originalFetch = globalThis.fetch;
+      const requests: Request[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (requests.length === 1) {
+          return Response.json({ error: envelope === "flat" ? "not_found" : { code: "not_found" } }, { status: 404 });
+        }
+        return Response.json(command === "list"
+          ? { installedApps: [], complete: true }
+          : { installPlan: { id: "ip_legacy", phase: "syncing_source" } });
+      }) as typeof fetch;
+      try {
+        expect(await main(["apps", command,
+          ...(command === "install" ? ["--git", "https://git.example.test/team/app.git"] : []),
+          "--workspace", "ws_legacy", "--url", "https://takosumi.example.test", "--token", "account-pat",
+        ], quietIo)).toBe(0);
+        expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+          command === "list" ? "/api/v1/apps" : "/api/v1/install-plans",
+          `/api/v1/workspaces/ws_legacy/${command === "list" ? "installed-apps" : "install-plans"}`,
+        ]);
+        if (command === "install") {
+          expect(requests[1]!.headers.get("idempotency-key")).toBe(requests[0]!.headers.get("idempotency-key"));
+        }
+      } finally { globalThis.fetch = originalFetch; }
+    });
+  }
+}

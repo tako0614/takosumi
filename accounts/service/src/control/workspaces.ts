@@ -135,6 +135,7 @@ import {
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
 import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
+import { workspaceFrozenResponse } from "../workspace-mutations-freeze.ts";
 import { handleWorkspaceInstallPlans } from "./install-plans.ts";
 import { handleWorkspaceInstalledApps } from "./installed-apps.ts";
 
@@ -163,7 +164,8 @@ export async function handleWorkspaces(
           403,
         );
       }
-      return await createWorkspace(request, operations, ctx.session.subject, ctx.session.requireCurrentMembership);
+      return await createWorkspace(request, operations, ctx.session.subject,
+        ctx.session.requireCurrentMembership, ctx.workspaceMutationsFrozen !== false);
     }
     return methodNotAllowed("GET, POST");
   }
@@ -715,6 +717,7 @@ async function createWorkspace(
   operations: ControlPlaneOperations,
   sessionSubject: string,
   requireCurrentMembership = false,
+  workspaceMutationsFrozen = true,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -728,10 +731,25 @@ async function createWorkspace(
       400,
     );
   }
+  if (workspaceMutationsFrozen && type === "organization") return workspaceFrozenResponse(request);
   const handle = stringValue(body.handle);
   const displayName = stringValue(body.displayName) ?? handle;
   if (!handle) {
     return errorJson("invalid_request", "handle is required", 400);
+  }
+  if (workspaceMutationsFrozen) {
+    if (Object.keys(body).some((key) => !["handle", "displayName", "type"].includes(key))) {
+      return errorJson("invalid_request", "Personal Workspace bootstrap accepts only handle, displayName, and type.", 400);
+    }
+    const ensure = requireCurrentMembership
+      ? operations.workspaces.ensurePersonalWorkspaceForSharedAccount
+      : operations.workspaces.ensurePersonalWorkspace;
+    if (!ensure) return errorJson("capability_unavailable", "Personal Workspace bootstrap is unavailable.", 503);
+    const workspace = await ensure.call(operations.workspaces, sessionSubject, handle);
+    if (workspace.type !== "personal" || workspace.ownerUserId !== sessionSubject) {
+      return errorJson("failed_precondition", "Personal Workspace bootstrap returned a different owner.", 500);
+    }
+    return jsonStatus({ workspace }, 201);
   }
   // ownerUserId is the authenticated account id; canonical Workspace creation
   // persists the corresponding owner membership in the same authority.

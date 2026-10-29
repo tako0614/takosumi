@@ -161,6 +161,7 @@ export async function handleRuns(
             operations,
             store,
             workspaceId: run.workspaceId,
+            ...(run.capsuleId ? { capsuleId: run.capsuleId } : {}),
             session: ctx.session,
             assertActive,
             ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
@@ -181,6 +182,7 @@ export async function handleRuns(
       operations,
       store,
       workspaceId: run.workspaceId,
+      ...(run.capsuleId ? { capsuleId: run.capsuleId } : {}),
       session: ctx.session,
     });
     if (!auth.ok) return auth.response;
@@ -341,6 +343,7 @@ export function runStatusStream(
             operations,
             store,
             workspaceId,
+            ...(initialRun.capsuleId ? { capsuleId: initialRun.capsuleId } : {}),
             session,
           });
           if (!auth.ok || cancelled) return false;
@@ -443,6 +446,9 @@ export async function handleRunGroups(
       operations,
       store,
       workspaceId: runGroupWorkspaceId,
+      ...(existing.runs.length > 0 && existing.runs.every((run) => run.capsuleId === existing.runs[0]?.capsuleId) && existing.runs[0]?.capsuleId
+        ? { capsuleId: existing.runs[0].capsuleId }
+        : {}),
       session: ctx.session,
     });
     if (!auth.ok) return auth.response;
@@ -493,6 +499,7 @@ async function applyPlanRun(
     operations,
     store,
     workspaceId: planRun.workspaceId,
+    ...(planRun.capsuleId ? { capsuleId: planRun.capsuleId } : {}),
     session,
   });
   if (!auth.ok) return auth.response;

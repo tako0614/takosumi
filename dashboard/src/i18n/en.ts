@@ -12,7 +12,6 @@ export const en: Record<keyof typeof ja, string> = {
   "controlError.ownershipTransferPending": "Ownership is being transferred. Try again after it completes or is cancelled.",
   "controlError.retiredManagement": "This operation is retired. Manage members from the app’s sharing section.",
   "account.apiKeys.scopeRestricted": "Restricted",
-  "account.section.connections": "Connections",
   "account.section.usage": "Billing and usage",
   "installStore.error.sourceRefRequired": "Enter a version to install this app.",
   "workspace.switcherAria": "Switch legacy workspace (current: {name})",

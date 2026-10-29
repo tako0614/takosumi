@@ -58,6 +58,7 @@ const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
 const NotificationsView = lazy(
   () => import("./views/notifications/NotificationsView.tsx"),
 );
+const ConnectionsView = lazy(() => import("./views/workspace/ConnectionsView.tsx"));
 const AccountView = lazy(() => import("./views/account/AccountView.tsx"));
 
 // --- redirects ---------------------------------------------------------------
@@ -125,7 +126,7 @@ function NewRoute() {
 
 /**
  * Legacy workspace settings routes remain graceful entrances during migration.
- * Personal connections and usage now live under Account; removed workspace
+ * Connections have their own route; usage lives under Account. Removed workspace
  * management routes return to the Account profile.
  */
 function legacyWorkspaceSettingsTarget(tab: string | undefined): string {
@@ -133,7 +134,7 @@ function legacyWorkspaceSettingsTarget(tab: string | undefined): string {
     case "members":
       return "/account";
     case "connections":
-      return "/account/connections";
+      return "/connections";
     case "billing":
       return "/account/usage";
     case "interface-recovery":
@@ -172,13 +173,14 @@ function App() {
 
       {/* Signed-in surface — ShellLayout owns AuthGuard + chrome. Primary
           destinations: / (ホーム), /new (ストア: browse AND install in one
-          page), /account (アカウント: profile, personal connections and usage). An app's page
+          page), /connections (接続), /account (アカウント: profile and usage). An app's page
           (`/apps/:id`, canonical) and the run details opened from its history
           stay routable. */}
       <Route component={ShellLayout}>
         <Route path="/" component={AppListView} />
         <Route path="/new" component={NewRoute} />
-        <Route path="/connections" component={() => <RedirectWithQuery to="/account/connections" />} />
+        <Route path="/connections" component={ConnectionsView} />
+        <Route path="/account/connections" component={() => <RedirectWithQuery to="/connections" />} />
         <Route path="/account" component={AccountView} />
         <Route path="/account/billing" component={() => <RedirectWithQuery to="/account/usage" />} />
         <Route path="/account/:section" component={AccountView} />
@@ -202,9 +204,8 @@ function App() {
           the external install link (client-handled): it forwards its query to
           /new, where lib/install-link.ts pre-fills the Git form — pre-fill
           only, the visitor always confirms before anything installs. A
-          provider OAuth helper callback's /connections forwards into Account
-          and keeps its result query
-          too. The all-apps list is ホーム, so /apps lands there; an app's
+          provider OAuth helper callback opens /connections with its result query.
+          The all-apps list is ホーム, so /apps lands there; an app's
           own page is /apps/:id. */}
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/" />} />
@@ -269,7 +270,7 @@ function App() {
       />
       <Route
         path="/providers"
-        component={() => <Navigate href="/account/connections" />}
+        component={() => <Navigate href="/connections" />}
       />
       <Route
         path="/billing"

@@ -275,6 +275,8 @@ export type DeployControlRouteName =
   | "outputInterfaceMigrationConfirm";
 
 export interface DeployControlInternalRouteDependencies {
+  /** Defaults to true: legacy Workspace creation returns 409 during app ownership migration. */
+  readonly workspaceMutationsFrozen?: boolean;
   /**
    * DeployControl bearer resolver. When unset or empty, deploy control routes are
    * disabled and return 404 so hosts do not leak an unconfigured

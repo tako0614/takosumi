@@ -241,8 +241,8 @@ export function registerNavigationAccountCases(mode: string): void {
       const fixture = await accountFixture(page);
       await page.setViewportSize(DESKTOP);
       await page.goto("/connections", { waitUntil: "domcontentloaded" });
-      await expect(page).toHaveURL(/\/account\/connections$/u);
-      await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/connections$/u);
+      await expect(page.getByRole("heading", { name: "接続", exact: true, level: 1 })).toBeVisible();
       const direct = page.locator(".conn-card").filter({ hasText: DIRECT.displayName });
       const operator = page.locator(".conn-card").filter({ hasText: OPERATOR.displayName });
       await expect(direct.locator(".conn-apps")).toContainText("使っているアプリ");
@@ -264,7 +264,7 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
-    test("アカウント has only personal profile, connections, usage and CLI sections", async ({ page }) => {
+    test("アカウント has only personal profile, usage and CLI sections", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const fixture = await accountFixture(page);
@@ -275,7 +275,6 @@ export function registerNavigationAccountCases(mode: string): void {
       const tabs = page.locator(".acct-tabs");
       await expect(tabs.getByRole("link")).toHaveText([
         "自分",
-        "接続",
         "料金と利用量",
         "CLI・APIから使う",
       ]);
@@ -283,15 +282,17 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(page.getByRole("button", { name: "このブラウザからサインアウト" })).toBeVisible();
       await shots(page, "account-profile");
 
-      await tabs.getByRole("link", { name: "接続" }).click();
-      await expect(page).toHaveURL(/\/account\/connections$/u);
-      await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+      await page.locator(".sidebar").getByRole("link", { name: "接続", exact: true }).click();
+      await expect(page).toHaveURL(/\/connections$/u);
+      await expect(page.getByRole("heading", { name: "接続", exact: true, level: 1 })).toBeVisible();
+      await expect(page.locator(".sidebar").getByRole("link", { name: "接続", exact: true })).toHaveAttribute("aria-current", "page");
       await expect(page.getByText(DIRECT.displayName, { exact: true })).toBeVisible();
       await expect(page.getByText(OPERATOR.displayName, { exact: true })).toBeVisible();
       expect(fixture.reads).toContain("/api/v1/connections");
       expect(fixture.reads.some((path) => path.startsWith("/api/v1/connections?"))).toBe(false);
       await shots(page, "account-connections");
 
+      await page.locator(".sidebar").getByRole("link", { name: "アカウント", exact: true }).click();
       await tabs.getByRole("link", { name: "料金と利用量" }).click();
       await expect(page).toHaveURL(/\/account\/usage$/u);
       await expect(page.getByRole("heading", { name: "利用量", level: 2 })).toBeVisible();
@@ -321,8 +322,8 @@ export function registerNavigationAccountCases(mode: string): void {
         ["/settings/manage", "/account"],
         ["/advanced/workspace", "/account"],
         ["/advanced/workspace/members", "/account"],
-        ["/advanced/workspace/connections", "/account/connections"],
-        ["/connections", "/account/connections"],
+        ["/advanced/workspace/connections", "/connections"],
+        ["/account/connections", "/connections"],
         ["/account/members", "/account"],
         ["/account/workspace", "/account"],
         ["/runs", "/"],

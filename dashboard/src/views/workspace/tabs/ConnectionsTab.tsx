@@ -1,5 +1,5 @@
 /**
- * 接続 — the behavior "connect my cloud". Lists personal connections in Account
+ * 接続 — the behavior "connect my cloud". Lists personal connections at /connections
  * (or workspace connections in the retained embedded surface) on the
  * session-authed control surface (`/api/v1/connections*`), and for each one
  * shows which installed apps use it, a test, and removal that names the

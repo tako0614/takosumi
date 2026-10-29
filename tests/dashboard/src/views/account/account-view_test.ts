@@ -1,5 +1,5 @@
 /**
- * アカウント (`/account[/:section]`): profile, personal connections, usage,
+ * アカウント (`/account[/:section]`): profile, usage,
  * and CLI/API keys as one page with sections. Source-text tests, like
  * the rest of the dashboard view suite.
  */
@@ -22,7 +22,6 @@ describe("AccountView", () => {
   test("one page with personal sections as sub-routes", () => {
     for (const [href, key] of [
       ["/account", "account.section.me"],
-      ["/account/connections", "account.section.connections"],
       ["/account/usage", "account.section.usage"],
       ["/account/cli", "account.section.cli"],
     ] as const) {
@@ -30,7 +29,8 @@ describe("AccountView", () => {
     }
     expect(source).toContain("<Tabs");
     expect(source).toContain("<ProfileSection session={props.session} />");
-    expect(source).toContain("<ConnectionsTab />");
+    expect(source).not.toContain("ConnectionsTab");
+    expect(source).not.toContain("/account/connections");
     expect(source).toContain("<BillingTab />");
     expect(source).not.toContain("MembersTab");
     expect(source).not.toContain("WorkspaceTab");
@@ -39,7 +39,6 @@ describe("AccountView", () => {
     // An unknown section returns to the account page instead of a blank one.
     expect(source).toContain('fallback={<Navigate href="/account" />}');
     expect(ja["account.section.cli"]).toBe("CLI・APIから使う");
-    expect(ja["account.section.connections"]).toBe("接続");
     expect(ja["account.section.usage"]).toBe("料金と利用量");
     expect(en["account.section.usage"]).toBe("Billing and usage");
   });

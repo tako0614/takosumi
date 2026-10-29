@@ -14,7 +14,12 @@ const INSTALL_PLANS_PATH = "/api/v1/install-plans";
 function isMissingAppRoute(error: unknown): error is DeployControlApiError {
   return error instanceof DeployControlApiError && error.status === 404 &&
     (error.code === undefined || ["route_not_found", "fixture_route_not_found"].includes(error.code) ||
-      (error.code === "not_found" && isRecord(error.body) && error.body.error === "not_found"));
+      (error.code === "not_found" && isRecord(error.body) && (
+        error.body.error === "not_found" ||
+        // A message identifies a business failure, not the code-only route fallback.
+        (isRecord(error.body.error) && error.body.error.code === "not_found" &&
+          !stringValue(error.body.error.message))
+      )));
 }
 
 export async function runApps(args: string[], io: CliIo): Promise<number> {

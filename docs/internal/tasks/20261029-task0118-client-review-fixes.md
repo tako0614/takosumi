@@ -31,3 +31,12 @@ Verification is focused local tests, affected static portable-gate phases,
 dashboard build and selected deterministic browser journeys. The shared SSD has
 limited capacity: no full local gate, dependency copies, or live checks. CI is the
 full gate and all PR heads must pass before handoff.
+
+Final review follow-up: render personal connections at `/connections`, retain
+`/account/connections` as a query-preserving redirect, and remove the duplicate
+Account section. CLI legacy fallback recognizes both flat and code-only nested
+route `not_found` envelopes while preserving business-error refusal. Propagate
+these changes from #662 into #664 normally. Mobile retries the legacy workspace
+read once for `/apps` `403 app_access_denied`, using opaque access tokens, and
+uses the agreed Japanese selector and owner labels. No local browser run is
+needed for this round; run focused tests and static phases and require CI.
