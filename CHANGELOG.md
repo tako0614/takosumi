@@ -20,8 +20,12 @@ package for the v1 GA line.
   silently rotating keys such as an app's `ENCRYPTION_KEY`. If the previous
   sealed values cannot be opened, Plan and Apply now fail with
   `runtime_inputs_previous_generation_unreadable` instead of minting
-  replacements; destroy is unaffected. A row that holds kept values cannot be
-  read by an earlier release, whose Apply then fails closed for that app. See
+  replacements; destroy is unaffected. **Rollback caution:** an earlier release
+  cannot read a row that holds kept values, so its Apply fails closed for that
+  app, but only while the app's manifest is unchanged. On the next manifest
+  change an earlier release deletes the row and regenerates every value,
+  including kept ones, and this also happens during a mixed-version rollout. Do
+  not roll back, or run mixed versions, while a manifest change is pending. See
   "Run-scoped generated secrets" in `docs/operations/secret-rotation.md` for
   recovery, including a key change.
 - **Breaking API change — automatic destruction:** for an applied Capsule,

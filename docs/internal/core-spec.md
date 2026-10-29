@@ -649,8 +649,13 @@ re-seal emits the value-free operator event
 were carried, restored, minted, newly retained and evicted. A generation that
 retains nothing and holds only 32-byte hex values keeps the original bare
 `binding -> value` document; one that retains a value uses a versioned envelope
-that an earlier release cannot read, so a rollback past this behavior fails that
-Capsule's Apply closed instead of mis-delivering it.
+that an earlier release cannot read. A rollback past this behavior fails that
+Capsule's Apply closed only while its profile is unchanged. An earlier release
+treats any AAD mismatch by deleting the row and regenerating every value, so on
+the next profile change it discards the carried and retained values alike. The
+same happens if an earlier release handles that Plan during a mixed-version
+rollout. Neither a rollback nor a mixed-version deployment may run while a
+profile change is pending.
 
 A previous generation that cannot be carried forward — it does not open (a
 changed or missing key, a damaged row), its stored AAD is not the canonical one

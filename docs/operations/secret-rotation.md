@@ -163,6 +163,14 @@ is needed. What happens to each slot:
   rotation exists, renaming is the only way to rotate one value.
 - **New slot**: a fresh value.
 
+Renaming rotates what the app receives, but it does **not** erase the old value.
+Renaming back, or removing a slot and adding it again, restores the retained
+value. There is no way to purge a single value: it leaves the row only when the
+whole row is deleted, when the Capsule is destroyed, or when it is evicted past
+the bound below. If a value must be treated as leaked, rename the slot. Until an
+operator purge exists, the leaked value can be removed only by deleting the row
+or destroying the Capsule, and either of those also discards every other value.
+
 Retained values leave the row only when the Capsule's runtime-input material is
 retired after destroy (including the destroy an uninstall schedules), or oldest
 first once more than 16 are retained. A revision with no generated secret at all
@@ -189,7 +197,15 @@ records the failure class and, when the row did not open,
   `<old global passphrase>|takos.cloud.partition=runtime-input:<capsuleId>`.
   Then re-plan. The re-sealed row is sealed under that override and stays bound
   to it permanently, so keep the override for as long as the Capsule exists.
-  Keep the override value in the operator vault like any other passphrase.
+
+  The override value contains the **old global passphrase verbatim**. Anyone who
+  can read one override can derive the old key of every partition: every
+  Connection and every Capsule sealed before the rotation, backups included.
+  Protect each override exactly like the global passphrase: keep it in the
+  operator vault, limit who can read it, and never put it in tickets, logs or
+  repositories. Takosumi has no re-wrap that would let you drop the override
+  later. Use this recovery only after a rotation that was **not** caused by a
+  compromise.
 - **`sealedUnderActiveKeyVersion: true`.** The row itself is damaged or was
   replaced. Restore the row from the most recent backup that holds it and
   re-plan.
@@ -202,8 +218,25 @@ records the failure class and, when the row did not open,
 Rotating the global passphrase needs the same care even without a manifest
 change. There is no re-wrap for runtime-input rows. Plan does not open a row
 whose profile is unchanged, so it still succeeds, but every such row then fails
-Apply with `runtime_inputs_material_unusable`. Before rotating, add a partition
-override as above for every Capsule whose values must survive.
+Apply with `runtime_inputs_material_unusable`. How to proceed depends on why the
+passphrase is rotated:
+
+- **Routine rotation (no compromise).** For each Capsule whose values must
+  survive, add a partition override as above before rotating. Each override
+  keeps the old global passphrase in configuration for as long as its Capsule
+  exists, and that Capsule's partition keeps using the old key; the rotation
+  takes effect only for every other partition.
+- **Rotation because of a compromise.** Treat every value sealed under the old
+  key as leaked, including retained values and backups. Do **not** preserve them
+  with overrides: an override puts the compromised passphrase back into
+  configuration and undoes the rotation. Rename the affected slots so they get
+  new values. Where that is not enough, accept fresh values by deleting the row
+  or reinstalling the Capsule. Then repair the app's data encrypted under the
+  old values in the app's own way.
+
+An operator re-wrap (open a row with the override, re-seal it under the current
+key, then remove the override) does not exist yet. It is the planned way to make
+overrides temporary.
 
 Destroy needs no recovery. A destroy plan opens no runtime-input material, and
 retirement after destroy deletes the row without opening it.
