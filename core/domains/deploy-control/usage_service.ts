@@ -1,6 +1,7 @@
 /** Provider-neutral app usage/showback with legacy Workspace adapters. */
 
 import type {
+  AppBillingIdentity,
   BillingSettings,
   CapsuleUsageSummary,
   UsageEvent,
@@ -15,6 +16,7 @@ import { usageMeterNameLeaksInternalWorkersBackend } from "takosumi-contract/bil
 import type { Workspace } from "takosumi-contract/workspaces";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { BillingService } from "./billing_service.ts";
+import { appPayerAtEventTime } from "./app_payer_history.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 
@@ -138,22 +140,35 @@ export class UsageReportingService {
         );
       }
     }
+    const recordedAt = this.#now();
     const usageEvent = normalizeMeteredUsageEvent(
       workspaceId,
       input,
       () => this.#newId("usage"),
-      () => new Date(this.#now()).toISOString(),
+      () => new Date(recordedAt).toISOString(),
     );
-    const ownership = input.capsuleId
-      ? await this.#billing.resolveAppBillingOwnership(input.capsuleId)
+    const identity = input.capsuleId
+      ? await this.#meterPayer(input.capsuleId, usageEvent.createdAt, recordedAt)
       : undefined;
-    // Until the first recorded transfer, usage follows the initial app owner.
-    // After a transfer, the row has no acceptance timestamp or payer history:
-    // a delayed event's createdAt cannot establish either owner's liability.
-    // Keep it unattributed until authoritative event-time history is available.
-    // A producer runId is not Core reservation authority.
-    const identity = ownership?.ownershipEpoch === 0 ? ownership.identity : undefined;
     return { usageEvent: await this.#store.putUsageEvent({ ...usageEvent, ...identity }) };
+  }
+
+  /**
+   * The owner whose ownership interval contains the event time, from the
+   * accepted transfer ledger. A producer runId is not Core reservation
+   * authority, and an unprovable payer stays absent: never the current owner.
+   */
+  async #meterPayer(capsuleId: string, eventAt: string, recordedAt: number): Promise<AppBillingIdentity | undefined> {
+    const ownership = await this.#billing.resolveAppBillingOwnership(capsuleId);
+    // The ledger snapshot can only place instants it has already seen; a later
+    // acceptance could still start a new owner's interval before this event.
+    if (Date.parse(eventAt) > recordedAt) return undefined;
+    const history = await this.#store.getAppOwnershipHistory(capsuleId, eventAt);
+    // No owner tuple or ledger yet (pre-backfill / legacy schema): no transfer
+    // can have been accepted, so only the initial owner of epoch 0 applies.
+    if (!history) return ownership.ownershipEpoch === 0 ? ownership.identity : undefined;
+    const payerAccountId = appPayerAtEventTime(history, eventAt);
+    return payerAccountId ? { capsuleId, payerAccountId } : undefined;
   }
 }
 

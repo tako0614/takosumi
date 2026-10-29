@@ -230,7 +230,7 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | POST | `/api/v1/connections/oauth/{helperId}/start` | アカウント資格情報。workspaceId省略時は本人所有の個人接続を開始 |
 | GET | `/api/v1/source-ref-resolutions?url=…` | write scopeを持つアカウント資格情報。runnerを起動して公開Git sourceのstable SemVerタグを解決 |
 | POST | `/api/v1/install-plans` | アカウント資格情報。`mode: "attempt"`、workspace指定なし。本人がアプリ所有者 |
-| GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ |
+| GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ。アプリ単位の独立した計測は、計測時刻を含む所有期間（受諾済みの所有権移転で区切る）の所有者が支払人。移転履歴が欠けていれば支払人なし |
 
 メンバー追加は、確認済みアカウントの有無にかかわらず `202 { accepted: true }` を返します。所有者の `connections_and_code` 同意を監査記録へ保存します。譲渡を受諾すると既存メンバーを全員削除し、監査記録に通知対象を残します。メンバー管理・譲渡・受諾・取消・アンインストールには本人のセッションまたは明示的scopeを持つPATが必要で、インストール済みアプリのOAuthアクセストークンは使えません。
 

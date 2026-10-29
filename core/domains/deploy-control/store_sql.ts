@@ -30,6 +30,14 @@ import type {
 import type { SqlClient, SqlParameters, SqlValue } from "../../adapters/storage/sql.ts";
 import { appApplyAdmission, appClaimAdmission, appPlanAdmission } from "./app_run_admission.ts";
 import {
+  APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
+  appOwnershipHistoryFromRows,
+  appOwnershipHistorySchemaMissing,
+  appOwnershipHistorySql,
+  type AppOwnershipHistory,
+  type AppOwnershipHistoryRow,
+} from "./app_payer_history.ts";
+import {
   and,
   asc,
   desc,
@@ -11489,6 +11497,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     }>(`select owner_account_id, ownership_epoch from takosumi_capsules where id=$1`, [capsuleId]);
     const row = result.rows[0];
     return row ? { ownerAccountId: row.owner_account_id ?? undefined, ownershipEpoch: row.ownership_epoch } : undefined;
+  }
+
+  async getAppOwnershipHistory(capsuleId: string, at: string): Promise<AppOwnershipHistory | undefined> {
+    try {
+      return await this.#client.transaction(async (transaction) => {
+        // PostgreSQL acceptance holds this row FOR UPDATE and stamps its
+        // acceptance time only after taking the lock. Taking FOR SHARE first
+        // means any acceptance this read's snapshot misses is stamped later
+        // than this read, hence after the event time the caller bounded by now.
+        await transaction.query(`select 1 from takosumi_capsules where id = $1 for share`, [capsuleId]);
+        const result = await transaction.query<AppOwnershipHistoryRow>(
+          appOwnershipHistorySql({
+            capsules: "takosumi_capsules", transfers: "takosumi_capsule_ownership_transfers", placeholder: "$",
+          }),
+          [capsuleId, at, APP_OWNERSHIP_HISTORY_MAX_TRANSFERS],
+        );
+        return appOwnershipHistoryFromRows(result.rows);
+      });
+    } catch (error) {
+      if (appOwnershipHistorySchemaMissing(error)) return undefined;
+      throw error;
+    }
   }
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
