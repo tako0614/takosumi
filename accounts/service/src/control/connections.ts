@@ -138,6 +138,7 @@ import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import {
   assertWorkspaceManagementAuthorityInput,
+  providerBindingSetTargetsCapsule,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 
@@ -290,42 +291,33 @@ async function listAppConnectionLabels(
   if (!bearerAppAllows(session, capsuleId)) return errorJson("app_access_denied", "App access is required.", 403);
   const access = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
   if (!access || access.capsuleId !== capsuleId) return errorJson("app_access_denied", "App access is required.", 403);
-  if (session.workspaceId) {
-    const capsule = await operations.capsules.getCapsule(capsuleId);
-    if (capsule.workspaceId !== session.workspaceId) return errorJson("app_access_denied", "App access is required.", 403);
+  const capsule = await operations.capsules.getCapsule(capsuleId);
+  if (capsule.id !== capsuleId || (session.workspaceId && capsule.workspaceId !== session.workspaceId)) {
+    return errorJson("app_access_denied", "App access is required.", 403);
   }
   const owner = access.ownerAccountId;
   const connections = new Map<string, ProviderConnection>();
-  if (operations.accountResources) {
-    let cursor: string | undefined;
-    const seen = new Set<string>();
-    do {
-      if (seen.size >= 100) return controlPlaneUnavailable();
-      const page = await operations.accountResources.listConnections(owner, { limit: 100, ...(cursor ? { cursor } : {}) });
-      for (const connection of page.items) {
-        if ((connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner && connection.status === "verified") connections.set(connection.id, connection);
-      }
-      cursor = page.nextCursor;
-      if (cursor && seen.has(cursor)) return controlPlaneUnavailable();
-      if (cursor) seen.add(cursor);
-    } while (cursor);
-  } else {
-    for (const workspace of await operations.workspaces.listWorkspacesByOwner(owner)) {
-      if (workspace.ownerUserId !== owner || workspace.archivedAt) continue;
-      for (const connection of await operations.connections.listProviderConnections(workspace.id)) {
-        if ((connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner && connection.status === "verified") connections.set(connection.id, connection);
-      }
+  const bindingSet = await operations.capsules.getProviderBindingSetByCapsule(capsule.id, capsule.environment);
+  if (bindingSet && !providerBindingSetTargetsCapsule(bindingSet, capsule)) return controlPlaneUnavailable();
+  // This projection names only the connections the app actually uses. Point
+  // reads keep its cost independent of the owner's unrelated connection count
+  // and avoid exposing that catalog to another app manager.
+  for (const connectionId of new Set(bindingSet?.bindings.map((binding) => binding.connectionId) ?? [])) {
+    let connection: ProviderConnection;
+    try {
+      connection = await (operations.connections.getProviderConnection?.(connectionId) ?? operations.getConnection(connectionId));
+    } catch (error) {
+      if (controllerErrorCode(error) === "not_found") continue;
+      throw error;
+    }
+    if (connection.id !== connectionId) return controlPlaneUnavailable();
+    if (isWorkspaceBindableOperatorConnection(connection) ||
+      ((connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner && connection.status === "verified")) {
+      connections.set(connection.id, connection);
     }
   }
-  const operatorConnections = [
-    ...(await operations.listOperatorConnections()).connections,
-    ...await operations.connections.listReleaseOwnedProviderConnections(),
-  ];
-  for (const connection of operatorConnections) {
-    if (isWorkspaceBindableOperatorConnection(connection)) connections.set(connection.id, connection);
-  }
   const current = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
-  if (!current || current.ownerAccountId !== owner || current.ownershipEpoch !== access.ownershipEpoch || current.role !== access.role ||
+  if (!current || current.capsuleId !== capsuleId || current.ownerAccountId !== owner || current.ownershipEpoch !== access.ownershipEpoch || current.role !== access.role ||
     !(await (session.reauthorizeBearer?.() ?? Promise.resolve(true)))) {
     return errorJson("app_access_denied", "App access is required.", 403);
   }

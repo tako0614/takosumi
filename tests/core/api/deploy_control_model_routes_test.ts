@@ -203,6 +203,63 @@ test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async ()
   expect(body.capsule.installType).toBeUndefined();
 });
 
+test("model e2e: retained Capsule ownership JSON stays private across reads and lifecycle writes", async () => {
+  const ledger = new InMemoryOpenTofuControlStore();
+  const { app, operations } = await service(ledger);
+  const workspaceId = await createWorkspace(app, "legacy-ownership");
+  const sourceId = await createSource(app, workspaceId);
+  const configId = await seedInstallConfig(operations, workspaceId);
+  const capsuleId = await createCapsule(operations, workspaceId, sourceId, configId, "legacy");
+  const stored = await ledger.getCapsule(capsuleId);
+  if (!stored) throw new Error("missing Capsule fixture");
+  // Emulate a retained pre-split JSON snapshot. The memory store retains the
+  // exact object, independently of its canonical physical ownership tuple.
+  Object.assign(stored, {
+    ownerAccountId: "stale_json_owner",
+    ownershipEpoch: 97,
+    managementState: "frozen",
+    managementEpoch: 98,
+    storageRoot: "private/legacy-storage-root",
+  });
+  const before = JSON.stringify(stored);
+  const ownership = await operations.appOwnership.getOwnership(capsuleId);
+  expect(ownership?.ownerAccountId).toBe("user_test00000001");
+  const assertPublic = (capsule: { readonly id: string }) => {
+    expect(capsule.id).toBe(capsuleId);
+    for (const field of ["ownerAccountId", "ownershipEpoch", "managementState", "managementEpoch", "storageRoot"]) {
+      expect(capsule).not.toHaveProperty(field);
+    }
+  };
+
+  assertPublic((await operations.controller.getCapsule(capsuleId)).capsule);
+  // The HTTP boundary must also sanitize an upstream implementation that
+  // returns the retained raw row instead of the controller's normal projector.
+  const getCapsule = operations.controller.getCapsule.bind(operations.controller);
+  operations.controller.getCapsule = async (id) => ({ capsule: await operations.capsules.getCapsule(id) });
+  const read = await app.request(`/internal/v1/capsules/${capsuleId}`, { headers: headers() });
+  operations.controller.getCapsule = getCapsule;
+  expect(read.status).toBe(200);
+  assertPublic((await read.json()).capsule);
+  const list = await app.request(`/internal/v1/workspaces/${workspaceId}/capsules`, { headers: headers() });
+  expect(list.status).toBe(200);
+  assertPublic((await list.json()).capsules[0]);
+  expect(JSON.stringify(await ledger.getCapsule(capsuleId))).toBe(before);
+
+  const patch = await app.request(`/internal/v1/capsules/${capsuleId}`, {
+    method: "PATCH",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({ status: "stale" }),
+  });
+  expect(patch.status).toBe(200);
+  assertPublic((await patch.json()).capsule);
+  expect(await ledger.getCapsule(capsuleId)).toEqual({ ...stored, status: "stale", updatedAt: expect.any(String) });
+  expect(await operations.appOwnership.getOwnership(capsuleId)).toEqual(ownership);
+
+  const deleted = await app.request(`/internal/v1/capsules/${capsuleId}`, { method: "DELETE", headers: headers() });
+  expect(deleted.status).toBe(202);
+  assertPublic((await deleted.json()).capsule);
+});
+
 test("model e2e: DELETE abandons an unapplied Capsule without a destroy plan", async () => {
   const { app, operations } = await service();
   const workspaceId = await createWorkspace(app, "abandon");

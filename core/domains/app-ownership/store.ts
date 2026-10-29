@@ -1,5 +1,5 @@
 import type { AppAccess, AppAccessResolver } from "takosumi-contract/app-access";
-import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import type { InMemoryOpenTofuControlStore, OpenTofuControlStore } from "../deploy-control/store.ts";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
 import type { D1Like } from "../../adapters/storage/d1.ts";
 
@@ -218,7 +218,13 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
 export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
   readonly #members = new Map<string, CapsuleMember>();
   readonly #billing = new Map<string, AccountBillingBinding>();
-  constructor(control: OpenTofuControlStore) { super(control); }
+  constructor(control: OpenTofuControlStore) {
+    super(control);
+    const memory = control as InMemoryOpenTofuControlStore;
+    if (typeof memory.getCapsuleOwnership !== "function" || typeof memory.setCapsuleOwnership !== "function") {
+      throw new TypeError("InMemoryAppOwnershipStore requires in-memory ownership storage");
+    }
+  }
   async getOwnership(id: string): Promise<CapsuleOwnership | undefined> {
     const control = this.control as import("../deploy-control/store.ts").InMemoryOpenTofuControlStore;
     return typeof control.getCapsuleOwnership === "function"

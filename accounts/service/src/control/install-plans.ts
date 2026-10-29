@@ -2272,7 +2272,10 @@ async function createCapsule(
   }
   const requestedBindings = requestedProviderBindings(plan);
   const capsuleId = deterministicInitialCapsuleId(plan.id);
-  let currentOwner = ctx.session.subject;
+  // Match the owner that initial authority commits. The workspace-less route
+  // already resolves an owner-bound personal namespace for the requester;
+  // legacy Workspace routes may be called by a different Workspace admin.
+  let currentOwner = (await operations.workspaces.getWorkspace(plan.workspaceId)).ownerUserId;
   try {
     const existingCapsule = await operations.capsules.getCapsule(capsuleId);
     currentOwner = (await capsuleOwnerAuthority(operations, existingCapsule))

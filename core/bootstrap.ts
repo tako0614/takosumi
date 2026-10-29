@@ -1108,10 +1108,23 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
-  const appOwnershipStore = options.appOwnershipStore ??
-    (options.sqlClient
-      ? new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore)
-      : new InMemoryAppOwnershipStore(durableOpenTofuStore));
+  // Every app authority consumer shares this port, including OIDC and the
+  // scheduled finalizer. A missing port is not evidence of a legacy ownerless
+  // app: refuse a durable composition before any domain service can start.
+  let appOwnershipStore = options.appOwnershipStore;
+  if (!(durableOpenTofuStore instanceof InMemoryOpenTofuControlStore) &&
+      appOwnershipStore instanceof InMemoryAppOwnershipStore) {
+    throw new TypeError("durable control store requires a durable AppOwnershipStore");
+  }
+  if (!appOwnershipStore) {
+    if (options.sqlClient) {
+      appOwnershipStore = new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore);
+    } else if (durableOpenTofuStore instanceof InMemoryOpenTofuControlStore) {
+      appOwnershipStore = new InMemoryAppOwnershipStore(durableOpenTofuStore);
+    } else {
+      throw new TypeError("durable control store requires an AppOwnershipStore");
+    }
+  }
   const operatorInstallConfigs = options.operatorInstallConfigs ?? [];
   const defaultInstallConfigOverrides = operatorInstallConfigs.filter(
     (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,

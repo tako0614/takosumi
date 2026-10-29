@@ -534,8 +534,8 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       summary: "List Connections",
       auth: "account-session",
       queryParameters: [
-        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "App whose owner's bindable connection labels are requested." },
-        { name: "projection", in: "query", schema: { type: "string", enum: ["labels"] }, description: "Requires capsuleId and returns only binding id, provider, and displayName." },
+        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "App whose bound connection labels are requested; does not list the owner's connection catalog." },
+        { name: "projection", in: "query", schema: { type: "string", enum: ["labels"] }, description: "Requires capsuleId and returns only bound connection id, provider, and displayName for verified owner connections or bindable operator connections." },
         { name: "cursor", in: "query", schema: { type: "string" } },
         { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
       ],

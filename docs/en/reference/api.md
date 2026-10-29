@@ -241,7 +241,7 @@ lightly edited for readers.
 | POST | `/api/v1/ownership-transfers/{transferId}/accept` | Recipient; drains runs, increments ownership epoch, resets provider bindings |
 | DELETE | `/api/v1/ownership-transfers/{transferId}` | Owner; cancels pending transfer |
 | GET, POST | `/api/v1/connections` | Account's own personal connections and bindable operator connections; new connections belong to caller |
-| GET | `/api/v1/connections?capsuleId=…&projection=labels` | Owner/member; owner's bindable connections as `{ id, provider, displayName }` only; IDs are for binding |
+| GET | `/api/v1/connections?capsuleId=…&projection=labels` | Owner/member; only this app's bound connections as `{ id, provider, displayName }`, limited to verified owner connections or bindable operator connections; does not list the owner's connection catalog |
 | POST | `/api/v1/connections/oauth/{helperId}/start` | Account credential; omit workspaceId to create a personal connection owned by caller |
 | GET | `/api/v1/source-ref-resolutions?url=…` | Account credential with write scope; starts a runner to resolve a public Git source's stable SemVer tag |
 | POST | `/api/v1/install-plans` | Account credential; `mode: "attempt"`, no workspace field; caller owns app |

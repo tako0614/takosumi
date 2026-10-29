@@ -591,6 +591,85 @@ test("Git revision plan recovers lost sync, compatibility, and Plan acknowledgem
   expect(fixture.counts).toEqual({ sync: 1, compatibility: 1, plan: 1 });
 });
 
+test("Git revision resumes an in-flight legacy Plan actor without replacing the requesting account", async () => {
+  const fixture = revisionFixture({ loseAckOnce: ["plan"] });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "revision-legacy-plan-actor" },
+  );
+  const planId = (await created.json()).revisionPlan.id as string;
+  await fixture.reconcile(planId);
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId);
+  await fixture.reconcile(planId);
+  expect((await fixture.reconcile(planId)).status).toBe(202);
+  const run = [...fixture.runs.values()].find((candidate) => candidate.type === "plan")!;
+  const legacyActor = `git-revision-plan:${planId}`;
+  fixture.runs.set(run.id, { ...run, createdBy: legacyActor, status: "running" });
+  // A lost acknowledgement left the old coordinator without the Run id.
+  expect((await fixture.planStore.get(planId))?.planRunId).toBeUndefined();
+
+  const running = await fixture.reconcile(planId);
+  expect((await running.json()).revisionPlan).toMatchObject({ phase: "planning", planRunId: run.id });
+  fixture.runs.set(run.id, { ...run, createdBy: legacyActor });
+  expect((await (await fixture.reconcile(planId)).json()).revisionPlan.phase).toBe("reviewable");
+  expect((await fixture.planStore.get(planId))?.createdBy).toBe(WORKSPACE.ownerUserId);
+  expect(fixture.runs.get(run.id)?.createdBy).toBe(legacyActor);
+  expect(fixture.counts).toEqual({ sync: 1, compatibility: 1, plan: 1 });
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+});
+
+test("Git revision legacy Plan compatibility rejects other actors and mismatched evidence", async () => {
+  for (const kind of ["other_account", "other_revision", "compatibility_actor", "snapshot"] as const) {
+    const fixture = revisionFixture({ loseAckOnce: ["plan"] });
+    const created = await fixture.request(
+      "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+      { "idempotency-key": `revision-legacy-reject-${kind}` },
+    );
+    const planId = (await created.json()).revisionPlan.id as string;
+    await fixture.reconcile(planId);
+    fixture.succeedSourceSync();
+    await fixture.reconcile(planId);
+    await fixture.reconcile(planId);
+    await fixture.reconcile(planId);
+    const run = [...fixture.runs.values()].find((candidate) => candidate.type === "plan")!;
+    fixture.runs.set(run.id, {
+      ...run,
+      createdBy: kind === "other_account" ? "tsub_foreign"
+        : kind === "other_revision" ? "git-revision-plan:grp_other"
+        : kind === "compatibility_actor" ? `git-revision-plan:${planId}:${"a".repeat(16)}`
+        : `git-revision-plan:${planId}`,
+      ...(kind === "snapshot" ? { sourceSnapshotId: "snap_other" } : {}),
+    });
+    const response = await fixture.reconcile(planId);
+    expect((await response.json()).revisionPlan, kind).toMatchObject({
+      phase: "failed", diagnostic: { code: "plan_run_identity_conflict" },
+    });
+    expect(fixture.counts.plan).toBe(1);
+    expect((await fixture.planStore.get(planId))?.createdBy).toBe(WORKSPACE.ownerUserId);
+  }
+});
+
+test("a newly created Git revision Plan must retain the requesting account actor", async () => {
+  const fixture = revisionFixture({
+    planRunActor: (runId) => `git-revision-plan:grp_${runId.slice("plan_".length)}`,
+  });
+  const created = await fixture.request(
+    "/api/v1/capsules/cap_revision/revision-plans", "POST", { ref: "release/v2" },
+    { "idempotency-key": "revision-fresh-actor" },
+  );
+  const planId = (await created.json()).revisionPlan.id as string;
+  await fixture.reconcile(planId);
+  fixture.succeedSourceSync();
+  await fixture.reconcile(planId);
+  await fixture.reconcile(planId);
+  expect((await (await fixture.reconcile(planId)).json()).revisionPlan).toMatchObject({
+    phase: "failed", diagnostic: { code: "plan_run_identity_conflict" },
+  });
+  expect((await fixture.planStore.get(planId))?.createdBy).toBe(WORKSPACE.ownerUserId);
+});
+
 test("Git revision plan terminalizes deterministic evidence identity conflicts", async () => {
   for (const kind of ["sync", "compatibility"] as const) {
     const fixture = revisionFixture({ deterministicConflict: kind });
@@ -780,6 +859,7 @@ function revisionFixture(
     readonly raceAfterClaimBeforeSourceSync?: boolean;
     readonly unAppliedInitialInstall?: boolean;
     readonly acceptedRepositoryInstallUx?: boolean;
+    readonly planRunActor?: (runId: string) => string;
   } = {},
 ) {
   const managementStore = new InMemoryOpenTofuControlStore();
@@ -1110,7 +1190,7 @@ function revisionFixture(
         compatibilityReportId: input.compatibilityReportId,
         baseStateGeneration: capsule.currentStateGeneration,
         ...(input.origin ? { origin: input.origin } : {}),
-        createdBy: input.actor!,
+        createdBy: options.planRunActor?.(input.planRunId!) ?? input.actor!,
         createdAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       };

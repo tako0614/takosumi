@@ -969,6 +969,47 @@ test("Git install plan fails closed when host policy requires an invalid manifes
   });
 });
 
+for (const connectionOwner of [WORKSPACE.ownerUserId, ADMIN_SUBJECT]) {
+  test(`legacy install by an admin validates bindings against the Workspace owner: ${connectionOwner}`, async () => {
+    const provider = "registry.opentofu.org/hashicorp/aws";
+    const connection = {
+      ...providerConnection(provider, "conn_legacyowner01"),
+      ownerAccountId: connectionOwner,
+    };
+    const fixture = installFixture({ providerConnections: [connection] });
+    const created = await fixture.request(
+      "/api/v1/workspaces/ws_install/install-plans",
+      "POST",
+      createBody({ providerBindings: [{ provider, moduleLocalName: "aws", connectionId: connection.id }] }),
+      { "idempotency-key": `legacy-owner-${connectionOwner}` },
+      ADMIN_SUBJECT,
+    );
+    expect(created.status).toBe(201);
+    const planId = (await created.json()).installPlan.id as string;
+    const reconcile = () => fixture.request(`/api/v1/install-plans/${planId}/reconcile`, "POST", undefined, {}, ADMIN_SUBJECT);
+    await reconcile(); // Source
+    await reconcile(); // Source sync
+    fixture.succeedSourceSync();
+    await reconcile(); // snapshot -> compilation
+    await reconcile(); // compilation -> Capsule creation
+    const result = await reconcile();
+    expect(result.status).toBe(200);
+    const plan = (await result.json()).installPlan;
+    if (connectionOwner === WORKSPACE.ownerUserId) {
+      expect(plan.phase).toBe("planning");
+      expect(fixture.counts.capsule).toBe(1);
+      expect(fixture.capsules[0]?.installingPrincipalId).toBe(ADMIN_SUBJECT);
+      expect((await fixture.operations.capsules.getProviderBindingSetByCapsule(
+        fixture.capsules[0]!.id, "production",
+      ))?.bindings).toEqual([{ provider, moduleLocalName: "aws", connectionId: connection.id }]);
+    } else {
+      expect(plan).toMatchObject({ phase: "failed", diagnostic: { code: "provider_binding_invalid" } });
+      expect(fixture.counts.capsule).toBe(0);
+      expect(fixture.authorityRows()).toEqual({ capsules: 0, bindingSets: 0, epochs: 0 });
+    }
+  });
+}
+
 test("Git install plan runs complete provider semantic preflight before initial authority", async () => {
   const fixture = installFixture({
     providerValidationError: new OpenTofuControllerError(
@@ -1818,6 +1859,34 @@ function discard(
     subject,
   );
 }
+
+test("workspace-less install keeps the requester's canonical personal owner for provider bindings", async () => {
+  const fixture = attemptFixture({ compatibilityRootModuleVariableDeclarations: [] });
+  fixture.operations.workspaces.listWorkspacesByOwner = async (accountId) =>
+    accountId === WORKSPACE.ownerUserId ? [WORKSPACE] : [];
+  const created = await fixture.request(
+    "/api/v1/install-plans",
+    "POST",
+    attemptBody(),
+    { "idempotency-key": "workspace-less-owner" },
+  );
+  expect(created.status).toBe(201);
+  const plan = (await created.json()).installPlan;
+  expect(plan).toMatchObject({ workspaceId: WORKSPACE.id, createdBy: WORKSPACE.ownerUserId });
+  const paused = await reconcileUntilIdle(fixture, plan.id);
+  expect(paused.installPlan.phase).toBe("awaiting_input");
+  const confirmed = await answer(fixture, plan.id, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+  });
+  expect(confirmed.status).toBe(200);
+  expect((await confirmed.json()).installPlan.phase).toBe("planning");
+  const capsule = fixture.capsules[0]!;
+  expect(capsule).toMatchObject({ workspaceId: WORKSPACE.id, installingPrincipalId: WORKSPACE.ownerUserId });
+  expect(fixture.getProviderBindingSet(capsule.id, "production")?.bindings).toEqual([
+    { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "conn_cloudflare01" },
+  ]);
+});
 
 test("install attempt pauses once for the whole sheet, auto-selects the only connection, and continues with transient values", async () => {
   const fixture = attemptFixture();

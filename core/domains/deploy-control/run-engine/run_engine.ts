@@ -2715,6 +2715,7 @@ export class RunEngine {
     );
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -3650,6 +3651,7 @@ export class RunEngine {
     if (!input.capsule) return { reasons: [] };
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4486,6 +4488,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4501,6 +4504,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4514,6 +4518,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -6340,6 +6345,7 @@ export class RunEngine {
     }
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,

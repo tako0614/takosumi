@@ -602,6 +602,7 @@ async function createOrObserveRevisionPlanRun(
       throw error;
     }
   }
+  const observedExistingRun = run !== undefined;
   if (!run) {
     const created = await operations.createCapsulePlan(plan.capsuleId, {
       sourceSnapshotId: plan.sourceSnapshotId,
@@ -618,7 +619,7 @@ async function createOrObserveRevisionPlanRun(
   // Re-read our immutable scope after that mutation so a concurrent edit can
   // never be published by this coordinator as reviewable evidence.
   await assertRevisionIdentity(plan, operations);
-  assertRevisionRunMatches(run, plan, exactRunId);
+  assertRevisionRunMatches(run, plan, exactRunId, observedExistingRun);
   if (
     run.status === "failed" ||
     run.status === "cancelled" ||
@@ -892,7 +893,13 @@ function assertRevisionRunMatches(
   run: Run,
   plan: StoredGitRevisionPlan,
   exactRunId: string,
+  observedExistingRun: boolean,
 ): void {
+  // Before account actors were retained, this coordinator used its exact id
+  // as the Plan actor. Resume only an already-existing matching Run; new
+  // Plans still have to retain the account that requested this revision.
+  const actorMatches = run.createdBy === plan.createdBy ||
+    (observedExistingRun && run.createdBy === `git-revision-plan:${plan.id}`);
   if (
     run.id !== exactRunId ||
     run.workspaceId !== plan.workspaceId ||
@@ -901,7 +908,7 @@ function assertRevisionRunMatches(
     run.compatibilityReportId !== plan.compatibilityReportId ||
     run.baseStateGeneration !== plan.revision.base.capsuleStateGeneration ||
     run.type !== "plan" ||
-    run.createdBy !== plan.createdBy
+    !actorMatches
   ) {
     throw permanent(
       "plan_run_identity_conflict",
