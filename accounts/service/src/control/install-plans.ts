@@ -102,7 +102,6 @@ import {
   genericOpenTofuVariableDeclarationsAreCanonical as declarationsAreCanonical,
 } from "./generic-opentofu-variable-contract.ts";
 import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
-import { mayApproveInterfaceProvider } from "./app-authorization.ts";
 import {
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
@@ -115,7 +114,7 @@ import {
   resolveProviderBindings,
   type ControlDispatchContext,
 } from "./shared.ts";
-import { requireResourceAccess } from "./app-authorization.ts";
+import { mayApproveInterfaceProvider, requireResourceAccess } from "./app-authorization.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;

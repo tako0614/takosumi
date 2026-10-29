@@ -137,12 +137,13 @@ import {
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
+import { clampPageLimit, decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import {
   requireAppAccess,
   requireResourceAccess,
   sourceCapsuleIds,
+  visibleKeysetPage,
   workspaceAppVisibility,
   workspaceSourceApps,
 } from "./app-authorization.ts";
@@ -757,19 +758,31 @@ async function listSources(
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  const response = await operations.listSources(workspaceId, page.params);
-  // Sources of apps the caller cannot view are omitted (Workspace compat list).
-  const sourceApps = operations.appOwnership
-    ? await workspaceSourceApps(operations, workspaceId)
-    : new Map<string, readonly string[]>();
-  const appsOf = (source: Source): readonly string[] => {
-    const owner = sourceOwnerCapsuleId(source);
-    return owner ? [owner] : sourceApps.get(source.id) ?? [];
-  };
-  const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: response.sources.flatMap(appsOf) });
+  // Sources of apps the caller cannot view are omitted (Workspace compat
+  // list), and the cursor never points at one of them.
+  let sourceApps: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+  const listed = await visibleKeysetPage({
+    limit: clampPageLimit(page.params.limit),
+    ...(page.params.cursor !== undefined ? { cursor: page.params.cursor } : {}),
+    read: async ({ cursor, limit }) => {
+      const response = await operations.listSources(workspaceId, { ...(cursor !== undefined ? { cursor } : {}), limit });
+      return { items: response.sources, ...(response.nextCursor !== undefined ? { nextCursor: response.nextCursor } : {}) };
+    },
+    visibility: async (sources) => {
+      const bySource = operations.appOwnership
+        ? await (sourceApps ??= workspaceSourceApps(operations, workspaceId))
+        : new Map<string, readonly string[]>();
+      const appsOf = (source: Source): readonly string[] => {
+        const owner = sourceOwnerCapsuleId(source);
+        return owner ? [owner] : bySource.get(source.id) ?? [];
+      };
+      const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: sources.flatMap(appsOf) });
+      return (source) => visibility.allows(appsOf(source));
+    },
+  });
   return json({
-    ...response,
-    sources: response.sources.filter((source) => visibility.allows(appsOf(source))).map(publicSource),
+    sources: listed.items.map(publicSource),
+    ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
   });
 }
 
