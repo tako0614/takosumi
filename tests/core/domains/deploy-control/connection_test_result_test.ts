@@ -8,8 +8,9 @@ import {
   type StoredSecretBlob,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
-import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
-import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import { postgresStorageMigrationStatements } from "../../../../core/adapters/storage/migrations.ts";
+import { PGliteSqlClient, splitSqlStatements } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const now = "2026-06-04T00:00:00.000Z";
@@ -162,6 +163,61 @@ for (const name of ["Postgres", "D1"] as const) {
         expectedWorkspaceManagementAuthority: authority, actorAuthority: null })).toBe(false);
       expect(await store.getSecretBlob(row.id)).toEqual(material);
       expect(await store.getConnection(row.id)).toMatchObject({ status: "pending", ownerAccountId: "other-owner" });
+    } finally { await pg?.close(); }
+  });
+}
+
+for (const name of ["Postgres", "D1"] as const) {
+  test(`${name}: pre-ownership Connection snapshots still pass test, expiry and revoke CAS after expand`, async () => {
+    const pg = name === "Postgres" ? await PGliteSqlClient.createThroughMigrationVersion(122) : undefined;
+    const d1 = name === "D1" ? new SqliteFakeD1() : undefined;
+    try {
+      if (d1) await ensureD1OpenTofuLedgerSchema(d1, { throughMigrationVersion: 76 });
+      const rows = ["tested", "expired", "revoked"].map((suffix) => ({
+        ...connection(), id: `conn_prior_${name.toLowerCase()}_${suffix}`,
+        expiresAt: "2026-06-04T00:01:00.000Z",
+      }));
+      const material = rows.map(blob);
+      if (d1) {
+        for (const row of rows) {
+          await d1.prepare(`insert into connections
+            (id,space_id,provider,status,connection_json,created_at,updated_at)
+            values (?,?,?,?,?,?,?)`).bind(row.id, row.workspaceId, row.provider,
+            row.status, JSON.stringify(row), row.createdAt, row.updatedAt).run();
+        }
+        await ensureD1OpenTofuLedgerSchema(d1!, { throughMigrationVersion: 77 });
+      } else {
+        for (const row of rows) {
+          await pg!.query(`insert into takosumi_connections
+            (id, space_id, provider, status, connection_json, created_at, updated_at)
+            values ($1,$2,$3,$4,$5::jsonb,$6,$7)`, [row.id, row.workspaceId,
+            row.provider, row.status, JSON.stringify(row), row.createdAt, row.updatedAt]);
+        }
+        const migration = postgresStorageMigrationStatements.find((item) => item.version === 123);
+        expect(migration?.id).toBe("deploy.app_ownership.expand");
+        for (const statement of splitSqlStatements(migration!.sql)) await pg!.query(statement);
+      }
+      const store: OpenTofuControlStore = pg ? new SqlOpenTofuControlStore({ client: pg })
+        : new CloudflareD1OpenTofuControlStore(d1!, { schemaMode: "predeployed" });
+      await store.putWorkspace({ id: authority.workspaceId, handle: "prior-connection",
+        displayName: "Prior Connection", type: "personal", ownerUserId: "owner",
+        createdAt: now, updatedAt: now });
+      for (const item of material) await store.putSecretBlob(item);
+      for (const row of rows) {
+        expect(await store.getConnection(row.id), `${name}:${row.id}:prior`).toEqual(row);
+      }
+      const verified = { ...rows[0]!, status: "verified" as const, verifiedAt: later, updatedAt: later };
+      expect(await store.commitConnectionTestResult({ expectedConnection: rows[0]!,
+        expectedSecretBlob: material[0]!, replacement: verified,
+        expectedWorkspaceManagementAuthority: authority, actorAuthority: null }), `${name}:test`).toBe(true);
+      expect((await store.getConnection(rows[0]!.id))?.status).toBe("verified");
+      expect(await store.markConnectionExpiredIfUnchanged({ expectedConnection: rows[1]!,
+        observedAt: later }), `${name}:expiry`).toBe(true);
+      expect((await store.getConnection(rows[1]!.id))?.status).toBe("expired");
+      expect(await store.revokeConnectionIfUnchanged({ expectedConnection: rows[2]!,
+        expectedWorkspaceManagementAuthority: authority, actorAuthority: null }), `${name}:revoke`).toBe(true);
+      expect(await store.getConnection(rows[2]!.id)).toBeUndefined();
+      expect(await store.getSecretBlob(rows[2]!.id)).toBeUndefined();
     } finally { await pg?.close(); }
   });
 }

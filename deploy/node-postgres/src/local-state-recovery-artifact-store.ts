@@ -1,5 +1,7 @@
 /** Local encrypted-file adapter for one failed-initial-create state recovery. */
 import type { ArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import { capsuleArtifactRoot } from "../../../core/adapters/storage/artifact-references.ts";
+import type { OpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   VERIFIED_RECOVERY_ARTIFACT_FORMAT,
   type RecoveryArtifactVerifier,
@@ -47,13 +49,17 @@ type LocalRecoveryArtifactStore = Pick<
 export class LocalOpenTofuStateRecoveryArtifactStore implements RecoveryArtifactVerifier {
   readonly #store: LocalRecoveryArtifactStore;
   readonly #allocator: ArtifactReferenceAllocator;
+  readonly #capsules: Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">;
 
   constructor(input: {
     readonly store: LocalRecoveryArtifactStore;
     readonly allocator: ArtifactReferenceAllocator;
+    /** Trusted persisted Capsule identity and physical-root authority. */
+    readonly capsules: Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">;
   }) {
     this.#store = input.store;
     this.#allocator = input.allocator;
+    this.#capsules = input.capsules;
   }
 
   async stage(input: StageLocalRecoveryStateInput): Promise<StagedLocalRecoveryStateArtifact> {
@@ -119,19 +125,30 @@ export class LocalOpenTofuStateRecoveryArtifactStore implements RecoveryArtifact
   }
 
   async #allocate(scope: LocalRecoveryStateArtifactScope): Promise<string> {
+    let root: string;
     let ref: string;
     try {
+      const capsule = await this.#capsules.getCapsule(scope.capsuleId);
+      if (!capsule || capsule.workspaceId !== scope.workspaceId || capsule.environment !== scope.environment) {
+        throw recoveryArtifactError("local recovery state scope is not the persisted Capsule");
+      }
+      const persistedRoot = await this.#capsules.getCapsuleStorageRoot(scope.capsuleId);
+      if (typeof persistedRoot !== "string" || !persistedRoot) {
+        throw recoveryArtifactError("local recovery state storage root is unavailable");
+      }
+      root = capsuleArtifactRoot(scope.workspaceId, scope.capsuleId, persistedRoot);
       ref = await this.#allocator.allocate({
         kind: "state",
         workspaceId: scope.workspaceId,
         subject: { kind: "capsule", id: scope.capsuleId },
         environment: scope.environment,
         generation: 1,
+        storageRoot: persistedRoot,
       });
     } catch {
       throw recoveryArtifactError("local recovery state allocation failed");
     }
-    const canonical = `workspaces/${scope.workspaceId}/capsules/${scope.capsuleId}/environments/${scope.environment}/state-versions/00000001.tfstate.enc`;
+    const canonical = `${root}/environments/${scope.environment}/state-versions/00000001.tfstate.enc`;
     if (ref !== canonical || ref.includes("..")) {
       throw recoveryArtifactError("local recovery state allocation is not canonical");
     }

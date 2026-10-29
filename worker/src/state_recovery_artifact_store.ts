@@ -11,6 +11,7 @@ import {
   type RecoveryArtifactVerifier,
   type VerifiedRecoveryArtifact,
 } from "../../core/domains/deploy-control/operator_state_recovery.ts";
+import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import type { R2Bucket, R2Object, R2ObjectBody } from "./bindings.ts";
 import { storedServiceUsageBucket, type StoredServiceComposition } from "./stored-service-usage.ts";
@@ -69,25 +70,25 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   readonly #allocator: ArtifactReferenceAllocator;
   readonly #storageUsage: ArtifactStorageUsagePort | undefined;
   readonly #storedService: StoredServiceComposition | undefined;
-  readonly #resolveStorageRoot: ((workspaceId: string, capsuleId: string) => Promise<string | undefined>) | undefined;
+  readonly #capsules: Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">;
 
   constructor(input: {
     readonly bucket: R2Bucket;
     readonly crypto: StateArtifactCrypto;
     readonly allocator: ArtifactReferenceAllocator;
+    /** Trusted persisted Capsule identity and physical-root authority. */
+    readonly capsules: Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">;
     /** Trusted optional host capability; an HTTP caller cannot select it. */
     readonly storageUsage?: ArtifactStorageUsagePort;
     readonly storedService?: StoredServiceComposition;
-    /** Reads the Capsule's persisted root on each allocation, never from a request. */
-    readonly resolveStorageRoot?: (workspaceId: string, capsuleId: string) => Promise<string | undefined>;
   }) {
     if (input.storageUsage && input.storedService) throw recoveryArtifactError("recovery storage profiles are mutually exclusive");
     this.#bucket = input.bucket;
     this.#crypto = input.crypto;
     this.#allocator = input.allocator;
+    this.#capsules = input.capsules;
     this.#storageUsage = input.storageUsage;
     this.#storedService = input.storedService;
-    this.#resolveStorageRoot = input.resolveStorageRoot;
   }
 
   async stage(input: StageRecoveryStateInput): Promise<StagedRecoveryStateArtifact> {
@@ -241,7 +242,14 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     let ref: string;
     let root: string;
     try {
-      const persistedRoot = await this.#resolveStorageRoot?.(scope.workspaceId, scope.capsuleId);
+      const capsule = await this.#capsules.getCapsule(scope.capsuleId);
+      if (!capsule || capsule.workspaceId !== scope.workspaceId || capsule.environment !== scope.environment) {
+        throw recoveryArtifactError("recovery state scope is not the persisted Capsule");
+      }
+      const persistedRoot = await this.#capsules.getCapsuleStorageRoot(scope.capsuleId);
+      if (typeof persistedRoot !== "string" || !persistedRoot) {
+        throw recoveryArtifactError("recovery state storage root is unavailable");
+      }
       root = capsuleArtifactRoot(scope.workspaceId, scope.capsuleId, persistedRoot);
       ref = await this.#allocator.allocate({
         kind: "state",

@@ -168,7 +168,7 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
   const directory: SharedAccountWorkspaceDirectory = {
     async bootstrap(session, allowCreate = true) {
       const account = await canonicalAccount(session);
-      if (!allowCreate || deps.workspaceMutationsFrozen !== false) {
+      if (!allowCreate) {
         let cursor: string | undefined;
         let personal: Workspace | undefined;
         do {
@@ -374,10 +374,7 @@ export async function handleSharedAccountWorkspaceRoute(input: {
       if (method !== "POST") return respond(methodNotAllowed("POST"));
       const body = await readJsonObject(input.request);
       if (!body || Object.keys(body).length) throw new SharedAccountWorkspaceError("invalid_request", "Body must be an empty object.", 400);
-      return respond(json({ workspace: await input.directory.bootstrap(
-        session,
-        input.workspaceMutationsFrozen === false,
-      ) }));
+      return respond(json({ workspace: await input.directory.bootstrap(session, true) }));
     }
     const match = /^\/([^/]+)\/(select|billing-organization)$/.exec(tail);
     if (match) {

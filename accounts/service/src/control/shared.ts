@@ -620,6 +620,9 @@ export async function canAccessWorkspace(input: {
     if (input.capsuleId) {
       try {
         if (!input.operations.appAccess && !input.diagnostics?.observeAppAccessShadow) return workspaceAllowed;
+        // Diagnostic sampling has no authority. Keep 99% of requests free of
+        // the extra ownership/member reads while the legacy decision is live.
+        if (Math.random() >= 0.01) return workspaceAllowed;
         await observeAppAccessShadow({
           operations: input.operations,
           session: input.session,
@@ -762,17 +765,13 @@ async function resolveWorkspaceRole(input: {
 }): Promise<"owner" | "member" | null> {
   const workspace = input.workspace ?? await input.operations.workspaces.getWorkspace(input.workspaceId);
   if (workspace.id !== input.workspaceId) return null;
-  if (!input.session.requireCurrentMembership && workspace.ownerUserId === input.session.subject) return "owner";
+  if (workspace.ownerUserId === input.session.subject) return "owner";
   const member = input.operations.members.getMember
     ? await input.operations.members.getMember(input.workspaceId, input.session.subject)
     : (await input.operations.members.listMembers(input.workspaceId)).find((row) => row.accountId === input.session.subject);
-  if (member?.status !== "active" ||
-    (input.session.requireCurrentMembership &&
-      (member.workspaceId !== input.workspaceId || member.accountId !== input.session.subject ||
-        !member.roles.some((role) => ["owner", "admin", "member", "viewer"].includes(role))))) return null;
-  if (workspace.ownerUserId === input.session.subject &&
-    (member.roles.includes("owner") || member.roles.includes("admin"))) return "owner";
-  return member.roles.includes("member") || member.roles.includes("viewer") ? "member" : null;
+  if (member?.status !== "active" || member.workspaceId !== input.workspaceId ||
+    member.accountId !== input.session.subject) return null;
+  return member.roles.includes("owner") || member.roles.includes("admin") ? "member" : null;
 }
 
 export function jsonStatus(body: unknown, status: number): Response {

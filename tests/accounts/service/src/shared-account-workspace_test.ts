@@ -17,7 +17,7 @@ const subject: TakosumiSubject = "tsub_shared";
 const other: TakosumiSubject = "tsub_other";
 const session = { subject };
 
-function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver, workspaceMutationsFrozen = false) {
+function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver, workspaceMutationsFrozen?: boolean) {
   const store = new InMemoryAccountsStore();
   store.saveAccount({ subject, email: "shared@example.test", displayName: "Shared", createdAt: 1, updatedAt: 1 });
   store.saveAccount({ subject: other, createdAt: 1, updatedAt: 1 });
@@ -47,7 +47,8 @@ function fixture(resolveWorkspaceBilling?: SharedWorkspaceBillingResolver, works
       upsertMember: async () => { throw new Error("Directory cannot reconcile membership."); },
     },
   };
-  return { store, control, service, operations, directory: createSharedAccountWorkspaceDirectory({ store, operations, resolveWorkspaceBilling, workspaceMutationsFrozen }) };
+  return { store, control, service, operations, directory: createSharedAccountWorkspaceDirectory({ store, operations, resolveWorkspaceBilling,
+    ...(workspaceMutationsFrozen === undefined ? {} : { workspaceMutationsFrozen }) }) };
 }
 
 async function member(f: ReturnType<typeof fixture>, workspace: Workspace, patch: Partial<WorkspaceMember> = {}) {
@@ -98,7 +99,7 @@ test("missing canonical account and bootstrap capabilities refuse instead of cre
   await expect(noBootstrap.bootstrap(session)).rejects.toMatchObject({ status: 401 });
 });
 
-test("frozen bootstrap preserves an existing personal Workspace and refuses implicit creation", async () => {
+test("frozen bootstrap preserves an existing personal Workspace and creates the first singleton", async () => {
   const existing = fixture();
   const workspace = await existing.directory.bootstrap(session);
   const frozen = createSharedAccountWorkspaceDirectory({
@@ -112,8 +113,10 @@ test("frozen bootstrap preserves an existing personal Workspace and refuses impl
   })).rejects.toMatchObject({ code: "workspace_frozen", status: 409 });
 
   const fresh = fixture(undefined, true);
-  await expect(fresh.directory.bootstrap(session)).rejects.toMatchObject({ code: "workspace_frozen", status: 409 });
-  expect(await fresh.control.listWorkspaces()).toEqual([]);
+  const created = await fresh.directory.bootstrap(session);
+  expect(created).toMatchObject({ type: "personal", ownerUserId: subject });
+  expect(await fresh.directory.bootstrap(session)).toEqual(created);
+  expect(await fresh.control.listWorkspaces()).toEqual([created]);
 });
 
 test("shared Workspace HTTP routes default to frozen while preserving existing personal bootstrap", async () => {
@@ -160,7 +163,7 @@ test("owner field and stale membership page do not authorize missing/revoked mem
 });
 
 test("menu exposes bounded live choices and authorized off-page selection", async () => {
-  const f = fixture();
+  const f = fixture(undefined, false);
   const personal = await f.directory.bootstrap(session);
   const additional = await f.directory.create(session, { handle: "additional-work", displayName: "Additional", type: "organization" });
   const menu = await f.directory.menu(session, { limit: 1, selectedWorkspaceId: additional.id });
@@ -173,7 +176,7 @@ test("menu exposes bounded live choices and authorized off-page selection", asyn
 });
 
 test("explicit creation uses canonical owner and rejects duplicate personal bootstrap", async () => {
-  const f = fixture();
+  const f = fixture(undefined, false);
   await f.directory.bootstrap(session);
   const created = await f.directory.create(session, { handle: "purpose-work", displayName: "Purpose", type: "organization" });
   expect(await f.control.getWorkspace(created.id)).toMatchObject({ ownerUserId: subject, type: "organization" });

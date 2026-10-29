@@ -1,7 +1,7 @@
 import { errorJson } from "./http-helpers.ts";
 
 /**
- * Phase 3 compatibility switch for retiring Workspace creation and membership.
+ * Phase 3 compatibility switch for retiring organization creation and membership.
  * The safe default is frozen; operators can explicitly opt out during rollback.
  */
 export const WORKSPACE_MUTATIONS_FROZEN_ENV =
@@ -25,13 +25,12 @@ export function parseWorkspaceMutationsFrozen(value?: string): boolean {
   }
 }
 
-/** Workspace creation and the legacy Workspace member-management surface. */
+/** Legacy Workspace member-management surface; creation is checked after parsing its type. */
 export function isWorkspaceMutationRoute(
   segments: readonly string[],
   method: string,
 ): boolean {
   const verb = method.toUpperCase();
-  if (segments.length === 1 && segments[0] === "workspaces") return verb === "POST";
   return segments[0] === "workspaces" && segments[2] === "members" && (
     (segments.length === 3 && verb === "POST") ||
     (segments.length === 4 && (verb === "PATCH" || verb === "DELETE"))
@@ -41,7 +40,7 @@ export function isWorkspaceMutationRoute(
 export function workspaceFrozenResponse(request?: Request): Response {
   return errorJson(
     "workspace_frozen",
-    "Workspace creation and membership changes are temporarily frozen.",
+    "Organization Workspace creation and membership changes are temporarily frozen.",
     409,
     request,
   );
