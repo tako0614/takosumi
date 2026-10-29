@@ -488,4 +488,14 @@ test("trusted shared-auth cookies retain first-party authority for app members a
   }), env, dependencies);
   expect(transfer?.status).toBe(201);
   expect(await transfer?.json()).toEqual({ transferId: "transfer_shared", state: "pending" });
+
+  // The operator kill switch reaches this direct Control dispatch too: reads stay, writes return 409.
+  const frozen = { ...env, TAKOSUMI_APP_OWNERSHIP_MUTATIONS: "frozen" } as CloudflareWorkerEnv;
+  expect((await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/members"), frozen, dependencies))?.status).toBe(200);
+  const paused = await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/ownership-transfers", {
+    method: "POST", headers: { cookie, origin, "content-type": "application/json" },
+    body: JSON.stringify({ toAccountId: "recipient" }),
+  }), frozen, dependencies);
+  expect(paused?.status).toBe(409);
+  expect((await paused?.json()).error).toMatchObject({ code: "failed_precondition", details: { reason: "app_ownership_mutations_frozen" } });
 });

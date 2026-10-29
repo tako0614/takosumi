@@ -2368,6 +2368,26 @@ describe("Capsule execution authority", () => {
       '{}'::jsonb
     from generate_series(1, 500) as n`);
     await client.exec("analyze takosumi_runs");
+    // A Workspace with many apps: the exact (space_id, id) index must win over
+    // other space_id-leading indexes such as the v125 list-visibility index.
+    await client.exec(`insert into takosumi_capsules (
+      id, space_id, project_id, name, environment, source_id, install_config_id,
+      status, installation_json, created_at, updated_at
+    )
+    select
+      'authority_filler_capsule_' || n,
+      '${WORKSPACE_ID}',
+      'authority_filler_project_' || n,
+      'filler-' || n,
+      'production',
+      'authority_filler_source_' || (n % 7),
+      'authority_filler_config_' || n,
+      'active',
+      '{}'::jsonb,
+      '1',
+      '1'
+    from generate_series(1, 500) as n`);
+    await client.exec("analyze takosumi_capsules");
     pgRecords.length = 0;
     await expect(
       pgStore.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID),

@@ -124,9 +124,13 @@ class SqliteFakeStatement implements D1PreparedStatement {
     return Promise.resolve({ results: rows, success: true });
   }
 
-  raw<T = unknown[]>(): Promise<T[]> {
-    const rows = this.db.query(this.query).values(...this.#params()) as T[];
-    return Promise.resolve(rows);
+  /** D1 `raw()`; `columnNames: true` prepends the column-name row like D1. */
+  raw<T = unknown[]>(options?: { readonly columnNames?: boolean }): Promise<T[]> {
+    const statement = this.db.query(this.query);
+    const rows = statement.values(...this.#params()) as T[];
+    return Promise.resolve(
+      options?.columnNames ? [statement.columnNames as T, ...rows] : rows,
+    );
   }
 
   run<T = unknown>(): Promise<D1Result<T>> {

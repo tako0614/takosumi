@@ -210,6 +210,7 @@ interface ControlRouteContext {
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
   readonly workspaceMutationsFrozen?: boolean;
+  readonly appOwnershipMutationsFrozen?: boolean;
   /** Operator-designated repositories whose installed app may delegate. */
   readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
 }
@@ -541,6 +542,7 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.assertActive ? { assertActive: context.assertActive } : {}),
           ...(context.withinRunReadDeadline ? { withinRunReadDeadline: context.withinRunReadDeadline } : {}),
           ...(context.workspaceMutationsFrozen !== undefined ? { workspaceMutationsFrozen: context.workspaceMutationsFrozen } : {}),
+          ...(context.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
           session: context.session,
         }),
       ),
@@ -718,6 +720,7 @@ interface DispatchInput {
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
   readonly workspaceMutationsFrozen?: boolean;
+  readonly appOwnershipMutationsFrozen?: boolean;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -745,6 +748,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       ...(input.assertActive ? { assertActive: input.assertActive } : {}),
       ...(input.withinRunReadDeadline ? { withinRunReadDeadline: input.withinRunReadDeadline } : {}),
       workspaceMutationsFrozen: input.workspaceMutationsFrozen !== false,
+      ...(input.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

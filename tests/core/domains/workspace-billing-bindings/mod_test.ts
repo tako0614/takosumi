@@ -266,6 +266,6 @@ test("Postgres v119 expands protected-shaped v118 rows without rewriting Workspa
     expect(await store.getWorkspaceMember(workspace.id,account)).toEqual(originalMember);
     expect(await store.getWorkspaceBillingBindingIntent(workspace.id)).toBeUndefined();
     expect(await store.getWorkspaceBillingBinding(workspace.id)).toBeUndefined();
-    expect(postgresStorageMigrationStatements.filter((row)=>row.version>118).map((row)=>row.version)).toEqual([119,120,121,122,123,124]);
+    expect(postgresStorageMigrationStatements.filter((row)=>row.version>118).map((row)=>row.version)).toEqual([119,120,121,122,123,124,125]);
   } finally { await client.close(); }
 },30_000);

@@ -15,10 +15,28 @@ checks; it does not require a `takosumi-run-id` metadata field on the copy.
 
 ## Before an apply
 
-1. Use the current reviewed release, hold the normal control-plane maintenance
-   fence, and take a restorable Control DB and R2_SOURCE backup. Record the
-   database and bucket identity, schema version, row counts, archive counts,
-   backup digest, release commit, and operator identity outside the repo.
+1. Use the current reviewed release, disable automatic Source retirement
+   (`TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED=0`), confirm that the Control
+   schema maintenance fence is **released**, and take a restorable Control DB
+   and R2_SOURCE backup. Record the database and bucket identity, schema
+   version, row counts, archive counts, backup digest, release commit, and
+   operator identity outside the repo.
+
+   Do not hold the schema owner's maintenance fence for this migration. That
+   fence blocks every Control write and its guard triggers reject the group
+   commit, and the store re-checks it before every read. The route therefore
+   refuses while it is active: `503 control_schema_maintenance_active` (or
+   `control_schema_maintenance_unverified` when the fence row cannot be read)
+   before any dry-run read, archive copy or commit. The migration's safety
+   does not come from a global write stop: each group commit re-checks every
+   observed physical row and membership count in the same D1 batch and rolls
+   back on any concurrent change (`conflict`), in-flight Runs and leases make
+   a group `blocked`, and apply requires the exact reviewed dry-run digest.
+   Run it in a quiet window after the schema fence is released (for the
+   TASK-0118 rollout: after the v75 -> v79 schema `release`), not inside the
+   schema window. A fence raised mid-run can report a group as
+   `group_read_failed`; that result writes nothing, so re-run the dry-run after
+   the fence is released.
 2. Run the read-only Phase 0 queries below on the target. The raw Phase 0 SQL
    mentioned by TASK-0118 is operator-local and was not available in this
    worktree; these are equivalent D1 queries against the current schema.
@@ -193,8 +211,8 @@ without secret values. A DB conflict rolls the group back. Repeat a dry-run
 and apply only after reviewing the new report. If a copy succeeded before a
 DB conflict, its create-only digest check makes retry safe. If the target was
 committed and later found incorrect, stop further groups, preserve evidence,
-restore the reviewed DB/R2 backup under the normal maintenance fence, or make
-an independently reviewed forward repair. Do not manually overwrite immutable
+restore the reviewed DB/R2 backup through the separate database recovery
+procedure, or make an independently reviewed forward repair. Do not manually overwrite immutable
 SourceSnapshot IDs or archive objects.
 
 

@@ -94,6 +94,14 @@ const CONTROL_SCHEMA_PRODUCTION_V66_V75 = {
   target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
 };
 
+// TASK-0118 rollout transition from the v75 head the previous lane leaves.
+// It runs only after the v71-v79-compatible platform Worker serves.
+const CONTROL_SCHEMA_PRODUCTION_V75_V79 = {
+  surface: "takosumi-control-d1-schema-production-v75-v79",
+  environment: "production",
+  target: "cloudflare-d1:TAKOSUMI_CONTROL_D1_PRODUCTION_DATABASE_ID",
+};
+
 const CONTRACT_PACKAGE = {
   surface: "takosumi-contract-package",
   target: "npm:@takosjp/takosumi-contract",
@@ -207,6 +215,25 @@ const CONTRACT = {
           "apply always retains the exact production in-place fence; after the compatible platform runtime is read back, the separate target-v75 release verifies and releases that exact fence, followed by authenticated Control read/write smoke",
         reversal:
           "schema is forward-only and the retained fence is the recovery boundary; a failure at any partial head v67 through v74 is resumed from the same exact source/manifest/fence and repaired forward, never by down-migration or code rollback",
+        "failure-handling":
+          "read-only source, manifest, target, ledger, environment, and fence mismatches fail closed before fence creation; apply leaves the exact fence active on post-mutation failure, never retries a mutation, and does not invoke a production restore",
+      },
+    },
+    {
+      surface: CONTROL_SCHEMA_PRODUCTION_V75_V79.surface,
+      target: CONTROL_SCHEMA_PRODUCTION_V75_V79.target,
+      triggers: ["irreversible", "authority"],
+      obligations: {
+        provenance:
+          "delegates the temporary owner-only v75-to-v79 schema CLI; plan, verify, apply, and release are built from the exact v79 canonical manifest and the existing clean-checkout/source guard",
+        "pre-mutation-proof":
+          "the production target is fixed and caller environment overrides are refused; before the first fence mutation, apply refuses queued/running Runs and retained leases, atomically rechecks that boundary in the fence transaction, and admits only the exact canonical ledger prefix at v75 or an exact active in-place fence with the canonical prefix at every canonical head v76 through v79, and never accepts a future ledger or predecessor/export fence; the serving platform Worker must already accept v71 through v79 because a v75-only Worker fails closed on v76 and later",
+        "independent-review":
+          "an independent owner review covers the limited direct-fenced v75-to-v79 transition, populated fault-forward rehearsal, production index volume and measured index-build margin for the v79 indexes, retained backup/bookmark evidence, runtime compatibility cutoff, retained-fence repair path, and the existing exact-fence release checks",
+        "post-conditions":
+          "apply always retains the exact production in-place fence; after the v79-compatible platform runtime and every other Worker bound to the same Control D1 are read back, the separate target-v79 release verifies and releases that exact fence, followed by authenticated Control read/write smoke",
+        reversal:
+          "schema is forward-only and the retained fence is the recovery boundary; a failure at any partial head v76 through v78 is resumed from the same exact source/manifest/fence and repaired forward, never by down-migration or code rollback to a v75-only Worker",
         "failure-handling":
           "read-only source, manifest, target, ledger, environment, and fence mismatches fail closed before fence creation; apply leaves the exact fence active on post-mutation failure, never retries a mutation, and does not invoke a production restore",
       },
@@ -397,6 +424,44 @@ if (selected === CONTROL_SCHEMA_PRODUCTION_V66_V75.surface) {
     command,
     "--environment",
     CONTROL_SCHEMA_PRODUCTION_V66_V75.environment,
+    ...args,
+  ]));
+}
+if (selected === CONTROL_SCHEMA_PRODUCTION_V75_V79.surface) {
+  const [command, ...args] = process.argv.slice(3);
+  if (
+    args.some((arg) =>
+      arg === "--environment" || arg.startsWith("--environment=")
+    )
+  ) {
+    die("schema environment is fixed by the selected surface");
+  }
+  if (!["plan", "verify", "apply", "release"].includes(command)) {
+    die("production v75-v79 schema command must be plan, verify, apply, or release");
+  }
+  if (
+    args.some(
+      (arg) =>
+        arg === "--confirm-predecessor-source" ||
+        arg === "--confirm-predecessor-manifest" ||
+        arg.startsWith("--confirm-predecessor-source=") ||
+        arg.startsWith("--confirm-predecessor-manifest=") ||
+        arg === "--confirm-fence-source-commit" ||
+        arg.startsWith("--confirm-fence-source-commit=")
+    )
+  ) {
+    die("production v75-v79 schema does not accept predecessor or forward-repair confirmation");
+  }
+  if (command === "apply" && !args.includes("--retain-maintenance-fence")) {
+    args.push("--retain-maintenance-fence");
+  }
+  const { runControlD1SchemaProductionV75V79Cli } = await import(
+    "../deploy/platform/control_d1_schema_cli.ts"
+  );
+  process.exit(await runControlD1SchemaProductionV75V79Cli([
+    command,
+    "--environment",
+    CONTROL_SCHEMA_PRODUCTION_V75_V79.environment,
     ...args,
   ]));
 }

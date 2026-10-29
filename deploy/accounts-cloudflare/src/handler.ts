@@ -36,6 +36,7 @@ import {
   resolveTakosumiMobileOidcClientId,
   parseInstalledAppDelegationSources,
   parseWorkspaceMutationsFrozen,
+  parseAppOwnershipMutationsFrozen,
 } from "@takosjp/takosumi-accounts-service";
 import {
   isAccountsApiPath,
@@ -93,6 +94,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
   /** JSON array of `{ url, path }` repositories whose installed app may delegate. */
   readonly TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES?: string;
+  /** `frozen` | `enabled` (default): app member and ownership-transfer writes. */
+  readonly TAKOSUMI_APP_OWNERSHIP_MUTATIONS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
@@ -1287,6 +1290,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ...(hostedSessionPolicy ? { hostedSessionPolicy: true } : {}),
     workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
       env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+    ),
+    appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
+      env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
