@@ -10,7 +10,7 @@
  */
 import "../../styles/wave-b.css";
 import "../../styles/wave-c.css";
-import { createResource, For, Match, Show, Switch } from "solid-js";
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";
 import { AlertTriangle, Bell } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
@@ -18,8 +18,8 @@ import type { ActivityEvent, ControlApiError } from "../../lib/control-api.ts";
 import {
   acknowledgeNotifications,
   attentionCount,
+  attentionEvents,
   type FeedEntry,
-  isFailureAction,
   notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
@@ -51,8 +51,12 @@ function NotificationRow(props: {
   workspaceName: string;
   /** Workspaces are named only when there is more than one. */
   showWorkspace: boolean;
+  /** An unsettled failure (see attentionEvents). A failure about an app that
+   * was removed since, or that a later successful run replaced, stays in the
+   * feed as history without the 要対応 styling. */
+  attention: boolean;
 }) {
-  const failure = () => isFailureAction(props.entry.event.action);
+  const failure = () => props.attention;
   const description = () => describeActivityEvent(props.entry.event, props.serviceName);
   const href = () => eventHref(props.entry.event);
   // The feed stays cross-Workspace, but the bell badge / 要対応 banner count
@@ -144,6 +148,7 @@ export default function NotificationsView() {
             : undefined;
         const failureCount = () =>
           attentionCount(feed(), currentWorkspaceId() || undefined);
+        const openFailures = createMemo(() => attentionEvents(feed()));
 
         return (
           <>
@@ -215,6 +220,7 @@ export default function NotificationsView() {
                               serviceName={serviceNameFor(entry.event)}
                               workspaceName={workspaceNameFor(entry)}
                               showWorkspace={multipleWorkspaces()}
+                              attention={openFailures().has(entry.event)}
                             />
                           )}
                         </For>
