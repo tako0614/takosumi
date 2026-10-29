@@ -11510,12 +11510,16 @@ test("failed provider apply atomically retains partial state, consumes the Plan,
       ],
     });
   };
-  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const seeded = await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const partialSnapshot = { ...seeded.snapshot, id: "snap_failed_apply_lane",
+    ref: "refs/heads/partial-release", resolvedCommit: "1".repeat(40),
+    archiveRef: "workspaces/ws_test001/sources/src_fixture/snapshots/snap_failed_apply_lane/source.tar.zst" };
+  await store.putSourceSnapshot(partialSnapshot);
   const controller = controllerWith(store, runner, {
     activity: activityRecorderFor(store),
   });
 
-  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1", {}, { sourceSnapshotId: partialSnapshot.id });
   const failed = await controller.createApplyRun({
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
@@ -11555,6 +11559,7 @@ test("failed provider apply atomically retains partial state, consumes the Plan,
     currentStateVersionId: partialState!.id,
   });
   expect(failed.capsule?.currentOutputId).toBeUndefined();
+  expect((await store.getSource(seeded.source.id))?.defaultRef).toBe(partialSnapshot.ref);
 
   const replay = await controller.createApplyRun({
     planRunId: planRun.id,
@@ -12675,6 +12680,50 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
       (stateVersion) => stateVersion.generation,
     ),
   ).toEqual([1, 2]);
+});
+
+test("committed destroy defers owned Source archive retirement to recovery", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store);
+  const archived: string[] = [];
+  const sourcesService = new SourcesService({
+    store,
+    deleteRetiredSourceArchives: async ({ archiveRefs }) => {
+      archived.push(...archiveRefs);
+    },
+  });
+  const profile = multiProviderRunnerProfile();
+  const createController = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+  const create = await createController.createCapsulePlan(seeded.capsule.id);
+  await createController.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const controller = controllerWith(store, runner, {
+    sourcesService,
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    newId: (prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`,
+  });
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  await controller.approveRun(destroy.planRun.id);
+  const result = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(result.applyRun.status).toBe("succeeded");
+  expect((await store.getCapsule(seeded.capsule.id))?.status).toBe("destroyed");
+  expect(await store.getSource(seeded.capsule.sourceId)).toBeDefined();
+  expect(archived).toEqual([]);
+  expect(await sourcesService.retireOwnedSource(seeded.capsule.sourceId, "destroy recovery"))
+    .toBe("retired");
+  expect(await store.getSource(seeded.capsule.sourceId)).toBeUndefined();
+  expect(await store.listSourceSnapshots(seeded.capsule.sourceId)).toEqual([]);
+  expect(archived).toEqual([seeded.snapshot.archiveRef]);
 });
 
 test("a second successful apply preserves StateVersion history and advances the cursor", async () => {

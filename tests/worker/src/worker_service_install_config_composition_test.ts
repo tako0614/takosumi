@@ -69,6 +69,26 @@ test("worker service does not infer requirements from a custom recipe catalog", 
   expect(configs[0]?.policy.providerCredentials).toBeUndefined();
 });
 
+test("worker rollback flag reaches Core's Workspace member mutation facade", async () => {
+  const created = await createWorkerServiceApp(
+    baseEnv({ TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN: "false" }),
+    "takosumi-api",
+    { operatorInstallConfigs: [] },
+  );
+  const workspace = await created.operations.workspaces.createWorkspace({
+    handle: "workspace-rollback",
+    displayName: "Workspace rollback",
+    type: "personal",
+    ownerUserId: "owner-rollback",
+  });
+  const member = await created.operations.members.upsertMember({
+    workspaceId: workspace.id,
+    accountId: "member-rollback",
+    actor: { actorAccountId: "owner-rollback", roles: ["owner"], requestId: "rollback-test" },
+  });
+  expect(member).toMatchObject({ workspaceId: workspace.id, accountId: "member-rollback" });
+});
+
 test("worker service unions reference and platform broker sources without provider inference", async () => {
   const created = await createWorkerServiceApp(
     baseEnv({

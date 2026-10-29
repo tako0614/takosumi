@@ -67,6 +67,7 @@ async function harness(): Promise<Harness> {
   const store = new InMemoryOpenTofuControlStore();
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,

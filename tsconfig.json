@@ -52,6 +52,7 @@
       "takosumi-contract/projects": ["./contract/projects.ts"],
       "takosumi-contract/install-configs": ["./contract/install-configs.ts"],
       "takosumi-contract/capsules": ["./contract/capsules.ts"],
+      "takosumi-contract/app-access": ["./contract/app-access.ts"],
       "takosumi-contract/provider-resolution": [
         "./contract/provider-resolution.ts"
       ],

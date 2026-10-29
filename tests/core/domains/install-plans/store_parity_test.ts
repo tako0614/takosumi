@@ -49,12 +49,34 @@ test("Git install-plan store has idempotency and CAS parity", async () => {
         new InMemoryOpenTofuControlStore(),
       ),
     ).toBe(false);
-    for (const store of [
+    for (const [index, store] of [
       memoryGit,
       new SqlGitInstallPlanStore(postgres),
       new D1GitInstallPlanStore(d1),
-    ]) {
+    ].entries()) {
       await expectStoreParity(store);
+      const active = {
+        ...plan(`source_reference_${index}`, `source_reference_digest_${index}`),
+        idempotencyKeyHash: `source_reference_key_${index}`,
+        sourceId: "src_public_preflight",
+      };
+      expect((await store.create(active)).status).toBe("created");
+      expect(await store.hasNonterminalPlanSourceReference(
+        "ws_one", "src_public_preflight", "2026-08-21T00:00:00.000Z",
+      )).toBe(true);
+      expect(await store.hasNonterminalPlanSourceReference(
+        "ws_two", "src_public_preflight", "2026-08-21T00:00:00.000Z",
+      )).toBe(false);
+      const expired = {
+        ...plan(`source_expired_${index}`, `source_expired_digest_${index}`),
+        idempotencyKeyHash: `source_expired_key_${index}`,
+        sourceId: "src_expired_preflight",
+        expiresAt: "2026-08-19T00:00:00.000Z",
+      };
+      expect((await store.create(expired)).status).toBe("created");
+      expect(await store.hasNonterminalPlanSourceReference(
+        "ws_one", "src_expired_preflight", "2026-08-21T00:00:00.000Z",
+      )).toBe(false);
     }
   } finally {
     await postgres.close();

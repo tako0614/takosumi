@@ -65,6 +65,7 @@ import {
   type EnqueueSourceSync,
   SourcesService,
 } from "./domains/sources/mod.ts";
+import { sweepRetiredSources, type SourceRetirementSweepResult } from "./domains/sources/retirement_sweeper.ts";
 import {
   CAPSULE_LIFECYCLE_BUSY_REASON,
   type CapsuleLifecycleAdmission,
@@ -76,7 +77,6 @@ import { ConnectionsService } from "./domains/connections/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import type { AppAccessResolver } from "../contract/app-access.ts";
-import { createWorkspaceAppAccessResolver } from "./adapters/app-access/workspace.ts";
 import {
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";
@@ -106,6 +106,8 @@ import {
   type RetryCapsuleInterfaceMaterializationFailureInput,
 } from "./domains/interfaces/materialization_intent_failures.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
+import { InMemoryAppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "./domains/app-ownership/store.ts";
+import type { AppAccessResolver } from "takosumi-contract/app-access";
 import {
   type BackupArtifactStore,
   type BackupObjectReader,
@@ -389,6 +391,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   };
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
+  /** Defaults to frozen for the legacy Workspace creation API. */
+  readonly workspaceMutationsFrozen?: boolean;
   readonly context?: AppContext;
   /**
    * Host/provider extension dispatcher for opaque ProviderConnection setup ids.
@@ -488,6 +492,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /** Durable Takosumi-managed runtime Interface declarations and bindings. */
   readonly interfaceStores?: InterfaceStores;
+  readonly appOwnershipStore?: AppOwnershipStore;
   /** Recoverable host materialization of canonical Interface/Binding state. */
   readonly interfaceProjectionSink?: InterfaceProjectionSink;
   /**
@@ -652,6 +657,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  */
 export interface TakosumiOperations {
   readonly appAccess: AppAccessResolver;
+  readonly appOwnership: AppOwnershipStore;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
@@ -712,6 +718,8 @@ export interface TakosumiOperations {
   finalizeDueCapsuleUninstalls(options?: {
     readonly limit?: number;
   }): Promise<CapsuleUninstallFinalizeResult>;
+  /** Internal daily retry for app-owned and orphan Source retirement. */
+  sweepRetiredSources(options?: { readonly limit?: number }): Promise<SourceRetirementSweepResult>;
   /** Internal scheduled recovery; never mounted on the public API. */
   drainInterfaceMaterializationIntents(options?: {
     readonly limit?: number;
@@ -962,6 +970,7 @@ export interface TakosumiOperations {
     request: EnsureOwnedSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<SourceResponse>;
+  retireOwnedSource(sourceId: string, reason: string): Promise<"retired" | "already_retired" | "deferred">;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -976,8 +985,10 @@ export interface TakosumiOperations {
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
     actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
+  convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly CreateSourceSyncResponse[]>;
   createSourceCompatibilityCheck(
     sourceId: string,
@@ -1084,6 +1095,10 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
+  const appOwnershipStore = options.appOwnershipStore ??
+    (options.sqlClient
+      ? new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore)
+      : new InMemoryAppOwnershipStore(durableOpenTofuStore));
   const operatorInstallConfigs = options.operatorInstallConfigs ?? [];
   const defaultInstallConfigOverrides = operatorInstallConfigs.filter(
     (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -1162,18 +1177,7 @@ export async function createTakosumiService(
   // resolution + credential mint). Without either, the controller fails closed on
   // every provider-using run (this is what the shipped worker was previously
   // missing — provider plan/apply + private-git source_sync had no vault to mint).
-  const appAccess = options.appAccessResolver ?? createWorkspaceAppAccessResolver({
-    getCapsule: (id) => sharedOpenTofuStore.getCapsule(id),
-    getWorkspace: (id) => sharedOpenTofuStore.getWorkspace(id),
-    getWorkspaceMember: (workspaceId, accountId) => sharedOpenTofuStore.getWorkspaceMember(workspaceId, accountId),
-    listWorkspacesForAccount: async (accountId) => {
-      const owned = await sharedOpenTofuStore.listWorkspacesByOwner(accountId);
-      const memberships = await sharedOpenTofuStore.listWorkspaceMembersByAccount(accountId);
-      const memberWorkspaces = await sharedOpenTofuStore.listWorkspacesByIds(memberships.filter((member) => member.status === "active").map((member) => member.workspaceId));
-      return [...new Map([...owned, ...memberWorkspaces].map((workspace) => [workspace.id, workspace])).values()];
-    },
-    listCapsules: (workspaceId) => sharedOpenTofuStore.listCapsules(workspaceId),
-  });
+  const appAccess = options.appAccessResolver ?? appOwnershipStore;
   const opentofuConnectionVault =
     options.opentofuConnectionVault ??
     (options.secretCrypto
@@ -1234,7 +1238,12 @@ export async function createTakosumiService(
   // controller is constructed.
   const sourcesService = new SourcesService({
     store: sharedOpenTofuStore,
+    plans: gitInstallPlanStore,
     enqueueSourceSync,
+    ...(options.opentofuRunner?.deleteRetiredSourceArchives
+      ? { deleteRetiredSourceArchives: (input) =>
+          options.opentofuRunner!.deleteRetiredSourceArchives!(input) }
+      : {}),
     ...(options.artifactReferenceAllocator
       ? { artifactReferenceAllocator: options.artifactReferenceAllocator }
       : {}),
@@ -1335,6 +1344,7 @@ export async function createTakosumiService(
     },
     uninstallGraceDays: uninstallGrace.days,
     validateUninstallRequesterAt: options.validateUninstallRequesterAt,
+    retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
   });
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
@@ -1755,6 +1765,7 @@ export async function createTakosumiService(
     registerMetricsRoutes:
       role === "takosumi-api" && Boolean(metricsScrapeToken),
     registerInterfaceRoutes: role === "takosumi-api",
+    workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,
     adapterCapabilities: {
       ...(hasConfiguredOpenTofuRunner(options) ? {} : { opentofu: false }),
       ...(options.adapterCapabilities ?? {}),
@@ -1782,6 +1793,7 @@ export async function createTakosumiService(
         }
       : undefined,
     deployControlInternalRouteOptions: {
+      workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,
       controller: opentofuController,
       ...(options.buildConnectionSetupRequest
         ? { buildConnectionSetupRequest: options.buildConnectionSetupRequest }
@@ -1833,8 +1845,14 @@ export async function createTakosumiService(
       workspacesService.getWorkspaceMember(workspaceId, accountId),
     listMembers: (workspaceId) =>
       workspacesService.listWorkspaceMembers(workspaceId),
-    upsertMember: (input) =>
-      workspacesService.upsertWorkspaceMember({
+    upsertMember: (input) => {
+      if (options.workspaceMutationsFrozen ?? true) {
+        throw new OpenTofuControllerError(
+          "workspace_frozen",
+          "Workspace membership changes are temporarily frozen.",
+        );
+      }
+      return workspacesService.upsertWorkspaceMember({
         expectedWorkspaceManagementAuthority: input.expectedWorkspaceManagementAuthority,
         requiredActorRole: input.requiredActorRole,
         requireCurrentMembership: input.requireCurrentMembership,
@@ -1843,10 +1861,12 @@ export async function createTakosumiService(
         ...(input.roles ? { roles: input.roles } : {}),
         ...(input.status ? { status: input.status } : {}),
         actorAccountId: input.actor.actorAccountId,
-      }),
+      });
+    },
   };
   const operations: TakosumiOperations = {
     appAccess,
+    appOwnership: appOwnershipStore,
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,
@@ -1876,6 +1896,14 @@ export async function createTakosumiService(
         },
         finalizeOptions,
       ),
+    sweepRetiredSources: (sweepOptions) =>
+      sweepRetiredSources({
+        store: sharedOpenTofuStore,
+        plans: gitInstallPlanStore,
+        retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
+        onError: (error, sourceId) =>
+          log.warn("service.source_retirement.sweep_failed", { sourceId, error }),
+      }, sweepOptions),
     drainInterfaceMaterializationIntents: (options) =>
       interfaceMaterializationIntentDrainer.drain(options),
     listInterfaceMaterializationFailures: (workspaceId, options) =>
@@ -2112,6 +2140,7 @@ export async function createTakosumiService(
         expectedWorkspaceManagementAuthority,
       ),
     ensureOwnedSource: (request, authority) => opentofuController.ensureOwnedSource(request, authority),
+    retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
     listSources: (workspaceId, params) =>
       opentofuController.listSources(workspaceId, params),
     getSource: (id) => opentofuController.getSource(id),
@@ -2125,8 +2154,9 @@ export async function createTakosumiService(
         expectedWorkspaceManagementAuthority,
         actorAccountId,
       ),
-    createSourceReconciliationSyncs: (sourceId) =>
-      opentofuController.createSourceReconciliationSyncs(sourceId),
+    convergeOwnedSourceLane: (sourceId) => opentofuController.convergeOwnedSourceLane(sourceId),
+    createSourceReconciliationSyncs: (sourceId, options) =>
+      opentofuController.createSourceReconciliationSyncs(sourceId, options),
     createSourceCompatibilityCheck: (sourceId, request, context) =>
       opentofuController.createSourceCompatibilityCheck(
         sourceId,

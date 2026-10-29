@@ -9,6 +9,8 @@ import {
 } from "../../../core/domains/deploy-control/mod.ts";
 import { sourceSyncRequiredError } from "../../../core/domains/deploy-control/errors.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { WorkspacesService } from "../../../core/domains/workspaces/mod.ts";
+import { createTakosumiService } from "../../../core/bootstrap.ts";
 import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 
 class ForeignControllerError extends Error {
@@ -140,6 +142,51 @@ test("deploy_control_internal_routes — disabled without TAKOSUMI_DEPLOY_CONTRO
   });
   expect(response.status).toEqual(404);
   expect((await response.json()).error.code).toEqual("not_found");
+});
+
+test("internal Workspace creation is frozen by default and opens only with an explicit rollback flag", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const workspacesService = new WorkspacesService({
+    store,
+    newId: (prefix) => `${prefix}_freeze_test`,
+  });
+  const base = {
+    registerDeployControlInternalRoutes: true,
+    deployControlInternalRouteOptions: {
+      controller: new OpenTofuController({ store, now: () => 1 }),
+      workspacesService,
+      getDeployControlToken: () => "deploy-control-token",
+    },
+    requestCorrelation: false as const,
+  };
+  const frozen = await createApiApp(base);
+  const body = JSON.stringify({ handle: "frozen-owner", displayName: "Frozen", type: "personal", ownerUserId: "acct_frozen" });
+  const blocked = await frozen.request("/internal/v1/workspaces", {
+    method: "POST",
+    headers: { authorization: "Bearer deploy-control-token", "content-type": "application/json" },
+    body,
+  });
+  expect(blocked.status).toBe(409);
+  expect(await blocked.json()).toMatchObject({ error: { code: "workspace_frozen", requestId: expect.any(String) } });
+  expect(await workspacesService.listWorkspaces()).toEqual([]);
+
+  const rollback = await createApiApp({ ...base, workspaceMutationsFrozen: false });
+  const allowed = await rollback.request("/internal/v1/workspaces", {
+    method: "POST",
+    headers: { authorization: "Bearer deploy-control-token", "content-type": "application/json" },
+    body,
+  });
+  expect(allowed.status).toBe(201);
+});
+
+test("Core's exposed membership mutation facade is frozen without touching the store", async () => {
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+  });
+  expect(() => operations.members.upsertMember({} as never)).toThrow(
+    expect.objectContaining({ code: "workspace_frozen" }),
+  );
 });
 
 test("deploy_control_internal_routes — rejects invalid bearer", async () => {

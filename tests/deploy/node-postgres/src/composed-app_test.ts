@@ -616,15 +616,21 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
   const spy = accountsHandlerSpy();
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  let accountsFreezeFlag: boolean | undefined;
   const created = await buildComposedApp({
     config: testConfig(),
     store: store as unknown as PostgresAccountsStore,
-    accountsHandler: spy.handler,
+    createAccountsHandler: (_operations, options) => {
+      accountsFreezeFlag = options.workspaceMutationsFrozen;
+      return spy.handler;
+    },
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+      TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN: "false",
     },
     interfaceOAuth2ResourceAuthorizer: () => true,
   });
+  assert.equal(accountsFreezeFlag, false);
   const app = created.app;
   const workspace = await created.operations.workspaces.createWorkspace({
     handle: "role-gate",

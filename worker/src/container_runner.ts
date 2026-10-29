@@ -771,6 +771,28 @@ export class CloudflareContainerOpenTofuRunner
     }
   }
 
+  /** Final Source retirement owns the physical R2 archive deletion. Each
+   * object is individually checked against D1 by the Runner before mutation. */
+  async deleteRetiredSourceArchives(input: {
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRefs: readonly string[];
+  }): Promise<void> {
+    if (!this.env.RUNNER) throw new Error("RUNNER binding is not configured");
+    const id = this.env.RUNNER.idFromName(`source-retirement-${input.sourceId}`);
+    const archiveRefs = [...new Set(input.archiveRefs)];
+    if (archiveRefs.length < 1 || archiveRefs.length > 32)
+      throw new Error("source archive retirement requires a bounded page");
+    const response = await this.env.RUNNER.get(id).fetch(
+      new Request(`https://opentofu-runner.internal/sources/${encodeURIComponent(input.sourceId)}/archive/retire`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspaceId: input.workspaceId, sourceId: input.sourceId, archiveRefs }),
+      }),
+    );
+    if (!response.ok) throw new Error(`source archive retirement rejected: ${response.status}`);
+  }
+
   async readCapsuleSourceFiles(
     job: OpenTofuCapsuleSourceFilesJob,
   ): Promise<readonly OpenTofuCapsuleSourceFile[]> {

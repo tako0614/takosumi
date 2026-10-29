@@ -212,6 +212,23 @@ export class SqlGitInstallPlanStore implements GitInstallPlanStore {
     return result.rows[0].present;
   }
 
+  async hasNonterminalPlanSourceReference(workspaceId: string, sourceId: string, expiredBefore: string): Promise<boolean> {
+    const result = await this.#client.query<{ readonly present: boolean }>(
+      `select exists (
+         select 1 from ${TABLE}
+          where workspace_id = $1
+            and record_json ->> 'sourceId' = $2
+            and phase not in ('failed', 'reviewable', 'discarded')
+            and (record_json ->> 'expiresAt' is null or record_json ->> 'expiresAt' > $3)
+       ) as present`,
+      [workspaceId, sourceId, expiredBefore],
+    );
+    if (result.rows.length !== 1 || typeof result.rows[0]?.present !== "boolean") {
+      throw new TypeError("Git install-plan Source reference result is indeterminate");
+    }
+    return result.rows[0].present;
+  }
+
   async failUnclaimedDuringDrain(
     inputValue: FailUnclaimedGitInstallPlanInput,
   ): Promise<CompleteGitInstallPlanResult> {

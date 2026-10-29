@@ -68,4 +68,14 @@ describe("ObjectKeyArtifactReferenceAllocator", () => {
       "workspaces/workspace_1/backups/backup_1/service-data.tar.zst.enc",
     );
   });
+
+  test("new Capsules use the persisted apps root while legacy and Resource keys stay stable", () => {
+    expect(allocator.allocate({ kind: "state", workspaceId: "ws_1", subject: { kind: "capsule", id: "cap_1" }, environment: "live", generation: 1, storageRoot: "apps/cap_1" }))
+      .toBe("apps/cap_1/environments/live/state-versions/00000001.tfstate.enc");
+    expect(allocator.allocate({ kind: "raw_output", workspaceId: "ws_1", subject: { kind: "capsule", id: "cap_1" }, runId: "run_1", storageRoot: "apps/cap_1" }))
+      .toBe("apps/cap_1/runs/run_1/outputs.raw.json.enc");
+    expect(allocator.allocate({ kind: "state", workspaceId: "ws_1", subject: { kind: "resource", id: "res_1" }, environment: "live", generation: 1, storageRoot: "apps/cap_1" }))
+      .toBe("workspaces/ws_1/resources/res_1/environments/live/state-versions/00000001.tfstate.enc");
+    expect(() => allocator.allocate({ kind: "state", workspaceId: "ws_1", subject: { kind: "capsule", id: "cap_1" }, environment: "live", generation: 1, storageRoot: "apps/other" })).toThrow();
+  });
 });

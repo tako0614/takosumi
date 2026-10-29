@@ -263,7 +263,7 @@ test("D1-backed hosted flow across two stores rotates and fails replay without r
   expect(persisted).not.toContain(grant.access_token);expect(persisted).not.toContain(grant.refresh_token!);expect(persisted).not.toContain(f.session.sessionId);expect(persisted).not.toContain(grant.code);
 });
 
-async function directoryFixture() {
+async function directoryFixture(workspaceMutationsFrozen?: boolean) {
   const f=await fixture();
   const control=new InMemoryOpenTofuControlStore();let id=0;
   const service=new WorkspacesService({store:control,newId:(prefix)=>`${prefix}_directory_${++id}`});
@@ -278,8 +278,8 @@ async function directoryFixture() {
   const directory=createSharedAccountWorkspaceDirectory({store:f.store,operations,resolveWorkspaceBilling:async({workspaceId})=>{
     if(pauseBilling){billingEntered();await blocked;}
     return {workspaceId,workspaceRef:"wrk_retained_directory_reference",organizationId:"org_retained_ledger"};
-  }});
-  const handler=await createEphemeralAccountsHandler({issuer,store:f.store,clients:f.clients,hostedSessionPolicy:true,sharedAccountWorkspaceDirectory:directory,allowEphemeralKeyOnHttpsIssuer:true});
+  },workspaceMutationsFrozen});
+  const handler=await createEphemeralAccountsHandler({issuer,store:f.store,clients:f.clients,hostedSessionPolicy:true,sharedAccountWorkspaceDirectory:directory,workspaceMutationsFrozen,allowEphemeralKeyOnHttpsIssuer:true});
   function request(path:string,token:string,method="GET",body?:unknown) {
     return handler(new Request(`${issuer}/api/v1/account/shared-workspaces${path}`,{method,headers:{authorization:`Bearer ${token}`,...(body!==undefined?{"content-type":"application/json"}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})}));
   }
@@ -287,7 +287,7 @@ async function directoryFixture() {
 }
 
 test("dedicated first-party directory Bearer yields the same canonical account/Workspace for both RPs",async()=>{
-  const f=await directoryFixture();const a=await f.grant(),b=await f.grant("takoserver");
+  const f=await directoryFixture(false);const a=await f.grant(),b=await f.grant("takoserver");
   const bootstrap=await f.request("/bootstrap",a.access_token,"POST",{});expect(bootstrap.status).toBe(200);
   const {workspace}=await bootstrap.json() as {workspace:{id:string;ownerUserId:string}};expect(workspace.ownerUserId).toBe(subject);
   const second=await f.request("/bootstrap",b.access_token,"POST",{});expect(second.status).toBe(200);expect((await second.json() as {workspace:{id:string}}).workspace.id).toBe(workspace.id);
@@ -316,8 +316,15 @@ test("directory rejects spoofed IDs, legacy/PAT/Interface credentials, revoked/f
   f.clients[0]!.enabled=false;expect((await f.request("",grant.access_token)).status).toBe(401);f.clients[0]!.enabled=true;expect((await f.request("",grant.access_token)).status).toBe(401);
 });
 
-test("directory revalidates grant after owner billing wait and genuine issuer session still needs exact Origin",async()=>{
+test("ephemeral Accounts handler keeps shared Workspace bootstrap frozen by default",async()=>{
   const f=await directoryFixture();const grant=await f.grant();
+  const response=await f.request("/bootstrap",grant.access_token,"POST",{});
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({error:{code:"workspace_frozen"}});
+});
+
+test("directory revalidates grant after owner billing wait and genuine issuer session still needs exact Origin",async()=>{
+  const f=await directoryFixture(false);const grant=await f.grant();
   const bootstrap=await f.request("/bootstrap",grant.access_token,"POST",{});const {workspace}=await bootstrap.json() as {workspace:{id:string}};
   f.pause();const pending=f.request(`/${workspace.id}/billing-organization`,grant.access_token);await f.entered;
   await f.store.revokeHostedOidcGrant!(claims(grant.id_token).sid as string,Date.now());f.billingRelease();expect((await pending).status).toBe(401);
@@ -327,7 +334,7 @@ test("directory revalidates grant after owner billing wait and genuine issuer se
 
 test("actual shared-profile Bearer cannot recreate an organization by repairing a suspended or demoted owner",async()=>{
   for(const patch of [{status:"suspended" as const},{roles:["viewer"]}]) {
-    const f=await directoryFixture();const grant=await f.grant();await f.request("/bootstrap",grant.access_token,"POST",{});
+    const f=await directoryFixture(false);const grant=await f.grant();await f.request("/bootstrap",grant.access_token,"POST",{});
     const body={handle:"forbidden-team",displayName:"Forbidden team",type:"organization"};
     const initial=await f.request("",grant.access_token,"POST",body);expect(initial.status).toBe(201);
     const {workspace}=await initial.json() as {workspace:{id:string}};const member=(await f.control.getWorkspaceMember(workspace.id,subject))!;

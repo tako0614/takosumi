@@ -51,9 +51,10 @@ function makeVault(
   overrides: {
     fetch?: typeof fetch;
     allowedProviderConfigUrls?: readonly string[];
+    store?: InMemoryOpenTofuControlStore;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = overrides.store ?? new InMemoryOpenTofuControlStore();
   seedWorkspace(store, "space_1");
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
@@ -250,7 +251,7 @@ for (const kind of ["provider", "git"] as const) {
     }
     expect(sealed).toBe(0);
     const connection = await vault.register(input, authority, null);
-    expect(await store.getConnection(connection.id)).toEqual(connection);
+    expect(await store.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: "fixture-owner" });
     expect(await store.getSecretBlob(connection.id)).toBeDefined();
     expect(sealed).toBe(1);
   });
@@ -764,7 +765,22 @@ test("opening a blob swapped onto a different connection id fails the aad bind",
 });
 
 test("opening a blob moved to a different account owner fails the v3 aad bind", async () => {
-  const { store, vault } = makeVault();
+  class CorruptedOwnerStore extends InMemoryOpenTofuControlStore {
+    corruptedOwner = false;
+    override async getConnection(id: string) {
+      const connection = await super.getConnection(id);
+      return connection && this.corruptedOwner
+        ? { ...connection, ownerAccountId: "different-owner" } : connection;
+    }
+    override async listConnections(workspaceId: string) {
+      const connections = await super.listConnections(workspaceId);
+      return this.corruptedOwner
+        ? connections.map((connection) => ({ ...connection, ownerAccountId: "different-owner" }))
+        : connections;
+    }
+  }
+  const corruptedStore = new CorruptedOwnerStore();
+  const { store, vault } = makeVault({ store: corruptedStore });
   const original = await markVerified(
     store,
     await vault.register({
@@ -779,7 +795,9 @@ test("opening a blob moved to a different account owner fails the v3 aad bind", 
 
   // Account ownership is the v3 AAD boundary. A swapped public row cannot
   // decrypt the old owner's sealed material.
-  await store.putConnection({ ...original, ownerAccountId: "different-owner" });
+  // Normal writes preserve the owner; simulate corruption at the storage read
+  // boundary to test the cryptographic owner binding independently.
+  corruptedStore.corruptedOwner = true;
 
   await expect(
     vault.mint("space_1", ["registry.opentofu.org/cloudflare/cloudflare"]),
@@ -820,13 +838,28 @@ test("vault opens legacy v2 then dry-runs and CAS rewraps to v3 without changing
     renewalLease: { owner: "fixture-renewal", expiresAt: "2026-06-04T01:00:00.000Z" },
   });
   expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("conflict");
-  await store.putSecretBlob(legacy);
+  await store.putSecretBlob({ ...legacy, renewalLease: {
+    owner: "expired-renewal", expiresAt: "2026-06-03T23:00:00.000Z" } });
   expect((await vault.rewrapConnectionSecret(connection.id, { dryRun: true })).status).toBe("dry_run");
   expect((await store.getSecretBlob(connection.id))!.aad).not.toContain('"v":3');
   expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("rewrapped");
   expect((await store.getSecretBlob(connection.id))!.aad).toContain('"v":3');
   expect((await vault.mint("space_1", [connection.provider])).env.CLOUDFLARE_API_TOKEN).toBe("fixture-secret");
   expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("already_v3");
+});
+
+test("legacy rewrap reports a missing row owner per item without selecting Workspace owner", async () => {
+  const { store, vault } = makeVault();
+  const connection = await markVerified(store, await vault.register({
+    workspaceId: "space_1", provider: "registry.opentofu.org/cloudflare/cloudflare",
+    values: { CLOUDFLARE_API_TOKEN: "fixture-secret" },
+  }, undefined, null));
+  const blob = (await store.getSecretBlob(connection.id))!;
+  await store.putSecretBlob({ ...blob, aad: JSON.stringify({ v: 2, secretPartition: connection.secretPartition }) });
+  await store.deleteConnection(connection.id);
+  await store.putWorkspace({ ...(await store.getWorkspace("space_1"))!, ownerUserId: undefined } as never);
+  await store.putConnection({ ...connection, ownerAccountId: undefined });
+  expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("missing_owner");
 });
 
 test("operator rewrap batch deduplicates IDs and returns value-free status", async () => {
@@ -962,7 +995,7 @@ test("test() retains the blob snapshot from before asynchronous crypto opening",
   const before = (await store.getSecretBlob(connection.id))!;
   await expect(vault.test(connection.id, undefined, null)).rejects.toMatchObject({ code: "failed_precondition", reason: "credential_service_unavailable" });
   expect(opened).toBe(true);
-  expect(await store.getConnection(connection.id)).toEqual(connection);
+  expect(await store.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: "fixture-owner" });
   expect(await store.getSecretBlob(connection.id)).toEqual({ ...before, ciphertext: "cm90YXRlZA==" });
 });
 
@@ -1719,7 +1752,7 @@ test("revoke preserves the connection and sealed blob while Workspace management
   await expect(vault.revoke(connection.id, undefined, null)).rejects.toMatchObject({
     code: "failed_precondition", reason: "workspace_management_admission_conflict",
   });
-  expect(await store.getConnection(connection.id)).toEqual(connection);
+  expect(await store.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: "fixture-owner" });
   expect(await store.getSecretBlob(connection.id)).toEqual(blob);
 });
 
