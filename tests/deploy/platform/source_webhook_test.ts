@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
@@ -459,7 +458,7 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
 });
 
 test("scheduled source poll batch is operator configurable with a bounded default", () => {
-  expect(scheduledSourcePollBatch({} as never)).toBe(25);
+  expect(scheduledSourcePollBatch({} as never)).toBe(5);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "2",
@@ -469,12 +468,12 @@ test("scheduled source poll batch is operator configurable with a bounded defaul
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "0",
     } as never),
-  ).toBe(25);
+  ).toBe(5);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "not-a-number",
     } as never),
-  ).toBe(25);
+  ).toBe(5);
 });
 
 

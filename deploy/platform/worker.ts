@@ -909,13 +909,18 @@ export default {
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
         : undefined;
-    await runSourceMaintenanceSchedule({
+    await schedulePlatformSideEffect(runSourceMaintenanceSchedule({
       db: env.TAKOSUMI_CONTROL_DB,
       cron,
       retirementEnabled: env.TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED !== "0",
       poll: () => runScheduledSourcePoll(env),
       sweep: () => runScheduledSourceRetirement(env),
-    });
+    }).catch((error: unknown) => {
+      console.warn(JSON.stringify({
+        event: "source_maintenance_schedule_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }));
+    }), context);
     await runScheduledOpenTofuRunRepair(env);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
@@ -4313,7 +4318,8 @@ function bearerFromAuthorization(header: string): string | undefined {
 }
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
-const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 25;
+// Start conservatively while previously unpolled Sources enter the cadence.
+const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 5;
 export function scheduledSourcePollBatch(env: DeployControlEnv): number {
   return positiveInteger(
     Number(env.TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH),
