@@ -74,6 +74,7 @@ import { stableStringify } from "../../adapters/source/digest.ts";
 import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
 import { convergeOwnedSourceLane, isLiveSourceLaneCapsule } from "./owned-lane.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
 // default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
@@ -345,11 +346,13 @@ export class SourcesService {
   async listSources(
     workspaceId: string,
     params?: PageParams,
+    viewer?: AppListViewer,
   ): Promise<ListSourcesResponse> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const { items, nextCursor } = await this.#store.listSourcesPage(
       workspaceId,
       params ?? {},
+      viewer,
     );
     return {
       sources: items.map(toPublicSource),

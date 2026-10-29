@@ -207,3 +207,37 @@ test("a Source shared by an owned and an unowned app needs each app under its ow
   // The owned app's member has no rule on the unowned app: the Source stays closed, as before.
   expect(report.differences.some((row) => row.sourceId === "src_mixed" && row.accountId === "app_only")).toBe(false);
 });
+
+test("a Source whose owner app was uninstalled is compared by the retained owner row, as live code decides", async () => {
+  const control = new InMemoryOpenTofuControlStore();
+  const ownership = new InMemoryAppOwnershipStore(control);
+  await control.putWorkspace(workspace("ws_gone", "ws_owner"));
+  await control.putWorkspaceMember(member("ws_gone", "ws_admin", "admin"));
+  await control.putCapsule({ ...capsule("cap_gone", "ws_gone", "destroyed"), sourceId: "src_gone" });
+  await control.putSource({
+    id: "src_gone", workspaceId: "ws_gone", name: "gone", url: "https://git.example.test/app.git",
+    defaultRef: "main", defaultPath: ".", status: "active", createdAt: NOW, updatedAt: NOW,
+    hookSecretHash: "hash", autoSync: false, ownerCapsuleId: "cap_gone",
+  } as never);
+  // The retained row names an owner outside the Workspace; the live decision
+  // on the Source uses it (and its roster), not the Workspace roles.
+  await ownership.initializeOwnershipIfMissing({
+    capsuleId: "cap_gone", ownerAccountId: "former_owner", ownershipEpoch: 0, managementState: "active",
+    managementEpoch: 0, storageRoot: "apps/cap_gone",
+  });
+  const report = await planAppAccessCutoverDiff({ control, ownership });
+  expect(report.capsulesChecked).toBe(0);
+  expect(report.sourcesChecked).toBe(1);
+  expect(report.differences.filter((row) => row.sourceId === "src_gone")
+    .map((row) => `${row.accountId} ${row.accessClass} ${row.workspaceDecision}->${row.appDecision} ${row.ownershipSource}`)).toEqual([
+    "former_owner view false->true ownership_row",
+    "former_owner manage false->true ownership_row",
+    "former_owner owner_only false->true ownership_row",
+    "ws_admin view true->false ownership_row",
+    "ws_admin manage true->false ownership_row",
+    "ws_admin owner_only true->false ownership_row",
+    "ws_owner view true->false ownership_row",
+    "ws_owner manage true->false ownership_row",
+    "ws_owner owner_only true->false ownership_row",
+  ]);
+});

@@ -2,6 +2,7 @@ import type { AppAccess, AppAccessResolver } from "takosumi-contract/app-access"
 import type { InMemoryOpenTofuControlStore, OpenTofuControlStore } from "../deploy-control/store.ts";
 import type { SqlClient } from "../../adapters/storage/sql.ts";
 import type { D1Like } from "../../adapters/storage/d1.ts";
+import { appHiddenFromViewer, type AppListViewer } from "./list-visibility.ts";
 
 export interface CapsuleOwnership {
   readonly capsuleId: string;
@@ -45,6 +46,12 @@ export interface AppOwnershipStore extends AppAccessResolver {
   readOwnershipFence?(capsuleId: string): Promise<CapsuleOwnershipFence>;
   /** Which of these Capsules have an ownership row; bounded batch read for list filtering. */
   listOwnedCapsuleIds?(capsuleIds: readonly string[]): Promise<ReadonlySet<string>>;
+  /**
+   * Which of these Capsules `viewer` may not see in a Workspace list (the rule
+   * in list-visibility.ts: owned, and neither owner nor active member, or
+   * outside `appIds`). Empty before the ownership schema exists.
+   */
+  listHiddenCapsuleIds?(viewer: AppListViewer, capsuleIds: readonly string[]): Promise<ReadonlySet<string>>;
   /** Returns false if the Capsule or ownership schema does not yet exist. */
   putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch?: number): Promise<boolean>;
   /** Backfill CAS: never replaces an app owner established by creation or transfer. */
@@ -201,6 +208,18 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
     const owned = new Set<string>();
     for (const id of new Set(capsuleIds)) if ((await this.readOwnershipFence(id)).ownership) owned.add(id);
     return owned;
+  }
+
+  async listHiddenCapsuleIds(viewer: AppListViewer, capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const hidden = new Set<string>();
+    for (const id of new Set(capsuleIds)) {
+      const ownership = (await this.readOwnershipFence(id)).ownership;
+      if (!ownership) continue;
+      const member = ownership.ownerAccountId !== viewer.accountId &&
+        (await this.listMembers(id)).some((row) => row.accountId === viewer.accountId && row.status === "active");
+      if (appHiddenFromViewer(viewer, id, ownership.ownerAccountId, () => member)) hidden.add(id);
+    }
+    return hidden;
   }
 
   async resolveAppAccess(accountId: string, capsuleId: string): Promise<AppAccess | undefined> {
@@ -401,6 +420,24 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
       throw error;
     }
   }
+  override async listHiddenCapsuleIds(viewer: AppListViewer, capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const ids = [...new Set(capsuleIds)];
+    if (!ids.length) return new Set();
+    try {
+      const rows = await this.client.query<{ id: string }>(`
+        select c.id from takosumi_capsules c
+        where c.id = any($1::text[]) and c.owner_account_id is not null and (
+          ($3::json is not null and c.id not in (select json_array_elements_text($3::json)))
+          or (c.owner_account_id <> $2 and not exists (
+            select 1 from takosumi_capsule_members m
+            where m.capsule_id = c.id and m.account_id = $2 and m.status = 'active')))`,
+      [ids, viewer.accountId, viewer.appIds === undefined ? null : JSON.stringify(viewer.appIds)]);
+      return new Set(rows.rows.map((row) => row.id));
+    } catch (error) {
+      if (isMissingOwnershipSchemaError(error)) return new Set();
+      throw error;
+    }
+  }
   async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);
     if (!validOwnershipEpochCas(record, expectedOwnershipEpoch)) return false;
@@ -579,6 +616,31 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
       for (const row of rows.results ?? []) owned.add(row.id);
     }
     return owned;
+  }
+  override async listHiddenCapsuleIds(viewer: AppListViewer, capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const ids = [...new Set(capsuleIds)];
+    if (!ids.length || this.now() < this.#fenceSchemaAbsentUntil) return new Set();
+    if (!await this.#column("capsules", "owner_account_id")) {
+      this.#fenceSchemaAbsentUntil = this.now() + D1_OWNERSHIP_FENCE_ABSENT_TTL_MS;
+      return new Set();
+    }
+    const hidden = new Set<string>();
+    // D1 binds at most 100 parameters per statement: 90 ids plus the viewer.
+    for (let index = 0; index < ids.length; index += 90) {
+      const chunk = ids.slice(index, index + 90);
+      const rows = await this.db.prepare(`
+        with input(account_id, app_ids) as (values (?, ?))
+        select c.id from capsules c cross join input i
+        where c.id in (${chunk.map(() => "?").join(",")}) and c.owner_account_id is not null and (
+          (i.app_ids is not null and c.id not in (select value from json_each(i.app_ids)))
+          or (c.owner_account_id <> i.account_id and not exists (
+            select 1 from capsule_members m
+            where m.capsule_id = c.id and m.account_id = i.account_id and m.status = 'active')))`,
+      ).bind(viewer.accountId, viewer.appIds === undefined ? null : JSON.stringify(viewer.appIds), ...chunk)
+        .all<{ id: string }>();
+      for (const row of rows.results ?? []) hidden.add(row.id);
+    }
+    return hidden;
   }
   async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);

@@ -110,6 +110,7 @@ import {
 } from "./domains/interfaces/materialization_intent_failures.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
 import { InMemoryAppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "./domains/app-ownership/store.ts";
+import type { AppViewerLists } from "./domains/app-ownership/list-visibility.ts";
 import type { AppAccessResolver } from "takosumi-contract/app-access";
 import {
   type BackupArtifactStore,
@@ -668,6 +669,8 @@ export interface TakosumiOperations {
   readonly accountResources?: AccountResourceReader;
   readonly appAuthorization?: AppAuthorizationMutations;
   readonly appOwnership: AppOwnershipStore;
+  /** Workspace lists filtered for one viewer in the store query (see list-visibility.ts). */
+  readonly viewerLists: AppViewerLists;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
@@ -1912,6 +1915,18 @@ export async function createTakosumiService(
       accountResources: options.accountResourceReader ?? sqlAccountResourceReader(options.sqlClient!),
     } : {}),
     appOwnership: appOwnershipStore,
+    viewerLists: {
+      listCapsulesPage: (workspaceId, params, viewer) =>
+        capsulesService.listCapsulesPage(workspaceId, params, viewer),
+      listRunsPage: (workspaceId, options, viewer) =>
+        opentofuController.listRunsPage(workspaceId, options, viewer),
+      listSources: (workspaceId, params, viewer) =>
+        opentofuController.listSources(workspaceId, params, viewer),
+      listBackups: (workspaceId, params, viewer) =>
+        backupsService.listBackups(workspaceId, params, viewer),
+      listWorkspaceUsage: (workspaceId, params, viewer) =>
+        opentofuController.listWorkspaceUsage(workspaceId, params, viewer),
+    },
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
     gitInstallPlans: gitInstallPlanStore,

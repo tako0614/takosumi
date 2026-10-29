@@ -138,6 +138,7 @@ import {
   type PlanRunInputs,
   type RuntimeSecretRetirementDispatchClaimInput,
 } from "./store.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 export type { CapsulePlanCreationFence } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -1878,11 +1879,12 @@ export class OpenTofuController {
   async listWorkspaceUsage(
     workspaceId: string,
     params?: PageParams,
+    viewer?: AppListViewer,
   ): Promise<{
     readonly usageEvents: readonly UsageEvent[];
     readonly nextCursor?: string;
   }> {
-    return await this.#usage.listWorkspaceUsage(workspaceId, params);
+    return await this.#usage.listWorkspaceUsage(workspaceId, params, viewer);
   }
 
   async recordMeteredUsage(
@@ -2360,8 +2362,9 @@ export class OpenTofuController {
   async listSources(
     workspaceId: string,
     params?: PageParams,
+    viewer?: AppListViewer,
   ): Promise<ListSourcesResponse> {
-    return await this.#sources.listSources(workspaceId, params);
+    return await this.#sources.listSources(workspaceId, params, viewer);
   }
 
   async getSource(id: string): Promise<SourceResponse> {
@@ -2515,8 +2518,9 @@ export class OpenTofuController {
   async listRunsPage(
     workspaceId: string,
     options: { readonly limit?: number; readonly cursor?: string } = {},
+    viewer?: AppListViewer,
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
-    return await this.#runQuery.listRunsPage(workspaceId, options);
+    return await this.#runQuery.listRunsPage(workspaceId, options, viewer);
   }
 
   async listCapsuleRunsPage(

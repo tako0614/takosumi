@@ -98,6 +98,7 @@ import {
   UNINSTALL_PAT_EXPIRY_MARGIN_MS,
   type UninstallRequesterAtValidator,
 } from "./uninstall_authorization.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -839,12 +840,14 @@ export class CapsulesService {
     return await this.#store.listCapsules(workspaceId);
   }
 
+  /** With `viewer`, apps the viewer may not see are excluded in the store query. */
   async listCapsulesPage(
     workspaceId: string,
     params: CapsuleListPageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<Capsule>> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    return await this.#store.listCapsulesPage(workspaceId, params);
+    return await this.#store.listCapsulesPage(workspaceId, params, viewer);
   }
 
   /**

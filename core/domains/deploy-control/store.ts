@@ -105,6 +105,7 @@ import type {
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
 import type { CapsuleMember, CapsuleOwnership } from "../app-ownership/store.ts";
+import { appHiddenFromViewer, type AppListViewer } from "../app-ownership/list-visibility.ts";
 import {
   APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
   type AppOwnershipHistory,
@@ -3720,9 +3721,11 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
     workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly StoredRunRecord[]>;
+  /** With `viewer`, rows the viewer may not see are excluded in the query (app-ownership/list-visibility.ts). */
   listRunsByWorkspacePage(
     workspaceId: string,
     options?: { readonly limit?: number; readonly after?: RunListPosition },
+    viewer?: AppListViewer,
   ): Promise<StoredRunListPage>;
   /**
    * One Capsule's run rows in the Workspace listing's newest-first keyset
@@ -3992,6 +3995,7 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listCapsulesPage(
     workspaceId: string,
     params: CapsuleListPageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<Capsule>>;
   getPublicHostReservation(
     hostname: string,
@@ -4136,6 +4140,7 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listSourcesPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<StoredSource>>;
   /** Bounded keyset page across every Workspace for scheduled polling. */
   listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>>;
@@ -4349,6 +4354,7 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listUsageEventsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<UsageEvent>>;
   /** Payer-only history. Rows are never inferred from a Workspace owner. */
   listUsageEventsForPayerPage(
@@ -4370,6 +4376,7 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   listBackupRecordsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<BackupRecord>>;
 }
 
@@ -5487,10 +5494,12 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   listRunsByWorkspacePage(
     workspaceId: string,
     options: { readonly limit?: number; readonly after?: RunListPosition } = {},
+    viewer?: AppListViewer,
   ): Promise<StoredRunListPage> {
     const limit = clampRunListLimit(options.limit);
+    const hidden = viewer ? this.#appListHidden(viewer) : undefined;
     const rows = Array.from(this.#runs.values())
-      .filter((row) => row.workspaceId === workspaceId)
+      .filter((row) => row.workspaceId === workspaceId && !hidden?.run(row))
       .filter((row) => {
         const after = options.after;
         if (!after) return true;
@@ -6763,13 +6772,59 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   async listCapsulesPage(
     workspaceId: string,
     params: CapsuleListPageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<Capsule>> {
-    const rows = await this.listCapsules(workspaceId);
+    const hidden = viewer ? this.#appListHidden(viewer) : undefined;
+    const rows = (await this.listCapsules(workspaceId)).filter((row) => !hidden?.capsule(row.id));
     const visibleRows =
       params.includeDestroyed === false
         ? rows.filter((row) => row.status !== "destroyed")
         : rows;
     return pageSorted(visibleRows, params);
+  }
+
+  /** The memory mirror of the list rule in app-ownership/list-visibility.ts. */
+  #appListHidden(viewer: AppListViewer) {
+    const capsule = (id: string | undefined): boolean => !!id &&
+      appHiddenFromViewer(viewer, id, this.#capsuleOwnership.get(id)?.ownerAccountId,
+        () => this.#capsuleMembers.get(`${id}\0${viewer.accountId}`)?.status === "active");
+    const liveApps = (workspaceId: string, sourceId?: string) => [...this.#capsules.values()].filter((row) =>
+      row.workspaceId === workspaceId && row.status !== "destroyed" && (sourceId === undefined || row.sourceId === sourceId));
+    const source = (row: StoredSource | undefined): boolean => {
+      if (!row) return false;
+      if (typeof row.ownerCapsuleId === "string" && row.ownerCapsuleId) return capsule(row.ownerCapsuleId);
+      return liveApps(row.workspaceId, row.id).some((app) => capsule(app.id));
+    };
+    const run = (row: StoredRunRecord): boolean => {
+      const fields = row as {
+        readonly capsuleId?: string; readonly planRunId?: string; readonly sourceId?: string;
+        readonly subject?: { readonly kind?: string; readonly id?: string };
+      };
+      const planCapsuleId = fields.planRunId
+        ? (this.#runs.get(fields.planRunId) as { readonly capsuleId?: string } | undefined)?.capsuleId
+        : undefined;
+      const capsuleId = fields.capsuleId || (fields.subject?.kind === "capsule" ? fields.subject.id : undefined) ||
+        planCapsuleId;
+      if (capsuleId) return capsule(capsuleId);
+      const sourceId = fields.sourceId || (fields.subject?.kind === "source" ? fields.subject.id : undefined);
+      return sourceId ? source(this.#sources.get(sourceId)) : false;
+    };
+    return {
+      capsule,
+      run,
+      source,
+      backup: (row: BackupRecord): boolean =>
+        row.capsuleId ? capsule(row.capsuleId) : liveApps(row.workspaceId).some((app) => capsule(app.id)),
+      usage: (row: UsageEvent): boolean => {
+        if (row.capsuleId) return capsule(row.capsuleId);
+        if (!row.runId) return false;
+        const owning = this.#runs.get(row.runId);
+        if (owning) return run(owning);
+        // An unattributable event stays hidden while the Workspace has an owned app.
+        return [...this.#capsules.values()].some((app) =>
+          app.workspaceId === row.workspaceId && this.#capsuleOwnership.has(app.id));
+      },
+    };
   }
 
   getPublicHostReservation(
@@ -8168,8 +8223,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   async listSourcesPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<StoredSource>> {
-    return pageSorted(await this.listSources(workspaceId), params);
+    const hidden = viewer ? this.#appListHidden(viewer) : undefined;
+    return pageSorted((await this.listSources(workspaceId)).filter((row) => !hidden?.source(row)), params);
   }
 
   async listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>> {
@@ -8840,8 +8897,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   async listUsageEventsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<UsageEvent>> {
-    const newestFirst = [...(await this.listUsageEvents(workspaceId))].sort(
+    const hidden = viewer ? this.#appListHidden(viewer) : undefined;
+    const newestFirst = (await this.listUsageEvents(workspaceId)).filter((row) => !hidden?.usage(row)).sort(
       (a, b) =>
         b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
     );
@@ -8885,9 +8944,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   async listBackupRecordsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<BackupRecord>> {
+    const hidden = viewer ? this.#appListHidden(viewer) : undefined;
     // Newest-first listing ⇒ descending keyset pager.
-    return pageSortedDesc(await this.listBackupRecords(workspaceId), params);
+    return pageSortedDesc((await this.listBackupRecords(workspaceId)).filter((row) => !hidden?.backup(row)), params);
   }
 }
 

@@ -61,6 +61,7 @@ import {
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 type BackupArtifactKind =
   | "backup_control"
@@ -452,6 +453,7 @@ export class BackupsService {
   async listBackups(
     workspaceId: string,
     params?: PageParams,
+    viewer?: AppListViewer,
   ): Promise<ListBackupsResponse> {
     const id = workspaceId.trim();
     if (id.length === 0) {
@@ -463,6 +465,7 @@ export class BackupsService {
     const { items, nextCursor } = await this.#store.listBackupRecordsPage(
       id,
       params ?? {},
+      viewer,
     );
     return {
       backups: items,

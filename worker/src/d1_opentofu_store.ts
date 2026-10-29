@@ -46,6 +46,7 @@ import {
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { alias, integer, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
 import { D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA, D1_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../core/domains/app-authorization/schema.ts";
+import type { AppListViewer } from "../../core/domains/app-ownership/list-visibility.ts";
 import {
   APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
   appOwnershipHistoryFromRows,
@@ -2392,6 +2393,98 @@ function d1RunStarted(): SQL {
  * for the D1 / SQLite backend). No cursor (first page) returns the filter
  * unchanged.
  */
+// --- Workspace list visibility (app-ownership/list-visibility.ts) ----------
+
+function d1JsonText(
+  column: SQL,
+  path: "$.capsuleId" | "$.sourceId" | "$.subject.kind" | "$.subject.id" | "$.planRunId" | "$.ownerCapsuleId",
+): SQL {
+  return sql`(case when json_valid(${column}) then json_extract(${column}, ${sql.raw(`'${path}'`)}) end)`;
+}
+
+/** An owned app the viewer is neither owner nor active member of, or outside its `appIds`. */
+function d1AppHidden(alias: "hidden_app" | "live_app", viewer: AppListViewer): SQL {
+  const app = sql.raw(alias);
+  const outsideAppIds = viewer.appIds === undefined
+    ? sql`0`
+    : sql`${app}.id not in (select value from json_each(${JSON.stringify(viewer.appIds)}))`;
+  return sql`(${app}.owner_account_id is not null and (${outsideAppIds}
+    or (${app}.owner_account_id <> ${viewer.accountId} and not exists (
+      select 1 from ${capsuleMembersWriteTable} app_member
+      where app_member.capsule_id = ${app}.id and app_member.account_id = ${viewer.accountId}
+        and app_member.status = 'active'))))`;
+}
+
+function d1CapsuleHidden(capsuleId: SQL, viewer: AppListViewer): SQL {
+  return sql`exists (select 1 from ${schema.capsules} hidden_app
+    where hidden_app.id = ${capsuleId} and ${d1AppHidden("hidden_app", viewer)})`;
+}
+
+/** A hidden live app in the Workspace (built from `sourceId` when given). */
+function d1LiveAppsHidden(workspaceId: SQL, sourceId: SQL | undefined, viewer: AppListViewer): SQL {
+  return sql`exists (select 1 from ${schema.capsules} live_app
+    where live_app.space_id = ${workspaceId} and live_app.status <> 'destroyed'
+      ${sourceId ? sql`and live_app.source_id = ${sourceId}` : sql``}
+      and ${d1AppHidden("live_app", viewer)})`;
+}
+
+interface D1SourceRef { readonly id: SQL; readonly workspaceId: SQL; readonly json: SQL }
+
+/** A Source is its owner app's; an ownerless Source is every live app's built from it. */
+function d1SourceHidden(source: D1SourceRef, viewer: AppListViewer): SQL {
+  const owner = sql`nullif(${d1JsonText(source.json, "$.ownerCapsuleId")}, '')`;
+  return sql`(case when ${owner} is not null then ${d1CapsuleHidden(owner, viewer)}
+    else ${d1LiveAppsHidden(source.workspaceId, source.id, viewer)} end)`;
+}
+
+interface D1RunRef { readonly capsuleId: SQL; readonly sourceId: SQL; readonly json: SQL }
+
+/**
+ * A Run is its Capsule's (an older apply row's plan's), else its Source's
+ * apps'. The record's own fields back up the indexed columns.
+ */
+function d1RunHidden(run: D1RunRef, viewer: AppListViewer): SQL {
+  const subjectKind = d1JsonText(run.json, "$.subject.kind");
+  const subjectId = sql`nullif(${d1JsonText(run.json, "$.subject.id")}, '')`;
+  const capsuleId = sql`coalesce(nullif(${run.capsuleId}, ''), nullif(${d1JsonText(run.json, "$.capsuleId")}, ''),
+    case when ${subjectKind} = 'capsule' then ${subjectId} end,
+    (select nullif(plan_run.installation_id, '') from ${schema.runs} plan_run
+      where plan_run.id = ${d1JsonText(run.json, "$.planRunId")}))`;
+  const sourceId = sql`coalesce(nullif(${run.sourceId}, ''), nullif(${d1JsonText(run.json, "$.sourceId")}, ''),
+    case when ${subjectKind} = 'source' then ${subjectId} end)`;
+  return sql`(case when ${capsuleId} is not null then ${d1CapsuleHidden(capsuleId, viewer)}
+    when ${sourceId} is not null then exists (select 1 from ${schema.sources} run_source
+      where run_source.id = ${sourceId} and ${d1SourceHidden({
+        id: sql`run_source.id`, workspaceId: sql`run_source.space_id`, json: sql`run_source.record_json`,
+      }, viewer)})
+    else 0 end)`;
+}
+
+/** A backup is its Capsule's; a Workspace-wide backup is every live app's. */
+function d1BackupHidden(viewer: AppListViewer): SQL {
+  const backup = schema.backups;
+  return sql`(case when nullif(${backup.capsuleId}, '') is not null
+    then ${d1CapsuleHidden(sql`${backup.capsuleId}`, viewer)}
+    else ${d1LiveAppsHidden(sql`${backup.workspaceId}`, undefined, viewer)} end)`;
+}
+
+/**
+ * A usage event is its Capsule's, else its Run's apps'. An event whose Run is
+ * gone cannot be attributed: hidden while the Workspace has an owned app.
+ */
+function d1UsageHidden(viewer: AppListViewer): SQL {
+  const usage = schema.usageEvents;
+  return sql`(case when nullif(${usage.capsuleId}, '') is not null
+      then ${d1CapsuleHidden(sql`${usage.capsuleId}`, viewer)}
+    when nullif(${usage.runId}, '') is null then 0
+    when exists (select 1 from ${schema.runs} usage_run where usage_run.id = ${usage.runId})
+      then exists (select 1 from ${schema.runs} usage_run where usage_run.id = ${usage.runId} and ${d1RunHidden({
+        capsuleId: sql`usage_run.installation_id`, sourceId: sql`usage_run.source_id`, json: sql`usage_run.run_json`,
+      }, viewer)})
+    else exists (select 1 from ${schema.capsules} owned_app
+      where owned_app.space_id = ${usage.workspaceId} and owned_app.owner_account_id is not null) end)`;
+}
+
 function d1KeysetWhere(
   filter: SQL | undefined,
   createdAtCol: SQLiteColumn | SQL,
@@ -2660,6 +2753,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const present = (rows.results ?? []).some((row) => row.name === column);
     if (present) this.#presentV77Columns.add(key);
     return present;
+  }
+
+  /** The viewer to filter a Workspace list by; none before v77 (Workspace decision only). */
+  async #appListViewer(viewer: AppListViewer | undefined): Promise<AppListViewer | undefined> {
+    return viewer && await this.#v77Column("capsules", "owner_account_id") ? viewer : undefined;
   }
 
   async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {
@@ -4755,17 +4853,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listRunsByWorkspacePage(
     workspaceId: string,
     options: { readonly limit?: number; readonly after?: RunListPosition } = {},
+    viewer?: AppListViewer,
   ): Promise<StoredRunListPage> {
     const limit = clampRunListLimit(options.limit);
     const createdAtMillis = d1RunCreatedAtMillisOrder();
     const idOrder = sql`${schema.runs.id} COLLATE BINARY`;
     const after = options.after;
+    const visibleTo = await this.#appListViewer(viewer);
     const rows = await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
         where: and(
           eq(schema.runs.workspaceId, workspaceId),
+          visibleTo ? sql`not ${d1RunHidden({
+            capsuleId: sql`${schema.runs.capsuleId}`,
+            sourceId: sql`${schema.runs.sourceId}`,
+            json: sql`${schema.runs.runJson}`,
+          }, visibleTo)}` : undefined,
           after
             ? or(
                 lt(createdAtMillis, after.createdAtMillis),
@@ -8092,21 +8197,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listCapsulesPage(
     workspaceId: string,
     params: CapsuleListPageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<Capsule>> {
     const limit = clampPageLimit(params.limit);
-    const baseWhere =
-      params.includeDestroyed === false
-        ? and(
-            eq(schema.capsules.workspaceId, workspaceId),
-            ne(schema.capsules.status, "destroyed"),
-          )
-        : eq(schema.capsules.workspaceId, workspaceId);
+    const visibleTo = await this.#appListViewer(viewer);
     const rows = await this.#drizzleManyJson<Capsule>(
       schema.capsules,
       schema.capsules.recordJson,
       {
         where: d1KeysetWhere(
-          baseWhere,
+          and(
+            eq(schema.capsules.workspaceId, workspaceId),
+            params.includeDestroyed === false ? ne(schema.capsules.status, "destroyed") : undefined,
+            visibleTo ? sql`not ${d1CapsuleHidden(sql`${schema.capsules.id}`, visibleTo)}` : undefined,
+          ),
           schema.capsules.createdAt,
           schema.capsules.id,
           decodeCursor(params.cursor),
@@ -10001,14 +10105,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listSourcesPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<StoredSource>> {
     const limit = clampPageLimit(params.limit);
+    const visibleTo = await this.#appListViewer(viewer);
     const rows = await this.#drizzleManyJson<StoredSource>(
       schema.sources,
       schema.sources.recordJson,
       {
         where: d1KeysetWhere(
-          eq(schema.sources.workspaceId, workspaceId),
+          and(
+            eq(schema.sources.workspaceId, workspaceId),
+            visibleTo ? sql`not ${d1SourceHidden({
+              id: sql`${schema.sources.id}`,
+              workspaceId: sql`${schema.sources.workspaceId}`,
+              json: sql`${schema.sources.recordJson}`,
+            }, visibleTo)}` : undefined,
+          ),
           schema.sources.createdAt,
           schema.sources.id,
           decodeCursor(params.cursor),
@@ -11464,15 +11577,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listUsageEventsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<UsageEvent>> {
     await this.#ensureSchema();
     const limit = clampPageLimit(params.limit);
+    const visibleTo = await this.#appListViewer(viewer);
     const rows = await this.#orm
       .select(d1LegacyUsageSelect)
       .from(schema.usageEvents)
       .where(
         d1KeysetWhereDesc(
-          eq(schema.usageEvents.workspaceId, workspaceId),
+          and(
+            eq(schema.usageEvents.workspaceId, workspaceId),
+            visibleTo ? sql`not ${d1UsageHidden(visibleTo)}` : undefined,
+          ),
           schema.usageEvents.createdAt,
           schema.usageEvents.id,
           decodeCursor(params.cursor),
@@ -11594,15 +11712,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async listBackupRecordsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<BackupRecord>> {
     const limit = clampPageLimit(params.limit);
+    const visibleTo = await this.#appListViewer(viewer);
     // Newest-first listing ⇒ descending keyset.
     const rows = await this.#drizzleManyJson<BackupRecord>(
       schema.backups,
       schema.backups.recordJson,
       {
         where: d1KeysetWhereDesc(
-          eq(schema.backups.workspaceId, workspaceId),
+          and(
+            eq(schema.backups.workspaceId, workspaceId),
+            visibleTo ? sql`not ${d1BackupHidden(visibleTo)}` : undefined,
+          ),
           schema.backups.createdAt,
           schema.backups.id,
           decodeCursor(params.cursor),
