@@ -701,6 +701,7 @@ function status(error: InterfaceServiceError): 400 | 403 | 404 | 409 | 412 {
       return 404;
     case "already_exists":
     case "conflict":
+    case "interface_link_approval_required":
       return 409;
     case "failed_precondition":
       return 412;

@@ -646,3 +646,38 @@ test("a caller's per-request provider approval decides whether a new link is act
   });
   expect(approved).toMatchObject({ state: "active", approval: { kind: "requester_manages_provider", approvedBy: "provider_manager" } });
 });
+
+test("a re-point that would only be pending is refused and keeps the current link", async () => {
+  const actor = { actorAccountId: "member", roles: [], requestId: "repoint" };
+  const fence = (approve: boolean) => ({ assertCurrent: async () => undefined, mayApproveProvider: async () => approve });
+  for (const currentState of ["active", "pending_approval"] as const) {
+    const f = await fixture();
+    const [current] = await f.service.ensureCapsuleInterfaceLinks({
+      workspaceId: "ws", capsuleId: "consumer", requirements: [requirement],
+      selections: [{ requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, selection: "explicit" }],
+    }, actor, fence(currentState === "active"));
+    expect(current!.state).toBe(currentState);
+    if (currentState === "active") await f.ensure("alice");
+    await expect(f.service.putCapsuleInterfaceLink({
+      capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id,
+      expectedGeneration: current!.generation,
+    }, actor, fence(false))).rejects.toMatchObject({ code: "interface_link_approval_required" });
+    expect(await f.service.getLatestCapsuleInterfaceLink("consumer", "tools")).toEqual(current);
+    expect(await f.service.listBindings(f.providers[1]!.metadata.id)).toHaveLength(0);
+    if (currentState === "active") {
+      expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.read" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+    }
+  }
+  // The same holds when the approval policy itself withholds approval.
+  const policy = await fixture({ pending: true });
+  const pending = await policy.link();
+  await expect(policy.service.putCapsuleInterfaceLink({
+    capsuleId: "consumer", requirementKey: "tools", interfaceId: policy.providers[1]!.metadata.id, expectedGeneration: pending.generation,
+  })).rejects.toMatchObject({ code: "interface_link_approval_required" });
+  // With no live link (here: after an unlink) a new link may start pending.
+  const revoked = await policy.service.revokeCapsuleInterfaceLink("consumer", "tools", pending.generation);
+  const fresh = await policy.service.putCapsuleInterfaceLink({
+    capsuleId: "consumer", requirementKey: "tools", interfaceId: policy.providers[1]!.metadata.id, expectedGeneration: revoked.generation,
+  });
+  expect(fresh).toMatchObject({ state: "pending_approval", providerInterfaceId: policy.providers[1]!.metadata.id });
+});

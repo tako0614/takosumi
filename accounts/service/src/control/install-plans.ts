@@ -102,6 +102,7 @@ import {
   genericOpenTofuVariableDeclarationsAreCanonical as declarationsAreCanonical,
 } from "./generic-opentofu-variable-contract.ts";
 import { parseInterfaceBlueprintsValue } from "./interface-blueprints.ts";
+import { mayApproveInterfaceProvider } from "./app-authorization.ts";
 import {
   previewRepoOwnedInstallConfig,
   resolveRepoOwnedInstallModulePath,
@@ -2437,6 +2438,21 @@ async function finishInitialInterfaceLinks(
           }
           return authority;
         },
+        // Same provider-side consent as PUT /capsules/:id/interface-links:
+        // the link is approved only when the person continuing the install
+        // is the plan's creator (recorded as the approver) and may change
+        // links on the provider app. Otherwise it is created pending_approval.
+        mayApproveProvider: async (provider) =>
+          ctx.session.subject === plan.createdBy &&
+          await mayApproveInterfaceProvider({
+            operations,
+            store: ctx.store,
+            session: ctx.session,
+            consumerCapsuleId: plan.capsuleId!,
+            provider,
+            ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+            ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+          }),
       });
     } catch (error) {
       if (error instanceof InterfaceServiceError &&
