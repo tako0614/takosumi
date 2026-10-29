@@ -181,8 +181,6 @@ function App() {
         <Route path="/connections" component={() => <RedirectWithQuery to="/account/connections" />} />
         <Route path="/account" component={AccountView} />
         <Route path="/account/billing" component={() => <RedirectWithQuery to="/account/usage" />} />
-        <Route path="/account/members" component={() => <Navigate href="/account" />} />
-        <Route path="/account/workspace" component={() => <Navigate href="/account" />} />
         <Route path="/account/:section" component={AccountView} />
         <Route path="/apps/:id" component={AppPage} />
         <Route path="/runs/:id" component={RunView} />

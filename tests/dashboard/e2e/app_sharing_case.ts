@@ -164,6 +164,20 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       ]);
     });
 
+    test("cancelling ownership confirmation sends no change and shows no saved notice", async ({ page }) => {
+      const requests = await accountAs(page, "owner");
+      await memberRoutes(page, OWNER_APP, PORTABLE_APP_MEMBERS);
+      await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });
+      const sharing = page.getByTestId("app-sharing");
+      await sharing.locator('select[name="transfer-recipient"]').selectOption("tsub_kenta0123456789");
+      const transfer = sharing.getByRole("button", { name: "所有権を譲渡", exact: true });
+      await transfer.click();
+      await page.getByRole("dialog").getByRole("button", { name: "キャンセル", exact: true }).click();
+      await expect(transfer).toBeEnabled();
+      await expect(sharing.getByText("共有を更新しました。", { exact: true })).toHaveCount(0);
+      expect(requests.filter((request) => request.method === "POST")).toEqual([]);
+    });
+
     test("an invite account-not-found response stays visible and keeps the sharing form", async ({ page }) => {
       const requests = await accountAs(page, "owner");
       await page.route(`**/api/v1/capsules/${OWNER_APP}/members`, async (route) => {
