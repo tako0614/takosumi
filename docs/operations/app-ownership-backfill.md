@@ -114,8 +114,10 @@ legacy Workspace decision and what the deployed per-app code decides:
   Until the backfill writes an app's row, the live code still uses the
   Workspace decision for that app, so run the check after the backfill (step 4
   below) for the result the cutover will actually enforce.
-- Every Source used by live apps: its `ownerCapsuleId`, or every live Capsule
-  built from an ownerless Source. Every one of those apps must allow, each
+- Every Source with an owner app or used by live apps: its `ownerCapsuleId` (an uninstalled owner
+  app by its retained ownership row and roster, which the live decision still
+  reads), or every live Capsule built from an ownerless Source. Every one of
+  those apps must allow, each
   under its own rule (an app with a row by its roster, an app without a row by
   the projection); a Source of apps with and without rows is reported with
   `ownershipSource: "mixed"`.

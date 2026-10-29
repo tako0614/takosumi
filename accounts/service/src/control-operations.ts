@@ -63,6 +63,7 @@ import type {
 } from "takosumi-contract/workspaces";
 import type { AppAccessResolver } from "takosumi-contract/app-access";
 import type { AppOwnershipStore } from "../../../core/domains/app-ownership/store.ts";
+import type { AppViewerLists } from "../../../core/domains/app-ownership/list-visibility.ts";
 import type { Project } from "takosumi-contract/projects";
 import type { WorkspaceBillingBindingsService } from "../../../core/domains/workspace-billing-bindings/mod.ts";
 import type {
@@ -161,6 +162,12 @@ export interface MembershipActor {
  */
 export interface ControlPlaneOperations {
   readonly appOwnership?: AppOwnershipStore;
+  /**
+   * Workspace compatibility lists filtered for the caller in the store query.
+   * Required whenever `appOwnership` is wired: list routes refuse (503)
+   * instead of serving an unfiltered list without it.
+   */
+  readonly viewerLists?: AppViewerLists;
   readonly appAccess?: AppAccessResolver;
   readonly appAuthorization?: import("./control/app-ownership.ts").AppOwnershipOperations;
   readonly accountResources?: import("../../../core/domains/account-resources/read.ts").AccountResourceReader;

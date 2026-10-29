@@ -593,9 +593,18 @@ describe("Workspace compatibility lists omit apps the caller cannot view", () =>
     return await response!.json() as Record<string, unknown>;
   }
   const ids = (rows: unknown, key = "id") => (rows as Record<string, unknown>[]).map((row) => row[key]);
+  /** List routes read the ledger with the store-side filter; seed the Runs there. */
+  async function seedListRuns(h: Harness): Promise<void> {
+    for (const run of [
+      runFixture("run_plan", { createdAt: "2026-10-28T00:00:03.000Z" }),
+      runFixture("run_legacy_sync", { capsuleId: undefined, sourceId: "src_authz", createdAt: "2026-10-28T00:00:02.000Z" }),
+      runFixture("run_workspace", { capsuleId: undefined, sourceId: "src_unowned", createdAt: "2026-10-28T00:00:01.000Z" }),
+    ]) await h.ledger.putBackupRun({ ...run, type: "backup", status: "succeeded" } as Run);
+  }
 
   test("Workspace roles without an app role see no rows of the owned app", async () => {
     const h = await fixture({ legacy: true });
+    await seedListRuns(h);
     for (const subject of [WORKSPACE_OWNER, WORKSPACE_ADMIN, WORKSPACE_MEMBER]) {
       const credential = h.headers.session(subject);
       expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules), subject).not.toContain(CAPSULE);
@@ -611,6 +620,7 @@ describe("Workspace compatibility lists omit apps the caller cannot view", () =>
 
   test("an app member who is also in the Workspace sees the app's rows", async () => {
     const h = await fixture({ legacy: true });
+    await seedListRuns(h);
     const credential = h.headers.session(DUAL);
     expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules)).toContain(CAPSULE);
     const runs = ids((await list(h, `/workspaces/${WORKSPACE}/runs`, credential)).runs);
@@ -622,6 +632,7 @@ describe("Workspace compatibility lists omit apps the caller cannot view", () =>
 
   test("apps without an ownership row keep the Workspace decision", async () => {
     const h = await fixture({ owned: false, legacy: true });
+    await seedListRuns(h);
     const credential = h.headers.session(WORKSPACE_MEMBER);
     expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules)).toContain(CAPSULE);
     expect(ids((await list(h, `/workspaces/${WORKSPACE}/runs`, credential)).runs)).toContain("run_plan");
@@ -722,14 +733,10 @@ describe("review round 3: shared Sources, cursors and Activity", () => {
 
   test("the Workspace Run list cursor only points at Runs the caller may view", async () => {
     const { h, visible, hidden } = await hiddenAndVisibleApps();
-    const all = [...visible, ...hidden].sort().map((capsuleId, index) => runFixture(`run_${String(index).padStart(2, "0")}_${capsuleId}`, { capsuleId }));
-    const cursorOf = (run: Run) => Buffer.from(JSON.stringify({ i: run.id })).toString("base64url");
-    (h.operations as unknown as { listRunsPage: unknown }).listRunsPage = async (_workspaceId: string, page: { cursor?: string; limit?: number }) => {
-      const after = page.cursor ? (JSON.parse(decoded(page.cursor)) as { i: string }).i : undefined;
-      const start = after ? all.findIndex((run) => run.id === after) + 1 : 0;
-      const runs = all.slice(start, start + (page.limit ?? 50));
-      return { runs, ...(start + runs.length < all.length ? { nextCursor: cursorOf(runs.at(-1)!) } : {}) };
-    };
+    const all = [...visible, ...hidden].sort().map((capsuleId, index) => runFixture(`run_${String(index).padStart(2, "0")}_${capsuleId}`, {
+      capsuleId, type: "backup", status: "succeeded", createdAt: new Date(Date.parse(NOW) + index * 1000).toISOString(),
+    }));
+    for (const run of all) await h.ledger.putBackupRun(run);
     const admin = h.headers.session(WORKSPACE_ADMIN);
     for (const limit of [1, 2]) {
       const seen: string[] = [];
@@ -807,5 +814,139 @@ describe("review round 3: shared Sources, cursors and Activity", () => {
         expect(events).toHaveLength(0);
       }
     }
+  }, 180_000);
+});
+
+describe("post-6b follow-ups: store-filtered lists, usage, Activity and uninstalled apps", () => {
+  async function get(h: Harness, path: string, credential: Record<string, string>, operations = h.operations) {
+    const url = new URL(`${ORIGIN}/api/v1${path}`);
+    const response = await handleControlRoute({ request: new Request(url, { headers: credential }), url, store: h.accounts, operations });
+    return { status: response!.status, body: await response!.json() as Record<string, unknown> };
+  }
+  const at = (seconds: number) => new Date(Date.parse(NOW) + seconds * 1000).toISOString();
+  const APP_B = "cap_b_member_app";
+  /** App B: WORKSPACE_MEMBER is its member; it has no role in CAPSULE (app A). */
+  async function withAppB(h: Harness): Promise<void> {
+    await seedCapsuleModel(h.ledger, {
+      workspaceId: WORKSPACE, capsuleId: APP_B, sourceId: "src_app_b", snapshotId: "snap_app_b",
+      installConfigId: "cfg_app_b", name: "app-b",
+    });
+    expect(await h.ownership.initializeOwnershipIfMissing({
+      capsuleId: APP_B, ownerAccountId: APP_OWNER, ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${APP_B}`,
+    })).toBe(true);
+    expect(await h.ownership.putMember({
+      capsuleId: APP_B, accountId: WORKSPACE_MEMBER, status: "active", addedBy: APP_OWNER, createdAt: NOW, updatedAt: NOW,
+    })).toBe(true);
+  }
+  const backupRun = (id: string, seconds: number, overrides: Partial<Run> = {}) =>
+    runFixture(id, { type: "backup", status: "succeeded", createdAt: at(seconds), ...overrides });
+  const record = (h: Harness, event: Record<string, unknown>) => (h.operations as unknown as {
+    activity: { record(input: Record<string, unknown>): Promise<unknown> };
+  }).activity.record({ workspaceId: WORKSPACE, actorId: APP_OWNER, metadata: {}, ...event });
+
+  test("a reader who is a member of app B reaches B's Runs behind 1,100 hidden Runs of app A", async () => {
+    const h = await fixture();
+    await withAppB(h);
+    await h.ledger.putBackupRun(backupRun("run_b_1", 1, { capsuleId: APP_B }));
+    await h.ledger.putBackupRun(backupRun("run_b_2", 2, { capsuleId: APP_B }));
+    for (let index = 0; index < 1_100; index++) await h.ledger.putBackupRun(backupRun(`run_a_${index}`, 100 + index));
+    const reader = h.headers.session(WORKSPACE_MEMBER);
+    const first = await get(h, `/workspaces/${WORKSPACE}/runs?limit=2`, reader);
+    expect(first.status).toBe(200);
+    expect((first.body.runs as { id: string }[]).map((run) => run.id)).toEqual(["run_b_2", "run_b_1"]);
+    // One per page: the cursor points at B's Run and the next page continues.
+    const one = await get(h, `/workspaces/${WORKSPACE}/runs?limit=1`, reader);
+    expect((one.body.runs as { id: string }[]).map((run) => run.id)).toEqual(["run_b_2"]);
+    const cursor = one.body.nextCursor as string;
+    expect(Buffer.from(cursor, "base64url").toString("utf8")).not.toContain("run_a_");
+    const two = await get(h, `/workspaces/${WORKSPACE}/runs?limit=1&cursor=${encodeURIComponent(cursor)}`, reader);
+    expect((two.body.runs as { id: string }[]).map((run) => run.id)).toEqual(["run_b_1"]);
+    expect(two.body.nextCursor).toBeUndefined();
+    // App A's member (no role in B) sees A's newest Runs.
+    const member = await get(h, `/workspaces/${WORKSPACE}/runs?limit=2`, h.headers.session(DUAL));
+    expect((member.body.runs as { id: string }[]).map((run) => run.id)).toEqual(["run_a_1099", "run_a_1098"]);
+  }, 180_000);
+
+  test("Workspace usage and backups omit apps the caller cannot view", async () => {
+    const h = await fixture();
+    await withAppB(h);
+    await h.ledger.putBackupRun(backupRun("run_usage_a", 1));
+    const event = (id: string, seconds: number, fields: { capsuleId?: string; runId?: string } = {}) => ({
+      id, workspaceId: WORKSPACE, ...fields, kind: "operation" as const, quantity: 1, usdMicros: 0,
+      ratingStatus: "unrated" as const, source: "runner" as const, idempotencyKey: `${id}:operation`, createdAt: at(seconds),
+    });
+    for (const usage of [
+      event("u_a", 5, { capsuleId: CAPSULE }), event("u_a_run", 4, { runId: "run_usage_a" }),
+      event("u_b", 3, { capsuleId: APP_B }), event("u_gone_run", 2, { runId: "run_missing" }), event("u_workspace", 1),
+    ]) await h.ledger.putUsageEvent(usage);
+    const usageIds = async (subject: string) => {
+      const response = await get(h, `/workspaces/${WORKSPACE}/usage`, h.headers.session(subject));
+      expect(response.status, subject).toBe(200);
+      return (response.body.usageEvents as { id: string }[]).map((row) => row.id);
+    };
+    // Usage of an app is its Capsule's or its Run's; usage whose Run is gone
+    // cannot be attributed and stays hidden while owned apps exist.
+    expect(await usageIds(WORKSPACE_MEMBER)).toEqual(["u_b", "u_workspace"]);
+    expect(await usageIds(WORKSPACE_OWNER)).toEqual(["u_workspace"]);
+    expect(await usageIds(DUAL)).toEqual(["u_a", "u_a_run", "u_workspace"]);
+    for (const backup of [
+      { id: "bk_a", capsuleId: CAPSULE, createdAt: at(3) }, { id: "bk_b", capsuleId: APP_B, createdAt: at(2) },
+      { id: "bk_wide", createdAt: at(1) },
+    ]) {
+      await h.ledger.putBackupRecord({ workspaceId: WORKSPACE, ref: `opaque-${backup.id}`, digest: `sha256:${"b".repeat(64)}`, sizeBytes: 1, ...backup });
+    }
+    const backupIds = async (subject: string) =>
+      ((await get(h, `/workspaces/${WORKSPACE}/backups`, h.headers.session(subject))).body.backups as { id: string }[]).map((row) => row.id);
+    // A Workspace-wide backup carries every live app: hidden unless all are visible.
+    expect(await backupIds(WORKSPACE_MEMBER)).toEqual(["bk_b"]);
+    expect(await backupIds(DUAL)).toEqual(["bk_a"]);
+  }, 180_000);
+
+  test("a host that wires ownership without the filtered reads is refused instead of listing unfiltered", async () => {
+    const h = await fixture();
+    const { viewerLists: _dropped, ...rest } = h.operations as unknown as Record<string, unknown>;
+    void _dropped;
+    const operations = rest as unknown as ControlPlaneOperations;
+    const owner = h.headers.session(WORKSPACE_OWNER);
+    for (const path of [
+      `/workspaces/${WORKSPACE}/capsules`, `/workspaces/${WORKSPACE}/current-state-versions`, `/workspaces/${WORKSPACE}/runs`,
+      `/workspaces/${WORKSPACE}/backups`, `/workspaces/${WORKSPACE}/usage`, `/sources?workspaceId=${WORKSPACE}`,
+      `/dashboard/overview?workspaceId=${WORKSPACE}`,
+    ]) {
+      expect((await get(h, path, owner, operations)).status, path).toBe(503);
+    }
+  }, 180_000);
+
+  test("Activity naming a Capsule this Workspace does not have stays hidden while owned apps exist", async () => {
+    const h = await fixture();
+    await h.ledger.putSource({
+      id: "src_unused", workspaceId: WORKSPACE, name: "unused", url: "https://git.example.test/unused.git",
+      defaultRef: "main", defaultPath: ".", status: "active", autoSync: false, hookSecretHash: "fixture-hash",
+      createdAt: NOW, updatedAt: NOW,
+    });
+    // Before: the unknown Capsule id was dropped and the unused Source made it Workspace-level.
+    await record(h, { action: "source.updated", targetType: "source", targetId: "src_unused", metadata: { capsuleId: "cap_elsewhere" } });
+    await record(h, { action: "source.created", targetType: "source", targetId: "src_unused", metadata: {} });
+    const actions = async (subject: string) =>
+      ((await get(h, `/workspaces/${WORKSPACE}/activity`, h.headers.session(subject))).body.events as { action: string }[])
+        .map((event) => event.action).sort();
+    expect(await actions(WORKSPACE_OWNER)).toEqual(["source.created"]);
+    expect(await actions(DUAL)).toEqual(["source.created"]);
+  }, 180_000);
+
+  test("the retained owner and members of an uninstalled app still see it and its history in Workspace lists", async () => {
+    const h = await fixture();
+    await h.ledger.putCapsule({ ...(await h.ledger.getCapsule(CAPSULE))!, status: "destroyed", updatedAt: NOW });
+    await record(h, { action: "capsule.uninstalled", targetType: "capsule", targetId: CAPSULE });
+    const view = async (subject: string) => ({
+      capsules: ((await get(h, `/workspaces/${WORKSPACE}/capsules`, h.headers.session(subject))).body.capsules as { id: string }[])
+        .map((row) => row.id),
+      activity: ((await get(h, `/workspaces/${WORKSPACE}/activity`, h.headers.session(subject))).body.events as { action: string }[])
+        .map((event) => event.action),
+    });
+    // DUAL is an app member (and a Workspace admin, so it may open the Workspace lists).
+    expect(await view(DUAL)).toEqual({ capsules: [CAPSULE], activity: ["capsule.uninstalled"] });
+    expect(await view(WORKSPACE_ADMIN)).toEqual({ capsules: [], activity: [] });
   }, 180_000);
 });

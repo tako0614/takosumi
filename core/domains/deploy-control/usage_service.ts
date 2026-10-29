@@ -19,6 +19,7 @@ import type { BillingService } from "./billing_service.ts";
 import { appPayerAtEventTime, meterEventSpan, type MeterEventPlacement } from "./app_payer_history.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 /** GET /api/v1/usage source; the route supplies the authenticated account ID. */
 export async function listPayerUsage(
@@ -86,6 +87,7 @@ export class UsageReportingService {
   async listWorkspaceUsage(
     workspaceId: string,
     params?: PageParams,
+    viewer?: AppListViewer,
   ): Promise<{
     readonly usageEvents: readonly UsageEvent[];
     readonly nextCursor?: string;
@@ -95,6 +97,7 @@ export class UsageReportingService {
     const { items, nextCursor } = await this.#store.listUsageEventsPage(
       workspaceId,
       params ?? {},
+      viewer,
     );
     return {
       usageEvents: items,

@@ -46,6 +46,7 @@ import {
   projectPlanRunCost,
   projectSourceSyncRun,
 } from "./projection_run.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 /**
  * Recorded Capsule context + source/dependency snapshot projection threaded
@@ -123,6 +124,7 @@ export class RunQueryService {
   async listRunsPage(
     workspaceId: string,
     options: { readonly limit?: number; readonly cursor?: string } = {},
+    viewer?: AppListViewer,
   ): Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const after = options.cursor === undefined
@@ -131,7 +133,7 @@ export class RunQueryService {
     const page = await this.#store.listRunsByWorkspacePage(workspaceId, {
       ...(options.limit !== undefined ? { limit: options.limit } : {}),
       ...(after ? { after } : {}),
-    });
+    }, viewer);
     const runs = await this.#projectStoredRuns(page.rows);
     const last = page.rows.at(-1);
     return {

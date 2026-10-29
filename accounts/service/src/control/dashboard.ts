@@ -34,7 +34,7 @@ import {
   canAccessWorkspace,
   requireWorkspaceAccess,
 } from "./shared.ts";
-import { visibleActivityEvents, visibleKeysetPage, workspaceAppVisibility } from "./app-authorization.ts";
+import { visibleActivityEvents, workspaceListReads } from "./app-authorization.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -291,22 +291,13 @@ async function dashboardOverview(
   // Activity, install metadata, StateVersions, and referenced-config lookup
   // independent timeouts let a degraded dependency hold this read projection
   // for up to N * timeout even though every value has a safe empty fallback.
+  const lists = workspaceListReads(operations, session);
+  if (lists instanceof Response) return lists;
   const projectionDeadline =
     Date.now() + DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS;
   const [capsulePage, activity, installConfigs] = await Promise.all([
-    // Apps the caller cannot view are omitted and never anchor the cursor.
-    visibleKeysetPage({
-      limit: clampPageLimit(capsuleLimit),
-      read: ({ cursor, limit }) => operations.capsules.listCapsulesPage(selectedWorkspace.id, {
-        ...(cursor !== undefined ? { cursor } : {}),
-        limit,
-        includeDestroyed: false,
-      }),
-      visibility: async (items) => {
-        const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: items.map((capsule) => capsule.id) });
-        return (capsule) => visibility.allows([capsule.id]);
-      },
-    }),
+    // Apps the caller cannot view are excluded in the store query.
+    lists.capsulesPage(selectedWorkspace.id, { limit: clampPageLimit(capsuleLimit), includeDestroyed: false }),
     optionalDashboardProjection(
       operations.activity.list(selectedWorkspace.id, activityLimit),
       [],

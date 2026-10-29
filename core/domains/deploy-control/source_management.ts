@@ -34,6 +34,7 @@ import type {
 import type { PageParams } from "takosumi-contract/pagination";
 import { OpenTofuControllerError } from "./errors.ts";
 import type { WorkspaceManagementAuthority } from "./store.ts";
+import type { AppListViewer } from "../app-ownership/list-visibility.ts";
 
 /**
  * Collaborator owning the Source lifecycle delegation. When `sourcesService` is
@@ -67,8 +68,9 @@ export class SourceManagement {
   async listSources(
     workspaceId: string,
     params?: PageParams,
+    viewer?: AppListViewer,
   ): Promise<ListSourcesResponse> {
-    return await this.#require().listSources(workspaceId, params);
+    return await this.#require().listSources(workspaceId, params, viewer);
   }
 
   async getSource(id: string): Promise<SourceResponse> {

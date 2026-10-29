@@ -119,9 +119,8 @@ import {
 import {
   requireWorkspaceAppsAccess,
   visibleActivityEvents,
-  visibleKeysetPage,
   workspaceAppVisibility,
-  workspaceSourceApps,
+  workspaceListReads,
 } from "./app-authorization.ts";
 import type { AppAction } from "takosumi-contract/app-access";
 import {
@@ -481,30 +480,13 @@ export async function handleWorkspaces(
       if (method === "GET") {
         const page = parseControlPageParams(url);
         if (!page.ok) return page.response;
-        // A Workspace-wide backup carries every live app's state. The cursor
-        // only ever points at a backup the caller may view.
-        let liveApps: Promise<readonly string[]> | undefined;
-        const listed = await visibleKeysetPage({
-          limit: clampPageLimit(page.params.limit),
-          ...(page.params.cursor !== undefined ? { cursor: page.params.cursor } : {}),
-          read: async ({ cursor, limit }) => {
-            const backups = await operations.backups.listBackups(workspaceId, { ...(cursor !== undefined ? { cursor } : {}), limit });
-            return { items: backups.backups, ...(backups.nextCursor !== undefined ? { nextCursor: backups.nextCursor } : {}) };
-          },
-          visibility: async (backups) => {
-            const all = backups.some((backup) => !backup.capsuleId)
-              ? await (liveApps ??= operations.capsules.listCapsules(workspaceId).then((capsules) => capsules
-                .filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed")
-                .map((capsule) => capsule.id)))
-              : [];
-            const appsOf = (backup: (typeof backups)[number]): readonly string[] =>
-              backup.capsuleId ? [backup.capsuleId] : all;
-            const visibility = await workspaceAppVisibility({ operations, session: ctx.session, capsuleIds: backups.flatMap(appsOf) });
-            return (backup) => visibility.allows(appsOf(backup));
-          },
-        });
+        // Backups of apps the caller cannot view (a Workspace-wide backup
+        // carries every live app) are excluded in the store query.
+        const lists = workspaceListReads(operations, ctx.session);
+        if (lists instanceof Response) return lists;
+        const listed = await lists.backups(workspaceId, { ...page.params, limit: clampPageLimit(page.params.limit) });
         return json({
-          backups: listed.items,
+          backups: listed.backups,
           ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
         } satisfies ListBackupsResponse);
       }
@@ -540,9 +522,15 @@ export async function handleWorkspaces(
       if (method !== "GET") return methodNotAllowed("GET");
       const page = parseControlPageParams(url);
       if (!page.ok) return page.response;
-      return json(
-        await operations.listWorkspaceUsage(workspaceId, page.params),
-      );
+      // Usage and cost of apps the caller cannot view are excluded in the
+      // store query. A payer's own history is GET /api/v1/usage.
+      const lists = workspaceListReads(operations, ctx.session);
+      if (lists instanceof Response) return lists;
+      const listed = await lists.usage(workspaceId, page.params);
+      return json({
+        usageEvents: listed.usageEvents,
+        ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
+      });
     }
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -1383,26 +1371,20 @@ function parseIncludeDestroyed(
   };
 }
 
-/** One page of the Workspace's Capsules the caller may view (see visibleKeysetPage). */
+/** One page of the Workspace's Capsules the caller may view (see workspaceListReads). */
 async function visibleWorkspaceCapsulePage(
   operations: ControlPlaneOperations,
   session: ControlSession,
   workspaceId: string,
   params: PageParams,
   includeDestroyed: boolean,
-) {
-  return await visibleKeysetPage({
+): Promise<Page<Capsule> | Response> {
+  const lists = workspaceListReads(operations, session);
+  if (lists instanceof Response) return lists;
+  return await lists.capsulesPage(workspaceId, {
+    ...params,
     limit: clampPageLimit(params.limit),
-    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
-    read: ({ cursor, limit }) => operations.capsules.listCapsulesPage(workspaceId, {
-      ...(cursor !== undefined ? { cursor } : {}),
-      limit,
-      includeDestroyed,
-    }),
-    visibility: async (capsules) => {
-      const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: capsules.map((capsule) => capsule.id) });
-      return (capsule) => visibility.allows([capsule.id]);
-    },
+    includeDestroyed,
   });
 }
 
@@ -1418,9 +1400,11 @@ async function listWorkspaceCapsules(
   if (!includeDestroyed.ok) return includeDestroyed.response;
   // Apps the caller cannot view are omitted from this Workspace compat list,
   // and the cursor never points at one of them.
-  const { items, nextCursor } = await visibleWorkspaceCapsulePage(
+  const listed = await visibleWorkspaceCapsulePage(
     operations, session, workspaceId, page.params, includeDestroyed.includeDestroyed,
   );
+  if (listed instanceof Response) return listed;
+  const { items, nextCursor } = listed;
   const capsules = await Promise.all(
     items.map(async (capsule): Promise<PublicCapsule> => {
       const projected = publicCapsule(capsule);
@@ -1448,9 +1432,11 @@ async function listWorkspaceCurrentStateVersions(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } = await visibleWorkspaceCapsulePage(
+  const listed = await visibleWorkspaceCapsulePage(
     operations, session, workspaceId, page.params, includeDestroyed.includeDestroyed,
   );
+  if (listed instanceof Response) return listed;
+  const { items, nextCursor } = listed;
   const stateVersions = operations.listStateVersionsByIds
     ? await listCurrentStateVersionsFromIdsRead(operations, workspaceId, items)
     : operations.listStateVersionsByWorkspace
@@ -1602,36 +1588,6 @@ async function createRestoreRun(
 
 // --- Activity --------------------------------------------------------------
 
-/** Runs of apps the caller cannot view are omitted (Workspace compat list). */
-function workspaceRunVisibility(
-  operations: ControlPlaneOperations,
-  session: ControlSession,
-  workspaceId: string,
-): (runs: readonly Run[]) => Promise<(run: Run) => boolean> {
-  let sourceApps: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
-  return async (runs) => {
-    if (!runs.length || !operations.appOwnership) return () => true;
-    const bySource = runs.some((run) => !run.capsuleId)
-      ? await (sourceApps ??= workspaceSourceApps(operations, workspaceId))
-      : new Map<string, readonly string[]>();
-    const appsOf = (run: Run): readonly string[] => run.capsuleId ? [run.capsuleId]
-      : run.subject?.kind === "capsule" ? [run.subject.id]
-      : bySource.get(run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : "")) ?? [];
-    const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: runs.flatMap(appsOf) });
-    return (run) => visibility.allows(appsOf(run));
-  };
-}
-
-async function visibleWorkspaceRuns(
-  operations: ControlPlaneOperations,
-  session: ControlSession,
-  workspaceId: string,
-  runs: readonly Run[],
-): Promise<readonly Run[]> {
-  const allows = await workspaceRunVisibility(operations, session, workspaceId)(runs);
-  return runs.filter(allows);
-}
-
 async function workspaceRuns(
   operations: ControlPlaneOperations,
   workspaceId: string,
@@ -1647,20 +1603,17 @@ async function workspaceRuns(
     );
   }
   const cursor = url.searchParams.get("cursor");
-  if (operations.listRunsPage) {
-    const listRunsPage = operations.listRunsPage.bind(operations);
-    // The cursor only ever points at a Run the caller may view.
-    const page = await visibleKeysetPage({
+  // Runs of apps the caller cannot view are excluded in the store query, and
+  // the cursor only ever points at a Run the caller may view.
+  const lists = workspaceListReads(operations, session);
+  if (lists instanceof Response) return lists;
+  if (lists.runsPage) {
+    const page = await lists.runsPage(workspaceId, {
       limit: clampRunListLimit(limit),
       ...(cursor !== null ? { cursor } : {}),
-      read: async (request) => {
-        const runs = await listRunsPage(workspaceId, request);
-        return { items: runs.runs, ...(runs.nextCursor !== undefined ? { nextCursor: runs.nextCursor } : {}) };
-      },
-      visibility: workspaceRunVisibility(operations, session, workspaceId),
     });
     return json({
-      runs: await Promise.all(page.items.map((run) => publicRun(operations, run))),
+      runs: await Promise.all(page.runs.map((run) => publicRun(operations, run))),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
     } satisfies ListRunsResponse);
   }
@@ -1671,8 +1624,8 @@ async function workspaceRuns(
       400,
     );
   }
-  const runs = await visibleWorkspaceRuns(operations, session, workspaceId,
-    await operations.listRuns(workspaceId, limit ? { limit } : {}));
+  // Only a host without Run paging and without an ownership store gets here.
+  const runs = await operations.listRuns(workspaceId, limit ? { limit } : {});
   return json({
     runs: await Promise.all(runs.map((run) => publicRun(operations, run))),
   } satisfies ListRunsResponse);

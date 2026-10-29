@@ -56,6 +56,8 @@ import {
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
+import { APP_LIST_SCHEMA_ABSENT_TTL_MS, type AppListViewer } from "../app-ownership/list-visibility.ts";
+import { isMissingOwnershipSchemaError } from "../app-ownership/store.ts";
 
 
 // Admission compares the exact deployment snapshot. Ownership is read from
@@ -4415,17 +4417,23 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async listRunsByWorkspacePage(
     workspaceId: string,
     options: { readonly limit?: number; readonly after?: RunListPosition } = {},
+    viewer?: AppListViewer,
   ): Promise<StoredRunListPage> {
     const limit = clampRunListLimit(options.limit);
     const createdAtMillis = pgRunCreatedAtMillisOrder();
     const idOrder = sql`${pgSchema.runs.id} COLLATE "C"`;
     const after = options.after;
-    const rows = await this.#pgManyJson<StoredRunRecord>(
+    const rows = await this.#withAppListViewer(viewer, (visibleTo) => this.#pgManyJson<StoredRunRecord>(
       pgSchema.runs,
       pgSchema.runs.runJson,
       {
         where: and(
           eq(pgSchema.runs.workspaceId, workspaceId),
+          visibleTo ? sql`not ${pgRunHidden({
+            capsuleId: sql`${pgSchema.runs.capsuleId}`,
+            sourceId: sql`${pgSchema.runs.sourceId}`,
+            json: sql`${pgSchema.runs.runJson}`,
+          }, visibleTo)}` : undefined,
           after
             ? or(
                 lt(createdAtMillis, after.createdAtMillis),
@@ -4439,7 +4447,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         orderBy: [desc(createdAtMillis), desc(idOrder)],
         limit: limit + 1,
       },
-    );
+    ));
     return {
       rows: rows.slice(0, limit).map(publicStoredRun),
       hasMore: rows.length > limit,
@@ -8101,21 +8109,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async listCapsulesPage(
     workspaceId: string,
     params: CapsuleListPageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<Capsule>> {
     const limit = clampPageLimit(params.limit);
-    const baseWhere =
-      params.includeDestroyed === false
-        ? and(
-            eq(pgSchema.capsules.workspaceId, workspaceId),
-            ne(pgSchema.capsules.status, "destroyed"),
-          )
-        : eq(pgSchema.capsules.workspaceId, workspaceId);
-    const rows = await this.#pgManyJson<Capsule>(
+    const rows = await this.#withAppListViewer(viewer, (visibleTo) => this.#pgManyJson<Capsule>(
       pgSchema.capsules,
       pgSchema.capsules.capsuleJson,
       {
         where: pgKeysetWhere(
-          baseWhere,
+          and(
+            eq(pgSchema.capsules.workspaceId, workspaceId),
+            params.includeDestroyed === false ? ne(pgSchema.capsules.status, "destroyed") : undefined,
+            visibleTo ? sql`not ${pgCapsuleHidden(sql`${pgSchema.capsules.id}`, visibleTo)}` : undefined,
+          ),
           pgSchema.capsules.createdAt,
           pgSchema.capsules.id,
           decodeCursor(params.cursor),
@@ -8123,7 +8129,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         orderBy: [asc(pgSchema.capsules.createdAt), asc(pgSchema.capsules.id)],
         limit: limit + 1,
       },
-    );
+    ));
     return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
@@ -10275,14 +10281,22 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async listSourcesPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<StoredSource>> {
     const limit = clampPageLimit(params.limit);
-    const rows = await this.#pgManyJson<StoredSource>(
+    const rows = await this.#withAppListViewer(viewer, (visibleTo) => this.#pgManyJson<StoredSource>(
       pgSchema.sources,
       pgSchema.sources.sourceJson,
       {
         where: pgKeysetWhere(
-          eq(pgSchema.sources.workspaceId, workspaceId),
+          and(
+            eq(pgSchema.sources.workspaceId, workspaceId),
+            visibleTo ? sql`not ${pgSourceHidden({
+              id: sql`${pgSchema.sources.id}`,
+              workspaceId: sql`${pgSchema.sources.workspaceId}`,
+              json: sql`${pgSchema.sources.sourceJson}`,
+            }, visibleTo)}` : undefined,
+          ),
           pgSchema.sources.createdAt,
           pgSchema.sources.id,
           decodeCursor(params.cursor),
@@ -10290,7 +10304,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         orderBy: [asc(pgSchema.sources.createdAt), asc(pgSchema.sources.id)],
         limit: limit + 1,
       },
-    );
+    ));
     return pageFromProbe(rows, limit);
   }
 
@@ -11653,14 +11667,18 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async listUsageEventsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<UsageEvent>> {
     const limit = clampPageLimit(params.limit);
-    const rows = await this.#db
+    const rows = await this.#withAppListViewer(viewer, (visibleTo) => this.#db
       .select(pgLegacyUsageSelect)
       .from(pgSchema.usageEvents)
       .where(
         pgKeysetWhereDesc(
-          eq(pgSchema.usageEvents.workspaceId, workspaceId),
+          and(
+            eq(pgSchema.usageEvents.workspaceId, workspaceId),
+            visibleTo ? sql`not ${pgUsageHidden(visibleTo)}` : undefined,
+          ),
           pgSchema.usageEvents.createdAt,
           pgSchema.usageEvents.id,
           decodeCursor(params.cursor),
@@ -11670,7 +11688,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         desc(pgSchema.usageEvents.createdAt),
         desc(pgSchema.usageEvents.id),
       )
-      .limit(limit + 1);
+      .limit(limit + 1));
     return pageFromProbe(await this.#usageEventsWithPayer(rows.map(usageEventFromRow)), limit);
   }
 
@@ -11774,15 +11792,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async listBackupRecordsPage(
     workspaceId: string,
     params: PageParams,
+    viewer?: AppListViewer,
   ): Promise<Page<BackupRecord>> {
     const limit = clampPageLimit(params.limit);
     // Newest-first listing ⇒ descending keyset.
-    const rows = await this.#pgManyJson<BackupRecord>(
+    const rows = await this.#withAppListViewer(viewer, (visibleTo) => this.#pgManyJson<BackupRecord>(
       pgSchema.backups,
       pgSchema.backups.backupJson,
       {
         where: pgKeysetWhereDesc(
-          eq(pgSchema.backups.workspaceId, workspaceId),
+          and(
+            eq(pgSchema.backups.workspaceId, workspaceId),
+            visibleTo ? sql`not ${pgBackupHidden(visibleTo)}` : undefined,
+          ),
           pgSchema.backups.createdAt,
           pgSchema.backups.id,
           decodeCursor(params.cursor),
@@ -11790,7 +11812,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
         limit: limit + 1,
       },
-    );
+    ));
     return pageFromProbe(rows, limit);
   }
 
@@ -11834,6 +11856,29 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return parseRow(rows[0]) as T | undefined;
   }
 
+  /** List-read-only negative cache: skips the failing filtered read before v123. */
+  #appListSchemaAbsentUntil = 0;
+
+  /**
+   * Applies a Workspace list's viewer predicate. A target before v123 has no
+   * ownership schema: the list then keeps the Workspace decision unfiltered,
+   * and later lists skip the filtered attempt for a short TTL.
+   */
+  async #withAppListViewer<T>(
+    viewer: AppListViewer | undefined,
+    read: (viewer: AppListViewer | undefined) => Promise<T>,
+  ): Promise<T> {
+    if (!viewer || Date.now() < this.#appListSchemaAbsentUntil) return await read(undefined);
+    try {
+      return await read(viewer);
+    } catch (error) {
+      if (!isMissingOwnershipSchemaError(error) &&
+        !isMissingOwnershipSchemaError((error as { readonly cause?: unknown } | undefined)?.cause)) throw error;
+      this.#appListSchemaAbsentUntil = Date.now() + APP_LIST_SCHEMA_ABSENT_TTL_MS;
+      return await read(undefined);
+    }
+  }
+
   async #pgManyJson<T>(
     table: PgTable,
     jsonColumn: PgColumn,
@@ -11856,6 +11901,89 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     const rows = await query;
     return rows.map((row) => parseRow(row) as T);
   }
+}
+
+// --- Workspace list visibility (app-ownership/list-visibility.ts) ----------
+
+/** An owned app the viewer is neither owner nor active member of, or outside its `appIds`. */
+function pgAppHidden(alias: "hidden_app" | "live_app", viewer: AppListViewer): SQL {
+  const app = sql.raw(alias);
+  const outsideAppIds = viewer.appIds === undefined
+    ? sql`false`
+    : sql`${app}.id not in (select json_array_elements_text(${JSON.stringify(viewer.appIds)}::json))`;
+  return sql`(${app}.owner_account_id is not null and (${outsideAppIds}
+    or (${app}.owner_account_id <> ${viewer.accountId} and not exists (
+      select 1 from ${pgSchema.capsuleMembers} app_member
+      where app_member.capsule_id = ${app}.id and app_member.account_id = ${viewer.accountId}
+        and app_member.status = 'active'))))`;
+}
+
+function pgCapsuleHidden(capsuleId: SQL, viewer: AppListViewer): SQL {
+  return sql`exists (select 1 from ${pgSchema.capsules} hidden_app
+    where hidden_app.id = ${capsuleId} and ${pgAppHidden("hidden_app", viewer)})`;
+}
+
+/** A hidden live app in the Workspace (built from `sourceId` when given). */
+function pgLiveAppsHidden(workspaceId: SQL, sourceId: SQL | undefined, viewer: AppListViewer): SQL {
+  return sql`exists (select 1 from ${pgSchema.capsules} live_app
+    where live_app.space_id = ${workspaceId} and live_app.status <> 'destroyed'
+      ${sourceId ? sql`and live_app.source_id = ${sourceId}` : sql``}
+      and ${pgAppHidden("live_app", viewer)})`;
+}
+
+interface PgSourceRef { readonly id: SQL; readonly workspaceId: SQL; readonly json: SQL }
+
+/** A Source is its owner app's; an ownerless Source is every live app's built from it. */
+function pgSourceHidden(source: PgSourceRef, viewer: AppListViewer): SQL {
+  const owner = sql`nullif(${source.json}->>'ownerCapsuleId', '')`;
+  return sql`(case when ${owner} is not null then ${pgCapsuleHidden(owner, viewer)}
+    else ${pgLiveAppsHidden(source.workspaceId, source.id, viewer)} end)`;
+}
+
+interface PgRunRef { readonly capsuleId: SQL; readonly sourceId: SQL; readonly json: SQL }
+
+/**
+ * A Run is its Capsule's (an older apply row's plan's), else its Source's
+ * apps'. The record's own fields back up the indexed columns.
+ */
+function pgRunHidden(run: PgRunRef, viewer: AppListViewer): SQL {
+  const capsuleId = sql`coalesce(nullif(${run.capsuleId}, ''), nullif(${run.json}->>'capsuleId', ''),
+    case when ${run.json}->'subject'->>'kind' = 'capsule' then nullif(${run.json}->'subject'->>'id', '') end,
+    (select nullif(plan_run.installation_id, '') from ${pgSchema.runs} plan_run
+      where plan_run.id = ${run.json}->>'planRunId'))`;
+  const sourceId = sql`coalesce(nullif(${run.sourceId}, ''), nullif(${run.json}->>'sourceId', ''),
+    case when ${run.json}->'subject'->>'kind' = 'source' then nullif(${run.json}->'subject'->>'id', '') end)`;
+  return sql`(case when ${capsuleId} is not null then ${pgCapsuleHidden(capsuleId, viewer)}
+    when ${sourceId} is not null then exists (select 1 from ${pgSchema.sources} run_source
+      where run_source.id = ${sourceId} and ${pgSourceHidden({
+        id: sql`run_source.id`, workspaceId: sql`run_source.space_id`, json: sql`run_source.source_json`,
+      }, viewer)})
+    else false end)`;
+}
+
+/** A backup is its Capsule's; a Workspace-wide backup is every live app's. */
+function pgBackupHidden(viewer: AppListViewer): SQL {
+  const backup = pgSchema.backups;
+  return sql`(case when nullif(${backup.capsuleId}, '') is not null
+    then ${pgCapsuleHidden(sql`${backup.capsuleId}`, viewer)}
+    else ${pgLiveAppsHidden(sql`${backup.workspaceId}`, undefined, viewer)} end)`;
+}
+
+/**
+ * A usage event is its Capsule's, else its Run's apps'. An event whose Run is
+ * gone cannot be attributed: hidden while the Workspace has an owned app.
+ */
+function pgUsageHidden(viewer: AppListViewer): SQL {
+  const usage = pgSchema.usageEvents;
+  return sql`(case when nullif(${usage.capsuleId}, '') is not null
+      then ${pgCapsuleHidden(sql`${usage.capsuleId}`, viewer)}
+    when nullif(${usage.runId}, '') is null then false
+    when exists (select 1 from ${pgSchema.runs} usage_run where usage_run.id = ${usage.runId})
+      then exists (select 1 from ${pgSchema.runs} usage_run where usage_run.id = ${usage.runId} and ${pgRunHidden({
+        capsuleId: sql`usage_run.installation_id`, sourceId: sql`usage_run.source_id`, json: sql`usage_run.run_json`,
+      }, viewer)})
+    else exists (select 1 from ${pgSchema.capsules} owned_app
+      where owned_app.space_id = ${usage.workspaceId} and owned_app.owner_account_id is not null) end)`;
 }
 
 interface JsonRow extends Record<string, unknown> {

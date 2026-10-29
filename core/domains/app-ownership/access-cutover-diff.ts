@@ -12,8 +12,9 @@ import type { OwnershipBackfillContext } from "./backfill.ts";
  * ownership row uses exactly that row's owner and active `capsule_members`;
  * only Capsules without a row are projected with the backfill's inference
  * (Workspace owner becomes the owner, active owner/admin members become
- * members). A Source belongs to its `ownerCapsuleId`, or to every live Capsule
- * built from it, and needs EVERY such app to allow under that app's own rule,
+ * members). A Source belongs to its `ownerCapsuleId` (an uninstalled owner app
+ * by its retained row and roster, as the live decision reads them), or to
+ * every live Capsule built from it, and needs EVERY such app to allow under that app's own rule,
  * as the live code decides: an app with a row by its roster; an app without a
  * row by the backfill projection, which is what its row will say once the
  * backfill reaches it (until then the live code uses the legacy Workspace
@@ -128,26 +129,41 @@ export async function planAppAccessCutoverDiff(context: OwnershipBackfillContext
     const memberByAccount = new Map(members.map((row) => [row.accountId, row]));
     const rosters = new Map<string, AppRoster>();
     const live = capsules.filter((capsule) => capsule.workspaceId === workspace.id && capsule.status !== "destroyed");
-    for (const capsule of live) {
-      capsulesChecked++;
-      const existing = await readOwnership(context, capsule.id);
+    const buildRoster = async (capsuleId: string): Promise<AppRoster> => {
+      const existing = await readOwnership(context, capsuleId);
       const roster = new Set<string>();
       let ownerAccountId: string;
       if (existing) {
         // Exactly what the live resolver reads: the owner row and active members.
         ownerAccountId = existing.ownerAccountId;
-        const current: readonly CapsuleMember[] = await context.ownership.listMembers(capsule.id);
+        const current: readonly CapsuleMember[] = await context.ownership.listMembers(capsuleId);
         for (const row of current) if (row.status === "active") roster.add(row.accountId);
       } else {
-        capsulesProjectedFromBackfill++;
         ownerAccountId = workspace.ownerUserId;
         for (const row of members) {
           if (row.status === "active" && row.roles.some((role) => role === "owner" || role === "admin")) roster.add(row.accountId);
         }
       }
       roster.delete(ownerAccountId);
-      rosters.set(capsule.id, { ownerAccountId, members: roster, projected: !existing });
+      return { ownerAccountId, members: roster, projected: !existing };
+    };
+    for (const capsule of live) {
+      capsulesChecked++;
+      const roster = await buildRoster(capsule.id);
+      if (roster.projected) capsulesProjectedFromBackfill++;
+      rosters.set(capsule.id, roster);
     }
+    // An uninstalled owner app keeps its ownership row and roster (the backfill
+    // writes destroyed apps too); the live decision on its Source uses them.
+    const sourceOwnerRoster = async (capsuleId: string): Promise<AppRoster | undefined> => {
+      const known = rosters.get(capsuleId);
+      if (known) return known;
+      const capsule = capsules.find((row) => row.id === capsuleId);
+      if (!capsule || capsule.workspaceId !== workspace.id || capsule.status !== "destroyed") return undefined;
+      const roster = await buildRoster(capsuleId);
+      rosters.set(capsuleId, roster);
+      return roster;
+    };
     const roleIn = (roster: AppRoster, accountId: string): AppRole =>
       accountId === roster.ownerAccountId ? "owner" : roster.members.has(accountId) ? "member" : null;
     const compare = (
@@ -192,10 +208,10 @@ export async function planAppAccessCutoverDiff(context: OwnershipBackfillContext
     // Sources: the owner Capsule, or every live Capsule built from an ownerless Source.
     const sources = [...await context.control.listSources(workspace.id)].sort((a, b) => a.id.localeCompare(b.id));
     for (const source of sources) {
-      const appIds = source.ownerCapsuleId
-        ? [source.ownerCapsuleId]
-        : live.filter((capsule) => capsule.sourceId === source.id).map((capsule) => capsule.id);
-      const apps = appIds.map((id) => rosters.get(id)).filter((roster): roster is AppRoster => roster !== undefined);
+      const owner = source.ownerCapsuleId ? await sourceOwnerRoster(source.ownerCapsuleId) : undefined;
+      const apps = source.ownerCapsuleId
+        ? owner ? [owner] : []
+        : live.filter((capsule) => capsule.sourceId === source.id).map((capsule) => rosters.get(capsule.id)!);
       if (!apps.length) continue;
       sourcesChecked++;
       compare({ sourceId: source.id }, apps);

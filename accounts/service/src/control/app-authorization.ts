@@ -10,11 +10,15 @@
 import { appActionAllowed, type AppAccess, type AppAction } from "takosumi-contract/app-access";
 import type { Capsule } from "takosumi-contract/install-configs";
 import type { Run } from "takosumi-contract/runs";
-import type { Source } from "takosumi-contract/sources";
+import type { ListSourcesResponse, Source } from "takosumi-contract/sources";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { ListBackupsResponse } from "takosumi-contract/backups";
+import type { UsageEvent } from "takosumi-contract/billing";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { PublicPlanRun } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleOwnership } from "../../../../core/domains/app-ownership/store.ts";
 import { isMissingOwnershipSchemaError } from "../../../../core/domains/app-ownership/store.ts";
+import type { AppListViewer } from "../../../../core/domains/app-ownership/list-visibility.ts";
 import { bearerAppAllows, bearerWorkspaceAllows } from "../account-session.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import { errorJson } from "../http-helpers.ts";
@@ -402,12 +406,71 @@ export async function runCapsuleIds(
   return await sourceCapsuleIds(operations, source);
 }
 
+/** The caller as a Workspace list viewer; `appIds` limits the owned apps it sees. */
+function appListViewer(session: ControlSession): AppListViewer {
+  return { accountId: session.subject, ...(session.appIds !== undefined ? { appIds: session.appIds } : {}) };
+}
+
 /**
- * List filtering for Workspace compatibility reads: an item that belongs to
- * an app with an ownership row is visible only if the caller may view that
- * app. Items of apps without an ownership row keep the Workspace decision the
- * route already applied. One batch ownership read and the resolver's
- * accessible-app pages per request; no per-item authorization lookups.
+ * Keyset-paged Workspace compatibility lists (capsules, current StateVersions,
+ * Runs, Sources, backups, usage, dashboard overview). With an ownership store
+ * wired, each page is filtered for the caller in the store query
+ * (core/domains/app-ownership/list-visibility.ts): pages hold only rows the
+ * caller may view, paging continues past any number of hidden rows, and the
+ * cursor is the store's own cursor for a visible row. Without an ownership
+ * store no app can be owned and the plain reads apply. A host that wires an
+ * ownership store without the filtered reads is refused, never served an
+ * unfiltered list.
+ */
+export interface WorkspaceListReads {
+  capsulesPage(workspaceId: string, params: PageParams & { readonly includeDestroyed?: boolean }): Promise<Page<Capsule>>;
+  /** Absent only on a host without Run paging and without an ownership store. */
+  readonly runsPage?: (
+    workspaceId: string,
+    options: { readonly limit?: number; readonly cursor?: string },
+  ) => Promise<{ readonly runs: readonly Run[]; readonly nextCursor?: string }>;
+  sources(workspaceId: string, params: PageParams): Promise<ListSourcesResponse>;
+  backups(workspaceId: string, params: PageParams): Promise<ListBackupsResponse>;
+  usage(
+    workspaceId: string,
+    params: PageParams,
+  ): Promise<{ readonly usageEvents: readonly UsageEvent[]; readonly nextCursor?: string }>;
+}
+
+export function workspaceListReads(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+): WorkspaceListReads | Response {
+  if (!operations.appOwnership) {
+    const listRunsPage = operations.listRunsPage?.bind(operations);
+    return {
+      capsulesPage: (workspaceId, params) => operations.capsules.listCapsulesPage(workspaceId, params),
+      ...(listRunsPage ? { runsPage: (workspaceId, options) => listRunsPage(workspaceId, options) } : {}),
+      sources: (workspaceId, params) => operations.listSources(workspaceId, params),
+      backups: (workspaceId, params) => operations.backups.listBackups(workspaceId, params),
+      usage: (workspaceId, params) => operations.listWorkspaceUsage(workspaceId, params),
+    };
+  }
+  const lists = operations.viewerLists;
+  if (!lists) return controlPlaneUnavailable();
+  const viewer = appListViewer(session);
+  return {
+    capsulesPage: (workspaceId, params) => lists.listCapsulesPage(workspaceId, params, viewer),
+    runsPage: (workspaceId, options) => lists.listRunsPage(workspaceId, options, viewer),
+    sources: (workspaceId, params) => lists.listSources(workspaceId, params, viewer),
+    backups: (workspaceId, params) => lists.listBackups(workspaceId, params, viewer),
+    usage: (workspaceId, params) => lists.listWorkspaceUsage(workspaceId, params, viewer),
+  };
+}
+
+/**
+ * Filtering for the Workspace reads that are not keyset-paged (Activity,
+ * materialization failures, installed apps): an item that belongs to an app
+ * the caller may not see in a list (the rule in list-visibility.ts, so the
+ * retained owner and members of an uninstalled app still see its history) is
+ * omitted. Items of apps without an ownership row keep the Workspace decision
+ * the route already applied. One batch read per request; no per-item
+ * authorization lookups.
  */
 export interface AppVisibility {
   allows(capsuleIds: readonly string[]): boolean;
@@ -424,6 +487,11 @@ export async function workspaceAppVisibility(input: {
   const ids = [...new Set([...input.capsuleIds].filter((id) => typeof id === "string" && id.length > 0))];
   const store = input.operations.appOwnership;
   if (!ids.length || !store) return ALLOW_ALL;
+  if (store.listHiddenCapsuleIds) {
+    const hidden = await store.listHiddenCapsuleIds(appListViewer(input.session), ids);
+    return hidden.size ? { allows: (capsuleIds) => capsuleIds.every((id) => !hidden.has(id)) } : ALLOW_ALL;
+  }
+  // Stores without the batch read: accessible-app pages (uninstalled apps excluded).
   const owned = store.listOwnedCapsuleIds
     ? await store.listOwnedCapsuleIds(ids)
     : new Set((await Promise.all(ids.map(async (id) =>
@@ -448,80 +516,6 @@ export async function workspaceAppVisibility(input: {
     allows: (capsuleIds) => capsuleIds.every((id) =>
       !owned.has(id) || (accessible.has(id) && (appIds === undefined || appIds.includes(id)))),
   };
-}
-
-/** Underlying pages read per filtered request after the first. */
-const FILTERED_LIST_SCAN_PAGES = 10;
-const FILTERED_LIST_SCAN_PAGE_SIZE = 100;
-
-export interface KeysetPage<T> {
-  readonly items: readonly T[];
-  readonly nextCursor?: string;
-}
-
-/**
- * Pages a keyset list with rows the caller cannot view omitted, without letting
- * a hidden row reach the client through the cursor. A store cursor encodes the
- * last row it scanned, so a filtered page may only end on a VISIBLE row: the
- * returned cursor is always the store's own cursor for the last returned row.
- * When that row sits mid-page, the store is asked again, from the same start,
- * for exactly the rows up to it, so the cursor format stays the store's.
- *
- * The first read is the request's own page; a page without hidden rows is
- * returned unchanged. Otherwise up to FILTERED_LIST_SCAN_PAGES further pages are
- * scanned to fill the page; paging visits every visible row exactly once. If
- * the budget ends without any visible row the page is empty and has no cursor
- * (a run of hidden rows longer than the budget ends the listing there; nothing
- * about the hidden rows is revealed either way).
- */
-export async function visibleKeysetPage<T extends { readonly id: string }>(input: {
-  /** The effective page size (already clamped like the store clamps it). */
-  readonly limit: number;
-  readonly cursor?: string;
-  readonly read: (page: { readonly cursor?: string; readonly limit: number }) => Promise<KeysetPage<T>>;
-  readonly visibility: (items: readonly T[]) => Promise<(item: T) => boolean>;
-}): Promise<KeysetPage<T>> {
-  type Origin = { readonly from: string | undefined; readonly page: KeysetPage<T>; readonly index: number };
-  const endAfter = async (origin: Origin): Promise<KeysetPage<T>["nextCursor"]> => {
-    if (origin.index === origin.page.items.length - 1) return origin.page.nextCursor;
-    const again = await input.read({ ...(origin.from !== undefined ? { cursor: origin.from } : {}), limit: origin.index + 1 });
-    // A concurrent change moved the window: end here rather than emit a
-    // cursor that might point at a row this caller cannot view.
-    return again.items.at(-1)?.id === origin.page.items[origin.index]!.id ? again.nextCursor : undefined;
-  };
-  const items: T[] = [];
-  let last: Origin | undefined;
-  let from = input.cursor;
-  for (let read = 0; read <= FILTERED_LIST_SCAN_PAGES; read++) {
-    const page = await input.read({
-      ...(from !== undefined ? { cursor: from } : {}),
-      limit: read === 0 ? input.limit : Math.max(input.limit, FILTERED_LIST_SCAN_PAGE_SIZE),
-    });
-    const allows = await input.visibility(page.items);
-    if (read === 0 && page.items.every(allows)) return page;
-    for (let index = 0; index < page.items.length; index++) {
-      const item = page.items[index]!;
-      if (!allows(item)) continue;
-      items.push(item);
-      last = { from, page, index };
-      if (items.length === input.limit) {
-        const nextCursor = await endAfter(last);
-        return { items, ...(nextCursor !== undefined ? { nextCursor } : {}) };
-      }
-    }
-    if (page.nextCursor === undefined) return { items };
-    from = page.nextCursor;
-  }
-  if (!last) {
-    try {
-      console.info(JSON.stringify({ event: "filtered_list_scan_budget_exhausted" }));
-    } catch {
-      // Logging is best-effort only.
-    }
-    return { items };
-  }
-  const nextCursor = await endAfter(last);
-  return { items, ...(nextCursor !== undefined ? { nextCursor } : {}) };
 }
 
 const ACTIVITY_CAPSULE_KEYS = ["capsuleId", "consumerCapsuleId", "providerCapsuleId", "ownerCapsuleId"] as const;
@@ -559,8 +553,9 @@ async function ownedCapsuleIds(operations: ControlPlaneOperations, capsuleIds: r
  * parallel and capped at ACTIVITY_LOOKUP_LIMIT per request.
  *
  * Fail closed: while the Workspace has owned apps, an event whose app cannot
- * be determined (a read past the cap, a missing Run or Interface, or no
- * attribution at all) is omitted, except Workspace-level events (`workspace`,
+ * be determined (a read past the cap, a missing Run or Interface, a Capsule id
+ * this Workspace does not have, or no attribution at all) is omitted, even
+ * when another reference resolves; except Workspace-level events (`workspace`,
  * `connection`) and events that resolve to no app (a Run or Source used by no
  * app, a retired Source), which keep the Workspace decision.
  */
@@ -638,7 +633,10 @@ export async function visibleActivityEvents<T extends ActivityEvent>(input: {
     let undetermined = false;
     let resolvedNoApp = false;
     const add = (id: string | undefined) => {
-      if (id && known.has(id)) ids.add(id);
+      if (!id) return;
+      // A Capsule this Workspace does not have cannot be attributed here.
+      if (known.has(id)) ids.add(id);
+      else undetermined = true;
     };
     const include = (resolved: Resolved) => {
       if (resolved === undefined) undetermined = true;
@@ -697,15 +695,6 @@ function sourceAppsOf(capsules: readonly Pick<Capsule, "id" | "sourceId" | "stat
     map.set(capsule.sourceId, [...(map.get(capsule.sourceId) ?? []), capsule.id]);
   }
   return map;
-}
-
-/** sourceId → live Capsules built from it, for mapping list items without a capsuleId. */
-export async function workspaceSourceApps(
-  operations: ControlPlaneOperations,
-  workspaceId: string,
-): Promise<ReadonlyMap<string, readonly string[]>> {
-  return sourceAppsOf((await operations.capsules.listCapsules(workspaceId))
-    .filter((capsule) => capsule.workspaceId === workspaceId));
 }
 
 /**
