@@ -71,6 +71,34 @@ test("OAuth discovers one account, renews sealed tokens, and never mints refresh
   expect(f.refreshes()).toBe(2);
 });
 
+test("ownerless legacy v2 OAuth refresh retains v2 AAD and persists rotated token", async () => {
+  const f = await fixture();
+  expect(await f.vault.test(f.connection.id, authority, null)).toEqual({ status: "verified" });
+  const connection = (await f.store.getConnection(f.connection.id))!;
+  const old = (await f.store.getSecretBlob(connection.id))!;
+  const crypto = new PartitionedSecretBoundaryCrypto({ globalPassphrase: "fixture-oauth-vault-passphrase-0123456789" });
+  const aad = new TextEncoder().encode(JSON.stringify({ v: 2, secretPartition: connection.secretPartition,
+    workspaceId: authority.workspaceId, connectionId: connection.id, provider }));
+  const values = cloudflareOAuthValues({ clientId: "client-id-fixture", tokenResponse: {
+    access_token: "access-original", refresh_token: "refresh-fixture", expires_in: 3600 }, now: start });
+  const sealed = await crypto.seal(JSON.stringify({ env: values, files: [] }), connection.secretPartition!, aad);
+  await f.store.deleteConnection(connection.id);
+  await f.store.putWorkspace({ ...(await f.store.getWorkspace(authority.workspaceId))!, ownerUserId: undefined } as never);
+  await f.store.putConnection({ ...connection, ownerAccountId: undefined });
+  await f.store.putSecretBlob({ ...old, ciphertext: Buffer.from(sealed).toString("base64"),
+    aad: JSON.stringify({ v: 2, secretPartition: connection.secretPartition, provider }) });
+  f.advance();
+  expect((await f.vault.mint(authority.workspaceId, [provider])).env.CLOUDFLARE_API_TOKEN)
+    .toBe("access-renewed-1");
+  const renewed = (await f.store.getSecretBlob(connection.id))!;
+  expect(JSON.parse(renewed.aad).v).toBe(2);
+  expect(renewed.renewalLease).toBeUndefined();
+  f.advance();
+  expect((await f.vault.mint(authority.workspaceId, [provider])).env.CLOUDFLARE_API_TOKEN)
+    .toBe("access-renewed-2");
+  expect(f.refreshes()).toBe(2);
+});
+
 test("revocation while refresh is in flight cannot resurrect credentials or mint the token", async () => {
   const f = await fixture();
   await f.vault.test(f.connection.id, authority, null);
