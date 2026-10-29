@@ -12,6 +12,7 @@ import {
   listWorkspacesCached,
 } from "../../../../dashboard/src/lib/workspace-list.ts";
 import { handleSharedAuthRouteRequest } from "../../../../worker/src/shared_auth_rpc.ts";
+import { appOwnershipAvailable, listAccessibleApps } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
 const workspaceBootstrapPath =
@@ -630,4 +631,32 @@ describe("dashboard session bootstrap", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
     ]);
   });
+  test("app ownership cache survives same-account refresh and resets on account change and sign-out", async () => {
+    let subject = "account-a";
+    let appReads = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/apps") {
+        appReads += 1;
+        return Response.json({ apps: [{ capsuleId: subject, role: "owner" }] });
+      }
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") return Response.json({ session: { subject } });
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+    await refreshSession();
+    expect(await appOwnershipAvailable()).toBe(true);
+    await refreshSession();
+    expect((await listAccessibleApps())?.[0]?.capsuleId).toBe("account-a");
+    expect(appReads).toBe(1);
+    subject = "account-b";
+    await refreshSession();
+    expect((await listAccessibleApps())?.[0]?.capsuleId).toBe("account-b");
+    expect(appReads).toBe(2);
+    clearSession();
+    await appOwnershipAvailable();
+    expect(appReads).toBe(3);
+  });
+
+
 });

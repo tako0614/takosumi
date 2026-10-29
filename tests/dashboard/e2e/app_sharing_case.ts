@@ -55,6 +55,9 @@ async function accountAs(page: Page, role: "owner" | "member"): Promise<RequestR
     }));
     return route.fulfill({ json: { apps } });
   });
+  await page.route((url) => url.pathname === "/api/v1/ownership-transfers" ||
+    /^\/api\/v1\/capsules\/[^/]+\/ownership-transfers$/u.test(url.pathname), (route) =>
+    route.fulfill({ json: { transfers: [] } }));
   return requests;
 }
 
@@ -109,10 +112,16 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
           ? portableAppConnectionLabels(OWNER_APP)
           : { connections: PORTABLE_PERSONAL_CONNECTIONS } });
       });
-      await page.route(`**/api/v1/capsules/${OWNER_APP}/ownership-transfers`, async (route) => {
+      let pending = false;
+      await page.route((url) => url.pathname === `/api/v1/capsules/${OWNER_APP}/ownership-transfers`, async (route) => {
+        if (route.request().method() === "GET") return route.fulfill({ json: { transfers: pending ? [{
+          transferId: TRANSFER_ID, capsuleId: OWNER_APP, fromAccountId: "sub_portable_e2e", toAccountId: "tsub_kenta0123456789", state: "pending",
+        }] : [] } });
+        pending = true;
         return route.fulfill({ status: 202, json: { transferId: TRANSFER_ID, state: "pending" } });
       });
       await page.route(`**/api/v1/ownership-transfers/${TRANSFER_ID}`, async (route) => {
+        pending = false;
         return route.fulfill({ json: { cancelled: true } });
       });
 
@@ -121,7 +130,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       await expect(sharing).toBeVisible();
       await expect(sharing).toContainText("Portable E2E");
       await expect(sharing.locator('input[name="sharing-consent"]')).toHaveAccessibleName(
-        "このメンバーは、あなたの接続〈Cloudflare (direct)、Takosumi hosted service〉を使ってこのアプリを変更できます（リポジトリの変更を含む）",
+        "このメンバーは、あなたの接続〈Cloudflare (direct)〉を使ってこのアプリを変更できます（リポジトリの変更を含む）",
       );
       await captureSharing(page, "sharing-owner");
       const email = sharing.getByRole("textbox", { name: "メールアドレス" });
@@ -138,7 +147,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
 
       const hanako = sharing.getByRole("listitem").filter({ hasText: "Hanako Sato" });
-      await hanako.getByRole("button", { name: "メンバーを削除" }).click();
+      await hanako.getByRole("button", { name: /Hanako Sato.*メンバーから削除/u }).click();
       const removeDialog = page.getByRole("dialog");
       await expect(removeDialog).toContainText("Hanako Sato");
       const removeResponse = page.waitForResponse((response) =>
@@ -153,7 +162,9 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       const transferDialog = page.getByRole("dialog");
       await expect(transferDialog).toContainText("接続は解除され");
       await transferDialog.getByRole("button", { name: "所有権を譲渡" }).click();
-      await expect(sharing).toContainText(TRANSFER_ID);
+      await expect(sharing).toContainText("所有権の受け取りを待っています");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(sharing.getByRole("button", { name: "譲渡を取り消す" })).toBeVisible();
       await sharing.getByRole("button", { name: "譲渡を取り消す" }).click();
       await expect(sharing.getByRole("button", { name: "所有権を譲渡" })).toBeVisible();
       expect(requests.filter((request) => request.method !== "GET")).toEqual([
@@ -239,7 +250,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       ]);
     });
 
-    test("a member can accept an ownership transfer by its transfer id", async ({ page }) => {
+    test("a member discovers and accepts an incoming ownership transfer after reload", async ({ page }) => {
       const requests = await accountAs(page, "member");
       let role: "member" | "owner" = "member";
       await page.route("**/api/v1/apps**", (route) => {
@@ -250,6 +261,9 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
         return route.fulfill({ json: { apps } });
       });
       await memberRoutes(page, SHARED_APP, PORTABLE_SHARED_APP_MEMBERS);
+      await page.route((url) => url.pathname === "/api/v1/ownership-transfers", (route) =>
+        route.fulfill({ json: { transfers: role === "member" ? [{ transferId: TRANSFER_ID, capsuleId: SHARED_APP,
+          fromAccountId: "tsub_hanako0123456789", toAccountId: "sub_portable_e2e", state: "pending" }] : [] } }));
       await page.route(`**/api/v1/ownership-transfers/${TRANSFER_ID}/accept`, async (route) => {
         role = "owner";
         return route.fulfill({ json: { transferId: TRANSFER_ID, state: "accepted" } });
@@ -257,8 +271,9 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
 
       await page.goto(`/apps/${SHARED_APP}`, { waitUntil: "domcontentloaded" });
       const sharing = page.getByTestId("app-sharing");
-      const transferId = sharing.locator('input[name="ownership-transfer-id"]');
-      await transferId.fill(TRANSFER_ID);
+      await expect(sharing.locator('input[name="ownership-transfer-id"]')).toHaveCount(0);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(sharing).toContainText("所有権の譲渡が届いています");
       await sharing.getByRole("button", { name: "所有権を受け取る" }).click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText("利用料金を支払います");
@@ -273,10 +288,30 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
     });
 
+    test("Home discovers incoming transfers for a recipient who is not an app member", async ({ page }) => {
+      const requests = await accountAs(page, "owner");
+      let pending = true;
+      await page.route((url) => url.pathname === "/api/v1/ownership-transfers", (route) => route.fulfill({ json: { transfers: pending ? [{
+        transferId: TRANSFER_ID, capsuleId: "cap_not_a_member", fromAccountId: "tsub_hanako0123456789", toAccountId: "sub_portable_e2e", state: "pending",
+      }] : [] } }));
+      await page.route(`**/api/v1/ownership-transfers/${TRANSFER_ID}/accept`, (route) => {
+        pending = false;
+        return route.fulfill({ json: { transferId: TRANSFER_ID, state: "accepted" } });
+      });
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.locator('input[name="ownership-transfer-id"]')).toHaveCount(0);
+      const accept = page.getByRole("button", { name: "所有権を受け取る", exact: true });
+      await expect(accept).toBeVisible();
+      await accept.click();
+      await page.getByRole("dialog").getByRole("button", { name: "所有権を受け取る", exact: true }).click();
+      await expect(accept).toHaveCount(0);
+      expect(requests.filter((request) => request.method === "POST")).toContainEqual({ method: "POST", path: `/api/v1/ownership-transfers/${TRANSFER_ID}/accept` });
+    });
+
     test("hides the app-sharing section when its new members route is absent", async ({ page }) => {
       await accountAs(page, "owner");
       await page.route(`**/api/v1/capsules/${OWNER_APP}/members`, (route) =>
-        route.fulfill({ status: 404, json: { error: "not_found" } }));
+        route.fulfill({ status: 404, json: { error: { code: "route_not_found" } } }));
       const response = page.waitForResponse((candidate) =>
         new URL(candidate.url()).pathname === `/api/v1/capsules/${OWNER_APP}/members`);
       await page.goto(`/apps/${OWNER_APP}`, { waitUntil: "domcontentloaded" });

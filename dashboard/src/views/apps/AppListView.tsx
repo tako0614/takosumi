@@ -12,6 +12,7 @@ import "../app/app-page.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Search, Sparkles } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
+import IncomingOwnershipTransfers from "./IncomingOwnershipTransfers.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { resolveAppIcon } from "../../lib/app-face.ts";
 import { currentWorkspaceId, selectAvailableWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
@@ -56,7 +57,10 @@ export default function AppListView() {
 async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; readonly surfacesFailed: boolean }> {
   const accessible = await listAccessibleApps();
   if (accessible !== undefined) {
-    const rows = await Promise.all(accessible.map(async (entry): Promise<HomeApp> => {
+    let surfacesFailed = false;
+    const rows: HomeApp[] = new Array(accessible.length);
+    let nextIndex = 0;
+    const readApp = async (entry: AccessibleApp): Promise<HomeApp> => {
       let surfaces: HomeApp["surfaces"] = [];
       let state = homeState(entry);
       // A launcher URL must come from the app's authorized screen projection.
@@ -65,7 +69,7 @@ async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; read
         const view = await getCapsuleApp(entry.capsuleId);
         surfaces = openableScreens(view.screens);
         if (state === "ready" && view.state === "installed" && view.version.updateAvailable) state = "update_available";
-      } catch { /* The app remains manageable when screen discovery is unavailable. */ }
+      } catch { surfacesFailed = true; }
       return {
         inst: { id: entry.capsuleId, name: entry.name },
         displayName: typeof entry.displayName === "string" ? entry.displayName : entry.displayName?.[locale()],
@@ -74,8 +78,14 @@ async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; read
         ownerDisplayName: entry.ownerDisplayName,
         state, surfaces,
       };
+    };
+    await Promise.all(Array.from({ length: Math.min(4, accessible.length) }, async () => {
+      while (nextIndex < accessible.length) {
+        const index = nextIndex++;
+        rows[index] = await readApp(accessible[index]!);
+      }
     }));
-    return { apps: rows, surfacesFailed: false };
+    return { apps: rows, surfacesFailed };
   }
   const workspaces = await listWorkspacesCached();
   const id = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
@@ -102,9 +112,11 @@ function homeState(app: AccessibleApp): AppState {
   }
 }
 function Inner() {
-  const [home, { refetch }] = createResource(loadHomeApps);
+  const [home, { refetch }] = createResource(() => ({ workspaceId: currentWorkspaceId(), locale: locale() }), loadHomeApps);
   const apps = createMemo(() => [...(home.error ? [] : home.latest?.apps ?? [])].sort(compareHomeApps));
   return (
+    <>
+    <IncomingOwnershipTransfers appNames={new Map(apps().map((app) => [app.inst.id, app.displayName ?? app.inst.name]))} onChanged={async () => { await refetch(); }} />
     <Switch>
       <Match when={home.loading}><HomeSkeleton /></Match>
       <Match when={home.error}>
@@ -151,6 +163,7 @@ function Inner() {
         </Show>
       </Match>
     </Switch>
+    </>
   );
 }
 

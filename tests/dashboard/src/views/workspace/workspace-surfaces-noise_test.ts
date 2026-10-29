@@ -26,7 +26,6 @@ describe("workspace and account surfaces", () => {
     for (const removed of [
       "workspace/WorkspaceSettingsView.tsx",
       "account/components/WorkspaceCreateForm.tsx",
-      "account/components/shell/WorkspaceSwitcher.tsx",
       "account/lib/current-workspace.tsx",
       "workspace/tabs/WorkspaceTab.tsx",
       "workspace/tabs/MembersTab.tsx",
@@ -52,7 +51,8 @@ describe("workspace and account surfaces", () => {
     expect(accountViewSource).not.toContain("MembersTab");
     expect(accountViewSource).not.toContain("WorkspaceCreateForm");
     expect(sidebarSource).not.toContain("WorkspaceSwitcher");
-    expect(topBarSource).not.toContain("WorkspaceSwitcher");
+    expect(topBarSource).toContain("WorkspaceSwitcher");
+    expect(read("account/components/shell/WorkspaceSwitcher.tsx")).toContain("!await appOwnershipAvailable()");
   });
 
   test("connections never render raw ids, sources, or env names", () => {

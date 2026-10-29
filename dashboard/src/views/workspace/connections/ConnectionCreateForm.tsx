@@ -40,8 +40,11 @@ import { ActionError, createAction } from "../../account/lib/action.tsx";
 import {
   type ProviderConnection,
   createConnection,
+  appOwnershipAvailable,
   connectionSetupCatalog,
 } from "../../../lib/control-api.ts";
+import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
+import { friendlyError } from "../../../lib/error-copy.ts";
 import { connectProviderWithPopup } from "../../../lib/connection-oauth-popup.ts";
 import { locale, t } from "../../../i18n/index.ts";
 import {
@@ -112,7 +115,10 @@ function setupOptionMatchesSource(
 }
 
 export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
-  const workspaceId = () => props.workspaceId;
+  const [personalScope, { refetch: refetchScope }] = createResource(() => appOwnershipAvailable());
+  const scopeReady = () => !personalScope.loading && !personalScope.error && personalScope() !== undefined;
+  const workspaceId = () => personalScope.error ? undefined : personalScope() === true
+    ? undefined : props.workspaceId ?? (currentWorkspaceId() || undefined);
   let disposed = false;
   onCleanup(() => { disposed = true; });
 
@@ -215,9 +221,11 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
   const connectionSaved = async (
     connection: ProviderConnection,
     verify: boolean,
+    legacyOAuthWorkspaceId?: string,
   ) => {
+    const personal = await appOwnershipAvailable();
     const matchesCurrentScope = () => {
-      const workspace = workspaceId();
+      const workspace = legacyOAuthWorkspaceId ?? (personal ? undefined : workspaceId());
       return workspace
         ? connection.workspaceId === workspace
         : connection.workspaceId === undefined && connection.scope !== "operator";
@@ -232,7 +240,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
 
   const connectOAuth = async () => {
     const helper = oauthHelper();
-    if (!helper || oauthBusy()) return;
+    if (!helper || oauthBusy() || !scopeReady()) return;
     const popup = window.open("about:blank", "_blank", "popup,width=600,height=760");
     if (!popup) { setOauthFailure(true); return; }
     cancelOAuth(); oauthPopup = popup;
@@ -245,7 +253,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
         scopeHints: { providerSettings: Object.fromEntries(oauthSetupFields().flatMap((field) =>
           values()[field.envName]?.trim() ? [[field.key, values()[field.envName]!.trim()]] : [])) } });
       if (disposed || controller.signal.aborted || workspaceId() !== targetWorkspace) return;
-      await connectionSaved(connection, false);
+      await connectionSaved(connection, false, connection.workspaceId);
     } catch {
       if (!disposed && !controller.signal.aborted && workspaceId() === targetWorkspace) setOauthFailure(true);
     } finally {
@@ -287,6 +295,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
 
   // One generic submit path for every service-described setup option.
   const createFromRecipe = createAction(async () => {
+    if (!scopeReady()) return;
     const option = setupOption();
     if (!option) throw new Error(t("conn.error.invalidProvider"));
     const submitValues: Record<string, string> = {};
@@ -310,6 +319,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
   // Generic ProviderConnection submit. This is the first-class path for any
   // provider not covered by a guided recipe.
   const createGenericEnvProvider = createAction(async () => {
+    if (!scopeReady()) return;
     const name = genericEnvProvider().trim();
     if (!name) throw new Error(t("conn.genericEnv.providerRequired"));
     const submitValues: Record<string, string> = {};
@@ -362,6 +372,11 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
   return (
     <Show when={props.open ?? true}>
       <Card>
+        <Show when={personalScope.error}>
+          <Toast tone="error">{friendlyError(personalScope.error, t).message}
+            <Button variant="secondary" onClick={() => void refetchScope()}>{t("common.retry")}</Button>
+          </Toast>
+        </Show>
         <CardHeader
           title={t("conn.add.title")}
           actions={
@@ -430,7 +445,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
               <Input value={values()[field.envName] ?? ""} onInput={(event) => setFieldValue(field.envName, event.currentTarget.value)} autocomplete="off" />
             </FormField>}</For>
             <div class="wc-form-actions">
-              <Button type="button" variant="primary" busy={oauthBusy()} onClick={() => void connectOAuth()}>
+              <Button type="button" variant="primary" busy={oauthBusy()} disabled={!scopeReady()} onClick={() => void connectOAuth()}>
                 {t("conn.oauth.connect", { provider: installedCredentialRecipes().find((recipe) => recipe.id === oauthHelper()?.credentialRecipe.id)?.displayName ?? "" })}
               </Button>
               <Show when={oauthBusy()}><Button type="button" variant="ghost" onClick={cancelOAuth}>{t("common.cancel")}</Button></Show>
@@ -508,6 +523,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
                       variant="primary"
                       type="submit"
                       busy={createFromRecipe.busy()}
+                      disabled={!scopeReady()}
                     >
                       {createFromRecipe.busy()
                         ? t("conn.registering")
@@ -636,6 +652,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
                     variant="primary"
                     type="submit"
                     busy={createGenericEnvProvider.busy()}
+                    disabled={!scopeReady()}
                   >
                     {createGenericEnvProvider.busy()
                       ? t("conn.registering")

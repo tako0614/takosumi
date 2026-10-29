@@ -13,7 +13,8 @@ const INSTALL_PLANS_PATH = "/api/v1/install-plans";
 
 function isMissingAppRoute(error: unknown): error is DeployControlApiError {
   return error instanceof DeployControlApiError && error.status === 404 &&
-    (error.code === undefined || ["not_found", "route_not_found", "fixture_route_not_found"].includes(error.code));
+    (error.code === undefined || ["route_not_found", "fixture_route_not_found"].includes(error.code) ||
+      (error.code === "not_found" && isRecord(error.body) && error.body.error === "not_found"));
 }
 
 export async function runApps(args: string[], io: CliIo): Promise<number> {
@@ -121,7 +122,7 @@ export async function runAppInstall(args: string[], io: CliIo): Promise<number> 
       });
     } catch (error) {
       if (!isMissingAppRoute(error) || !workspaceId) {
-        if (error instanceof DeployControlApiError && error.status === 404 && !workspaceId) {
+        if (isMissingAppRoute(error) && !workspaceId) {
           throw new Error(isJapaneseCli()
             ? "このサーバーはワークスペースなしのアプリインストールに対応していません。サーバーを更新するか、旧サーバーとの互換利用で --workspace を指定してください。"
             : "Workspace-less app install is not available on this server; update the server or pass --workspace for legacy compatibility.");
@@ -154,6 +155,12 @@ export async function runAppUninstall(args: string[], io: CliIo): Promise<number
   }
   if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr(isJapaneseCli() ? "アプリID が必要です" : "app id is required");
+    return 2;
+  }
+  if (!booleanOption(options, "yes")) {
+    io.stderr(isJapaneseCli()
+      ? `アプリ ${capsuleId} のアンインストールを開始するには --yes を指定してください。`
+      : `Pass --yes to confirm uninstalling app ${capsuleId}.`);
     return 2;
   }
   try {
@@ -259,13 +266,13 @@ export function appsInstallHelpText(): string {
 
 export function appsUninstallHelpText(): string {
   return isJapaneseCli() ? [
-    "takosumi apps uninstall <app-id>",
-    "", "通常のアンインストール処理を開始します。",
+    "takosumi apps uninstall <app-id> --yes",
+    "", "--yes で確認し、通常のアンインストール処理を開始します。",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "環境変数: TAKOSUMI_ACCOUNT_TOKEN",
   ].join("\n") : [
-    "takosumi apps uninstall <app-id>",
-    "", "Starts the app's normal uninstall process.",
+    "takosumi apps uninstall <app-id> --yes",
+    "", "--yes confirms starting the app's normal uninstall process.",
     "--url <Takosumi origin> --token <Accounts PAT> --json",
     "Environment: TAKOSUMI_ACCOUNT_TOKEN",
   ].join("\n");

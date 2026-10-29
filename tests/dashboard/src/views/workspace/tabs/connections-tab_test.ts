@@ -85,7 +85,7 @@ describe("ConnectionsTab guided-first add flow", () => {
   test("personal Account connections need no workspace selector", () => {
     expect(source).toContain("readonly workspaceId?: string;");
     expect(formSource).toContain("readonly workspaceId?: string;");
-    expect(source).toContain("() => ({ workspaceId: workspaceId() })");
+    expect(source).toContain("() => ({ workspaceId: workspaceId() ?? (currentWorkspaceId() || undefined) })");
     expect(source).toContain("({ workspaceId: id }) => listProviderConnections(id || currentWorkspaceId() || undefined)");
     expect(source).toContain("const legacyUsageWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;");
     expect(source).toContain("loadConnectionUsage(");
@@ -162,7 +162,7 @@ describe("ConnectionsTab create-form wiring", () => {
 
   test("typed-credential paths verify; the OAuth path arrives checked", () => {
     expect(formSource.match(/await connectionSaved\(connection, true\);/g)).toHaveLength(2);
-    expect(formSource).toContain("await connectionSaved(connection, false);");
+    expect(formSource).toContain("await connectionSaved(connection, false, connection.workspaceId);");
     expect(formSource).toContain("connectProviderWithPopup");
     expect(source).not.toContain("connectProviderWithPopup");
   });

@@ -3,6 +3,7 @@ import { matchingInstalledApps } from "takosumi-contract";
 import {
   listInstalledApps,
   listOpenGitInstallAttempts,
+  resetAppOwnershipCache,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const realFetch = globalThis.fetch;
@@ -26,6 +27,7 @@ const config = (id: string, overrides: Record<string, unknown> = {}) => ({
 });
 
 function stub(reply: (path: string) => Response | Promise<Response>) {
+  resetAppOwnershipCache();
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const path = String(input);
@@ -153,7 +155,7 @@ test("discovery caps at 200 apps and never exceeds four concurrent detail reads"
 
 test("only missing /apps falls back to an existing authorized legacy Workspace", async () => {
   const calls = stub((path) => {
-    if (path === "/api/v1/apps") return Response.json({}, { status: 404 });
+    if (path === "/api/v1/apps") return Response.json({ error: { code: "route_not_found" } }, { status: 404 });
     if (path.startsWith("/api/v1/workspaces?")) return Response.json({ workspaces: [{ id: "ws_a" }], returned: 1, limit: 50, truncated: false });
     if (path === "/api/v1/workspaces/ws_a/installed-apps") return Response.json({ installedApps: [{ capsuleId: "old" }], complete: true });
     if (path === "/api/v1/workspaces/ws_a/install-plans?open=1") return Response.json({ installPlans: [
@@ -168,7 +170,7 @@ test("only missing /apps falls back to an existing authorized legacy Workspace",
   expect(calls).toContain("/api/v1/workspaces/ws_a/install-plans?open=1");
 
   const absent = stub((path) => {
-    if (path === "/api/v1/apps") return Response.json({}, { status: 404 });
+    if (path === "/api/v1/apps") return Response.json({ error: { code: "route_not_found" } }, { status: 404 });
     if (path.startsWith("/api/v1/workspaces?")) return Response.json({ workspaces: [], returned: 0, limit: 50, truncated: false });
     throw new Error(`unexpected ${path}`);
   });

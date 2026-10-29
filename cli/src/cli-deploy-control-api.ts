@@ -9,6 +9,7 @@ export class DeployControlApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly body?: unknown,
   ) {
     super(message);
     this.name = "DeployControlApiError";
@@ -65,6 +66,7 @@ export async function requestDeployControlApi(input: {
       deployControlApiErrorMessage(body, `HTTP ${response.status}`),
       response.status,
       isRecord(body) ? (isRecord(body.error) ? stringValue(body.error.code) : stringValue(body.error)) : undefined,
+      body,
     );
   }
   if (body === undefined) {

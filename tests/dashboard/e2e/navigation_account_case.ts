@@ -168,11 +168,11 @@ export function registerNavigationAccountCases(mode: string): void {
           apiReads.push(new URL(request.url()).pathname);
         }
       });
-      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      await page.addInitScript(() => { localStorage.setItem("tg_lang", "ja"); localStorage.setItem("takosumi.currentWorkspaceId", "ws_beta"); });
       await page.setViewportSize(DESKTOP);
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const sidebar = page.locator(".sidebar-nav");
-      await expect(sidebar.getByRole("link")).toHaveText(["ホーム", "ストア", "アカウント"]);
+      await expect(sidebar.getByRole("link")).toHaveText(["ホーム", "ストア", "接続", "アカウント"]);
       await expect(page.getByTestId("workspace-switcher")).toHaveCount(0);
       await expect(page.locator(".sidebar")).not.toContainText(/workspace|space|スペース|ワークスペース/iu);
       await expect(page.locator(".topbar")).not.toContainText(/workspace|space|スペース|ワークスペース/iu);
@@ -180,7 +180,8 @@ export function registerNavigationAccountCases(mode: string): void {
       await expect(home.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName })).toBeVisible();
       await expect(home.getByTestId("home-app").filter({ hasText: "Beta Office" })).toBeVisible();
       await expect(home).toContainText("Hanako Sato");
-      expect(apiReads).toContain("/api/v1/apps");
+      expect(apiReads.filter((path) => path === "/api/v1/apps")).toHaveLength(1);
+      expect(await page.evaluate(() => localStorage.getItem("takosumi.currentWorkspaceId"))).toBeNull();
       expect(apiReads.some((path) => path === "/api/v1/workspaces" || path.startsWith("/api/v1/workspaces/"))).toBe(false);
       await page.getByRole("button", { name: /ユーザーメニュー|User menu/u }).click();
       const menu = page.getByRole("group", { name: /ユーザーメニュー|User menu/u });
@@ -191,13 +192,47 @@ export function registerNavigationAccountCases(mode: string): void {
 
       await page.setViewportSize(PHONE);
       const tabs = page.locator(".mobile-tabs");
-      await expect(tabs.getByRole("link")).toHaveText(["ホーム", "ストア", "アカウント"]);
+      await expect(tabs.getByRole("link")).toHaveText(["ホーム", "ストア", "接続", "アカウント"]);
       await expect(page.getByTestId("workspace-switcher")).toHaveCount(0);
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
       ).toBeLessThanOrEqual(1);
       await shot(page, "nav-mobile-app-ownership");
       expect(errors).toEqual([]);
+    });
+
+    test("legacy workspace selection remains available only after the apps route is missing", async ({ page }) => {
+      await page.addInitScript(() => { localStorage.setItem("tg_lang", "ja"); localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha"); });
+      await page.route("**/api/v1/apps**", (route) => route.fulfill({ status: 404, json: { error: { code: "route_not_found" } } }));
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      const selector = page.locator(".topbar select.workspace-switcher");
+      await expect(selector).toBeVisible();
+      await expect(page.getByTestId("home-apps")).toContainText(PORTABLE_EXPECTATIONS.appName);
+      await selector.selectOption("ws_beta");
+      await expect(page.getByTestId("home-apps")).toContainText("Beta Office");
+      await expect(page.getByTestId("home-apps")).not.toContainText(PORTABLE_EXPECTATIONS.appName);
+    });
+
+    test("Home bounds app reads and reports failed screen discovery", async ({ page }) => {
+      const apps = Array.from({ length: 9 }, (_, index) => ({ ...PORTABLE_APPS[0]!, capsuleId: `cap_home_${index}`, name: `Home app ${index}` }));
+      let active = 0;
+      let maximum = 0;
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      await page.route("**/api/v1/apps**", (route) => route.fulfill({ json: { apps } }));
+      await page.route((url) => /^\/api\/v1\/capsules\/cap_home_\d+\/app$/u.test(url.pathname), async (route) => {
+        active += 1; maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        active -= 1;
+        const id = new URL(route.request().url()).pathname.split("/")[4]!;
+        if (id === "cap_home_2") return route.fulfill({ status: 503, json: { error: { code: "unavailable" } } });
+        return route.fulfill({ json: { app: { kind: "takosumi.capsule-app@v1", capsuleId: id, state: "installed", primaryAction: "none",
+          problems: [], screens: [], version: {}, progress: {}, uninstall: {} } } });
+      });
+      await page.goto("/", { waitUntil: "domcontentloaded" });
+      await expect(page.getByTestId("home-app")).toHaveCount(9);
+      expect(maximum).toBeLessThanOrEqual(4);
+      expect(maximum).toBeGreaterThan(1);
+      await expect(page.getByTestId("home-apps")).toContainText("一部のアプリの画面を読み込めませんでした");
     });
 
     test("接続 shows the apps using each connection and removal names them", async ({ page }) => {
