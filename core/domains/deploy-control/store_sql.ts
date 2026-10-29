@@ -9071,7 +9071,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async putConnection(
     connection: ProviderConnection,
   ): Promise<ProviderConnection> {
-    await this.#pgUpsert(pgSchema.connections, {
+    const values = {
       id: connection.id,
       workspaceId: connection.workspaceId ?? null,
       ownerAccountId: connection.ownerAccountId ?? null,
@@ -9080,7 +9080,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       connectionJson: connection,
       createdAt: connection.createdAt,
       updatedAt: connection.updatedAt,
-    });
+    };
+    const { ownerAccountId: _insertOnlyOwner, ...update } = values;
+    void _insertOnlyOwner;
+    await this.#pgUpsert(pgSchema.connections, values, update);
     await this.#initializeConnectionPhysicalOwner(connection);
     return connection;
   }
