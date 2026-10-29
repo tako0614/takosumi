@@ -3,7 +3,7 @@
  *
  * Billing providers return the browser to the dashboard, so these URLs must
  * stay on a route the SPA actually mounts. The workspace id remains a query
- * parameter because the dashboard's WorkspaceSwitcher owns the active
+ * parameter because the compatibility workspace state retains the active
  * Workspace selection rather than encoding it in the route.
  */
 export const WORKSPACE_BILLING_ROUTE = "/account/billing" as const;

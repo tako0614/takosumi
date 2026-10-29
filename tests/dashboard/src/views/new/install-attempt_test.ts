@@ -32,6 +32,7 @@ import {
   openAttemptStatusKey,
   progressSignature,
   replanRequest,
+  reviewSummarySheet,
   repositoryLabel,
   restartRequest,
   retainedBindings,
@@ -399,10 +400,11 @@ describe("starting and starting over", () => {
     });
   });
 
-  test("only this person's attempt in this workspace is shown", () => {
+  test("only this person's explicit attempt is shown, with legacy Workspace matching when available", () => {
     const response = respond(inputs());
     const here = { attemptId: ID, workspaceId: "ws_alpha", principalId: "sub_me" };
     expect(attemptBelongsHere(response, here)).toBe(true);
+    expect(attemptBelongsHere(response, { attemptId: ID, principalId: "sub_me" })).toBe(true);
     expect(attemptBelongsHere(response, { ...here, workspaceId: "ws_beta" })).toBe(false);
     expect(attemptBelongsHere(response, { ...here, principalId: "sub_other" })).toBe(false);
     expect(attemptBelongsHere(response, { ...here, attemptId: "gip_ffffffffffffffff" })).toBe(false);
@@ -619,5 +621,38 @@ describe("what holds 「許可してインストール」 after a change", () =>
     expect(deriveInstallView(failed, { answersKept: true })).toMatchObject({ stage: "failed", applyBlock: "failed", progress: "failed", retryCode: "plan_run_failed" });
     expect(deriveInstallView(failed, { answersKept: true, outdated: true })).toMatchObject({ applyBlock: "replanning" });
     expect(deriveInstallView(failed).applyBlock).toBeUndefined();
+  });
+});
+
+
+describe("reopened review sheet", () => {
+  test("hydrates only public values and leaves sensitive set markers out of drafts", () => {
+    const hydrated = reviewSummarySheet({
+      modulePath: "deploy", appName: "office", environment: "integration",
+      connections: [], interfaces: [],
+      settings: [
+        { name: "domain", type: "string", required: true, sensitive: false, set: true, value: "office.example.test" },
+        { name: "enabled", type: "boolean", required: false, sensitive: false, set: true, value: false },
+        { name: "limit", type: "number", required: false, sensitive: false, set: true, value: 0 },
+        { name: "options", type: "json", required: false, sensitive: false, set: true, value: { zones: ["east"] } },
+        { name: "empty", type: "json", required: false, sensitive: false, set: true, value: null },
+        { name: "absent", type: "string", required: false, sensitive: false, set: false },
+        // Defense in depth: even a malformed server answer cannot turn a
+        // write-only value or its set marker into a confirmation draft.
+        { name: "token", type: "string", required: true, sensitive: true, set: true, value: "never-copy-secret" },
+      ],
+    });
+    expect(hydrated.sheet.name.current).toBe("office");
+    expect(hydrated.sheet.modulePath).toBe("deploy");
+    expect(hydrated.drafts).toEqual({
+      domain: { value: "office.example.test", touched: true },
+      enabled: { value: "false", touched: true },
+      limit: { value: "0", touched: true },
+      options: { value: '{"zones":["east"]}', touched: true },
+      empty: { value: "null", touched: true },
+    });
+    expect(JSON.stringify(hydrated)).not.toContain("never-copy-secret");
+    expect(hydrated.sheet.variables.find((variable) => variable.name === "token")?.defaultValue).toBeUndefined();
+    expect(continueVariables(hydrated.sheet, hydrated.drafts)).toMatchObject({ ok: false, missing: ["token"] });
   });
 });

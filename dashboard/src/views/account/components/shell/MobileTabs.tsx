@@ -1,6 +1,6 @@
 /**
- * Mobile bottom bar: the same four behaviors as the sidebar (home / store /
- * connections / account), from the shared nav model, each with its icon and a
+ * Mobile bottom bar: the same destinations as the sidebar (home / store /
+ * account), from the shared nav model, each with its icon and a
  * short label so the destination reads in words.
  */
 import { A, useLocation } from "@solidjs/router";

@@ -112,7 +112,7 @@ describe("Takosumi API key management", () => {
     expect(component).not.toContain("key.token");
   });
 
-  test("supports least-privilege scope, expiry, and Workspace binding", () => {
+  test("uses least-privilege, catalog-approved personal scopes and expiry", () => {
     expect(TAKOSUMI_ACCOUNTS_PAT_SCOPES).toEqual([
       "read",
       "write",
@@ -128,13 +128,19 @@ describe("Takosumi API key management", () => {
     ]);
     expect(component).toContain("listTakosumiApiKeyScopeCatalog");
     expect(component).toContain("selfService");
-    expect(component).toContain('workspaceBinding === "required"');
+    expect(component).toContain('scope.selfService && scope.workspaceBinding === "optional"');
     expect(component).not.toContain(
       "TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES",
     );
     expect(component).not.toContain('"resources:read"');
     expect(component).toContain("expires_at:");
-    expect(component).toContain("workspace_id: props.workspaceId");
+    expect(component).not.toContain("props.workspaceId");
+    expect(component).not.toContain("workspaceBinding === \"required\"");
+    const createBody = component.slice(
+      component.indexOf("const create = async"),
+      component.indexOf("const revoke = async"),
+    );
+    expect(createBody).not.toContain("workspace_id");
   });
 
   test("never sends operator-issued admin scope through self-service", () => {
@@ -284,12 +290,9 @@ describe("Takosumi API key management", () => {
   test("uses server-provided localized scope labels and descriptions", () => {
     expect(component).toContain("scope.label[locale()]");
     expect(component).toContain("scope.description[locale()]");
-    expect(en["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
-      "workspace",
-    );
-    expect(ja["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
-      "スペース",
-    );
+    expect(component).not.toContain("account.apiKeys.scopeCatalog.workspaceRequired");
+    expect(component).not.toContain("account.apiKeys.restrictWorkspace");
+    expect(component).toContain('t("account.apiKeys.scopeRestricted")');
   });
 
   test("explains why administrative access is unavailable", () => {

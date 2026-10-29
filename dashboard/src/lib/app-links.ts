@@ -20,6 +20,7 @@ export const APP_PAGE_SECTIONS = {
   links: "links",
   created: "created",
   history: "history",
+  sharing: "sharing",
   danger: "danger",
 } as const;
 

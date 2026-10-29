@@ -59,6 +59,16 @@ async function appFixture(page: Page, initialUses: readonly CapsuleAppLink[] = [
     const path = url.pathname;
     const method = request.method();
     if (method !== "GET") mutations.push({ method, path, body: request.postData() ? request.postDataJSON() : undefined });
+    if (path === "/api/v1/apps") {
+      return route.fulfill({ json: { apps: [{
+        capsuleId: ID,
+        name: capsule.name,
+        role: "owner",
+        ownerDisplayName: "Portable E2E",
+        state: "installed",
+        primaryAction: "open",
+      }] } });
+    }
     const linkMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)\/interface-links\/([^/]+)(\/candidates)?$/u);
     if (linkMatch) {
       const consumerId = decodeURIComponent(linkMatch[1]!);
@@ -84,6 +94,7 @@ async function appFixture(page: Page, initialUses: readonly CapsuleAppLink[] = [
       return route.fulfill({ json: { link: receipt } });
     }
     const base = `/api/v1/capsules/${ID}`;
+    if (path === `${base}/members`) return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
     if (path === base) return route.fulfill({ json: { capsule, installConfigReAdoption: { authorityGuard: `sha256:${"a".repeat(64)}` } } });
     if (path === `${base}/app`) return route.fulfill({ json: { app: {
       kind: "takosumi.capsule-app@v1", capsuleId: ID, workspaceId: "ws_alpha", projectId: "prj_alpha", name: capsule.name,

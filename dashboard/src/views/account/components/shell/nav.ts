@@ -4,15 +4,15 @@
  * The primary nav is what people do with Takosumi (TASK-0115):
  *   ホーム   — open and keep the apps you installed
  *   ストア   — find an app and install it (`/new`)
- *   接続     — connect your own cloud
- *   アカウント — you, the people you share a workspace with, and what it costs
+ *   接続     — connect your personal cloud accounts
+ *   アカウント — your profile and personal usage
  * The desktop sidebar and the mobile bottom bar render this list verbatim, and
  * the top bar names the section from the same table, so a route rename cannot
  * desync the chrome. Nothing else is a top-level destination: run history,
  * activity, recovery and created resources belong to each app's
  * page, and workspace-wide tools that no behavior needs stay in the API and CLI.
  */
-import { LayoutGrid, Link2, Store, UserCircle2 } from "lucide-solid";
+import { LayoutGrid, Plug, Store, UserCircle2 } from "lucide-solid";
 import type { MessageKey } from "../../../../i18n/index.ts";
 
 export type ShellNavItem = {
@@ -25,7 +25,7 @@ export type ShellNavItem = {
   readonly alsoActiveOn?: readonly string[];
 };
 
-/** The four behaviors — identical on the sidebar and the mobile bottom bar. */
+/** The four primary destinations — identical on the sidebar and mobile bar. */
 export const PRIMARY_NAV: readonly ShellNavItem[] = [
   // An installed app's page and the run details opened from its history are
   // part of keeping your apps, so they keep ホーム selected.
@@ -38,7 +38,7 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
   },
   // ストア = browse + install in one page (`/new`).
   { href: "/new", labelKey: "nav.store", icon: Store },
-  { href: "/connections", labelKey: "nav.connections", icon: Link2 },
+  { href: "/connections", labelKey: "nav.connections", icon: Plug },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
 

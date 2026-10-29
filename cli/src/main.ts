@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import process from "node:process";
-import { helpText } from "./cli-help.ts";
+import { helpText, isJapaneseCli } from "./cli-help.ts";
 import {
   runAccountsMigrate,
   runAccountsMigrateD1,
@@ -9,6 +9,7 @@ import {
   runAccountsTokens,
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
+import { runApps } from "./cli-apps-commands.ts";
 import {
   runLaunchReadinessMigrateFinalModel,
   runLaunchReadinessOidcAccountSecurityEvidence,
@@ -69,9 +70,9 @@ export async function main(
 
   const [domain, command, ...rest] = args;
   if (domain === "installations") {
-    io.stderr(
-      "`takosumi installations` is retired. Use canonical Source/Capsule plan/apply operations.",
-    );
+    io.stderr(isJapaneseCli()
+      ? "この旧コマンドは終了しました。`takosumi apps list`、`apps install`、`apps uninstall` を使ってください。"
+      : "This legacy command is retired. Use `takosumi apps list`, `apps install`, or `apps uninstall`.");
     return 2;
   }
   if (domain === "accounts" && command === "seed") {
@@ -91,6 +92,9 @@ export async function main(
   }
   if (domain === "connections") {
     return await runConnections([command, ...rest].filter(Boolean), io);
+  }
+  if (domain === "apps") {
+    return await runApps([command, ...rest].filter(Boolean), io);
   }
   if (domain === "install-configs") {
     return await runInstallConfigs([command, ...rest].filter(Boolean), io);

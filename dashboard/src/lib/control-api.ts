@@ -55,6 +55,7 @@ import type {
   DiscardGitInstallPlanRequest,
   GitInstallPlanResponse,
   ListOpenGitInstallPlansResponse,
+  InstalledAppSummary,
   ListInstalledAppsResponse,
   PatchGitInstallPlanRequest,
   CreateGitRevisionPlanRequest,
@@ -63,8 +64,15 @@ import type {
   RunPlanOrigin as ContractRunPlanOrigin,
   RunPolicyReason as ContractRunPolicyReason,
 } from "takosumi-contract";
-import { isCanonicalRepositoryDirectoryPath } from "takosumi-contract";
+import {
+  hasCredentialQueryParams,
+  installedAppSourceIsMatchable,
+  installedAppSourceUrl,
+  isCanonicalRepositoryDirectoryPath,
+  normalizeInstallConfigSourcePath,
+} from "takosumi-contract";
 import { gitPlanProgressSignature } from "./git-plan-progress.ts";
+import { normalizeProviderSourceAddress } from "takosumi-contract/provider-env-rules";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account
@@ -230,6 +238,7 @@ export async function controlFetch<T>(
   });
 
   if (res.status === 401) {
+    resetAppOwnershipCache();
     // The control routes share the account-plane session gate. On expiry, send
     // the operator back through sign-in, preserving the intended destination
     // (mirrors the account-plane apiFetch behaviour).
@@ -297,7 +306,10 @@ async function fetchAllPages<T>(
   extract: (
     body: { nextCursor?: string } & Record<string, unknown>,
   ) => readonly T[],
-  opts: { readonly signal?: AbortSignal } = {},
+  opts: {
+    readonly signal?: AbortSignal;
+    readonly readPage?: (path: string) => Promise<{ nextCursor?: string } & Record<string, unknown>>;
+  } = {},
 ): Promise<readonly T[]> {
   const all: T[] = [];
   let cursor: string | undefined;
@@ -307,7 +319,7 @@ async function fetchAllPages<T>(
       cursor === undefined
         ? basePath
         : `${basePath}${sep}cursor=${encodeURIComponent(cursor)}`;
-    const body = await controlFetch<
+    const body = opts.readPage ? await opts.readPage(path) : await controlFetch<
       { nextCursor?: string } & Record<string, unknown>
     >(path, { signal: opts.signal });
     all.push(...extract(body));
@@ -477,7 +489,7 @@ export type CapsuleUninstall = NonNullable<ContractCapsule["uninstall"]>;
 
 export interface Capsule {
   readonly id: string;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   /** Exact compatibility evidence pinned by the retained install configuration. */
   readonly compatibilityReportId?: string;
   /** Owning Project, when exposed by the public Capsule projection. */
@@ -798,7 +810,7 @@ export interface SourcePatchRequest {
 }
 
 export interface CapsuleSourceIdentity {
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   readonly sourceId: string;
   readonly url: string;
   readonly defaultPath: string;
@@ -1365,18 +1377,23 @@ export async function createCapsuleConfigurationPlan(
  * unchanged: the same key and request return the same attempt.
  */
 export async function createGitInstallAttempt(
-  workspaceId: string,
+  workspaceId: string | undefined,
   request: CreateGitInstallAttemptRequest,
   idempotencyKey: string,
 ): Promise<GitInstallPlanResponse> {
-  return await controlFetch<GitInstallPlanResponse>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/install-plans`,
-    {
-      method: "POST",
-      headers: { "idempotency-key": idempotencyKey },
-      body: request,
-    },
-  );
+  const options = {
+    method: "POST",
+    headers: { "idempotency-key": idempotencyKey },
+    body: request,
+  } as const;
+  if (!await appOwnershipAvailable()) {
+    const legacyId = await legacyInstallWorkspaceId(workspaceId);
+    if (!legacyId) throw new ControlApiError(404, "feature_unavailable", "Legacy installation is unavailable on this server.");
+    return await controlFetch<GitInstallPlanResponse>(
+      `${BASE}/workspaces/${encodeURIComponent(legacyId)}/install-plans`, options,
+    );
+  }
+  return await controlFetch<GitInstallPlanResponse>(`${BASE}/install-plans`, options);
 }
 
 /** Answers an attempt that waits for input (generation CAS). */
@@ -1404,13 +1421,15 @@ export async function discardGitInstallAttempt(
 
 /** The caller's own unfinished attempts in one Workspace, newest first. */
 export async function listOpenGitInstallAttempts(
-  workspaceId: string,
+  workspaceId?: string,
 ): Promise<readonly GitInstallPlanResponse[]> {
+  const legacyId = await legacyWorkspaceFor404(workspaceId);
+  if (!legacyId) return [];
   const body = await controlFetch<Partial<ListOpenGitInstallPlansResponse>>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/install-plans?open=1`,
+    `${BASE}/workspaces/${encodeURIComponent(legacyId)}/install-plans?open=1`,
   );
   return (body.installPlans ?? []).filter(
-    (entry) => entry.installPlan?.workspaceId === workspaceId,
+    (entry) => entry.installPlan?.workspaceId === legacyId,
   );
 }
 
@@ -1711,8 +1730,7 @@ function isCapsuleResponse(value: unknown): value is Capsule {
   return (
     typeof value.id === "string" &&
     value.id.length > 0 &&
-    typeof value.workspaceId === "string" &&
-    value.workspaceId.length > 0 &&
+    (value.workspaceId === undefined || (typeof value.workspaceId === "string" && value.workspaceId.length > 0)) &&
     typeof value.name === "string" &&
     value.name.length > 0 &&
     typeof value.slug === "string" &&
@@ -1808,7 +1826,7 @@ export interface DeleteCapsuleOptions {
 
 export interface CapsuleAbandonmentExpectation {
   readonly id: string;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
 }
 
 /**
@@ -2002,15 +2020,167 @@ export type CapsuleAppView = ContractCapsuleAppView;
 export type RunPolicyReason = ContractRunPolicyReason;
 export type RunPlanOrigin = ContractRunPlanOrigin;
 
-/** Reads value-free installed app identities for matching Store listings. */
-export async function listInstalledApps(workspaceId: string): Promise<ListInstalledAppsResponse> {
-  const body = await controlFetch<ListInstalledAppsResponse>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/installed-apps`,
-  );
-  if (!Array.isArray(body.installedApps) || typeof body.complete !== "boolean") {
-    throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+const INSTALLED_APP_LIST_LIMIT = 200;
+const INSTALLED_APP_READ_CONCURRENCY = 4;
+const INSTALLED_APP_STATES = new Set([
+  "installing", "installed", "updating", "needs_attention", "stopped",
+  "uninstall_scheduled", "uninstalling", "uninstalled", "update_available",
+]);
+
+function safeInstalledAppIcon(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password &&
+      !hasCredentialQueryParams(url.searchParams) ? url.toString() : undefined;
+  } catch {
+    return undefined;
   }
-  return body;
+}
+
+/** Reads value-free installed app identities for matching Store listings. */
+export async function listInstalledApps(workspaceId?: string): Promise<ListInstalledAppsResponse> {
+  // The account-owned app list is the same authority used by listAccessibleApps,
+  // but this discovery read has a strict ceiling so a long account cannot make
+  // Store load an unbounded number of detail/config requests.
+  const apps: { capsuleId: string; state: InstalledAppSummary["state"] }[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let inspected = 0;
+  let complete = true;
+  let cursor: string | undefined;
+  for (;;) {
+    let body: unknown;
+    try {
+      body = await readCachedAppsPage(`${BASE}/apps${cursor ? query({ cursor }) : ""}`);
+    } catch (error) {
+      if (isMissingControlRoute(error) && cursor === undefined) {
+        const legacyId = await legacyWorkspaceFor404(workspaceId);
+        if (!legacyId) return { installedApps: [], complete: false };
+        const legacy = await controlFetch<ListInstalledAppsResponse>(
+          `${BASE}/workspaces/${encodeURIComponent(legacyId)}/installed-apps`,
+        );
+        if (!Array.isArray(legacy.installedApps) || typeof legacy.complete !== "boolean") {
+          throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+        }
+        return legacy;
+      }
+      if (cursor === undefined ||
+        (error instanceof ControlApiError && (error.status === 401 || error.status === 403))) throw error;
+      complete = false;
+      break;
+    }
+    if (!isRecord(body) || !Array.isArray(body.apps) ||
+      (body.nextCursor !== undefined && typeof body.nextCursor !== "string")) {
+      if (cursor === undefined) {
+        throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+      }
+      complete = false;
+      break;
+    }
+    for (const raw of body.apps) {
+      if (inspected === INSTALLED_APP_LIST_LIMIT) {
+        complete = false;
+        break;
+      }
+      inspected += 1;
+      if (!isRecord(raw) || typeof raw.capsuleId !== "string" || !raw.capsuleId ||
+        !INSTALLED_APP_STATES.has(raw.state as string) ||
+        (raw.role !== "owner" && raw.role !== "member") ||
+        typeof raw.name !== "string" || typeof raw.ownerDisplayName !== "string" ||
+        typeof raw.primaryAction !== "string") {
+        if (cursor === undefined) {
+          throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+        }
+        complete = false;
+        continue;
+      }
+      if (seenIds.has(raw.capsuleId)) {
+        if (cursor === undefined) {
+          throw new ControlApiError(502, "invalid_installed_apps_response", "Installed apps returned an invalid response.");
+        }
+        complete = false;
+        continue;
+      }
+      seenIds.add(raw.capsuleId);
+      apps.push({
+        capsuleId: raw.capsuleId,
+        state: raw.state === "update_available" ? "installed" : raw.state as InstalledAppSummary["state"],
+      });
+    }
+    if (inspected === INSTALLED_APP_LIST_LIMIT) {
+      if (body.nextCursor !== undefined && body.nextCursor !== "") complete = false;
+      break;
+    }
+    if (body.nextCursor === undefined || body.nextCursor === "") break;
+    if (typeof body.nextCursor !== "string" || seenCursors.has(body.nextCursor)) {
+      complete = false;
+      break;
+    }
+    cursor = body.nextCursor;
+    seenCursors.add(cursor);
+  }
+
+  const rows: (InstalledAppSummary | undefined)[] = new Array(apps.length);
+  let next = 0;
+  const readOne = async (index: number) => {
+    const app = apps[index]!;
+    try {
+      const capsule = await getCapsule(app.capsuleId);
+      if (capsule.id !== app.capsuleId || capsule.status === "destroyed") {
+        complete = false;
+        return;
+      }
+      const config = await getInstallConfig(capsule.installConfigId);
+      if (!isRecord(config) || config.id !== capsule.installConfigId ||
+        (capsule.workspaceId && config.workspaceId && config.workspaceId !== capsule.workspaceId)) {
+        complete = false;
+        return;
+      }
+      const selector = config.sourceSelector;
+      const needsSource = !selector?.url || !selector.path;
+      const source = needsSource && capsule.sourceId ? await getSource(capsule.sourceId) : undefined;
+      if (needsSource && !source ||
+        (source && capsule.workspaceId && source.workspaceId !== capsule.workspaceId)) {
+        complete = false;
+        return;
+      }
+      const sourceUrl = selector?.url ?? source!.url;
+      const displaySourceUrl = installedAppSourceUrl(sourceUrl);
+      if (!displaySourceUrl) {
+        complete = false;
+        return;
+      }
+      const sourcePath = normalizeInstallConfigSourcePath(selector?.path ?? source!.defaultPath);
+      const modulePath = normalizeInstallConfigSourcePath(config.modulePath ?? ".");
+      const path = [sourcePath, modulePath].filter((part) => part !== ".").join("/") || ".";
+      const storeName = config.store?.name;
+      const displayName = storeName && typeof storeName.ja === "string" && typeof storeName.en === "string"
+        ? storeName : undefined;
+      if (storeName && !displayName) complete = false;
+      const iconUrl = safeInstalledAppIcon(config.store?.iconUrl);
+      rows[index] = {
+        capsuleId: capsule.id,
+        name: capsule.name,
+        ...(displayName ? { displayName } : {}),
+        ...(iconUrl ? { iconUrl } : {}),
+        state: app.state,
+        installedFrom: {
+          url: displaySourceUrl,
+          path,
+          ...(installedAppSourceIsMatchable(sourceUrl) ? {} : { matchable: false as const }),
+        },
+      };
+    } catch (error) {
+      if (error instanceof ControlApiError && error.status === 401) throw error;
+      complete = false;
+    }
+  };
+  const workers = Array.from({ length: Math.min(INSTALLED_APP_READ_CONCURRENCY, apps.length) }, async () => {
+    while (next < apps.length) await readOne(next++);
+  });
+  await Promise.all(workers);
+  return { installedApps: rows.filter((row): row is InstalledAppSummary => row !== undefined), complete };
 }
 
 /** The view kind this dashboard build understands. */
@@ -2305,13 +2475,41 @@ async function findSourceSnapshotById(
 }
 
 export async function resolveStableSourceTag(
-  workspaceId: string,
+  workspaceId: string | undefined,
   url: string,
 ): Promise<StableSourceTagResolutionResponse> {
-  return await controlFetch<StableSourceTagResolutionResponse>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/source-ref-resolutions/stable-semver`,
-    { method: "POST", body: { url } },
-  );
+  let publicUrl: URL;
+  try {
+    publicUrl = new URL(url.trim());
+  } catch {
+    throw new ControlApiError(400, "invalid_request", "A public HTTPS Git URL is required.");
+  }
+  if (publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password || publicUrl.hash ||
+    hasCredentialQueryParams(publicUrl.searchParams) || !installedAppSourceIsMatchable(url)) {
+    throw new ControlApiError(400, "invalid_request", "A public HTTPS Git URL is required.");
+  }
+  const safeUrl = publicUrl.toString();
+  const options = { method: "POST", body: { url: safeUrl } } as const;
+  if (!await appOwnershipAvailable()) {
+    const legacyId = await legacyInstallWorkspaceId(workspaceId);
+    if (!legacyId) throw new ControlApiError(404, "feature_unavailable", "Legacy source resolution is unavailable on this server.");
+    return await controlFetch<StableSourceTagResolutionResponse>(
+      `${BASE}/workspaces/${encodeURIComponent(legacyId)}/source-ref-resolutions/stable-semver`, options,
+    );
+  }
+  try {
+    return await controlFetch<StableSourceTagResolutionResponse>(
+      `${BASE}/source-ref-resolutions${query({ url: safeUrl })}`,
+    );
+  } catch (error) {
+    if (!isMissingControlRoute(error)) throw error;
+    const legacyId = await legacyWorkspaceFor404(workspaceId);
+    if (!legacyId) throw error;
+    return await controlFetch<StableSourceTagResolutionResponse>(
+      `${BASE}/workspaces/${encodeURIComponent(legacyId)}/source-ref-resolutions/stable-semver`,
+      options,
+    );
+  }
 }
 
 export async function waitForLatestSourceSnapshot(
@@ -2938,16 +3136,27 @@ function normalizedWorkspaceId(value: string): string {
 }
 
 export async function listConnections(
-  workspaceId: string,
+  workspaceId?: string,
 ): Promise<readonly ProviderConnection[]> {
   return await listConnectionsWithSignal(workspaceId);
 }
 
 export async function listConnectionsWithSignal(
-  workspaceId: string,
+  workspaceId?: string,
   signal?: AbortSignal,
 ): Promise<readonly ProviderConnection[]> {
-  const normalized = normalizedWorkspaceId(workspaceId);
+  if (await appOwnershipAvailable(signal)) {
+    try {
+      return await fetchAllPages<ProviderConnection>(
+        `${BASE}/connections`,
+        (body) => (body.connections as readonly ProviderConnection[]) ?? [],
+        { signal },
+      );
+    } catch (error) {
+      if (!isMissingControlRoute(error)) throw error;
+    }
+  }
+  const normalized = await legacyWorkspaceFor404(workspaceId);
   if (!normalized) return [];
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
@@ -2957,12 +3166,23 @@ export async function listConnectionsWithSignal(
 }
 
 export async function listProviderConnections(
-  workspaceId: string,
+  workspaceId?: string,
 ): Promise<readonly ProviderConnection[]> {
   return await listProviderConnectionsWithSignal(workspaceId);
 }
 
 export async function listProviderConnectionsWithSignal(
+  workspaceId?: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
+  if (await appOwnershipAvailable(signal)) return await listConnectionsWithSignal(workspaceId, signal);
+  const normalized = await legacyWorkspaceFor404(workspaceId);
+  if (!normalized) return [];
+  return await listLegacyProviderConnectionsWithSignal(normalized, signal);
+}
+
+/** Only for a legacy OAuth start that explicitly returned this client context. */
+export async function listLegacyProviderConnectionsWithSignal(
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<readonly ProviderConnection[]> {
@@ -2980,7 +3200,7 @@ export async function listReleaseOwnedProviderConnectionsWithSignal(
   workspaceId: string,
   signal?: AbortSignal,
 ): Promise<readonly ProviderConnection[]> {
-  const normalized = normalizedWorkspaceId(workspaceId);
+  const normalized = normalizedWorkspaceId(workspaceId ?? "");
   if (!normalized) return [];
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
@@ -3002,7 +3222,7 @@ export async function listReleaseOwnedProviderConnectionsWithSignal(
  * `scope: "workspace"`, so this creates only a Workspace-owned ProviderConnection.
  */
 export async function createConnection(input: {
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   readonly provider: string;
   readonly credentialRecipe: {
     readonly id: string;
@@ -3014,12 +3234,15 @@ export async function createConnection(input: {
   readonly scopeHints?: ConnectionScopeHints;
   readonly values: Readonly<Record<string, string>>;
 }): Promise<ProviderConnection> {
+  const personal = await appOwnershipAvailable();
+  const legacyId = personal ? undefined : await legacyWorkspaceFor404(input.workspaceId);
+  if (!personal && !legacyId) throw new ControlApiError(404, "feature_unavailable", "Personal connections are not available on this server.");
   const body = await controlFetch<{ connection: ProviderConnection }>(
     `${BASE}/connections`,
     {
       method: "POST",
       body: {
-        workspaceId: input.workspaceId,
+        ...(legacyId ? { workspaceId: legacyId } : {}),
         provider: input.provider,
         credentialRecipe: input.credentialRecipe,
         ...(input.kind ? { kind: input.kind } : {}),
@@ -3033,7 +3256,7 @@ export async function createConnection(input: {
 }
 
 export async function createSourceHttpsTokenConnection(input: {
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   readonly displayName?: string;
   readonly repoUrl?: string;
   readonly username?: string;
@@ -3045,12 +3268,15 @@ export async function createSourceHttpsTokenConnection(input: {
   };
   const scopeHints: ConnectionScopeHints =
     Object.keys(providerSettings).length > 0 ? { providerSettings } : {};
+  const personal = await appOwnershipAvailable();
+  const legacyId = personal ? undefined : await legacyWorkspaceFor404(input.workspaceId);
+  if (!personal && !legacyId) throw new ControlApiError(404, "feature_unavailable", "Personal connections are not available on this server.");
   const body = await controlFetch<{ connection: ProviderConnection }>(
     `${BASE}/connections`,
     {
       method: "POST",
       body: {
-        workspaceId: input.workspaceId,
+        ...(legacyId ? { workspaceId: legacyId } : {}),
         provider: "source_git_https_token",
         kind: "source_git_https_token",
         ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -3089,6 +3315,8 @@ export interface ConnectionOAuthStart {
   readonly authorizationUrl: string;
   readonly state: string;
   readonly expiresAt?: string;
+  /** Client-only context of the legacy start route, when used. */
+  readonly legacyWorkspaceId?: string;
 }
 
 /**
@@ -3101,21 +3329,31 @@ export interface ConnectionOAuthStart {
  */
 export async function startConnectionOAuth(input: {
   readonly helperId: string;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   readonly displayName?: string;
   readonly scopeHints?: ConnectionScopeHints;
 }): Promise<ConnectionOAuthStart> {
-  return await controlFetch<ConnectionOAuthStart>(
-    `${BASE}/connections/oauth/${encodeURIComponent(input.helperId)}/start`,
-    {
-      method: "POST",
-      body: {
-        workspaceId: input.workspaceId,
+  const personal = await appOwnershipAvailable();
+  const legacyId = personal ? undefined : await legacyWorkspaceFor404(input.workspaceId);
+  if (!personal && !legacyId) throw new ControlApiError(404, "feature_unavailable", "Personal connections are not available on this server.");
+  const start = async (workspaceId?: string): Promise<ConnectionOAuthStart> => {
+    const started = await controlFetch<ConnectionOAuthStart>(`${BASE}/connections/oauth/${encodeURIComponent(input.helperId)}/start`, {
+      method: "POST", body: {
+        ...(workspaceId ? { workspaceId } : {}),
         ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
       },
-    },
-  );
+    });
+    return { ...started, ...(workspaceId ? { legacyWorkspaceId: workspaceId } : {}) };
+  };
+  try {
+    return await start(legacyId);
+  } catch (error) {
+    if (!personal || !isMissingControlRoute(error)) throw error;
+    const fallbackId = await legacyWorkspaceFor404(input.workspaceId);
+    if (fallbackId) return await start(fallbackId);
+    throw new ControlApiError(404, "feature_unavailable", "Provider authorization is unavailable on this server.");
+  }
 }
 
 /** True when a control error means the OAuth helper is not configured (501). */
@@ -3171,3 +3409,270 @@ export function extractRunId(envelope: unknown): string | undefined {
   }
   return typeof obj.id === "string" ? obj.id : undefined;
 }
+
+async function legacyWorkspaceFor404(workspaceId?: string): Promise<string | undefined> {
+  const explicit = normalizedWorkspaceId(workspaceId ?? "");
+  if (explicit) return explicit;
+  try {
+    return (await listWorkspaces()).find((workspace) => !workspace.archivedAt)?.id;
+  } catch (error) {
+    if (isMissingControlRoute(error)) return undefined;
+    throw error;
+  }
+}
+
+export function isMissingControlRoute(error: unknown): boolean {
+  if (!(error instanceof ControlApiError) || error.status !== 404) return false;
+  if (error.code === "route_not_found" || error.code === "fixture_route_not_found") return true;
+  if (error.code === "not_found" && isRecord(error.body) && error.body.error === "not_found") return true;
+  // Generic not_found is also used for business/resource lookup failures.
+  // Compatibility requires an explicit machine-readable route marker.
+  return error.code === "not_found" && isRecord(error.details) &&
+    error.details.reason === "route_not_found";
+}
+
+// TASK-0118 additive app ownership client. Compatibility is selected only by
+// an absent route (404), never an authorization or service failure.
+export type AppRole = "owner" | "member";
+export interface AccessibleApp {
+  readonly capsuleId: string;
+  readonly name: string;
+  readonly displayName?: string | Readonly<Record<string, string>>;
+  readonly iconUrl?: string;
+  readonly role: AppRole;
+  readonly ownerDisplayName: string;
+  readonly state: CapsuleAppView["state"] | "update_available";
+  readonly primaryAction: CapsuleAppView["primaryAction"];
+}
+let accessibleAppsCache: Promise<readonly AccessibleApp[] | undefined> | undefined;
+let appOwnershipCache: Promise<boolean> | undefined;
+const ACCESSIBLE_APPS_CACHE_MS = 10_000;
+let appsDataExpiresAt = 0;
+const appsPageCache = new Map<string, Promise<{ nextCursor?: string } & Record<string, unknown>>>();
+
+function expireAccessibleAppsData(): void {
+  if (appsDataExpiresAt === 0 || Date.now() < appsDataExpiresAt) return;
+  accessibleAppsCache = undefined;
+  appsPageCache.clear();
+  appsDataExpiresAt = 0;
+}
+
+function readCachedAppsPage(path: string): Promise<{ nextCursor?: string } & Record<string, unknown>> {
+  expireAccessibleAppsData();
+  const cached = appsPageCache.get(path);
+  if (cached) return cached;
+  const request = controlFetch<{ nextCursor?: string } & Record<string, unknown>>(path).then((body) => {
+    if (appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
+    return body;
+  }).catch((error: unknown) => {
+    // The old collection route has no resource id and cannot return a missing
+    // app. Its dispatcher predates route_not_found; this exception applies
+    // only to the initial GET /apps capability probe, never mutation errors.
+    if (path === `${BASE}/apps` && error instanceof ControlApiError && error.status === 404 &&
+      error.code === "not_found" && error.details === undefined && isRecord(error.body) && isRecord(error.body.error)) {
+      error = new ControlApiError(404, "route_not_found", error.message, error.body, error.isHttpStatusFallback);
+    }
+    if (!isMissingControlRoute(error) && appsPageCache.get(path) === request) appsPageCache.delete(path);
+    if (isMissingControlRoute(error) && appsPageCache.get(path) === request) appsDataExpiresAt = Date.now() + ACCESSIBLE_APPS_CACHE_MS;
+    throw error;
+  });
+  appsPageCache.set(path, request);
+  return request;
+}
+
+/** Reset after signing out, changing accounts, or changing app access. */
+export function resetAppOwnershipCache(): void {
+  accessibleAppsCache = undefined;
+  appOwnershipCache = undefined;
+  appsDataExpiresAt = 0;
+  appsPageCache.clear();
+  legacyInstallWorkspace = undefined;
+}
+
+/** One account app read is shared by role, provider and OAuth consumers. */
+export async function listAccessibleApps(signal?: AbortSignal): Promise<readonly AccessibleApp[] | undefined> {
+  throwIfAborted(signal);
+  expireAccessibleAppsData();
+  if (!accessibleAppsCache) {
+    const request = fetchAllPages<AccessibleApp>(`${BASE}/apps`, (body) => {
+      if (!Array.isArray(body.apps)) {
+        throw new ControlApiError(502, "invalid_apps_response", "Apps returned an invalid response.");
+      }
+      return body.apps as readonly AccessibleApp[];
+    }, { readPage: async (path) => {
+      try {
+        return await readCachedAppsPage(path);
+      } catch (error) {
+        if (path !== `${BASE}/apps` && isMissingControlRoute(error)) {
+          throw new ControlApiError(502, "invalid_apps_response", "Apps pagination became unavailable.");
+        }
+        throw error;
+      }
+    } }).catch((error: unknown) => {
+      if (isMissingControlRoute(error)) return undefined;
+      if (accessibleAppsCache === request) accessibleAppsCache = undefined;
+      throw error;
+    });
+    accessibleAppsCache = request;
+  }
+  return await withAppReadSignal(accessibleAppsCache, signal);
+}
+
+async function withAppReadSignal<T>(request: Promise<T>, signal?: AbortSignal): Promise<T> {
+  throwIfAborted(signal);
+  if (!signal) return await request;
+  // A view leaving must not abort the shared account capability read.
+  return await new Promise<T>((resolve, reject) => {
+    const abort = () => { cleanup(); reject(new DOMException("Request was aborted.", "AbortError")); };
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    request.then((apps) => { cleanup(); resolve(apps); }, (error: unknown) => { cleanup(); reject(error); });
+    if (signal.aborted) abort();
+  });
+}
+
+export async function appOwnershipAvailable(signal?: AbortSignal): Promise<boolean> {
+  throwIfAborted(signal);
+  if (!appOwnershipCache) {
+    const request = listAccessibleApps().then((apps) => apps !== undefined).catch((error: unknown) => {
+      if (appOwnershipCache === request) appOwnershipCache = undefined;
+      throw error;
+    });
+    appOwnershipCache = request;
+  }
+  return await withAppReadSignal(appOwnershipCache, signal);
+}
+
+let legacyInstallWorkspace: Promise<string> | undefined;
+
+/** Only a legacy server may create the Workspace needed by its install route. */
+export async function legacyInstallWorkspaceId(workspaceId?: string): Promise<string | undefined> {
+  if (await appOwnershipAvailable()) return undefined;
+  const existing = await legacyWorkspaceFor404(workspaceId);
+  if (existing) return existing;
+  if (!legacyInstallWorkspace) {
+    legacyInstallWorkspace = createWorkspace({
+      handle: `personal-${randomUuid().replaceAll("-", "").slice(0, 16)}`,
+      type: "personal",
+    }).then((workspace) => workspace.id).catch((error: unknown) => {
+      legacyInstallWorkspace = undefined;
+      throw error;
+    });
+  }
+  return await legacyInstallWorkspace;
+}
+export interface AppMember {
+  readonly accountId: string;
+  readonly displayName: string;
+  readonly email?: string;
+  readonly status: "active" | "invited";
+}
+export interface AppMembers {
+  readonly owner: { readonly accountId: string; readonly displayName: string; readonly email?: string };
+  readonly members: readonly AppMember[];
+}
+export async function getAppMembers(id: string): Promise<AppMembers | undefined> {
+  try {
+    return await controlFetch<AppMembers>(`${BASE}/capsules/${encodeURIComponent(id)}/members`);
+  } catch (error) {
+    if (isMissingControlRoute(error)) return undefined;
+    throw error;
+  }
+}
+export async function inviteAppMember(id: string, email: string, consent: "connections_and_code"): Promise<void> {
+  await controlFetch(`${BASE}/capsules/${encodeURIComponent(id)}/members`, { method: "POST", body: { email, consent } });
+  resetAppOwnershipCache();
+}
+export async function removeAppMember(id: string, accountId: string): Promise<void> {
+  await controlFetch(`${BASE}/capsules/${encodeURIComponent(id)}/members/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+  resetAppOwnershipCache();
+}
+export async function transferAppOwnership(id: string, toAccountId: string): Promise<{ readonly transferId: string; readonly state: "pending" }> {
+  const transfer = await controlFetch<{ readonly transferId: string; readonly state: "pending" }>(`${BASE}/capsules/${encodeURIComponent(id)}/ownership-transfers`, { method: "POST", body: { toAccountId } });
+  resetAppOwnershipCache();
+  return transfer;
+}
+export async function acceptAppOwnershipTransfer(id: string): Promise<void> {
+  await controlFetch(`${BASE}/ownership-transfers/${encodeURIComponent(id)}/accept`, { method: "POST" });
+  resetAppOwnershipCache();
+}
+export async function cancelAppOwnershipTransfer(id: string): Promise<void> {
+  await controlFetch(`${BASE}/ownership-transfers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  resetAppOwnershipCache();
+}
+
+export interface AppOwnershipTransfer {
+  readonly transferId: string;
+  readonly capsuleId: string;
+  readonly fromAccountId: string;
+  readonly toAccountId: string;
+  readonly state: "pending";
+  readonly createdAt?: string;
+  readonly expiresAt?: string;
+}
+
+async function listOwnershipTransfers(path: string, signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
+  try {
+    return await fetchAllPages<AppOwnershipTransfer>(path, (body) => {
+      if (!Array.isArray(body.ownershipTransfers)) {
+        throw new ControlApiError(502, "invalid_ownership_transfers_response", "Ownership transfers returned an invalid response.");
+      }
+      return body.ownershipTransfers.filter((row): row is AppOwnershipTransfer => isRecord(row) && row.state === "pending" &&
+        [row.transferId, row.capsuleId, row.fromAccountId, row.toAccountId].every((value) => typeof value === "string" && value.length > 0));
+    }, { signal });
+  } catch (error) {
+    if (isMissingControlRoute(error)) return undefined;
+    throw error;
+  }
+}
+
+export async function listAppOwnershipTransfers(capsuleId: string, signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
+  return await listOwnershipTransfers(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/ownership-transfers?state=pending`, signal);
+}
+
+export async function listIncomingOwnershipTransfers(signal?: AbortSignal): Promise<readonly AppOwnershipTransfer[] | undefined> {
+  return await listOwnershipTransfers(`${BASE}/ownership-transfers?state=pending`, signal);
+}
+
+export async function listPersonalUsagePage(workspaceId?: string, options: { readonly cursor?: string; readonly limit?: number; readonly signal?: AbortSignal } = {}): Promise<UsageEventsPage> {
+  // Kept as a positional compatibility argument for existing views only.
+  void workspaceId;
+  const body = await controlFetch<UsageEventsPage>(`${BASE}/usage${query({ cursor: options.cursor, limit: options.limit })}`, { signal: options.signal });
+  return { usageEvents: body.usageEvents ?? [], ...(body.nextCursor ? { nextCursor: body.nextCursor } : {}) };
+}
+
+/** The app-authorized label projection never carries credential/owner metadata. */
+export interface AppConnectionChoice {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly providerSource: string;
+}
+export async function getAppConnectionChoices(capsuleId: string): Promise<readonly AppConnectionChoice[] | undefined> {
+  try {
+    return await fetchAllPages<AppConnectionChoice>(`${BASE}/connections${query({ capsuleId, projection: "labels" })}`, (body) => {
+      if (!isRecord(body) || Object.keys(body).some((key) => key !== "connections" && key !== "nextCursor") ||
+        !Array.isArray(body.connections) || (body.nextCursor !== undefined && typeof body.nextCursor !== "string")) {
+        throw new ControlApiError(502, "invalid_connection_labels_response", "Connection labels returned an invalid response.");
+      }
+      return body.connections.map((row: unknown) => {
+        // Old servers may ignore projection=labels and return complete rows.
+        // Reject that response rather than treating private metadata as labels.
+        if (!isRecord(row) || Object.keys(row).some((key) => !["id", "provider", "displayName"].includes(key)) ||
+          typeof row.id !== "string" || row.id.trim() === "" || typeof row.provider !== "string" || row.provider.trim() === "" ||
+          (row.displayName !== undefined && typeof row.displayName !== "string")) {
+          throw new ControlApiError(502, "invalid_connection_labels_response", "Connection labels returned an invalid response.");
+        }
+        return {
+          id: row.id,
+          providerSource: normalizeProviderSourceAddress(row.provider),
+          ...(typeof row.displayName === "string" ? { displayName: row.displayName } : {}),
+        };
+      });
+    });
+  } catch (error) {
+    if (isMissingControlRoute(error)) return undefined;
+    throw error;
+  }
+}
+
+export const getAppConnectionLabels = getAppConnectionChoices;

@@ -2,7 +2,8 @@
  * `/new`: the Store and an app's page while it is not installed yet
  * (TASK-0115).
  *
- * - `/new` lists the Store and this person's unfinished installs.
+ * - `/new` lists the Store; unfinished installs are shown when a legacy
+ *   Workspace context can list them.
  * - `/new?tcsBase&tcsListing…`, `/new?git=…` (and `/install`, `/store`, which
  *   forward here) show one app, not installed. Opening it creates nothing.
  * - 「インストール」 starts one install attempt and opens the one install
@@ -36,6 +37,7 @@ import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import { appPageHref, installAttemptHref } from "../../lib/app-links.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
+import { readyOrUndefined } from "../../lib/resource-read.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
@@ -135,8 +137,8 @@ function StorePage(props: { readonly principalId: string }) {
   const [gitUrl, setGitUrl] = createSignal("");
   const [gitError, setGitError] = createSignal<string>();
   const [installedApps, { refetch: refetchInstalledApps }] = createResource(
-    () => currentWorkspaceId() || false,
-    (workspaceId) => listInstalledApps(workspaceId),
+    () => ({ workspaceId: currentWorkspaceId() || undefined }),
+    (scope) => listInstalledApps(scope.workspaceId),
   );
   // Selecting a listing reflects it into the URL, so back and share work.
   const choose = (listing: TcsListing) => {
@@ -206,13 +208,13 @@ function StorePage(props: { readonly principalId: string }) {
 /** This person's unfinished installs here: each can continue or be thrown away. */
 function OpenAttempts(props: { readonly principalId: string }) {
   const [attempts, { mutate, refetch }] = createResource(
-    () => currentWorkspaceId() || false,
-    (workspaceId) => listOpenGitInstallAttempts(workspaceId),
+    () => ({ workspaceId: currentWorkspaceId() || undefined }),
+    (scope) => listOpenGitInstallAttempts(scope.workspaceId),
   );
   const [busy, setBusy] = createSignal<string>();
   const [rowError, setRowError] = createSignal<{ readonly id: string; readonly message: string }>();
   const mine = () =>
-    (attempts.error ? [] : (attempts.latest ?? [])).filter(
+    (attempts.state === "ready" ? attempts.latest ?? [] : []).filter(
       (entry) => entry.installPlan.createdBy === props.principalId,
     );
   const discard = async (entry: GitInstallPlanResponse) => {
@@ -342,8 +344,8 @@ function AppInstallPage(props: { readonly principalId: string }) {
   const listingFailed = (): boolean => Boolean(listing.error);
   const gitUrl = () => plan()?.source.url ?? listed()?.source.url ?? prefill()?.git ?? "";
   const [installedApps, { refetch: refetchInstalledApps }] = createResource(
-    () => currentWorkspaceId() || false,
-    (workspaceId) => listInstalledApps(workspaceId),
+    () => ({ workspaceId: currentWorkspaceId() || undefined }),
+    (scope) => listInstalledApps(scope.workspaceId),
   );
   const existingApps = createMemo(() => matchingInstalledApps(
     !installedApps.loading && !installedApps.error ? installedApps()?.installedApps ?? [] : [],
@@ -357,16 +359,18 @@ function AppInstallPage(props: { readonly principalId: string }) {
     ? t("installStore.installed")
     : t("installStore.installedCount", { count: existingApps().length });
 
-  // Private repositories: an existing Git connection may read the source.
+  // Private repositories: a personal or operator-provided Git connection may
+  // read the source. Legacy Workspace connections remain usable as well.
   // Offered only before Install, so only read then.
   const [connections] = createResource(
-    () => (attempt.view().stage === "candidate" && !fromStore() && currentWorkspaceId()) || false,
-    (workspaceId) => listConnections(workspaceId),
+    () => attempt.view().stage === "candidate" && !fromStore()
+      ? { workspaceId: currentWorkspaceId() || undefined }
+      : false,
+    (scope) => listConnections(scope.workspaceId),
   );
   const sourceConnections = () =>
-    (connections.error ? [] : (connections.latest ?? [])).filter(
+    (readyOrUndefined(connections) ?? []).filter(
       (connection) =>
-        connection.scope === "workspace" &&
         connection.status === "verified" &&
         (connection.kind === "source_git_https_token" || connection.kind === "source_git_ssh_key"),
     );
@@ -390,7 +394,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
   };
 
   const install = () => {
-    if (currentWorkspaceId() && (installedApps.loading || installedApps.error || !installedApps())) return;
+    if (installedApps.state !== "ready") return;
     void attempt.start(
       {
         url: gitUrl(),
@@ -413,12 +417,16 @@ function AppInstallPage(props: { readonly principalId: string }) {
    */
   const finish = async (capsuleId: string) => {
     if (completed()?.capsuleId === capsuleId) return;
-    const workspaceId = plan()?.workspaceId ?? currentWorkspaceId();
+    const workspaceId = plan()?.workspaceId || currentWorkspaceId() || undefined;
     clearCapsuleListCache(workspaceId);
     clearCurrentStateVersionCache(workspaceId);
     clearDashboardOverviewCache(workspaceId);
     attempt.finish();
     setCompleted({ capsuleId });
+    if (!workspaceId) {
+      setCompleted({ capsuleId, settled: true });
+      return;
+    }
     for (let index = 0; index < SCREEN_READ_ATTEMPTS; index += 1) {
       try {
         const screens = await listAuthorizedUiSurfaces(workspaceId, { capsuleId });
@@ -517,7 +525,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
                     variant={existingApps().length > 0 ? "secondary" : "primary"}
                     size="lg"
                     busy={attempt.mutating() === "start"}
-                    disabled={!gitUrl() || (Boolean(currentWorkspaceId()) && (installedApps.loading || Boolean(installedApps.error))) || (store() !== undefined && listing.loading)}
+                    disabled={!gitUrl() || installedApps.state !== "ready" || (store() !== undefined && listing.loading)}
                     icon={<PackagePlus size={18} />}
                   >
                     {existingApps().length > 0 ? t("installStore.installAnother") : t("installStore.install")}
@@ -564,7 +572,7 @@ function AppInstallPage(props: { readonly principalId: string }) {
           <Match when={onScreen()}>
             <InstallScreen
               attempt={attempt}
-              workspaceId={plan()?.workspaceId ?? currentWorkspaceId()}
+              workspaceId={plan()?.workspaceId || currentWorkspaceId() || undefined}
               fromStore={fromStore()}
               onDone={(capsuleId) => void finish(capsuleId)}
             />

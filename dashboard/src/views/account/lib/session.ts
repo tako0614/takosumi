@@ -32,6 +32,7 @@ import {
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
 import { SESSION_ME } from "./paths.ts";
+import { resetAppOwnershipCache } from "../../../lib/control-api.ts";
 import {
   clearSharedAuthSessionPreflight,
   isKnownSharedAuthRoutePresent,
@@ -342,6 +343,9 @@ export function refreshSession(
   if (inflight) return inflight;
   const request = fetchSessionMe(options)
     .then((s) => {
+      if (!s || cachedSession?.subject !== s.subject || cachedSession?.primaryAccountId !== s.primaryAccountId) {
+        resetAppOwnershipCache();
+      }
       cachedSession = s;
       cachedError = null;
       cachedAt = Date.now();
@@ -354,6 +358,7 @@ export function refreshSession(
       return s;
     })
     .catch((error) => {
+      resetAppOwnershipCache();
       const typed =
         error instanceof SessionError ? error : sessionErrorFromUnknown(error);
       cachedSession = null;
@@ -425,6 +430,7 @@ export function readSessionState(
     cachedSession.expiresAt > 0 &&
     cachedSession.expiresAt < Date.now()
   ) {
+    resetAppOwnershipCache();
     cachedSession = null;
   }
   // Preserve the cache-first contract while a stale authenticated session is
@@ -465,6 +471,7 @@ export function writeSession(_s: SessionRecord): void {
  * empty auto-created personal one — which reads as "signed in as someone else".
  */
 export function clearSession(): void {
+  resetAppOwnershipCache();
   clearSharedAuthSessionPreflight();
   cachedSession = null;
   cachedError = null;

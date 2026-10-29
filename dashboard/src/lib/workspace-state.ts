@@ -61,3 +61,8 @@ export function setCurrentWorkspaceId(workspaceId: string): void {
   if (next) localStorage.setItem(STORAGE_KEY, next);
   else localStorage.removeItem(STORAGE_KEY);
 }
+
+/** Clear retired browser persistence without interrupting an in-flight app action. */
+export function clearStoredWorkspaceId(): void {
+  if (typeof localStorage !== "undefined") localStorage.removeItem(STORAGE_KEY);
+}

@@ -15,7 +15,6 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
   createInstallAttemptFixture,
-  PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_COMMIT,
@@ -33,10 +32,10 @@ import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-brow
 import { assertExpectedResponseUrl } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
 import { registerInstallAuthReturnCase } from "./install_auth_return_case.ts";
 import { registerNavigationAccountCases } from "./navigation_account_case.ts";
+import { registerAppSharingCases } from "./app_sharing_case.ts";
+import { registerInstallReopenCases } from "./install_reopen_case.ts";
 
 type Expectations = {
-  readonly workspaceName: string;
-  readonly switchWorkspaceName: string;
   readonly appName: string;
   readonly appUrl: string;
 };
@@ -50,6 +49,7 @@ if (rawMode !== "portable" && rawMode !== "live" && rawMode !== "public-live") {
 const mode: DashboardE2EMode = rawMode;
 registerInstallAuthReturnCase(mode);
 registerNavigationAccountCases(mode);
+registerAppSharingCases(mode);
 
 const expectedWorkerVersionId =
   mode === "live" || mode === "public-live"
@@ -74,16 +74,10 @@ const expectations: Expectations =
     ? PORTABLE_EXPECTATIONS
     : mode === "live"
       ? {
-          workspaceName: requiredLive("TAKOSUMI_E2E_WORKSPACE_NAME"),
-          switchWorkspaceName: requiredLive(
-            "TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME",
-          ),
           appName: requiredLive("TAKOSUMI_E2E_APP_NAME"),
           appUrl: requiredLive("TAKOSUMI_E2E_APP_URL"),
         }
       : {
-          workspaceName: "",
-          switchWorkspaceName: "",
           appName: "",
           appUrl: "",
         };
@@ -341,29 +335,6 @@ async function fetchLiveEndpoint(
   }
 }
 
-async function expectInsideViewport(
-  page: Page,
-  locator: Locator,
-  label: string,
-): Promise<void> {
-  const box = await locator.boundingBox();
-  expect(box, `${label} must have a visible bounding box`).not.toBeNull();
-  const viewport = page.viewportSize();
-  expect(viewport, "browser viewport must be available").not.toBeNull();
-  if (!box || !viewport) return;
-  expect(box.x, `${label} must not extend left of the viewport`).toBeGreaterThanOrEqual(0);
-  expect(
-    box.x + box.width,
-    `${label} must not extend right of the viewport`,
-  ).toBeLessThanOrEqual(viewport.width);
-}
-
-function workspaceTrigger(page: Page) {
-  return page
-    .getByRole("button", { name: /スペースを切り替え|Switch workspace/u })
-    .first();
-}
-
 interface ProviderDestinationFixtureState {
   readonly mutations: string[];
   /** The scripted install-plan coordinator behind the install page. */
@@ -446,12 +417,21 @@ async function stubProviderDestinationFixture(
     });
     if (attempt) return route.fulfill({ status: attempt.status, json: attempt.json });
     if (path === "/api/v1/credential-recipes") return route.fulfill({ json: { recipes: REFERENCE_CREDENTIAL_RECIPES } });
+    if (path === "/api/v1/apps") return route.fulfill({ json: { apps: [{
+      capsuleId: "cap_provider_destination_e2e",
+      name: "cloudflare-service",
+      role: "owner",
+      ownerDisplayName: "Portable E2E",
+      state: applied ? "installed" : "installing",
+      primaryAction: applied ? "view_resources" : "review",
+    }] } });
+    if (path === "/api/v1/capsules/cap_provider_destination_e2e/members") return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
     if (path === "/api/v1/connections" && request.method() === "GET") return route.fulfill({ json: { connections: providerConnections.filter((c) => c.scope === "workspace") } });
     if (path === "/api/v1/provider-connections") {
       return route.fulfill({ json: { providerConnections } });
     }
     if (path === "/api/v1/capsules/cap_provider_destination_e2e/runs") return route.fulfill({ json: { runs: [] } });
-    if (path === "/api/v1/workspaces/ws_alpha/source-ref-resolutions/stable-semver" && request.method() === "POST") {
+    if (path === "/api/v1/source-ref-resolutions" && request.method() === "GET") {
       return route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } });
     }
     // The installed app's own reads (`/app`, `/runs`) once an install
@@ -479,6 +459,8 @@ async function stubProviderDestinationFixture(
           installConfig: {
             id: "cfg-default-opentofu-capsule",
             name: "default-opentofu-capsule",
+            sourceSelector: { url: "https://github.com/example/cloudflare-service.git", path: "." },
+            modulePath: ".",
             policy: {},
             variableMapping: {},
             variablePresentation: [],
@@ -1137,7 +1119,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     })]);
 
     // Billing is disabled here: provider pricing is explained, never "$0.00".
-    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
+    await expect(page.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs for this app.");
     await expect(page.locator("body")).not.toContainText("$0.00");
 
     await page.getByRole("checkbox", { name: "I reviewed these changes" }).check();
@@ -1319,7 +1301,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     });
   }
 
-  test("authenticates through dashboard bootstrap and switches Workspace scope", async ({
+  test("authenticates through dashboard bootstrap and lists owner/member apps", async ({
     page,
   }) => {
     const errors = pageErrors(page);
@@ -1348,40 +1330,28 @@ test.describe("Takosumi dashboard browser surface", () => {
       expect(await response.json()).toEqual({ error: "not_found" });
     }
     await expect((await bootstrap).status()).toBe(200);
-
-    const trigger = workspaceTrigger(page);
-    await expect(trigger).toBeVisible();
-    await expect(trigger).toHaveAttribute(
-      "aria-label",
-      new RegExp(
-        expectations.workspaceName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
-      ),
-    );
-
-    await trigger.click();
-    const menu = page.locator('[role="menu"]:visible').first();
-    await expect(menu).toBeVisible();
-    const workspaces = menu.getByRole("menuitemradio");
-    if (mode === "portable") {
-      await expect(workspaces).toHaveCount(3);
-    } else {
-      expect(await workspaces.count()).toBeGreaterThanOrEqual(2);
-    }
-    await workspaces
-      .filter({ hasText: expectations.switchWorkspaceName })
-      .first()
-      .click();
-    await expect(trigger).toHaveAttribute(
-      "aria-label",
-      new RegExp(
-        expectations.switchWorkspaceName.replace(
-          /[.*+?^${}()|[\]\\]/gu,
-          "\\$&",
-        ),
-      ),
-    );
+    const home = page.getByTestId("home-apps");
+    await expect(home.getByTestId("home-app").filter({ hasText: expectations.appName }).first()).toBeVisible();
+    await expect(home.getByTestId("home-app").filter({ hasText: "Beta Office" }).first()).toBeVisible();
+    await expect(page.locator('[data-testid="workspace-switcher"]')).toHaveCount(0);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
+  });
+
+  test("Home uses the legacy app projection only when /api/v1/apps returns 404", async ({ page }) => {
+    test.skip(mode !== "portable", "legacy route compatibility is exercised only against the local fixture");
+    const errors = pageErrors(page);
+    const reads: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "GET") reads.push(new URL(request.url()).pathname);
+    });
+    await page.route("**/api/v1/apps**", (route) => route.fulfill({ status: 404, json: { error: "not_found" } }));
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName }).first()).toBeVisible();
+    expect(reads).toContain("/api/v1/apps");
+    expect(reads.some((path) => path === "/api/v1/workspaces" || path.startsWith("/api/v1/workspaces/"))).toBe(true);
+    await expect(page.locator('[data-testid="workspace-switcher"]')).toHaveCount(0);
+    await assertNoPageErrors(errors);
   });
 
   test("live probes keep OIDC, unauthenticated API, and SPA documents on one Version", async ({
@@ -1466,94 +1436,26 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
   });
 
-  test("keeps the current workspace name visible on compact widths and disambiguates duplicates", async ({
+  test("Home keeps owned and shared apps usable without workspace chrome at compact widths", async ({
     page,
   }) => {
-    test.skip(
-      mode !== "portable",
-      "the duplicate-name Workspace fixture is portable-only",
-    );
+    test.skip(mode !== "portable", "deterministic owned/shared app fixture is portable-only");
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
     await page.goto("/", { waitUntil: "domcontentloaded" });
 
-    for (const width of [320, 390, 880]) {
+    for (const width of [320, 390, 880, 1440]) {
       await page.setViewportSize({ width, height: 844 });
-      const trigger = workspaceTrigger(page);
-      await expect(trigger.locator(".workspace-switcher-name")).toContainText(
-        PORTABLE_EXPECTATIONS.workspaceName,
-      );
+      await expect(page.getByTestId("workspace-switcher")).toHaveCount(0);
+      await expect(page.getByTestId("home-app").filter({ hasText: expectations.appName }).first()).toBeVisible();
+      await expect(page.getByTestId("home-app").filter({ hasText: "Beta Office" }).first()).toBeVisible();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth - window.innerWidth,
         ),
-        `Workspace chrome must not overflow a ${width}px viewport`,
+        `Home must not overflow a ${width}px viewport`,
       ).toBeLessThanOrEqual(1);
     }
-
-    for (const width of [320, 390]) {
-      await page.setViewportSize({ width, height: 844 });
-      const trigger = workspaceTrigger(page);
-      await trigger.click();
-      const menu = page.locator('[role="menu"]:visible').first();
-      await expect(menu).toBeVisible();
-      await expectInsideViewport(page, menu, `Workspace menu at ${width}px`);
-      const duplicates = menu
-        .getByRole("menuitemradio")
-        .filter({ hasText: PORTABLE_EXPECTATIONS.workspaceName });
-      await expect(duplicates).toHaveCount(2);
-      await expect(
-        duplicates.filter({ hasText: "@alpha" }).first(),
-      ).toBeVisible();
-      await expect(
-        duplicates
-          .filter({ hasText: `@${PORTABLE_EXPECTATIONS.duplicateWorkspaceHandle}` })
-          .first(),
-      ).toBeVisible();
-
-      await menu
-        .getByRole("menuitem", { name: /環境を分ける|Separate an environment/u })
-        .click();
-      const dialog = page.getByRole("dialog").first();
-      const form = dialog.locator("form.workspace-create-form");
-      const input = dialog.getByRole("textbox", {
-        name: /環境の名前|Environment name/u,
-      });
-      await expect(dialog).toBeVisible();
-      await expect(form).toBeVisible();
-      await expect(input).toBeVisible();
-      await expectInsideViewport(page, form, `Workspace create form at ${width}px`);
-      await expectInsideViewport(page, input, `Workspace create input at ${width}px`);
-      await expect(input).toHaveAttribute("required", "");
-      await expect(input).toHaveAttribute(
-        "aria-describedby",
-        /workspace-switcher-compact-create-name-help/u,
-      );
-      await dialog
-        .getByRole("button", { name: /キャンセル|Cancel/u })
-        .click();
-      await expect(page.locator('[role="menu"]:visible').first()).toBeVisible();
-      await trigger.click();
-      await expect(page.locator('[role="menu"]:visible')).toHaveCount(0);
-    }
-
-    await page.setViewportSize({ width: 880, height: 844 });
-    const trigger = workspaceTrigger(page);
-    await trigger.click();
-    const menu = page.locator('[role="menu"]:visible').first();
-    await expect(menu).toBeVisible();
-    const duplicates = menu
-      .getByRole("menuitemradio")
-      .filter({ hasText: PORTABLE_EXPECTATIONS.workspaceName });
-    await expect(duplicates).toHaveCount(2);
-    await expect(
-      duplicates.filter({ hasText: "@alpha" }).first(),
-    ).toBeVisible();
-    await expect(
-      duplicates
-        .filter({ hasText: `@${PORTABLE_EXPECTATIONS.duplicateWorkspaceHandle}` })
-        .first(),
-    ).toBeVisible();
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1817,43 +1719,23 @@ test.describe("Takosumi dashboard browser surface", () => {
     await assertNoPageErrors(errors);
   });
 
-  test("a failed Workspace list read keeps the current Workspace selected", async ({
+  test("a failed app-access read is visible and does not use a Workspace error state", async ({
     page,
   }) => {
     test.skip(mode !== "portable", "synthetic list failures are portable-only");
     const errors = pageErrors(page);
-    const appTile = page
-      .getByTestId("home-app")
-      .filter({ hasText: expectations.appName })
-      .first();
-    await gotoDashboardDocument(page, "/");
-    await expect(appTile).toBeVisible();
-    const readSelection = () =>
-      page.evaluate(() => localStorage.getItem("takosumi.currentWorkspaceId"));
-    const selected = await readSelection();
-    expect(selected).toBeTruthy();
-
     let failedListReads = 0;
     await page.route(
-      (url) =>
-        url.pathname === "/api/v1/workspaces" ||
-        url.pathname === "/api/v1/dashboard/bootstrap",
+      (url) => url.pathname === "/api/v1/apps",
       (route) => {
         failedListReads += 1;
         return route.fulfill({ status: 503, json: { error: "synthetic_list" } });
       },
     );
-    // Rename/archive/create broadcast this; the switcher re-reads the list.
-    await page.evaluate(() =>
-      window.dispatchEvent(new Event("takosumi:workspaces-changed")),
-    );
-    await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(2);
-    await expect(page.locator(".workspace-switcher-error:visible").first()).toBeVisible();
-
-    // The failure is not evidence of "no Workspaces": the selection and the
-    // launcher survive instead of resetting to first-Workspace onboarding.
-    expect(await readSelection()).toBe(selected);
-    await expect(appTile).toBeVisible();
+    await gotoDashboardDocument(page, "/");
+    await expect.poll(() => failedListReads).toBeGreaterThanOrEqual(1);
+    await expect(page.getByRole("button", { name: /再試行|Retry/u })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(/workspace switcher|スペース切り替え/iu);
     await assertNoPageErrors(errors);
   });
 
@@ -1873,28 +1755,12 @@ test.describe("Takosumi dashboard browser surface", () => {
       page.getByRole("main").getByRole("link", { name: /^(Find apps in the store|ストアでアプリを探す)$/u }),
     ).toBeVisible();
 
-    // An available update is said in words on the app's Home card.
-    await page.route(
-      (url) => url.pathname === "/api/v1/workspaces/ws_alpha/capsules",
-      (route) =>
-      route.fulfill({
-        json: {
-          capsules: [
-            {
-              ...PORTABLE_CAPSULES.ws_alpha[0],
-              freshness: "stale",
-            },
-          ],
-        },
-      }),
-    );
+    // The app list is the Home authority; verify both owned and shared cards.
     await gotoDashboardDocument(page, "/");
-    const tile = page
-      .getByTestId("home-app")
-      .filter({ hasText: expectations.appName })
-      .first();
-    await expect(tile).toContainText(/Update available|更新あり/u);
-    await expect(tile).toHaveAttribute("data-app-state", "update_available");
+    const home = page.getByTestId("home-apps");
+    await expect(home.getByTestId("home-app").filter({ hasText: expectations.appName }).first()).toBeVisible();
+    await expect(home.getByTestId("home-app").filter({ hasText: "Beta Office" }).first()).toBeVisible();
+    await expect(home).not.toContainText(/workspace|space|スペース|ワークスペース/iu);
     await assertNoPageErrors(errors);
   });
 
@@ -2259,4 +2125,27 @@ registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinatio
   [],
   needsProvider ? [{ source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", credentialRequired: true }] : [],
   { resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }, { type: "cloudflare_d1_database", count: 2, allowed: true }] },
+));
+registerInstallReopenCases(mode, (page) => stubProviderDestinationFixture(
+  page,
+  [{
+    id: "pc_account_42",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    status: "verified",
+    scope: "workspace",
+    workspaceId: "ws_alpha",
+    displayName: "Takosumi account · account-42",
+  }],
+  [{
+    source: "registry.opentofu.org/cloudflare/cloudflare",
+    moduleLocalName: "cloudflare",
+    credentialRequired: true,
+  }],
+  {
+    resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
+    variables: [
+      { name: "domain", type: "string", required: false, sensitive: false, label: { en: "Domain", ja: "ドメイン" } },
+      { name: "api_token", type: "string", required: true, sensitive: true, label: { en: "API token", ja: "APIトークン" } },
+    ],
+  },
 ));

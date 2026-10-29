@@ -43,6 +43,7 @@ import {
 } from "../../components/ui/index.ts";
 import {
   createCapsuleConfigurationPlan,
+  type AppConnectionChoice,
   type InstallConfig,
   type ProviderBinding,
   type ProviderBindings,
@@ -56,7 +57,6 @@ import {
 } from "../../lib/capsules-ui.ts";
 import {
   isProviderConnectionCandidate,
-  providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
 import { providerRowLabels } from "../../lib/app-page.ts";
@@ -76,7 +76,9 @@ function providerTail(provider: string): string {
 function connectionChoices(
   provider: string,
   connections: readonly ProviderConnection[],
-): readonly ProviderConnection[] {
+  memberChoices?: readonly AppConnectionChoice[],
+): readonly Pick<ProviderConnection, "id" | "displayName" | "providerSource">[] {
+  if (memberChoices) return memberChoices.filter((connection) => sameProviderSource(provider, connection.providerSource));
   return connections.filter(
     (connection) =>
       isProviderConnectionCandidate(connection) &&
@@ -91,10 +93,11 @@ function connectionChoices(
 function reviewedBindings(
   rows: readonly ProviderBinding[],
   connections: readonly ProviderConnection[],
+  memberChoices?: readonly AppConnectionChoice[],
 ): { readonly bindings: ProviderBindings } | { readonly error: string } {
   const bindings: ProviderBinding[] = [];
   for (const row of rows) {
-    if (!connectionChoices(row.provider, connections).some((c) => c.id === row.connectionId)) {
+    if (!connectionChoices(row.provider, connections, memberChoices).some((c) => c.id === row.connectionId)) {
       return { error: t("app.settings.connectionMissing", { provider: providerRowLabels([row])[0]! }) };
     }
     const rootAlias = row.rootAlias ?? row.alias;
@@ -139,7 +142,11 @@ function experienceVariableNames(config: InstallConfig | undefined): ReadonlySet
 
 export default function AppSettingsSection(props: {
   readonly capsuleId: string;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
+  readonly member?: boolean;
+  readonly accessKnown?: boolean;
+  readonly memberConnectionChoices?: readonly AppConnectionChoice[];
+  readonly canCreateConnection?: boolean;
   readonly installConfig: InstallConfig | undefined;
   readonly installConfigLoading: boolean;
   /** The configuration the app runs now; the form must be read from it. */
@@ -308,7 +315,8 @@ export default function AppSettingsSection(props: {
       setFormError(t("app.settings.notReady"));
       return;
     }
-    const bindings = reviewedBindings(rows(), props.connections);
+    const bindings = props.member && !bindingsDirty()
+      ? { bindings: rows() } : reviewedBindings(rows(), props.connections, props.memberConnectionChoices);
     if ("error" in bindings) {
       setFormError(bindings.error);
       return;
@@ -401,22 +409,24 @@ export default function AppSettingsSection(props: {
               <p class="ap-muted">{t("app.settings.connectionsHint")}</p>
               <Index each={rows()}>
                 {(row, index) => {
-                  const choices = () => connectionChoices(row().provider, props.connections);
+                  const choices = () => connectionChoices(row().provider, props.connections, props.memberConnectionChoices);
                   const selected = () => choices().find((c) => c.id === row().connectionId);
+                  const bound = () => selected() || (props.member && row().connectionId);
                   const formId = `app-connect-${index}`;
                   return (
                     <article
                       class="iv-connection-row"
                       data-testid="app-connection-row"
                       data-provider-source={row().provider}
-                      data-connection-state={selected() ? "connected" : "missing"}
+                      data-connection-state={bound() ? "connected" : "missing"}
                     >
                       <div class="iv-connection-head">
                         <strong>{rowLabels()[index]}</strong>
-                        <Badge tone={selected() ? "ok" : "warn"}>
-                          {selected() ? t("app.settings.connected") : t("app.settings.notConnected")}
+                        <Badge tone={bound() ? "ok" : "warn"}>
+                          {bound() ? t("app.settings.connected") : t("app.settings.notConnected")}
                         </Badge>
                       </div>
+                      <Show when={props.accessKnown !== false && (!props.member || props.memberConnectionChoices !== undefined)} fallback={<p class="ap-muted">{t("app.sharing.ownerConnectionsOnly")}</p>}>
                       <FormField label={t("app.settings.connectionLabel")}>
                         <Select
                           value={row().connectionId}
@@ -428,12 +438,14 @@ export default function AppSettingsSection(props: {
                           <For each={choices()}>
                             {(connection) => (
                               <option value={connection.id} selected={connection.id === row().connectionId}>
-                                {providerConnectionDisplayName(connection)}
+                                {connection.displayName || connection.id}
                               </option>
                             )}
                           </For>
                         </Select>
                       </FormField>
+                      </Show>
+                      <Show when={props.canCreateConnection !== false}>
                       <div class="ap-row-actions">
                         <Button
                           type="button"
@@ -451,10 +463,11 @@ export default function AppSettingsSection(props: {
                               : t("app.settings.connectAnother")}
                         </Button>
                       </div>
+                      </Show>
                       <Show when={connectionMessages()[index]}>
                         {(message) => <p class="ap-muted" role="alert">{message()}</p>}
                       </Show>
-                      <Show when={connecting() === index}>
+                      <Show when={props.canCreateConnection !== false && connecting() === index}>
                         <div class="iv-inline-connect" id={formId}>
                           {/* The form reads the setup catalog; suspend here,
                               not the whole page. */}
@@ -492,6 +505,7 @@ export default function AppSettingsSection(props: {
             type="submit"
             busy={props.starting}
             disabled={
+              props.accessKnown === false ||
               props.reviewBusy ||
               !configCurrent() ||
               !props.authorityGuard ||

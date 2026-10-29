@@ -16,13 +16,19 @@ const connectionsTabSource = read("workspace/tabs/ConnectionsTab.tsx");
 const connectionCreateFormSource = read(
   "workspace/connections/ConnectionCreateForm.tsx",
 );
-const workspaceTabSource = read("workspace/tabs/WorkspaceTab.tsx");
+const accountViewSource = read("account/AccountView.tsx");
+const sidebarSource = read("account/components/shell/Sidebar.tsx");
+const topBarSource = read("account/components/shell/TopBar.tsx");
 const userMenuSource = read("account/components/auth/UserMenu.tsx");
 
 describe("workspace and account surfaces", () => {
   test("screens that no behavior needs are removed, not folded away", () => {
     for (const removed of [
       "workspace/WorkspaceSettingsView.tsx",
+      "account/components/WorkspaceCreateForm.tsx",
+      "account/lib/current-workspace.tsx",
+      "workspace/tabs/WorkspaceTab.tsx",
+      "workspace/tabs/MembersTab.tsx",
       "workspace/tabs/BackupsTab.tsx",
       "workspace/tabs/SharesTab.tsx",
       "workspace/tabs/InterfaceRecoveryTab.tsx",
@@ -40,14 +46,13 @@ describe("workspace and account surfaces", () => {
     }
   });
 
-  test("the workspace form never exposes policy JSON or the generated handle", () => {
-    expect(workspaceTabSource).toContain(
-      "updateWorkspace(current.id, { displayName })",
-    );
-    expect(workspaceTabSource).not.toContain("policyDraft");
-    expect(workspaceTabSource).not.toContain("Textarea");
-    expect(workspaceTabSource).not.toContain("ownerUserId");
-    expect(workspaceTabSource).not.toContain("current().type");
+  test("the live Account shell has no workspace or member management surface", () => {
+    expect(accountViewSource).not.toContain("WorkspaceTab");
+    expect(accountViewSource).not.toContain("MembersTab");
+    expect(accountViewSource).not.toContain("WorkspaceCreateForm");
+    expect(sidebarSource).not.toContain("WorkspaceSwitcher");
+    expect(topBarSource).toContain("WorkspaceSwitcher");
+    expect(read("account/components/shell/WorkspaceSwitcher.tsx")).toContain("!await appOwnershipAvailable()");
   });
 
   test("connections never render raw ids, sources, or env names", () => {
@@ -83,11 +88,11 @@ describe("workspace and account surfaces", () => {
 
   test("workspace and account copy uses スペース and the app vocabulary", () => {
     const keys = (Object.keys(ja) as Array<keyof typeof ja>).filter((key) =>
-      ["nav.", "conn.", "account.", "members.", "workspace.", "notif."].some(
+      ["nav.", "conn.", "account.", "notif."].some(
         (prefix) => key.startsWith(prefix),
       ),
     );
-    expect(keys.length).toBeGreaterThan(150);
+    expect(keys.length).toBeGreaterThan(50);
     for (const key of keys) {
       expect({ key, value: ja[key] }).not.toEqual(
         expect.objectContaining({

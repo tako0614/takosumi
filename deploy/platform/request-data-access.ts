@@ -116,6 +116,7 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
   "/account/:section",
   "/account/settings",
   "/account/billing",
+  "/account/connections",
   "/account/profile",
   "/account/sessions",
 ] as const;

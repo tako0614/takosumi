@@ -208,7 +208,8 @@ describe("installed app page", () => {
     expect(attention).toContain("<RunPolicyReasons runId={runId()} capsuleId={app().capsuleId} reportLoadFailure />");
     // A card repeats an action only when it is not the header's primary one,
     // and cards are keyed by what each problem is so a poll keeps them.
-    expect(attention).toContain("if (!action || isPrimary(problem, action)) return null;");
+    expect(attention).toContain("if (!action || isPrimary(problem, action)");
+    expect(attention).toContain("isAppRemovalRun(problem.runType)");
     expect(attention).toContain("<For each={cardKeys()}>");
     // Screen recovery retries the exact failure the server named.
     expect(page).toContain("const failure = problem?.screenFailure;");
@@ -349,6 +350,6 @@ describe("installed app page", () => {
     expect(page).toContain("capsuleInstallConfigId={inst().installConfigId}");
     expect(settings).toContain("props.installConfig.id === props.capsuleInstallConfigId");
     expect(settings).toContain("!props.installConfigLoading &&");
-    expect(settings).toMatch(/disabled=\{\s*props\.reviewBusy \|\|\s*!configCurrent\(\)/u);
+    expect(settings).toMatch(/disabled=\{\s*props\.accessKnown === false \|\|\s*props\.reviewBusy \|\|\s*!configCurrent\(\)/u);
   });
 });

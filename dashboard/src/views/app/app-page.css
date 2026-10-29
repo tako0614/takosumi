@@ -134,3 +134,8 @@
   .ap-app-card-actions .ap-open, .ap-app-card-actions > .tg-btn { flex: 1 1 auto; }
   .ap-app-card-actions .ap-open > .tg-btn:first-child { flex: 1 1 auto; justify-content: center; }
 }
+
+.ap-sharing-form { display: grid; gap: 1rem; max-width: 36rem; margin-block: 1.5rem; }
+.ap-sharing-members { display: grid; gap: .75rem; padding: 0; list-style: none; }
+.ap-sharing-members li { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; }
+.ap-sharing-form label { overflow-wrap: anywhere; }

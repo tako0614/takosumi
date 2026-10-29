@@ -22,6 +22,7 @@ import {
   providerName,
 } from "../../lib/app-page.ts";
 import { installAttemptHref } from "../../lib/app-links.ts";
+import { isAppRemovalRun } from "../../lib/app-access.ts";
 import { appUninstallBanner, appUninstallExportNote } from "../../lib/capsule-uninstall.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { t, type MessageKey } from "../../i18n/index.ts";
@@ -102,6 +103,7 @@ export default function AppAttentionSection(props: {
   readonly busy: boolean;
   /** Which action is starting right now, for its busy spinner. */
   readonly startingAction?: CapsuleAppAction | "continue_revision";
+  readonly canUninstall?: boolean;
   readonly uninstallBusy: boolean;
   readonly uninstallError?: string;
   readonly screenRetryBusy: boolean;
@@ -131,7 +133,7 @@ export default function AppAttentionSection(props: {
   const pendingReview = () => {
     const review = app().progress.review;
     // A review the server is waiting on that is not already open here.
-    return review && review.runId !== props.reviewRunId && app().state === "installed"
+    return review && (props.canUninstall !== false || !isAppRemovalRun(review.runType)) && review.runId !== props.reviewRunId && app().state === "installed"
       ? review
       : undefined;
   };
@@ -169,9 +171,9 @@ export default function AppAttentionSection(props: {
   const teardownRunning = () =>
     scheduled()?.phase === "destroying" && !scheduled()?.blocked && !uninstallFailed();
   const offerCancel = () =>
-    scheduled()?.cancellable === true && app().primaryAction !== "cancel_uninstall";
+    props.canUninstall !== false && scheduled()?.cancellable === true && app().primaryAction !== "cancel_uninstall";
   const offerUninstallNow = () =>
-    !teardownRunning() && app().primaryAction !== "uninstall_now" &&
+    props.canUninstall !== false && !teardownRunning() && app().primaryAction !== "uninstall_now" &&
     app().state !== "uninstalling";
 
   const detailsLink = (runId: string) => (
@@ -190,7 +192,7 @@ export default function AppAttentionSection(props: {
   );
   const actionButton = (problem: CapsuleAppProblem) => {
     const action = PROBLEM_ACTION[problem.code];
-    if (!action || isPrimary(problem, action)) return null;
+    if (!action || isPrimary(problem, action) || (props.canUninstall === false && (isAppRemovalRun(problem.runType) || problem.code === "uninstall_failed"))) return null;
     switch (action) {
       case "fix_interface_link":
         return (
@@ -296,7 +298,7 @@ export default function AppAttentionSection(props: {
                 >
                   {(problem) => (
                     <>
-                      <Show when={!isPrimary(problem(), "retry")}>
+                      <Show when={props.canUninstall !== false && !isPrimary(problem(), "retry")}>
                         <Button
                           variant="secondary"
                           type="button"

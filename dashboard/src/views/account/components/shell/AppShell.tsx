@@ -22,9 +22,8 @@ interface Props {
 
 /**
  * Dashboard chrome: a persistent left sidebar (primary nav: home / store /
- * connections / account) + a top bar (section title / notifications / profile
- * menu) over the content well, with mobile bottom tabs carrying the same four
- * destinations.
+ * connections / account) + a top bar (section title / notifications / profile menu) over the
+ * content well, with mobile bottom tabs carrying the same destinations.
  */
 export default function AppShell(props: Props) {
   const location = useLocation();

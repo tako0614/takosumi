@@ -3,7 +3,7 @@
  *
  * The fixture is intentionally shaped like the public dashboard projections,
  * not like an internal store/database row. It proves that the browser can
- * authenticate, navigate, switch Workspace scope, and render the canonical
+ * authenticate, navigate, manage owned/shared apps, and render the canonical
  * launcher projection without deploying anything.
  */
 
@@ -129,6 +129,127 @@ export const PORTABLE_CAPSULES = {
   ],
   ws_beta: [capsule("ws_beta", "cap_beta_office", "Beta Office")],
 } as const;
+
+/** Value-free app list returned by the workspace-less management API. */
+export const PORTABLE_APPS = [
+  {
+    capsuleId: "cap_repository_office",
+    name: PORTABLE_EXPECTATIONS.appName,
+    displayName: PORTABLE_EXPECTATIONS.appName,
+    role: "owner",
+    ownerDisplayName: "Portable E2E",
+    state: "installed",
+    primaryAction: "open",
+  },
+  {
+    capsuleId: "cap_beta_office",
+    name: "Beta Office",
+    displayName: "Beta Office",
+    role: "member",
+    ownerDisplayName: "Hanako Sato",
+    state: "installed",
+    primaryAction: "open",
+  },
+] as const;
+
+export const PORTABLE_PERSONAL_CONNECTIONS = [
+  {
+    ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1],
+    scope: "personal",
+    ownerAccountId: "sub_portable_e2e",
+    workspaceId: undefined,
+  },
+  PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0],
+] as const;
+
+export function portableUsageResponse() {
+  return {
+    usageEvents: [
+      {
+        id: "use_rated",
+        payerAccountId: "sub_portable_e2e",
+        capsuleId: "cap_repository_office",
+        kind: "runner_minute",
+        quantity: 3,
+        usdMicros: 12_000,
+        ratingStatus: "rated",
+        source: "runner",
+        idempotencyKey: "use_rated",
+        createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      },
+      {
+        id: "use_unrated",
+        payerAccountId: "sub_portable_e2e",
+        capsuleId: "cap_repository_office",
+        kind: "operation",
+        quantity: 1,
+        usdMicros: 0,
+        ratingStatus: "unrated",
+        source: "control",
+        idempotencyKey: "use_unrated",
+        createdAt: new Date(Date.now() - 26 * 3600_000).toISOString(),
+      },
+    ],
+  };
+}
+
+/** Owner-visible people for the primary app in sharing E2E fixtures. */
+export const PORTABLE_APP_MEMBERS = {
+  owner: {
+    accountId: "sub_portable_e2e",
+    displayName: "Portable E2E",
+    email: "portable-e2e@example.test",
+  },
+  members: [
+    {
+      accountId: "tsub_hanako0123456789",
+      displayName: "Hanako Sato",
+      email: "hanako@example.test",
+      status: "active",
+    },
+    {
+      accountId: "tsub_kenta0123456789",
+      displayName: "Kenta Ito",
+      email: "kenta@example.test",
+      status: "active",
+    },
+  ],
+} as const;
+
+export const PORTABLE_SHARED_APP_MEMBERS = {
+  owner: {
+    accountId: "tsub_hanako0123456789",
+    displayName: "Hanako Sato",
+  },
+  members: [
+    {
+      accountId: "sub_portable_e2e",
+      displayName: "Portable E2E",
+      email: "portable-e2e@example.test",
+      status: "active",
+    },
+  ],
+} as const;
+
+export function portableAppConnectionLabels(capsuleId: string) {
+  return { connections: [
+    {
+      id: capsuleId === "cap_beta_office" ? "pc_hanako_cloudflare" : "pc_cloudflare_direct",
+      displayName: "Cloudflare account",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+    },
+    ...(capsuleId === "cap_beta_office" ? [{
+      id: "pc_hanako_cloudflare_alt",
+      displayName: "Second Cloudflare account",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+    }, {
+      id: "pc_hanako_aws",
+      displayName: "AWS account",
+      provider: "registry.opentofu.org/hashicorp/aws",
+    }] : []),
+    { id: "pc_takosumi_cloud", displayName: "Takosumi hosted service", provider: "registry.opentofu.org/cloudflare/cloudflare" },
+  ] };
+}
 
 function launcherInterface(
   workspaceId: string,
@@ -278,8 +399,9 @@ export function workspacesResponse() {
 // --- Install attempts (TASK-0115 Phase 3b) ----------------------------------
 //
 // A deterministic stand-in for the install-plan coordinator's attempt routes:
-// POST /workspaces/:id/install-plans (mode "attempt"), GET ?open=1, GET/PATCH/
-// DELETE /install-plans/:id and POST /install-plans/:id/reconcile. It follows
+// POST /install-plans (mode "attempt") and its legacy
+// /workspaces/:id/install-plans alias, GET ?open=1, GET/PATCH/DELETE
+// /install-plans/:id and POST /install-plans/:id/reconcile. It follows
 // the public contract shapes (contract/install-plans.ts) and keeps no setting
 // value: a confirming answer's values are only checked for presence.
 
@@ -301,6 +423,7 @@ export interface InstallAttemptFixtureConnection {
   readonly status: string;
   readonly scope: string;
   readonly workspaceId?: string;
+  readonly ownerAccountId?: string;
 }
 
 export interface InstallAttemptFixtureRequirement {
@@ -355,6 +478,8 @@ interface StoredAttempt {
   source: { name: string; url: string; ref: string; path: string; authConnectionId?: string };
   capsule: { name: string; environment: string };
   options: { modulePath?: string; providerBindings?: readonly Record<string, unknown>[]; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] };
+  /** Test-only public values and value-free presence markers for the committed settings. */
+  settings?: readonly { name: string; type: InstallAttemptFixtureVariable["type"]; required: boolean; sensitive: boolean; set: boolean; value?: unknown }[];
   phase: AttemptPhase;
   awaitingInput?: "module" | "inputs";
   generation: number;
@@ -392,9 +517,10 @@ function proposedAttemptName(url: string): string {
   return last.toLowerCase().replace(/[^a-z0-9-]+/gu, "-").replace(/^-|-$/gu, "").slice(0, 63) || "app";
 }
 
-function offerable(connection: InstallAttemptFixtureConnection, provider: string, workspaceId: string): boolean {
+function offerable(connection: InstallAttemptFixtureConnection, provider: string, workspaceId: string, ownerAccountId: string): boolean {
   if (connection.providerSource !== provider || connection.status !== "verified") return false;
   return connection.scope === "operator" ||
+    (connection.scope === "personal" && connection.ownerAccountId === ownerAccountId) ||
     (connection.scope === "workspace" && (connection.workspaceId === undefined || connection.workspaceId === workspaceId));
 }
 
@@ -416,7 +542,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
   const requirementRows = (attempt: StoredAttempt) =>
     (options.requirements ?? []).map((requirement) => {
       const candidates = (options.connections?.() ?? [])
-        .filter((connection) => offerable(connection, requirement.provider, attempt.workspaceId))
+        .filter((connection) => offerable(connection, requirement.provider, attempt.workspaceId, attempt.createdBy))
         .map((connection) => ({
           id: connection.id,
           displayName: connection.displayName || connection.id,
@@ -506,6 +632,43 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
     }
   };
 
+  const reviewSummary = (attempt: StoredAttempt) => {
+    if (attempt.phase !== "planning" && attempt.phase !== "reviewable") return undefined;
+    if (!attempt.capsuleId || !attempt.planRunId) return undefined;
+    const connections = requirementRows(attempt).flatMap((row) => {
+      const connectionId = row.selectedConnectionId;
+      if (!connectionId) return [];
+      const candidate = row.candidates.find((entry) => entry.id === connectionId);
+      return [{
+        provider: row.provider,
+        moduleLocalName: row.moduleLocalName,
+        ...(row.childAlias !== undefined ? { childAlias: row.childAlias } : {}),
+        ...(row.rootAlias !== undefined ? { rootAlias: row.rootAlias } : {}),
+        connectionId,
+        displayName: candidate?.displayName ?? connectionId,
+        // Persisted provider bindings do not retain whether the person chose
+        // this row or it was the only available candidate.
+        autoSelected: null,
+      }];
+    });
+    const interfaces = interfaceRows(attempt).flatMap((row) => row.choice ? [{
+      requirementKey: row.requirementKey,
+      choice: row.choice,
+      ...(row.choice.kind === "interface"
+        ? { displayName: row.candidates.find((candidate) => row.choice?.kind === "interface" && candidate.id === row.choice.interfaceId)?.name }
+        : {}),
+      autoSelected: row.autoSelected,
+    }] : []);
+    return {
+      modulePath: attempt.options.modulePath ?? modules[0]?.path ?? ".",
+      appName: attempt.capsule.name,
+      environment: attempt.capsule.environment,
+      connections,
+      interfaces,
+      settings: attempt.settings ?? [],
+    };
+  };
+
   const respond = (attempt: StoredAttempt, status = 200): InstallAttemptFixtureResponse => {
     const action = userAction(attempt);
     return {
@@ -534,6 +697,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         userAction: action,
         ...(attempt.invalidated ? { invalidated: attempt.invalidated } : {}),
         links: { self: `/api/v1/install-plans/${attempt.id}`, reconcile: `/api/v1/install-plans/${attempt.id}/reconcile` },
+        ...(reviewSummary(attempt) ? { reviewSummary: reviewSummary(attempt) } : {}),
       },
     };
   };
@@ -624,6 +788,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         ...(bindings ? { providerBindings: bindings } : {}),
         ...(Array.isArray(optionsBody?.interfaceLinks) ? { interfaceLinks: optionsBody.interfaceLinks as unknown as readonly GitInstallPlanInterfaceLinkRequest[] } : {}),
       },
+      settings: [],
       phase: "syncing_source",
       generation: 0,
       rounds: 0,
@@ -688,6 +853,13 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
       if (missingVariables.length > 0) {
         return attemptError(400, "invalid_request", `The settings are incomplete: ${missingVariables.join(", ")}.`, "install_variable_required");
       }
+      attempt.settings = (options.variables ?? []).map((variable) => {
+        const set = Object.hasOwn(values, variable.name);
+        const metadata = { name: variable.name, type: variable.type, required: variable.required, sensitive: variable.sensitive };
+        if (!set) return { ...metadata, set };
+        if (variable.sensitive) return { ...metadata, set: true };
+        return { ...metadata, set: true, value: values[variable.name] };
+      });
       move(attempt, "creating_capsule");
       move(attempt, "planning");
       return respond(attempt);
@@ -714,9 +886,12 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
   /** Answer one request, or undefined when it is not an attempt route. */
   const handle = (request: InstallAttemptFixtureRequest): InstallAttemptFixtureResponse | undefined => {
     const method = request.method.toUpperCase();
-    const collection = request.path.match(/^\/api\/v1\/workspaces\/([^/]+)\/install-plans$/u);
+    const workspaceCollection = request.path.match(/^\/api\/v1\/workspaces\/([^/]+)\/install-plans$/u);
+    const collection = request.path === "/api/v1/install-plans" || workspaceCollection
+      ? true
+      : undefined;
     if (collection) {
-      if (decodeURIComponent(collection[1] ?? "") !== workspaceId) return attemptError(404, "not_found", "Workspace not found.");
+      if (workspaceCollection && decodeURIComponent(workspaceCollection[1] ?? "") !== workspaceId) return attemptError(404, "not_found", "Workspace not found.");
       if (method === "POST") return create(request);
       if (method === "GET") {
         const open = new URLSearchParams(request.search ?? "").get("open");
