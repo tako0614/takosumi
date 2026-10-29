@@ -549,6 +549,8 @@ export interface ControlPlaneOperations {
       workspaceId?: string,
     ): Promise<readonly ProviderConnection[]>;
     getProviderConnection?(id: string): Promise<ProviderConnection>;
+    /** The account's own non-operator Connections, where the store lists by owner. */
+    listOwnedConnections?(ownerAccountId: string): Promise<readonly ProviderConnection[] | undefined>;
   };
   listConnections(
     workspaceId: string,
