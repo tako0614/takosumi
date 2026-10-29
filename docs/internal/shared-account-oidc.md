@@ -100,8 +100,10 @@ Origin. RP Bearer requests use no ambient cookie authority.
 
 ## Phase 3 Workspace mutation freeze
 
-The Accounts Worker defaults `TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN` to
-`true`. While frozen, `POST /api/v1/workspaces`, legacy Workspace member
+The Accounts Worker and node-postgres composition default
+`TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN` to `true`. The node-postgres
+composition passes the same parsed value to Core and its Accounts handler. While frozen,
+`POST /api/v1/workspaces`, legacy Workspace member
 add/role-change/remove routes, and shared-account additional Workspace creation
 return HTTP 409 with the standard `workspace_frozen` error envelope. Set the
 flag to `false`, `off`, or `0` only to explicitly restore those legacy writes;

@@ -6,6 +6,7 @@ import type { Workspace } from "takosumi-contract/workspaces";
 import { InMemoryOpenTofuControlStore, type OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import { acquireControlD1MaintenanceFence, releaseControlD1MaintenanceFence } from "../../../../worker/src/d1_schema_maintenance.ts";
 import { D1AppOwnershipStore, InMemoryAppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -172,4 +173,94 @@ test("initial Capsule creation copies only active Workspace owner and admin gran
     expect((await ownership.listMembers(app.id)).map((member) => member.accountId)).toEqual(["co-owner"]);
     expect(name).toBeTruthy();
   }
+});
+
+test("app inventory pages mixed physical and legacy access without Workspace fallback for new owners", async () => {
+  for (const { name, control, ownership } of await stores()) {
+    const ws = workspace();
+    await control.putWorkspace(ws);
+    for (const [accountId, roles, status] of [
+      ["admin", ["admin"], "active"],
+      ["viewer", ["viewer"], "active"],
+      ["invited", ["admin"], "invited"],
+    ] as const) await control.putWorkspaceMember({ id: `wm_${accountId}`, workspaceId: ws.id,
+      accountId, roles, status, createdAt: NOW, updatedAt: NOW });
+    const rows = [
+      ["B_owned", "admin", 2],
+      ["a_legacy", undefined, 0],
+      ["c_member", "other", 3],
+      ["d_denied", "other", 4],
+      ["e_legacy", undefined, 0],
+      ["f_invited", "other", 5],
+    ] as const;
+    for (const [id, ownerAccountId, ownershipEpoch] of rows) {
+      await control.putCapsule({ ...capsule(), id, name: id, slug: id, ...(ownerAccountId
+        ? { ownerAccountId, ownershipEpoch, managementState: "active" as const,
+          managementEpoch: 0, storageRoot: `apps/${id}` } : {}) });
+    }
+    expect(await ownership.putMember({ capsuleId: "c_member", accountId: "admin", status: "active",
+      createdAt: NOW, updatedAt: NOW })).toBe(true);
+    expect(await ownership.putMember({ capsuleId: "f_invited", accountId: "admin", status: "invited",
+      createdAt: NOW, updatedAt: NOW })).toBe(true);
+    const first = await ownership.listAccessibleApps("admin", { limit: 2 });
+    expect(first).toEqual({ apps: [
+      { capsuleId: "B_owned", role: "owner", ownerAccountId: "admin", ownershipEpoch: 2 },
+      { capsuleId: "a_legacy", role: "member", ownerAccountId: ws.ownerUserId, ownershipEpoch: 0 },
+    ], nextCursor: "a_legacy" });
+    expect(await ownership.listAccessibleApps("admin", { cursor: first.nextCursor, limit: 2 })).toEqual({ apps: [
+      { capsuleId: "c_member", role: "member", ownerAccountId: "other", ownershipEpoch: 3 },
+      { capsuleId: "e_legacy", role: "member", ownerAccountId: ws.ownerUserId, ownershipEpoch: 0 },
+    ] });
+    expect(await ownership.listAccessibleApps("viewer")).toEqual({ apps: [] });
+    expect(await ownership.listAccessibleApps("invited")).toEqual({ apps: [] });
+    expect((await ownership.listAccessibleApps(ws.ownerUserId)).apps.map((app) => app.capsuleId))
+      .toEqual(["a_legacy", "e_legacy"]);
+    expect(name).toBeTruthy();
+  }
+});
+
+test("pre-v77 D1 app inventory uses legacy access without missing-column errors", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
+  const fence = await acquireControlD1MaintenanceFence(db, {
+    sourceCommit: "a".repeat(40), manifestDigest: `sha256:${"b".repeat(64)}`,
+    environment: "test", databaseRole: "in_place", releasePolicy: "in_place",
+  }, NOW);
+  await releaseControlD1MaintenanceFence(db, fence, "2026-10-28T00:00:01.000Z");
+  const control = new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
+  const ownership = new D1AppOwnershipStore(db, control);
+  await control.putWorkspace(workspace());
+  await control.putWorkspaceMember({ id: "legacy_admin", workspaceId: workspace().id,
+    accountId: "admin", roles: ["admin"], status: "active", createdAt: NOW, updatedAt: NOW });
+  await control.putCapsule(capsule());
+  expect(await ownership.listAccessibleApps("admin", { limit: 1 })).toEqual({ apps: [
+    { capsuleId: capsule().id, role: "member", ownerAccountId: workspace().ownerUserId, ownershipEpoch: 0 },
+  ] });
+});
+
+test("an orphan legacy membership cannot grant app inventory access", async () => {
+  const db = new SqliteFakeD1();
+  // Deliberately inconsistent retained rows: the old Workspace is absent.
+  await db.exec(`
+    create table capsules(id text, space_id text, owner_account_id text, ownership_epoch integer,
+      management_state text, management_epoch integer, storage_root text);
+    create table capsule_members(capsule_id text, account_id text, status text);
+    create table workspaces(id text, record_json text);
+    create table workspace_members(workspace_id text, account_id text, status text, record_json text);
+    insert into capsules values('orphan','missing',null,0,'active',0,null);
+    insert into workspace_members values('missing','admin','active',
+      '{"workspaceId":"missing","accountId":"admin","status":"active","roles":["admin"]}');
+  `);
+  const control = {
+    getCapsule: async () => ({ ...capsule(), id: "orphan", workspaceId: "missing" }),
+    getWorkspace: async () => undefined,
+  } as unknown as OpenTofuControlStore;
+  const ownership = new D1AppOwnershipStore(db, control);
+  expect(await ownership.resolveAppAccess("admin", "orphan")).toBeUndefined();
+  expect(await ownership.listAccessibleApps("admin")).toEqual({ apps: [] });
+  await db.exec("update capsules set owner_account_id='app-owner', ownership_epoch=7, storage_root='apps/orphan'");
+  expect(await ownership.listAccessibleApps("app-owner")).toEqual({ apps: [
+    { capsuleId: "orphan", role: "owner", ownerAccountId: "app-owner", ownershipEpoch: 7 },
+  ] });
+  expect(await ownership.listAccessibleApps("admin")).toEqual({ apps: [] });
 });

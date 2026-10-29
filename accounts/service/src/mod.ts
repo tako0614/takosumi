@@ -253,6 +253,7 @@ export interface AccountsHandlerOptions {
 
 export interface EphemeralAccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
+  workspaceMutationsFrozen?: boolean;
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   identityMergeReconciler?: IdentityMergeReconciler;
   identityMergeRetry?: IdentityMergeRetryCapability;
@@ -392,6 +393,7 @@ export async function createEphemeralAccountsHandler(
     requestPhaseDiagnostics: options.requestPhaseDiagnostics,
     issuer,
     hostedSessionPolicy: options.hostedSessionPolicy,
+    workspaceMutationsFrozen: options.workspaceMutationsFrozen,
     sharedAccountWorkspaceDirectory: options.sharedAccountWorkspaceDirectory,
     identityMergeReconciler: options.identityMergeReconciler,
     identityMergeRetry: options.identityMergeRetry,
