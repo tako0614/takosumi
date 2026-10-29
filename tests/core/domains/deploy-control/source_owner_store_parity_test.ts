@@ -137,6 +137,30 @@ test("initial authority atomically claims an unowned Source and replays the matc
   }
 });
 
+test("new initial authority refuses disabled or retiring Sources without partial writes", async () => {
+  for (const [label, store] of await stores()) {
+    await store.putWorkspace(workspace());
+    for (const [index, state] of [
+      { status: "disabled" as const },
+      { status: "disabled" as const, retiringAt: NOW },
+      { status: "active" as const, retiringAt: NOW },
+    ].entries()) {
+      for (const preowned of [false, true]) {
+        const capsuleId = `cap_fenced_${label}_${index}_${preowned}`;
+        const sourceId = `${SOURCE}_${index}_${preowned}`;
+        await store.putSource({ ...source(preowned ? capsuleId : undefined, sourceId), ...state });
+        const input = authority(capsuleId, sourceId);
+        expect(await store.createCapsuleInitialAuthority(input), label).toEqual({ status: "conflict" });
+        expect(await store.getCapsule(capsuleId), label).toBeUndefined();
+        expect(await store.getInstallConfig(input.installConfig.id), label).toBeUndefined();
+        expect(await store.getProviderBindingSetByCapsule(capsuleId, "production"), label).toBeUndefined();
+        expect((await store.getSource(sourceId))?.ownerCapsuleId, label)
+          .toBe(preowned ? capsuleId : undefined);
+      }
+    }
+  }
+});
+
 test("exact initial authority replay survives later conflicting references and Source deletion", async () => {
   for (const [label, store] of await stores()) {
     await store.putWorkspace(workspace());
@@ -291,7 +315,7 @@ test("Postgres and D1 roll back the Source claim with the entire initial unit on
   }
 });
 
-test("D1 classifies a Source deleted between its read and atomic claim as lost ownership", async () => {
+test("D1 classifies a Source deleted between its read and atomic claim as conflict", async () => {
   const db = new FailFinalBatchD1();
   const store = new CloudflareD1OpenTofuControlStore(db);
   await store.putWorkspace(workspace());
@@ -300,7 +324,7 @@ test("D1 classifies a Source deleted between its read and atomic claim as lost o
   db.beforeNextBatch = async () => {
     expect(await store.deleteSource(SOURCE)).toBe(true);
   };
-  expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "source_owned_by_another_app" });
+  expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "conflict" });
   expect(await store.getSource(SOURCE)).toBeUndefined();
   expect(await store.getInstallConfig(input.installConfig.id)).toBeUndefined();
   expect(await store.getCapsule(input.capsule.id)).toBeUndefined();

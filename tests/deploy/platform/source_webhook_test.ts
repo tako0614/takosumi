@@ -5,6 +5,7 @@ import {
   CloudflareD1OpenTofuControlStore,
 } from "../../../worker/src/d1_opentofu_store.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
@@ -50,7 +51,6 @@ import {
   pollAutoSyncSources,
   planStaleCapsuleUpdates,
   repairStaleOpenTofuRuns,
-  scheduledSourcePollEnabledForCron,
   scheduledSourcePollBatch,
   schedulePlatformSideEffect,
   summarizePrometheusMetrics,
@@ -296,6 +296,7 @@ function makeWebhookOps(
   overrides: {
     valid?: boolean;
     throwOnVerify?: boolean;
+    missingSource?: boolean;
   } = {},
 ): {
   ops: SourceWebhookOperations;
@@ -305,8 +306,12 @@ function makeWebhookOps(
   const syncCalls: { sourceId: string; dedupe?: boolean }[] = [];
   const verifyCalls: { sourceId: string; secret: string }[] = [];
   const ops: SourceWebhookOperations = {
+    getSource: async () => {
+      if (overrides.missingSource) throw new OpenTofuControllerError("not_found", "missing source");
+    },
     verifySourceHookSecret: (sourceId, secret) => {
       verifyCalls.push({ sourceId, secret });
+      if (overrides.missingSource) return Promise.reject(new OpenTofuControllerError("not_found", "missing source"));
       if (overrides.throwOnVerify) return Promise.reject(new Error("boom"));
       return Promise.resolve(overrides.valid ?? true);
     },
@@ -354,6 +359,16 @@ test("webhook rejects a wrong bearer (401) and does not trigger a sync", async (
   expect(syncCalls).toHaveLength(0);
 });
 
+test("webhook hides unknown and retired Source existence behind the same bearer rejection", async () => {
+  const { ops, syncCalls, verifyCalls } = makeWebhookOps({ missingSource: true });
+  const { request, url } = webhookRequest({}, { bearer: "old-hook-secret" });
+  const response = await handleSourceWebhookRequest(request, url, ops);
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ error: "unauthenticated" });
+  expect(syncCalls).toEqual([]);
+  expect(verifyCalls).toHaveLength(1);
+});
+
 test("webhook with a verify error is treated as unauthenticated (401)", async () => {
   const { ops, syncCalls } = makeWebhookOps({ throwOnVerify: true });
   const { request, url } = webhookRequest({}, { bearer: "x" });
@@ -377,6 +392,32 @@ test("webhook with a good bearer triggers a deduped sync and IGNORES the payload
   expect(syncCalls).toEqual([{ sourceId: SOURCE_ID, dedupe: true }]);
 });
 
+test("an authenticated webhook acknowledges an inactive Source without retry work", async () => {
+  const { ops, verifyCalls } = makeWebhookOps();
+  const { request, url } = webhookRequest({}, { bearer: "good-secret" });
+  const response = await handleSourceWebhookRequest(request, url, {
+    ...ops,
+    createSourceReconciliationSyncs: async () => {
+      throw new OpenTofuControllerError("failed_precondition", "Source is not active",
+        { reason: "source_not_active" });
+    },
+  });
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ accepted: true, runIds: [] });
+  expect(verifyCalls).toHaveLength(1);
+});
+
+test("authenticated webhook infrastructure and unrelated precondition failures remain visible", async () => {
+  const { ops } = makeWebhookOps();
+  for (const error of [new Error("storage failed"),
+    new OpenTofuControllerError("failed_precondition", "Source changed", { reason: "source_configuration_conflict" })]) {
+    const { request, url } = webhookRequest({}, { bearer: "good-secret" });
+    await expect(handleSourceWebhookRequest(request, url, {
+      ...ops, createSourceReconciliationSyncs: async () => { throw error; },
+    })).rejects.toBe(error);
+  }
+});
+
 test("webhook rejects a non-POST method (405)", async () => {
   const { ops } = makeWebhookOps();
   const { request, url } = webhookRequest({}, { method: "GET", bearer: "x" });
@@ -396,11 +437,12 @@ test("webhook rejects an unsupported source id shape (404)", async () => {
 });
 
 test("scheduled poll enqueues a deduped sync per autoSync source, capped", async () => {
-  const syncCalls: string[] = [];
+  const syncCalls: { sourceId: string; scheduled?: boolean }[] = [];
   const ops: SourcePollOperations = {
+    getSource: async () => undefined,
     verifySourceHookSecret: () => Promise.resolve(true),
-    createSourceReconciliationSyncs: (sourceId) => {
-      syncCalls.push(sourceId);
+    createSourceReconciliationSyncs: (sourceId, options) => {
+      syncCalls.push({ sourceId, scheduled: options?.scheduled });
       return Promise.resolve([{ run: { id: `ssr_${sourceId}` } }]);
     },
     controller: {
@@ -409,11 +451,14 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
     },
   };
   await pollAutoSyncSources(ops, 50);
-  expect(syncCalls).toEqual(["src_a", "src_b"]);
+  expect(syncCalls).toEqual([
+    { sourceId: "src_a", scheduled: true },
+    { sourceId: "src_b", scheduled: true },
+  ]);
 });
 
 test("scheduled source poll batch is operator configurable with a bounded default", () => {
-  expect(scheduledSourcePollBatch({} as never)).toBe(25);
+  expect(scheduledSourcePollBatch({} as never)).toBe(5);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "2",
@@ -423,23 +468,15 @@ test("scheduled source poll batch is operator configurable with a bounded defaul
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "0",
     } as never),
-  ).toBe(25);
+  ).toBe(5);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "not-a-number",
     } as never),
-  ).toBe(25);
+  ).toBe(5);
 });
 
-test("scheduled source polling runs only on the hourly source-poll cron", () => {
-  expect(scheduledSourcePollEnabledForCron("5 * * * *")).toBe(true);
-  expect(scheduledSourcePollEnabledForCron("0 * * * *")).toBe(true);
-  expect(scheduledSourcePollEnabledForCron("*/5 * * * *")).toBe(false);
-  expect(scheduledSourcePollEnabledForCron("* * * * *")).toBe(false);
-  expect(scheduledSourcePollEnabledForCron("3,18,33,48 * * * *")).toBe(
-    false,
-  );
-});
+
 
 test("stale Capsule auto-plan is opt-in", () => {
   const base = { TAKOSUMI_ACCOUNTS_DB: {} } as never;
@@ -3770,6 +3807,7 @@ test("handlePlatformExtensionRequest returns undefined for unmatched paths", asy
 test("scheduled poll continues past a failing source", async () => {
   const syncCalls: string[] = [];
   const ops: SourcePollOperations = {
+    getSource: async () => undefined,
     verifySourceHookSecret: () => Promise.resolve(true),
     createSourceReconciliationSyncs: (sourceId) => {
       syncCalls.push(sourceId);

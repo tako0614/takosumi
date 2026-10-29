@@ -109,8 +109,40 @@ async function fixture(options: {
     expect(response.status).toBe(200);
     return ((await response.json()) as { app: CapsuleAppView }).app;
   }
-  return { ledger, core, seeded, request, app, owner, stranger, interfaceStores, accounts };
+  return { ledger, core, seeded, request, app, owner, stranger, interfaceStores, accounts, operations };
 }
+
+test("destroyed Capsule GET and Workspace list survive retired Source row with a retained state cursor", async () => {
+  const h = await fixture({ currentStateVersionId: "sv_retained_destroy" });
+  await h.ledger.putCapsule({
+    ...h.seeded.capsule,
+    status: "destroyed",
+    currentStateVersionId: "sv_retained_destroy",
+    currentStateGeneration: 2,
+  });
+  expect(await h.ledger.deleteSource(h.seeded.capsule.sourceId)).toBe(true);
+
+  const get = await h.request("");
+  expect(get.status).toBe(200);
+  const got = (await get.json()) as { capsule: Record<string, unknown> };
+  expect(got.capsule.status).toBe("destroyed");
+  expect(got.capsule.adoptedSourceRevision).toBeUndefined();
+
+  const url = new URL(`${ORIGIN}/api/v1/workspaces/${WORKSPACE}/capsules`);
+  const list = await handleControlRoute({
+    request: new Request(url, { headers: { cookie: h.owner } }),
+    url,
+    store: h.accounts,
+    operations: h.operations,
+  });
+  expect(list?.status).toBe(200);
+  const listed = (await list!.json()) as { capsules: readonly Record<string, unknown>[] };
+  expect(listed.capsules[0]?.status).toBe("destroyed");
+  expect(listed.capsules[0]?.adoptedSourceRevision).toBeUndefined();
+  const app = await h.app();
+  expect(app.version).toEqual({ uninstalled: true, updateAvailable: false, stale: false, autoUpdate: false });
+  expect(app.incomplete ?? []).not.toContain("version");
+});
 
 function planRun(id: string, createdAt: number, over: Partial<PlanRun> = {}): PlanRun {
   return {
@@ -447,6 +479,10 @@ test("version facts compare the adopted commit with the newest snapshot of the s
   await h.ledger.putSourceSnapshot(
     snapshot("snap_older_main", "main", "0".repeat(40), "2026-06-01T00:00:00.000Z"),
   );
+  await h.ledger.putSourceSnapshot({
+    ...snapshot("snap_newer_other_path", "main", "9".repeat(40), "2026-06-09T00:00:00.000Z"),
+    path: "another/app",
+  });
   const unchanged = await h.app();
   expect(unchanged.version).toMatchObject({
     current: { sourceSnapshotId: "snap_app_route", ref: "main", path: ".", commit },
@@ -1206,4 +1242,16 @@ test("a full Workspace failure window without this app's entry is reported as in
     },
   });
   expect((await partial.app()).incomplete).toBeUndefined();
+});
+
+test("a destroyed app renders after its Source has retired", async () => {
+  const h = await fixture({ currentStateVersionId: "historical_state" });
+  const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+  await h.ledger.putCapsule({ ...capsule, status: "destroyed" });
+  await h.ledger.deleteSource(capsule.sourceId);
+  expect((await h.request("")).status).toBe(200);
+  const app = await h.app();
+  expect(app.status).toBe("destroyed");
+  expect(app.version.current).toBeUndefined();
+  expect(app.version.updateAvailable).toBe(false);
 });

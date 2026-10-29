@@ -477,7 +477,10 @@ webhook secret の復旧手順、旧 secret の失効タイミング、応答を
 Source を削除します。非破棄 Capsule に追跡されていると `409
 source_referenced_by_capsule`、進行中 Run があると `409
 source_has_in_flight_run` で拒否します。削除後は webhook bearer が無効になり、
-読み取りは 404、value-free の `source.deleted` が Activity に 1 件記録されます。
+読み取りは 404 になります。所有アプリがある Source、退役中の Source、snapshot・同期履歴がある
+Source は、専用 archive を custody 経路で削除してから snapshot 行と Source 行を原子的に削除し、
+value-free の `source.retired` を Activity に 1 件記録します。失敗時は行を保持して再試行できます。
+所有者も履歴もない未使用 Source だけは `source.deleted` を記録します。
 
 ### Git install plan
 
@@ -515,7 +518,8 @@ route はありません。
 試行が作った未適用の Capsule を abandon し、終端の `discarded` にします。abandon が途中で
 止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
 すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
-Source は削除しません。その試行自身が有効にした polling だけを止めます。
+試行専用の Source を退役させ、同期・polling を止めて archive と snapshot 行を削除します。
+途中失敗した退役は、同じ DELETE または日次の回収で再開します。
 
 `userAction.kind: "provide_inputs"` の `interfaces` は、`requirementKey`、type/version、
 permissions、値を含まない候補、`choice`、`autoSelected` を返します。候補が 0 件なら「あとで」、

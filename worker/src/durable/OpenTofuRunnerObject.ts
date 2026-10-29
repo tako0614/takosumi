@@ -8,7 +8,7 @@ import type {
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
 import { storedServiceCompositionFromEnv, type StoredBucketRole } from "../stored-service-usage.ts";
-import { assertStoredReleaseRunLease, assertStoredRunLease, assertStoredSourceArchiveCleanup, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER, type SourceArchiveCleanupAllocation, type StoredReleaseParent, type StoredRunLease } from "../stored-service-owner-context.ts";
+import { assertStoredReleaseRunLease, assertStoredRetiredSourceArchiveDeletions, assertStoredRunLease, assertStoredSourceArchiveCleanup, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER, type SourceArchiveCleanupAllocation, type StoredReleaseParent, type StoredRunLease } from "../stored-service-owner-context.ts";
 import {
   maxStateArtifactCiphertextBytes,
   StateArtifactCrypto,
@@ -985,6 +985,37 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async fetch(request: Request): Promise<Response> {
+    const retirementMatch = /^\/sources\/([^/]+)\/archive\/retire$/.exec(new URL(request.url).pathname);
+    if (retirementMatch && request.method === "POST") {
+      try {
+        const sourceId = decodeURIComponent(retirementMatch[1]!);
+        const bytes = await readBoundedResponseBytes(new Response(request.body), "runner_response", 65_536);
+        const payload: unknown = JSON.parse(new TextDecoder().decode(bytes));
+        if (!isRecord(payload) || payload.sourceId !== sourceId) throw new Error("invalid source archive retirement request");
+        const workspaceId = requiredStringField(payload, "workspaceId");
+        const archiveRefs = Array.isArray(payload.archiveRefs)
+          ? payload.archiveRefs
+          : [requiredStringField(payload, "archiveRef")];
+        if (archiveRefs.length < 1 || archiveRefs.length > 32 ||
+          !archiveRefs.every((ref): ref is string => typeof ref === "string") ||
+          new Set(archiveRefs).size !== archiveRefs.length)
+          throw new Error("invalid source archive retirement page");
+        const bucket = this.env.R2_SOURCE;
+        if (!bucket) throw new Error("R2_SOURCE binding is not configured");
+        const batch = { workspaceId, sourceId, archiveRefs };
+        const deletable = await assertStoredRetiredSourceArchiveDeletions(this.env.TAKOSUMI_CONTROL_DB, batch);
+        if (!deletable) throw new Error("source archive is still referenced by another Source");
+        const owned = runnerStoredServiceBucket(bucket, storedServiceCompositionFromEnv(this.env),
+          this.env.TAKOSUMI_CONTROL_DB, { bucketRole: "source", sourceRetirementBatch: batch });
+        for (const archiveRef of archiveRefs) {
+          if (await bucket.head(archiveRef)) await owned.delete(archiveRef);
+        }
+        return new Response(null, { status: 204 });
+      } catch (error) {
+        console.error("OpenTofu runner source archive retirement failed", { errorName: safeRunnerErrorName(error) });
+        return Response.json({ error: "source archive retirement failed" }, { status: 503 });
+      }
+    }
     const cleanupMatch = /^\/runs\/([^/]+)\/source-archive\/cleanup$/.exec(new URL(request.url).pathname);
     if (cleanupMatch && request.method === "POST") {
       try {
@@ -1000,18 +1031,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           canonicalSnapshotId: requiredStringField(payload, "canonicalSnapshotId"),
         };
         if (payload.runId !== runId) throw new Error("source archive cleanup Run mismatch");
-        await assertStoredSourceArchiveCleanup(this.env.TAKOSUMI_CONTROL_DB, input);
         const bucket = this.env.R2_SOURCE;
         if (!bucket) throw new Error("R2_SOURCE binding is not configured");
+        // A duplicate settlement may have uploaded nothing or already removed
+        // the allocation. Do not scan historical references in that case.
+        const object = await bucket.head(input.archiveRef);
+        if (!object) return new Response(null, { status: 204 });
+        await assertStoredSourceArchiveCleanup(this.env.TAKOSUMI_CONTROL_DB, input);
         const owned = runnerStoredServiceBucket(bucket, storedServiceCompositionFromEnv(this.env),
           this.env.TAKOSUMI_CONTROL_DB, { bucketRole: "source", sourceCleanup: input });
-        const object = await owned.head(input.archiveRef);
-        if (object) {
-          if (object.customMetadata?.["takosumi-run-id"] !== runId) {
-            throw new Error("source archive cleanup object owner mismatch");
-          }
-          await owned.delete(input.archiveRef);
+        if (object.customMetadata?.["takosumi-run-id"] !== runId) {
+          throw new Error("source archive cleanup object owner mismatch");
         }
+        await owned.delete(input.archiveRef);
         return new Response(null, { status: 204 });
       } catch (error) {
         console.error("OpenTofu runner source archive cleanup failed", {

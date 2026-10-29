@@ -1,3 +1,6 @@
+import type { GitInstallPlanStore } from "../install-plans/store.ts";
+import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
+import { sourceCreatorPlanAllowsRetirement, sourceCreatorPlanMatchesSource } from "./retirement_policy.ts";
 /**
  * Source domain service (Core Specification §6 / §7).
  *
@@ -23,7 +26,6 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
-  Capsule,
   CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -32,7 +34,6 @@ import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsul
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
 import {
-  MAX_PAGE_LIMIT,
   type PageParams,
 } from "takosumi-contract/pagination";
 import {
@@ -70,6 +71,7 @@ import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact
 import { stableStringify } from "../../adapters/source/digest.ts";
 import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
+import { convergeOwnedSourceLane, isLiveSourceLaneCapsule } from "./owned-lane.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
 // default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
@@ -154,11 +156,18 @@ export interface EnsureOwnedSourceRequest {
 
 export interface SourcesServiceDependencies {
   readonly store: OpenTofuControlStore;
+  readonly plans?: Pick<GitInstallPlanStore, "get">;
   /** Host authority for opaque durable source-archive references. */
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly compatibilityAnalyzer?: CapsuleCompatibilityAnalyzer;
   readonly readCapsuleSourceFiles?: ReadCapsuleSourceFiles;
+  /** Idempotent host custody deletion; missing objects count as deleted. */
+  readonly deleteRetiredSourceArchives?: (input: {
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRefs: readonly string[];
+  }) => Promise<void>;
   readonly newId?: (prefix: string) => string;
   readonly now?: () => Date;
   /** Per-source webhook secret generator. Defaults to a random URL-safe token. */
@@ -167,10 +176,12 @@ export interface SourcesServiceDependencies {
 
 export class SourcesService {
   readonly #store: OpenTofuControlStore;
+  readonly #plans?: Pick<GitInstallPlanStore, "get">;
   readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly #enqueue: EnqueueSourceSync;
   readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
   readonly #readCapsuleSourceFiles: ReadCapsuleSourceFiles;
+  readonly #deleteRetiredSourceArchives?: SourcesServiceDependencies["deleteRetiredSourceArchives"];
   readonly #sourceFilesCache = new Map<
     string,
     Promise<readonly CapsuleSourceFile[]>
@@ -181,12 +192,14 @@ export class SourcesService {
 
   constructor(deps: SourcesServiceDependencies) {
     this.#store = deps.store;
+    this.#plans = deps.plans;
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#enqueue = deps.enqueueSourceSync ?? (() => Promise.resolve());
     this.#compatibilityAnalyzer =
       deps.compatibilityAnalyzer ?? new StaticHclCapsuleCompatibilityAnalyzer();
     this.#readCapsuleSourceFiles =
       deps.readCapsuleSourceFiles ?? (() => Promise.resolve([]));
+    this.#deleteRetiredSourceArchives = deps.deleteRetiredSourceArchives;
     this.#newId = deps.newId ?? defaultId;
     this.#now = deps.now ?? (() => new Date());
     this.#newHookSecret = deps.newHookSecret ?? defaultHookSecret;
@@ -353,6 +366,16 @@ export class SourcesService {
     patch: PatchSourceRequest,
   ): Promise<SourceResponse> {
     const stored = await this.#requireSource(id);
+    if (stored.retiringAt) {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${id} is retiring`, { reason: "source_retiring" });
+    }
+    if (stored.ownerCapsuleId && (
+      (patch.defaultRef !== undefined && (nonEmpty(patch.defaultRef) ?? DEFAULT_REF) !== stored.defaultRef) ||
+      (patch.defaultPath !== undefined && (nonEmpty(patch.defaultPath) ?? DEFAULT_PATH) !== stored.defaultPath)
+    )) throw new OpenTofuControllerError("failed_precondition", "Change the app revision to change its Git lane.", {
+      reason: "source_lane_owned_by_app",
+    });
     const next: StoredSource = { ...stored };
     const shouldValidateAuthConnection =
       patch.authConnectionId !== undefined && patch.authConnectionId !== null;
@@ -498,6 +521,24 @@ export class SourcesService {
         { reason: "source_has_in_flight_run" },
       );
     }
+    // App-owned and historically synced Sources require archive custody before
+    // their rows disappear. A concurrent destroy or manual DELETE cannot take
+    // the Source-only path and strand the archive work list.
+    const requiresRetirement = Boolean(stored.ownerCapsuleId || stored.retiringAt) ||
+      (await this.#store.listSourceSnapshots(id)).length > 0 ||
+      (await this.#store.listSourceSyncRuns(id)).length > 0;
+    if (requiresRetirement) {
+      const retired = await this.retireOwnedSource(id, "source deleted by operator", {
+        expectedWorkspaceManagementAuthority: authority, actorId,
+      });
+      if (retired === "retired") return { source: toPublicSource(stored) };
+      if (retired === "already_retired") {
+        throw new OpenTofuControllerError("not_found", `source ${id} not found`);
+      }
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${id} still has an in-flight Run; wait for it to settle first.`,
+        { reason: "source_has_in_flight_run" });
+    }
     const nowIso = this.#now().toISOString();
     const outcome = await this.#store.deleteSourceWithActivity({
       expectedSource: stored,
@@ -531,6 +572,11 @@ export class SourcesService {
           { reason },
         );
       }
+      if (reason === "source_retirement_required") {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${id} changed before deletion; retry through archive custody.`,
+          { reason });
+      }
       throw new OpenTofuControllerError(
         "failed_precondition",
         `Source ${stored.id} still has an in-flight Run; wait for it to settle first.`,
@@ -541,27 +587,184 @@ export class SourcesService {
   }
 
   /**
+   * Retire an app-owned or orphan Source. A disabled durable marker makes this
+   * resumable: archives are deleted while their snapshot/run rows still name
+   * them, then one store transaction removes the snapshots and Source and
+   * records the value-free Activity. Missing Source is an idempotent replay.
+   */
+  async retireOwnedSource(
+    sourceId: string,
+    reason: string,
+    options: {
+      readonly expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority;
+      readonly actorId?: string;
+    } = {},
+  ): Promise<"retired" | "already_retired" | "deferred"> {
+    requireNonEmptyString(sourceId, "sourceId");
+    requireNonEmptyString(reason, "reason");
+    let source = await this.#store.getSource(sourceId);
+    if (!source) return "already_retired";
+    const assertUnreferenced = async () => {
+      const owner = source!.ownerCapsuleId
+        ? await this.#store.getCapsule(source!.ownerCapsuleId)
+        : undefined;
+      let uncreatedReservation = false;
+      if (source!.ownerCapsuleId && !owner && isInstallPlanSourceReservation(source!)) {
+        const creator = await this.#plans?.get(source!.createdByInstallPlanId!);
+        uncreatedReservation = !!creator && sourceCreatorPlanMatchesSource(source!, creator) &&
+          sourceCreatorPlanAllowsRetirement(creator, this.#now().getTime(), 0);
+        if (uncreatedReservation) {
+          let cursor: string | undefined;
+          do {
+            const page = await this.#store.listCapsulesPage(source!.workspaceId, {
+              limit: 100, includeDestroyed: true, ...(cursor ? { cursor } : {}),
+            });
+            if (page.items.some((capsule) => capsule.sourceId === sourceId)) {
+              uncreatedReservation = false;
+              break;
+            }
+            cursor = page.nextCursor;
+          } while (cursor !== undefined);
+        }
+      }
+      if (source!.ownerCapsuleId && ((!owner && !uncreatedReservation) || (owner && (
+        owner.id !== source!.ownerCapsuleId || owner.workspaceId !== source!.workspaceId ||
+        owner.sourceId !== sourceId || owner.status !== "destroyed")))) {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} owner Capsule is not destroyed`,
+          { reason: "source_owner_not_destroyed" });
+      }
+      const blockers = await this.#store.sourceLifecycleBlockers(sourceId, source!.workspaceId);
+      if (blockers.includes("source_referenced_by_capsule")) {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} is still referenced by a Capsule`,
+          { reason: "source_referenced_by_capsule" });
+      }
+    };
+    await assertUnreferenced();
+    const authority = options.expectedWorkspaceManagementAuthority ??
+      await this.#captureWorkspaceManagementAuthority(source.workspaceId);
+    if (options.expectedWorkspaceManagementAuthority) {
+      assertWorkspaceManagementAuthorityInput(authority, source.workspaceId);
+    }
+    if (!source.retiringAt) {
+      try {
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, status: "disabled", autoSync: false,
+            retiringAt: this.#now().toISOString(), updatedAt: this.#now().toISOString() },
+          expectedSource: source,
+          expectedWorkspaceManagementAuthority: authority,
+        });
+      } catch (error) {
+        if (!(error instanceof OpenTofuControllerError) ||
+          structuredErrorReason(error) !== "source_configuration_conflict") throw error;
+        const raced = await this.#store.getSource(sourceId);
+        if (!raced) return "already_retired";
+        if (!raced.retiringAt || raced.status !== "disabled" || raced.autoSync) throw error;
+        source = raced;
+      }
+    } else if (source.status !== "disabled" || source.autoSync) {
+      throw sourceConfigurationConflictError();
+    }
+    if (await this.#hasInFlightSourceRun(source)) return "deferred";
+    const scope = `workspaces/${source.workspaceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/sources/${sourceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/snapshots/`;
+    const blocker = await this.#store.sourceRetirementArchiveBlocker(sourceId, scope);
+    if (blocker === "foreign_reference") {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${sourceId} shares an archive with another live Source`,
+        { reason: "source_archive_shared_by_another_source" });
+    }
+    // Drain bounded pages for at most 1,024 archives or five seconds between
+    // pages. Persist only after idempotent deletion, preserving crash retries.
+    const startedAt = performance.now();
+    let pages = 0;
+    while (true) {
+      let page = await this.#store.listSourceRetirementArchiveRefsPage(
+        sourceId, source.retirementArchiveCursor, 32, scope,
+      );
+      if (source.retirementSnapshotCount === undefined ||
+        source.retirementSourceSyncRunCount === undefined) {
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, retirementSnapshotCount: page.snapshotCount,
+            retirementSourceSyncRunCount: page.sourceSyncRunCount,
+            updatedAt: this.#now().toISOString() },
+          expectedSource: source, expectedWorkspaceManagementAuthority: authority,
+        });
+        page = await this.#store.listSourceRetirementArchiveRefsPage(
+          sourceId, source.retirementArchiveCursor, 32, scope,
+        );
+      }
+      if (page.snapshotCount !== source.retirementSnapshotCount ||
+        page.sourceSyncRunCount !== source.retirementSourceSyncRunCount) {
+        // An operator migration can normalize a historical foreign ref. Restart
+        // from the first key; already deleted objects are safe to delete again.
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, retirementArchiveCursor: undefined,
+            retirementSnapshotCount: page.snapshotCount,
+            retirementSourceSyncRunCount: page.sourceSyncRunCount,
+            updatedAt: this.#now().toISOString() },
+          expectedSource: source, expectedWorkspaceManagementAuthority: authority,
+        });
+        page = await this.#store.listSourceRetirementArchiveRefsPage(sourceId, undefined, 32, scope);
+      }
+      const archiveRefs = page.archiveRefs;
+      // Only this Source's own prefix is in its physical deletion custody.
+      if (archiveRefs.some((ref) => !ref.startsWith(scope))) {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} has an archive outside its custody scope`,
+          { reason: "source_archive_outside_custody_scope" });
+      }
+      if (archiveRefs.length > 0) {
+        if (!this.#deleteRetiredSourceArchives) {
+          throw new OpenTofuControllerError("failed_precondition",
+            "Source archive custody is unavailable",
+            { reason: "source_archive_custody_unavailable" });
+        }
+        await this.#deleteRetiredSourceArchives({
+          workspaceId: source.workspaceId, sourceId, archiveRefs,
+        });
+      }
+      if (page.hasMore) {
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, retirementArchiveCursor: archiveRefs.at(-1),
+            updatedAt: this.#now().toISOString() },
+          expectedSource: source, expectedWorkspaceManagementAuthority: authority,
+        });
+        pages++;
+        if (pages >= 32 || performance.now() - startedAt >= 5_000) return "deferred";
+        continue;
+      }
+      break;
+    }
+    const result = await this.#store.retireSource({
+      expectedSource: source,
+      expectedWorkspaceManagementAuthority: authority,
+      expectedSnapshotCount: source.retirementSnapshotCount!,
+      expectedSourceSyncRunCount: source.retirementSourceSyncRunCount!,
+      activity: {
+        id: this.#newId("act"), workspaceId: source.workspaceId,
+        ...(options.actorId === undefined ? {} : { actorId: options.actorId }),
+        action: "source.retired", targetType: "source", targetId: sourceId,
+        metadata: { reason }, createdAt: this.#now().toISOString(),
+      },
+    });
+    if (result.status === "deleted") return "retired";
+    if (result.status === "not_found") return "already_retired";
+    if (result.status === "blocked" && result.blockers.includes("source_has_in_flight_run"))
+      return "deferred";
+    throw new OpenTofuControllerError("failed_precondition",
+      `Source ${sourceId} retirement was blocked`,
+      { reason: result.status === "blocked" ? result.blockers[0] : "source_retirement_conflict" });
+  }
+
+  /**
    * Whether any queued/running Run still touches this Source: a source_sync
    * Run for it, a Workspace Run carrying its id, or a Run bound to a Capsule
    * that tracks it (a destroyed Capsule's history alone does not block).
    */
   async #hasInFlightSourceRun(stored: StoredSource): Promise<boolean> {
-    const syncRuns = await this.#store.listSourceSyncRuns(stored.id);
-    if (syncRuns.some((run) => runIsInFlight(run.status))) return true;
-    const runs = await this.#store.listRunsByWorkspace(stored.workspaceId);
-    for (const run of runs) {
-      if (!runIsInFlight(run.status)) continue;
-      if ("sourceId" in run && run.sourceId === stored.id) return true;
-      if (
-        "capsuleId" in run &&
-        typeof run.capsuleId === "string" &&
-        run.capsuleId.length > 0
-      ) {
-        const capsule = await this.#store.getCapsule(run.capsuleId);
-        if (capsule?.sourceId === stored.id) return true;
-      }
-    }
-    return false;
+    return (await this.#store.sourceLifecycleBlockers(stored.id, stored.workspaceId))
+      .includes("source_has_in_flight_run");
   }
 
   async listSnapshots(
@@ -617,48 +820,46 @@ export class SourcesService {
     );
   }
 
-  /**
-   * Enqueues observation runs for the shared Source default and every distinct
-   * Git ref/path lane currently adopted by one of its Capsules. The addresses
-   * are derived from applied StateVersion provenance; this never rewrites the
-   * Source defaults and is intentionally not exposed as caller-controlled HTTP
-   * input.
-   */
+  /** The Source follows exactly the owning app's adopted ref and subtree. */
+  async convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse> {
+    const source = await convergeOwnedSourceLane(this.#store, sourceId, this.#now);
+    if (!source) throw new OpenTofuControllerError("not_found", `source ${sourceId} not found`);
+    return { source: toPublicSource(source) };
+  }
+
+  /** A webhook observes the lane; only a scheduler advances the polling marker. */
   async createReconciliationSyncs(
     sourceId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): Promise<readonly CreateSourceSyncResponse[]> {
     let stored = await this.#requireSource(sourceId);
     try {
       const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
-      // Persist the attempt before lineage enumeration or archive allocation:
-      // either can fail before there is a Run to advance the polling cursor.
-      stored = await this.#writeSourceConfiguration({
-        source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
-        expectedSource: stored,
-        expectedWorkspaceManagementAuthority: authority,
-      });
-      return await this.#createReconciliationSyncs(stored, authority);
+      if (options.scheduled) {
+        const result = await this.#store.writeSourceConfiguration({
+          source: { ...stored, lastAutoSyncAttemptAt: this.#now().toISOString() },
+          expectedSource: stored,
+          expectedWorkspaceManagementAuthority: authority,
+        });
+        // A marker is fairness bookkeeping. A concurrent sync/configuration
+        // write wins; read once rather than failing observation for this tick.
+        stored = result.status === "conflict" ? await this.#requireSource(sourceId) : result.source;
+      }
+      stored = await convergeOwnedSourceLane(this.#store, sourceId, this.#now) ?? stored;
+      return await this.#createReconciliationSyncs(stored, authority, options.scheduled === true);
     } catch (error) {
-      // Invalid durable configuration cannot make progress on another hourly
-      // poll. Quarantine permanent preparation/lineage failures; infrastructure
-      // errors remain retryable behind later Sources. CAS preserves a repair
-      // made while this attempt was preparing its lanes.
-      if (
-        error instanceof OpenTofuControllerError &&
+      if (error instanceof OpenTofuControllerError &&
         (error.code === "invalid_argument" ||
           structuredErrorReason(error) === CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON ||
-          structuredErrorReason(error) === "source_reconciliation_capsule_limit")
-      ) {
+          structuredErrorReason(error) === "source_reconciliation_capsule_limit")) {
         try {
           const authority = await this.#captureWorkspaceManagementAuthority(stored.workspaceId);
           await this.#writeSourceConfiguration({
             source: { ...stored, status: "error", updatedAt: this.#now().toISOString() },
-            expectedSource: stored,
-            expectedWorkspaceManagementAuthority: authority,
+            expectedSource: stored, expectedWorkspaceManagementAuthority: authority,
           });
         } catch {
-          // A concurrent repair or management drain wins; report the original
-          // preparation failure and let a later eligible poll reconsider it.
+          // A concurrent repair or management drain wins.
         }
       }
       throw error;
@@ -667,45 +868,29 @@ export class SourcesService {
 
   async #createReconciliationSyncs(
     stored: StoredSource,
-    workspaceManagementAuthority: WorkspaceManagementAuthority,
+    authority: WorkspaceManagementAuthority,
+    scheduled: boolean,
   ): Promise<readonly CreateSourceSyncResponse[]> {
-    const sourceId = stored.id;
-    // Capture one immutable authority before asynchronous Capsule/lane
-    // enumeration. Every reconciliation lane must use this original tuple;
-    // taking a fresh epoch after a drain/resume could admit only a subset of
-    // the lanes from an obsolete reconciliation request.
     const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
     const addAddress = (ref: string, path: string) => {
+      if (scheduled && isImmutableSourceRevision(ref)) return;
       addresses.set(JSON.stringify([ref, path]), { ref, path });
     };
     addAddress(stored.defaultRef, stored.defaultPath);
 
-    const capsules = await this.#listReconciliationCapsules(
-      stored.workspaceId,
-    );
-    for (const capsule of capsules) {
-      if (
-        capsule.sourceId !== stored.id ||
-        capsule.status === "destroyed" ||
-        capsule.status === "disabled" ||
-        !capsule.currentStateVersionId
-      ) {
-        continue;
-      }
-      const adopted = await getCapsuleAdoptedSourceSnapshot(
-        this.#store,
-        capsule,
-      );
-      if (!adopted) continue;
-      // An exact commit cannot advance. Its already-adopted immutable snapshot
-      // remains sufficient until the Capsule deliberately changes lane.
-      if (
-        isImmutableSourceRevision(adopted.ref) &&
-        sameGitRef(adopted.ref, adopted.resolvedCommit)
-      ) {
-        continue;
-      }
-      addAddress(adopted.ref, adopted.path);
+    const laneCapsules = stored.ownerCapsuleId
+      ? [await this.#store.getCapsule(stored.ownerCapsuleId)].filter((capsule) => capsule !== undefined)
+      : await this.#store.listCapsulesForSource(stored.workspaceId, stored.id);
+    if (laneCapsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES) {
+      throw new OpenTofuControllerError("resource_exhausted",
+        `Source reconciliation exceeds ${MAX_SOURCE_RECONCILIATION_CAPSULES} Capsules`,
+        { reason: "source_reconciliation_capsule_limit" });
+    }
+    for (const capsule of laneCapsules) {
+      if (capsule.sourceId !== stored.id || !isLiveSourceLaneCapsule(capsule) ||
+        !capsule.currentStateVersionId) continue;
+      const adopted = await getCapsuleAdoptedSourceSnapshot(this.#store, capsule);
+      if (adopted) addAddress(adopted.ref, adopted.path);
     }
 
     const runs: CreateSourceSyncResponse[] = [];
@@ -714,42 +899,9 @@ export class SourcesService {
       : undefined;
     const reconciliationActor = ownerCapsule?.ownerAccountId;
     for (const address of addresses.values()) {
-      runs.push(
-        await this.#createSync(
-          sourceId,
-          { intent: "observe", dedupe: true },
-          address,
-          workspaceManagementAuthority,
-          reconciliationActor,
-        ),
-      );
+      runs.push(await this.#createSync(stored.id, { intent: "observe", dedupe: true }, address, authority, reconciliationActor));
     }
     return runs;
-  }
-
-  async #listReconciliationCapsules(
-    workspaceId: string,
-  ): Promise<readonly Capsule[]> {
-    const capsules: Capsule[] = [];
-    let cursor: string | undefined;
-    for (;;) {
-      const remaining = MAX_SOURCE_RECONCILIATION_CAPSULES - capsules.length;
-      const page = await this.#store.listCapsulesPage(workspaceId, {
-        limit: Math.min(MAX_PAGE_LIMIT, remaining),
-        ...(cursor ? { cursor } : {}),
-        includeDestroyed: false,
-      });
-      capsules.push(...page.items);
-      if (!page.nextCursor) return capsules;
-      if (capsules.length >= MAX_SOURCE_RECONCILIATION_CAPSULES) {
-        throw new OpenTofuControllerError(
-          "resource_exhausted",
-          `Source reconciliation exceeds ${MAX_SOURCE_RECONCILIATION_CAPSULES} Capsules in one Workspace`,
-          { reason: "source_reconciliation_capsule_limit" },
-        );
-      }
-      cursor = page.nextCursor;
-    }
   }
 
   async #createSync(
@@ -760,6 +912,10 @@ export class SourcesService {
     actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
+    if (stored.status !== "active" || stored.retiringAt) {
+      throw new OpenTofuControllerError("failed_precondition",
+        `Source ${sourceId} is not active`, { reason: "source_not_active" });
+    }
     if (expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         expectedWorkspaceManagementAuthority,
@@ -1738,6 +1894,10 @@ export function toPublicSource(stored: StoredSource): Source {
     lastSeenCommit: _lastSeenCommit,
     createdByInstallPlanId: _createdByInstallPlanId,
     lastAutoSyncAttemptAt: _lastAutoSyncAttemptAt,
+    retiringAt: _retiringAt,
+    retirementArchiveCursor: _retirementArchiveCursor,
+    retirementSnapshotCount: _retirementSnapshotCount,
+    retirementSourceSyncRunCount: _retirementSourceSyncRunCount,
     ...rest
   } = stored;
   return rest;

@@ -434,14 +434,22 @@ verification.
 | POST | `/api/v1/sources` | Create a Source |
 | GET | `/api/v1/sources/{sourceId}` | Read a Source |
 | PATCH | `/api/v1/sources/{sourceId}` | Update Source metadata |
-| DELETE | `/api/v1/sources/{sourceId}` | Delete an unreferenced Source and invalidate its webhook bearer. Returns 409 while it is tracked or has a Run in flight |
+| DELETE | `/api/v1/sources/{sourceId}` | Retire an unreferenced Source and its owned archives, then invalidate its webhook bearer. Returns 409 while tracked, in flight, or awaiting safe cleanup |
 | POST | `/api/v1/sources/{sourceId}/hook-secret/rotate` | Rotate the webhook bearer and return the new one once; the old bearer stops working immediately |
 | POST | `/api/v1/sources/{sourceId}/sync` | Create a Source sync Run (observe by default; manual_plan for an explicit reviewed update) |
 | GET | `/api/v1/sources/{sourceId}/snapshots` | List SourceSnapshots |
 | GET | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/install-modules` | List install module directories and provider requirements scanned from one SourceSnapshot tree |
+
+Source deletion uses archive custody when the Source is owned, retiring, or has snapshot/sync history.
+It deletes archives first, then atomically removes snapshots and the Source with `source.retired`
+Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources use `source.deleted`.
 | POST | `/api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | Resolve the highest public stable SemVer Git tag |
 | POST | `/api/v1/sources/{sourceId}/compatibility-check` | Create a Compatibility Report |
 | GET | `/api/v1/compatibility-reports/{reportId}` | Read a Compatibility Report |
+
+Source deletion uses archive custody when the Source is owned, retiring, or has snapshot/sync history.
+It deletes archives first, then atomically removes snapshots and the Source with `source.retired`
+Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources use `source.deleted`.
 
 ### Git install plans
 
@@ -473,8 +481,9 @@ holder is working on the attempt, then abandons the never-applied Capsule it
 created and records the terminal `discarded` phase; if the abandonment stops,
 the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
 `DELETE` finishes it. It is refused once the app is applying or applied, and
-for plans that are not attempts. The Source is never deleted; only polling
-that the attempt itself turned on is turned off.
+for plans that are not attempts. Its dedicated Source is retired, polling and sync admission stop,
+and archives and snapshot rows are removed. The same DELETE or the daily sweep resumes
+an interrupted retirement.
 
 For `userAction.kind: "provide_inputs"`, `interfaces` lists each `requirementKey`, exact
 type/version, permissions, value-free candidates, `choice`, and `autoSelected`. No candidates

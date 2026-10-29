@@ -931,6 +931,12 @@ export interface OpenTofuRunner {
     readonly archiveRef: string;
     readonly canonicalSnapshotId: string;
   }): Promise<void>;
+  /** Delete an app-owned Source's retained archives before its ledger rows retire. */
+  deleteRetiredSourceArchives?(input: {
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRefs: readonly string[];
+  }): Promise<void>;
   /**
    * Expands an immutable SourceSnapshot archive in the Runner Container and
    * returns the OpenTofu source files needed by the Capsule Compatibility
@@ -2365,10 +2371,15 @@ export class OpenTofuController {
     );
   }
 
+  async convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse> {
+    return await this.#sources.convergeOwnedSourceLane(sourceId);
+  }
+
   async createSourceReconciliationSyncs(
     sourceId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): Promise<readonly CreateSourceSyncResponse[]> {
-    return await this.#sources.createSourceReconciliationSyncs(sourceId);
+    return await this.#sources.createSourceReconciliationSyncs(sourceId, options);
   }
 
   async listSourceSnapshots(

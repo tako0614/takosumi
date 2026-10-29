@@ -46,6 +46,7 @@ async function fixture() {
     return await handleSourceWebhookRequest(new Request(url, {
       method: "POST", headers: { authorization: `Bearer ${secret}` },
     }), url, {
+      getSource: (id) => sources.getSource(id),
       verifySourceHookSecret: (id, bearer) => sources.verifyHookSecret(id, bearer),
       createSourceReconciliationSyncs: (id) => sources.createReconciliationSyncs(id),
     });

@@ -777,6 +777,7 @@ export interface ControlPlaneOperations {
     request: EnsureOwnedSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<SourceResponse>;
+  retireOwnedSource(sourceId: string, reason: string): Promise<"retired" | "already_retired" | "deferred">;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -796,8 +797,10 @@ export interface ControlPlaneOperations {
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
     actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
+  convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly CreateSourceSyncResponse[]>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   listSourceSnapshots(
