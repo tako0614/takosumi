@@ -155,7 +155,7 @@ test("apply requires an explicitly verified Workspace mutation freeze; dry-run d
     { apply: true, expectedDigest: plan.digest, batchSize: 1 })).mode).toBe("apply");
 });
 
-test("Memory: transferred app owns legacy usage payer while Workspace-only usage keeps Workspace owner", async () => {
+test("Memory: transferred app usage stays unattributed while Workspace-only usage keeps Workspace owner", async () => {
   const context = fixture();
   expect(await context.ownership.initializeOwnershipIfMissing({ capsuleId: "cap-organization", ownerAccountId: "transferred",
     ownershipEpoch: 3, managementState: "active", managementEpoch: 4,
@@ -164,13 +164,37 @@ test("Memory: transferred app owns legacy usage payer while Workspace-only usage
     idempotencyKey: "app-usage" });
   const plan = await planAppOwnershipBackfill(context);
   expect(plan.writes.filter((row) => row.kind === "usage")).toEqual([
-    { kind: "usage", id: "app-usage", payerAccountId: "transferred" },
     { kind: "usage", id: "usage", payerAccountId: "owner" },
   ]);
+  expect(plan.transferredAppUsage).toEqual([{ eventId: "app-usage", capsuleId: "cap-organization" }]);
+  expect(plan.unresolvedUsagePayers).toEqual([]);
   const frozen = { ...context, workspaceMutationsFrozen: true as const };
   await applyAppOwnershipBackfill(frozen, plan.digest);
-  expect(context.events.find((row) => row.id === "app-usage")?.payerAccountId).toBe("transferred");
+  expect(context.events.find((row) => row.id === "app-usage")?.payerAccountId).toBeUndefined();
   expect(context.events.find((row) => row.id === "usage")?.payerAccountId).toBe("owner");
+});
+
+test("Memory: re-running the backfill after a transfer never charges the current owner", async () => {
+  const context = fixture();
+  context.events.push({ ...context.events[0]!, id: "before-transfer", capsuleId: "cap-organization",
+    idempotencyKey: "before-transfer" });
+  const frozen = { ...context, workspaceMutationsFrozen: true as const };
+  const first = await planAppOwnershipBackfill(context);
+  expect(first.writes.filter((row) => row.kind === "usage")).toContainEqual(
+    { kind: "usage", id: "before-transfer", payerAccountId: "owner" });
+  await applyAppOwnershipBackfill(frozen, first.digest);
+  expect(context.events.find((row) => row.id === "before-transfer")?.payerAccountId).toBe("owner");
+  const current = await context.ownership.getOwnership("cap-organization");
+  expect(await context.ownership.putOwnership({ ...current!, ownerAccountId: "recipient", ownershipEpoch: 1 }, 0)).toBe(true);
+  const { payerAccountId: _paid, ...unattributed } = context.events[0]!;
+  context.events.push({ ...unattributed, id: "after-transfer", capsuleId: "cap-organization",
+    idempotencyKey: "after-transfer" });
+  const rerun = await planAppOwnershipBackfill(context);
+  expect(rerun.writes.filter((row) => row.kind === "usage")).toEqual([]);
+  expect(rerun.transferredAppUsage).toEqual([{ eventId: "after-transfer", capsuleId: "cap-organization" }]);
+  expect((await applyAppOwnershipBackfill(frozen, rerun.digest)).applied).toBe(rerun.writes.length);
+  expect(context.events.find((row) => row.id === "after-transfer")?.payerAccountId).toBeUndefined();
+  expect(context.events.find((row) => row.id === "before-transfer")?.payerAccountId).toBe("owner");
 });
 
 test("apply rejects a stale reviewed inventory without writing", async () => {
@@ -213,7 +237,7 @@ test("billing preserves the retained billing reference and refuses to choose bet
   expect(conflict.writes.filter((row) => row.kind === "billing")).toEqual([]);
 });
 
-test("Postgres and D1 backfill transferred app payer with idempotent apply and report orphan Capsules", async () => {
+test("Postgres and D1 backfill only never-transferred app payers with idempotent apply and report orphan Capsules", async () => {
   const pg = await PGliteSqlClient.create();
   pgClients.push(pg);
   const d1 = new SqliteFakeD1();
@@ -238,34 +262,48 @@ test("Postgres and D1 backfill transferred app payer with idempotent apply and r
       projectId: `prj_${label}`, name: "App", slug: "app", sourceId: `src_${label}`,
       installConfigId: `cfg_${label}`, environment: "production", status: "active",
       currentStateGeneration: 0, createdAt: now, updatedAt: now };
+    const moved: Capsule = { ...app, id: `moved_${label}`, name: "Moved", slug: "moved" };
     await control.putWorkspace(workspace);
     await control.putCapsule(app);
+    await control.putCapsule(moved);
     expect(await ownership.initializeOwnershipIfMissing({ capsuleId: app.id,
+      ownerAccountId: "app-owner", ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${app.id}` }), label).toBe(true);
+    expect(await ownership.initializeOwnershipIfMissing({ capsuleId: moved.id,
       ownerAccountId: "transferred-owner", ownershipEpoch: 3, managementState: "active",
-      managementEpoch: 4, storageRoot: `apps/${app.id}` }), label).toBe(true);
+      managementEpoch: 4, storageRoot: `apps/${moved.id}` }), label).toBe(true);
     const event: UsageEvent = { id: `usage_${label}`, workspaceId: workspace.id,
       capsuleId: app.id, kind: "runner_minute", quantity: 1, usdMicros: 0,
       ratingStatus: "unrated", source: "runner", idempotencyKey: `usage_${label}`,
       createdAt: now };
-    await control.putUsageEvent(event);
-    await clearPayer(event.id); // Retained pre-expand event with no payer column value.
+    const movedEvent: UsageEvent = { ...event, id: `moved_usage_${label}`, capsuleId: moved.id,
+      idempotencyKey: `moved_usage_${label}` };
+    for (const row of [event, movedEvent]) {
+      await control.putUsageEvent(row);
+      await clearPayer(row.id); // Retained pre-expand event with no payer column value.
+    }
+    const payer = async (id: string) =>
+      (await control.listUsageEvents(workspace.id)).find((row) => row.id === id)?.payerAccountId;
     const context = { control, ownership };
     const plan = await planAppOwnershipBackfill(context);
     expect(plan.writes.filter((row) => row.kind === "usage"), label).toEqual([
-      { kind: "usage", id: event.id, payerAccountId: "transferred-owner" },
+      { kind: "usage", id: event.id, payerAccountId: "app-owner" },
     ]);
+    expect(plan.transferredAppUsage, label).toEqual([{ eventId: movedEvent.id, capsuleId: moved.id }]);
     await expect(applyAppOwnershipBackfill(context, plan.digest), label)
       .rejects.toThrow("workspaceMutationsFrozen");
     await expect(applyAppOwnershipBackfill({ ...context, workspaceMutationsFrozen: false } as unknown as OwnershipBackfillContext,
       plan.digest), label).rejects.toThrow("workspaceMutationsFrozen");
-    expect((await control.listUsageEvents(workspace.id))[0]?.payerAccountId, label).toBeUndefined();
+    expect(await payer(event.id), label).toBeUndefined();
     const frozen = { ...context, workspaceMutationsFrozen: true as const };
     expect((await applyAppOwnershipBackfill(frozen, plan.digest)).applied, label).toBe(1);
-    expect((await control.listUsageEvents(workspace.id))[0]?.payerAccountId, label)
-      .toBe("transferred-owner");
+    expect(await payer(event.id), label).toBe("app-owner");
+    expect(await payer(movedEvent.id), label).toBeUndefined();
     const complete = await planAppOwnershipBackfill(context);
     expect(complete.writes, label).toEqual([]);
+    expect(complete.transferredAppUsage, label).toEqual(plan.transferredAppUsage);
     expect((await applyAppOwnershipBackfill(frozen, complete.digest)).applied, label).toBe(0);
+    expect(await payer(movedEvent.id), label).toBeUndefined();
 
     const orphan: Capsule = { ...app, id: `orphan_${label}`, workspaceId: `missing_${label}`,
       name: "Orphan", slug: "orphan" };

@@ -34,8 +34,12 @@ inventory and digest. Owners come from `ownerUserId`. Active owner/admin members
 other than the owner become app members; member/viewer, invited and suspended
 rows are reported for confirmation and never migrated automatically. Connections
 take the Workspace owner, while operator connections retain no personal owner.
-Usage tied to a Capsule takes that app's existing owner, including a transferred
-owner; only usage without a Capsule falls back to the Workspace owner. Legacy storage roots remain
+Usage tied to a never-transferred Capsule (`ownership_epoch = 0`) takes that
+app's owner; only usage without a Capsule falls back to the Workspace owner.
+Payer-less usage of a transferred app is never assigned: the current owner is
+not its historical payer. Dry-run lists it under `transferredAppUsage`. That
+report does not block apply, and re-running the tool leaves the rows
+unattributed. Legacy storage roots remain
 `workspaces/{workspaceId}/capsules/{capsuleId}`; no R2 object moves. New apps use
 `apps/{capsuleId}`. Existing explicit ownership, epochs and app rosters survive.
 
@@ -73,7 +77,8 @@ Complete and verify this backfill before enabling or accepting **any ownership
 transfer**. Only this migration may infer a missing historical usage payer;
 ordinary usage writes preserve an absent payer. After a transfer, the current
 owner cannot prove who owed an old unattributed measurement or Plan settlement.
-Do not run this legacy inference over newly unattributed post-transfer rows.
+The tool therefore skips every transferred app's payer-less usage, so re-running
+it after a transfer cannot turn intentionally unattributed rows into charges.
 
 The freeze permits only canonical, authenticated owner-bound personal Workspace
 singleton bootstrap for a fresh account. Organization creation and membership
