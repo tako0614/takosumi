@@ -211,6 +211,10 @@ test("parseLsRemoteRef records the full name of the ref that was chosen", () => 
   expect(parseLsRemoteRef(`${a}\trefs/heads/main\n${b}\trefs/heads/x/main\n`, "main")).toEqual({ commit: a, resolvedRef: "refs/heads/main" });
   // Peeled annotated tag: the commit, named by the tag without ^{}.
   expect(parseLsRemoteRef(`${a}\trefs/tags/v1\n${b}\trefs/tags/v1^{}\n`, "v1")).toEqual({ commit: b, resolvedRef: "refs/tags/v1" });
+  // A fully qualified annotated tag peels too (the tag object row comes first).
+  expect(parseLsRemoteRef(`${a}\trefs/tags/v1\n${b}\trefs/tags/v1^{}\n`, "refs/tags/v1")).toEqual({ commit: b, resolvedRef: "refs/tags/v1" });
+  // A lightweight tag has no peeled row; the tag row is the commit.
+  expect(parseLsRemoteRef(`${a}\trefs/tags/v2\n`, "refs/tags/v2")).toEqual({ commit: a, resolvedRef: "refs/tags/v2" });
   // HEAD with --symref resolves to its branch; without it, there is no name.
   expect(parseLsRemoteRef(`ref: refs/heads/main\tHEAD\n${a}\tHEAD\n`, "HEAD")).toEqual({ commit: a, resolvedRef: "refs/heads/main" });
   expect(parseLsRemoteRef(`${a}\tHEAD\n`, "HEAD")).toEqual({ commit: a });
@@ -449,13 +453,17 @@ test("resolveSourceCommit peels an annotated tag to its commit", async () => {
     const tagObject = git(repo, ["rev-parse", "v1.0.0"]);
     expect(tagObject).not.toBe(expectedCommit);
 
-    const source = { url: repo, ref: "v1.0.0", path: "." };
-    await expect(
-      resolveSourceCommit(source, { context: { env: commandEnv() } }),
-    ).resolves.toBe(expectedCommit);
-    await expect(
-      resolveSourceRef(source, { context: { env: commandEnv() } }),
-    ).resolves.toEqual({ commit: expectedCommit, resolvedRef: "refs/tags/v1.0.0" });
+    // Bare and fully qualified names both record the peeled commit, never
+    // the tag object; the recorded ref stays the tag name.
+    for (const ref of ["v1.0.0", "refs/tags/v1.0.0"]) {
+      const source = { url: repo, ref, path: "." };
+      await expect(
+        resolveSourceCommit(source, { context: { env: commandEnv() } }),
+      ).resolves.toBe(expectedCommit);
+      await expect(
+        resolveSourceRef(source, { context: { env: commandEnv() } }),
+      ).resolves.toEqual({ commit: expectedCommit, resolvedRef: "refs/tags/v1.0.0" });
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

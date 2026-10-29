@@ -940,8 +940,9 @@ export async function resolveSourceRef(
 }
 
 // Parse `git ls-remote` output ("<sha>\t<refname>") and pick the commit for the
-// requested ref. Prefers an exact refs/heads|refs/tags match, then a peeled tag
-// (^{}), then the bare ref, then a single-line fallback.
+// requested ref. Prefers an exact refs/heads match, then a peeled tag (^{}) over
+// its tag object (bare or fully qualified), then the ref itself, then a
+// single-line fallback.
 export function parseLsRemoteCommit(
   stdout: string,
   ref: string,
@@ -975,10 +976,14 @@ export function parseLsRemoteRef(
     const full = name.startsWith("refs/") ? name : symrefs.get(name);
     return full ? { commit: row.sha, resolvedRef: full } : { commit: row.sha };
   };
+  // The peeled row of an annotated tag names the commit; the unpeeled row
+  // names the tag object. Prefer the peel for a bare tag name and for a fully
+  // qualified one (`refs/tags/v1`), whose rows are `ref^{}` and `ref`.
   const candidates = [
     `refs/heads/${ref}`,
     `refs/tags/${ref}^{}`,
     `refs/tags/${ref}`,
+    `${ref}^{}`,
     ref,
   ];
   for (const candidate of candidates) {
