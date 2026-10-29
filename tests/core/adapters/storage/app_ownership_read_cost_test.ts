@@ -32,6 +32,9 @@ for (const dialect of ["D1", "Postgres"] as const) {
       expect(await store.getConnection("personal")).toEqual(connection("personal"));
       await store.putConnection({ ...connection("personal"), ownerAccountId: undefined });
       expect(await store.getConnection("personal")).toEqual(connection("personal"));
+      expect(await store.listOperatorConnections()).toEqual([]);
+      await store.putConnection({ ...connection("operator"), scope: "operator", ownerAccountId: undefined });
+      expect(await store.listOperatorConnections()).toMatchObject([{ id: "operator", scope: "operator" }]);
       await store.putWorkspace({ id: "ws_projection", handle: "projection", displayName: "Projection", type: "personal",
         ownerUserId: "personal-owner", createdAt: "now", updatedAt: "now" });
       for (let index = 0; index < 105; index++) await store.putConnection({ ...connection(`personal_${index}`), workspaceId: "ws_projection" });
