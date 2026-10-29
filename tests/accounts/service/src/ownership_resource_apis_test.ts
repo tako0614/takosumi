@@ -8,6 +8,7 @@ import type { ControlPlaneOperations } from "../../../../accounts/service/src/co
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import type { ProviderConnection } from "takosumi-contract/connections";
+import { pageSorted, type PageParams } from "takosumi-contract/pagination";
 
 const store = new InMemoryAccountsStore();
 function context(path: string, operations: ControlPlaneOperations, subject = "member", method = "GET", body?: unknown): ControlDispatchContext {
@@ -22,48 +23,131 @@ function labelConnection(id: string, overrides: Partial<ProviderConnection> = {}
   return { id, ownerAccountId: "owner", scope: "personal", status: "verified", provider: "registry.example/cloud", providerSource: "registry.example/cloud", materialization: "provider", displayName: `Label ${id}`, credentialRecipe: { id: "recipe", authMode: "token", secretPartition: "secret", envNames: ["SECRET"] }, envNames: ["SECRET"], scopeHints: { accountId: "private" }, createdAt: "2026-01-01", updatedAt: "2026-01-01", ...overrides };
 }
 
-function connectionLabelFixture(boundIds: readonly string[], rows: readonly ProviderConnection[] = []) {
+function byKeyset(left: ProviderConnection, right: ProviderConnection): number {
+  return left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
+function operatorConnection(id: string, overrides: Partial<ProviderConnection> = {}): ProviderConnection {
+  return labelConnection(id, { scope: "operator", ownerAccountId: undefined, credentialRecipe: {
+    id: "operator-run", authMode: "capsule-run", runIssuance: { context: "capsule-run.v1", operatorConnection: "workspace-bindable", storedMaterial: "none", audience: "extension.example.v1", scopes: ["extension:invoke"] },
+  }, ...overrides });
+}
+
+function connectionLabelFixture(boundIds: readonly string[], rows: readonly ProviderConnection[] = [], releaseOwned: readonly ProviderConnection[] = []) {
   const connectionReads: string[] = [];
+  const ownerPages: { readonly accountId: string; readonly page: PageParams }[] = [];
+  const releaseOwnedReads: (string | undefined)[] = [];
   const capsule = { id: "cap_ok", workspaceId: "ws_app", environment: "production" };
   let bindingSet: unknown = { ...capsule, id: "bindings_app", capsuleId: capsule.id, bindings: boundIds.map((connectionId) => ({ provider: "registry.example/cloud", connectionId })) };
   const operations = {
     appAccess: { resolveAppAccess: async (_subject: string, capsuleId: string) => capsuleId === "cap_ok" ? { capsuleId, role: "member", ownerAccountId: "owner", ownershipEpoch: 4 } : undefined },
     capsules: { getCapsule: async () => capsule, getProviderBindingSetByCapsule: async (capsuleId: string, environment: string) => { expect([capsuleId, environment]).toEqual([capsule.id, capsule.environment]); return bindingSet; } },
-    accountResources: { listConnections: async () => { throw new Error("Must not enumerate the owner's 10,001 unrelated connections"); } },
-    listOperatorConnections: async () => { throw new Error("Must not enumerate unbound operator connections"); },
+    // Mirrors the owner-keyed indexed reader: every status, only that account's rows.
+    accountResources: { listConnections: async (accountId: string, page: PageParams) => {
+      ownerPages.push({ accountId, page });
+      return pageSorted(rows.filter((row) => row.scope !== "operator" && row.ownerAccountId === accountId).sort(byKeyset), page);
+    } },
+    listOperatorConnections: async () => { throw new Error("Must not scan every account's unscoped connection rows"); },
+    workspaces: { listWorkspacesByOwner: async () => { throw new Error("Must not scan Workspaces when the owner index exists"); } },
     connections: {
-      listReleaseOwnedProviderConnections: async () => { throw new Error("Must not enumerate unbound release connections"); },
+      listReleaseOwnedProviderConnections: async (workspaceId?: string) => { releaseOwnedReads.push(workspaceId); return releaseOwned; },
+      listProviderConnections: async () => { throw new Error("Must not list Workspace connections when the owner index exists"); },
       getProviderConnection: async (id: string) => {
         connectionReads.push(id);
-        const connection = rows.find((row) => row.id === id);
+        const connection = [...rows, ...releaseOwned].find((row) => row.id === id);
         if (!connection) throw new OpenTofuControllerError("not_found", "missing");
         return connection;
       },
     },
   } as unknown as ControlPlaneOperations;
-  return { operations, connectionReads, setBindingSet: (value: unknown) => { bindingSet = value; } };
+  return { operations, connectionReads, ownerPages, releaseOwnedReads, setBindingSet: (value: unknown) => { bindingSet = value; } };
 }
 
-test("member reads only bound Connection labels, independently of the owner's catalog size", async () => {
-  const operator = labelConnection("conn_operator", { scope: "operator", ownerAccountId: undefined, credentialRecipe: {
-    id: "operator-run", authMode: "capsule-run", runIssuance: { context: "capsule-run.v1", operatorConnection: "workspace-bindable", storedMaterial: "none", audience: "extension.example.v1", scopes: ["extension:invoke"] },
-  } });
-  const ids = ["conn_good", "conn_legacy", "conn_other", "conn_revoked", "conn_operator", "conn_not_bindable", "conn_missing", "conn_good"];
-  const { operations, connectionReads } = connectionLabelFixture(ids, [
-    labelConnection("conn_good"), labelConnection("conn_legacy", { scope: "workspace", workspaceId: "ws_legacy" }),
-    labelConnection("conn_other", { ownerAccountId: "other" }), labelConnection("conn_revoked", { status: "revoked" }),
-    operator, labelConnection("conn_not_bindable", { scope: "operator" }), labelConnection("conn_unbound"),
-  ]);
-  const response = await handleConnections(context("connections?capsuleId=cap_ok&projection=labels", operations), ["connections"], "GET");
+async function readLabels(operations: ControlPlaneOperations, query = "", subject = "member") {
+  const response = await handleConnections(context(`connections?capsuleId=cap_ok&projection=labels${query}`, operations, subject), ["connections"], "GET");
+  return { response, body: await response?.json() as { connections: Record<string, unknown>[]; nextCursor?: string } };
+}
+
+test("member chooses among the owner's bindable connection labels only", async () => {
+  const { operations, connectionReads, ownerPages, releaseOwnedReads } = connectionLabelFixture(["conn_bound_operator", "conn_other", "conn_good"], [
+    labelConnection("conn_good"), labelConnection("conn_unbound"), labelConnection("conn_nameless", { displayName: undefined }),
+    labelConnection("conn_legacy", { scope: "workspace", workspaceId: "ws_legacy" }),
+    labelConnection("conn_pending", { status: "pending" }), labelConnection("conn_revoked", { status: "revoked" }),
+    labelConnection("conn_git", { kind: "source_git_https_token" }),
+    labelConnection("conn_other", { ownerAccountId: "other" }), labelConnection("conn_other_unbound", { ownerAccountId: "other" }),
+    operatorConnection("conn_bound_operator"),
+  ], [operatorConnection("conn_operator"), labelConnection("conn_not_bindable", { scope: "operator", ownerAccountId: undefined })]);
+  const { response, body } = await readLabels(operations);
   expect(response?.status).toBe(200);
-  expect(await response?.json()).toEqual({ connections: [
+  expect(body).toEqual({ connections: [
+    { id: "conn_bound_operator", provider: "registry.example/cloud", displayName: "Label conn_bound_operator" },
     { id: "conn_good", provider: "registry.example/cloud", displayName: "Label conn_good" },
     { id: "conn_legacy", provider: "registry.example/cloud", displayName: "Label conn_legacy" },
+    { id: "conn_nameless", provider: "registry.example/cloud" },
     { id: "conn_operator", provider: "registry.example/cloud", displayName: "Label conn_operator" },
+    { id: "conn_unbound", provider: "registry.example/cloud", displayName: "Label conn_unbound" },
   ] });
-  expect(connectionReads).toEqual([...new Set(ids)]);
+  for (const row of body.connections) expect(Object.keys(row).every((key) => ["id", "provider", "displayName"].includes(key))).toBe(true);
+  expect(JSON.stringify(body)).not.toMatch(/scope|ownerAccountId|status|createdAt|credentialRecipe|envNames|private|ws_legacy/u);
+  // One owner-keyed page; no other account's rows, Workspaces or durable operator scan.
+  expect(ownerPages).toEqual([{ accountId: "owner", page: { limit: 100 } }]);
+  expect(releaseOwnedReads).toEqual(["ws_app"]);
+  expect(connectionReads).toEqual(["conn_bound_operator", "conn_other", "conn_good"]);
   expect(response?.headers.get("cache-control")).toBe("no-store");
-  expect((await handleConnections(context("connections?capsuleId=cap_other&projection=labels", operations), ["connections"], "GET"))?.status).toBe(403);
+});
+
+test("non-members cannot read an app's connection labels", async () => {
+  const { operations, connectionReads, ownerPages, releaseOwnedReads } = connectionLabelFixture(["conn_good"], [labelConnection("conn_good")]);
+  const response = await handleConnections(context("connections?capsuleId=cap_other&projection=labels", operations, "stranger"), ["connections"], "GET");
+  expect(response?.status).toBe(403);
+  expect(await response?.json()).toMatchObject({ error: { code: "app_access_denied" } });
+  expect([connectionReads, ownerPages, releaseOwnedReads]).toEqual([[], [], []]);
+});
+
+test("connection labels page through the owner's index one page per request", async () => {
+  const at = (minute: number) => `2026-01-01T00:${String(minute).padStart(2, "0")}:00.000Z`;
+  const rows: ProviderConnection[] = [];
+  for (let minute = 0; minute < 12; minute++) {
+    // Every third owner row cannot be bound and must be skipped, not counted.
+    rows.push(labelConnection(`conn_${String(minute).padStart(2, "0")}`, { createdAt: at(minute), ...(minute % 3 === 2 ? { status: "pending" as const } : {}) }));
+  }
+  rows.push(labelConnection("conn_other", { ownerAccountId: "other", createdAt: at(5) }));
+  const releaseOwned = [operatorConnection("conn_op_early", { createdAt: at(1) }), operatorConnection("conn_op_late", { createdAt: at(30) })];
+  const { operations, ownerPages } = connectionLabelFixture([], rows, releaseOwned);
+  const expected = [...rows.filter((row) => row.ownerAccountId === "owner" && row.status === "verified"), ...releaseOwned].sort(byKeyset).map((row) => row.id);
+  const seen: string[] = [];
+  let cursor: string | undefined;
+  let requests = 0;
+  do {
+    const { response, body } = await readLabels(operations, `&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    expect(response?.status).toBe(200);
+    expect(body.connections.length).toBeLessThanOrEqual(2);
+    seen.push(...body.connections.map((row) => row.id as string));
+    cursor = body.nextCursor;
+    expect(++requests).toBeLessThan(20);
+  } while (cursor);
+  expect(seen).toEqual(expected);
+  expect(ownerPages).toHaveLength(requests);
+  expect(ownerPages.every((call) => call.accountId === "owner" && call.page.limit === 2)).toBe(true);
+});
+
+test("connection label cost does not grow with the owner's catalog", async () => {
+  const rows = Array.from({ length: 250 }, (_, index) => labelConnection(`conn_${String(index).padStart(3, "0")}`));
+  const { operations, ownerPages } = connectionLabelFixture([], rows);
+  const { body } = await readLabels(operations);
+  expect(body.connections).toHaveLength(100);
+  expect(typeof body.nextCursor).toBe("string");
+  expect(ownerPages).toEqual([{ accountId: "owner", page: { limit: 100 } }]);
+});
+
+test("a page of only unbindable owner rows still advances the cursor", async () => {
+  const rows = [labelConnection("conn_a", { status: "pending" }), labelConnection("conn_b", { status: "revoked" }), labelConnection("conn_c")];
+  const { operations } = connectionLabelFixture([], rows);
+  const first = await readLabels(operations, "&limit=2");
+  expect(first.body.connections).toEqual([]);
+  expect(typeof first.body.nextCursor).toBe("string");
+  const second = await readLabels(operations, `&limit=2&cursor=${encodeURIComponent(first.body.nextCursor!)}`);
+  expect(second.body).toEqual({ connections: [{ id: "conn_c", provider: "registry.example/cloud", displayName: "Label conn_c" }] });
 });
 
 test("Connection labels fail closed if app ownership changes during the read", async () => {
@@ -75,17 +159,17 @@ test("Connection labels fail closed if app ownership changes during the read", a
   expect(reads).toBe(2);
 });
 
-test("Connection labels read no credentials without an app binding set", async () => {
-  const { operations, connectionReads, setBindingSet } = connectionLabelFixture([]);
+test("Connection labels list owner choices without an app binding set", async () => {
+  const { operations, connectionReads, setBindingSet } = connectionLabelFixture([], [labelConnection("conn_good")]);
   setBindingSet(undefined);
-  const response = await handleConnections(context("connections?capsuleId=cap_ok&projection=labels", operations), ["connections"], "GET");
+  const { response, body } = await readLabels(operations);
   expect(response?.status).toBe(200);
-  expect(await response?.json()).toEqual({ connections: [] });
+  expect(body).toEqual({ connections: [{ id: "conn_good", provider: "registry.example/cloud", displayName: "Label conn_good" }] });
   expect(connectionReads).toEqual([]);
 });
 
-test("Connection label point reads retain bearer and Workspace attenuation", async () => {
-  const { operations, connectionReads } = connectionLabelFixture(["conn_good"], [labelConnection("conn_good")]);
+test("Connection labels retain bearer and Workspace attenuation", async () => {
+  const { operations, connectionReads, ownerPages } = connectionLabelFixture(["conn_good"], [labelConnection("conn_good")]);
   const ctx = context("connections?capsuleId=cap_ok&projection=labels", operations);
   for (const session of [
     { subject: "member", appIds: ["cap_other"] },
@@ -93,17 +177,18 @@ test("Connection label point reads retain bearer and Workspace attenuation", asy
   ]) {
     expect((await handleConnections({ ...ctx, session }, ["connections"], "GET"))?.status).toBe(403);
   }
-  expect(connectionReads).toEqual([]);
+  expect([connectionReads, ownerPages]).toEqual([[], []]);
   expect((await handleConnections({ ...ctx, session: { subject: "member", reauthorizeBearer: async () => false } }, ["connections"], "GET"))?.status).toBe(403);
   expect(connectionReads).toEqual(["conn_good"]);
+  expect(ownerPages).toHaveLength(1);
 });
 
-test("Connection labels refuse a binding set for another app before looking up its connections", async () => {
-  const { operations, connectionReads, setBindingSet } = connectionLabelFixture([]);
+test("Connection labels refuse a binding set for another app before reading connections", async () => {
+  const { operations, connectionReads, ownerPages, setBindingSet } = connectionLabelFixture([]);
   setBindingSet({ id: "bindings_other", capsuleId: "cap_other", workspaceId: "ws_app", environment: "production", bindings: [{ connectionId: "conn_private" }] });
   const response = await handleConnections(context("connections?capsuleId=cap_ok&projection=labels", operations), ["connections"], "GET");
   expect(response?.status).toBe(503);
-  expect(connectionReads).toEqual([]);
+  expect([connectionReads, ownerPages]).toEqual([[], []]);
 });
 
 test("Connection labels reject a point lookup returning a different connection identity", async () => {
@@ -120,10 +205,38 @@ test("Connection labels retain the exact point lookup on the legacy connection f
     connections: { ...fixture.operations.connections, getProviderConnection: undefined },
     getConnection: async (id: string) => { reads.push(id); return labelConnection(id); },
   } as unknown as ControlPlaneOperations;
-  const response = await handleConnections(context("connections?capsuleId=cap_ok&projection=labels", operations), ["connections"], "GET");
+  const { response, body } = await readLabels(operations);
   expect(response?.status).toBe(200);
-  expect(await response?.json()).toEqual({ connections: [{ id: "conn_bound", provider: "registry.example/cloud", displayName: "Label conn_bound" }] });
+  expect(body).toEqual({ connections: [{ id: "conn_bound", provider: "registry.example/cloud", displayName: "Label conn_bound" }] });
   expect(reads).toEqual(["conn_bound"]);
+});
+
+test("Connection labels are unavailable before the owner column exists", async () => {
+  const { operations } = connectionLabelFixture([]);
+  (operations as { accountResources: unknown }).accountResources = { listConnections: async () => { throw new Error("D1_ERROR: no such column: owner_account_id"); } };
+  const response = await handleConnections(context("connections?capsuleId=cap_ok&projection=labels", operations), ["connections"], "GET");
+  expect(response?.status).toBe(503);
+});
+
+test("Connection labels without the owner index read only the owner's Workspaces", async () => {
+  const fixture = connectionLabelFixture([]);
+  const listed: string[] = [];
+  const operations = { ...fixture.operations,
+    accountResources: undefined,
+    workspaces: { listWorkspacesByOwner: async (owner: string) => {
+      expect(owner).toBe("owner");
+      return [{ id: "ws_owner", ownerUserId: "owner" }, { id: "ws_archived", ownerUserId: "owner", archivedAt: "2026-01-02" }, { id: "ws_foreign", ownerUserId: "other" }];
+    } },
+    connections: { ...fixture.operations.connections, listProviderConnections: async (workspaceId: string) => {
+      listed.push(workspaceId);
+      return [labelConnection("conn_ws", { scope: "workspace", workspaceId }), labelConnection("conn_ws_other", { scope: "workspace", workspaceId, ownerAccountId: "other" }),
+        labelConnection("conn_misplaced", { scope: "workspace", workspaceId: "ws_elsewhere" })];
+    } },
+  } as unknown as ControlPlaneOperations;
+  const { response, body } = await readLabels(operations);
+  expect(response?.status).toBe(200);
+  expect(body).toEqual({ connections: [{ id: "conn_ws", provider: "registry.example/cloud", displayName: "Label conn_ws" }] });
+  expect(listed).toEqual(["ws_owner"]);
 });
 
 test("personal OAuth start and callback bind the signed owner without Workspace authority", async () => {

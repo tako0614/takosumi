@@ -226,7 +226,7 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | POST | `/api/v1/ownership-transfers/{transferId}/accept` | 受取人。実行をdrainし、所有epochを増加、接続bindingをリセット |
 | DELETE | `/api/v1/ownership-transfers/{transferId}` | 所有者。保留中の譲渡を取消 |
 | GET, POST | `/api/v1/connections` | 本人の個人接続とoperatorのbindable接続。新規接続の所有者は本人 |
-| GET | `/api/v1/connections?capsuleId=…&projection=labels` | 所有者・メンバー。このアプリにbinding済みの接続だけを `{ id, provider, displayName }` で表示。所有者の検証済み接続と利用可能なoperator接続に限り、所有者の接続一覧は返さない |
+| GET | `/api/v1/connections?capsuleId=…&projection=labels` | 所有者・メンバー。このアプリに結べる接続（所有者の検証済み接続と、operatorが提供するbindable接続）を `{ id, provider, displayName }` だけで返す。メンバーはこの中から選び直せる。値・状態・scopeなどの詳細は返さない。所有者の接続を1回に1ページだけ読み、`nextCursor` で続きを返す（選べない接続を飛ばすため、件数が `limit` 未満でも続きがあることがある）。bindingと資格情報発行の検査（接続の所有者＝アプリの所有者）は変わらない |
 | POST | `/api/v1/connections/oauth/{helperId}/start` | アカウント資格情報。workspaceId省略時は本人所有の個人接続を開始 |
 | GET | `/api/v1/source-ref-resolutions?url=…` | write scopeを持つアカウント資格情報。runnerを起動して公開Git sourceのstable SemVerタグを解決 |
 | POST | `/api/v1/install-plans` | アカウント資格情報。`mode: "attempt"`、workspace指定なし。本人がアプリ所有者 |

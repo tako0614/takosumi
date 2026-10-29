@@ -49,7 +49,7 @@ import type {
   PublicCapsule,
 } from "takosumi-contract/install-configs";
 import type { ActivityEvent } from "takosumi-contract/activity";
-import type { Page, PageParams } from "takosumi-contract/pagination";
+import type { Page, PageCursor, PageParams } from "takosumi-contract/pagination";
 import type {
   ProviderBinding,
   ProviderBindings,
@@ -134,7 +134,7 @@ import {
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
+import { clampPageLimit, decodeCursor, encodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import {
   assertWorkspaceManagementAuthorityInput,
@@ -296,12 +296,13 @@ async function listAppConnectionLabels(
     return errorJson("app_access_denied", "App access is required.", 403);
   }
   const owner = access.ownerAccountId;
-  const connections = new Map<string, ProviderConnection>();
   const bindingSet = await operations.capsules.getProviderBindingSetByCapsule(capsule.id, capsule.environment);
   if (bindingSet && !providerBindingSetTargetsCapsule(bindingSet, capsule)) return controlPlaneUnavailable();
-  // This projection names only the connections the app actually uses. Point
-  // reads keep its cost independent of the owner's unrelated connection count
-  // and avoid exposing that catalog to another app manager.
+  // Members choose among the owner's connections, so the choices are the
+  // owner's bindable connections plus operator-provided bindable ones. The
+  // current bindings are always included so a member can keep them; their
+  // point reads also cover operator rows outside the release-owned set.
+  const extras = new Map<string, ProviderConnection>();
   for (const connectionId of new Set(bindingSet?.bindings.map((binding) => binding.connectionId) ?? [])) {
     let connection: ProviderConnection;
     try {
@@ -311,22 +312,105 @@ async function listAppConnectionLabels(
       throw error;
     }
     if (connection.id !== connectionId) return controlPlaneUnavailable();
-    if (isWorkspaceBindableOperatorConnection(connection) ||
-      ((connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner && connection.status === "verified")) {
-      connections.set(connection.id, connection);
-    }
+    if (connectionLabelChoice(connection, owner)) extras.set(connection.id, connection);
   }
+  for (const connection of await operations.connections.listReleaseOwnedProviderConnections(capsule.workspaceId)) {
+    if (connectionLabelChoice(connection, owner) && !extras.has(connection.id)) extras.set(connection.id, connection);
+  }
+  // One owner-keyed indexed page per request: the cost does not grow with the
+  // owner's connection count, and no other account's rows are read.
+  const limit = clampPageLimit(params.params.limit);
+  let ownerPage: Page<ProviderConnection>;
+  try {
+    ownerPage = await ownerConnectionPage(operations, owner, { limit, ...(params.params.cursor ? { cursor: params.params.cursor } : {}) });
+  } catch (error) {
+    if (error instanceof Error && /(?:no such column.*owner_account_id|column .*owner_account_id.*does not exist)/iu.test(error.message)) return controlPlaneUnavailable();
+    throw error;
+  }
+  const page = mergeConnectionLabelPage(ownerPage, [...extras.values()], owner, params.params.cursor, limit);
   const current = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
   if (!current || current.capsuleId !== capsuleId || current.ownerAccountId !== owner || current.ownershipEpoch !== access.ownershipEpoch || current.role !== access.role ||
     !(await (session.reauthorizeBearer?.() ?? Promise.resolve(true)))) {
     return errorJson("app_access_denied", "App access is required.", 403);
   }
-  const page = pageSorted([...connections.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)), params.params);
   return json({ connections: page.items.map((connection) => ({
     id: connection.id,
     provider: connection.provider,
     ...(connection.displayName ? { displayName: connection.displayName } : {}),
   })), ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) }, 200, { "cache-control": "no-store" });
+}
+
+/**
+ * A connection the app owner's app may bind: the owner's verified personal or
+ * legacy Workspace connection, or an operator-provided bindable one. Binding
+ * and credential mint still re-check ownership; this only shapes the choices.
+ */
+function connectionLabelChoice(connection: ProviderConnection, owner: string): boolean {
+  if (connection.kind === "source_git_https_token" || connection.kind === "source_git_ssh_key") return false;
+  return isWorkspaceBindableOperatorConnection(connection) ||
+    ((connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner && connection.status === "verified");
+}
+
+/**
+ * The owner's connections in `(createdAt, id)` order, one page at a time. The
+ * owner-keyed reader is the durable path; compositions without it (in-memory)
+ * read the owner's Workspaces, as the account's own connection list does.
+ */
+async function ownerConnectionPage(
+  operations: ControlPlaneOperations,
+  owner: string,
+  page: PageParams,
+): Promise<Page<ProviderConnection>> {
+  if (operations.accountResources) return await operations.accountResources.listConnections(owner, page);
+  const connections = new Map<string, ProviderConnection>();
+  for (const workspace of await operations.workspaces.listWorkspacesByOwner(owner)) {
+    if (workspace.ownerUserId !== owner || workspace.archivedAt) continue;
+    for (const connection of await operations.connections.listProviderConnections(workspace.id)) {
+      if ((connection.scope === "personal" || connection.scope === "workspace") &&
+        connection.workspaceId === workspace.id && connection.ownerAccountId === owner) connections.set(connection.id, connection);
+    }
+  }
+  return pageSorted([...connections.values()].sort(compareKeyset), page);
+}
+
+function compareKeyset(left: PageCursor, right: PageCursor): number {
+  if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
+/**
+ * Merges one owner page with the small operator/bound set into a single
+ * keyset stream. Extras are limited to the keyset window the owner page
+ * covers, so every connection lands on exactly one page. A page can hold
+ * fewer than `limit` choices (unbindable owner rows are skipped) and still
+ * carry a `nextCursor`.
+ */
+function mergeConnectionLabelPage(
+  ownerPage: Page<ProviderConnection>,
+  extras: readonly ProviderConnection[],
+  owner: string,
+  cursorToken: string | undefined,
+  limit: number,
+): Page<ProviderConnection> {
+  const after = decodeCursor(cursorToken);
+  const ownerLast = ownerPage.nextCursor ? ownerPage.items.at(-1) : undefined;
+  if (ownerPage.nextCursor && !ownerLast) throw new Error("Owner connection page is inconsistent");
+  const choices = new Map<string, ProviderConnection>();
+  for (const connection of ownerPage.items) {
+    if (connectionLabelChoice(connection, owner)) choices.set(connection.id, connection);
+  }
+  for (const connection of extras) {
+    if (choices.has(connection.id)) continue;
+    if (after && compareKeyset(connection, after) <= 0) continue;
+    if (ownerLast && compareKeyset(connection, ownerLast) > 0) continue;
+    choices.set(connection.id, connection);
+  }
+  const sorted = [...choices.values()].sort(compareKeyset);
+  if (sorted.length > limit) {
+    const items = sorted.slice(0, limit);
+    return { items, nextCursor: encodeCursor(items[limit - 1]!) };
+  }
+  return { items: sorted, ...(ownerLast ? { nextCursor: encodeCursor(ownerLast) } : {}) };
 }
 
 /**
