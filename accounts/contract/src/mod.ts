@@ -123,6 +123,8 @@ export interface TakosumiAccountsPatMetadata {
   prefix: string;
   scopes: readonly TakosumiAccountsPatScope[];
   workspace_id?: string;
+  app_ids?: readonly string[];
+  appIds?: readonly string[];
   created_at: string;
   expires_at?: string;
   revoked_at?: string;
@@ -148,6 +150,8 @@ export interface TakosumiAccountsCreatePatRequest {
   name: string;
   scopes: readonly TakosumiAccountsPatScope[];
   workspace_id?: string;
+  app_ids?: readonly string[];
+  appIds?: readonly string[];
   expires_at?: string;
 }
 
@@ -181,6 +185,8 @@ export interface TakosumiAccountsCurrentPatAuthorityResponse {
   readonly subject: TakosumiSubject;
   readonly scopes: readonly TakosumiAccountsPatScope[];
   readonly workspace_id: string | null;
+  readonly app_ids?: readonly string[];
+  readonly appIds?: readonly string[];
   readonly expires_at: string | null;
   readonly workspace_role: TakosumiAccountsWorkspaceRole | null;
 }
@@ -193,6 +199,8 @@ export interface TakosumiAccountsPatInventoryToken {
   readonly prefix: string;
   readonly scopes: readonly TakosumiAccountsPatScope[];
   readonly workspace_id: string | null;
+  readonly app_ids?: readonly string[];
+  readonly appIds?: readonly string[];
   readonly created_at: string;
   readonly expires_at: string | null;
   readonly revoked_at: string | null;

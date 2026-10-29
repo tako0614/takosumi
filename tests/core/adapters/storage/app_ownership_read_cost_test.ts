@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ProviderConnection } from "takosumi-contract/connections";
 import type { SqlClient } from "../../../../core/adapters/storage/sql.ts";
+import { D1AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -66,6 +67,9 @@ for (const version of [75, 76]) {
     expect(await store.getCapsuleExecutionAuthorityEpoch(capsule.id)).toBe(7);
     expect(await store.getCapsuleStorageRoot(capsule.id)).toBe(`workspaces/${capsule.workspaceId}/capsules/${capsule.id}`);
     await ensureD1OpenTofuLedgerSchema(db);
+    expect(await new D1AppOwnershipStore(db, store).initializeOwnershipIfMissing({ capsuleId: capsule.id,
+      ownerAccountId: "owner", ownershipEpoch: 1, managementState: "active", managementEpoch: 0,
+      storageRoot: supplied.storageRoot })).toBe(true);
     await store.putCapsule(supplied);
     expect(await store.getCapsuleStorageRoot(capsule.id)).toBe(supplied.storageRoot);
     expect(await store.getCapsuleExecutionAuthorityEpoch(capsule.id)).toBe(7);

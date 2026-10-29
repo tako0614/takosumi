@@ -126,6 +126,8 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
  */
 export interface ControlSession {
   readonly subject: string;
+  /** Exact credential kind resolved by the Accounts bearer dispatcher. */
+  readonly credential?: "session" | "personal-access-token" | "oauth-access-token";
   /** Trusted shared-account composition requires a current active membership,
    * including for the Workspace's recorded owner. Ordinary OSS sessions retain
    * their existing owner authority. Never read this option from an HTTP field. */
@@ -133,6 +135,7 @@ export interface ControlSession {
   /** Set only by the authenticated Accounts bearer dispatcher. */
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
+  readonly appIds?: readonly string[];
   /**
    * Authorization intent derived from the HTTP method at the authenticated
    * dispatch boundary. Workspace members may read; only owner/admin members
@@ -177,6 +180,11 @@ type PublicCapsuleInput = PublicCapsule &
       | "currentOutputId"
       | "autoUpdateAttemptSourceSnapshotId"
       | "installingPrincipalId"
+      | "ownerAccountId"
+      | "ownershipEpoch"
+      | "managementState"
+      | "managementEpoch"
+      | "storageRoot"
     >
   >;
 
@@ -185,6 +193,11 @@ export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     installingPrincipalId: _installingPrincipalId,
+    ownerAccountId: _ownerAccountId,
+    ownershipEpoch: _ownershipEpoch,
+    managementState: _managementState,
+    managementEpoch: _managementEpoch,
+    storageRoot: _storageRoot,
     ...publicRecord
   } = capsule;
   const uninstall = publicRecord.uninstall === undefined
@@ -469,6 +482,7 @@ export async function resolveProviderBindings(
   operations: ControlPlaneOperations,
   workspaceId: string,
   bindings: ProviderBindings,
+  appOwnerAccountId?: string,
 ): Promise<
   | { readonly ok: true; readonly bindings: ProviderBindings }
   | { readonly ok: false; readonly message: string }
@@ -483,7 +497,20 @@ export async function resolveProviderBindings(
   }
   const resolved: ProviderBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
-    const connection = visibleById.get(binding.connectionId);
+    let connection = visibleById.get(binding.connectionId);
+    // Personal connections have no legacy namespace. Resolve only explicitly
+    // selected IDs; members never receive the owner's connection inventory.
+    if (!connection || (appOwnerAccountId && connection.scope !== "operator" && connection.ownerAccountId !== appOwnerAccountId)) {
+      try {
+        const candidate = await operations.getConnection(binding.connectionId);
+        const owner = appOwnerAccountId ?? (await operations.workspaces.getWorkspace(workspaceId)).ownerUserId;
+        if (candidate.scope !== "operator" && candidate.ownerAccountId === owner) connection = candidate;
+        else connection = undefined;
+      } catch (error) {
+        if (controllerErrorCode(error) !== "not_found") throw error;
+        connection = undefined;
+      }
+    }
     if (!connection) {
       return {
         ok: false,
@@ -623,7 +650,27 @@ export async function canAccessWorkspace(input: {
     }
     return workspaceAllowed;
   };
-  if (!bearerAllowed) return await finish(false);
+  if (!bearerAllowed) {
+    return await finish(false);
+  }
+  if (input.session.appIds !== undefined && input.session.credential !== "oauth-access-token") {
+    // A PAT's Workspace binding identifies its issuance scope, not authority
+    // over every app in that Workspace. Only a live app grant may proceed.
+    if (!input.capsuleId || !input.session.appIds.includes(input.capsuleId) || !input.operations.appAccess) {
+      return await finish(false);
+    }
+    const access = await input.operations.appAccess.resolveAppAccess(input.session.subject, input.capsuleId);
+    input.assertActive?.();
+    if (!access || access.capsuleId !== input.capsuleId ||
+      !appActionAllowed(access.role, input.appAction ?? (input.session.requiredAccess === "write" ? "change_settings" : "view"))) {
+      return await finish(false);
+    }
+    const capsule = await input.operations.capsules.getCapsule(input.capsuleId);
+    input.assertActive?.();
+    return await finish(capsule.workspaceId === input.workspaceId);
+  }
+  // The OAuth compatibility path is limited to an issuance-bound Workspace.
+  if (input.session.appIds !== undefined && !input.session.workspaceId) return await finish(false);
 
   const workspace =
     input.workspace ??

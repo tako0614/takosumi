@@ -495,9 +495,8 @@ test("d1 atomic commits reject a batchless binding before database access", asyn
 test("d1 commitRunState rolls back when the apply lease changes after the pre-read", async () => {
   const backing = new SqliteFakeD1();
   const admissionStore = new CloudflareD1OpenTofuControlStore(backing);
-  const store = new CloudflareD1OpenTofuControlStore(
-    new LeaseChangingD1(backing, "apply_interleave", "lease_taken"),
-  );
+  const interleaved = new LeaseChangingD1(backing, "apply_interleave", "lease_taken");
+  const store = new CloudflareD1OpenTofuControlStore(interleaved);
   const TS = "2026-06-07T00:00:00.000Z";
 
   const seeded = await seedCapsuleModel(store, {
@@ -571,6 +570,9 @@ test("d1 commitRunState rolls back when the apply lease changes after the pre-re
     heartbeatAt: 1,
   });
   expect(claim.won).toBe(true);
+
+  // The race belongs to settlement, after admission has installed its lease.
+  interleaved.arm();
 
   const committed = await store.commitRunState({
     stateVersion: {
@@ -664,6 +666,9 @@ test("d1 store accepts operator-scoped connections without a Workspace id", asyn
 
 class LeaseChangingD1 implements D1Database {
   #changed = false;
+  #armed = false;
+
+  arm(): void { this.#armed = true; }
 
   constructor(
     private readonly inner: D1Database,
@@ -675,7 +680,7 @@ class LeaseChangingD1 implements D1Database {
     const statement = this.inner.prepare(query);
     const lower = query.toLowerCase();
     if (
-      !this.#changed &&
+      this.#armed && !this.#changed &&
       lower.includes("select") &&
       lower.includes("lease_token") &&
       lower.includes('from "runs"')

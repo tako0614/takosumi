@@ -278,6 +278,12 @@ export async function handleCapsules(
           { reason: "capsule_uninstall_requester_unavailable" },
         );
       }
+      if (!(ctx.session.credential === "session" &&
+          ctx.session.uninstallRequester?.grant === undefined) &&
+        !(ctx.session.credential === "personal-access-token" &&
+          ctx.session.uninstallRequester?.grant?.kind === "personal-access-token")) {
+        return errorJson("forbidden", "Uninstall requires an account session or personal access token.", 403, request);
+      }
       if (capsule.status === "destroyed") {
         return json({ capsule: publicCapsule(capsule), alreadyDeleted: true });
       }
@@ -339,12 +345,11 @@ export async function handleCapsules(
             : undefined;
       const response = await operations.createCapsulePlan(
         capsuleId,
-        compatibilityReportId || runnerProfileId
-          ? {
-              ...(compatibilityReportId ? { compatibilityReportId } : {}),
-              ...(runnerProfileId ? { runnerProfileId } : {}),
-            }
-          : undefined,
+        {
+          actor: ctx.session.subject,
+          ...(compatibilityReportId ? { compatibilityReportId } : {}),
+          ...(runnerProfileId ? { runnerProfileId } : {}),
+        },
       );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
@@ -384,7 +389,7 @@ export async function handleCapsules(
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const response = await operations.createCapsuleDriftCheck(capsuleId);
+      const response = await operations.createCapsuleDriftCheck(capsuleId, { actor: ctx.session.subject });
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,

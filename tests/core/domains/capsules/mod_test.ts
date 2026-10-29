@@ -229,6 +229,25 @@ class ReplayProjectProbe extends ProjectsService {
   }
 }
 
+for (const installingPrincipalId of ["user_1", "workspace_admin"]) {
+  test(`initial authority owner is the canonical Workspace owner for requester ${installingPrincipalId}`, async () => {
+    const { store, service } = build();
+    await seedWorkspaceAndSource(store);
+    const capsule = await createInitialCapsule(service, {
+      capsuleId: "cap_owner",
+      providerBindingSetId: "pbind_owner",
+      installingPrincipalId,
+      installConfig: initialInstallConfig("cfg_owner"),
+    });
+    expect((store as InMemoryOpenTofuControlStore).getCapsuleOwnership(capsule.id)).toMatchObject({
+      ownerAccountId: "user_1",
+      storageRoot: `apps/${capsule.id}`,
+    });
+    expect(capsule.installingPrincipalId).toBe(installingPrincipalId);
+    expect(capsule).not.toHaveProperty("ownerAccountId");
+  });
+}
+
 test("initial authority rejects a supplied noncurrent Workspace epoch without creating resources", async () => {
   const store = new InMemoryOpenTofuControlStore();
   await seedWorkspace(store);

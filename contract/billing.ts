@@ -140,7 +140,7 @@ export interface CapsuleUsageSummary {
 
 export interface UsageEvent {
   readonly id: string;
-  /** Account billed for this event; absent only on pre-v77 rows awaiting backfill. */
+  /** Immutable reserved/resolved payer; absent when attribution is unavailable. */
   readonly payerAccountId?: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
@@ -249,13 +249,19 @@ export const NOOP_SHOWBACK_RATER: ShowbackRater = {
 // implement them by importing `takosumi-contract` ONLY (never OSS internals).
 // ---------------------------------------------------------------------------
 
+/** Canonical app owner, resolved by Core rather than supplied by the caller. */
+export interface AppBillingIdentity {
+  readonly capsuleId: string;
+  readonly payerAccountId: string;
+}
+
 /** Context handed to {@link BillingEnforcement.reservePlanBilling} at plan time. */
-export interface BillingReservationContext {
+export interface BillingReservationContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
-  /** Owner-account subject resolved by OSS from the canonical Workspace. */
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
   readonly billingSubjectId: string;
   readonly runId: string;
-  readonly capsuleId?: string;
   /** The OSS-resolved billing mode (`disabled` | `showback`). */
   readonly mode: BillingMode;
   /** Amount returned by the explicitly composed showback rater. */
@@ -279,27 +285,36 @@ export interface BillingEnforcementDecision {
   readonly audit?: Readonly<Record<string, JsonValue>>;
 }
 
-export interface BillingReservationCheckContext {
+export interface BillingReservationCheckContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
   readonly billingSubjectId: string;
   readonly runId: string;
   readonly now: number;
 }
 
-export interface BillingCaptureContext {
+export interface BillingCaptureContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
   readonly billingSubjectId: string;
   readonly runId: string;
   readonly applyRunId: string;
-  readonly capsuleId?: string;
   /** USD micros the OSS controller recorded as the captured usage estimate. */
   readonly capturedUsdMicros: number;
   readonly ratingStatus: UsageRatingStatus;
   readonly now: number;
 }
 
-export interface BillingReleaseContext {
+export interface BillingReleaseContext extends Partial<AppBillingIdentity> {
+  /** Legacy host routing context. Retire in Phase 9. */
   readonly workspaceId: string;
+  /**
+   * payerAccountId when known, otherwise the legacy Workspace owner for host
+   * validation only. Release the hold by runId; never charge or attribute this
+   * routing alias when payerAccountId is absent. Retire in Phase 9.
+   */
   readonly billingSubjectId: string;
   readonly runId: string;
   readonly now: number;
@@ -315,7 +330,7 @@ export interface BillingReleaseContext {
 export interface BillingEnforcement {
   /**
    * Plan-time reservation. Returns blocking `reasons` (e.g. insufficient USD
-   * balance) for an enforce-mode Workspace; OSS returns `{ reasons: [] }`.
+   * balance) for an app; OSS returns `{ reasons: [] }`.
    */
   reservePlanBilling(
     ctx: BillingReservationContext,
@@ -337,12 +352,14 @@ export interface BillingEnforcement {
    * after process crashes or transient host failures.
    */
   captureRunBilling(ctx: BillingCaptureContext): Promise<void>;
-  /** Release a reservation on a failed/abandoned apply (Cloud restores balance). */
+  /** Release by stable Run identity even if payer evidence is unavailable. */
   releaseReservation(ctx: BillingReleaseContext): Promise<void>;
 }
 
-export interface QuotaEvaluationContext {
+export interface QuotaEvaluationContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
   readonly billingSubjectId: string;
   readonly estimatedUsdMicros: number;
   readonly ratingStatus: UsageRatingStatus;
@@ -365,7 +382,7 @@ export interface QuotaPolicy {
  * accepts the existing provider-neutral context and returns a plain DTO (or
  * void); unlike BillingExtensionFactory, no function-bearing object crosses
  * the RPC boundary. Hosts expose these methods from a private WorkerEntrypoint.
- * Workspace/subject/Run authority is resolved by Core before invoking this port.
+ * App/payer/Run authority is resolved by Core before invoking this port.
  */
 export interface BillingRpcService
   extends ShowbackRater, BillingEnforcement, QuotaPolicy {}

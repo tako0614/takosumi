@@ -718,6 +718,9 @@ export interface SourceSyncRun {
   readonly kind: "source_sync";
   readonly workspaceId: string;
   readonly sourceId: string;
+  /** Trusted actor pinned at admission for an app-owned private Source. */
+  readonly actorAccountId?: string;
+  readonly ownershipEpoch?: number;
   /** The {@link GitAddress} this run resolved (path included). */
   readonly url: string;
   readonly ref: string;

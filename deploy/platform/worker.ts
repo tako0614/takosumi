@@ -23,6 +23,7 @@ import {
   createCloudflareWorker,
   rejectDisallowedCloudflarePresentedSession,
 } from "../accounts-cloudflare/src/handler.ts";
+import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   D1AccountsStore,
   handleAuthenticatedControlRoute,
@@ -1697,6 +1698,7 @@ export async function handlePlatformSharedAuthControlRequest(
       }),
       resolveOperations: dependencies.resolveOperations ?? (() => controlPlaneOperationsFor(env)),
       subject: identity.accountId,
+      credential: "session",
       requireCurrentMembership: true,
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
@@ -4224,6 +4226,7 @@ export interface OpenTofuRunRepairOperations {
 type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
 export interface StaleCapsuleAutoPlanOperations {
+  readonly appOwnership?: Pick<import("../../core/domains/app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   readonly workspaces: {
     listWorkspacesForSweep(limit: number): Promise<
       readonly { readonly id: string; readonly archivedAt?: string }[]
@@ -4238,7 +4241,8 @@ export interface StaleCapsuleAutoPlanOperations {
       options?: { readonly limit?: number },
     ): Promise<readonly Run[]>;
   };
-  createCapsulePlan(capsuleId: string): Promise<unknown>;
+  createCapsulePlan(capsuleId: string, options: { readonly actor: string }): Promise<unknown>;
+  readonly activity?: Pick<ActivityRecorder, "record">;
 }
 
 export interface OpenTofuRunRepairScheduler {
@@ -4457,9 +4461,20 @@ export async function planStaleCapsuleUpdates(
     for (const capsule of staleCapsules) {
       if (pendingPlanCapsuleIds.has(capsule.id)) continue;
       try {
-        await operations.createCapsulePlan(capsule.id);
+        const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+        if (ownership && ownership.managementState !== "active") continue;
+        await operations.createCapsulePlan(capsule.id, {
+          actor: ownership?.ownerAccountId ?? "system:stale-auto-plan",
+        });
         pendingPlanCapsuleIds.add(capsule.id);
         plansCreated += 1;
+        try {
+          await operations.activity?.record({ workspaceId: workspace.id,
+            actorId: "system:stale-auto-plan", action: "capsule.stale_auto_plan_created",
+            targetType: "capsule", targetId: capsule.id, metadata: {} });
+        } catch {
+          console.warn("scheduled.stale_auto_plan_activity_failed");
+        }
       } catch {
         // Best-effort: one bad Capsule must not abort other update plans.
         console.warn("scheduled.stale_auto_plan_create_failed");

@@ -157,7 +157,7 @@ export async function handleStateVersions(
     if (segments[2] === "rollback-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       const response =
-        await operations.createStateVersionRollbackPlan(stateVersionId);
+        await operations.createStateVersionRollbackPlan(stateVersionId, { actor: ctx.session.subject });
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,

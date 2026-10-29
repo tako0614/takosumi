@@ -6,6 +6,7 @@ import type {
   ControlWorkspaceRole,
 } from "./control-operations.ts";
 import type { AccountsStore } from "./store.ts";
+import type { AppRole } from "../../../contract/app-access.ts";
 import { oidcClientActivationDigest } from "./oidc-activation.ts";
 import { accountsOidcModuleVariableProfile } from "../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
@@ -35,6 +36,7 @@ export type OidcLiveGrantValidation =
       readonly capsuleName?: string;
       readonly workspaceId?: string;
       readonly role?: ControlWorkspaceRole;
+      readonly appRole?: AppRole;
     }
   | {
       readonly ok: false;
@@ -45,7 +47,7 @@ export type OidcLiveGrantValidation =
  * Validates the authority behind an OIDC authorization code or token against
  * the current source-of-truth records. Dynamic Capsule grants are deliberately
  * not snapshots: the client registration, Capsule readiness, InstallConfig
- * declaration, Workspace binding, membership, role, and scopes must all still
+ * declaration, Capsule binding, and scopes must all still
  * agree whenever authority is exercised.
  */
 export async function validateOidcLiveGrant(input: {
@@ -202,20 +204,35 @@ export async function validateOidcLiveGrant(input: {
   if (!subject) {
     return { ok: false, reason: "subject_missing" };
   }
-  const role = await currentWorkspaceRole(
-    operations,
-    capsule.workspaceId,
-    subject,
-  );
-  if (!role) {
-    return { ok: false, reason: "workspace_membership_inactive" };
+  // App sign-in is available to every account. Management claims come only
+  // from the live per-app resolver; Workspace claims are legacy evidence and
+  // are never inferred from AppAccess.
+  let appRole: AppRole | undefined;
+  try {
+    const access = await operations.appAccess?.resolveAppAccess(subject, capsuleId);
+    if (access?.capsuleId === capsuleId) appRole = access.role;
+  } catch {
+    // Resolver outage cannot confer management authority to an ID token.
   }
+  const workspaceRole = await currentWorkspaceRole(operations, capsule.workspaceId, subject);
+  // Legacy apps still read Workspace claims. For an owned Capsule, require
+  // current app access before exposing the independent Workspace role; app
+  // authority is carried only in app_role.
+  let ownedApp: boolean;
+  try {
+    ownedApp = (await operations.appOwnership?.getOwnership(capsuleId)) !== undefined;
+  } catch {
+    return { ok: false, reason: "control_plane_unavailable" };
+  }
+  const role = ownedApp
+    ? (appRole && workspaceRole ? workspaceRole : undefined)
+    : workspaceRole;
   return {
     ok: true,
     capsuleId,
     capsuleName: capsule.name,
-    workspaceId: capsule.workspaceId,
-    role,
+    ...(role ? { workspaceId: capsule.workspaceId, role } : {}),
+    ...(appRole ? { appRole } : {}),
   };
 }
 

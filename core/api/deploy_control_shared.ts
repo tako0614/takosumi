@@ -367,7 +367,8 @@ export type ConnectionOAuthHelpers = Readonly<
 export interface ConnectionOAuthStartBody {
   readonly workspaceId?: string;
   readonly displayName?: string;
-  readonly scope?: "operator" | "workspace";
+  readonly scope?: "operator" | "workspace" | "personal";
+  readonly ownerAccountId?: string;
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
   readonly redirectUri?: string;

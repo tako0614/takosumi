@@ -91,7 +91,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         createdAt: "2026-06-04T00:00:00.000Z", updatedAt: "2026-06-04T00:00:00.000Z",
       });
       const authority = { workspaceId: "workspace_1", managementState: "active" as const, managementEpoch: 1 };
-      const row = connection();
+      const row = connection({ ownerAccountId: "registration_owner" });
       const blob = secretBlob(row.id);
       const input = { connection: row, secretBlob: blob, expectedWorkspaceManagementAuthority: authority, actorAuthority: null };
       expect(await store.createConnectionRegistration(input)).toBe(true);
@@ -103,7 +103,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         secretBlob: { ...blob, ciphertext: "cmVwbGFjZW1lbnQ=" } })).toBe(false);
       expect(await store.getSecretBlob(row.id)).toEqual(blob);
 
-      const other = connection({ id: "conn_registration_other" });
+      const other = connection({ id: "conn_registration_other", ownerAccountId: "registration_owner" });
       expect(await store.createConnectionRegistration({
         connection: other, secretBlob: { ...secretBlob(other.id), id: blob.id },
         expectedWorkspaceManagementAuthority: authority,
@@ -114,7 +114,8 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const orphan = secretBlob("conn_registration_orphan");
       await store.putSecretBlob(orphan);
       expect(await store.createConnectionRegistration({
-        connection: connection({ id: orphan.connectionId, secretPartition: undefined, credentialRecipe: undefined }),
+        connection: connection({ id: orphan.connectionId, ownerAccountId: "registration_owner",
+          secretPartition: undefined, credentialRecipe: undefined }),
         expectedWorkspaceManagementAuthority: authority,
         actorAuthority: null,
       })).toBe(false);
@@ -135,7 +136,8 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
           return await batch(statements);
         };
         const created = await store.createConnectionRegistration({
-          connection: connection({ id: raced.connectionId, secretPartition: undefined, credentialRecipe: undefined }),
+          connection: connection({ id: raced.connectionId, ownerAccountId: "registration_owner",
+            secretPartition: undefined, credentialRecipe: undefined }),
           expectedWorkspaceManagementAuthority: authority,
           actorAuthority: null,
         });
@@ -167,7 +169,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       expect(await store.getConnection(operator.id)).toEqual(operator);
       expect(await store.getSecretBlob(operator.id)).toBeUndefined();
       await expect(store.createConnectionRegistration({ connection: { ...operator, id: "conn_hybrid", workspaceId: "workspace_1" }, actorAuthority: null })).rejects.toThrow();
-      await expect(store.createConnectionRegistration({ connection: connection({ id: "conn_missing_tuple" }),
+      await expect(store.createConnectionRegistration({ connection: connection({ id: "conn_missing_tuple", ownerAccountId: "registration_owner" }),
         secretBlob: secretBlob("conn_missing_tuple"), actorAuthority: null })).rejects.toThrow();
     } finally {
       await pg?.close();
@@ -204,6 +206,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const original = connection({
         id: `conn_expiry_${name.toLowerCase()}`,
         workspaceId,
+        ownerAccountId: "connection-expiry-owner",
         expiresAt: "2026-06-04T00:10:00.000Z",
         updatedAt: "2026-06-04T00:00:00.000Z",
       });
@@ -271,6 +274,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const future = connection({
         id: `conn_expiry_future_${name.toLowerCase()}`,
         workspaceId,
+        ownerAccountId: "connection-expiry-owner",
         expiresAt: "2026-06-04T00:20:00.000Z",
         updatedAt: "2026-06-04T00:00:00.000Z",
       });
@@ -307,6 +311,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const whileDraining = connection({
         id: `conn_expiry_draining_${name.toLowerCase()}`,
         workspaceId,
+        ownerAccountId: "connection-expiry-owner",
         expiresAt: "2026-06-04T00:10:00.000Z",
         updatedAt: "2026-06-04T00:00:00.000Z",
       });
@@ -341,7 +346,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         id: "workspace_1", handle: "revocation", displayName: "Revocation", type: "personal",
         ownerUserId: "owner", createdAt: "2026-06-04T00:00:00.000Z", updatedAt: "2026-06-04T00:00:00.000Z",
       });
-      const row = connection();
+      const row = connection({ ownerAccountId: "owner" });
       const blob = secretBlob(row.id);
       const authority = { workspaceId: "workspace_1", managementState: "active" as const, managementEpoch: 1 };
       await store.createConnectionRegistration({ connection: row, secretBlob: blob, expectedWorkspaceManagementAuthority: authority, actorAuthority: null });

@@ -19,6 +19,7 @@
  *    that the Takosumi service deploy control routes do not claim.
  */
 import type { AccountsHandler } from "@takosjp/takosumi-accounts-service";
+import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "../../../accounts/service/src/control-route-inventory.ts";
 import {
   issueInterfaceOAuthAccessToken,
   requireAccountsBearer,
@@ -260,6 +261,7 @@ export async function buildComposedApp(
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
+    publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS,
     workspaceMutationsFrozen,
     validateUninstallRequester: (requester, workspaceId) =>
       validateUninstallRequester(input.store, requester, workspaceId),

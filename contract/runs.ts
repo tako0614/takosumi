@@ -259,7 +259,9 @@ export type RunPlanOrigin =
   | { readonly kind: "revision"; readonly ref: string }
   | { readonly kind: "rollback"; readonly stateVersionId: string }
   | { readonly kind: "configuration" }
-  | { readonly kind: "update" };
+  | { readonly kind: "update" }
+  /** Internal finalizer marker bound to the immutable uninstall request. */
+  | { readonly kind: "scheduled_uninstall"; readonly uninstallId: string };
 
 export interface RunChangeSummary {
   readonly add?: number;

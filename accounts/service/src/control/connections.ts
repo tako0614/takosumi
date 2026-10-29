@@ -22,6 +22,7 @@ import type {
   PublicPlanRun,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
   Source,
   CreateSourceRequest,
@@ -55,6 +56,8 @@ import type {
   ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
+import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connections";
+import { bearerAppAllows } from "../account-session.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -135,6 +138,7 @@ import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import {
   assertWorkspaceManagementAuthorityInput,
+  providerBindingSetTargetsCapsule,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 
@@ -212,19 +216,50 @@ async function listControlConnections(
   session: ControlSession,
   url: URL,
 ): Promise<Response> {
+  const capsuleId = stringValue(url.searchParams.get("capsuleId") ?? undefined);
+  if (url.searchParams.get("projection") === "labels") {
+    if (!capsuleId || url.searchParams.has("workspaceId")) return errorJson("invalid_request", "capsuleId is required", 400);
+    return await listAppConnectionLabels(operations, session, capsuleId, url);
+  }
   const workspaceId = stringValue(
     url.searchParams.get("workspaceId") ?? undefined,
   );
-  // The accounts plane has no admin notion distinct from a normal session, so
-  // a Workspace id is REQUIRED here; operator-scoped Connection listing stays on
-  // the operator-bearer §30 surface. (If/when the accounts plane grows an admin
-  // role, this can branch to listOperatorConnections.)
   if (!workspaceId) {
-    return errorJson(
-      "invalid_request",
-      "workspaceId query parameter is required",
-      400,
-    );
+    if (session.workspaceId !== undefined || session.appIds !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
+    const page = parseControlPageParams(url);
+    if (!page.ok) return page.response;
+    const connections = new Map<string, ProviderConnection>();
+    let personalNextCursor: string | undefined;
+    if (operations.accountResources) {
+      let result;
+      try {
+        result = await operations.accountResources.listConnections(session.subject, page.params);
+      } catch (error) {
+        if (error instanceof Error && /(?:no such column.*owner_account_id|column .*owner_account_id.*does not exist)/iu.test(error.message)) return controlPlaneUnavailable();
+        throw error;
+      }
+      for (const connection of result.items) connections.set(connection.id, connection);
+      personalNextCursor = result.nextCursor;
+    } else {
+      for (const workspace of await operations.workspaces.listWorkspacesByOwner(session.subject)) {
+        if (workspace.ownerUserId !== session.subject || workspace.archivedAt) continue;
+        for (const connection of await operations.connections.listProviderConnections(workspace.id)) {
+          if ((connection.scope === "workspace" || connection.scope === "personal") &&
+            connection.workspaceId === workspace.id &&
+            (connection.ownerAccountId === undefined || connection.ownerAccountId === session.subject)) connections.set(connection.id, connection);
+        }
+      }
+    }
+    const operatorConnections = [
+      ...(await operations.listOperatorConnections()).connections,
+      ...await operations.connections.listReleaseOwnedProviderConnections(),
+    ];
+    for (const connection of operatorConnections) {
+      if (isWorkspaceBindableOperatorConnection(connection)) connections.set(connection.id, connection);
+    }
+    const result = pageSorted([...connections.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)), page.params);
+    const nextCursor = result.nextCursor ?? personalNextCursor;
+    return json({ connections: result.items.map(publicProviderConnection), ...(nextCursor ? { nextCursor } : {}) });
   }
   const auth = await requireWorkspaceAccess({
     operations,
@@ -233,6 +268,9 @@ async function listControlConnections(
     session,
   });
   if (!auth.ok) return auth.response;
+  if (session.appIds !== undefined || (await operations.workspaces.getWorkspace(workspaceId)).ownerUserId !== session.subject) {
+    return errorJson("app_owner_only", "Only the connection owner can list personal connections.", 403);
+  }
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const response = await operations.listConnections(workspaceId, page.params);
@@ -240,6 +278,55 @@ async function listControlConnections(
     ...response,
     connections: response.connections.map(publicProviderConnection),
   });
+}
+
+async function listAppConnectionLabels(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  capsuleId: string,
+  url: URL,
+): Promise<Response> {
+  const params = parseControlPageParams(url);
+  if (!params.ok) return params.response;
+  if (!bearerAppAllows(session, capsuleId)) return errorJson("app_access_denied", "App access is required.", 403);
+  const access = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
+  if (!access || access.capsuleId !== capsuleId) return errorJson("app_access_denied", "App access is required.", 403);
+  const capsule = await operations.capsules.getCapsule(capsuleId);
+  if (capsule.id !== capsuleId || (session.workspaceId && capsule.workspaceId !== session.workspaceId)) {
+    return errorJson("app_access_denied", "App access is required.", 403);
+  }
+  const owner = access.ownerAccountId;
+  const connections = new Map<string, ProviderConnection>();
+  const bindingSet = await operations.capsules.getProviderBindingSetByCapsule(capsule.id, capsule.environment);
+  if (bindingSet && !providerBindingSetTargetsCapsule(bindingSet, capsule)) return controlPlaneUnavailable();
+  // This projection names only the connections the app actually uses. Point
+  // reads keep its cost independent of the owner's unrelated connection count
+  // and avoid exposing that catalog to another app manager.
+  for (const connectionId of new Set(bindingSet?.bindings.map((binding) => binding.connectionId) ?? [])) {
+    let connection: ProviderConnection;
+    try {
+      connection = await (operations.connections.getProviderConnection?.(connectionId) ?? operations.getConnection(connectionId));
+    } catch (error) {
+      if (controllerErrorCode(error) === "not_found") continue;
+      throw error;
+    }
+    if (connection.id !== connectionId) return controlPlaneUnavailable();
+    if (isWorkspaceBindableOperatorConnection(connection) ||
+      ((connection.scope === "personal" || connection.scope === "workspace") && connection.ownerAccountId === owner && connection.status === "verified")) {
+      connections.set(connection.id, connection);
+    }
+  }
+  const current = await operations.appAccess?.resolveAppAccess(session.subject, capsuleId);
+  if (!current || current.capsuleId !== capsuleId || current.ownerAccountId !== owner || current.ownershipEpoch !== access.ownershipEpoch || current.role !== access.role ||
+    !(await (session.reauthorizeBearer?.() ?? Promise.resolve(true)))) {
+    return errorJson("app_access_denied", "App access is required.", 403);
+  }
+  const page = pageSorted([...connections.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)), params.params);
+  return json({ connections: page.items.map((connection) => ({
+    id: connection.id,
+    provider: connection.provider,
+    ...(connection.displayName ? { displayName: connection.displayName } : {}),
+  })), ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) }, 200, { "cache-control": "no-store" });
 }
 
 /**
@@ -266,36 +353,41 @@ async function createControlConnection(
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const personal = body.workspaceId === undefined;
+  if (session.appIds !== undefined || (personal && session.workspaceId !== undefined)) {
+    return errorJson("app_access_denied", "An account credential is required.", 403);
+  }
   const workspaceId = stringValue(body.workspaceId);
-  if (!workspaceId) {
+  if (!personal && !workspaceId) {
     return errorJson("invalid_request", "workspaceId is required", 400);
   }
   // Capture the exact Workspace-management tuple before authorization and the
   // remaining asynchronous preparation. Keep capture refusal private until the
   // existing Workspace access gate has produced its normal response.
   const captured = await (async () => {
+    if (personal) return { ok: true as const, authority: undefined };
     try {
       return {
         ok: true as const,
         authority: await operations.workspaces.captureManagementAuthority(
-          workspaceId,
+          workspaceId!,
         ),
       };
     } catch (error) {
       return { ok: false as const, error };
     }
   })();
-  const managementAuthority = (): WorkspaceManagementAuthority => {
+  const managementAuthority = (): WorkspaceManagementAuthority | undefined => {
     if (!captured.ok) throw captured.error;
     return captured.authority;
   };
-  const auth = await requireWorkspaceAccess({
-    operations,
-    store,
-    workspaceId,
-    session,
-  });
-  if (!auth.ok) return auth.response;
+  if (!personal) {
+    const auth = await requireWorkspaceAccess({ operations, store, workspaceId: workspaceId!, session });
+    if (!auth.ok) return auth.response;
+    if ((await operations.workspaces.getWorkspace(workspaceId!)).ownerUserId !== session.subject) {
+      return errorJson("app_owner_only", "Only the connection owner can create personal connections.", 403);
+    }
+  }
   const requestedKind = stringValue(body.kind);
   const sourceGitKind =
     requestedKind === "source_git_https_token" ||
@@ -358,7 +450,7 @@ async function createControlConnection(
   }
   const scopeHints = connectionScopeHints(body.scopeHints);
   const createRequest: CreateConnectionRequest = {
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
     provider,
     ...(sourceGitKind ? { kind: sourceGitKind } : {}),
     ...(!sourceGitKind
@@ -372,7 +464,8 @@ async function createControlConnection(
       : {}),
     // Force Workspace scope: the dashboard session surface never mints an operator
     // default. Any caller-supplied `scope` is ignored.
-    scope: "workspace",
+    scope: personal ? "personal" : "workspace",
+    ownerAccountId: session.subject,
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
@@ -428,8 +521,16 @@ async function connectionItemOp(
     return errorJson("connection_not_found", "connection not found", 404);
   }
   const { connection, rawConnectionId } = target;
+  if (session.appIds !== undefined || (connection.ownerAccountId !== undefined && connection.ownerAccountId !== session.subject)) {
+    return errorJson("connection_not_found", "connection not found", 404);
+  }
   const workspaceId = connection.workspaceId;
   if (!workspaceId) {
+    if (connection.scope === "personal" && connection.ownerAccountId === session.subject && session.workspaceId === undefined) {
+      if (op === "test") return json(await operations.testConnection(rawConnectionId, undefined, session.subject));
+      await operations.revokeConnection(rawConnectionId, undefined, session.subject);
+      return new Response(null, { status: 204 });
+    }
     return errorJson("connection_not_found", "connection not found", 404);
   }
   // Capture the exact Workspace-management tuple before authorization and keep
@@ -461,6 +562,9 @@ async function connectionItemOp(
     session,
   });
   if (!auth.ok) {
+    return errorJson("connection_not_found", "connection not found", 404);
+  }
+  if ((await operations.workspaces.getWorkspace(workspaceId)).ownerUserId !== session.subject) {
     return errorJson("connection_not_found", "connection not found", 404);
   }
   if (op === "test") {
@@ -518,19 +622,20 @@ async function startConnectionOAuth(
   url: URL,
   helperId: string,
 ): Promise<Response> {
+  if (session.appIds !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
   const helper = operations.connectionOAuth?.[helperId];
   if (!helper) return connectionOAuthUnavailable();
   const body = (await readJsonObject(request)) ?? {};
   const workspaceId =
     stringValue(body.workspaceId) ??
     stringValue(url.searchParams.get("workspaceId") ?? undefined);
-  if (!workspaceId) {
-    return errorJson("invalid_request", "workspaceId is required", 400);
-  }
+  const personal = !workspaceId;
+  if (personal && session.workspaceId !== undefined) return errorJson("app_access_denied", "An account credential is required.", 403);
   // Capture the exact Workspace-management tuple before authorization and the
   // provider-owned OAuth awaits. Keep refusal private until the existing
   // Workspace access gate has produced its normal response.
   const captured = await (async () => {
+    if (personal) return { ok: true as const, authority: undefined };
     try {
       return {
         ok: true as const,
@@ -542,27 +647,27 @@ async function startConnectionOAuth(
       return { ok: false as const, error };
     }
   })();
-  const managementAuthority = (): WorkspaceManagementAuthority => {
+  const managementAuthority = (): WorkspaceManagementAuthority | undefined => {
     if (!captured.ok) throw captured.error;
     return captured.authority;
   };
-  const auth = await requireWorkspaceAccess({
-    operations,
-    store,
-    workspaceId,
-    session,
-  });
-  if (!auth.ok) return auth.response;
+  if (!personal) {
+    const auth = await requireWorkspaceAccess({ operations, store, workspaceId: workspaceId!, session });
+    if (!auth.ok) return auth.response;
+    if ((await operations.workspaces.getWorkspace(workspaceId!)).ownerUserId !== session.subject) return errorJson("app_owner_only", "Only the connection owner can authorize this connection.", 403);
+  }
   const started = await helper.start({
     // Bind the OAuth state to the authenticated subject so the cross-site
     // callback can authorize without depending on a session cookie.
     subject: session.subject,
-    workspaceId,
+    ...(workspaceId ? { workspaceId } : {}),
+    scope: personal ? "personal" : "workspace",
+    ownerAccountId: session.subject,
     ...(connectionScopeHints(body.scopeHints) ? { scopeHints: connectionScopeHints(body.scopeHints) } : {}),
     ...(stringValue(body.displayName)
       ? { displayName: stringValue(body.displayName) }
       : {}),
-    expectedWorkspaceManagementAuthority: managementAuthority(),
+    ...(personal ? {} : { expectedWorkspaceManagementAuthority: managementAuthority() }),
   });
   const response = json(started);
   if (helper.browserBindingRequired) {
@@ -629,8 +734,28 @@ export async function completeConnectionOAuth(
   // The subject is the account that initiated `start` (signed into the state).
   // Its absence means an unsigned/legacy state we will not trust for a mint.
   const subject = completed.subject;
-  if (!workspaceId || !subject) {
+  if (!subject) {
     return redirectToConnections(url, { error: "oauth_failed" });
+  }
+  if (!workspaceId) {
+    if (createRequest.scope !== "personal" || createRequest.ownerAccountId !== subject) {
+      return redirectToConnections(url, { error: "oauth_failed" });
+    }
+    if (!await store.findAccount(subject as TakosumiSubject)) {
+      return redirectToConnections(url, { error: "forbidden" });
+    }
+    try {
+      const created = await operations.createConnection({ ...createRequest, scope: "personal", ownerAccountId: subject }, undefined, subject);
+      let connectionStatus: TestConnectionResponse["status"] | undefined;
+      try {
+        connectionStatus = (await operations.testConnection(created.connection.id, undefined, subject)).status;
+      } catch {
+        connectionStatus = "pending";
+      }
+      return redirectToConnections(url, { connected: subject, connectionId: created.connection.id, connectionStatus });
+    } catch {
+      return redirectToConnections(url, { error: "oauth_failed" });
+    }
   }
   // Re-check Workspace ownership against the SIGNED state's subject + workspaceId so a
   // stolen or forged callback cannot mint a Connection into a Workspace the
@@ -645,6 +770,7 @@ export async function completeConnectionOAuth(
     session: { subject, requiredAccess: "write" },
   });
   if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
+  if ((await operations.workspaces.getWorkspace(workspaceId)).ownerUserId !== subject) return redirectToConnections(url, { error: "forbidden" });
   const expectedWorkspaceManagementAuthority =
     completed.expectedWorkspaceManagementAuthority;
   if (!expectedWorkspaceManagementAuthority) {

@@ -123,6 +123,12 @@ test("D1 v77 physically records Capsule, Connection, usage payer, and mint owner
   const control = new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
   await control.putWorkspace(workspace);
   await control.putCapsule(capsule);
+  const ownership = new D1AppOwnershipStore(db, control);
+  expect(await ownership.initializeOwnershipIfMissing({
+    capsuleId: capsule.id, ownerAccountId: "owner", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: "apps/cap_legacy_runtime",
+  })).toBe(true);
+  expect((await control.getCapsule(capsule.id))?.ownerAccountId).toBeUndefined();
   await control.putConnection(connection);
   await control.putUsageEvent(usage);
   await control.putCredentialMintEvent(mint);

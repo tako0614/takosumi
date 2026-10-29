@@ -2,10 +2,14 @@ export type DeployControlErrorCode =
   | "invalid_argument"
   | "unauthenticated"
   | "permission_denied"
+  | "app_access_denied"
+  | "app_owner_only"
+  | "connection_not_owned_by_app_owner"
+  | "ownership_transfer_pending"
+  | "workspace_frozen"
   | "not_found"
   | "failed_precondition"
   | "dependency_retired"
-  | "workspace_frozen"
   | "resource_exhausted"
   | "method_not_allowed"
   | "not_implemented"
@@ -26,10 +30,14 @@ export const DEPLOY_CONTROL_ERROR_CODES = [
   "invalid_argument",
   "unauthenticated",
   "permission_denied",
+  "app_access_denied",
+  "app_owner_only",
+  "connection_not_owned_by_app_owner",
+  "ownership_transfer_pending",
+  "workspace_frozen",
   "not_found",
   "failed_precondition",
   "dependency_retired",
-  "workspace_frozen",
   "resource_exhausted",
   "method_not_allowed",
   "not_implemented",
@@ -40,10 +48,14 @@ export const DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE = {
   invalid_argument: 400,
   unauthenticated: 401,
   permission_denied: 403,
+  app_access_denied: 403,
+  app_owner_only: 403,
+  connection_not_owned_by_app_owner: 403,
+  ownership_transfer_pending: 409,
+  workspace_frozen: 409,
   not_found: 404,
   failed_precondition: 409,
   dependency_retired: 409,
-  workspace_frozen: 409,
   resource_exhausted: 413,
   method_not_allowed: 405,
   not_implemented: 501,

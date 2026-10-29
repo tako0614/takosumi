@@ -161,8 +161,9 @@ export interface MembershipActor {
  */
 export interface ControlPlaneOperations {
   readonly appOwnership?: AppOwnershipStore;
-  /** Read-only Phase 3 AppAccess shadow resolver; never the request authority yet. */
   readonly appAccess?: AppAccessResolver;
+  readonly appAuthorization?: import("./control/app-ownership.ts").AppOwnershipOperations;
+  readonly accountResources?: import("../../../core/domains/account-resources/read.ts").AccountResourceReader;
   /** Optional private owner-to-owner identity custody; no public caller admission. */
   readonly identityReconciliation?:import("../../../contract/identity-reconciliation.ts").ControlIdentityReconciliationPort;
   /** Durable, actor-scoped Git install/revision coordinator ledger. */
@@ -466,13 +467,13 @@ export interface ControlPlaneOperations {
   };
   // --- RunGroups (§19 / §24) ---
   readonly runGroups: {
-    createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRunsLike>;
+    createWorkspaceUpdate(workspaceId: string, actorAccountId?: string): Promise<RunGroupWithRunsLike>;
     createWorkspaceDriftCheck(
       workspaceId: string,
-      options?: { readonly limit?: number },
+      options?: { readonly limit?: number; readonly actorAccountId?: string },
     ): Promise<RunGroupWithRunsLike>;
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
-    approveRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
+    approveRunGroup(id: string, actorAccountId?: string): Promise<RunGroupWithRunsLike | undefined>;
   };
   listInterfaceMaterializationFailures(
     workspaceId: string,
@@ -610,7 +611,9 @@ export interface ControlPlaneOperations {
          */
         start(input: {
           readonly subject: string;
-          readonly workspaceId: string;
+          readonly workspaceId?: string;
+          readonly scope?: "personal" | "workspace";
+          readonly ownerAccountId?: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
           readonly scopeHints?: ConnectionScopeHints;
@@ -693,7 +696,7 @@ export interface ControlPlaneOperations {
       readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
-  createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;
   /** Derived from current StateVersion provenance; never Source.defaultRef. */
   getCapsuleAdoptedSourceRevision(
     capsuleId: string,
@@ -747,6 +750,7 @@ export interface ControlPlaneOperations {
    */
   createStateVersionRollbackPlan(
     stateVersionId: string,
+    options?: { readonly actor?: string },
   ): Promise<PlanRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(
@@ -793,6 +797,7 @@ export interface ControlPlaneOperations {
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
   convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(

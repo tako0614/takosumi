@@ -1,3 +1,4 @@
+import type { AppOwnershipStore } from "../app-ownership/store.ts";
 /**
  * Source-sync consumer + finalization facade (Core Specification §6).
  *
@@ -64,6 +65,7 @@ import { errorMessage } from "./projection.ts";
  * consumers, so it stays owned by the controller and is passed in).
  */
 export interface SourceLifecycleServiceDependencies {
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly store: OpenTofuControlStore;
   readonly now: () => number;
   readonly newId: (prefix: string) => string;
@@ -100,6 +102,7 @@ export interface SourceLifecycleServiceDependencies {
  * identical to the prior inline controller methods.
  */
 export class SourceLifecycleService {
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #store: OpenTofuControlStore;
   readonly #now: () => number;
   readonly #newId: (prefix: string) => string;
@@ -119,6 +122,7 @@ export class SourceLifecycleService {
 
   constructor(dependencies: SourceLifecycleServiceDependencies) {
     this.#store = dependencies.store;
+    this.#appOwnership = dependencies.appOwnership;
     this.#now = dependencies.now;
     this.#newId = dependencies.newId;
     this.#runRenewalIntervalMs = dependencies.runRenewalIntervalMs;
@@ -223,6 +227,8 @@ export class SourceLifecycleService {
           // The vault refuses to mint a git token for a host the connection is
           // not bound to, so the Source URL is part of the mint request.
           sourceUrl: stored.url,
+          sourceId: stored.id,
+          runId: run.id,
         });
         await this.#recordSourceCredentialMintEvent({
           runId: run.id,
@@ -662,12 +668,27 @@ export class SourceLifecycleService {
     readonly sourceId: string;
     readonly connectionId: string;
   }): Promise<void> {
+    const source = await this.#store.getSource(input.sourceId);
+    const capsule = source?.ownerCapsuleId
+      ? await this.#store.getCapsule(source.ownerCapsuleId)
+      : undefined;
+    const ownership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
+    const connection = await this.#store.getConnection(input.connectionId);
+    const run = await this.#store.getSourceSyncRun(input.runId);
     await this.#store.putCredentialMintEvent({
       id: this.#newId("credmint"),
       runId: input.runId,
       workspaceId: input.workspaceId,
       sourceId: input.sourceId,
       connectionId: input.connectionId,
+      ...(capsule && ownership
+        ? {
+            capsuleId: capsule.id,
+            actorAccountId: run?.actorAccountId,
+            connectionOwnerAccountId: connection?.ownerAccountId,
+            ownershipEpoch: ownership.ownershipEpoch,
+          }
+        : {}),
       phase: "source",
       capabilities: ["source"],
       createdAt: new Date(this.#now()).toISOString(),

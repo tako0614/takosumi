@@ -166,6 +166,7 @@ export interface PersonalAccessTokenRow {
   name: string;
   scopes: PersonalAccessTokenRecord["scopes"];
   workspace_id: string | null;
+  app_ids: string[] | null;
   created_at: TimeValue;
   expires_at: TimeValue | null;
   revoked_at: TimeValue | null;
@@ -312,6 +313,7 @@ export function personalAccessTokenFromRow(
     name: row.name,
     scopes: row.scopes,
     workspaceId: row.workspace_id ?? undefined,
+    appIds: row.app_ids ?? undefined,
     createdAt: millis(row.created_at),
     expiresAt: row.expires_at === null ? undefined : millis(row.expires_at),
     revokedAt: row.revoked_at === null ? undefined : millis(row.revoked_at),
