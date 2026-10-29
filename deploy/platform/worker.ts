@@ -140,6 +140,7 @@ import {
   type CapsuleRunCredentialLedger,
 } from "../../core/domains/deploy-control/run_credential_context.ts";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
+import { structuredErrorReason } from "../../core/domains/deploy-control/errors.ts";
 import {
   OpenTofuControllerError,
   RUN_HEARTBEAT_STALE_MS,
@@ -911,13 +912,18 @@ export default {
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
         : undefined;
-    await runSourceMaintenanceSchedule({
+    await schedulePlatformSideEffect(runSourceMaintenanceSchedule({
       db: env.TAKOSUMI_CONTROL_DB,
       cron,
       retirementEnabled: env.TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED !== "0",
       poll: () => runScheduledSourcePoll(env),
       sweep: () => runScheduledSourceRetirement(env),
-    });
+    }).catch((error: unknown) => {
+      console.warn(JSON.stringify({
+        event: "source_maintenance_schedule_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }));
+    }), context);
     await runScheduledOpenTofuRunRepair(env);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
@@ -4289,7 +4295,16 @@ export async function handleSourceWebhookRequest(
   }
   // Payload is untrusted and ignored; addresses come only from durable Source
   // defaults and current Capsule StateVersion provenance.
-  const runs = await operations.createSourceReconciliationSyncs(sourceId);
+  let runs: Awaited<ReturnType<SourceWebhookOperations["createSourceReconciliationSyncs"]>>;
+  try {
+    runs = await operations.createSourceReconciliationSyncs(sourceId);
+  } catch (error) {
+    // A valid delivery can race retirement marking. Acknowledge that no-op so
+    // the Git host does not retry a Source whose sync admission is closed.
+    if (!(error instanceof OpenTofuControllerError) ||
+      error.code !== "failed_precondition" || structuredErrorReason(error) !== "source_not_active") throw error;
+    runs = [];
+  }
   return Response.json(
     {
       accepted: true,
@@ -4306,7 +4321,8 @@ function bearerFromAuthorization(header: string): string | undefined {
 }
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
-const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 25;
+// Start conservatively while previously unpolled Sources enter the cadence.
+const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 5;
 export function scheduledSourcePollBatch(env: DeployControlEnv): number {
   return positiveInteger(
     Number(env.TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH),

@@ -1,5 +1,6 @@
 import type { OpenTofuControlStore, StoredSource } from "../deploy-control/store.ts";
 import type { GitInstallPlanStore } from "../install-plans/store.ts";
+import { sourceCreatorPlanAllowsRetirement } from "./retirement_policy.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 100;
@@ -13,7 +14,7 @@ export interface SourceRetirementSweepResult {
 }
 
 export interface SourceRetirementSweepDependencies {
-  readonly store: Pick<OpenTofuControlStore, "listAllSourcesPage" | "getCapsule">;
+  readonly store: Pick<OpenTofuControlStore, "listAllSourcesPage" | "getCapsule" | "listCapsulesPage">;
   readonly plans: Pick<GitInstallPlanStore, "get" | "hasNonterminalPlanSourceReference">;
   readonly retireOwnedSource: (sourceId: string, reason: string) => Promise<"retired" | "already_retired" | "deferred">;
   readonly now?: () => Date;
@@ -83,7 +84,22 @@ async function retirementReason(
     const owner = await deps.store.getCapsule(source.ownerCapsuleId);
     return owner?.status === "destroyed" ? "owner capsule destroyed" : undefined;
   }
-  // Old ownerless Sources include independent user repositories. Age and a
-  // terminal creator plan do not grant the sweeper deletion authority.
-  return source.retiringAt ? "retry pending source retirement" : undefined;
+  if (source.retiringAt) return "retry pending source retirement";
+  // Legacy independent repositories still require an operator mark. Only a
+  // deterministic install-plan Source can recover without that mark.
+  if (!source.createdByInstallPlanId || !Number.isFinite(Date.parse(source.createdAt)) ||
+    Date.parse(source.createdAt) + DAY_MS > now) return undefined;
+  const creator = await deps.plans.get(source.createdByInstallPlanId);
+  if (!creator || creator.workspaceId !== source.workspaceId ||
+    !sourceCreatorPlanAllowsRetirement(creator, now)) return undefined;
+  if (creator.capsuleId && await deps.store.getCapsule(creator.capsuleId)) return undefined;
+  let cursor: string | undefined;
+  do {
+    const page = await deps.store.listCapsulesPage(source.workspaceId, {
+      limit: PAGE_SIZE, includeDestroyed: true, ...(cursor ? { cursor } : {}),
+    });
+    if (page.items.some((capsule) => capsule.sourceId === source.id)) return undefined;
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  return "creator install plan terminal or expired";
 }

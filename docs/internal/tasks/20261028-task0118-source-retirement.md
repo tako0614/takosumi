@@ -28,3 +28,11 @@ Implementation and focused regression coverage are complete. Complete-gate and C
 - Review-fix report: `/root/dev/tmp/tk0118/phase2-fix-report.md`.
 
 - No-copy retirement also releases terminal historical archive references after disabled retirement marking plus no live Capsule/in-flight work, or after committed `source.retired` evidence with the same guards. SourceSyncRun history remains; external-prefix archives are neither copied nor physically deleted. Active foreign consumers continue to block cleanup.
+
+## Final small review fixes (2026-10-29)
+
+- Scope: takosumi PRs #646–#649, fixed on their introducing branch and propagated with normal merges. No deployment or live data access.
+- #646: drain archive pages within a 1,024-object / five-second budget, persist each completed page, and acknowledge authenticated inactive-Source webhooks with a no-op 202.
+- #647: recover only deterministic install-plan orphans after the terminal/expiry grace; retain operator marking for legacy ownerless Sources. Isolate maintenance marker failures and start hourly polling conservatively.
+- Validation: focused regressions and static phases locally; the full portable gate runs in CI on all four heads. Stop local work if SSD free space falls below 2 GB.
+- Report: `/root/dev/tmp/tk0118/phase2-fix2-report.md`.

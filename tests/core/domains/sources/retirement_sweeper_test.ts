@@ -28,7 +28,7 @@ function source(id: string, ageHours: number, extra: Partial<StoredSource> = {})
 }
 
 function plan(id: string, phase: StoredGitInstallPlan["phase"], extra: Partial<StoredGitInstallPlan> = {}): StoredGitInstallPlan {
-  return { id, workspaceId: "ws_one", phase, ...extra } as StoredGitInstallPlan;
+  return { id, workspaceId: "ws_one", phase, updatedAt: "2026-10-27T11:00:00.000Z", ...extra } as StoredGitInstallPlan;
 }
 
 function fixture(
@@ -42,6 +42,7 @@ function fixture(
     store: {
       listAllSourcesPage: async () => ({ items: sources }),
       getCapsule: async (id) => capsules.find((capsule) => capsule.id === id),
+      listCapsulesPage: async () => ({ items: capsules }),
     },
     plans: {
       get: async (id) => plans.find((candidate) => candidate.id === id),
@@ -71,8 +72,8 @@ test("source retirement sweep selects destroyed owners and explicit markers, pre
     source("src_marked", 1, { status: "disabled", retiringAt: NOW.toISOString() }),
     source("src_marked_plan_live", 1, { status: "disabled", retiringAt: NOW.toISOString(),
       createdByInstallPlanId: "plan_marked_live" }),
-    source("src_discarded", 1, { createdByInstallPlanId: "plan_discarded" }),
-    source("src_failed", 1, { createdByInstallPlanId: "plan_failed" }),
+    source("src_discarded", 48, { createdByInstallPlanId: "plan_discarded" }),
+    source("src_failed", 48, { createdByInstallPlanId: "plan_failed" }),
     source("src_expired", 48, { createdByInstallPlanId: "plan_expired" }),
     source("src_open", 72, { createdByInstallPlanId: "plan_open" }),
     source("src_public_preflight", 72),
@@ -95,9 +96,9 @@ test("source retirement sweep selects destroyed owners and explicit markers, pre
     { id: "cap_live", status: "active" } as Capsule,
   ]);
   const result = await sweepRetiredSources(dependencies);
-  expect(result).toEqual({ scanned: 14, attempted: 2, retired: 2, deferred: 0, failures: 0 });
+  expect(result).toEqual({ scanned: 14, attempted: 5, retired: 5, deferred: 0, failures: 0 });
   expect(calls.map((call) => call.split(":")[0]).sort()).toEqual([
-    "src_destroyed", "src_marked",
+    "src_destroyed", "src_marked", "src_discarded", "src_failed", "src_expired",
   ].sort());
 });
 
@@ -132,4 +133,61 @@ test("failed retirement stays bounded and daily rotation reaches later candidate
   }, { limit: 2 });
   expect(second).toMatchObject({ attempted: 2, failures: 2 });
   expect(new Set(calls.map((call) => call.split(":")[0]))).toEqual(new Set(ids));
+});
+
+test("deterministic orphan retirement requires scoped creator evidence and a full day of terminal or expiry grace", async () => {
+  const cutoff = new Date(NOW.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const cases: readonly [string, Partial<StoredGitInstallPlan>, boolean][] = [
+    ["discarded_boundary", { phase: "discarded", mode: "attempt", completedAt: cutoff }, true],
+    ["failed_boundary", { phase: "failed", completedAt: cutoff }, true],
+    ["expired_boundary", { phase: "awaiting_input", mode: "attempt", expiresAt: cutoff }, true],
+    ["recent_discard", { phase: "discarded", completedAt: NOW.toISOString() }, false],
+    ["recent_failure", { phase: "failed", updatedAt: NOW.toISOString() }, false],
+    ["recent_expiry", { phase: "awaiting_input", mode: "attempt", expiresAt: NOW.toISOString() }, false],
+    ["retryable_failed_attempt", { phase: "failed", mode: "attempt" }, false],
+    ["expired_failed_attempt", { phase: "failed", mode: "attempt", expiresAt: cutoff }, true],
+    ["reviewable", { phase: "reviewable", mode: "attempt", expiresAt: cutoff }, false],
+    ["invalid_expiry", { phase: "awaiting_input", mode: "attempt", expiresAt: "invalid" }, false],
+    ["invalid_terminal_time", { phase: "discarded", completedAt: "invalid" }, false],
+    ["wrong_workspace", { phase: "discarded", workspaceId: "ws_other" }, false],
+    ["creation_in_progress", { phase: "creating_capsule", mode: "attempt", creationAttempted: true, expiresAt: cutoff }, false],
+  ];
+  for (const [id, extra, expected] of cases) {
+    const creator = plan(`plan_${id}`, "discarded", extra);
+    const row = source(`src_${id}`, 48, { createdByInstallPlanId: creator.id });
+    const { calls, dependencies } = fixture([row], [creator]);
+    await sweepRetiredSources(dependencies);
+    expect(calls.length, id).toBe(expected ? 1 : 0);
+  }
+  for (const age of [23, 24]) {
+    const creator = plan("plan_age", "discarded");
+    const { calls, dependencies } = fixture([source("src_age", age, { createdByInstallPlanId: creator.id })], [creator]);
+    await sweepRetiredSources(dependencies);
+    expect(calls.length).toBe(age === 24 ? 1 : 0);
+  }
+  const { calls, dependencies } = fixture([source("src_missing", 72, { createdByInstallPlanId: "plan_missing" })]);
+  await sweepRetiredSources(dependencies);
+  expect(calls).toEqual([]);
+});
+
+test("deterministic orphan sweep preserves any existing Capsule and paginates references including destroyed rows", async () => {
+  const creator = plan("plan_capsule", "discarded", { capsuleId: "cap_creator" });
+  const row = source("src_capsule", 48, { createdByInstallPlanId: creator.id });
+  const { calls, dependencies } = fixture([row], [creator], [{ id: creator.capsuleId } as Capsule]);
+  await sweepRetiredSources(dependencies);
+  expect(calls).toEqual([]);
+  const pages: unknown[] = [];
+  for (const status of ["active", "destroyed"] as const) {
+    await sweepRetiredSources({ ...dependencies,
+      store: { ...dependencies.store, getCapsule: async () => undefined,
+        listCapsulesPage: async (workspaceId, params) => {
+          pages.push({ workspaceId, ...params });
+          return params.cursor ? { items: [{ id: "cap_reference", sourceId: row.id, status } as Capsule] }
+            : { items: [], nextCursor: "next" };
+        } },
+    });
+  }
+  expect(calls).toEqual([]);
+  expect(pages).toHaveLength(4);
+  expect(pages.every((page) => (page as { includeDestroyed: boolean }).includeDestroyed)).toBe(true);
 });

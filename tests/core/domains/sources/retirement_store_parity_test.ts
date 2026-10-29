@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
@@ -262,7 +262,7 @@ test("terminal Source A releases its foreign Run ref so Source B can retire", as
   }
 }, 30_000);
 
-test("retirement advances one bounded archive page and resumes after a failed later page", async () => {
+test("retirement processes multiple bounded pages and resumes after a failed later page", async () => {
   const fixtures = await adapters();
   try {
     for (const { name, store } of fixtures) {
@@ -279,15 +279,12 @@ test("retirement advances one bounded archive page and resumes after a failed la
           if (calls.length === 2) throw new Error("second page custody failed");
         },
       });
-      expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("deferred");
+      await expect(service.retireOwnedSource(SRC, "destroyed"), name)
+        .rejects.toThrow("second page custody failed");
       const marker = await store.getSource(SRC);
       expect(marker?.retirementArchiveCursor, name).toBe(calls[0]?.at(-1));
       expect(marker?.retirementSnapshotCount, name).toBe(36);
       expect(calls[0]?.length, name).toBe(32);
-      await expect(service.retireOwnedSource(SRC, "destroyed"), name)
-        .rejects.toThrow("second page custody failed");
-      expect((await store.getSource(SRC))?.retirementArchiveCursor, name)
-        .toBe(marker?.retirementArchiveCursor);
       expect(await service.retireOwnedSource(SRC, "destroyed"), name).toBe("retired");
       expect(calls.map((refs) => refs.length), name).toEqual([32, 5, 5]);
       expect(await store.getSource(SRC), name).toBeUndefined();
@@ -387,3 +384,54 @@ test("retirement preflight never materializes complete Run or Capsule history", 
     await Promise.all(fixtures.map((fixture) => fixture.close()));
   }
 }, 30_000);
+
+test("one retirement invocation drains 1,000 archives and stops at its count budget", async () => {
+  for (const archiveCount of [1_000, 1_050]) {
+    const store = new InMemoryOpenTofuControlStore();
+    await seed(store);
+    const template = (await store.getSourceSnapshot("snapshot_retirement"))!;
+    for (let i = 2; i < archiveCount; i++) {
+      const id = `snapshot_extra_${String(i).padStart(4, "0")}`;
+      await store.putSourceSnapshot({ ...template, id,
+        archiveRef: `workspaces/${WS}/sources/${SRC}/snapshots/${id}/source.tar.zst` });
+    }
+    const calls: string[][] = [];
+    const service = new SourcesService({ store, now: () => new Date(NOW),
+      deleteRetiredSourceArchives: async ({ archiveRefs }) => { calls.push([...archiveRefs]); } });
+    expect(await service.retireOwnedSource(SRC, "destroyed"))
+      .toBe(archiveCount === 1_000 ? "retired" : "deferred");
+    expect(calls.every((refs) => refs.length <= 32)).toBe(true);
+    expect(calls.flat()).toHaveLength(Math.min(archiveCount, 1_024));
+    if (archiveCount > 1_024) {
+      expect((await store.getSource(SRC))?.retirementArchiveCursor).toBe(calls.at(-1)?.at(-1));
+      expect(await store.listActivityEvents(WS)).toHaveLength(0);
+      expect(await service.retireOwnedSource(SRC, "destroyed")).toBe("retired");
+      expect(new Set(calls.flat()).size).toBe(archiveCount);
+    }
+    expect(await store.getSource(SRC)).toBeUndefined();
+  }
+});
+
+test("retirement saves its cursor when the elapsed-time budget runs out", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await seed(store);
+  const template = (await store.getSourceSnapshot("snapshot_retirement"))!;
+  for (let i = 0; i < 35; i++) {
+    const id = `snapshot_timed_${i}`;
+    await store.putSourceSnapshot({ ...template, id,
+      archiveRef: `workspaces/${WS}/sources/${SRC}/snapshots/${id}/source.tar.zst` });
+  }
+  const deleted: string[] = [];
+  const service = new SourcesService({ store, now: () => new Date(NOW),
+    deleteRetiredSourceArchives: async ({ archiveRefs }) => { deleted.push(...archiveRefs); } });
+  const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(5_000);
+  try {
+    expect(await service.retireOwnedSource(SRC, "destroyed")).toBe("deferred");
+    expect(deleted).toHaveLength(32);
+    expect((await store.getSource(SRC))?.retirementArchiveCursor).toBe(deleted.at(-1));
+  } finally {
+    clock.mockRestore();
+  }
+  expect(await service.retireOwnedSource(SRC, "destroyed")).toBe("retired");
+  expect(new Set(deleted).size).toBe(37);
+});
