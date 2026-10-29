@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import { sha256Digest } from "../../../../core/adapters/source/digest.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryOpenTofuControlStore, type OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type { Capsule } from "takosumi-contract/capsules";
 import { recoverFailedInitialCreateState } from "../../../../core/domains/deploy-control/operator_state_recovery.ts";
 import {
   createFileOpenTofuStateArtifactStore,
@@ -48,10 +49,23 @@ function scope(override: Partial<{
   };
 }
 
-async function adapter(store: ReturnType<typeof createFileOpenTofuStateArtifactStore>) {
+async function adapter(
+  store: ReturnType<typeof createFileOpenTofuStateArtifactStore>,
+  persisted: { readonly workspaceId?: string; readonly environment?: string; readonly storageRoot?: string } = {},
+) {
+  const workspaceId = persisted.workspaceId ?? "workspace.local";
+  const environment = persisted.environment ?? "prod.blue";
   return new LocalOpenTofuStateRecoveryArtifactStore({
     store,
     allocator: new ObjectKeyArtifactReferenceAllocator(),
+    capsules: {
+      async getCapsule(id) {
+        return { id, workspaceId, environment } as Capsule;
+      },
+      async getCapsuleStorageRoot(id) {
+        return persisted.storageRoot ?? `workspaces/${workspaceId}/capsules/${id}`;
+      },
+    } as Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">,
   });
 }
 
@@ -82,6 +96,30 @@ test("local recovery adapter stages encrypted state, verifies exact readback, an
       plaintextSha256,
       plaintext: TEST_STATE,
     })).rejects.toThrow();
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("local recovery adapter uses the persisted apps root for stage and verification", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-state-recovery-app-root-"));
+  try {
+    const fileStore = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+    const recoveryStore = await adapter(fileStore, { storageRoot: "apps/capsule.local" });
+    const plaintextSha256 = await sha256Digest(TEST_STATE) as `sha256:${string}`;
+    const input = { ...scope(), plaintextSha256, plaintext: TEST_STATE };
+    const staged = await recoveryStore.stage(input);
+    expect(staged.artifact.stateRef).toBe(
+      "apps/capsule.local/environments/prod.blue/state-versions/00000001.tfstate.enc",
+    );
+    expect(await recoveryStore.verify({
+      workspaceId: input.workspaceId,
+      capsuleId: input.capsuleId,
+      failedApplyRunId: input.failedApplyRunId,
+      recoveryRunId: input.recoveryRunId,
+      artifactHandle: staged.handle,
+    })).toEqual(staged.artifact);
+    expect(await recoveryStore.stage(input)).toEqual(staged);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -257,7 +295,6 @@ test("staged local recovery commits Core generation one and local Plan receives 
   let server: ReturnType<typeof Bun.serve> | undefined;
   try {
     const stateArtifactStore = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
-    const recoveryArtifacts = await adapter(stateArtifactStore);
     const controlStore = new InMemoryOpenTofuControlStore();
     const seeded = await seedCapsuleModel(controlStore, {
       workspaceId: "workspace_recovery_local",
@@ -265,6 +302,11 @@ test("staged local recovery commits Core generation one and local Plan receives 
       sourceId: "source_recovery_local",
       snapshotId: "snapshot_recovery_local",
       installConfigId: "config_recovery_local",
+    });
+    const recoveryArtifacts = new LocalOpenTofuStateRecoveryArtifactStore({
+      store: stateArtifactStore,
+      allocator: new ObjectKeyArtifactReferenceAllocator(),
+      capsules: controlStore,
     });
     const failedApplyRunId = "apply_recovery_local";
     const recoveryRunId = "recovery_local";

@@ -444,6 +444,8 @@ export interface GitInstallPlanStore {
    * only after both reconciliation lease columns have been cleared.
    */
   hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean>;
+  /** Read-only protection for Source retirement candidate selection. */
+  hasNonterminalPlanSourceReference(workspaceId: string, sourceId: string, expiredBefore: string): Promise<boolean>;
   /** No new reconcile lease or execution authority is granted by this command. */
   failUnclaimedDuringDrain(
     input: FailUnclaimedGitInstallPlanInput,
@@ -606,6 +608,15 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
 
   async hasWorkspaceManagementBlockers(workspaceId: string): Promise<boolean> {
     return this.hasWorkspaceManagementBlockersNow(workspaceId);
+  }
+
+  async hasNonterminalPlanSourceReference(workspaceId: string, sourceId: string, expiredBefore: string): Promise<boolean> {
+    for (const { plan } of this.#entries.values()) {
+      if (plan.workspaceId === workspaceId && plan.sourceId === sourceId &&
+        !isTerminalGitInstallPlanPhase(plan.phase) &&
+        !(plan.expiresAt && plan.expiresAt <= expiredBefore)) return true;
+    }
+    return false;
   }
 
   async failUnclaimedDuringDrain(
@@ -800,10 +811,11 @@ export function publicGitInstallPlan(plan: StoredGitInstallPlan): GitInstallPlan
     transientVariableNames: _transientVariableNames,
     creationAttempted: _creationAttempted,
     sourcePollingEnabledByAttempt: _sourcePollingEnabledByAttempt,
+    sourceCreatedByAttempt: _sourceCreatedByAttempt,
     autoSelectedInterfaceKeys,
     attemptFacts: _attemptFacts,
     ...publicPlan
-  } = plan;
+  } = plan as StoredGitInstallPlan & { readonly sourceCreatedByAttempt?: boolean };
   return {
     ...publicPlan,
     ...(autoSelectedInterfaceKeys !== undefined

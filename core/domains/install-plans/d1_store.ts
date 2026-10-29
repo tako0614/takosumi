@@ -207,6 +207,26 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
     return result.present === 1;
   }
 
+  async hasNonterminalPlanSourceReference(workspaceId: string, sourceId: string, expiredBefore: string): Promise<boolean> {
+    const result = await this.#db
+      .prepare(
+        `select exists (
+           select 1 from git_install_plans
+            where workspace_id = ?
+              and json_valid(record_json) = 1
+              and json_extract(record_json, '$.sourceId') = ?
+              and phase not in ('failed', 'reviewable', 'discarded')
+              and (json_extract(record_json, '$.expiresAt') is null or json_extract(record_json, '$.expiresAt') > ?)
+         ) as present`,
+      )
+      .bind(workspaceId, sourceId, expiredBefore)
+      .first<{ readonly present: number }>();
+    if (result === null || (result.present !== 0 && result.present !== 1)) {
+      throw new TypeError("Git install-plan Source reference result is indeterminate");
+    }
+    return result.present === 1;
+  }
+
   async failUnclaimedDuringDrain(
     inputValue: FailUnclaimedGitInstallPlanInput,
   ): Promise<CompleteGitInstallPlanResult> {

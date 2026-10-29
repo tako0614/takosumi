@@ -714,9 +714,9 @@ test("Git revision plan fences Capsule state, Source identity, and InstallConfig
         fixture.mutateCapsule({ currentStateGeneration: 4 }),
     },
     {
-      name: "Source default ref",
+      name: "Source authentication",
       mutate: (fixture: ReturnType<typeof revisionFixture>) =>
-        fixture.mutateSource({ defaultRef: "other" }),
+        fixture.mutateSource({ authConnectionId: "changed_auth" }),
     },
     {
       name: "InstallConfig content",
@@ -890,6 +890,7 @@ function revisionFixture(
       getMember: async () => undefined,
       listMembers: async () => [],
     },
+    convergeOwnedSourceLane: async () => ({ source }),
     getSource: async (id: string) => {
       if (id !== source.id) throw new OpenTofuControllerError("not_found", "missing");
       return { source };
@@ -1250,3 +1251,15 @@ function revisionFixture(
     request,
   };
 }
+
+
+test("a revision base does not pin mutable Source lane defaults", async () => {
+  const fixture = revisionFixture();
+  const response = await fixture.request("/api/v1/capsules/cap_revision/revision-plans", "POST",
+    { ref: "release/v2" }, { "idempotency-key": "lane-default-change" });
+  const plan = (await response.json()).revisionPlan;
+  expect(plan.revision.base.sourceDefaultRef).toBeUndefined();
+  expect(plan.revision.base.sourceDefaultPath).toBeUndefined();
+  fixture.mutateSource({ defaultRef: "another-default", defaultPath: "another/path" });
+  expect((await (await fixture.reconcile(plan.id)).json()).revisionPlan.phase).not.toBe("failed");
+});
