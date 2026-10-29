@@ -222,6 +222,22 @@ test("parseLsRemoteRef records the full name of the ref that was chosen", () => 
   expect(parseLsRemoteRef("", "main")).toBeUndefined();
 });
 
+test("parseLsRemoteRef never lets a suffix-matched branch shadow a fully qualified ref", () => {
+  const a = "a".repeat(40);
+  const b = "b".repeat(40);
+  const c = "c".repeat(40);
+  // `git ls-remote -- url refs/tags/v2 'refs/tags/v2^{}'` also lists a branch
+  // literally named `refs/tags/v2`, and lists it first.
+  const annotated = `${c}\trefs/heads/refs/tags/v2\n${a}\trefs/tags/v2\n${b}\trefs/tags/v2^{}\n`;
+  expect(parseLsRemoteRef(annotated, "refs/tags/v2")).toEqual({ commit: b, resolvedRef: "refs/tags/v2" });
+  const lightweight = `${c}\trefs/heads/refs/tags/v2\n${a}\trefs/tags/v2\n`;
+  expect(parseLsRemoteRef(lightweight, "refs/tags/v2")).toEqual({ commit: a, resolvedRef: "refs/tags/v2" });
+  // The branch is still reachable by its own full name.
+  expect(parseLsRemoteRef(`${c}\trefs/heads/refs/tags/v2\n`, "refs/heads/refs/tags/v2")).toEqual({ commit: c, resolvedRef: "refs/heads/refs/tags/v2" });
+  // A bare name keeps branch-before-tag (documented difference from git).
+  expect(parseLsRemoteRef(`${c}\trefs/heads/v2\n${a}\trefs/tags/v2\n${b}\trefs/tags/v2^{}\n`, "v2")).toEqual({ commit: c, resolvedRef: "refs/heads/v2" });
+});
+
 test("parseLsRemoteCommit prefers the peeled annotated tag object", () => {
   const stdout = [
     "1111111111111111111111111111111111111111\trefs/tags/v1.0.0",
@@ -464,6 +480,38 @@ test("resolveSourceCommit peels an annotated tag to its commit", async () => {
         resolveSourceRef(source, { context: { env: commandEnv() } }),
       ).resolves.toEqual({ commit: expectedCommit, resolvedRef: "refs/tags/v1.0.0" });
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolveSourceRef resolves refs/tags/v2 to the tag, not a branch named refs/tags/v2", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-tag-shadow-"));
+  const author = ["-c", "user.email=test@example.com", "-c", "user.name=Takosumi Test"];
+  try {
+    git(root, ["init", "-b", "main", "repo"]);
+    const repo = join(root, "repo");
+    git(repo, [...author, "commit", "--allow-empty", "-m", "release"]);
+    git(repo, [...author, "tag", "-a", "v2", "-m", "release"]);
+    git(repo, [...author, "commit", "--allow-empty", "-m", "later"]);
+    // refs/heads/refs/tags/v2 and refs/heads/v2, both at the later commit.
+    git(repo, ["branch", "refs/tags/v2"]);
+    git(repo, ["branch", "v2"]);
+
+    const tagCommit = git(repo, ["rev-parse", "refs/tags/v2^{}"]);
+    const branchCommit = git(repo, ["rev-parse", "refs/heads/refs/tags/v2"]);
+    expect(branchCommit).not.toBe(tagCommit);
+    const context = { env: commandEnv() };
+    const resolve = (ref: string) => resolveSourceRef({ url: repo, ref, path: "." }, { context });
+
+    // Fully qualified: exactly that ref, as `git rev-parse refs/tags/v2` does.
+    await expect(resolve("refs/tags/v2")).resolves.toEqual({ commit: tagCommit, resolvedRef: "refs/tags/v2" });
+    await expect(resolve("refs/heads/refs/tags/v2")).resolves.toEqual({
+      commit: branchCommit,
+      resolvedRef: "refs/heads/refs/tags/v2",
+    });
+    // Bare name: branch before tag, unchanged (git itself would pick the tag).
+    await expect(resolve("v2")).resolves.toEqual({ commit: branchCommit, resolvedRef: "refs/heads/v2" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

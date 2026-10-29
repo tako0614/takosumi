@@ -940,9 +940,10 @@ export async function resolveSourceRef(
 }
 
 // Parse `git ls-remote` output ("<sha>\t<refname>") and pick the commit for the
-// requested ref. Prefers an exact refs/heads match, then a peeled tag (^{}) over
-// its tag object (bare or fully qualified), then the ref itself, then a
-// single-line fallback.
+// requested ref. A fully qualified ref matches only itself (peeled first). A
+// bare name prefers an exact refs/heads match, then a peeled tag (^{}) over its
+// tag object, then the name itself. Then any peeled row, then a single-line
+// fallback.
 export function parseLsRemoteCommit(
   stdout: string,
   ref: string,
@@ -977,15 +978,26 @@ export function parseLsRemoteRef(
     return full ? { commit: row.sha, resolvedRef: full } : { commit: row.sha };
   };
   // The peeled row of an annotated tag names the commit; the unpeeled row
-  // names the tag object. Prefer the peel for a bare tag name and for a fully
-  // qualified one (`refs/tags/v1`), whose rows are `ref^{}` and `ref`.
-  const candidates = [
-    `refs/heads/${ref}`,
-    `refs/tags/${ref}^{}`,
-    `refs/tags/${ref}`,
-    `${ref}^{}`,
-    ref,
-  ];
+  // names the tag object, so the peel comes first.
+  //
+  // A fully qualified ref (`refs/tags/v1`) names exactly that ref, as in git
+  // (rule `%s` wins). `git ls-remote` matches name suffixes, so it also lists
+  // a branch literally named `refs/tags/v1` (`refs/heads/refs/tags/v1`); that
+  // row must not shadow the tag.
+  //
+  // A bare name keeps its historical order, branch before tag. git's own
+  // precedence (`git rev-parse`: refs/tags/<name> before refs/heads/<name>)
+  // differs only when a branch and a tag share the name; switching would move
+  // existing branch Sources onto the tag at their next sync.
+  const candidates = ref.startsWith("refs/")
+    ? [`${ref}^{}`, ref]
+    : [
+      `refs/heads/${ref}`,
+      `refs/tags/${ref}^{}`,
+      `refs/tags/${ref}`,
+      `${ref}^{}`,
+      ref,
+    ];
   for (const candidate of candidates) {
     const match = rows.find((row) => row.name === candidate);
     if (match) return chosen(match);
