@@ -232,7 +232,7 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 | POST | `/api/v1/install-plans` | アカウント資格情報。`mode: "attempt"`、workspace指定なし。本人がアプリ所有者 |
 | GET | `/api/v1/usage` | アカウント資格情報。本人が支払人の使用量だけ。アプリ単位の独立した計測は、使用期間（計測時刻の前後2時間。アプリ作成より前と記録時刻より後は含めない）が受諾済みの所有権移転で区切られた1つの所有期間に収まるときだけ、その所有者が支払人。収まらない場合や移転履歴が欠けている場合は支払人なし |
 
-メンバー追加は、確認済みアカウントの有無にかかわらず `202 { accepted: true }` を返します。所有者の `connections_and_code` 同意を監査記録へ保存します。譲渡を受諾すると既存メンバーを全員削除し、監査記録に通知対象を残します。メンバー管理・譲渡・受諾・取消・アンインストールには本人のセッションまたは明示的scopeを持つPATが必要で、インストール済みアプリのOAuthアクセストークンは使えません。
+operator が `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen` を設定している間、メンバーの追加・削除・脱退と譲渡の申し出・受諾・取消は、アプリを読む前に `409 failed_precondition` (`details.reason: "app_ownership_mutations_frozen"`) を返します。メンバー追加は、確認済みアカウントの有無にかかわらず `202 { accepted: true }` を返します。所有者の `connections_and_code` 同意を監査記録へ保存します。譲渡を受諾すると既存メンバーを全員削除し、監査記録に通知対象を残します。メンバー管理・譲渡・受諾・取消・アンインストールには本人のセッションまたは明示的scopeを持つPATが必要で、インストール済みアプリのOAuthアクセストークンは使えません。
 
 PATには `appIds` を指定できます。実効権限はscopeと現在のアプリ内の役割の積です。アプリに束縛したPATはアカウント全体の個人接続や使用量を読めません。旧Workspace route・claimは互換期間だけ維持します。インストールされたアプリへのOIDCサインインは全アカウントに開き、`takosumi.capsule_id` でアプリを示します。現在の所有者・メンバーだけに `takosumi.app_role` を発行します。
 

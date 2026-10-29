@@ -125,3 +125,11 @@ test("ownership errors explain app authority in the selected UI language", () =>
     expect(friendlyError(error, (name) => en[name]).message).toBe(en[key]);
   }
 });
+
+test("an operator pause of member and transfer writes is explained, not shown raw", () => {
+  const error = new ControlApiError(409, "failed_precondition", "App member and ownership changes are temporarily paused by the operator.", {
+    error: { code: "failed_precondition", message: "paused", details: { reason: "app_ownership_mutations_frozen" } },
+  });
+  expect(friendlyError(error, (name) => ja[name]).message).toBe(ja["controlError.appOwnershipMutationsFrozen"]);
+  expect(friendlyError(error, (name) => en[name]).message).toBe(en["controlError.appOwnershipMutationsFrozen"]);
+});

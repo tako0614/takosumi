@@ -125,6 +125,8 @@ function truncate(message: string): string {
  * behaviour.
  */
 const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
+  // 409 failed_precondition while the operator pauses member/transfer writes.
+  app_ownership_mutations_frozen: "controlError.appOwnershipMutationsFrozen",
   state_generation_mismatch: "controlError.stateGenerationMismatch",
   dependency_retired: "controlError.dependencyRetired",
   source_ref_changed: "controlError.sourceChanged",

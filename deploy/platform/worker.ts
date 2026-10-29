@@ -27,6 +27,7 @@ import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   D1AccountsStore,
   handleAuthenticatedControlRoute,
+  parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
   type ControlPlaneOperations,
@@ -554,6 +555,9 @@ async function createPlatformOperatorControlMcpAuthority(
         operations,
         subject: session.subject,
         workspaceId: session.workspaceId,
+        ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
+          ? { appOwnershipMutationsFrozen: true }
+          : {}),
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
@@ -1700,6 +1704,7 @@ export async function handlePlatformSharedAuthControlRequest(
       subject: identity.accountId,
       credential: "session",
       requireCurrentMembership: true,
+      ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
       ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),

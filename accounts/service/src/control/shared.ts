@@ -174,6 +174,8 @@ export interface ControlDispatchContext {
   readonly session: ControlSession;
   /** True when the legacy Workspace create/member compatibility surfaces are frozen. */
   readonly workspaceMutationsFrozen?: boolean;
+  /** Operator kill switch: app member and ownership-transfer writes return 409. */
+  readonly appOwnershipMutationsFrozen?: boolean;
   /** Injectable request-local clock for deterministic stream tests. */
   readonly runStreamTiming?: RunStreamTiming;
   /** Stops new work after the enclosing ordinary Run GET read budget expires. */

@@ -323,6 +323,7 @@ async function buildAccountsHandler(
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     workspaceMutationsFrozen,
+    ...(config.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
     ...(config.installedAppDelegationSources?.length
       ? { installedAppDelegationSources: config.installedAppDelegationSources }
       : {}),
