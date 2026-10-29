@@ -367,7 +367,7 @@ test("a business not_found response never retries install under another scope", 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-for (const envelope of ["flat", "nested"] as const) {
+for (const envelope of ["flat", "nested", "nested-with-request-id"] as const) {
   for (const command of ["list", "install"] as const) {
     test(`apps ${command} falls back on the ${envelope} route-not-found envelope`, async () => {
       const originalFetch = globalThis.fetch;
@@ -376,7 +376,11 @@ for (const envelope of ["flat", "nested"] as const) {
         const request = new Request(input, init);
         requests.push(request);
         if (requests.length === 1) {
-          return Response.json({ error: envelope === "flat" ? "not_found" : { code: "not_found" } }, { status: 404 });
+          return Response.json({ error: envelope === "flat"
+            ? "not_found"
+            : envelope === "nested"
+              ? { code: "not_found" }
+              : { code: "not_found", message: "not found", requestId: "req_route_missing" } }, { status: 404 });
         }
         return Response.json(command === "list"
           ? { installedApps: [], complete: true }
@@ -397,4 +401,24 @@ for (const envelope of ["flat", "nested"] as const) {
       } finally { globalThis.fetch = originalFetch; }
     });
   }
+}
+
+for (const command of ["list", "install"] as const) {
+  test(`apps ${command} does not fall back when not_found includes resource details`, async () => {
+    const originalFetch = globalThis.fetch;
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests += 1;
+      return Response.json({
+        error: { code: "not_found", message: "not found", requestId: "req_resource_missing", resourceId: "app_123" },
+      }, { status: 404 });
+    }) as typeof fetch;
+    try {
+      expect(await main(["apps", command,
+        ...(command === "install" ? ["--git", "https://git.example.test/team/app.git"] : []),
+        "--workspace", "ws_legacy", "--url", "https://takosumi.example.test", "--token", "account-pat",
+      ], quietIo)).toBe(1);
+      expect(requests).toBe(1);
+    } finally { globalThis.fetch = originalFetch; }
+  });
 }

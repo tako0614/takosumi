@@ -1,5 +1,6 @@
 /** Personal cloud connections are a primary destination. */
 import "../../styles/wave-c.css";
+import "../../styles/account-views.css";
 import Page from "../account/components/auth/Page.tsx";
 import { PageHeader } from "../../components/ui/index.ts";
 import { t } from "../../i18n/index.ts";
