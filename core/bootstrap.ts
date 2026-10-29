@@ -76,7 +76,6 @@ import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
-import type { AppAccessResolver } from "../contract/app-access.ts";
 import {
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";

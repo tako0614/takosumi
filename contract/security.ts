@@ -4,9 +4,6 @@
 
 export interface CredentialMintEvent {
   readonly id: string;
-  readonly actorAccountId?: string;
-  readonly connectionOwnerAccountId?: string;
-  readonly ownershipEpoch?: number;
   readonly runId: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
