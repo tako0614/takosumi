@@ -96,7 +96,10 @@ The owning entry is `bun run deploy -- <surface>`. The surfaces are:
   records their digest, and a served change refuses a different one. A
   predecessor from before that digest can be replaced once with an unchanged
   signing key id, and keeping its other identity secrets is an explicit review
-  obligation of that change.
+  obligation of that change. The served public key set (key id and previous
+  public keys) is kept the same way. Replacing the signing key or session salt
+  of a served issuer is a separate reviewed mode of this surface; see
+  [Rotating an exposed signing key or session salt](#rotating-an-exposed-signing-key-or-session-salt).
 - `takosumi-auth-staging-code`: subsequent code bytes with unchanged authority
   digest, physical stores, registered clients, secret custody and topology.
 - `takosumi-auth-staging-topology`: the exact dedicated domain attachment.
@@ -107,8 +110,10 @@ The owning entry is `bun run deploy -- <surface>`. The surfaces are:
 provider. For the four Worker/domain surfaces, `plan` and `apply` accept exact
 `--target` and `--canonical-config` paths. `apply` also takes `--confirm`; all
 authority/topology steps require `--reviewer`, and code/authority take
-`--secrets`. Unknown arguments, source overrides and environment overrides are
-refused. All input files are absolute physical single-link files, mode 0600,
+`--secrets`. Only the authority surface accepts the rotation arguments
+`--rotate-identity`, `--previous-secrets`, `--confirm-rotation`,
+`--acknowledge-session-invalidation` and `--retire-previous-key`. Unknown
+arguments, source overrides and environment overrides are refused. All input files are absolute physical single-link files, mode 0600,
 outside Git repositories. Keep them in operator-private mode-0700 custody;
 do not commit realized IDs, credentials, config or release evidence.
 
@@ -175,6 +180,216 @@ The wrapper fixes environment/DB/source and forwards only canonical CLI evidence
 and confirmation options. `apply` additionally requires a named independent
 reviewer and `--rehearsal-digest`; the owner CLI requires private backup evidence
 and exact source/catalog/target/config digests. There is no down/reset command.
+
+## Rotating an exposed signing key or session salt
+
+Use this when the issuer's ES256 signing key or session hash salt may have been
+exposed, for example in a transcript or log. An ordinary authority release on
+the served issuer refuses a different identity (`auth_staging_identity_continuity_changed`)
+or a different public key set (`auth_staging_jwks_continuity_changed`). Do not
+work around that by detaching the domain or the retry schedule by hand: the
+rotation mode below is the only supported path.
+
+What can rotate:
+
+- `signing-key` (`TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK`): the new key signs every
+  ID token from activation. Public JWKS keeps the previous public key for
+  verification only, until a later retirement step removes it. Subjects and
+  sessions do not change.
+- `session-salt` (`TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`): **every issuer account
+  session ends at activation and every user must sign in again.** Session rows
+  are found by a salted hash, so existing session cookies stop resolving. Work
+  that needs the current issuer session, such as an identity merge leg, also
+  needs the new sign-in. RP refresh grants (keyed by `sid`), access tokens and
+  personal access tokens are not keyed by the salt. They stay valid until they expire or are revoked. The
+  apply step requires `--acknowledge-session-invalidation`.
+- Both in one reviewed change: `--rotate-identity signing-key,session-salt`.
+
+The pairwise subject secret and the subject secret never rotate here
+(`auth_staging_identity_rotation_subject_refused`). They derive every RP `sub`
+and upstream account link, so replacing them creates a new identity rather than
+rotating one.
+
+### Preconditions
+
+1. The served Version records `TAKOSUMI_AUTH_IDENTITY_CONTINUITY_DIGEST`. A
+   predecessor from before that digest first takes an ordinary authority release
+   with its current bundle (`auth_staging_identity_rotation_predecessor_unrecorded`).
+2. The served Version runs the same source commit and artifact digest that the
+   rotation uploads. A rotation changes identity only
+   (`auth_staging_identity_only_code_changed`). First serve the merged commit
+   that contains this mode through `takosumi-auth-staging-code`, using the
+   served target with only `sourceCommit` changed and the served bundle.
+3. The served target and the served bundle (the one the issuer runs now) are in
+   private custody. The lane reads the served bundle to prove the served
+   identity and to check that nothing else changes. It prints digests, never
+   values.
+
+### Prepare the new files
+
+Keep both new files mode 0600 in private custody outside Git, like every input.
+
+- **New bundle**: copy the served bundle and replace only the rotated values:
+  a newly generated P-256 private JWK, and/or a new random 32-byte base64url
+  salt. Never reuse material that appeared where the exposure happened. Every
+  other value stays byte-identical
+  (`auth_staging_identity_rotation_non_identity_changed`,
+  `auth_staging_identity_rotation_scope_exceeded`).
+- **New target**: copy the served target and edit these fields in place:
+  - `secretsSha256`: the SHA-256 of the new bundle file.
+  - For `signing-key`: `vars.TAKOSUMI_ACCOUNTS_ES256_KEY_ID` set to a new,
+    distinct key id. `vars.TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS` set to
+    `{"keys":[...]}` containing the served public key: the
+    `kty`/`crv`/`x`/`y`/`kid`/`use`/`alg` entry that
+    `https://auth-staging.takos.jp/oauth/jwks` serves now, with no `d`.
+    `jwksSha256` set to the digest of the new public key set (new key plus
+    previous keys). `plan` refuses a mismatch with
+    `auth_staging_signing_configuration_invalid`.
+  - `sourceCommit`: the commit the served Version runs (precondition 2).
+    `canonicalStageVersionId` and `canonicalStageConfigSha256` name the current
+    canonical staging Version, as for any release.
+
+  Change nothing else and keep the variable order. The lane recomputes the
+  served authority digest from this target with only the identity fields
+  substituted. Any other difference is refused
+  (`auth_staging_identity_only_authority_changed`).
+
+### Plan, review, apply
+
+`plan` stays local. With `--rotate-identity` it also reads both bundles and
+prints an `identityRotation` block. That block contains `rotate`,
+`fromContinuityDigest` (served), `toContinuityDigest` (new), `signingKey`
+(`fromKid`, `toKid`, the published kids and the minimum overlap), `sessions`
+(`all-invalidated` or `preserved`), the plain `statement` of consequences and
+the rotation `confirmation`.
+
+```bash
+bun run deploy -- takosumi-auth-staging-authority plan \
+  --target /private/auth-staging/target.rotated.json \
+  --canonical-config /private/auth-staging/takosumi-staging.toml \
+  --rotate-identity signing-key,session-salt \
+  --secrets /private/auth-staging/secrets.rotated.json \
+  --previous-secrets /private/auth-staging/secrets.served.json
+```
+
+The independent reviewer checks the plan `confirmation` and the statement.
+They also check that `fromContinuityDigest` equals the served Version's
+`TAKOSUMI_AUTH_IDENTITY_CONTINUITY_DIGEST` binding, and they check the kids.
+The rotation confirmation has the form
+`rotate-identity:<scopes>:<served digest>:<new digest>`, so approving it means
+approving both digests.
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=<stage account id> \
+bun run deploy -- takosumi-auth-staging-authority apply \
+  --target /private/auth-staging/target.rotated.json \
+  --canonical-config /private/auth-staging/takosumi-staging.toml \
+  --rotate-identity signing-key,session-salt \
+  --secrets /private/auth-staging/secrets.rotated.json \
+  --previous-secrets /private/auth-staging/secrets.served.json \
+  --confirm <plan confirmation> \
+  --confirm-rotation 'rotate-identity:session-salt,signing-key:sha256:<served>:sha256:<new>' \
+  --reviewer '<independent reviewer>' \
+  --acknowledge-session-invalidation
+```
+
+For a signing-key-only rotation, use `--rotate-identity signing-key` and omit
+`--acknowledge-session-invalidation`; the lane refuses that flag without a salt
+rotation. For a salt-only rotation, the key id and previous public keys stay as
+served.
+
+Before the single upload, `apply` uses only read requests. It checks these
+points:
+
+- The issuer is served.
+- The served Version records exactly `fromContinuityDigest`.
+- The served key id is the key the new JWKS keeps as previous, and no previous
+  key that was not served is added.
+- The served Version runs the same source and artifact.
+- Its authority digest recomputes from the new target, with the served key id,
+  previous keys, public key set and served bundle digest substituted. This
+  proves that every other variable, registration, resource, secret, placement
+  and schedule, and the pairwise and subject secrets, are unchanged.
+
+After the upload, the Version must record `toContinuityDigest` before
+activation. Public readback must then serve the new public key set. Otherwise
+the run reports `incomplete` with `auth_staging_jwks_identity_mismatch`.
+
+Success reports `identity-rotated-served` with both digests, the session
+outcome and `signingKey.retireNotBefore`. From then on the rotated target and
+bundle are the served custody: ordinary code and authority releases use them,
+and the exposed bundle is refused (`auth_staging_identity_continuity_changed`).
+No later step needs the exposed bundle. Rotating the key and the salt in
+separate runs is also valid. Each run uses the bundle being served at that
+moment as `--previous-secrets`.
+
+### Overlap and retirement
+
+The ES256 key signs only ID tokens, which live 300 seconds for the
+shared-account clients, and the issuer never verifies its own tokens. The
+previous public key therefore only lets an ID token signed just before
+activation still verify at its RP. An RP that caches JWKS learns the new key id
+only when it refetches; keeping the previous key does not change that.
+
+`--retire-previous-key` removes previous public keys no sooner than 15 minutes
+after the serving deployment's `created_on`. A later deployment restarts that
+wait, and a missing or future timestamp is refused
+(`auth_staging_previous_key_overlap_unverifiable`). **For an exposed key, retire
+as soon as the minimum has passed.** While the previous key is published, a
+token signed with the exposed key still verifies. An RP that cached the overlap
+JWKS keeps accepting it until its cache expires, and the issuer cannot shorten
+that.
+
+The retirement target is the rotated target with
+`TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS` removed (or reduced to the keys
+being kept) and `jwksSha256` recomputed. The bundle is unchanged. The kids
+given must be exactly the removed ones.
+
+```bash
+bun run deploy -- takosumi-auth-staging-authority plan \
+  --target /private/auth-staging/target.retired.json \
+  --canonical-config /private/auth-staging/takosumi-staging.toml \
+  --retire-previous-key <previous kid>
+CLOUDFLARE_ACCOUNT_ID=<stage account id> \
+bun run deploy -- takosumi-auth-staging-authority apply \
+  --target /private/auth-staging/target.retired.json \
+  --canonical-config /private/auth-staging/takosumi-staging.toml \
+  --secrets /private/auth-staging/secrets.rotated.json \
+  --retire-previous-key <previous kid> \
+  --confirm <plan confirmation> \
+  --reviewer '<independent reviewer>'
+```
+
+Retirement recomputes the served authority digest the same way and refuses any
+other change. An ordinary authority release cannot drop a published previous
+key (`auth_staging_jwks_continuity_changed`). Success reports
+`previous-key-retired-served`.
+
+### Failure, reversal and related custody
+
+Every refusal above happens before the upload and leaves the served issuer
+untouched. After the upload, the usual `incomplete` report applies, and nothing
+is retried. Restoring the predecessor Version re-serves the exposed key or
+salt, and sessions created after a salt rotation end again. After an exposure,
+repair forward with another reviewed rotation instead.
+
+The staging platform Worker `takosumi-staging` binds the same Accounts D1. On
+handler-owned extension routes it refuses issuer bearer credentials, hashing
+them with its own `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`. Its canonical config
+also names its own issuer, `https://app-staging.takosumi.com`. If that Worker
+holds the same exposed signing key or salt, this rotation does not change them.
+Rotate them through that Worker's owner lane. Until then, its handler-route
+refusal stops recognizing new issuer sessions; access tokens and personal
+access tokens are unaffected.
+
+Production has no separate auth Worker. The production platform Worker serves
+Accounts OIDC itself and composes the same `deploy/accounts-cloudflare/src/handler.ts`.
+So the runtime JWKS overlap (`TAKOSUMI_ACCOUNTS_ES256_KEY_ID` plus
+`TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS`) and the session-salt effects are
+the same code path there. This lane's rotation mode, continuity digest and
+retirement step are not: the production platform release pins only secret
+names, and the operator sets the values. Production issuer rotation is out of
+scope here and needs its own reviewed procedure.
 
 ## Readback and recovery
 
