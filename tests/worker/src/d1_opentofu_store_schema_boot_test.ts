@@ -788,7 +788,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed qualification verification accepts complete v75/v76/v77 ledgers during the additive rollout", async () => {
+test("predeployed qualification verification accepts complete v75/v76/v77/v78 ledgers during the additive rollout", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -840,7 +840,7 @@ test("predeployed qualification verification accepts complete v75/v76/v77 ledger
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (78, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (79, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();
@@ -849,8 +849,8 @@ test("predeployed qualification verification accepts complete v75/v76/v77 ledger
   );
 });
 
-test("predeployed v71-v77 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
-  for (const head of [71, 72, 73, 74, 75, 76, 77]) {
+test("predeployed v71-v78 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
+  for (const head of [71, 72, 73, 74, 75, 76, 77, 78]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: head });
     await prepareInactiveBridgeMaintenance(db);

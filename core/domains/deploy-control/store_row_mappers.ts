@@ -110,6 +110,7 @@ export function usageEventFromRow(row: {
   readonly resourceId?: string | null;
   readonly operation?: string | null;
   readonly resourceMetadataJson?: unknown;
+  readonly payerAccountId?: string | null;
   readonly kind: string;
   readonly quantity: number;
   readonly usdMicros: number;
@@ -127,6 +128,7 @@ export function usageEventFromRow(row: {
     ...(row.resourceFamily ? { resourceFamily: row.resourceFamily } : {}),
     ...(row.resourceId ? { resourceId: row.resourceId } : {}),
     ...(row.operation ? { operation: row.operation } : {}),
+    ...(row.payerAccountId ? { payerAccountId: row.payerAccountId } : {}),
     ...usageResourceMetadataFromRow(row.resourceMetadataJson),
     kind: row.kind as UsageEvent["kind"],
     quantity: row.quantity,

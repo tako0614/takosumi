@@ -81,6 +81,7 @@ import {
 import { evaluateSourceUrl } from "../../../../core/domains/sources/url-policy.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { personalResourceNamespace } from "./personal-resources.ts";
 import { defaultProjectId } from "../../../../core/domains/projects/mod.ts";
 import {
   errorJson,
@@ -109,6 +110,7 @@ import {
   resolveStoreBaseInstallConfig,
 } from "./sources.ts";
 import {
+  controllerErrorCode,
   requireWorkspaceAccess,
   resolveProviderBindings,
   type ControlDispatchContext,
@@ -373,6 +375,21 @@ export async function handleInstallPlans(
   segments: readonly string[],
   method: string,
 ): Promise<Response | undefined> {
+  if (segments[0] === "install-plans" && segments.length === 1) {
+    if (method !== "POST") return methodNotAllowed("POST");
+    if (ctx.session.workspaceId !== undefined || ctx.session.appIds !== undefined) {
+      return errorJson("app_access_denied", "An account credential is required to install an app.", 403, ctx.request);
+    }
+    const body = await readJsonObject(ctx.request.clone());
+    if (!body || body.mode !== "attempt" || body.workspaceId !== undefined) {
+      return errorJson("invalid_request", "A workspace-less install attempt is required.", 400, ctx.request);
+    }
+    // The freeze permits only A's canonical owner-bound personal bootstrap.
+    // Never use the general Workspace creation or membership mutation ports.
+    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
+    if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
+    return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
+  }
   if (segments[0] !== "install-plans" || segments.length < 2) {
     return undefined;
   }
@@ -1687,6 +1704,7 @@ async function advanceSource(
           },
         },
         plan.workspaceManagementAuthority,
+        plan.actorSubject,
       )
     ).run;
   }
@@ -2254,10 +2272,23 @@ async function createCapsule(
     }
   }
   const requestedBindings = requestedProviderBindings(plan);
+  const capsuleId = deterministicInitialCapsuleId(plan.id);
+  // Match the owner that initial authority commits. The workspace-less route
+  // already resolves an owner-bound personal namespace for the requester;
+  // legacy Workspace routes may be called by a different Workspace admin.
+  let currentOwner = (await operations.workspaces.getWorkspace(plan.workspaceId)).ownerUserId;
+  try {
+    const existingCapsule = await operations.capsules.getCapsule(capsuleId);
+    currentOwner = (await capsuleOwnerAuthority(operations, existingCapsule))
+      .ownerAccountId ?? currentOwner;
+  } catch (error) {
+    if (controllerErrorCode(error) !== "not_found") throw error;
+  }
   const resolved = await resolveProviderBindings(
     operations,
     plan.workspaceId,
     requestedBindings,
+    currentOwner,
   );
   if (!resolved.ok) {
     return failedPlan(plan, {
@@ -2265,7 +2296,6 @@ async function createCapsule(
       message: "A referenced Provider Connection is unavailable to this Workspace.",
     });
   }
-  const capsuleId = deterministicInitialCapsuleId(plan.id);
   const candidateCapsule: Capsule = {
     id: capsuleId,
     workspaceId: plan.workspaceId,
@@ -2819,6 +2849,14 @@ async function createOrObservePlanRun(
   operations: ControlPlaneOperations,
 ): Promise<StoredGitInstallPlan> {
   const exactRunId = plan.planRunId ?? deterministicPlanRunId(plan.id);
+  const capsule = await operations.capsules.getCapsule(plan.capsuleId!);
+  assertCapsuleMatches(capsule, plan);
+  const ownership = await capsuleOwnerAuthority(operations, capsule);
+  // The install plan's creator is the authenticated Principal captured at
+  // creation. A synthetic coordinator id is only valid for legacy Capsules.
+  const planActor = !ownership.canonical
+    ? installPlanRunActor(plan.id)
+    : plan.createdBy;
   let run: Run | undefined;
   try {
     run = await operations.getRun(exactRunId);
@@ -2827,17 +2865,24 @@ async function createOrObservePlanRun(
       throw error;
     }
   }
+  const existingRun = run !== undefined;
   if (!run) {
     const created = await operations.createCapsulePlan(plan.capsuleId!, {
       sourceSnapshotId: plan.sourceSnapshotId,
       planRunId: exactRunId,
       expectedWorkspaceManagementAuthority:
         plan.workspaceManagementAuthority,
-      actor: installPlanRunActor(plan.id),
+      actor: planActor,
     });
     run = await operations.getRun(created.planRun.id);
   }
-  assertRunMatches(run, plan, exactRunId);
+  assertRunMatches(
+    run,
+    plan,
+    exactRunId,
+    planActor,
+    existingRun && ownership.canonical,
+  );
   if (
     run.status === "failed" ||
     run.status === "cancelled" ||
@@ -2857,6 +2902,20 @@ async function createOrObservePlanRun(
     });
   }
   return progressed(plan, { planRunId: run.id });
+}
+
+async function capsuleOwnerAuthority(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<{ readonly canonical: boolean; readonly ownerAccountId?: string }> {
+  const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+  if (ownership) {
+    return { canonical: true, ownerAccountId: ownership.ownerAccountId };
+  }
+  const workspace = await operations.workspaces.getWorkspace(capsule.workspaceId);
+  return workspace.ownerUserId
+    ? { canonical: false, ownerAccountId: workspace.ownerUserId }
+    : { canonical: false };
 }
 
 /**
@@ -3707,6 +3766,8 @@ function assertRunMatches(
   run: Run,
   plan: StoredGitInstallPlan,
   exactRunId: string,
+  planActor: string,
+  allowLegacySyntheticActor: boolean,
 ): void {
   if (
     run.id !== exactRunId ||
@@ -3714,7 +3775,9 @@ function assertRunMatches(
     run.capsuleId !== plan.capsuleId ||
     run.sourceSnapshotId !== plan.sourceSnapshotId ||
     run.type !== "plan" ||
-    run.createdBy !== installPlanRunActor(plan.id)
+    (run.createdBy !== planActor &&
+      !(allowLegacySyntheticActor &&
+        run.createdBy === installPlanRunActor(plan.id)))
   ) {
     throw permanent(
       "plan_run_identity_conflict",

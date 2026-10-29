@@ -27,7 +27,8 @@ import type {
   RunnerProfile,
   StateVersion,
 } from "@takosumi/internal/deploy-control-api";
-import type { SqlClient, SqlParameters } from "../../adapters/storage/sql.ts";
+import type { SqlClient, SqlParameters, SqlValue } from "../../adapters/storage/sql.ts";
+import { appApplyAdmission, appClaimAdmission, appPlanAdmission } from "./app_run_admission.ts";
 import {
   and,
   asc,
@@ -47,6 +48,31 @@ import {
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
+
+
+// Admission compares the exact deployment snapshot. Ownership is read from
+// physical columns by the AppOwnershipStore and is never merged into JSON.
+const PG_CAPSULE_ADMISSION_JSON = `installation_json`;
+
+type PgCapsuleAdmissionOwnershipRow = {
+  readonly ownerAccountId: string | null;
+  readonly ownershipEpoch: number | string | null;
+  readonly managementState: string | null;
+  readonly managementEpoch: number | string | null;
+};
+
+function pgCapsuleForAppAdmission(
+  capsule: Capsule | undefined,
+  row: PgCapsuleAdmissionOwnershipRow | undefined,
+): Capsule | undefined {
+  if (!row?.ownerAccountId) return capsuleWithOwnershipForAdmission(capsule, undefined);
+  return capsuleWithOwnershipForAdmission(capsule, {
+    ownerAccountId: row.ownerAccountId,
+    ownershipEpoch: Number(row.ownershipEpoch),
+    managementState: row.managementState as "active" | "draining" | "frozen",
+    managementEpoch: Number(row.managementEpoch),
+  });
+}
 
 const pgLegacyUsageSelect = {
   id: pgSchema.usageEvents.id,
@@ -75,12 +101,13 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
           isNull(pgSchema.connections.ownerAccountId),
           sql`${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId})`,
         )
+
       : isNull(pgSchema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
     sql`(${pgSchema.connections.connectionJson}::jsonb - 'ownerAccountId') = ${JSON.stringify(legacy)}::jsonb`,
-    eq(pgSchema.connections.ownerAccountId, ownerAccountId),
+    sql`coalesce(${pgSchema.connections.ownerAccountId}, ${pgSchema.connections.connectionJson}->>'ownerAccountId') = ${ownerAccountId}`,
   )!;
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
@@ -268,6 +295,7 @@ import {
   CapsuleStateGenerationGuardConflict,
   WorkspaceManagementAdmissionConflictError,
   CapsuleApplyRunAdmissionConflictError,
+  CapsulePlanCreationFenceConflictError,
   isApplyRunRecord,
   isPlanRunRecord,
   isSourceSyncRunRecord,
@@ -305,6 +333,8 @@ import {
   storeRunManagementAuthority,
   restoreRunCreationIdentityMatches,
   publicStoredRun,
+  capsuleWithoutOwnership,
+  capsuleWithOwnershipForAdmission,
   storeSourceSyncRun,
   sourceSyncRunSuccessIdentityMatches,
   storedCapsuleCompatibilityProviderGraph,
@@ -1891,6 +1921,7 @@ async function assertWorkspaceFinancialPostgresTriggers(client:SqlClient):Promis
 }
 
 export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwnershipMigrationStore {
+
   async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {
     if (!rows.length) return rows;
     const owners = new Map<string, string>();
@@ -1905,47 +1936,27 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       const { ownerAccountId: _ignored, ...record } = connection;
       void _ignored;
       const ownerAccountId = owners.get(connection.id);
-      return ownerAccountId ? { ...record, ownerAccountId } : record;
+      return ownerAccountId ? { ...record, ownerAccountId } : connection;
     });
+
   }
 
-  async #withUsagePayers(rows: readonly UsageEvent[]): Promise<readonly UsageEvent[]> {
-    if (!rows.length) return rows;
-    const payers = new Map<string, string>();
-    const ids = [...new Set(rows.map((row) => row.id))];
-    for (let offset = 0; offset < ids.length; offset += 100) {
-      const chunk = ids.slice(offset, offset + 100);
-      const found = await this.#db.select({ id: pgSchema.usageEvents.id, payerAccountId: pgSchema.usageEvents.payerAccountId })
-        .from(pgSchema.usageEvents).where(inArray(pgSchema.usageEvents.id, chunk));
-      for (const row of found) if (row.payerAccountId) payers.set(row.id, row.payerAccountId);
-    }
-    return rows.map((event) => {
-      const payerAccountId = payers.get(event.id);
-      return payerAccountId ? { ...event, payerAccountId } : event;
-    });
-  }
-
-  async #capsuleOwnerAccountId(capsuleId: string): Promise<string | undefined> {
-    const result = await this.#client.query<{ readonly owner_account_id: string | null }>(
-      `select owner_account_id from takosumi_capsules where id=$1`, [capsuleId]);
-    return result.rows[0]?.owner_account_id ?? undefined;
-  }
-
-  async #initializeCapsulePhysicalOwner(capsule: Capsule, client: SqlClient = this.#client): Promise<void> {
-    if (!capsule.ownerAccountId) return;
+  async #initializeCapsulePhysicalOwner(ownership: CapsuleInitialAuthorityInput["initialOwnership"], slug: string, client: SqlClient = this.#client): Promise<void> {
+    if (!ownership) return;
     await client.query(`update takosumi_capsules set owner_account_id=coalesce(owner_account_id,$2),
       ownership_epoch=case when owner_account_id is null then $3 else ownership_epoch end,
       management_state=case when owner_account_id is null then $4 else management_state end,
       management_epoch=case when owner_account_id is null then $5 else management_epoch end,
       storage_root=coalesce(storage_root,$6), slug=coalesce(slug,$7)
-      where id=$1`, [capsule.id,capsule.ownerAccountId,capsule.ownershipEpoch ?? 0,
-      capsule.managementState ?? "active",capsule.managementEpoch ?? 0,capsule.storageRoot ?? `apps/${capsule.id}`,capsule.slug]);
+      where id=$1`, [ownership.capsuleId,ownership.ownerAccountId,ownership.ownershipEpoch,
+      ownership.managementState,ownership.managementEpoch,ownership.storageRoot,slug]);
   }
 
   async #initializeConnectionPhysicalOwner(
     connection: ProviderConnection, client: SqlClient = this.#client,
     ownerAccountId?: string,
   ): Promise<void> {
+    if (connection.scope === "operator") return;
     const owner = ownerAccountId ?? connection.ownerAccountId ??
       (connection.workspaceId
         ? client === this.#client
@@ -1953,10 +1964,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           : (await client.query<{ owner_user_id: string | null }>(
             `select owner_user_id from takosumi_workspaces where id=$1`, [connection.workspaceId])).rows[0]?.owner_user_id
         : undefined);
+
     if (!owner) return;
     await client.query(`update takosumi_connections set owner_account_id=$2 where id=$1 and owner_account_id is null`,
       [connection.id, owner]);
   }
+
   #financialSourceStore():SqlWorkspaceFinancialSource {
     const client=this.#client;
     const make=(executor:SqlClient):FinancialSourceSqlPort=>({dialect:"postgres",
@@ -1990,6 +2003,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   readonly persistence = "durable" as const;
   readonly #client: SqlClient;
   readonly #db: PgRemoteDatabase<typeof pgSchema>;
+  #usagePayerColumnPresent = false;
 
   constructor(input: { readonly client: SqlClient }) {
     registerIdentityControlStorage(this, input.client);
@@ -2097,8 +2111,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           run,
           expectedWorkspaceManagementAuthority,
         );
-        if (input.expectedCapsulePlanAuthority !== undefined && run.capsuleId) {
-          const rows = await transaction.query<{
+        if (run.capsuleId) {
+          const rows = await transaction.query<PgCapsuleAdmissionOwnershipRow & {
             installConfigId: string | null;
             currentStateVersionId: string | null;
             executionAuthorityEpoch: number | string | null;
@@ -2108,18 +2122,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                install_config_id as "installConfigId",
                current_state_version_id as "currentStateVersionId",
                execution_authority_epoch as "executionAuthorityEpoch",
-               installation_json as "capsuleJson"
+               owner_account_id as "ownerAccountId",
+               ownership_epoch as "ownershipEpoch",
+               management_state as "managementState",
+               management_epoch as "managementEpoch",
+               ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson"
              from takosumi_capsules
              where id = $1
              for update`,
             [run.capsuleId],
           );
           const row = rows.rows[0];
-          const persistedCapsule = row
-            ? normalizeOptionalCapsuleRecord(
-                parseJson(row.capsuleJson) as Capsule,
-              )
-            : undefined;
+          let persistedCapsule: Capsule | undefined;
+          try {
+            persistedCapsule = row
+              ? normalizeOptionalCapsuleRecord(parseJson(row.capsuleJson) as Capsule)
+              : undefined;
+          } catch {
+            persistedCapsule = undefined;
+          }
           const capsule = persistedCapsule
             ? {
                 ...persistedCapsule,
@@ -2130,14 +2151,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                   row?.currentStateVersionId ?? undefined,
               }
             : undefined;
-          assertCapsulePlanCreationFence(
-            capsule,
-            row?.executionAuthorityEpoch === null ||
-                row?.executionAuthorityEpoch === undefined
-              ? undefined
-              : Number(row.executionAuthorityEpoch),
-            input.expectedCapsulePlanAuthority,
-          );
+          if (input.expectedCapsulePlanAuthority !== undefined) {
+            assertCapsulePlanCreationFence(
+              capsule,
+              row?.executionAuthorityEpoch === null ||
+                  row?.executionAuthorityEpoch === undefined
+                ? undefined
+                : Number(row.executionAuthorityEpoch),
+              input.expectedCapsulePlanAuthority,
+            );
+          }
+          if (!appPlanAdmission(pgCapsuleForAppAdmission(capsule, row), run)) {
+            throw new CapsulePlanCreationFenceConflictError(run.capsuleId);
+          }
         }
       }
       const inserted = await db
@@ -2403,7 +2429,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         if (!capsuleApplyRunAdmissionFenceMatchesRun(run, expectedCapsule)) {
           throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
         }
-        const capsuleRows = await transaction.query<{
+        const capsuleRows = await transaction.query<PgCapsuleAdmissionOwnershipRow & {
           readonly id: string;
           readonly workspaceId: string;
           readonly environment: string;
@@ -2421,7 +2447,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
              current_state_version_id as "currentStateVersionId",
              status,
              execution_authority_epoch as "executionAuthorityEpoch",
-             installation_json as "capsuleJson"
+             owner_account_id as "ownerAccountId",
+             ownership_epoch as "ownershipEpoch",
+             management_state as "managementState",
+             management_epoch as "managementEpoch",
+             ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson"
            from takosumi_capsules
           where id = $1
           for update`,
@@ -2459,6 +2489,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             expectedCapsule,
           )
         ) {
+          throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
+        }
+        const planRows = await transaction.query<{ readonly runJson: unknown }>(
+          `select run_json as "runJson" from takosumi_runs
+             where id = $1 and kind in ('plan', 'destroy_plan', 'drift_check')
+             for update`,
+          [run.planRunId],
+        );
+        const storedPlan = planRows.rows[0]
+          ? parseJson(planRows.rows[0].runJson) as StoredRunRecord
+          : undefined;
+        if (!appApplyAdmission(pgCapsuleForAppAdmission(persistedCapsule, capsuleRow),
+          storedPlan && isPlanRunRecord(storedPlan) ? storedPlan : undefined, run)) {
           throw new CapsuleApplyRunAdmissionConflictError(run.capsuleId);
         }
       }
@@ -3003,6 +3046,68 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             // CAS miss.
             return undefined;
           }
+          if (input.setLeaseToken !== undefined && current !== undefined &&
+            (isPlanRunRecord(current) || isApplyRunRecord(current)) && current.capsuleId !== undefined &&
+            (input.kind === "plan" || input.kind === "apply")) {
+            const observedCapsuleId = current.capsuleId;
+            const capsuleRows = await transaction.query<PgCapsuleAdmissionOwnershipRow & { readonly capsuleJson: unknown }>(
+              `select ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson",
+                      owner_account_id as "ownerAccountId",
+                      ownership_epoch as "ownershipEpoch",
+                      management_state as "managementState",
+                      management_epoch as "managementEpoch"
+                 from takosumi_capsules where id = $1 for update`,
+              [observedCapsuleId],
+            );
+            // Lock the Run after the Capsule, matching transfer's lock order.
+            // A concurrent direct Run write cannot replace its pinned epochs
+            // between this read and the lease CAS.
+            const lockedRunRows = await transaction.query<{
+              readonly runJson: unknown;
+              readonly status: string;
+            }>(
+              `select run_json as "runJson", status from takosumi_runs where id = $1 for update`,
+              [input.id],
+            );
+            const lockedRun = lockedRunRows.rows[0]
+              ? parseJson(lockedRunRows.rows[0].runJson) as StoredRunRecord
+              : undefined;
+            if (!lockedRun ||
+              !(isPlanRunRecord(lockedRun) || isApplyRunRecord(lockedRun)) ||
+              lockedRunRows.rows[0]?.status !== lockedRun.status ||
+              lockedRun.capsuleId !== observedCapsuleId ||
+              lockedRun.workspaceId !== management.workspaceId ||
+              runManagementAuthority(lockedRun)?.managementEpoch !== management.managementEpoch) {
+              return undefined;
+            }
+            current = lockedRun;
+            let capsule: Capsule | undefined;
+            try {
+              capsule = capsuleRows.rows[0]
+                ? normalizeOptionalCapsuleRecord(parseJson(capsuleRows.rows[0].capsuleJson) as Capsule)
+                : undefined;
+            } catch {
+              capsule = undefined;
+            }
+            let plan: PlanRun | undefined;
+            if (isPlanRunRecord(current)) {
+              plan = current;
+            } else if (isApplyRunRecord(current)) {
+              const planRows = await transaction.query<{ readonly runJson: unknown }>(
+                `select run_json as "runJson" from takosumi_runs where id = $1 and kind in ('plan', 'destroy_plan', 'drift_check') for update`,
+                [current.planRunId],
+              );
+              const stored = planRows.rows[0]
+                ? parseJson(planRows.rows[0].runJson) as StoredRunRecord
+                : undefined;
+              plan = stored && isPlanRunRecord(stored) ? stored : undefined;
+            }
+            if (!appClaimAdmission(pgCapsuleForAppAdmission(capsule, capsuleRows.rows[0]), plan, current,
+              current.status === "running" && input.expectFrom.includes("running") &&
+                input.expectHeartbeatAt !== undefined)) {
+              return undefined;
+            }
+          }
         }
         // The initial Run read did not lock the dependent row. Bind the CAS to
         // that same Workspace so a concurrent row replacement cannot make the
@@ -3077,9 +3182,39 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           input.terminalRun.workspaceId,
         );
 
-        // Lock the held SourceSync row before validating its lease. This
-        // preserves same-lease heartbeat semantics while ensuring a takeover
-        // that won the row lock is observed as the ordinary CAS loss.
+        // A cheap unlocked read preserves the stale-lease fast path. Recheck
+        // after taking the Capsule census lock: transfer accepts with Capsule
+        // then Run locks, so settlement must take them in that order too.
+        const candidateRows = await transaction.query<{
+          readonly kind: string;
+          readonly workspaceId: string;
+          readonly sourceId: string | null;
+          readonly status: string;
+          readonly leaseToken: string | null;
+        }>(
+          `select kind, space_id as "workspaceId", source_id as "sourceId",
+                  status, lease_token as "leaseToken"
+             from takosumi_runs where id = $1`,
+          [input.terminalRun.id],
+        );
+        const candidateRun = candidateRows.rows[0];
+        if (!candidateRun || candidateRun.kind !== RUN_KIND_SOURCE_SYNC ||
+          candidateRun.workspaceId !== input.terminalRun.workspaceId ||
+          candidateRun.sourceId !== input.terminalRun.sourceId ||
+          candidateRun.status !== "running" || candidateRun.leaseToken !== input.leaseToken) {
+          return { won: false as const };
+        }
+
+        // Take only this Source owner's Capsule lock before its Run lock,
+        // matching transfer admission order while keeping other apps independent.
+        const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
+          transaction,
+          input.terminalRun.workspaceId,
+          input.terminalRun.sourceId,
+        );
+
+        // The locked reread preserves same-lease heartbeat semantics and
+        // observes a takeover that won the row lock as an ordinary CAS loss.
         const currentRows = await transaction.query<{
           readonly id: string;
           readonly kind: string;
@@ -3133,13 +3268,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           throw new SourceSyncSettlementConflictError();
         }
 
-        // Lock only the Source owner before resolving adopted lineage. Normal
-        // lifecycle writes share the outer Workspace lock.
-        const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
-          transaction,
-          input.terminalRun.workspaceId,
-          input.terminalRun.sourceId,
-        );
+
+
 
         // The Source cursor is part of this same settlement. Lock its exact
         // row (when present) before helper observation; Source creation also
@@ -3372,6 +3502,22 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       const source = sourceRows.rows[0] ? sourceFromPgRow(sourceRows.rows[0]) : undefined;
       if (!source || source.workspaceId !== run.workspaceId || source.status !== "active" || source.retiringAt) {
         return { status: "conflict" as const };
+      }
+      // Member removal and transfer hold this same Source row lock. Check
+      // current access after acquiring it so a revoked actor cannot enqueue
+      // a new Run immediately after the cancellation transaction commits.
+      if (source.ownerCapsuleId) {
+        const authority = await transaction.query<{ id: string }>(
+          `select $1::text as id where
+            ($5::boolean and not exists(select 1 from takosumi_capsules where id=$1))
+            or exists(select 1 from takosumi_capsules c where c.id=$1 and c.space_id=$2 and c.source_id=$3
+              and (c.owner_account_id is null or (c.management_state='active' and
+                (c.owner_account_id=$4 or exists(select 1 from takosumi_capsule_members m
+                  where m.capsule_id=c.id and m.account_id=$4 and m.status='active')))))`,
+          [source.ownerCapsuleId, run.workspaceId, run.sourceId, run.actorAccountId ?? null,
+            isInstallPlanSourceReservation(source)],
+        );
+        if (authority.rows.length !== 1) return { status: "conflict" as const };
       }
       const stored = storeSourceSyncRun(
         run,
@@ -6982,14 +7128,15 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           updatedAt: values.updatedAt,
         },
       });
-    await this.#initializeCapsulePhysicalOwner(capsule);
-    return normalizeCapsuleRecord(capsule);
+    return capsuleWithoutOwnership(normalizeCapsuleRecord(capsule));
   }
 
   async createCapsuleInitialAuthority(
     input: CapsuleInitialAuthorityInput,
   ): Promise<CapsuleInitialAuthorityResult> {
-    const capsule = normalizeCapsuleRecord(input.capsule);
+    const capsule = capsuleWithoutOwnership(normalizeCapsuleRecord(input.capsule));
+    const ownership = input.initialOwnership;
+    if (ownership && ownership.capsuleId !== capsule.id) return { status: "conflict" };
     if (input.expectedWorkspaceManagementAuthority !== undefined) {
       assertWorkspaceManagementAuthorityInput(
         input.expectedWorkspaceManagementAuthority,
@@ -7095,7 +7242,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             publicStoredInstallConfig(parseJson(configRows[0].json) as InstallConfig),
           ),
           stableJsonDigest(
-            normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule),
+            capsuleWithoutOwnership(normalizeCapsuleRecord(parseJson(capsuleRows[0].json) as Capsule)),
           ),
           stableJsonDigest(parseJson(bindingRow.json)),
         ]);
@@ -7179,8 +7326,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         updatedAt: installConfig.updatedAt,
       });
       await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
-      await this.#initializeCapsulePhysicalOwner(capsule, transaction);
-      if (capsule.ownerAccountId) {
+      await this.#initializeCapsulePhysicalOwner(ownership, capsule.slug, transaction);
+      if (ownership) {
         await transaction.query(
           `insert into takosumi_capsule_members
              (capsule_id, account_id, status, added_by, created_at, updated_at)
@@ -7193,7 +7340,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
               and member.member_json ->> 'accountId'=member.account_id
               and (member.member_json -> 'roles' ? 'owner' or member.member_json -> 'roles' ? 'admin')
            on conflict (capsule_id, account_id) do nothing`,
-          [capsule.id, capsule.ownerAccountId, capsule.createdAt, capsule.workspaceId],
+          [capsule.id, ownership.ownerAccountId, capsule.createdAt, capsule.workspaceId],
         );
       }
       await db.insert(pgSchema.providerBindingSets).values({
@@ -7668,7 +7815,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.capsules)
         .set({
           installConfigId: updated.installConfigId,
-          capsuleJson: updated,
+          capsuleJson: capsuleWithoutOwnership(updated),
           updatedAt: updated.updatedAt,
           executionAuthorityEpoch: sql`${pgSchema.capsules.executionAuthorityEpoch} + 1`,
         })
@@ -8102,7 +8249,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.capsules)
         .set({
           status: updated.status,
-          capsuleJson: updated,
+          capsuleJson: capsuleWithoutOwnership(updated),
           updatedAt: updated.updatedAt,
         })
         .where(
@@ -8200,8 +8347,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.capsules)
         .set({
           ...(patch.status ? { status: patch.status } : {}),
-          capsuleJson:
-            sql`${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb`,
+          capsuleJson: sql`(${pgSchema.capsules.capsuleJson} || ${JSON.stringify(patch)}::jsonb)
+            - 'ownerAccountId' - 'ownershipEpoch' - 'managementState' - 'managementEpoch' - 'storageRoot'`,
           updatedAt: input.updatedAt,
         })
         .where(
@@ -9218,7 +9365,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     expected: ProviderConnection,
     replacement: ProviderConnection,
   ): Promise<boolean> {
-    if (replacement.id !== expected.id) return false;
+    if (replacement.id !== expected.id || replacement.ownerAccountId !== expected.ownerAccountId) return false;
+
     const updated = await this.#db
       .update(pgSchema.connections)
       .set({
@@ -11252,6 +11400,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent> {
     await this.#pgUpsert(pgSchema.credentialMintEvents, {
+
       id: event.id,
       runId: event.runId,
       // Physical columns space_id / installation_id are frozen; the contract
@@ -11329,39 +11478,56 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
 
   // --- provider-neutral OSS showback usage --------------------------------
 
+  async getAppBillingOwnership(capsuleId: string): Promise<Pick<Capsule, "ownerAccountId" | "ownershipEpoch"> | undefined> {
+    const columns = await this.#client.query<{ readonly present: boolean }>(
+      `select count(*) = 2 as present from information_schema.columns where table_schema = current_schema() and table_name = 'takosumi_capsules' and column_name in ('owner_account_id', 'ownership_epoch')`,
+    );
+    if (!columns.rows[0]?.present) return undefined;
+    const result = await this.#client.query<{
+      readonly owner_account_id: string | null;
+      readonly ownership_epoch: number;
+    }>(`select owner_account_id, ownership_epoch from takosumi_capsules where id=$1`, [capsuleId]);
+    const row = result.rows[0];
+    return row ? { ownerAccountId: row.owner_account_id ?? undefined, ownershipEpoch: row.ownership_epoch } : undefined;
+  }
+
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = await this.#usageEventByIdempotencyKey(
       event.idempotencyKey,
     );
     if (existing) return existing;
-    const payerAccountId = event.payerAccountId ??
-      (event.capsuleId ? await this.#capsuleOwnerAccountId(event.capsuleId) : undefined) ??
-      (await this.getWorkspace(event.workspaceId))?.ownerUserId;
-    const normalized = normalizeUsageEvent(payerAccountId ? { ...event, payerAccountId } : event);
+    const normalized = normalizeUsageEvent(event);
     // A missing pre-read is only an optimization, never insertion authority.
     // Recovery callers can race: the unique key chooses one immutable winner.
-    await this.#db
-      .insert(pgSchema.usageEvents)
-      .values({
-        id: normalized.id,
-        workspaceId: normalized.workspaceId,
-        capsuleId: normalized.capsuleId ?? null,
-        runId: normalized.runId ?? null,
-        meterId: normalized.meterId ?? null,
-        resourceFamily: normalized.resourceFamily ?? null,
-        resourceId: normalized.resourceId ?? null,
-        operation: normalized.operation ?? null,
-        resourceMetadataJson: normalized.resourceMetadata ?? null,
-        kind: normalized.kind,
-        quantity: normalized.quantity,
-        usdMicros: normalized.usdMicros,
-        ratingStatus: normalized.ratingStatus,
-        source: normalized.source,
-        idempotencyKey: normalized.idempotencyKey,
-        createdAt: normalized.createdAt,
-        payerAccountId: normalized.payerAccountId ?? null,
-      })
-      .onConflictDoNothing({ target: pgSchema.usageEvents.idempotencyKey });
+    const columns = [
+      "id", "workspace_id", "capsule_id", "run_id", "meter_id",
+      "resource_family", "resource_id", "operation", "resource_metadata_json",
+      "kind", "quantity", "usd_micros", "rating_status", "source",
+      "idempotency_key", "created_at",
+    ];
+    const values: SqlValue[] = [
+      normalized.id, normalized.workspaceId, normalized.capsuleId ?? null,
+      normalized.runId ?? null, normalized.meterId ?? null,
+      normalized.resourceFamily ?? null, normalized.resourceId ?? null,
+      normalized.operation ?? null, normalized.resourceMetadata ?? null,
+      normalized.kind, normalized.quantity, normalized.usdMicros,
+      normalized.ratingStatus, normalized.source, normalized.idempotencyKey,
+      normalized.createdAt,
+    ];
+    if (await this.#hasUsagePayerColumn()) {
+      columns.push("payer_account_id");
+      values.push(normalized.payerAccountId ?? null);
+    }
+    const quotedColumns = columns.map((column) => `"${column}"`).join(", ");
+    const placeholders = values.map((_, index) => `$${index + 1}`).join(", ");
+    try {
+      await this.#client.query(
+        `insert into "takosumi_usage_events" (${quotedColumns}) values (${placeholders}) on conflict ("idempotency_key") do nothing`,
+        values,
+      );
+    } catch (cause) {
+      throw new Error("usage event insert failed", { cause });
+    }
     // A separate statement sees the committed winner after a conflicting
     // insert waited for it. A same-statement CTE can retain an older snapshot.
     const winner = await this.#usageEventByIdempotencyKey(
@@ -11381,7 +11547,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       .limit(1);
     const row = rows[0];
     if (!row) return undefined;
-    return (await this.#withUsagePayers([usageEventFromRow(row)]))[0];
+    return (await this.#usageEventsWithPayer([usageEventFromRow(row)]))[0];
   }
 
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
@@ -11393,7 +11559,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         asc(pgSchema.usageEvents.createdAt),
         asc(pgSchema.usageEvents.id),
       );
-    return await this.#withUsagePayers(rows.map(usageEventFromRow));
+    return this.#usageEventsWithPayer(rows.map(usageEventFromRow));
   }
 
   async getCapsuleUsageTotals(
@@ -11433,7 +11599,64 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         desc(pgSchema.usageEvents.id),
       )
       .limit(limit + 1);
-    return pageFromProbe(await this.#withUsagePayers(rows.map(usageEventFromRow)), limit);
+    return pageFromProbe(await this.#usageEventsWithPayer(rows.map(usageEventFromRow)), limit);
+  }
+
+  async listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    if (!(await this.#hasUsagePayerColumn())) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const where = cursor
+      ? `payer_account_id = $1 and (created_at < $2 or (created_at = $2 and id < $3))`
+      : `payer_account_id = $1`;
+    const values = cursor
+      ? [payerAccountId, cursor.createdAt, cursor.id, limit + 1]
+      : [payerAccountId, limit + 1];
+    const limitParameter = `$${values.length}`;
+    type RawUsageRow = Omit<Parameters<typeof usageEventFromRow>[0], "quantity" | "usdMicros"> & {
+      readonly quantity: number | string;
+      readonly usdMicros: number | string;
+    };
+    const result = await this.#client.query<RawUsageRow>(
+      `select id, workspace_id as "workspaceId", capsule_id as "capsuleId", run_id as "runId", meter_id as "meterId", resource_family as "resourceFamily", resource_id as "resourceId", operation, resource_metadata_json as "resourceMetadataJson", kind, quantity, usd_micros as "usdMicros", rating_status as "ratingStatus", source, idempotency_key as "idempotencyKey", created_at as "createdAt", payer_account_id as "payerAccountId" from takosumi_usage_events where ${where} order by created_at desc, id desc limit ${limitParameter}`,
+      values,
+    );
+    return pageFromProbe(
+      result.rows.map((row) => usageEventFromRow({
+        ...row,
+        // Raw pg results keep bigint/numeric values as text; Drizzle's
+        // column decoders do not run on this bounded payer query.
+        quantity: Number(row.quantity),
+        usdMicros: Number(row.usdMicros),
+      })),
+      limit,
+    );
+  }
+
+  async #hasUsagePayerColumn(): Promise<boolean> {
+    if (this.#usagePayerColumnPresent) return true;
+    const result = await this.#client.query<{ readonly present: boolean }>(
+      `select exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'takosumi_usage_events' and column_name = 'payer_account_id') as present`,
+    );
+    const present = Boolean(result.rows[0]?.present);
+    if (present) this.#usagePayerColumnPresent = true;
+    return present;
+  }
+
+  async #usageEventsWithPayer(events: readonly UsageEvent[]): Promise<UsageEvent[]> {
+    if (!events.length || !(await this.#hasUsagePayerColumn())) return [...events];
+    const result = await this.#client.query<{ readonly id: string; readonly payer_account_id: string | null }>(
+      `select id, payer_account_id from takosumi_usage_events where id = any($1::text[])`,
+      [events.map((event) => event.id)],
+    );
+    const payers = new Map(result.rows.map((row) => [row.id, row.payer_account_id]));
+    return events.map((event) => {
+      const payerAccountId = payers.get(event.id);
+      return payerAccountId ? { ...event, payerAccountId } : event;
+    });
   }
 
   // --- backups (§33 layer 1; bytes live in the configured artifact store) ----
@@ -12608,7 +12831,7 @@ function installConfigJsonPreservingAuthority(config: InstallConfig): SQL {
 }
 
 function capsuleValues(capsule: Capsule) {
-  const normalized = normalizeCapsuleRecord(capsule);
+  const normalized = capsuleWithoutOwnership(normalizeCapsuleRecord(capsule));
   return {
     id: normalized.id,
     workspaceId: normalized.workspaceId,

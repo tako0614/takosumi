@@ -63,7 +63,7 @@ export async function resolveAccountsBearerCandidates(
         where token_hash = $2
       ),
       presented_pat as (
-        select token_id, token_prefix, subject, name, scopes, workspace_id,
+        select token_id, token_prefix, subject, name, scopes, workspace_id, app_ids,
           created_at, expires_at, revoked_at, last_used_at
         from accounts_v1.personal_access_tokens
         where token_hash = $2

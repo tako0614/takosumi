@@ -11,9 +11,10 @@ import type {
   PersonalAccessTokenInventoryPage,
   PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
+  PersonalAccessTokenAppAttenuation,
   TokenRecord,
 } from "../store.ts";
-import { assertPersonalAccessTokenInventoryPageInput } from "../store.ts";
+import { assertPersonalAccessTokenAppAttenuation, assertPersonalAccessTokenInventoryPageInput } from "../store.ts";
 import {
   authorizationCodeFromRow,
   type AuthorizationCodeRow,
@@ -97,6 +98,7 @@ const personalAccessTokens = accountsV1.table("personal_access_tokens", {
   name: text("name").notNull(),
   scopes: text("scopes").array().notNull(),
   workspaceId: text("workspace_id"),
+  appIds: text("app_ids").array(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
@@ -184,6 +186,7 @@ function personalAccessTokenSelection() {
     name: personalAccessTokens.name,
     scopes: personalAccessTokens.scopes,
     workspace_id: personalAccessTokens.workspaceId,
+    app_ids: personalAccessTokens.appIds,
     created_at: personalAccessTokens.createdAt,
     expires_at: personalAccessTokens.expiresAt,
     revoked_at: personalAccessTokens.revokedAt,
@@ -193,7 +196,7 @@ function personalAccessTokenSelection() {
 
 const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
   subject_tokens as (
-    select token_id, token_prefix, subject, name, scopes, workspace_id,
+    select token_id, token_prefix, subject, name, scopes, workspace_id, app_ids,
            created_at, expires_at, revoked_at, last_used_at,
            date_trunc('milliseconds', created_at) as cursor_created_at
       from accounts_v1.personal_access_tokens
@@ -240,6 +243,7 @@ select 0 as row_kind,
        null::text as name,
        null::text[] as scopes,
        null::text as workspace_id,
+       null::text[] as app_ids,
        null::timestamptz as created_at,
        null::timestamptz as expires_at,
        null::timestamptz as revoked_at,
@@ -255,6 +259,7 @@ select 1 as row_kind,
        page.name,
        page.scopes,
        page.workspace_id,
+       page.app_ids,
        page.cursor_created_at as created_at,
        page.expires_at,
        page.revoked_at,
@@ -447,6 +452,7 @@ export async function savePersonalAccessToken(
     name: record.name,
     scopes: [...record.scopes],
     workspaceId: record.workspaceId ?? null,
+    appIds: record.appIds ? [...record.appIds] : null,
     createdAt: toDate(record.createdAt),
     expiresAt: record.expiresAt === undefined ? null : toDate(record.expiresAt),
     revokedAt: record.revokedAt === undefined ? null : toDate(record.revokedAt),
@@ -467,6 +473,7 @@ export async function savePersonalAccessToken(
           name: values.name,
           scopes: values.scopes,
           workspaceId: values.workspaceId,
+          appIds: values.appIds,
           expiresAt: values.expiresAt,
           revokedAt: values.revokedAt,
           lastUsedAt: values.lastUsedAt,
@@ -612,6 +619,19 @@ export async function revokePersonalAccessToken(
       .returning(personalAccessTokenSelection()),
   );
   return row ? personalAccessTokenFromRow(row) : undefined;
+}
+
+export async function attenuatePersonalAccessTokenApps(
+  client: PostgresQueryClient,
+  input: PersonalAccessTokenAppAttenuation,
+): Promise<boolean> {
+  assertPersonalAccessTokenAppAttenuation(input);
+  const rows = await runQuery<{ token_id: string }>(client, `UPDATE accounts_v1.personal_access_tokens
+    SET app_ids = $4::text[]
+    WHERE token_id = $1 AND subject = $2 AND workspace_id = $3 AND app_ids IS NULL
+    RETURNING token_id`, [input.tokenId, input.subject, input.expectedWorkspaceId, [...input.appIds]]);
+  if (rows.rows.length > 1) throw new Error("Postgres PAT app attenuation changed an unexpected number of rows");
+  return rows.rows.length === 1 && rows.rows[0]?.token_id === input.tokenId;
 }
 
 export async function recordPersonalAccessTokenUsed(

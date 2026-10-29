@@ -733,6 +733,24 @@ test("createSync persists a queued run, allocates the archive ref, and enqueues"
   expect(stored?.id).toBe(run.id);
 });
 
+test("app-owned Source sync pins a trusted actor and ownership epoch", async () => {
+  const { store, service } = makeService();
+  const { capsule, source } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+  });
+  await store.putSource({ ...source, ownerCapsuleId: capsule.id });
+  expect(store.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: "user_1", ownershipEpoch: 3,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}` })).toBe(true);
+  expect((await store.getCapsule(capsule.id))?.ownerAccountId).toBeUndefined();
+  await expect(service.createSync(source.id)).rejects.toMatchObject({
+    details: { reason: "app_access_denied" },
+  });
+  const { run } = await service.createSync(source.id, {}, undefined, "user_1");
+  expect(run.actorAccountId).toBe("user_1");
+  expect(run.ownershipEpoch).toBe(3);
+  expect((await store.getSourceSyncRun(run.id))?.actorAccountId).toBe("user_1");
+});
+
 test("createSync rejects a valid noncurrent Workspace management authority", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({
@@ -1574,6 +1592,8 @@ test("reconciliation keeps its captured authority while converging the owner lan
     currentStateGeneration: 1,
     status: "active",
   });
+  expect(store.setCapsuleOwnership({ capsuleId: seeded.capsule.id, ownerAccountId: "user_1", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${seeded.capsule.id}` })).toBe(true);
 
   const reconciling = service.createReconciliationSyncs(seeded.source.id);
   await store.enumerationStarted.promise;
@@ -2872,4 +2892,20 @@ test("readCapsuleSourceFiles keeps module paths relative to the snapshot archive
     { modulePath: "infrastructure" },
     undefined,
   ]);
+});
+
+test("an app-owned Source accepts its owner's personal Git connection and refuses another person's", async () => {
+  const { store, service } = makeService();
+  const connection: ProviderConnection = {
+    id: "conn_personal_git", ownerAccountId: "user_1", scope: "personal",
+    provider: "source_git_https_token", providerSource: "git", kind: "source_git_https_token",
+    materialization: "secret", status: "verified", envNames: ["GIT_HTTPS_TOKEN"],
+    createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putConnection(connection);
+  const created = await service.ensureOwnedSource(ownedSourceRequest({ authConnectionId: connection.id }));
+  expect(created.source.authConnectionId).toBe(connection.id);
+  await store.putConnection({ ...connection, id: "conn_foreign_git", ownerAccountId: "someone_else" });
+  await expect(service.ensureOwnedSource(ownedSourceRequest({ id: "src_1122334455667788", authConnectionId: "conn_foreign_git" })))
+    .rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
 });

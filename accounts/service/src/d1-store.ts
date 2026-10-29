@@ -28,12 +28,13 @@ import type {
   PersonalAccessTokenInventoryPage,
   PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
+  PersonalAccessTokenAppAttenuation,
   PrivacyRequestRecord,
   TakosumiAccountRecord,
   TokenRecord,
   UpstreamIdentityRecord,
 } from "./store.ts";
-import { assertPersonalAccessTokenInventoryPageInput } from "./store.ts";
+import { assertPersonalAccessTokenAppAttenuation, assertPersonalAccessTokenInventoryPageInput, personalAccessTokenStoredAppIdsAreWellFormed } from "./store.ts";
 import {
   emptyRefreshChainPruneResult,
   isRefreshChainRetentionPhase,
@@ -289,6 +290,9 @@ function personalAccessTokenInventoryRecordFromD1Row(
         (TAKOSUMI_ACCOUNTS_PAT_SCOPES as readonly string[]).includes(scope),
     ) ||
     !optionalStringIsValid(record.workspaceId) ||
+    (record.appIds !== undefined &&
+      (!Array.isArray(record.appIds) ||
+        !personalAccessTokenStoredAppIdsAreWellFormed(record.appIds))) ||
     !optionalTimestampIsValid(record.expiresAt) ||
     !optionalTimestampIsValid(record.revokedAt) ||
     !optionalTimestampIsValid(record.lastUsedAt)
@@ -1045,6 +1049,23 @@ export class D1AccountsStore implements AccountsStore {
       },
     ]);
     return updated;
+  }
+
+  async attenuatePersonalAccessTokenApps(input: PersonalAccessTokenAppAttenuation): Promise<boolean> {
+    assertPersonalAccessTokenAppAttenuation(input);
+    await this.initialize();
+    const result = await this.#db.prepare(`UPDATE takosumi_accounts_documents
+      SET document = json_set(document, '$.appIds', json(?1)), updated_at = ?2
+      WHERE bucket = 'personal_access_tokens' AND key = ?3
+        AND json_extract(document, '$.tokenId') = ?3
+        AND json_extract(document, '$.subject') = ?4
+        AND json_extract(document, '$.workspaceId') = ?5
+        AND json_type(document, '$.appIds') IS NULL`)
+      .bind(JSON.stringify(input.appIds), Date.now(), input.tokenId, input.subject, input.expectedWorkspaceId)
+      .run();
+    const changes = d1ChangeCount(result) ?? (await this.#selectLastChangeCount());
+    if (changes !== 0 && changes !== 1) throw new Error("D1 PAT app attenuation changed an unexpected number of rows");
+    return changes === 1;
   }
 
   async recordPersonalAccessTokenUsed(

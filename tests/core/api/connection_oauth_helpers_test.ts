@@ -24,6 +24,40 @@ const PRINCIPAL = {
   runnerProfileIds: "*",
 } as const;
 
+test("personal OAuth state signs scope and account owner and rejects a mismatched owner", async () => {
+  const helpers = createConnectionOAuthHelpers({
+    stateSecret: "personal-oauth-state-secret",
+    descriptors: [{
+      id: "personal-helper",
+      providerSource: "registry.example.test/acme/widgets",
+      credentialRecipe: { id: "acme", authMode: "oauth", secretPartition: "provider-credentials" },
+      clientId: "client",
+      authorizationUrl: "https://provider.example.test/authorize",
+      tokenUrl: "https://provider.example.test/token",
+      redirectUri: "https://app.example.test/callback",
+      scopes: [],
+      mapTokenResponse: () => ({ TOKEN: "secret" }),
+    }],
+  }, (async () => Response.json({ access_token: "secret" })) as typeof fetch);
+  const helper = helpers!["personal-helper"]!;
+  const input = {
+    helperId: "personal-helper",
+    request: new Request("https://app.example.test/start"),
+    principal: PRINCIPAL,
+    body: { scope: "personal" as const, ownerAccountId: "owner", subject: "owner" },
+  };
+  const started = await helper.start(input);
+  const completed = await helper.complete({
+    helperId: "personal-helper", request: new Request("https://app.example.test/callback"), principal: PRINCIPAL,
+    code: "code", state: started.state, query: {},
+  });
+  expect(completed.subject).toBe("owner");
+  expect(completed.request).toMatchObject({ scope: "personal", ownerAccountId: "owner" });
+  expect(completed.request.workspaceId).toBeUndefined();
+  expect(helper.start({ ...input, body: { ...input.body, ownerAccountId: "someone-else" } })).rejects.toThrow("invalid personal OAuth state");
+  expect(helper.complete({ helperId: "personal-helper", request: new Request("https://app.example.test/callback"), principal: PRINCIPAL, code: "code", state: `${started.state}x`, query: {} })).rejects.toThrow();
+});
+
 test("generic OAuth engine installs an opaque host descriptor", async () => {
   const helpers = createConnectionOAuthHelpers(
     {

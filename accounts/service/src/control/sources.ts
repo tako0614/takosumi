@@ -224,7 +224,7 @@ export async function handleSources(
         dedupe: true,
         intent,
         ...(expectedRef === undefined ? {} : { expectedRef }),
-      });
+      }, undefined, ctx.session.subject);
       return jsonStatus(
         isRecord(response) && isRecord(response.run)
           ? { ...response, run: publicSourceSyncRun(response.run) }
@@ -805,5 +805,6 @@ function publicSourceSnapshot(snapshot: SourceSnapshot) {
 }
 
 function publicSourceSyncRun(run: Record<string, unknown>) {
-  return run;
+  const { actorAccountId: _actor, ownershipEpoch: _epoch, ...publicRun } = run;
+  return publicRun;
 }

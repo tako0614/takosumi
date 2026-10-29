@@ -602,6 +602,7 @@ async function createOrObserveRevisionPlanRun(
       throw error;
     }
   }
+  const observedExistingRun = run !== undefined;
   if (!run) {
     const created = await operations.createCapsulePlan(plan.capsuleId, {
       sourceSnapshotId: plan.sourceSnapshotId,
@@ -609,7 +610,7 @@ async function createOrObserveRevisionPlanRun(
       planRunId: exactRunId,
       expectedWorkspaceManagementAuthority:
         plan.workspaceManagementAuthority,
-      actor: revisionPlanRunActor(plan.id),
+      actor: plan.createdBy,
       origin: { kind: "revision", ref: plan.revision.targetRef },
     });
     run = await operations.getRun(created.planRun.id);
@@ -618,7 +619,7 @@ async function createOrObserveRevisionPlanRun(
   // Re-read our immutable scope after that mutation so a concurrent edit can
   // never be published by this coordinator as reviewable evidence.
   await assertRevisionIdentity(plan, operations);
-  assertRevisionRunMatches(run, plan, exactRunId);
+  assertRevisionRunMatches(run, plan, exactRunId, observedExistingRun);
   if (
     run.status === "failed" ||
     run.status === "cancelled" ||
@@ -892,7 +893,13 @@ function assertRevisionRunMatches(
   run: Run,
   plan: StoredGitRevisionPlan,
   exactRunId: string,
+  observedExistingRun: boolean,
 ): void {
+  // Before account actors were retained, this coordinator used its exact id
+  // as the Plan actor. Resume only an already-existing matching Run; new
+  // Plans still have to retain the account that requested this revision.
+  const actorMatches = run.createdBy === plan.createdBy ||
+    (observedExistingRun && run.createdBy === `git-revision-plan:${plan.id}`);
   if (
     run.id !== exactRunId ||
     run.workspaceId !== plan.workspaceId ||
@@ -901,7 +908,7 @@ function assertRevisionRunMatches(
     run.compatibilityReportId !== plan.compatibilityReportId ||
     run.baseStateGeneration !== plan.revision.base.capsuleStateGeneration ||
     run.type !== "plan" ||
-    run.createdBy !== revisionPlanRunActor(plan.id)
+    !actorMatches
   ) {
     throw permanent(
       "plan_run_identity_conflict",
@@ -1106,10 +1113,6 @@ function revisionPlanId(): string {
 function deterministicPlanRunId(planId: string): string {
   const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
   return `plan_${suffix.padStart(16, "0")}`;
-}
-
-function revisionPlanRunActor(planId: string): string {
-  return `git-revision-plan:${planId}`;
 }
 
 function digestSuffix(digest: string): string {

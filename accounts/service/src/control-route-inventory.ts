@@ -6,16 +6,29 @@ export interface PublicSessionControlEndpoint {
   readonly path: string;
   readonly summary: string;
   readonly auth: "account-session";
+  readonly queryParameters?: readonly Record<string, unknown>[];
 }
 
 /**
  * Inventory for the account-plane session `/api/v1` control surface implemented
- * by `control-routes.ts`. The process `/openapi.json` describes internal
- * process families; this table keeps the public session route set reviewable
- * and lets docs/tests gate the separate session surface.
+ * by `control-routes.ts`. Hosts pass this table to the composed `/openapi.json`
+ * inventory; Core-only services omit these unmounted Accounts paths. This table
+ * also gates public session documentation and route dispatch parity.
  */
 export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndpoint[] =
   [
+    { method: "GET", path: "/api/v1/apps", summary: "List apps the caller owns or manages", auth: "account-session" },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/members", summary: "Read app owner and members; email is owner-only", auth: "account-session" },
+    { method: "POST", path: "/api/v1/capsules/{capsuleId}/members", summary: "Add a verified member with owner consent", auth: "account-session" },
+    { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/members/{accountId}", summary: "Remove a member and cancel their waiting runs atomically", auth: "account-session" },
+    { method: "GET", path: "/api/v1/capsules/{capsuleId}/ownership-transfers", summary: "List pending app transfers visible to the owner or recipient", auth: "account-session", queryParameters: [{ name: "state", in: "query", schema: { type: "string", enum: ["pending"], default: "pending" } }] },
+    { method: "GET", path: "/api/v1/ownership-transfers", summary: "List pending app transfers addressed to the caller", auth: "account-session", queryParameters: [{ name: "state", in: "query", schema: { type: "string", enum: ["pending"], default: "pending" } }] },
+    { method: "GET", path: "/api/v1/source-ref-resolutions", summary: "Resolve the current stable SemVer tag of a public Git source (write scope; starts a runner)", auth: "account-session", queryParameters: [{ name: "url", in: "query", required: true, schema: { type: "string", format: "uri" } }] },
+    { method: "POST", path: "/api/v1/capsules/{capsuleId}/ownership-transfers", summary: "Offer app ownership to another account", auth: "account-session" },
+    { method: "POST", path: "/api/v1/ownership-transfers/{transferId}/accept", summary: "Accept ownership after draining; reset provider bindings", auth: "account-session" },
+    { method: "DELETE", path: "/api/v1/ownership-transfers/{transferId}", summary: "Cancel a pending app ownership transfer", auth: "account-session" },
+    { method: "POST", path: "/api/v1/install-plans", summary: "Create an app install attempt owned by the caller", auth: "account-session" },
+    { method: "GET", path: "/api/v1/usage", summary: "List usage charged to the caller", auth: "account-session" },
     { method: "GET", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates", summary: "List manageable providers for one app requirement", auth: "account-session" },
     { method: "PUT", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Select one provider with generation CAS", auth: "account-session" },
     { method: "DELETE", path: "/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}", summary: "Revoke a link as consumer or provider manager", auth: "account-session" },
@@ -520,6 +533,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       path: "/api/v1/connections",
       summary: "List Connections",
       auth: "account-session",
+      queryParameters: [
+        { name: "capsuleId", in: "query", schema: { type: "string" }, description: "App whose bound connection labels are requested; does not list the owner's connection catalog." },
+        { name: "projection", in: "query", schema: { type: "string", enum: ["labels"] }, description: "Requires capsuleId and returns only bound connection id, provider, and displayName for verified owner connections or bindable operator connections." },
+        { name: "cursor", in: "query", schema: { type: "string" } },
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+      ],
     },
     {
       method: "POST",

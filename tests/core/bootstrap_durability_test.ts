@@ -10,12 +10,52 @@ import {
 import { createInMemoryInterfaceStores } from "../../core/domains/interfaces/mod.ts";
 import { declaredDurableTestOpenTofuStore } from "../helpers/deploy-control/durable_test_store.ts";
 import { credentialRecipeDriverKey } from "../../core/adapters/vault/driver_ports.ts";
+import { D1AppOwnershipStore, InMemoryAppOwnershipStore } from "../../core/domains/app-ownership/store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../helpers/deploy-control/sqlite_fake_d1.ts";
 
 function localContext() {
   return createInMemoryAppContext({
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
   });
 }
+
+test("durable service startup refuses an omitted ownership authority before reading D1", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  db.prepare = () => { throw new Error("startup must refuse before touching D1"); };
+  await expect(createTakosumiService({
+    role: "takosumi-api", context: localContext(),
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: store,
+  })).rejects.toThrow("durable control store requires an AppOwnershipStore");
+});
+
+test("durable service startup refuses an unrelated in-memory ownership authority", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  await expect(createTakosumiService({
+    role: "takosumi-api", context: localContext(),
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: store,
+    appOwnershipStore: new InMemoryAppOwnershipStore(new InMemoryOpenTofuControlStore()),
+  })).rejects.toThrow("durable control store requires a durable AppOwnershipStore");
+});
+
+test("in-memory ownership authority cannot silently read durable apps as ownerless", () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  expect(() => new InMemoryAppOwnershipStore(store))
+    .toThrow("InMemoryAppOwnershipStore requires in-memory ownership storage");
+});
+
+test("durable service startup shares the explicitly supplied D1 ownership authority", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  const appOwnershipStore = new D1AppOwnershipStore(db, store);
+  const service = await createTakosumiService({
+    role: "takosumi-api", context: localContext(),
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" }, opentofuControlStore: store,
+    appOwnershipStore,
+  });
+  expect(service.operations.appOwnership).toBe(appOwnershipStore);
+});
 
 function declaredDurableTestGitInstallPlanStore(): GitInstallPlanStore {
   const store = new InMemoryGitInstallPlanStore();

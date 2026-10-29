@@ -12,6 +12,7 @@ import type {
   PersonalAccessTokenInventoryPage,
   PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
+  PersonalAccessTokenAppAttenuation,
   PrivacyRequestRecord,
   TakosumiAccountRecord,
   TokenRecord,
@@ -306,6 +307,10 @@ export class PostgresAccountsStore implements AccountsStore {
     input: PersonalAccessTokenInventoryPageInput,
   ): Promise<PersonalAccessTokenInventoryPage> {
     return tokens.listPersonalAccessTokenInventoryPage(this.#client, input);
+  }
+
+  attenuatePersonalAccessTokenApps(input: PersonalAccessTokenAppAttenuation): Promise<boolean> {
+    return tokens.attenuatePersonalAccessTokenApps(this.#client, input);
   }
 
   revokePersonalAccessToken(input: {

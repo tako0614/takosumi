@@ -559,10 +559,43 @@ async function readConnectionIssues(
   );
   const bindings = bindingSet?.bindings ?? [];
   if (bindings.length === 0) return [];
-  const connections = await operations.connections.listProviderConnections(
+  const connections = new Map((await operations.connections.listProviderConnections(
     capsule.workspaceId,
-  );
-  const byId = new Map(connections.map((connection) => [connection.id, connection]));
+  )).map((connection) => [connection.id, connection]));
+  // The Workspace list intentionally excludes personal connections. Resolve
+  // the owner from the canonical ownership ledger, never the legacy Capsule
+  // projection, then include that account's own connection inventory.
+  const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+  const owner = ownership?.ownerAccountId;
+  if (owner) {
+    if (operations.accountResources) {
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        if (seen.size >= 100) throw new Error("owner connection page limit exceeded");
+        const page = await operations.accountResources.listConnections(owner, {
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        });
+        for (const connection of page.items) {
+          if ((connection.scope === "personal" || connection.scope === "workspace") &&
+            connection.ownerAccountId === owner) connections.set(connection.id, connection);
+        }
+        cursor = page.nextCursor;
+        if (cursor && seen.has(cursor)) throw new Error("owner connection cursor repeated");
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+    } else {
+      for (const workspace of await operations.workspaces.listWorkspacesByOwner(owner)) {
+        if (workspace.ownerUserId !== owner || workspace.archivedAt) continue;
+        for (const connection of await operations.connections.listProviderConnections(workspace.id)) {
+          if ((connection.scope === "personal" || connection.scope === "workspace") &&
+            connection.ownerAccountId === owner) connections.set(connection.id, connection);
+        }
+      }
+    }
+  }
+  const byId = connections;
   const issues: CapsuleAppConnectionIssue[] = [];
   const seen = new Set<string>();
   for (const binding of bindings) {

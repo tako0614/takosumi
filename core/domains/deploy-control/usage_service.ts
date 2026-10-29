@@ -1,4 +1,4 @@
-/** Provider-neutral Workspace usage/showback service. */
+/** Provider-neutral app usage/showback with legacy Workspace adapters. */
 
 import type {
   BillingSettings,
@@ -17,6 +17,17 @@ import type { PageParams } from "takosumi-contract/pagination";
 import type { BillingService } from "./billing_service.ts";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+
+/** GET /api/v1/usage source; the route supplies the authenticated account ID. */
+export async function listPayerUsage(
+  store: Pick<OpenTofuControlStore, "listUsageEventsForPayerPage">,
+  payerAccountId: string,
+  params: PageParams = {},
+): Promise<{ readonly usageEvents: readonly UsageEvent[]; readonly nextCursor?: string }> {
+  requireNonEmptyString(payerAccountId, "payerAccountId");
+  const { items, nextCursor } = await store.listUsageEventsForPayerPage(payerAccountId, params);
+  return { usageEvents: items, ...(nextCursor !== undefined ? { nextCursor } : {}) };
+}
 
 export interface RecordMeteredUsageInput {
   readonly capsuleId?: string;
@@ -133,7 +144,16 @@ export class UsageReportingService {
       () => this.#newId("usage"),
       () => new Date(this.#now()).toISOString(),
     );
-    return { usageEvent: await this.#store.putUsageEvent(usageEvent) };
+    const ownership = input.capsuleId
+      ? await this.#billing.resolveAppBillingOwnership(input.capsuleId)
+      : undefined;
+    // Until the first recorded transfer, usage follows the initial app owner.
+    // After a transfer, the row has no acceptance timestamp or payer history:
+    // a delayed event's createdAt cannot establish either owner's liability.
+    // Keep it unattributed until authoritative event-time history is available.
+    // A producer runId is not Core reservation authority.
+    const identity = ownership?.ownershipEpoch === 0 ? ownership.identity : undefined;
+    return { usageEvent: await this.#store.putUsageEvent({ ...usageEvent, ...identity }) };
   }
 }
 

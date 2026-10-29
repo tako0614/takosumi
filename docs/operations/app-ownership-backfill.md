@@ -69,6 +69,12 @@ app-owner/member writers stopped until backfill completes; the tool is an expand
 not a concurrent ownership-transfer transaction. Verify each new owner/member,
 connection owner and usage payer before authorization switches in Phase 6.
 
+Complete and verify this backfill before enabling or accepting **any ownership
+transfer**. Only this migration may infer a missing historical usage payer;
+ordinary usage writes preserve an absent payer. After a transfer, the current
+owner cannot prove who owed an old unattributed measurement or Plan settlement.
+Do not run this legacy inference over newly unattributed post-transfer rows.
+
 The freeze permits only canonical, authenticated owner-bound personal Workspace
 singleton bootstrap for a fresh account. Organization creation and membership
 mutations stay frozen; the bootstrap cannot select an arbitrary owner.

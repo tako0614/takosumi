@@ -81,6 +81,11 @@ const API_PATCHABLE_CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([
 
 function publicCapsule(capsule: Capsule): PublicCapsule {
   const {
+    ownerAccountId: _ownerAccountId,
+    ownershipEpoch: _ownershipEpoch,
+    managementState: _managementState,
+    managementEpoch: _managementEpoch,
+    storageRoot: _storageRoot,
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
     installingPrincipalId: _installingPrincipalId,
@@ -487,7 +492,7 @@ export function mountDeployControlCapsuleRoutes(
       handler: async ({ c, principal, id }) => {
         const response = await controller.getCapsule(id);
         ensureWorkspacePermission(principal, response.capsule.workspaceId);
-        return c.json(response, 200);
+        return c.json(capsuleResponse(response.capsule), 200);
       },
     }),
   );

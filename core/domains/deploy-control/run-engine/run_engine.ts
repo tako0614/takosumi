@@ -1594,6 +1594,7 @@ function corePlanElapsedDiagnostic(timings: CorePlanElapsedTimings): RunDiagnost
 export interface RunEngineDependencies {
   readonly validateUninstallRequester?: import("../../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly store: OpenTofuControlStore;
+  readonly appOwnership?: Pick<import("../../app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   /** Exact executor-id to runner adapter bindings supplied by the host. */
   readonly runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly sourcesService?: SourcesService;
@@ -1639,6 +1640,7 @@ export interface RunEngineDependencies {
 export class RunEngine {
   readonly #validateUninstallRequester?: import("../../capsules/uninstall_authorization.ts").UninstallRequesterValidator;
   readonly #store: OpenTofuControlStore;
+  readonly #appOwnership?: Pick<import("../../app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   readonly #runnerExecutors: OpenTofuRunnerExecutorRegistry;
   readonly #sourcesService?: SourcesService;
   readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
@@ -1693,6 +1695,7 @@ export class RunEngine {
   constructor(deps: RunEngineDependencies) {
     this.#validateUninstallRequester = deps.validateUninstallRequester;
     this.#store = deps.store;
+    this.#appOwnership = deps.appOwnership;
     this.#runnerExecutors = deps.runnerExecutors;
     this.#sourcesService = deps.sourcesService;
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
@@ -2463,11 +2466,22 @@ export class RunEngine {
     );
     const storedPlanRunInputs = planRunInputs;
     const dispatchDiagnostics = genericRootDispatch?.diagnostics ?? [];
+    // Automatic app policy delegates authorization to its current owner;
+    // audit keeps the system trigger distinct from that account principal.
+    const eventActor = internal.autoApplyRequested ? "system:auto-update" : context.actor;
+    const appOwnership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
+    const automaticProvenance = internal.autoApplyRequested
+      ? { automatic: true, ...(appOwnership !== undefined && context.actor
+        ? { authorizationAccountId: context.actor } : {}) }
+      : {};
     let planRun: PlanRun = {
       id: planRunId,
       workspaceId,
       createdBy: context.actor ?? "system",
       ...(requestCapsuleId ? { capsuleId: requestCapsuleId } : {}),
+      ...(appOwnership !== undefined
+        ? { ownershipEpoch: appOwnership.ownershipEpoch, appManagementEpoch: appOwnership.managementEpoch }
+        : {}),
       ...(capsule
         ? {
             capsuleCurrentStateVersionId: capsule.currentStateVersionId ?? null,
@@ -2512,8 +2526,9 @@ export class RunEngine {
             variablesDigest,
             runnerProfileId: profile.id,
             ...(internal.refreshOnly ? { refreshOnly: true } : {}),
+            ...automaticProvenance,
           },
-          context.actor,
+          eventActor,
         ),
         auditEvent(
           "plan",
@@ -2522,8 +2537,9 @@ export class RunEngine {
           {
             policyDecisionDigest,
             status: policy.status,
+            ...automaticProvenance,
           },
-          context.actor,
+          eventActor,
         ),
       ],
       createdAt: now,
@@ -2574,7 +2590,7 @@ export class RunEngine {
     if (prepared.status === "created") {
       await this.#recordActivity({
         workspaceId: planRun.workspaceId,
-        ...(context.actor ? { actorId: context.actor } : {}),
+        ...(eventActor ? { actorId: eventActor } : {}),
         action: "run.plan_created",
         targetType: "run",
         targetId: planRun.id,
@@ -2584,6 +2600,7 @@ export class RunEngine {
           capsuleId: planRun.capsuleId,
           policyStatus: planRun.policy.status,
           ...(planRun.refreshOnly ? { refreshOnly: true } : {}),
+          ...automaticProvenance,
         },
       });
       if (planRun.status === "failed") {
@@ -2698,6 +2715,7 @@ export class RunEngine {
     );
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -2728,6 +2746,7 @@ export class RunEngine {
       | "sourceSnapshotId"
       | "planRunId"
       | "expectedWorkspaceManagementAuthority"
+      | "origin"
     > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
@@ -3632,6 +3651,7 @@ export class RunEngine {
     if (!input.capsule) return { reasons: [] };
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4468,6 +4488,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4483,6 +4504,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4496,6 +4518,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -4889,7 +4912,7 @@ export class RunEngine {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
     }
     const scheduledUninstall = plannedCapsule
-      ? scheduledUninstallPlanIdentity(planRun, plannedCapsule)
+      ? await this.#scheduledUninstallPlanIdentity(planRun, plannedCapsule)
       : undefined;
     if (scheduledUninstall && plannedCapsule) {
       await this.#requireScheduledUninstallAuthorization(plannedCapsule);
@@ -4924,6 +4947,7 @@ export class RunEngine {
     const applyRun: ApplyRun = {
       id: exactApplyRunId ?? this.#newId("apply"),
       planRunId: planRun.id,
+      createdBy: context.actor ?? planRun.approval?.approvedBy ?? planRun.createdBy,
       workspaceId: planRun.workspaceId,
       ...(applyCapsuleId ? { capsuleId: applyCapsuleId } : {}),
       operation: planRun.operation,
@@ -6263,9 +6287,13 @@ export class RunEngine {
           planRunId: planRun.id,
           expected: applyExpectedGuardFromPlanRun(planRun),
         },
-        { actor: "system:auto-update" },
+        { actor: planRun.createdBy },
         { expectedWorkspaceManagementAuthority: authority },
       );
+      await this.#recordActivity({ workspaceId: planRun.workspaceId,
+        actorId: "system:auto-update", action: "capsule.auto_update_apply_started",
+        targetType: "capsule", targetId: planRun.capsuleId ?? planRun.id,
+        metadata: { planRunId: planRun.id } });
     } catch (error) {
       await this.#recordActivity({
         workspaceId: planRun.workspaceId,
@@ -6317,6 +6345,7 @@ export class RunEngine {
     }
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      appOwnership: this.#appOwnership,
       operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
@@ -6789,9 +6818,9 @@ export class RunEngine {
       }
       throw new OpenTofuControllerError("not_found", `run ${id} not found`);
     }
-    if (planRun.createdBy === "system:scheduled-uninstall") {
+    if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
       const capsule = await this.#requireCapsule(planRun.capsuleId ?? "");
-      scheduledUninstallPlanIdentity(planRun, capsule);
+      await this.#scheduledUninstallPlanIdentity(planRun, capsule);
       await this.#requireScheduledUninstallAuthorization(capsule);
     }
     if (planRun.approval) {
@@ -9132,6 +9161,7 @@ export class RunEngine {
       quantity,
       usdMicros: rating.usdMicros,
       ratingStatus: rating.ratingStatus,
+      ...(rating.payerAccountId ? { payerAccountId: rating.payerAccountId } : {}),
       source: "runner",
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt,
@@ -9850,8 +9880,8 @@ export class RunEngine {
     // provider is exempt: its outcome must still be recorded.
     if (plannedCapsule && !applyRunMutationDispatched(applyRun)) {
       assertCapsuleAcceptsOperation(plannedCapsule, planRun.operation);
-      scheduledUninstallPlanIdentity(planRun, plannedCapsule);
-      if (planRun.createdBy === "system:scheduled-uninstall") {
+      await this.#scheduledUninstallPlanIdentity(planRun, plannedCapsule);
+      if (planRun.origin?.kind === "scheduled_uninstall" || planRun.createdBy === "system:scheduled-uninstall") {
         await this.#requireScheduledUninstallAuthorization(plannedCapsule);
       }
     }
@@ -12399,6 +12429,14 @@ export class RunEngine {
     return capsule;
   }
 
+  async #scheduledUninstallPlanIdentity(planRun: PlanRun, capsule: Capsule): Promise<{
+    readonly id: string;
+    readonly destroyPlanRunId: string;
+  } | undefined> {
+    const ownership = await this.#appOwnership?.getOwnership(capsule.id);
+    return scheduledUninstallPlanIdentity(planRun, capsule, ownership?.ownerAccountId);
+  }
+
   async #requireScheduledUninstallAuthorization(capsule: Capsule): Promise<void> {
     const reason = await scheduledUninstallAuthorizationFailure(
       this.#store, capsule, this.#validateUninstallRequester,
@@ -12414,9 +12452,10 @@ export class RunEngine {
   }
 
   async #requireLiveScheduledUninstallAuthorization(plan: PlanRun, apply: ApplyRun): Promise<void> {
-    if (plan.createdBy !== "system:scheduled-uninstall" || applyRunProviderMutationDispatched(apply)) return;
+    if ((plan.origin?.kind !== "scheduled_uninstall" && plan.createdBy !== "system:scheduled-uninstall") ||
+      applyRunProviderMutationDispatched(apply)) return;
     const current = await this.#requireCapsule(plan.capsuleId ?? "");
-    scheduledUninstallPlanIdentity(plan, current);
+    await this.#scheduledUninstallPlanIdentity(plan, current);
     await this.#requireScheduledUninstallAuthorization(current);
   }
 }
@@ -12439,13 +12478,21 @@ function scheduledUninstallRefusal(error: unknown): {
 function scheduledUninstallPlanIdentity(
   planRun: PlanRun,
   capsule: Capsule,
+  ownerAccountId: string | undefined,
 ): { readonly id: string; readonly destroyPlanRunId: string } | undefined {
-  if (planRun.createdBy !== "system:scheduled-uninstall") return undefined;
+  const origin = planRun.origin;
+  const legacy = planRun.createdBy === "system:scheduled-uninstall";
+  if (origin?.kind !== "scheduled_uninstall" && !legacy) return undefined;
   const uninstall = capsule.uninstall;
   if (
     planRun.operation !== "destroy" || capsule.status !== "uninstalled" ||
     uninstall === undefined || uninstall.phase === "cancelled" || uninstall.blockedReason !== undefined ||
-    uninstall.destroyPlanRunId !== planRun.id
+    uninstall.destroyPlanRunId !== planRun.id ||
+    (origin?.kind === "scheduled_uninstall" && (
+      origin.uninstallId !== uninstall.id ||
+      planRun.createdBy !== (ownerAccountId ?? "system:scheduled-uninstall") ||
+      planRun.id !== `plan_${uninstall.id.replace(/[^0-9a-zA-Z]/gu, "")}a${uninstall.destroyAttempts ?? 1}`
+    ))
   ) {
     throw new OpenTofuControllerError(
       "failed_precondition",

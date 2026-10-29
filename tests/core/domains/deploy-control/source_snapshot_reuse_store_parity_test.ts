@@ -259,7 +259,6 @@ test("in-memory lane retry refreshes its owner and ignores unrelated app changes
   await store.putSource({ ...source(), ownerCapsuleId: "cap_reuse_race" });
   const a = "a".repeat(40);
   const b = "b".repeat(40);
-  await commit(store, 1, a);
   const capsule: Capsule = {
     id: "cap_reuse_race", workspaceId: WORKSPACE, projectId: "project_reuse_race",
     name: "race", slug: "race", sourceId: SOURCE, installConfigId: "config_reuse_race",
@@ -267,6 +266,7 @@ test("in-memory lane retry refreshes its owner and ignores unrelated app changes
     currentStateGeneration: 0, status: "active", createdAt: T0, updatedAt: T0,
   };
   await store.putCapsule(capsule);
+  await commit(store, 1, a);
   const input = await prepare(store, 2, a);
   store.onNextSourceRead = async () => {
     expect((await commit(store, 3, b)).won).toBe(true);

@@ -17,8 +17,12 @@ import {
 } from "@takosumi/providers/types";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import type { CapsuleOwnership } from "../../../../core/domains/app-ownership/store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { connectionCredentialIssuanceAttemptRef } from "../../../../core/domains/deploy-control/credential_issuance_attempt.ts";
+import type { AppAccessResolver } from "../../../../contract/app-access.ts";
+import { InMemoryAppMintLeaseStore, type AppMintLeaseStore } from
+  "../../../../core/domains/app-authorization/mint-leases.ts";
 
 const PROVIDER = "registry.example/operator/provider";
 const AUDIENCE = "extension.example.v1";
@@ -32,6 +36,133 @@ const RUN_ISSUANCE = {
 } as const;
 
 describe("Vault run-issued credential recipe", () => {
+  test("owner-tagged app mint checks epoch, live creator access, active state and operator binding", async () => {
+    let accessAllowed = true;
+    const appAccessResolver: AppAccessResolver = {
+      resolveAppAccess: async (accountId, capsuleId) =>
+        accessAllowed && accountId === "fixture-owner" && capsuleId === "capsule_1"
+          ? { capsuleId, role: "owner", ownerAccountId: "fixture-owner", ownershipEpoch: 2 }
+          : undefined,
+      listAccessibleApps: async () => ({ apps: [] }),
+    };
+    const { store, vault } = fixture(validDriver(), { appAccessResolver });
+    const connection = await verifiedConnection(store, vault);
+    await seedOwnedRunningPlan(store);
+    const ownership: CapsuleOwnership = { capsuleId: "capsule_1", ownerAccountId: "fixture-owner",
+      ownershipEpoch: 2, managementState: "active" as const, managementEpoch: 0,
+      storageRoot: "apps/capsule_1" };
+    const setOwnership = (patch: Partial<typeof ownership> = {}) =>
+      expect(store.setCapsuleOwnership({ ...ownership, ...patch })).toBe(true);
+    const originalPlan = (await store.getPlanRun("plan_1"))!;
+    await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 1, appManagementEpoch: 0 });
+    const request = () => vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    );
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 2, appManagementEpoch: 0 });
+    accessAllowed = false;
+    await expect(request()).rejects.toThrow(/no longer has app access/);
+    accessAllowed = true;
+    setOwnership({ managementState: "draining" });
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    setOwnership();
+    expect((await request()).env.RUN_CREDENTIAL_TOKEN).toBe("issued:plan_1");
+    setOwnership({ managementState: "frozen" });
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    setOwnership({ ownerAccountId: undefined as unknown as string });
+    await expect(request()).rejects.toThrow(/ownership metadata is incomplete/);
+    setOwnership({ ownershipEpoch: undefined as unknown as number });
+    await expect(request()).rejects.toThrow(/ownership authority changed/);
+    setOwnership();
+    await store.putConnection({ ...connection, status: "pending" });
+    await expect(request()).rejects.toMatchObject({ reason: "connection_not_owned_by_app_owner" });
+    await store.putConnection(connection);
+    await store.putApplyRun({ ...applyRun(), approval: { approvedBy: "removed-member", approvedAt: 1 } });
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "apply", capsuleId: "capsule_1", runId: "apply_1" },
+    )).rejects.toThrow(/no longer has app access/);
+    await store.putApplyRun({ ...applyRun(), approval: { approvedAt: 1 } });
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "apply", capsuleId: "capsule_1", runId: "apply_1" },
+    )).rejects.toThrow(/approver is unavailable/);
+    await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 2, appManagementEpoch: 0, requiresApproval: true });
+    await store.putApplyRun(applyRun());
+    await expect(vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: connection.id }],
+      { phase: "apply", capsuleId: "capsule_1", runId: "apply_1" },
+    )).rejects.toThrow(/approver is unavailable/);
+    await store.putConnection({ ...connection, scope: "personal", ownerAccountId: "other-owner" });
+    await expect(request()).rejects.toMatchObject({ reason: "connection_not_owned_by_app_owner" });
+  });
+  test("paused provider driver discards credentials after Run settlement, drain, or Connection revocation", async () => {
+    for (const change of ["settle", "drain", "revoke"] as const) {
+      let entered!: () => void;
+      let resume!: () => void;
+      const driverEntered = new Promise<void>((resolve) => { entered = resolve; });
+      const driverResume = new Promise<void>((resolve) => { resume = resolve; });
+      const base = validDriver();
+      const driver: CredentialRecipeRuntimeDriver = { ...base,
+        mint: async (input) => {
+          entered();
+          await driverResume;
+          return await base.mint!(input);
+        },
+      };
+      const store = new InMemoryOpenTofuControlStore();
+      const underlying = new InMemoryAppMintLeaseStore(store, {
+        now: () => new Date("2026-06-04T00:00:00.000Z").getTime(),
+      });
+      const active = new Set<string>();
+      const leases: AppMintLeaseStore = {
+        async begin(input) {
+          const lease = await underlying.begin(input);
+          if (lease) active.add(lease.id);
+          return lease;
+        },
+        async finish(lease, disposition) {
+          const issued = await underlying.finish(lease, disposition);
+          active.delete(lease.id);
+          return issued;
+        },
+      };
+      const appAccessResolver: AppAccessResolver = {
+        resolveAppAccess: async (accountId, capsuleId) => accountId === "fixture-owner"
+          ? { capsuleId, role: "owner", ownerAccountId: "fixture-owner", ownershipEpoch: 2 }
+          : undefined,
+        listAccessibleApps: async () => ({ apps: [] }),
+      };
+      const { vault } = fixture(driver, { store, appMintLeases: leases, appAccessResolver });
+      const connection = await verifiedConnection(store, vault);
+      await seedOwnedRunningPlan(store);
+      const owned = { capsuleId: "capsule_1", ownerAccountId: "fixture-owner", ownershipEpoch: 2,
+        managementState: "active" as const, managementEpoch: 0, storageRoot: "apps/capsule_1" };
+      const plan = (await store.getPlanRun("plan_1"))!;
+      await store.putPlanRun({ ...plan, createdBy: "fixture-owner", ownershipEpoch: 2,
+        appManagementEpoch: 0 });
+      const pending = vault.mintForCapsuleProviderBindings("workspace_1",
+        [{ provider: PROVIDER, connectionId: connection.id }],
+        { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" });
+      await driverEntered;
+      expect(active.size).toBe(1);
+      if (change === "settle") {
+        await store.putPlanRun({ ...(await store.getPlanRun("plan_1"))!, status: "failed" });
+      } else if (change === "drain") {
+        store.setCapsuleOwnership({ ...owned, managementState: "draining", managementEpoch: 1 });
+      } else {
+        await store.putConnection({ ...connection, status: "revoked" });
+      }
+      resume();
+      await expect(pending).rejects.toThrow(/authority changed during credential mint/);
+      expect(active.size).toBe(0);
+    }
+  });
   test("pins a renewable file protocol only from the installed recipe", async () => {
     const { store, vault } = fixture(issuingDriver(), {
       renewableEnv: {
@@ -601,7 +732,10 @@ describe("Vault run-issued credential recipe", () => {
 function fixture(
   driver: CredentialRecipeRuntimeDriver,
   options: {
+    readonly store?: InMemoryOpenTofuControlStore;
+    readonly appMintLeases?: AppMintLeaseStore;
     readonly runCredentialIssuer?: CredentialRecipeRunCredentialIssuer | null;
+    readonly appAccessResolver?: AppAccessResolver;
     readonly operatorProviderConnections?: readonly ProviderConnection[];
     readonly renewableEnv?: {
       readonly sourceEnvName: string;
@@ -613,9 +747,11 @@ function fixture(
   readonly store: InMemoryOpenTofuControlStore;
   readonly vault: StaticSecretConnectionVault;
 } {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = options.store ?? new InMemoryOpenTofuControlStore();
   const vault = new StaticSecretConnectionVault({
     store,
+    appAccessResolver: options.appAccessResolver,
+    appMintLeases: options.appMintLeases,
     crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
     }),
@@ -736,6 +872,30 @@ async function seedRunningPlan(
     installingPrincipalId: "principal_installer",
   });
   await store.putPlanRun(planRun());
+}
+
+async function seedOwnedRunningPlan(store: InMemoryOpenTofuControlStore): Promise<void> {
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", capsuleId: "capsule_1",
+    installConfig: { workspaceId: "workspace_1" },
+  });
+  await store.putCapsule({ ...capsule, status: "active",
+    installingPrincipalId: "principal_installer" });
+  expect(store.setCapsuleOwnership({ capsuleId: "capsule_1", ownerAccountId: "fixture-owner",
+    ownershipEpoch: 2, managementState: "active", managementEpoch: 0,
+    storageRoot: "apps/capsule_1" })).toBe(true);
+  const queued: PlanRun = { ...planRun(), status: "queued", createdBy: "fixture-owner",
+    ownershipEpoch: 2, appManagementEpoch: 0, executionInputsDigest: "sha256:inputs" };
+  expect((await store.preparePlanRun({ run: queued,
+    inputs: { planRunId: queued.id, variables: {} },
+    expectedWorkspaceManagementAuthority: {
+      workspaceId: "workspace_1", managementState: "active", managementEpoch: 1,
+    },
+  })).status).toBe("created");
+  expect((await store.transitionRun({ id: queued.id, kind: "plan", expectFrom: ["queued"],
+    setLeaseToken: "run-lease-plan_1", heartbeatAt: 2,
+    run: { ...queued, status: "running", startedAt: 2, heartbeatAt: 2 },
+  })).won).toBe(true);
 }
 
 async function seedCommittedPostApplyRecovery(

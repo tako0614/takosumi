@@ -142,11 +142,15 @@ export interface CapsuleUninstall {
  */
 export interface Capsule {
   readonly id: string;
-  /** Materialized app owner; absent only on pre-v77 rows awaiting backfill. */
+  /** @deprecated Legacy input only. AppOwnershipStore is the owner authority; never persist or read this from Capsule JSON. */
   readonly ownerAccountId?: string;
+  /** @deprecated Legacy input only; use AppOwnershipStore. */
   readonly ownershipEpoch?: number;
+  /** @deprecated Legacy input only; use AppOwnershipStore. */
   readonly managementState?: "active" | "draining" | "frozen";
+  /** @deprecated Legacy input only; use AppOwnershipStore. */
   readonly managementEpoch?: number;
+  /** @deprecated Legacy input only; use getCapsuleStorageRoot or AppOwnershipStore. */
   readonly storageRoot?: string;
   readonly workspaceId: string;
   /**
@@ -253,6 +257,11 @@ export interface CapsuleAdoptedSourceRevision {
 /** Public Capsule projection returned by `/api` and dashboard session routes. */
 export type PublicCapsule = Omit<
   Capsule,
+  | "ownerAccountId"
+  | "ownershipEpoch"
+  | "managementState"
+  | "managementEpoch"
+  | "storageRoot"
   | "currentOutputId"
   | "autoUpdateAttemptSourceSnapshotId"
   | "installingPrincipalId"

@@ -245,6 +245,10 @@ export interface PlanRun {
   readonly workspaceId: string;
   /** Exact server-owned actor that created this PlanRun. */
   readonly createdBy?: string;
+  /** App ownership generation captured before Plan dispatch. */
+  readonly ownershipEpoch?: number;
+  /** App management generation pinned when the Plan first enters the queue. */
+  readonly appManagementEpoch?: number;
   readonly capsuleId?: string;
   readonly capsuleCurrentStateVersionId?: string | null;
   /** Private Capsule execution-authority epoch pinned before Plan dispatch. */
@@ -472,6 +476,8 @@ export interface RunDiagnostic {
 export interface ApplyRun {
   readonly id: string;
   readonly planRunId: string;
+  /** Account that requested this Apply, retained for member revocation. */
+  readonly createdBy?: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly stateVersionId?: string;

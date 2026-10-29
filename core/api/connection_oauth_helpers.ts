@@ -87,6 +87,14 @@ async function startOAuth(
   config: OAuthProviderConfig,
   input: ConnectionOAuthStartInput,
 ): Promise<ConnectionOAuthStartResponse> {
+  if (input.body.scope === "personal" && (
+    input.body.workspaceId !== undefined ||
+    !input.body.subject ||
+    input.body.ownerAccountId !== input.body.subject ||
+    input.expectedWorkspaceManagementAuthority !== undefined
+  )) {
+    throw new OpenTofuControllerError("invalid_argument", "invalid personal OAuth state");
+  }
   const expectedWorkspaceManagementAuthority =
     input.expectedWorkspaceManagementAuthority;
   if (expectedWorkspaceManagementAuthority !== undefined) {
@@ -165,6 +173,15 @@ async function completeOAuth(
       "OAuth state expired",
     );
   }
+  if (state.body.scope === "personal" && (
+    state.body.workspaceId !== undefined ||
+    !state.subject ||
+    state.body.subject !== state.subject ||
+    state.body.ownerAccountId !== state.subject ||
+    state.expectedWorkspaceManagementAuthority !== undefined
+  )) {
+    throw new OpenTofuControllerError("invalid_argument", "invalid personal OAuth state");
+  }
   const redirectUri = state.body.redirectUri ?? config.redirectUri;
   const tokenResponse = await exchangeCode(
     config,
@@ -191,6 +208,7 @@ async function completeOAuth(
     materialization: "oauth",
     ...(state.body.displayName ? { displayName: state.body.displayName } : {}),
     ...(state.body.scope ? { scope: state.body.scope } : {}),
+    ...(state.body.ownerAccountId ? { ownerAccountId: state.body.ownerAccountId } : {}),
     ...(state.body.scopeHints ? { scopeHints: state.body.scopeHints } : {}),
     ...(state.body.expiresAt ? { expiresAt: state.body.expiresAt } : {}),
     values,
