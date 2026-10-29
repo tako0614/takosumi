@@ -594,7 +594,13 @@ and reopened for every later Run. A host that ALSO materializes the same profile
 through its private runtime-binding lane injects that derivation instead; nothing
 is then sealed, because the values are a pure function of the host key and the
 profile and both lanes necessarily mint the same bytes. Sealing one lane's first
-generation would let the other drift away from it with no drift signal.
+generation would let the other drift away from it with no drift signal. A
+derived value depends only on the host key and that binding's own derivation
+parts (Workspace, Capsule and binding name, plus the InstallConfig id under the
+v1 profile contract), so adding or removing another binding moves no derived
+value and there is nothing to carry. A change of those parts themselves — a v1
+profile recompiled as v2, a new InstallConfig id under v1, or a change of the
+Capsule's Workspace identity — does move every derived value.
 
 The OIDC values have no such lane and are never sealed or minted here. An OIDC
 client is one registration under the Capsule's Accounts authority — the same
@@ -607,12 +613,64 @@ value-free generation identity, which is folded into the nonce so a moved
 registration rotates it exactly like re-sealed material. A profile that declares
 OIDC bindings and a host with no such port fail closed.
 
-A profile change — the Capsule's manifest adds or renames a generated secret, or
-changes which bindings the OIDC grant delivers — retires the previous sealed
-generation and seals a new one. Fencing it off instead would leave the Capsule
-unable to plan OR destroy, with no recovery path. Re-sealing rotates the nonce,
-which is exactly the replacement semantics a provider expects from rotated
-material.
+A profile change — the Capsule's manifest adds, removes or renames a generated
+secret, changes its profile contract, or changes its OIDC grant — seals a new
+generation that carries the previous one's values forward, and no value is
+discarded by it. A binding whose name and shape (`bytes` and `encoding`) are
+unchanged keeps its exact value. A binding the profile no longer declares (or
+declares in another shape) is retained: it stays in the sealed generation, is
+never delivered, and comes back unchanged when a later profile declares the same
+binding in the same shape again. Only a binding the row has never held in that
+shape receives fresh randomness, so renaming a binding gives the new name a new
+value — renaming `ENCRYPTION_KEY` is a rotation of that key — while the old
+name's value stays retained. Renaming is the only way to rotate one generated
+value until an explicit operator rotation exists. Retained values leave the row
+only when the Capsule's runtime-input material is retired after destroy
+(including the destroy an uninstall schedules), or oldest first once more than
+16 are retained. A profile that declares no generated secret at
+all (an OIDC-only profile) leaves the row untouched, which retains every value
+in it the same way. A workload has usually encrypted data under these values, so
+minting over them would be silent data loss; retaining them also means a profile
+that moves and moves back — at Plan alone, or between Plan and Apply — never
+leaves the workload holding a value the row has lost.
+
+The previous generation is opened under its own stored AAD, and only after the
+same owner fence (owner reference, Workspace, partition, scheme) passes and that
+AAD is byte-for-byte the canonical AAD for the same owner and Capsule; the new
+generation is sealed under the current AAD. It replaces the previous row by an
+atomic compare-and-replace on the exact row that was opened, so no moment exists
+with neither generation stored, a failure before the replace commits leaves the
+previous generation intact, and a concurrent re-seal adopts the winner's row
+instead of overwriting it. The same path carries values across a later change of
+the AAD's own shape. Re-sealing rotates the nonce, which is exactly the
+replacement semantics a provider expects from rotated material. Each committed
+re-seal emits the value-free operator event
+`deploy_control.runtime_input_generation_resealed`, naming the bindings that
+were carried, restored, minted, newly retained and evicted. A generation that
+retains nothing and holds only 32-byte hex values keeps the original bare
+`binding -> value` document; one that retains a value uses a versioned envelope
+that an earlier release cannot read. A rollback past this behavior fails that
+Capsule's Apply closed only while its profile is unchanged. An earlier release
+treats any AAD mismatch by deleting the row and regenerating every value, so on
+the next profile change it discards the carried and retained values alike. The
+same happens if an earlier release handles that Plan during a mixed-version
+rollout. Neither a rollback nor a mixed-version deployment may run while a
+profile change is pending.
+
+A previous generation that cannot be carried forward — it does not open (a
+changed or missing key, a damaged row), its stored AAD is not the canonical one
+for this owner and Capsule, or its document is not one this lane wrote — is
+refused, not replaced. Plan and Apply of the live Capsule fail with
+`failed_precondition` / `runtime_inputs_previous_generation_unreadable`; the
+message names the Capsule and the failure class, never a value or anything about
+the key. Whether the row was sealed under the active key version is recorded
+only in the operator event
+`deploy_control.runtime_input_previous_generation_unreadable`. Teardown is
+unaffected: a destroy plan calls no runtime-input materializer (below), and
+retirement after destroy deletes the row without opening it. Recovery is an
+explicit operator decision, never an automatic retry: restore the key or the
+sealed row and re-plan, or deliberately retire the row and accept fresh values
+(see [Run-scoped generated secrets](../operations/secret-rotation.md#run-scoped-generated-secrets)).
 
 The nonce is deterministic per (Workspace, Capsule, profile digest, material
 generation, provider instance). It is never random per Run: a provider derives

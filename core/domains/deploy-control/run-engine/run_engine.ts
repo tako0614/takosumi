@@ -147,6 +147,7 @@ import {
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
   RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
+  RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON,
   RUNTIME_INPUTS_PROFILE_MISSING_REASON,
   RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON,
   RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON,
@@ -259,6 +260,7 @@ import {
   type RuntimeSecretFileMaterializer,
 } from "../runtime_secret_file_materializer.ts";
 import {
+  RuntimeInputPreviousGenerationError,
   runtimeInputProviderInstanceForStorage,
   type RuntimeInputMaterializer,
 } from "../runtime_input_materializer.ts";
@@ -4133,8 +4135,11 @@ export class RunEngine {
    * Resolves the Plan-time wiring for run-scoped sensitive provider inputs.
    *
    * Value-free throughout: it derives the plan-stable nonce and pins the exact
-   * deliverable name set, but never opens the sealed material. The values are
-   * minted only at Apply, by the credential broker.
+   * deliverable name set, and no value leaves the materializer. The nonce
+   * digests the sealed generation, so this is where the materializer first
+   * seals a Capsule's generated values and where it re-seals them (opening the
+   * previous generation to carry its values forward) after a profile change.
+   * The values are delivered only at Apply, by the credential broker.
    *
    * Destroy uses separate nonce-only wiring derived from the already-captured
    * StateVersion cursor. It never asks the materializer for a profile, nonce,
@@ -4237,10 +4242,16 @@ export class RunEngine {
         providerInstance: wiring.providerInstance,
       });
     } catch (error) {
+      // A previous generation that cannot be carried forward keeps its own
+      // reason: the recovery is an operator decision, not a re-plan.
       throw new OpenTofuControllerError(
         "failed_precondition",
         `run-scoped sensitive provider input material is not usable: ${errorMessage(error)}`,
-        { reason: RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON },
+        {
+          reason: error instanceof RuntimeInputPreviousGenerationError
+            ? RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON
+            : RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
+        },
       );
     }
     return {

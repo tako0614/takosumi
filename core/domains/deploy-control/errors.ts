@@ -60,6 +60,16 @@ export const RUNTIME_INPUTS_LIMIT_EXCEEDED_REASON =
 export const RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON =
   "runtime_inputs_material_unusable";
 /**
+ * The Capsule's profile moved and its previous sealed generation cannot be
+ * opened or parsed, so its generated-secret values cannot be carried forward.
+ * Plan and Apply refuse rather than mint replacements, which would silently
+ * rotate keys the workload already uses; destroy is unaffected. Recovery is an
+ * operator decision: restore the key or row that sealed it, or retire the row
+ * and accept fresh values.
+ */
+export const RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON =
+  "runtime_inputs_previous_generation_unreadable";
+/**
  * The declaring provider instance is not pinned to a version that proves the
  * provider accepts the two arguments, so the wiring stays inert. This is a
  * plan warning, not a failure: a Capsule that needs no run-scoped sensitive

@@ -53,6 +53,7 @@ import {
   RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
   RUNTIME_INPUTS_NAME_SET_CHANGED_REASON,
   RUNTIME_INPUTS_NONCE_CHANGED_REASON,
+  RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON,
   RUNTIME_INPUTS_VARIABLE_CHANGED_REASON,
   RUNTIME_INPUTS_WIRING_MISSING_REASON,
   structuredErrorReason,
@@ -63,6 +64,7 @@ import {
   RUNTIME_INPUT_MAX_VALUE_BYTES,
   RUNTIME_INPUT_MIN_VALUE_LENGTH,
   RUNTIME_INPUT_NAME_PATTERN,
+  RuntimeInputPreviousGenerationError,
   runtimeInputProviderInstanceFromStorage,
   type RuntimeInputMaterializer,
 } from "./runtime_input_materializer.ts";
@@ -649,12 +651,15 @@ export class RunCredentialBroker {
       });
     } catch (error) {
       if (error instanceof OpenTofuControllerError) throw error;
+      const reason = error instanceof RuntimeInputPreviousGenerationError
+        ? RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON
+        : RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON;
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `${RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON}: run-scoped sensitive provider input material is not usable: ${
+        `${reason}: run-scoped sensitive provider input material is not usable: ${
           error instanceof Error ? error.message : String(error)
         }`,
-        { reason: RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON },
+        { reason },
       );
     }
     if (minted.nonce !== descriptor.nonce) {

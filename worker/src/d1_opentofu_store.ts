@@ -9551,6 +9551,41 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return changes(inserted as D1Result) > 0;
   }
 
+  async replaceSecretBlobIfCurrent(
+    expected: StoredSecretBlob,
+    replacement: StoredSecretBlob,
+  ): Promise<boolean> {
+    if (
+      replacement.id !== expected.id ||
+      replacement.connectionId !== expected.connectionId
+    ) {
+      throw new TypeError(
+        "sealed material replacement must keep its owner reference",
+      );
+    }
+    await this.#ensureSchema();
+    // One conditional UPDATE over the full sealed-material identity: the
+    // previous row stays intact until the new one commits, and a concurrent
+    // writer's row is never overwritten.
+    const updated = await this.#orm
+      .update(schema.secretBlobs)
+      .set({
+        workspaceId: replacement.workspaceId ?? null,
+        kind: replacement.kind,
+        ciphertext: replacement.ciphertext,
+        encryptedDek: replacement.encryptedDek,
+        nonce: replacement.nonce,
+        aad: replacement.aad,
+        keyVersion: replacement.keyVersion,
+        createdAt: replacement.createdAt,
+        rotatedAt: replacement.rotatedAt ?? null,
+        blobJson: replacement,
+      })
+      .where(d1ConnectionTestResultSecretBlobWhere(expected))
+      .run();
+    return changes(updated as D1Result) > 0;
+  }
+
   async getSecretBlob(
     connectionId: string,
   ): Promise<StoredSecretBlob | undefined> {
@@ -14168,7 +14203,10 @@ function d1InvalidConnectionRevocationGuardRow(
   };
 }
 
-/** Full physical/JSON sealed-material identity used by test-result CAS. */
+/**
+ * Full physical/JSON sealed-material identity used by test-result CAS and by
+ * `replaceSecretBlobIfCurrent`.
+ */
 function d1ConnectionTestResultSecretBlobWhere(
   expectedSecretBlob: StoredSecretBlob,
 ): SQL {

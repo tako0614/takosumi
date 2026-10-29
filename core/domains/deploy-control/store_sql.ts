@@ -9813,6 +9813,48 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return inserted.length === 1;
   }
 
+  async replaceSecretBlobIfCurrent(
+    expected: StoredSecretBlob,
+    replacement: StoredSecretBlob,
+  ): Promise<boolean> {
+    if (
+      replacement.id !== expected.id ||
+      replacement.connectionId !== expected.connectionId
+    ) {
+      throw new TypeError(
+        "sealed material replacement must keep its owner reference",
+      );
+    }
+    // One conditional UPDATE: the previous row stays intact until the new
+    // one commits, and a concurrent writer's row is never overwritten.
+    const updated = await this.#db
+      .update(pgSchema.secretBlobs)
+      .set({
+        workspaceId: replacement.workspaceId ?? null,
+        kind: replacement.kind,
+        ciphertext: replacement.ciphertext,
+        encryptedDek: replacement.encryptedDek,
+        nonce: replacement.nonce,
+        aad: replacement.aad,
+        keyVersion: replacement.keyVersion,
+        createdAt: replacement.createdAt,
+        rotatedAt: replacement.rotatedAt ?? null,
+        blobJson: replacement,
+      })
+      .where(
+        and(
+          eq(pgSchema.secretBlobs.connectionId, expected.connectionId),
+          eq(pgSchema.secretBlobs.id, expected.id),
+          eq(pgSchema.secretBlobs.ciphertext, expected.ciphertext),
+          eq(pgSchema.secretBlobs.aad, expected.aad),
+          eq(pgSchema.secretBlobs.keyVersion, expected.keyVersion),
+          sql`${pgSchema.secretBlobs.blobJson}::jsonb = ${JSON.stringify(expected)}::jsonb`,
+        ),
+      )
+      .returning({ id: pgSchema.secretBlobs.id });
+    return updated.length === 1;
+  }
+
   async getSecretBlob(
     connectionId: string,
   ): Promise<StoredSecretBlob | undefined> {
