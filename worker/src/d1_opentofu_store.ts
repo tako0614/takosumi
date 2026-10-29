@@ -3875,8 +3875,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     // Retirement closes admission before archive cleanup. Fence the indexed
     // Source row in the same transaction as the create-only Run insert; a
     // preflight getSource() would race a concurrent retirement.
+    const sourceForReservation = await this.getSource(run.sourceId);
+    const reservation = sourceForReservation && isInstallPlanSourceReservation(sourceForReservation)
+      ? sourceForReservation : undefined;
     const appActorGuard = await this.#v77Column("capsules", "owner_account_id")
       ? sql`(json_extract(source.record_json, '$.ownerCapsuleId') is null
+          or (${reservation ? 1 : 0}=1
+            and json_extract(source.record_json, '$.createdByInstallPlanId')=${reservation?.createdByInstallPlanId ?? null}
+            and json_extract(source.record_json, '$.ownerCapsuleId')=${reservation?.ownerCapsuleId ?? null}
+            and not exists(select 1 from capsules where id=json_extract(source.record_json, '$.ownerCapsuleId')))
           or exists (select 1 from capsules owner
             where owner.id=json_extract(source.record_json, '$.ownerCapsuleId')
               and owner.space_id=${run.workspaceId} and owner.source_id=${run.sourceId}

@@ -499,6 +499,8 @@ test("stale Capsule auto-plan creates one pending update plan per stale Capsule"
   const planned: { capsuleId: string; actor: string }[] = [];
   const result = await planStaleCapsuleUpdates(
     {
+      appOwnership: { getOwnership: async (capsuleId) => ({ capsuleId, ownerAccountId: "owner_account",
+        ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}` }) },
       workspaces: {
         listWorkspacesForSweep: () =>
           Promise.resolve([

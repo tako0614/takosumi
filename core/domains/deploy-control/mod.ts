@@ -1,3 +1,4 @@
+import { capsuleWithOwnershipForAdmission } from "./store.ts";
 /**
  * OpenTofu-native deployment-control-plane domain.
  *
@@ -1483,6 +1484,7 @@ export interface TerminalRunPersistResult<R extends PlanRun | ApplyRun> {
 }
 
 export class OpenTofuController {
+  readonly #appOwnership: OpenTofuControllerDependencies["appOwnership"];
   readonly #store: OpenTofuControlStore;
   readonly #runner?: OpenTofuRunner;
   readonly #runnerExecutors: OpenTofuRunnerExecutorRegistry;
@@ -1527,6 +1529,7 @@ export class OpenTofuController {
       (this.#store instanceof InMemoryOpenTofuControlStore
         ? new InMemoryAppOwnershipStore(this.#store)
         : undefined);
+    this.#appOwnership = appOwnership;
     this.#runner = dependencies.runner;
     const runnerExecutors = new Map(dependencies.runnerExecutors ?? []);
     for (const executorId of runnerExecutors.keys()) {
@@ -2259,7 +2262,8 @@ export class OpenTofuController {
       // attempt marker must be judged against the current record.
       const capsule = await this.#store.getCapsule(input.capsule.id);
       if (!capsule || capsule.autoUpdate !== true) return;
-      if (appRunAuthority(capsule) === undefined) return;
+      if (appRunAuthority(capsuleWithOwnershipForAdmission(capsule,
+        await this.#appOwnership?.getOwnership(capsule.id))) === undefined) return;
       if (capsule.autoUpdateAttemptSourceSnapshotId === input.snapshot.id) {
         return;
       }
@@ -2293,7 +2297,8 @@ export class OpenTofuController {
         updatedAt: new Date(this.#now()).toISOString(),
       });
       if (claim.kind !== "updated") return;
-      const appAuthority = appRunAuthority(claim.capsule);
+      const appAuthority = appRunAuthority(capsuleWithOwnershipForAdmission(claim.capsule,
+        await this.#appOwnership?.getOwnership(claim.capsule.id)));
       if (appAuthority === undefined) return;
       await this.createCapsulePlan(
         claim.capsule.id,

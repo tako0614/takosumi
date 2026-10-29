@@ -103,3 +103,14 @@ and connection-owner reads must use the injected ownership port after JSON
 fields disappear. Source reservation, retirement, address/dedupe semantics and
 polling lifecycle are preserved. This is the only file-ownership overlap with
 Phase 2 in this review round, required to keep its existing source sync working.
+
+
+The composed initial-install regression also exercises the interval after the
+trusted coordinator has reserved an owned Source and before its Capsule row
+exists. Source sync retains captured Workspace admission only for that recorded
+`createdByInstallPlanId` reservation with the exact deterministic Source and
+Capsule IDs (`isInstallPlanSourceReservation`). Once a Capsule exists, every backend checks
+its exact scope and current app membership; the marker cannot bypass revocation.
+Missing owner rows without a reservation are rejected. Scheduled stale and
+policy-driven auto-update actors likewise read canonical ownership and preserve
+the legacy system actor for ownerless rows.

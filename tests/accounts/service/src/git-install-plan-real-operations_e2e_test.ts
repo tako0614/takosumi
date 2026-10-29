@@ -157,12 +157,13 @@ test("composed install routes create owned Source, sync, and Capsule authority w
   const capsule = await deployStore.getCapsule(capsuleId!);
   expect(capsule).toMatchObject({
     id: capsuleId,
-    ownerAccountId: "user_install_composition",
     sourceId,
     installConfigId,
     installingPrincipalId: "user_install_composition",
     status: "pending",
   });
+  expect(capsule?.ownerAccountId).toBeUndefined();
+  expect((await operations.appOwnership.getOwnership(capsuleId!))?.ownerAccountId).toBe("user_install_composition");
   expect((await deployStore.getSource(sourceId))?.ownerCapsuleId).toBe(capsuleId);
 
   const planned = await route("POST", `/api/v1/install-plans/${planId}/reconcile`);

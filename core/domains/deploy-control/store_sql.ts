@@ -3530,11 +3530,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       // a new Run immediately after the cancellation transaction commits.
       if (source.ownerCapsuleId) {
         const authority = await transaction.query<{ id: string }>(
-          `select c.id from takosumi_capsules c where c.id=$1 and c.space_id=$2 and c.source_id=$3
-            and (c.owner_account_id is null or (c.management_state='active' and
-              (c.owner_account_id=$4 or exists(select 1 from takosumi_capsule_members m
-                where m.capsule_id=c.id and m.account_id=$4 and m.status='active'))))`,
-          [source.ownerCapsuleId, run.workspaceId, run.sourceId, run.actorAccountId ?? null],
+          `select $1::text as id where
+            ($5::boolean and not exists(select 1 from takosumi_capsules where id=$1))
+            or exists(select 1 from takosumi_capsules c where c.id=$1 and c.space_id=$2 and c.source_id=$3
+              and (c.owner_account_id is null or (c.management_state='active' and
+                (c.owner_account_id=$4 or exists(select 1 from takosumi_capsule_members m
+                  where m.capsule_id=c.id and m.account_id=$4 and m.status='active')))))`,
+          [source.ownerCapsuleId, run.workspaceId, run.sourceId, run.actorAccountId ?? null,
+            isInstallPlanSourceReservation(source)],
         );
         if (authority.rows.length !== 1) return { status: "conflict" as const };
       }

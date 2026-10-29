@@ -32,7 +32,8 @@ test("auto-plan visits every Workspace beyond the fixed window despite permanent
     workspaces: new WorkspacesService({ store }),
     capsules: { listCapsules: (id: string) => store.listCapsules(id) },
     controller: { listRuns: () => Promise.resolve([]) },
-    createCapsulePlan: (id: string) => {
+    createCapsulePlan: (id: string, options: { actor: string }) => {
+      expect(options.actor).toBe("system:stale-auto-plan");
       visited.add(id);
       return Promise.reject(new Error("persistent failure"));
     },

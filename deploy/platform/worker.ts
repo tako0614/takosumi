@@ -4226,6 +4226,7 @@ export interface OpenTofuRunRepairOperations {
 type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
 export interface StaleCapsuleAutoPlanOperations {
+  readonly appOwnership?: Pick<import("../../core/domains/app-ownership/store.ts").AppOwnershipStore, "getOwnership">;
   readonly workspaces: {
     listWorkspacesForSweep(limit: number): Promise<
       readonly { readonly id: string; readonly archivedAt?: string }[]
@@ -4459,12 +4460,12 @@ export async function planStaleCapsuleUpdates(
     );
     for (const capsule of staleCapsules) {
       if (pendingPlanCapsuleIds.has(capsule.id)) continue;
-      if (!capsule.ownerAccountId?.trim()) {
-        console.warn("scheduled.stale_auto_plan_owner_unavailable");
-        continue;
-      }
       try {
-        await operations.createCapsulePlan(capsule.id, { actor: capsule.ownerAccountId });
+        const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+        if (ownership && ownership.managementState !== "active") continue;
+        await operations.createCapsulePlan(capsule.id, {
+          actor: ownership?.ownerAccountId ?? "system:stale-auto-plan",
+        });
         pendingPlanCapsuleIds.add(capsule.id);
         plansCreated += 1;
         try {

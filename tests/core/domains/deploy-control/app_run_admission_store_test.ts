@@ -20,6 +20,7 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { D1AppAuthorizationStore, SqlAppAuthorizationStore } from "../../../../core/domains/app-authorization/store.ts";
 import type { AppAccessResolver } from "../../../../contract/app-access.ts";
+import { D1AppOwnershipStore, SqlAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import type { D1Like } from "../../../../core/adapters/storage/d1.ts";
 
 setDefaultTimeout(30_000);
@@ -37,10 +38,9 @@ async function stores(): Promise<readonly [string, OpenTofuControlStore, SetPhys
   return [
     ["memory", memory, async (capsule) => {
       if (!capsule.ownerAccountId) throw new Error("Fixture ownership is required");
-      const current = await memory.getCapsule(capsule.id);
       memory.setCapsuleOwnership({ capsuleId: capsule.id, ownerAccountId: capsule.ownerAccountId,
         ownershipEpoch: capsule.ownershipEpoch ?? 0, managementState: capsule.managementState ?? "active",
-        managementEpoch: capsule.managementEpoch ?? 0, storageRoot: current?.storageRoot ?? `apps/${capsule.id}` });
+        managementEpoch: capsule.managementEpoch ?? 0, storageRoot: memory.getCapsuleOwnership(capsule.id)?.storageRoot ?? `apps/${capsule.id}` });
     }],
     ["postgres", new SqlOpenTofuControlStore({ client }), async (capsule) => {
       await client.query(`update takosumi_capsules set owner_account_id=$2, ownership_epoch=$3,
@@ -112,6 +112,7 @@ test("owned app Run admission fences new Plan, Apply, queued claim, and drain AB
     const capsule: Capsule = { ...legacy, ownerAccountId: "owner", ownershipEpoch: 0,
       managementState: "active", managementEpoch: 0 };
     await store.putCapsule(capsule);
+    await setPhysicalAuthority(capsule);
     await expect(prepare(store, plan(capsule, `plan_owner_epoch_${label}`, 1, 0), authority), label)
       .rejects.toBeInstanceOf(CapsulePlanCreationFenceConflictError);
     await expect(prepare(store, plan(capsule, `plan_management_epoch_${label}`, 0, 1), authority), label)
@@ -165,7 +166,7 @@ test("owned app Run admission fences new Plan, Apply, queued claim, and drain AB
     await setPhysicalAuthority(transferred);
     expect((await claim(store, queued, "plan")).won, label).toBe(false);
     await expect(store.beginApplyRun(apply(queued, transferred, `apply_transfer_${label}`), authority,
-      capsuleApplyRunAdmissionFence(transferred, 1)), label)
+      capsuleApplyRunAdmissionFence(capsule, 1)), label)
       .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
     expect((await claim(store, applyContinuation.run as ApplyRun, "apply", true, 4)).won, label)
       .toBe(false);
@@ -180,7 +181,7 @@ test("owned app Run admission fences new Plan, Apply, queued claim, and drain AB
 });
 
 test("owned app incomplete metadata fails closed while legacy provider-free Plan apply remains valid", async () => {
-  for (const [label, store] of await stores()) {
+  for (const [label, store, setPhysicalAuthority] of await stores()) {
     const { capsule: legacy } = await seedCapsuleModel(store, { capsuleId: `cap_app_partial_${label}` });
     const authority = workspaceAuthority(legacy);
     const oldPlan = plan(legacy, `plan_legacy_${label}`);
@@ -188,7 +189,7 @@ test("owned app incomplete metadata fails closed while legacy provider-free Plan
     await store.putPlanRun(legacyPlan);
     expect((await store.beginApplyRun(apply(legacyPlan, legacy, `apply_legacy_${label}`), authority,
       capsuleApplyRunAdmissionFence(legacy, 1))).status, label).toBe("created");
-    await store.putCapsule({ ...legacy, ownerAccountId: "owner" });
+    await setPhysicalAuthority({ ...legacy, ownerAccountId: "owner" });
     const { ownershipEpoch: _missingOwner, appManagementEpoch: _missingManagement,
       ...unpinned } = plan(legacy, `plan_partial_${label}`);
     await expect(prepare(store, unpinned, authority), label)
@@ -217,6 +218,9 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
     const capsule: Capsule = { ...legacy, ownerAccountId: "owner", ownershipEpoch: 0,
       managementState: "active", managementEpoch: 0 };
     await store.putCapsule(capsule);
+    const appOwnership = label === "postgres" ? new SqlAppOwnershipStore(pg, store) : new D1AppOwnershipStore(d1, store);
+    expect(await appOwnership.initializeOwnershipIfMissing({ capsuleId: capsule.id, ownerAccountId: "owner",
+      ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}` })).toBe(true);
     const authority = workspaceAuthority(capsule);
     const runningPlan = plan(capsule, `plan_transfer_running_${label}`);
     await prepare(store, runningPlan, authority);
@@ -226,7 +230,7 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
       actorAccountId: "owner", toAccountId: "recipient", expectedOwnershipEpoch: 0 });
     expect((await ownership.acceptTransfer({ transferId: transfer.transferId,
       actorAccountId: "recipient" })).state, label).toBe("pending");
-    const draining = (await store.getCapsule(capsule.id))!;
+    const draining = (await appOwnership.getOwnership(capsule.id))!;
     expect(draining.managementState, label).toBe("draining");
     await expect(prepare(store, plan(capsule, `plan_transfer_drain_${label}`), authority), label)
       .rejects.toBeInstanceOf(CapsulePlanCreationFenceConflictError);
@@ -237,7 +241,7 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
       expectLeaseToken: `lease-${terminal.id}-3`, clearLeaseToken: true, run: terminal })).won, label).toBe(true);
     expect((await ownership.acceptTransfer({ transferId: transfer.transferId,
       actorAccountId: "recipient" })).state, label).toBe("accepted");
-    const transferred = (await store.getCapsule(capsule.id))!;
+    const transferred = (await appOwnership.getOwnership(capsule.id))!;
     expect(transferred.ownerAccountId, label).toBe("recipient");
     expect(transferred.ownershipEpoch, label).toBe(1);
     // The stored JSON remains an opaque concurrency snapshot. A repair can
@@ -249,10 +253,10 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
       await d1.prepare(`update capsules set record_json=? where id=?`)
         .bind(JSON.stringify(capsule), capsule.id).run();
     }
-    await expect(store.beginApplyRun(apply(runningPlan, transferred, `apply_transfer_old_${label}`),
-      authority, capsuleApplyRunAdmissionFence(transferred, 1)), label)
+    await expect(store.beginApplyRun(apply(runningPlan, capsule, `apply_transfer_old_${label}`),
+      authority, capsuleApplyRunAdmissionFence(capsule, 1)), label)
       .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
-    expect((await prepare(store, plan(transferred, `plan_transfer_new_${label}`,
+    expect((await prepare(store, plan(capsule, `plan_transfer_new_${label}`,
       transferred.ownershipEpoch, transferred.managementEpoch), authority)).status, label).toBe("created");
   }
 });

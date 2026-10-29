@@ -5245,11 +5245,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       const ownership = this.#capsuleOwnership.get(source.ownerCapsuleId);
       const actor = run.actorAccountId;
       const member = actor ? this.#capsuleMembers.get(`${source.ownerCapsuleId}\0${actor}`) : undefined;
-      if (!capsule || capsule.workspaceId !== run.workspaceId ||
+      // The trusted install coordinator reserves its Source before creating
+      // the Capsule. Public Source input cannot mint this reservation marker.
+      const initialReservation = !capsule && isInstallPlanSourceReservation(source);
+      if (!initialReservation && (!capsule || capsule.workspaceId !== run.workspaceId ||
         capsule.sourceId !== run.sourceId ||
         (ownership !== undefined &&
           (ownership.managementState !== "active" ||
-            (ownership.ownerAccountId !== actor && member?.status !== "active")))) {
+            (ownership.ownerAccountId !== actor && member?.status !== "active"))))) {
         return { status: "conflict" };
       }
     }

@@ -36,6 +36,7 @@ import {
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
+import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { PlanResourceChange } from "@takosumi/internal/deploy-control-api";
 import {
@@ -224,8 +225,14 @@ async function buildActiveCapsule(options: {
     installConfigId: "cfg_a",
     name: "app",
   });
-  if (options.ownedApp) await store.putCapsule({ ...seeded.capsule,
-    ownerAccountId: seeded.workspace.ownerUserId!, ownershipEpoch: 3, managementState: "active", managementEpoch: 2 });
+  if (options.ownedApp) {
+    if (!(store instanceof InMemoryOpenTofuControlStore)) throw new Error("owned app fixture requires memory store");
+    expect(await new InMemoryAppOwnershipStore(store).initializeOwnershipIfMissing({
+      capsuleId: seeded.capsule.id, ownerAccountId: seeded.workspace.ownerUserId!,
+      ownershipEpoch: 3, managementState: "active", managementEpoch: 2,
+      storageRoot: `apps/${seeded.capsule.id}`,
+    })).toBe(true);
+  }
   await seedProviderConnections(store, seeded.capsule);
   let counter = 0;
   const newId = (prefix: string) =>
@@ -341,7 +348,7 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
 
 test("owned app automatic policy uses its pinned owner authority and records the system trigger", async () => {
   const { store, controller } = await buildActiveCapsule({ autoUpdate: true, ownedApp: true });
-  const ownerAccountId = (await store.getCapsule("cap_auto0001"))!.ownerAccountId!;
+  const ownerAccountId = (await store.getWorkspace("ws_test001"))!.ownerUserId!;
   await syncNewCommit(controller, ownerAccountId);
   const autoPlan = (await planRunsOf(controller, store)).find((run) => run.autoApplyRequested === true);
   expect(autoPlan?.status).toBe("succeeded");

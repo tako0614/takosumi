@@ -6,6 +6,7 @@ import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run
 import { RunEnvResolver } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
 import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import {
   PhaseMintBundle,
   type CapsuleProviderBindingMintEntry,
@@ -129,6 +130,7 @@ function brokerFor(resolved: readonly ResolvedCapsuleProviderBinding[]): {
   const store = new InMemoryOpenTofuControlStore();
   const broker = new RunCredentialBroker({
     store,
+    appOwnership: new InMemoryAppOwnershipStore(store),
     newId: (prefix) => `${prefix}_${(counter += 1)}`,
     now: () => Date.parse(NOW),
     vault,
@@ -183,12 +185,10 @@ test("owner-tagged mint audit records current plan actor, apply approver, connec
     workspaceId: "workspace_1",
     capsuleId: "cap_1",
   });
-  await store.putCapsule({
-    ...capsule,
-    ownerAccountId: "account_owner",
-    ownershipEpoch: 4,
-    managementState: "active",
-  });
+  expect(await new InMemoryAppOwnershipStore(store).initializeOwnershipIfMissing({
+    capsuleId: capsule.id, ownerAccountId: "account_owner", ownershipEpoch: 4,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}`,
+  })).toBe(true);
   const plan = {
     ...planRun([owned.provider]),
     createdBy: "account_creator",
