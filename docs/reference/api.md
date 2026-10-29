@@ -254,7 +254,7 @@ PATには `appIds` を指定できます。実効権限はscopeと現在のア�
 
 拒否は `403 app_access_denied` (役割がない) または `403 app_owner_only` (所有者だけの操作) です。所有記録の確認と役割の読み取りの間に所有者が変わった場合は `409 conflict` を返し、再試行を求めます。完了したアンインストール後も、残っている所有記録の所有者・メンバーは履歴を表示できます。
 
-資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリのOAuthアクセストークンは権限を広げません。アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通り、メンバー管理・譲渡・アンインストールには使えません。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も同じく両方を要求します。
+資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリ自身のOAuthアクセストークン (アプリごとのOIDC clientに発行され、そのアプリに束縛されたtoken) は、そのアプリ自身だけに使えます。別のアプリのroute、別のアプリに属するRun・Source・インストール計画、Workspace単位のroute (一覧、`install-plans` の作成など) は `403` です。自分のアプリでも、アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通り、メンバー管理・譲渡・アンインストール・新しい接続の選択には使えません。例外は、operatorが `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` で指定したリポジトリから作られたアプリ (Takosのように利用者の代わりにアプリをインストールするアプリ) だけです。判定はサーバー側で、tokenに束縛されたアプリが同じWorkspaceにあり、そのアプリに記録されたSource (URLは変更できない) が指定と一致するかで行い、clientの申告は使いません。指定されたアプリのtokenは、束縛されたWorkspaceの中で、アプリでの役割とWorkspace判定の両方を満たす範囲だけ使えます。operatorが登録するstatic client (アプリに束縛されないtoken) は従来どおりです。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も、アプリでの役割とWorkspace判定の両方を要求します。
 
 Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者のいないpreflight Source、Workspaceの接続) はPhase 9まで従来のWorkspace判定で互換提供します。一覧には引き続き表示されますが、所有記録のあるアプリへの操作はアプリでの判定を通ります。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
 

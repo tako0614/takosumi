@@ -93,6 +93,10 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import { appActionAllowed, type AppAction } from "takosumi-contract/app-access";
 import type { AccountsStore } from "../store.ts";
+import {
+  installedAppSourceDelegates,
+  type InstalledAppDelegationSource,
+} from "../installed-app-delegation.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -135,6 +139,13 @@ export interface ControlSession {
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
+  /**
+   * Operator-designated repositories whose installed app may use its own
+   * OAuth token as a Workspace delegation. Set only by the authenticated
+   * Accounts bearer dispatcher from composition configuration, and only for
+   * installed-app OAuth tokens; never read from an HTTP field.
+   */
+  readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   /**
    * Authorization intent derived from the HTTP method at the authenticated
    * dispatch boundary. Workspace members may read; only owner/admin members
@@ -633,6 +644,14 @@ export async function canAccessWorkspace(input: {
   // read B's Capsules, Runs, and Outputs through every id-addressed route.
   // The restriction is applied before membership, never instead of it.
   if (!bearerWorkspaceAllows(input.session, input.workspaceId)) return false;
+  // An installed app's own token reaches only its own app, unless the
+  // operator designated the app as a Workspace delegate (Takos-style).
+  if (isInstalledAppToken(input.session) &&
+    !(input.capsuleId !== undefined && input.session.appIds.includes(input.capsuleId)) &&
+    !(await installedAppTokenDelegates(input.operations, input.session))) {
+    return false;
+  }
+  input.assertActive?.();
   if (input.session.appIds !== undefined && input.session.credential !== "oauth-access-token") {
     // A PAT's Workspace binding identifies its issuance scope, not authority
     // over every app in that Workspace. Only a live app grant may proceed.
@@ -694,6 +713,53 @@ export async function canAccessWorkspace(input: {
   return mayUseMember(
     members.find((member) => member.accountId === input.session.subject),
   );
+}
+
+/** An installed app's own OAuth token: issued to its per-install client, bound to its Capsule. */
+export function isInstalledAppToken(
+  session: ControlSession,
+): session is ControlSession & { readonly appIds: readonly string[] } {
+  return session.credential === "oauth-access-token" && session.appIds !== undefined;
+}
+
+const installedAppDelegationDecisions = new WeakMap<ControlSession, Promise<boolean>>();
+
+/**
+ * Workspace delegation for an installed app's own token. Server-side only:
+ * the token's single bound Capsule must still live in the token's Workspace,
+ * and that Capsule's recorded Source (whose URL cannot be patched) must match
+ * an operator-designated repository. Memoized per session object.
+ */
+export function installedAppTokenDelegates(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+): Promise<boolean> {
+  const sources = session.installedAppDelegationSources;
+  if (!isInstalledAppToken(session) || !sources?.length || session.appIds.length !== 1 || !session.workspaceId) {
+    return Promise.resolve(false);
+  }
+  let decision = installedAppDelegationDecisions.get(session);
+  if (!decision) {
+    const capsuleId = session.appIds[0]!;
+    const workspaceId = session.workspaceId;
+    decision = (async () => {
+      let capsule: Capsule;
+      let source: Source;
+      try {
+        capsule = await operations.capsules.getCapsule(capsuleId);
+        if (capsule.id !== capsuleId || capsule.workspaceId !== workspaceId || capsule.status === "destroyed") return false;
+        source = (await operations.getSource(capsule.sourceId)).source;
+      } catch (error) {
+        if (controllerErrorCode(error) === "not_found") return false;
+        throw error;
+      }
+      return source.id === capsule.sourceId && source.workspaceId === capsule.workspaceId &&
+        (source.ownerCapsuleId === undefined || source.ownerCapsuleId === capsule.id) &&
+        installedAppSourceDelegates(sources, source);
+    })();
+    installedAppDelegationDecisions.set(session, decision);
+  }
+  return decision;
 }
 
 export function jsonStatus(body: unknown, status: number): Response {

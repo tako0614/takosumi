@@ -26,6 +26,7 @@ import {
   createRequestPhaseDiagnostics,
   type RequestPhaseDiagnosticsConfiguration,
 } from "./request-phase-diagnostics.ts";
+import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
 
 export type {
   AccountsJsonWebKey,
@@ -176,6 +177,11 @@ export * from "./identity.ts";
 export * from "./mobile-oidc-client.ts";
 export * from "./shared-account-workspace.ts";
 export * from "./workspace-mutations-freeze.ts";
+export {
+  INSTALLED_APP_DELEGATION_SOURCES_ENV,
+  parseInstalledAppDelegationSources,
+  type InstalledAppDelegationSource,
+} from "./installed-app-delegation.ts";
 export * from "./workspace-billing-bootstrap.ts";
 export type { IdentityMergeReconciler } from "./identity-merge.ts";
 export type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
@@ -202,6 +208,12 @@ export interface AccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   /** Defaults to true: legacy Workspace creation/member mutations return 409. */
   workspaceMutationsFrozen?: boolean;
+  /**
+   * Operator-designated repositories whose installed app may use its own
+   * OAuth token as a Workspace delegation. Empty: every installed-app token is
+   * confined to its own app.
+   */
+  installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   /** Explicit owner reconciliation; absence never activates account aliases. */
   identityMergeReconciler?: IdentityMergeReconciler;
@@ -254,6 +266,7 @@ export interface AccountsHandlerOptions {
 export interface EphemeralAccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   workspaceMutationsFrozen?: boolean;
+  installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   identityMergeReconciler?: IdentityMergeReconciler;
   identityMergeRetry?: IdentityMergeRetryCapability;
@@ -394,6 +407,9 @@ export async function createEphemeralAccountsHandler(
     issuer,
     hostedSessionPolicy: options.hostedSessionPolicy,
     workspaceMutationsFrozen: options.workspaceMutationsFrozen,
+    ...(options.installedAppDelegationSources
+      ? { installedAppDelegationSources: options.installedAppDelegationSources }
+      : {}),
     sharedAccountWorkspaceDirectory: options.sharedAccountWorkspaceDirectory,
     identityMergeReconciler: options.identityMergeReconciler,
     identityMergeRetry: options.identityMergeRetry,
@@ -988,6 +1004,9 @@ export function createAccountsHandler(
             ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
             ...(options.workspaceMutationsFrozen !== undefined
               ? { workspaceMutationsFrozen: options.workspaceMutationsFrozen }
+              : {}),
+            ...(options.installedAppDelegationSources?.length
+              ? { installedAppDelegationSources: options.installedAppDelegationSources }
               : {}),
           }),
       );

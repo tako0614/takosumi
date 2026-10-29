@@ -12,6 +12,10 @@ import type {
 } from "@takosjp/takosumi-accounts-service";
 import { upstreamOAuthOptionsFromEnvironment } from "@takosjp/takosumi-accounts-service";
 import { resolveTakosumiMobileOidcClientId } from "@takosjp/takosumi-accounts-service";
+import {
+  parseInstalledAppDelegationSources,
+  type InstalledAppDelegationSource,
+} from "@takosjp/takosumi-accounts-service";
 
 export interface NodeAccountsStableOidcConfig {
   readonly privateJwkJson: string;
@@ -41,6 +45,8 @@ export interface NodeAccountsServerConfig {
   readonly privacyOperationsToken: string | undefined;
   readonly privacyRetentionPolicyRef: string | undefined;
   readonly subject: string | undefined;
+  /** Repositories whose installed app may use its own token as a Workspace delegation. */
+  readonly installedAppDelegationSources: readonly InstalledAppDelegationSource[];
 }
 
 export function parseEnv(
@@ -77,6 +83,9 @@ export function parseEnv(
       "TAKOSUMI_ACCOUNTS_PRIVACY_RETENTION_POLICY_REF",
     ),
     subject: optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT"),
+    installedAppDelegationSources: parseInstalledAppDelegationSources(
+      env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
+    ),
   };
 }
 

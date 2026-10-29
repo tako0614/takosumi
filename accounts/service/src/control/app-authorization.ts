@@ -24,6 +24,8 @@ import type { AccountsStore } from "../store.ts";
 import {
   canAccessWorkspace,
   controlPlaneUnavailable,
+  installedAppTokenDelegates,
+  isInstalledAppToken,
   requireWorkspaceAccess,
   workspaceAccessForbidden,
   type ControlSession,
@@ -165,6 +167,13 @@ async function decideOwnedApp(
     !bearerAppAllows(session, input.capsuleId)) {
     return { ok: false, response: appAccessDenied() };
   }
+  // An installed app's own token reaches only its own app unless the
+  // operator designated the app as a Workspace delegate.
+  if (isInstalledAppToken(session) && !session.appIds.includes(input.capsuleId) &&
+    !(await installedAppTokenDelegates(operations, session))) {
+    return { ok: false, response: appAccessDenied() };
+  }
+  input.assertActive?.();
   let capsule = input.capsule;
   if (session.workspaceId !== undefined) {
     capsule ??= await operations.capsules.getCapsule(input.capsuleId);
@@ -204,6 +213,8 @@ async function decideOwnedApp(
       store: input.store,
       session,
       workspaceId: input.workspaceId,
+      capsuleId: input.capsuleId,
+      appAction: input.action,
       ...(input.assertActive ? { assertActive: input.assertActive } : {}),
       ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     });

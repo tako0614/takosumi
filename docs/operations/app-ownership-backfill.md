@@ -126,8 +126,16 @@ count. The Phase 0 production inventory (5 Workspaces, 2 owners, 0 non-owner
 members) is expected to report `differenceCount: 0`. The report contains
 account and Capsule ids; keep it with the private backfill inventory, not in a
 public repository or ticket. Bearer restrictions (PAT `appIds`, Workspace-bound
-tokens) are identical under both rules and are not part of this comparison;
-installed-app OAuth tokens are always the intersection of both rules.
+tokens) are identical under both rules and are not part of this comparison.
+
+An installed app's own OAuth token reaches only its own app (and there needs
+both its app role and the Workspace decision). Only apps built from a
+repository listed in `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` keep Workspace
+delegation. On a target where Takos installs apps for its users, set that
+variable to the Takos repository coordinate, for example
+`[{"url":"https://github.com/<owner>/takos","path":"."}]` with the exact URL
+the Takos Capsule was installed from, before deploying this release;
+otherwise Takos's delegated install, approve and apply requests return 403.
 
 Failure recovery preserves the additive schema and existing storage roots.
 Use a reviewed forward repair for incorrect backfill data. Do not drop the new
