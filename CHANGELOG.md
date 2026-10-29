@@ -8,6 +8,15 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Generated secrets survive app updates:** when an installed app's repository
+  manifest adds, removes or renames a binding-delivered `secret.generated` slot
+  (or changes its OIDC grant), Takosumi now re-seals the app's generated values
+  and keeps every unchanged slot's value; only a new slot gets a fresh value.
+  Previously every value was regenerated, silently rotating keys such as an
+  app's `ENCRYPTION_KEY`. If the previous sealed values cannot be opened, Plan
+  and Apply now fail with `runtime_inputs_previous_generation_unreadable`
+  instead of minting replacements; destroy is unaffected. See the operator
+  runbook in `docs/operations/secret-rotation.md` for recovery.
 - **Breaking API change — automatic destruction:** for an applied Capsule,
   `DELETE /api/v1/capsules/{id}` now schedules uninstall with an OSS default
   **seven-day grace period**, followed by automatic destroy if the reservation

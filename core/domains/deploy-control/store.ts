@@ -4104,6 +4104,17 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
   /** Atomic sealed-material create; an existing opaque owner reference wins. */
   createSecretBlobIfAbsent(blob: StoredSecretBlob): Promise<boolean>;
+  /**
+   * Atomic sealed-material replace. The row is swapped only while it is still
+   * exactly `expected`, so a re-seal never passes through a moment with no
+   * material and never overwrites a concurrent writer. `false` means the row
+   * moved or is gone; the caller re-reads it instead of retrying blindly. The
+   * replacement must keep `expected`'s row id and opaque owner reference.
+   */
+  replaceSecretBlobIfCurrent(
+    expected: StoredSecretBlob,
+    replacement: StoredSecretBlob,
+  ): Promise<boolean>;
   getSecretBlob(connectionId: string): Promise<StoredSecretBlob | undefined>;
   deleteSecretBlob(connectionId: string): Promise<boolean>;
 
@@ -8001,6 +8012,26 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   createSecretBlobIfAbsent(blob: StoredSecretBlob): Promise<boolean> {
     if (this.#secretBlobs.has(blob.connectionId)) return Promise.resolve(false);
     this.#secretBlobs.set(blob.connectionId, blob);
+    return Promise.resolve(true);
+  }
+
+  replaceSecretBlobIfCurrent(
+    expected: StoredSecretBlob,
+    replacement: StoredSecretBlob,
+  ): Promise<boolean> {
+    if (
+      replacement.id !== expected.id ||
+      replacement.connectionId !== expected.connectionId
+    ) {
+      return Promise.reject(
+        new TypeError("sealed material replacement must keep its owner reference"),
+      );
+    }
+    const current = this.#secretBlobs.get(expected.connectionId);
+    if (!current || JSON.stringify(current) !== JSON.stringify(expected)) {
+      return Promise.resolve(false);
+    }
+    this.#secretBlobs.set(replacement.connectionId, replacement);
     return Promise.resolve(true);
   }
 

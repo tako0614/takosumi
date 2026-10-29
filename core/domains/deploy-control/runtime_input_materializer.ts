@@ -32,10 +32,23 @@
  * it returns. Minting a second client — or sealing a copy of the first — would
  * put two identities under one Capsule.
  *
- * A profile change (the Capsule's manifest adds or renames a generated secret,
- * or changes which bindings the OIDC grant delivers) retires the previous
- * sealed generation and seals a new one. Fencing it off instead would leave the
- * Capsule unable to plan OR destroy, with no recovery path.
+ * A profile change (the Capsule's manifest adds, removes or renames a generated
+ * secret, or changes its OIDC grant) seals a new generation that CARRIES every
+ * value the previous one holds for a binding whose name and shape are
+ * unchanged: only a new or reshaped binding is minted, and a removed one is
+ * dropped. A workload has usually encrypted data under those values, so minting
+ * over them would be silent data loss. The previous generation is opened under
+ * its own stored AAD, only after the same owner fence, and the new one is
+ * sealed under the current AAD and swapped in by an atomic compare-and-replace:
+ * there is no moment with neither generation stored, and a concurrent writer is
+ * never overwritten. A later AAD-shape change reuses the same path.
+ *
+ * A previous generation that cannot be opened or parsed is refused with
+ * {@link RuntimeInputPreviousGenerationError} instead of being replaced. That
+ * fences Plan and Apply for a live Capsule, but never teardown: a destroy plan
+ * wires no runtime-input material and retirement never opens it, so the Capsule
+ * can still be destroyed. Recovery is explicit: restore the key or row that
+ * sealed it, or deliberately retire the row and accept fresh values.
  *
  * The nonce is deliberately NOT random per Run. A provider derives its
  * apply-idempotency identity from the nonce, and that identity forces resource
@@ -109,6 +122,8 @@ export const RUNTIME_INPUT_MAX_TOTAL_BYTES = 1024 * 1024;
 export const RUNTIME_INPUT_MIN_VALUE_LENGTH = 8;
 
 const GENERATED_SECRET_BYTES = 32;
+/** Exactly the form `bytesToHex` gives one {@link GENERATED_SECRET_BYTES}-byte secret. */
+const SEALED_GENERATED_SECRET_PATTERN = /^[0-9a-f]{64}$/u;
 
 /** Capsule authority every runtime-input operation is scoped to. */
 export interface RuntimeInputAuthority {
@@ -332,8 +347,10 @@ export interface RuntimeInputMaterializer {
   /** Value-free. The exact deliverable name set plus its digest. */
   profile(input: RuntimeInputAuthority): Promise<RuntimeInputProfile>;
   /**
-   * Plan-stable nonce for one provider instance. Value-free: it never opens the
-   * sealed material. Called at Plan (to bake the literal into the generated
+   * Plan-stable nonce for one provider instance. Value-free: its answer never
+   * depends on a value, and it opens sealed material only to carry a previous
+   * generation forward after a profile change, re-sealing it before anything
+   * leaves this module. Called at Plan (to bake the literal into the generated
    * root) and again at Apply (to fence that literal against live material).
    */
   nonce(input: RuntimeInputProviderInstanceRequest): Promise<string>;
@@ -442,6 +459,59 @@ export function createRuntimeInputMaterializer(input: {
     return `sha256:${bytesToHex(digest)}`;
   };
 
+  /**
+   * Seals the next generation from the previous one and swaps it in.
+   *
+   * The previous generation is opened under its OWN stored AAD (the caller has
+   * already passed the owner fence), so a profile change and a later AAD-shape
+   * change both reach the same carry-over. The new generation is sealed under
+   * the current AAD and replaces the old row only while that row is still the
+   * one opened here: a failure anywhere before the replace commits leaves the
+   * previous generation stored and readable, and a lost race returns the
+   * winner's row for the caller's fences to judge. Nothing is retried.
+   */
+  const carriedGeneration = async (next: {
+    readonly previous: StoredSecretBlob;
+    readonly declaration: RuntimeInputDeclaration;
+    readonly authority: RuntimeInputAuthority;
+    readonly ownerRef: string;
+    readonly partition: SecretPartition;
+    readonly aad: string;
+  }): Promise<StoredSecretBlob | undefined> => {
+    const previous = await openPreviousGeneration({
+      blob: next.previous,
+      ownerRef: next.ownerRef,
+      capsuleId: next.authority.capsuleId,
+      partition: next.partition,
+      crypto: input.crypto,
+    });
+    const carried = carryGeneratedSecretValues({
+      previous,
+      generatedSecrets: next.declaration.generatedSecrets,
+    });
+    const sealed = await input.crypto.seal(
+      stableStringify(carried.values),
+      next.partition,
+      new TextEncoder().encode(next.aad),
+    );
+    const replacement = runtimeInputBlob({
+      ownerRef: next.ownerRef,
+      workspaceId: next.authority.workspaceId,
+      partition: next.partition,
+      aad: next.aad,
+      sealed,
+      createdAt: next.previous.createdAt,
+      rotatedAt: exactClock(clock()),
+      crypto: input.crypto,
+    });
+    return (await input.store.replaceSecretBlobIfCurrent(
+      next.previous,
+      replacement,
+    ))
+      ? replacement
+      : await input.store.getSecretBlob(next.ownerRef);
+  };
+
   const sealedMaterial = async (
     request: RuntimeInputAuthority,
   ): Promise<{
@@ -475,17 +545,21 @@ export function createRuntimeInputMaterializer(input: {
         partition,
       });
       if (blob.aad !== aad) {
-        // The Capsule's manifest changed the deliverable name set, so the
-        // sealed material no longer answers the current profile. Retire it and
-        // seal a new generation rather than bricking every later plan — and
-        // every later destroy — behind a fence with no recovery path. The
-        // nonce rotates with the new generation, which is exactly the
-        // replacement semantics a provider expects from rotated material.
-        await input.store.deleteSecretBlob(ownerRef);
-        blob = undefined;
+        // The Capsule's profile moved, so the sealed generation no longer
+        // answers it. Carry its values into a generation sealed under the
+        // current AAD rather than minting over keys the workload already
+        // encrypted data under. The nonce still rotates with the new
+        // ciphertext, which is the replacement semantics a provider expects.
+        blob = await carriedGeneration({
+          previous: blob,
+          declaration: current.declaration,
+          authority: request,
+          ownerRef,
+          partition,
+          aad,
+        });
       }
-    }
-    if (!blob) {
+    } else {
       const content = await generateRuntimeInputValues(
         current.declaration,
         request,
@@ -1010,11 +1084,235 @@ async function generateRuntimeInputValues(
       values[entry.binding] = value;
       continue;
     }
-    const bytes = new Uint8Array(entry.bytes);
-    crypto.getRandomValues(bytes);
-    values[entry.binding] = bytesToHex(bytes);
+    values[entry.binding] = freshGeneratedSecret(entry);
   }
   return stableStringify(values);
+}
+
+/** Fresh randomness for one generated-secret binding, in its declared shape. */
+function freshGeneratedSecret(entry: {
+  readonly bytes: number;
+  readonly encoding: string;
+}): string {
+  if (
+    entry.encoding !== "hex" ||
+    !Number.isInteger(entry.bytes) ||
+    entry.bytes < 1 ||
+    entry.bytes > 1024
+  ) {
+    invalid("runtime input generated secret declaration is invalid");
+  }
+  const bytes = new Uint8Array(entry.bytes);
+  crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
+}
+
+/**
+ * One value of a sealed generation together with the shape it was minted for.
+ * The shape is what decides whether a later declaration may keep the value.
+ */
+export interface SealedGeneratedSecret {
+  readonly value: string;
+  readonly bytes: number;
+  readonly encoding: string;
+}
+
+/** Value-free account of one carry-over, plus the values to seal. */
+export interface RuntimeInputCarryOver {
+  /** The next generation's `binding -> value` document. Seal it; never log it. */
+  readonly values: Readonly<Record<string, string>>;
+  /** Bindings whose previous value was kept, sorted. */
+  readonly carried: readonly string[];
+  /** Bindings that received fresh randomness (new or reshaped), sorted. */
+  readonly minted: readonly string[];
+  /** Previous bindings the current declaration no longer has, sorted. */
+  readonly dropped: readonly string[];
+}
+
+/**
+ * The next generation's values, carried from the previous one.
+ *
+ * A binding keeps its value exactly when the previous generation holds that
+ * binding minted for the same shape (`bytes` and `encoding`, the declaration's
+ * only value-shaping fields). Every other declared binding — new, or reshaped,
+ * which a consumer could not read in its old shape anyway — is minted fresh,
+ * and a previous binding the declaration no longer has is dropped. No other
+ * binding's value moves.
+ */
+export function carryGeneratedSecretValues(input: {
+  readonly previous: ReadonlyMap<string, SealedGeneratedSecret>;
+  readonly generatedSecrets: readonly RuntimeGeneratedSecretBinding[];
+}): RuntimeInputCarryOver {
+  const values: Record<string, string> = {};
+  const carried: string[] = [];
+  const minted: string[] = [];
+  const declared = new Set<string>();
+  for (const entry of input.generatedSecrets) {
+    declared.add(entry.binding);
+    const previous = input.previous.get(entry.binding);
+    if (
+      previous &&
+      previous.bytes === entry.bytes &&
+      previous.encoding === entry.encoding
+    ) {
+      values[entry.binding] = previous.value;
+      carried.push(entry.binding);
+      continue;
+    }
+    values[entry.binding] = freshGeneratedSecret(entry);
+    minted.push(entry.binding);
+  }
+  return {
+    values,
+    carried: carried.sort(),
+    minted: minted.sort(),
+    dropped: [...input.previous.keys()]
+      .filter((binding) => !declared.has(binding))
+      .sort(),
+  };
+}
+
+/**
+ * A previous sealed generation that cannot be carried forward.
+ *
+ * Minting fresh values in its place would silently rotate every generated key
+ * the workload already encrypted data under, so Plan and Apply refuse instead.
+ * Destroy is unaffected: a destroy plan wires no runtime-input material, and
+ * retirement deletes the row without opening it. The message names the Capsule
+ * and the failure class, never a value; for an open failure it also says
+ * whether the row was sealed under the active key version, which separates a
+ * changed key from a damaged row without exposing either key's fingerprint.
+ */
+export class RuntimeInputPreviousGenerationError extends TypeError {
+  readonly capsuleId: string;
+
+  constructor(capsuleId: string, problem: string, options?: { cause?: unknown }) {
+    super(
+      `previous runtime input generation of Capsule ${capsuleId} cannot be carried forward: ${problem}; ` +
+        "its generated secrets are not re-minted",
+      options,
+    );
+    this.name = "RuntimeInputPreviousGenerationError";
+    this.capsuleId = capsuleId;
+  }
+}
+
+/**
+ * Opens the previous generation under its own stored AAD.
+ *
+ * The caller has already passed the owner fence on the row. The stored AAD is
+ * then read as the identity the row was sealed under and must name that same
+ * owner, Capsule and Workspace before it is used to open anything; AES-GCM
+ * authenticates it, so opening succeeds only with the exact bytes it was
+ * sealed under. Only the AAD shape this module has ever written is recognised.
+ * A later AAD-shape change (for example one that retires the Workspace from it)
+ * adds its predecessor here and seals under the new shape, without touching
+ * the carry-over itself.
+ */
+async function openPreviousGeneration(input: {
+  readonly blob: StoredSecretBlob;
+  readonly ownerRef: string;
+  readonly capsuleId: string;
+  readonly partition: SecretPartition;
+  readonly crypto: SecretBoundaryCrypto;
+}): Promise<ReadonlyMap<string, SealedGeneratedSecret>> {
+  if (!previousGenerationAadNamesOwner(input)) {
+    throw new RuntimeInputPreviousGenerationError(
+      input.capsuleId,
+      "its authenticated data does not name this Capsule's runtime inputs",
+    );
+  }
+  let content: string;
+  try {
+    content = await input.crypto.open(
+      base64ToBytes(input.blob.ciphertext),
+      input.partition,
+      new TextEncoder().encode(input.blob.aad),
+    );
+  } catch (error) {
+    const activeKeyVersion = input.crypto.keyVersion?.(input.partition) ?? 1;
+    throw new RuntimeInputPreviousGenerationError(
+      input.capsuleId,
+      `it could not be opened (${error instanceof Error ? error.name : typeof error}; ` +
+        `sealed under ${input.blob.keyVersion === activeKeyVersion ? "the active" : "a different"} key version)`,
+      { cause: error },
+    );
+  }
+  return sealedGeneratedSecrets(content, input.capsuleId);
+}
+
+function previousGenerationAadNamesOwner(input: {
+  readonly blob: StoredSecretBlob;
+  readonly ownerRef: string;
+  readonly capsuleId: string;
+}): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input.blob.aad);
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(parsed) &&
+    Object.keys(parsed).length === 5 &&
+    parsed.contract === BLOB_CONTRACT &&
+    parsed.ownerRef === input.ownerRef &&
+    parsed.capsuleId === input.capsuleId &&
+    typeof parsed.workspaceId === "string" &&
+    parsed.workspaceId === input.blob.workspaceId &&
+    typeof parsed.profileDigest === "string" &&
+    /^sha256:[0-9a-f]{64}$/u.test(parsed.profileDigest)
+  );
+}
+
+/**
+ * The previous generation's sealed document.
+ *
+ * It is a bare `binding -> value` map and records no shape: every value this
+ * lane has ever sealed was minted as {@link GENERATED_SECRET_BYTES}-byte hex,
+ * the only shape the runtime binding profile has ever admitted. A value of any
+ * other form means the document is not one this lane wrote, so the whole
+ * generation is refused rather than partially trusted. A profile grammar that
+ * admits a second shape must first make this document record each value's
+ * shape. Parser text is never surfaced: it would quote the plaintext.
+ */
+function sealedGeneratedSecrets(
+  content: string,
+  capsuleId: string,
+): ReadonlyMap<string, SealedGeneratedSecret> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch {
+    parsed = undefined;
+  }
+  if (!isRecord(parsed)) {
+    throw new RuntimeInputPreviousGenerationError(
+      capsuleId,
+      "its sealed document is not a binding map",
+    );
+  }
+  const values = new Map<string, SealedGeneratedSecret>();
+  for (const [binding, value] of Object.entries(parsed)) {
+    if (!RUNTIME_INPUT_NAME_PATTERN.test(binding)) {
+      throw new RuntimeInputPreviousGenerationError(
+        capsuleId,
+        "its sealed document holds an invalid binding name",
+      );
+    }
+    if (typeof value !== "string" || !SEALED_GENERATED_SECRET_PATTERN.test(value)) {
+      throw new RuntimeInputPreviousGenerationError(
+        capsuleId,
+        `its sealed value for ${binding} is not a ${GENERATED_SECRET_BYTES}-byte hex secret`,
+      );
+    }
+    values.set(binding, {
+      value,
+      bytes: GENERATED_SECRET_BYTES,
+      encoding: "hex",
+    });
+  }
+  return values;
 }
 
 /**
@@ -1184,6 +1482,8 @@ function runtimeInputBlob(input: {
   readonly aad: string;
   readonly sealed: Uint8Array;
   readonly createdAt: string;
+  /** Set when a later generation re-seals carried values. */
+  readonly rotatedAt?: string;
   readonly crypto: SecretBoundaryCrypto;
 }): StoredSecretBlob {
   return {
@@ -1197,6 +1497,7 @@ function runtimeInputBlob(input: {
     aad: input.aad,
     keyVersion: input.crypto.keyVersion?.(input.partition) ?? 1,
     createdAt: input.createdAt,
+    ...(input.rotatedAt === undefined ? {} : { rotatedAt: input.rotatedAt }),
   };
 }
 

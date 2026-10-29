@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
 
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type {
+  OpenTofuApplyJob,
   OpenTofuDestroyJob,
   OpenTofuPlanJob,
 } from "../../../../core/domains/deploy-control/mod.ts";
@@ -19,6 +20,7 @@ import {
   applyExpectedGuardFromPlanRun,
   DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
   OpenTofuController,
+  OpenTofuControllerError,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   InMemoryOpenTofuControlStore,
@@ -231,6 +233,7 @@ async function seedFenceModel(
   });
   const observed: {
     plan?: OpenTofuPlanJob;
+    apply?: OpenTofuApplyJob;
     destroy?: OpenTofuDestroyJob;
   } = {};
   const runtimeInputMaterializerDelegate = createRuntimeInputMaterializer({
@@ -286,12 +289,15 @@ async function seedFenceModel(
             : {}),
         };
       },
-      apply: async (job) => ({
-        stateDigest: `sha256:${"d".repeat(64)}`,
-        providerInstallation: planResult().providerInstallation,
-        rawOutputRef: job.rawOutputRef,
-        executionEvidence: fixtureExecutionEvidence(job, "apply"),
-      }),
+      apply: async (job) => {
+        observed.apply = job;
+        return {
+          stateDigest: `sha256:${"d".repeat(64)}`,
+          providerInstallation: planResult().providerInstallation,
+          rawOutputRef: job.rawOutputRef,
+          executionEvidence: fixtureExecutionEvidence(job, "apply"),
+        };
+      },
       destroy: async (job) => {
         observed.destroy = job;
         return {
@@ -507,6 +513,140 @@ test("destroy carries stable nonce-only provider wiring without opening runtime 
   expect(destroyed.applyRun.status).toBe("succeeded");
   expect(observed.destroy?.generatedRoot?.files).toEqual(firstFiles);
   expect(observed.destroy?.credentials?.runtimeInputs).toBeUndefined();
+});
+
+/** Replaces the generated-secret slots of the Capsule's current InstallConfig. */
+async function declareGeneratedSecrets(
+  store: OpenTofuControlStore,
+  capsuleId: string,
+  bindings: readonly string[],
+): Promise<void> {
+  const capsule = await store.getCapsule(capsuleId);
+  const current = capsule
+    ? await store.getInstallConfig(capsule.installConfigId)
+    : undefined;
+  if (!current) throw new Error("fixture InstallConfig is missing");
+  await store.putInstallConfig({
+    ...current,
+    runtimeBindingMaterialization: {
+      contract: "takosumi.runtime-binding-profile/v2",
+      generatedSecrets: bindings.map((binding) => ({
+        binding,
+        bytes: 32 as const,
+        encoding: "hex" as const,
+      })),
+    },
+  });
+}
+
+test("an upgrade that adds a generated secret applies the existing value unchanged", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { seeded, controller, observed, compatibilityReportId } =
+    await seedFenceModel(store, {
+      providerVersion: "4.0.0",
+      capsuleId: "cap_fence_carry",
+    });
+  const first = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { compatibilityReportId },
+  );
+  const applied = await controller.createApplyRun({
+    planRunId: first.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(first.planRun),
+  });
+  expect(applied.applyRun.status).toBe("succeeded");
+  const firstValues = observed.apply?.credentials?.runtimeInputs?.[0]?.values;
+  expect(firstValues?.ENCRYPTION_KEY).toMatch(/^[0-9a-f]{64}$/u);
+
+  // The app's next source revision asks for one more generated secret.
+  await declareGeneratedSecrets(store, seeded.capsule.id, [
+    "ENCRYPTION_KEY",
+    "WEB_PUSH_KEY",
+  ]);
+  const second = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { compatibilityReportId },
+  );
+  expect(second.planRun.status).toBe("succeeded");
+  expect(observed.plan?.credentials?.runtimeInputs).toEqual([
+    {
+      variableName: VARIABLE,
+      names: ["ENCRYPTION_KEY", "WEB_PUSH_KEY"],
+      values: {},
+    },
+  ]);
+  const reapplied = await controller.createApplyRun({
+    planRunId: second.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(second.planRun),
+  });
+  expect(reapplied.applyRun.status).toBe("succeeded");
+  const secondValues = observed.apply?.credentials?.runtimeInputs?.[0]?.values;
+  expect(Object.keys(secondValues ?? {}).sort()).toEqual([
+    "ENCRYPTION_KEY",
+    "WEB_PUSH_KEY",
+  ]);
+  expect(secondValues?.ENCRYPTION_KEY).toBe(firstValues?.ENCRYPTION_KEY);
+  expect(secondValues?.WEB_PUSH_KEY).toMatch(/^[0-9a-f]{64}$/u);
+  expect(secondValues?.WEB_PUSH_KEY).not.toBe(firstValues?.ENCRYPTION_KEY);
+});
+
+test("an unreadable previous generation refuses Plan with its own reason and destroy still completes", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { seeded, controller, observed, compatibilityReportId } =
+    await seedFenceModel(store, {
+      providerVersion: "4.0.0",
+      capsuleId: "cap_fence_unreadable",
+    });
+  const create = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { compatibilityReportId },
+  );
+  const applied = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(applied.applyRun.status).toBe("succeeded");
+  const appliedValues = observed.apply?.credentials?.runtimeInputs?.[0]?.values;
+  const ownerRef = `runtime_input_${seeded.capsule.id}`;
+  const sealed = await store.getSecretBlob(ownerRef);
+  if (!sealed) throw new Error("fixture sealed blob is missing");
+  const damaged = { ...sealed, ciphertext: btoa("damaged sealed material") };
+  await store.putSecretBlob(damaged);
+  await declareGeneratedSecrets(store, seeded.capsule.id, [
+    "ENCRYPTION_KEY",
+    "WEB_PUSH_KEY",
+  ]);
+
+  const refusal = await controller
+    .createCapsulePlan(seeded.capsule.id, {}, { compatibilityReportId })
+    .catch((error: unknown) => error);
+  expect(refusal).toBeInstanceOf(OpenTofuControllerError);
+  const controllerError = refusal as OpenTofuControllerError;
+  expect(controllerError.code).toBe("failed_precondition");
+  expect(controllerError.details).toEqual({
+    reason: "runtime_inputs_previous_generation_unreadable",
+  });
+  expect(controllerError.message).toContain("could not be opened");
+  for (const value of Object.values(appliedValues ?? {})) {
+    expect(controllerError.message).not.toContain(value);
+  }
+  // Refused, not replaced: the operator still has the row to recover from.
+  expect(await store.getSecretBlob(ownerRef)).toEqual(damaged);
+
+  const destroy = await controller.createCapsuleDestroyPlan(seeded.capsule.id);
+  await controller.approveRun(destroy.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(destroyed.capsule?.status).toBe("destroyed");
+  expect(observed.destroy?.credentials?.runtimeInputs).toBeUndefined();
+  // Retirement deletes the row without opening it.
+  expect(await store.getSecretBlob(ownerRef)).toBeUndefined();
 });
 
 /**

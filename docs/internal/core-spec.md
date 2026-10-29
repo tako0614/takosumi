@@ -594,7 +594,13 @@ and reopened for every later Run. A host that ALSO materializes the same profile
 through its private runtime-binding lane injects that derivation instead; nothing
 is then sealed, because the values are a pure function of the host key and the
 profile and both lanes necessarily mint the same bytes. Sealing one lane's first
-generation would let the other drift away from it with no drift signal.
+generation would let the other drift away from it with no drift signal. A
+derived value depends only on the host key and that binding's own derivation
+parts (Workspace, Capsule and binding name, plus the InstallConfig id under the
+v1 profile contract), so adding or removing another binding moves no derived
+value and there is nothing to carry. A change of those parts themselves — a v1
+profile recompiled as v2, a new InstallConfig id under v1, or a change of the
+Capsule's Workspace identity — does move every derived value.
 
 The OIDC values have no such lane and are never sealed or minted here. An OIDC
 client is one registration under the Capsule's Accounts authority — the same
@@ -607,12 +613,35 @@ value-free generation identity, which is folded into the nonce so a moved
 registration rotates it exactly like re-sealed material. A profile that declares
 OIDC bindings and a host with no such port fail closed.
 
-A profile change — the Capsule's manifest adds or renames a generated secret, or
-changes which bindings the OIDC grant delivers — retires the previous sealed
-generation and seals a new one. Fencing it off instead would leave the Capsule
-unable to plan OR destroy, with no recovery path. Re-sealing rotates the nonce,
-which is exactly the replacement semantics a provider expects from rotated
-material.
+A profile change — the Capsule's manifest adds, removes or renames a generated
+secret, changes its profile contract, or changes its OIDC grant — seals a new
+generation that carries the previous one's values forward. A binding whose name
+and shape (`bytes` and `encoding`) are unchanged keeps its exact value; only a
+new or reshaped binding receives fresh randomness, and a removed binding is
+dropped. A workload has usually encrypted data under those values, so minting
+over them would be silent data loss. The previous generation is opened under its
+own stored AAD, and only after the same owner fence (owner reference, Workspace,
+partition, scheme) passes and that AAD names the same owner and Capsule; the new
+generation is sealed under the current AAD. It replaces the previous row by an
+atomic compare-and-replace on the exact row that was opened, so no moment exists
+with neither generation stored, a failure before the replace commits leaves the
+previous generation intact, and a concurrent re-seal adopts the winner's row
+instead of overwriting it. The same path carries values across a later change of
+the AAD's own shape. Re-sealing rotates the nonce, which is exactly the
+replacement semantics a provider expects from rotated material.
+
+A previous generation that cannot be carried forward — it does not open (a
+changed or missing key, a damaged row), its authenticated data names another
+owner, or its document is not a `binding -> 32-byte hex` map — is refused, not
+replaced. Plan and Apply of the live Capsule fail with
+`failed_precondition` / `runtime_inputs_previous_generation_unreadable`; the
+message names the Capsule, the failure class, and whether the row was sealed
+under the active key version, never a value or a key fingerprint. Teardown is
+unaffected: a destroy plan calls no runtime-input materializer (below), and
+retirement after destroy deletes the row without opening it. Recovery is an
+explicit operator decision, never an automatic retry: restore the key or the
+sealed row and re-plan, or deliberately retire the row and accept fresh values
+(see [Run-scoped generated secrets](../operations/secret-rotation.md#run-scoped-generated-secrets)).
 
 The nonce is deterministic per (Workspace, Capsule, profile digest, material
 generation, provider instance). It is never random per Run: a provider derives

@@ -15,6 +15,7 @@ import {
 import { mergePolicyConfigs } from "../../../../core/domains/deploy-control/provider_policy.ts";
 import {
   RuntimeInputBundle,
+  RuntimeInputPreviousGenerationError,
   runtimeInputProviderInstance,
   runtimeInputProviderInstanceForStorage,
   type RuntimeInputMaterializer,
@@ -896,6 +897,42 @@ test("apply fails closed when the deliverable name set moved since the plan", as
     code: "failed_precondition",
     details: { reason: "runtime_inputs_name_set_changed" },
   });
+});
+
+test("apply keeps an uncarriable previous generation distinct from unusable material", async () => {
+  // The recovery differs: a re-plan cannot fix a previous generation that
+  // cannot be opened, so it carries its own reason rather than the generic one.
+  const refusing = (error: Error): RuntimeInputMaterializer =>
+    ({
+      ...runtimeInputMaterializerStub(),
+      materialize: async () => {
+        throw error;
+      },
+    }) as RuntimeInputMaterializer;
+  for (const [error, reason] of [
+    [
+      new RuntimeInputPreviousGenerationError(
+        "cap_fixture",
+        "it could not be opened (OperationError; sealed under the active key version)",
+      ),
+      "runtime_inputs_previous_generation_unreadable",
+    ],
+    [
+      new TypeError("sealed runtime inputs could not be opened"),
+      "runtime_inputs_material_unusable",
+    ],
+  ] as const) {
+    const { broker, run } = await runtimeInputBrokerFor({
+      resolved: [runtimeInputBinding()],
+      materializer: refusing(error),
+    });
+    await expect(
+      broker.mintRunCredentials(run, "apply", "run_1"),
+    ).rejects.toMatchObject({
+      code: "failed_precondition",
+      details: { reason },
+    });
+  }
 });
 
 test("two declaring provider instances fail closed instead of sharing one value set", async () => {

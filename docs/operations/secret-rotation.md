@@ -141,6 +141,38 @@ Any helper input file stays outside the repo and is deleted after import.
 Shell history, logs, PR comments, and terminal transcripts must not contain the
 credential.
 
+## Run-scoped generated secrets
+
+A repository manifest's binding-delivered `secret.generated` slots are minted
+by Takosumi and, on a host without a key derivation, sealed as one generation
+per Capsule: the one sealed-material row whose `connection_id` is
+`runtime_input_<capsuleId>`, in secret partition `runtime-input:<capsuleId>`.
+This runbook never records the values.
+
+A manifest change that adds, removes or renames a slot, or changes the OIDC
+grant, re-seals the generation and carries every unchanged slot's value
+forward; only a new slot is minted. No operator action is needed, and the Run
+that re-seals is an ordinary Plan.
+
+When the previous generation cannot be carried forward, Plan and Apply of that
+Capsule fail with `runtime_inputs_previous_generation_unreadable` and the row is
+left exactly as it was. The message says whether the row was sealed under the
+active key version:
+
+- **A different key version.** The secret-boundary passphrase (global or the
+  `runtime-input:<capsuleId>` override) changed after the row was sealed.
+  Restore the passphrase that sealed it and re-plan.
+- **The active key version.** The row itself is damaged or was replaced. Restore
+  the row from the most recent backup that holds it and re-plan.
+- **Neither is possible.** The previous values are lost, and data the workload
+  encrypted under them stays unreadable. Accept fresh values deliberately: after
+  a backup, delete that one row and re-plan, which seals a fresh generation, or
+  destroy and reinstall the Capsule. Record the decision; Takosumi never makes
+  it for you.
+
+Destroy needs no recovery. A destroy plan opens no runtime-input material, and
+retirement after destroy deletes the row without opening it.
+
 ## Operator runtime-secret file profile
 
 An operator may supply one value-free, DB-owned per-Capsule runtime-secret file

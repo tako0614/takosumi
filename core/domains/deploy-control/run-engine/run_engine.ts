@@ -147,6 +147,7 @@ import {
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
   RUNTIME_INPUT_MATERIALIZER_UNAVAILABLE_REASON,
   RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
+  RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON,
   RUNTIME_INPUTS_PROFILE_MISSING_REASON,
   RUNTIME_INPUTS_PROVIDER_VERSION_UNPROVEN_REASON,
   RUNTIME_INPUTS_REQUIRE_GENERATED_ROOT_REASON,
@@ -259,6 +260,7 @@ import {
   type RuntimeSecretFileMaterializer,
 } from "../runtime_secret_file_materializer.ts";
 import {
+  RuntimeInputPreviousGenerationError,
   runtimeInputProviderInstanceForStorage,
   type RuntimeInputMaterializer,
 } from "../runtime_input_materializer.ts";
@@ -4237,10 +4239,16 @@ export class RunEngine {
         providerInstance: wiring.providerInstance,
       });
     } catch (error) {
+      // A previous generation that cannot be carried forward keeps its own
+      // reason: the recovery is an operator decision, not a re-plan.
       throw new OpenTofuControllerError(
         "failed_precondition",
         `run-scoped sensitive provider input material is not usable: ${errorMessage(error)}`,
-        { reason: RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON },
+        {
+          reason: error instanceof RuntimeInputPreviousGenerationError
+            ? RUNTIME_INPUTS_PREVIOUS_GENERATION_UNREADABLE_REASON
+            : RUNTIME_INPUTS_MATERIAL_UNUSABLE_REASON,
+        },
       );
     }
     return {

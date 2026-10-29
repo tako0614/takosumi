@@ -1,15 +1,24 @@
 // takos-secret-scan: synthetic — this in-memory test seals randomly generated
 // bytes and asserts only their shape and containment.
 import { expect, test } from "bun:test";
-import { PlaceholderSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
+  PartitionedSecretBoundaryCrypto,
+  PlaceholderSecretBoundaryCrypto,
+  type SecretBoundaryCrypto,
+} from "../../../../core/adapters/secret-store/memory.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type StoredSecretBlob,
+} from "../../../../core/domains/deploy-control/store.ts";
+import {
+  carryGeneratedSecretValues,
   createRuntimeInputMaterializer,
   runtimeInputNonce,
   runtimeInputProviderInstance,
   runtimeInputProviderInstanceForStorage,
   runtimeInputProviderInstanceFromStorage,
   RUNTIME_INPUT_BUNDLE_MARKER,
+  RuntimeInputPreviousGenerationError,
 } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -27,9 +36,14 @@ const DEFAULT_INSTANCE = runtimeInputProviderInstance({
 });
 
 async function fixture(
-  overrides: { readonly runtimeBindingMaterialization?: unknown } = {},
+  overrides: {
+    readonly runtimeBindingMaterialization?: unknown;
+    readonly store?: InMemoryOpenTofuControlStore;
+    readonly crypto?: SecretBoundaryCrypto;
+  } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = overrides.store ?? new InMemoryOpenTofuControlStore();
+  const crypto = overrides.crypto ?? new PlaceholderSecretBoundaryCrypto();
   const seeded = await seedCapsuleModel(store, {
     installConfig: {
       runtimeBindingMaterialization: (overrides.runtimeBindingMaterialization ??
@@ -38,7 +52,7 @@ async function fixture(
   });
   const materializer = createRuntimeInputMaterializer({
     store,
-    crypto: new PlaceholderSecretBoundaryCrypto(),
+    crypto,
     clock: () => new Date("2026-09-01T12:00:00.000Z"),
   });
   const authority = {
@@ -48,10 +62,29 @@ async function fixture(
   };
   return {
     store,
+    crypto,
     seeded,
     materializer,
     authority,
     request: { ...authority, providerInstance: DEFAULT_INSTANCE },
+    /** Replaces the Capsule's generated-secret declaration in place. */
+    async declare(
+      generatedSecrets: readonly string[],
+      contract = "takosumi.runtime-binding-profile/v1",
+    ) {
+      await store.putInstallConfig({
+        ...seeded.installConfig,
+        runtimeBindingMaterialization: {
+          contract,
+          generatedSecrets: generatedSecrets.map((binding) => ({
+            binding,
+            bytes: 32,
+            encoding: "hex",
+          })),
+        } as never,
+      });
+    },
+    ownerRef: `runtime_input_${seeded.capsule.id}`,
   };
 }
 
@@ -188,7 +221,7 @@ test("re-sealing the same Capsule rotates the nonce", async () => {
   expect(await materializer.nonce(request)).not.toBe(before);
 });
 
-test("a drifted runtime binding profile rotates the material instead of bricking the Capsule", async () => {
+test("a drifted runtime binding profile re-seals the material and keeps its values", async () => {
   const { store, seeded, materializer, request } = await fixture();
   const before = await materializer.materialize({ ...request, phase: "apply" });
   const sealedBeforeDrift = await store.getSecretBlob(
@@ -196,9 +229,10 @@ test("a drifted runtime binding profile rotates the material instead of bricking
   );
 
   // A Capsule upgrade that adds a `secret.generated` binding changes the
-  // deliverable name set. The old sealed generation cannot answer it, so it is
-  // retired and a new one is sealed — a hard fence here would leave the Capsule
-  // unable to plan OR destroy, with no recovery path at all.
+  // deliverable name set. The old sealed generation cannot answer it, so a new
+  // one is sealed — carrying every value the old one held. A hard fence here
+  // would leave the Capsule unable to plan, and minting over the old values
+  // would silently rotate keys its workload already encrypted data under.
   await store.putInstallConfig({
     ...seeded.installConfig,
     runtimeBindingMaterialization: {
@@ -216,6 +250,12 @@ test("a drifted runtime binding profile rotates the material instead of bricking
     "SESSION_KEY",
     "SIGNING_KEY",
   ]);
+  const beforeValues = before.toRunnerDispatch().values;
+  const afterValues = after.toRunnerDispatch().values;
+  expect(afterValues.ENCRYPTION_KEY).toBe(beforeValues.ENCRYPTION_KEY!);
+  expect(afterValues.SIGNING_KEY).toBe(beforeValues.SIGNING_KEY!);
+  expect(afterValues.SESSION_KEY).toMatch(/^[0-9a-f]{64}$/u);
+  expect(Object.values(beforeValues)).not.toContain(afterValues.SESSION_KEY);
   // Replacement semantics: new generation, new nonce.
   expect(after.nonce).not.toBe(before.nonce);
   expect(after.profileDigest).not.toBe(before.profileDigest);
@@ -224,6 +264,13 @@ test("a drifted runtime binding profile rotates the material instead of bricking
   );
   expect(sealedAfterDrift?.ciphertext).not.toBe(sealedBeforeDrift?.ciphertext);
   expect(sealedAfterDrift?.aad).not.toBe(sealedBeforeDrift?.aad);
+  // The row keeps its lineage: same id and creation time, a rotation stamp.
+  expect(sealedAfterDrift?.id).toBe(sealedBeforeDrift?.id);
+  expect(sealedAfterDrift?.createdAt).toBe(sealedBeforeDrift?.createdAt);
+  expect(sealedAfterDrift?.rotatedAt).toBe("2026-09-01T12:00:00.000Z");
+  for (const value of Object.values(afterValues)) {
+    expect(JSON.stringify(sealedAfterDrift)).not.toContain(value);
+  }
   // Stable once more under the new profile.
   expect(
     (await materializer.materialize({ ...request, phase: "apply" }))
@@ -356,4 +403,382 @@ test("runtime input material retires only after the exact Capsule is destroyed",
   ).toBeUndefined();
   // Retirement is idempotent.
   await materializer.retire({ ...authority, profileDigest });
+});
+
+// -- Carrying a sealed generation across a profile change ---------------------
+
+/** Placeholder crypto that counts opens and can fail its next seal. */
+class CountingCrypto implements SecretBoundaryCrypto {
+  readonly #inner: SecretBoundaryCrypto;
+  opens = 0;
+  failNextSeal = false;
+
+  constructor(inner: SecretBoundaryCrypto = new PlaceholderSecretBoundaryCrypto()) {
+    this.#inner = inner;
+  }
+
+  seal(plaintext: string, partition: string, aad?: Uint8Array) {
+    if (this.failNextSeal) {
+      this.failNextSeal = false;
+      return Promise.reject(new Error("injected seal failure"));
+    }
+    return this.#inner.seal(plaintext, partition, aad);
+  }
+
+  open(ciphertext: Uint8Array, partition: string, aad?: Uint8Array) {
+    this.opens += 1;
+    return this.#inner.open(ciphertext, partition, aad);
+  }
+
+  keyVersion(partition: string): number {
+    return this.#inner.keyVersion?.(partition) ?? 1;
+  }
+}
+
+/** A store whose next compare-and-replace fails before or after it commits. */
+class InterruptedReplaceStore extends InMemoryOpenTofuControlStore {
+  interruptNextReplace: "before-commit" | "after-commit" | undefined;
+
+  override async replaceSecretBlobIfCurrent(
+    expected: StoredSecretBlob,
+    replacement: StoredSecretBlob,
+  ): Promise<boolean> {
+    const interruption = this.interruptNextReplace;
+    this.interruptNextReplace = undefined;
+    if (interruption === "before-commit") {
+      throw new Error("injected store failure before the replace committed");
+    }
+    const committed = await super.replaceSecretBlobIfCurrent(
+      expected,
+      replacement,
+    );
+    if (interruption === "after-commit") {
+      throw new Error("injected lost acknowledgement after the replace committed");
+    }
+    return committed;
+  }
+}
+
+async function appliedValues(
+  materializer: Awaited<ReturnType<typeof fixture>>["materializer"],
+  request: Awaited<ReturnType<typeof fixture>>["request"],
+): Promise<Readonly<Record<string, string>>> {
+  return (await materializer.materialize({ ...request, phase: "apply" }))
+    .toRunnerDispatch().values;
+}
+
+test("adding a generated secret keeps every existing value and mints only the new one", async () => {
+  const { materializer, request, declare } = await fixture();
+  const before = await appliedValues(materializer, request);
+
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "WEB_PUSH_KEY"]);
+  // Plan reaches the re-seal first. The nonce it bakes must be the one Apply
+  // sees, so the carried generation is sealed exactly once.
+  const planned = await materializer.nonce(request);
+  const applied = await materializer.materialize({ ...request, phase: "apply" });
+  expect(applied.nonce).toBe(planned);
+  const after = applied.toRunnerDispatch().values;
+  expect(after.ENCRYPTION_KEY).toBe(before.ENCRYPTION_KEY!);
+  expect(after.SIGNING_KEY).toBe(before.SIGNING_KEY!);
+  expect(after.WEB_PUSH_KEY).toMatch(/^[0-9a-f]{64}$/u);
+  expect(Object.values(before)).not.toContain(after.WEB_PUSH_KEY);
+});
+
+test("removing a generated secret keeps the rest and really drops the removed one", async () => {
+  const { materializer, request, declare } = await fixture();
+  const before = await appliedValues(materializer, request);
+
+  await declare(["ENCRYPTION_KEY"]);
+  const removed = await appliedValues(materializer, request);
+  expect(removed).toEqual({ ENCRYPTION_KEY: before.ENCRYPTION_KEY! });
+
+  // The dropped value is gone from the sealed document: declaring the binding
+  // again mints a fresh one rather than resurrecting it.
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY"]);
+  const readded = await appliedValues(materializer, request);
+  expect(readded.ENCRYPTION_KEY).toBe(before.ENCRYPTION_KEY!);
+  expect(readded.SIGNING_KEY).toMatch(/^[0-9a-f]{64}$/u);
+  expect(readded.SIGNING_KEY).not.toBe(before.SIGNING_KEY!);
+});
+
+test("a profile contract change re-seals without moving any value", async () => {
+  // A repository re-sync recompiles an old v1 profile as v2. The deliverable
+  // names are identical, only the profile digest (and so the AAD) moves.
+  const { store, materializer, request, declare, ownerRef } = await fixture();
+  const before = await appliedValues(materializer, request);
+  const sealedBefore = await store.getSecretBlob(ownerRef);
+
+  await declare(
+    ["ENCRYPTION_KEY", "SIGNING_KEY"],
+    "takosumi.runtime-binding-profile/v2",
+  );
+  expect(await appliedValues(materializer, request)).toEqual(before);
+  expect((await store.getSecretBlob(ownerRef))?.aad).not.toBe(
+    sealedBefore?.aad,
+  );
+});
+
+test("reshaping one generated secret mints only that binding", () => {
+  // The declaration grammar admits only 32-byte hex today, so a reshape cannot
+  // reach the materializer yet; the carry rule is pinned here directly so the
+  // day a second shape is admitted, only the reshaped binding moves.
+  const previous = new Map([
+    ["KEEP_KEY", { value: "a".repeat(64), bytes: 32, encoding: "hex" }],
+    ["RESHAPED_KEY", { value: "b".repeat(64), bytes: 32, encoding: "hex" }],
+    ["REMOVED_KEY", { value: "c".repeat(64), bytes: 32, encoding: "hex" }],
+  ]);
+  const carried = carryGeneratedSecretValues({
+    previous,
+    generatedSecrets: [
+      { binding: "KEEP_KEY", bytes: 32, encoding: "hex" },
+      { binding: "RESHAPED_KEY", bytes: 64 as 32, encoding: "hex" },
+      { binding: "NEW_KEY", bytes: 32, encoding: "hex" },
+    ],
+  });
+  expect(carried.carried).toEqual(["KEEP_KEY"]);
+  expect(carried.minted).toEqual(["NEW_KEY", "RESHAPED_KEY"]);
+  expect(carried.dropped).toEqual(["REMOVED_KEY"]);
+  expect(Object.keys(carried.values).sort()).toEqual([
+    "KEEP_KEY",
+    "NEW_KEY",
+    "RESHAPED_KEY",
+  ]);
+  expect(carried.values.KEEP_KEY).toBe("a".repeat(64));
+  expect(carried.values.RESHAPED_KEY).toMatch(/^[0-9a-f]{128}$/u);
+  expect(carried.values.NEW_KEY).toMatch(/^[0-9a-f]{64}$/u);
+});
+
+test("a failure between sealing and storing leaves the previous generation intact", async () => {
+  const store = new InterruptedReplaceStore();
+  const crypto = new CountingCrypto();
+  const { materializer, request, declare, ownerRef } = await fixture({
+    store,
+    crypto,
+  });
+  const before = await appliedValues(materializer, request);
+  const sealedBefore = await store.getSecretBlob(ownerRef);
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+
+  // The new generation fails to seal: nothing was written.
+  crypto.failNextSeal = true;
+  await expect(materializer.nonce(request)).rejects.toThrow(
+    "injected seal failure",
+  );
+  expect(await store.getSecretBlob(ownerRef)).toEqual(sealedBefore);
+
+  // The store fails before the replace commits: the old row is still there.
+  store.interruptNextReplace = "before-commit";
+  await expect(materializer.nonce(request)).rejects.toThrow(
+    "before the replace committed",
+  );
+  expect(await store.getSecretBlob(ownerRef)).toEqual(sealedBefore);
+
+  // The replace commits but its acknowledgement is lost. The next call finds
+  // the committed generation under the current AAD and uses it as is.
+  store.interruptNextReplace = "after-commit";
+  await expect(materializer.nonce(request)).rejects.toThrow(
+    "lost acknowledgement",
+  );
+  const committed = await store.getSecretBlob(ownerRef);
+  expect(committed?.aad).not.toBe(sealedBefore?.aad);
+  const nonce = await materializer.nonce(request);
+  expect(await store.getSecretBlob(ownerRef)).toEqual(committed);
+
+  const after = await materializer.materialize({ ...request, phase: "apply" });
+  expect(after.nonce).toBe(nonce);
+  expect(after.toRunnerDispatch().values.ENCRYPTION_KEY).toBe(
+    before.ENCRYPTION_KEY!,
+  );
+  expect(after.toRunnerDispatch().values.SIGNING_KEY).toBe(before.SIGNING_KEY!);
+});
+
+test("concurrent re-seals agree on one generation instead of overwriting each other", async () => {
+  const replaces: boolean[] = [];
+  // Holds the next two reads until both have arrived, so both re-seals start
+  // from the same previous row instead of running one after the other.
+  let barrier: { arrived: number; release: () => void; ready: Promise<void> } | undefined;
+  const recording = new (class extends InMemoryOpenTofuControlStore {
+    override async getSecretBlob(
+      connectionId: string,
+    ): Promise<StoredSecretBlob | undefined> {
+      const read = await super.getSecretBlob(connectionId);
+      const gate = barrier;
+      if (gate && gate.arrived < 2) {
+        gate.arrived += 1;
+        if (gate.arrived === 2) gate.release();
+        await gate.ready;
+      }
+      return read;
+    }
+
+    override async replaceSecretBlobIfCurrent(
+      expected: StoredSecretBlob,
+      replacement: StoredSecretBlob,
+    ): Promise<boolean> {
+      const committed = await super.replaceSecretBlobIfCurrent(
+        expected,
+        replacement,
+      );
+      replaces.push(committed);
+      return committed;
+    }
+  })();
+  const { store, materializer, request, declare, ownerRef } = await fixture({
+    store: recording,
+  });
+  const before = await appliedValues(materializer, request);
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+
+  // Both read the same previous generation and seal their own successor; only
+  // one compare-and-replace can win, and the loser adopts the winner's row.
+  let release = () => {};
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  barrier = { arrived: 0, release, ready };
+  const [left, right] = await Promise.all([
+    materializer.nonce(request),
+    materializer.nonce(request),
+  ]);
+  expect(right).toBe(left);
+  barrier = undefined;
+  expect(replaces).toEqual([true, false]);
+  const stored = await store.getSecretBlob(ownerRef);
+  const after = await materializer.materialize({ ...request, phase: "apply" });
+  expect(after.nonce).toBe(left);
+  expect(await store.getSecretBlob(ownerRef)).toEqual(stored);
+  expect(after.toRunnerDispatch().values.ENCRYPTION_KEY).toBe(
+    before.ENCRYPTION_KEY!,
+  );
+});
+
+test("an owner mismatch still refuses before the previous generation is opened", async () => {
+  const crypto = new CountingCrypto();
+  const { store, materializer, request, declare, ownerRef } = await fixture({
+    crypto,
+  });
+  await appliedValues(materializer, request);
+  const sealed = await store.getSecretBlob(ownerRef);
+  if (!sealed) throw new Error("fixture sealed blob is missing");
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+  const opensBefore = crypto.opens;
+
+  // A row recorded under another Workspace fails the existing owner fence.
+  const foreignRow = { ...sealed, workspaceId: "ws_someone_else" };
+  await store.putSecretBlob(foreignRow);
+  await expect(materializer.nonce(request)).rejects.toThrow(
+    "runtime input owner fence changed",
+  );
+  expect(await store.getSecretBlob(ownerRef)).toEqual(foreignRow);
+
+  // A row whose authenticated data names another Capsule is not carried, even
+  // though the row's own owner columns match.
+  const foreignAad = {
+    ...sealed,
+    aad: sealed.aad.replace(request.capsuleId, "cap_someone_else"),
+  };
+  expect(foreignAad.aad).not.toBe(sealed.aad);
+  await store.putSecretBlob(foreignAad);
+  const refusal = await materializer.nonce(request).catch((error) => error);
+  expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
+  expect(String(refusal)).toContain("does not name this Capsule");
+  expect(await store.getSecretBlob(ownerRef)).toEqual(foreignAad);
+
+  expect(crypto.opens).toBe(opensBefore);
+});
+
+test("an unreadable previous generation fences Plan and Apply but never retirement", async () => {
+  const { store, seeded, materializer, authority, request, declare, ownerRef } =
+    await fixture();
+  const before = await appliedValues(materializer, request);
+  const sealed = await store.getSecretBlob(ownerRef);
+  if (!sealed) throw new Error("fixture sealed blob is missing");
+  const corrupt = { ...sealed, ciphertext: btoa("damaged sealed material") };
+  await store.putSecretBlob(corrupt);
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+
+  for (const attempt of [
+    () => materializer.nonce(request),
+    () => materializer.materialize({ ...request, phase: "apply" }),
+  ]) {
+    const refusal = await attempt().catch((error) => error);
+    expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
+    expect(refusal.message).toContain(seeded.capsule.id);
+    expect(refusal.message).toContain("could not be opened");
+    expect(refusal.message).toContain("the active key version");
+    expect(refusal.message).toContain("not re-minted");
+    for (const value of Object.values(before)) {
+      expect(refusal.message).not.toContain(value);
+    }
+    // Refused, not replaced: the damaged row is still the stored one.
+    expect(await store.getSecretBlob(ownerRef)).toEqual(corrupt);
+  }
+
+  // Teardown never opens the material, so the destroyed Capsule still retires.
+  await store.putCapsule({ ...seeded.capsule, status: "destroyed" });
+  await materializer.retire(authority);
+  expect(await store.getSecretBlob(ownerRef)).toBeUndefined();
+});
+
+test("a previous generation sealed under another key says so", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const sealing = await fixture({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "runtime-input-previous-key-0123456789abcdef",
+    }),
+  });
+  await appliedValues(sealing.materializer, sealing.request);
+  const sealed = await store.getSecretBlob(sealing.ownerRef);
+  await sealing.declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+
+  const rotated = createRuntimeInputMaterializer({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "runtime-input-replaced-key-0123456789abcdef",
+    }),
+  });
+  const refusal = await rotated.nonce(sealing.request).catch((error) => error);
+  expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
+  expect(refusal.message).toContain("a different key version");
+  expect(refusal.cause).toBeDefined();
+  expect(await store.getSecretBlob(sealing.ownerRef)).toEqual(sealed);
+});
+
+test("a previous generation whose document is not ours is refused without echoing it", async () => {
+  const crypto = new PlaceholderSecretBoundaryCrypto();
+  const { store, materializer, request, declare, ownerRef } = await fixture({
+    crypto,
+  });
+  await appliedValues(materializer, request);
+  const sealed = await store.getSecretBlob(ownerRef);
+  if (!sealed) throw new Error("fixture sealed blob is missing");
+  const partition = `runtime-input:${request.capsuleId}`;
+  const reseal = async (document: string): Promise<StoredSecretBlob> => {
+    const bytes = await crypto.seal(
+      document,
+      partition,
+      new TextEncoder().encode(sealed.aad),
+    );
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return { ...sealed, ciphertext: btoa(binary) };
+  };
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+
+  for (const [document, problem] of [
+    ['{"ENCRYPTION_KEY":"not-a-hex-secret-value"', "not a binding map"],
+    ['["ENCRYPTION_KEY"]', "not a binding map"],
+    ['{"ENCRYPTION_KEY":"not-a-hex-secret-value"}', "not a 32-byte hex secret"],
+    ['{"lower_case":"' + "a".repeat(64) + '"}', "invalid binding name"],
+  ] as const) {
+    const planted = await reseal(document);
+    await store.putSecretBlob(planted);
+    const refusal = await materializer.nonce(request).catch((error) => error);
+    expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
+    expect(refusal.message).toContain(problem);
+    expect(refusal.message).not.toContain("not-a-hex-secret-value");
+    expect(refusal.message).not.toContain("lower_case");
+    expect(await store.getSecretBlob(ownerRef)).toEqual(planted);
+  }
 });
