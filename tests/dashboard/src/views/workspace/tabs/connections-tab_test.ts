@@ -82,6 +82,18 @@ describe("ConnectionsTab per-connection test state", () => {
 });
 
 describe("ConnectionsTab guided-first add flow", () => {
+  test("personal Account connections need no workspace selector", () => {
+    expect(source).toContain("readonly workspaceId?: string;");
+    expect(formSource).toContain("readonly workspaceId?: string;");
+    expect(source).toContain("() => ({ workspaceId: workspaceId() })");
+    expect(source).toContain("({ workspaceId: id }) => listProviderConnections(id || currentWorkspaceId() || undefined)");
+    expect(source).toContain("const legacyUsageWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;");
+    expect(source).toContain("loadConnectionUsage(");
+    expect(formSource).toContain("connection.scope !== \"operator\"");
+    expect(source).toContain("connection.scope !== \"operator\"");
+    expect(formSource).toContain("...(workspaceId() ? { workspaceId: workspaceId() } : {})");
+  });
+
   test("installed recipes are the default surface; keys for an unlisted cloud are the other path", () => {
     expect(source).toContain("<ConnectionCreateForm");
     expect(formSource).toContain("providerSetupOptionsFromCredentialRecipes");
@@ -163,15 +175,17 @@ describe("ConnectionsTab create-form wiring", () => {
 
 describe("接続 shows which apps use each connection", () => {
   test("usage is read from app bindings outside the install review only", () => {
-    expect(source).toContain("props.embedded ? null : workspaceId()");
-    expect(source).toContain("(id) => loadConnectionUsage(id)");
+    expect(source).toContain("if (props.embedded) return null;");
+    expect(source).toContain("loadConnectionUsage(");
+    expect(source).toContain("(source) => loadConnectionUsage(");
+    expect(source).toContain("props.embedded || usage.loading || usage.error");
     expect(source).toContain('t("conn.apps.label")');
     expect(source).toContain('t("conn.apps.none")');
     expect(source).toContain('t("conn.apps.unknown")');
     // Each app links to its page.
     expect(source).toContain("href={appPageHref(app.capsuleId)}");
     // An incomplete read never claims "no app uses this".
-    expect(source).toContain("apps.length === 0 && known.incomplete ? undefined : apps");
+    expect(source).toContain("if (known.incomplete) return undefined;");
   });
 
   test("removal names the affected apps and what is kept", () => {

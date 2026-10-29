@@ -85,7 +85,7 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     }
   });
 
-  test("the four behaviors are first-class routes", () => {
+  test("home, store and account are first-class routes; legacy connections redirect to Account", () => {
     expect(source).toContain('<Route path="/" component={AppListView} />');
     // `/new` is the store and install page; an old `?capsule=` locator alone
     // opens that app's page instead.
@@ -93,9 +93,10 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain('resolveLegacyAppUrl("/new", untrack(() => location.search))');
     expect(source).toContain("appPage ? <Navigate href={appPage} /> : <InstallView />");
     expect(source).toContain(
-      '<Route path="/connections" component={ConnectionsView} />',
+      '<Route path="/connections" component={() => <RedirectWithQuery to="/account/connections" />} />',
     );
     expect(source).toContain('<Route path="/account" component={AccountView} />');
+    expect(source).toContain('<Route path="/account/billing" component={() => <RedirectWithQuery to="/account/usage" />} />');
     expect(source).toContain(
       '<Route path="/account/:section" component={AccountView} />',
     );
@@ -123,13 +124,13 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
       ["/settings/account", "/account"],
       ["/settings/manage", "/account"],
       ["/settings/manage/hosted-resources", "/"],
-      ["/advanced/workspace", "/account/workspace"],
-      ["/workspace/settings", "/account/workspace"],
-      ["/members", "/account/members"],
-      ["/backups", "/account/workspace"],
-      ["/output-shares", "/account/workspace"],
-      ["/providers", "/connections"],
-      ["/account/settings", "/account/workspace"],
+      ["/advanced/workspace", "/account"],
+      ["/workspace/settings", "/account"],
+      ["/members", "/account"],
+      ["/backups", "/account"],
+      ["/output-shares", "/account"],
+      ["/providers", "/account/connections"],
+      ["/account/settings", "/account"],
       ["/account/profile", "/account"],
       ["/account/sessions", "/account"],
     ];
@@ -140,22 +141,22 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
         ),
       );
     }
-    // Billing keeps its query (a payment provider's return carries it).
+    // Legacy billing URLs keep query parameters while opening personal usage.
     for (const from of ["/billing", "/settings/billing"]) {
       expect(source).toMatch(
         new RegExp(
-          `<Route\\s+path="${from.replace(/[/]/gu, "\\/")}"\\s+component=\\{\\(\\)\\s*=>\\s*<RedirectWithQuery\\s+to="\\/account\\/billing"\\s*\\/>\\}\\s*\\/>`,
+          `<Route\\s+path="${from.replace(/[/]/gu, "\\/")}"\\s+component=\\{\\(\\)\\s*=>\\s*<RedirectWithQuery\\s+to="\\/account\\/usage"\\s*\\/>\\}\\s*\\/>`,
         ),
       );
     }
-    // Old Workspace-settings tabs map onto 接続 and アカウント sections.
+    // Old Workspace-settings tabs land on personal Account sections.
     expect(source).toContain('<Route\n        path="/advanced/workspace/:tab"');
     expect(source).toContain('<Route\n        path="/workspace/settings/:tab"');
-    expect(source).toContain('case "members":\n      return "/account/members";');
-    expect(source).toContain('case "connections":\n      return "/connections";');
-    expect(source).toContain('case "billing":\n      return "/account/billing";');
+    expect(source).toContain('case "members":\n      return "/account";');
+    expect(source).toContain('case "connections":\n      return "/account/connections";');
+    expect(source).toContain('case "billing":\n      return "/account/usage";');
     expect(source).toContain('case "interface-recovery":\n      return "/";');
-    expect(source).toContain('default:\n      return "/account/workspace";');
+    expect(source).toContain('default:\n      return "/account";');
     // Older app-page URLs land on the canonical page, their tab as a section.
     for (const from of [
       "/apps/:id/:tab",

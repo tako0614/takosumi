@@ -348,7 +348,7 @@ function PlanReview(props: {
 
 export function InstallScreen(props: {
   readonly attempt: InstallAttempt;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   /** The install started from a Store listing (an empty version means its newest release). */
   readonly fromStore: boolean;
   readonly onDone: (capsuleId: string) => void;

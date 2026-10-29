@@ -3,10 +3,17 @@ import { resolvePortablePort } from "./portable-origin.ts";
 import {
   createInstallAttemptFixture,
   PORTABLE_AUTHORITY_GUARD,
+  PORTABLE_APPS,
+  PORTABLE_APP_MEMBERS,
+  PORTABLE_SHARED_APP_MEMBERS,
+  PORTABLE_PERSONAL_CONNECTIONS,
   PORTABLE_CAPSULES,
   PORTABLE_SESSION_COOKIE,
+  PORTABLE_SOURCE_COMMIT,
   PORTABLE_UI_SURFACES,
   PORTABLE_WORKSPACES,
+  portableUsageResponse,
+  portableAppConnectionLabels,
   portableCapsule,
   portableCapsuleApp,
   portableCapsuleRuns,
@@ -57,9 +64,9 @@ function page(value: unknown, field: string): unknown {
   return { [field]: value };
 }
 
-// The install-plan coordinator's attempt routes for the signed-in Workspace.
-// Cases that need a particular app (connections, settings, failures) stub
-// these per test with their own fixture instance.
+// Per-app install attempt routes, including the workspace-less collection and
+// the legacy workspace collection alias. Cases that need a particular app
+// (connections, settings, failures) stub these with their own fixture instance.
 const installAttempts = createInstallAttemptFixture({ workspaceId: "ws_alpha" });
 
 async function installAttemptResponse(request: Request, url: URL): Promise<Response | undefined> {
@@ -110,6 +117,46 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
       notifications: [],
     });
   }
+  if (path === "/api/v1/apps" && request.method === "GET") {
+    return json({ apps: PORTABLE_APPS });
+  }
+  if (path === "/api/v1/connections" && request.method === "GET") {
+    if (url.searchParams.get("projection") === "labels") {
+      const capsuleId = url.searchParams.get("capsuleId");
+      if (!capsuleId) return json({ error: "invalid_request" }, 400);
+      return json(portableAppConnectionLabels(capsuleId));
+    }
+    return json({ connections: PORTABLE_PERSONAL_CONNECTIONS });
+  }
+  if (path === "/api/v1/usage" && request.method === "GET") {
+    return json(portableUsageResponse());
+  }
+  if (path === "/api/v1/source-ref-resolutions/stable-semver" && request.method === "POST") {
+    return json({ tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT });
+  }
+  const memberMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)\/members$/u);
+  if (memberMatch && request.method === "GET") {
+    if (!portableCapsule(decodeURIComponent(memberMatch[1] ?? ""))) {
+      return json({ error: "not_found" }, 404);
+    }
+    return json(decodeURIComponent(memberMatch[1] ?? "") === "cap_beta_office"
+      ? PORTABLE_SHARED_APP_MEMBERS
+      : PORTABLE_APP_MEMBERS);
+  }
+  const configMatch = path.match(/^\/api\/v1\/capsule-configs\/([^/]+)$/u);
+  if (configMatch && request.method === "GET") {
+    const configId = decodeURIComponent(configMatch[1] ?? "");
+    const capsuleId = configId.startsWith("cfg_") ? configId.slice("cfg_".length) : "";
+    const capsule = portableCapsule(capsuleId);
+    if (!capsule || capsule.installConfigId !== configId) return json({ error: "not_found" }, 404);
+    return json({ installConfig: {
+      id: configId,
+      workspaceId: capsule.workspaceId,
+      name: capsule.name,
+      sourceSelector: { url: `https://github.com/example/${capsule.slug}.git`, path: "." },
+      modulePath: ".",
+    } });
+  }
   if (path === "/api/v1/__e2e/unexpected-404") {
     return json({ error: "intentional_fixture_failure" }, 404);
   }
@@ -131,6 +178,9 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
       });
     }
     if (suffix === "activity") return json(activityResponse());
+    if (suffix === "source-ref-resolutions/stable-semver" && request.method === "POST") {
+      return json({ tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT });
+    }
     if (suffix === "current-state-versions") return json({ stateVersions: [] });
     if (suffix === "install-configs") return json({ installConfigs: [] });
     if (suffix === "install-plans") {
@@ -139,7 +189,7 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     }
   }
 
-  if (path.startsWith("/api/v1/install-plans/")) {
+  if (path === "/api/v1/install-plans" || path.startsWith("/api/v1/install-plans/")) {
     const reply = await installAttemptResponse(request, url);
     if (reply) return reply;
   }

@@ -295,9 +295,10 @@ describe("Run review ProviderConnection evidence", () => {
     expect(costSummarySource).toContain('"run.cost.billingCta"');
     expect(costSummarySource).toContain('"run.cost.operatorHelp"');
     expect(en["run.cost.billingCta"]).toContain("billing");
-    expect(en["run.cost.operatorHelp"]).toContain("workspace");
+    expect(en["run.cost.operatorHelp"]).not.toContain("workspace");
+    expect(en["run.cost.operatorHelp"]).toContain("owner");
     expect(ja["run.cost.billingCta"]).toContain("お支払い");
-    expect(ja["run.cost.operatorHelp"]).toContain("スペース");
+    expect(ja["run.cost.operatorHelp"]).toContain("所有者");
   });
 
   test("keeps launch URLs Interface-owned instead of inferring them from run state or outputs", () => {

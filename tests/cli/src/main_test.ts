@@ -6358,19 +6358,26 @@ test("accounts tokens create rejects invalid PAT scopes before fetch", async () 
 });
 
 test("top-level installations command is retired from the public CLI surface", async () => {
+  const originalLang = process.env.TAKOSUMI_LANG;
+  process.env.TAKOSUMI_LANG = "en";
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const code = await main(["installations", "list"], {
-    stdout: (line) => stdout.push(line),
-    stderr: (line) => stderr.push(line),
-  });
+  try {
+    const code = await main(["installations", "list"], {
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    });
 
-  expect(code).toEqual(2);
-  expect(stdout).toEqual([]);
-  expect(stderr).toEqual([
-    "`takosumi installations` is retired. Use canonical Source/Capsule plan/apply operations.",
-  ]);
-  expect(stderr.join("\n")).not.toContain("internal installations");
+    expect(code).toEqual(2);
+    expect(stdout).toEqual([]);
+    expect(stderr).toEqual([
+      "This legacy command is retired. Use `takosumi apps list`, `apps install`, or `apps uninstall`.",
+    ]);
+    expect(stderr.join("\n")).not.toContain("internal installations");
+  } finally {
+    if (originalLang === undefined) delete process.env.TAKOSUMI_LANG;
+    else process.env.TAKOSUMI_LANG = originalLang;
+  }
 });
 
 test("accounts serve rejects a non-integer --port (integerOption throws)", async () => {

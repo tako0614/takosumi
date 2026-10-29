@@ -61,9 +61,10 @@ describe("attempt-driven install page", () => {
     expect(controller.match(/void replan\(\)/gu)).toHaveLength(3);
     expect(view).toContain("void attempt.start(");
     expect(view.match(/attempt\.start\(/gu)).toHaveLength(1);
-    // A workspace is created only on that same Install path.
-    expect(between(controller, "const ensureWorkspace = async", "/** POST one attempt")).toContain("createWorkspace(");
-    expect(controller.match(/ensureWorkspace\(\)/gu)).toHaveLength(1);
+    // Starting an install never creates a Workspace as a side effect.
+    expect(controller).not.toContain("createWorkspace");
+    expect(controller).not.toContain("ensureWorkspace");
+    expect(post).toContain("createGitInstallAttempt(workspaceId, request, key)");
   });
 
   test("nothing applies from the page: the review's explicit click is the only apply", () => {
@@ -198,7 +199,7 @@ describe("attempt-driven install page", () => {
     expect(view).toContain('class="iv-catalogue iv-catalogue-browse"');
     expect(view).toContain('aria-label={t("installStore.sourceUrl")}');
     expect(view).toContain("<OpenAttempts principalId={props.principalId} />");
-    expect(view).toContain("listOpenGitInstallAttempts(workspaceId)");
+    expect(view).toContain("listOpenGitInstallAttempts(scope.workspaceId)");
     // Selecting a listing reflects it into the URL so back and share work.
     expect(view).toContain("navigate(`/new?${buildNewQuery(listing)}`);");
   });
@@ -210,5 +211,9 @@ describe("attempt-driven install page", () => {
     expect(candidate).toContain('t("installStore.startHint")');
     expect(candidate).toContain('label={t("installStore.sourceRef")}');
     expect(view).toContain('data-testid="install-provenance"');
+    expect(view).toContain('if (installedApps.state !== "ready") return;');
+    expect(candidate).toContain('disabled={!gitUrl() || installedApps.state !== "ready"');
+    expect(view).toContain('readyOrUndefined(connections)');
+    expect(view).toContain('readyOrUndefined(attempts)');
   });
 });

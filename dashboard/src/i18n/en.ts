@@ -6,6 +6,38 @@ import type { ja } from "./ja.ts";
  * here is a type error, so the locales cannot drift.
  */
 export const en: Record<keyof typeof ja, string> = {
+  "controlError.appAccessDenied": "You cannot manage this app. Sign in with an account that has access.",
+  "controlError.appOwnerOnly": "Only the app owner can do this.",
+  "controlError.connectionNotOwned": "Choose a connection belonging to this app’s owner.",
+  "controlError.ownershipTransferPending": "Ownership is being transferred. Try again after it completes or is cancelled.",
+  "controlError.retiredManagement": "This operation is retired. Manage members from the app’s sharing section.",
+  "account.apiKeys.scopeRestricted": "Restricted",
+  "account.section.connections": "Connections",
+  "account.section.usage": "Billing and usage",
+  "installStore.error.sourceRefRequired": "Enter a version to install this app.",
+  "app.sharing.title": "Sharing",
+  "app.sharing.subtitle": "Manage who can change this app. People who only use it need its URL.",
+  "app.sharing.owner": "Owner",
+  "app.sharing.sharedBy": "Shared by {name}",
+  "app.sharing.email": "Email address",
+  "app.sharing.invite": "Invite",
+  "app.sharing.consent": "This member can use your connections ({names}) to change this app, including repository changes.",
+  "app.sharing.noConnections": "no connections currently bound",
+  "app.sharing.remove": "Remove member",
+  "app.sharing.removeConfirm": "Remove {name} from this app and cancel their queued changes.",
+  "app.sharing.leave": "Leave app",
+  "app.sharing.leaveConfirm": "Leave this app and cancel your queued changes.",
+  "app.sharing.transferRecipient": "New owner",
+  "app.sharing.chooseRecipient": "Choose a member",
+  "app.sharing.transfer": "Transfer ownership",
+  "app.sharing.transferConfirm": "After acceptance, connections are cleared. The new owner must bind their own connections and becomes the payer.",
+  "app.sharing.pending": "Pending transfer: {id}. Give this ID to the recipient.",
+  "app.sharing.cancelTransfer": "Cancel transfer",
+  "app.sharing.transferId": "Transfer ID",
+  "app.sharing.acceptTransfer": "Accept ownership",
+  "app.sharing.acceptConfirm": "Become this app\u2019s owner and payer. Current connections will be cleared; bind your own connections.",
+  "app.sharing.ownerConnectionsOnly": "Only the owner\u2019s connections can be used. Choices are unavailable, so the current connections are kept.",
+  "app.sharing.saved": "Sharing updated.",
   "installStore.installed": "Installed",
   "installStore.installedCount": "{count} installed",
   "installStore.installAnother": "Install another",
@@ -90,7 +122,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.plannedHint": "Once connections and settings are complete, the exact list and a cost estimate replace this.",
   "installStore.plannedEmpty": "No resources can be counted in advance. Review shows exactly what will be created.",
   "installStore.plannedNotAllowed": "Not allowed by policy",
-  "installStore.nameHint": "The name that tells this app apart in your workspace. Use lowercase letters, numbers and hyphens.",
+  "installStore.nameHint": "The name that tells this app apart. Use lowercase letters, numbers and hyphens.",
   "installStore.connectionReady": "Connected",
   "installStore.connectionMissing": "Not connected",
   "installStore.connectionNotAllowed": "This app's policy doesn't allow this connection. Choose another one or connect another account.",
@@ -99,7 +131,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.allowInstall": "Allow and install",
   "installStore.costTitle": "Cost estimate",
   "installStore.costRatedZero": "The estimate is {amount}.",
-  "installStore.costNotApplicable": "Takosumi doesn't calculate costs in this workspace. Each cloud's own pricing applies to the resources it creates.",
+  "installStore.costNotApplicable": "Takosumi doesn't calculate costs for this app. Each cloud's own pricing applies to its resources.",
   "run.cost.unavailable": "Couldn't load the cost estimate. Treat the cost as unknown.",
   "installStore.moduleTitle": "Choose a module",
   "installStore.moduleHint":
@@ -120,7 +152,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.manageApp": "Manage app",
   "installStore.cloudConnection": "Cloud connection",
   "installStore.cloudConnected": "Connected. Ready to install.",
-  "installStore.appDescription": "Install this app in your workspace with just the settings it needs.",
+  "installStore.appDescription": "Install this app with just the settings it needs.",
   "installStore.logs": "Progress and logs",
   "installStore.retryInstall": "Retry installation",
   "installStore.applyUnconfirmed": "The execution could not be confirmed. Check the existing run before starting another execution.",
@@ -176,7 +208,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.settingInvalid": "This value isn't in the expected format.",
   "installStore.resubmitTitle": "Enter the settings again",
   "installStore.resubmitHint": "We couldn't confirm that your last confirmation arrived. Send the same settings again to continue; nothing else can change now.",
-  "installStore.nameTaken": "Another app in this workspace already uses this name.",
+  "installStore.nameTaken": "An app with this name already exists.",
   "installStore.useProposedName": "Use “{name}”",
   "installStore.open.title": "Unfinished installs",
   "installStore.open.hint": "Continue where you left off, or stop and clean up. Nothing has been created in your cloud yet.",
@@ -196,14 +228,14 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.problem.restart": "Start over",
   "installStore.problem.reinstall": "Install again",
   "installStore.problem.expired": "This install expired after a while without activity. Start over to install.",
-  "installStore.problem.workspaceChanged": "The workspace's management changed while this install waited. Start over to install.",
+  "installStore.problem.workspaceChanged": "App management changed while you were waiting. Start again.",
   "installStore.problem.sourceSync": "The Git repository couldn't be read. Check the URL, the version and, for a private repository, its Git connection.",
   "installStore.problem.module": "No installable module could be identified in this version.",
   "installStore.problem.compatibility": "This version can't be installed as it is. Check with the app's publisher.",
   "installStore.problem.secretSetting": "This app needs a secret setting that can't be accepted at install time yet.",
   "installStore.problem.plan": "What this app would create couldn't be worked out. Check the reason and logs.",
   "installStore.problem.retryable": "A step couldn't be confirmed. Try again to continue from there.",
-  "installStore.problem.nameTaken": "Another app here uses this name. Choose a different one.",
+  "installStore.problem.nameTaken": "An app with this name already exists. Choose another name.",
   "installStore.problem.connection": "The chosen connection can't be used by this app. Choose another one.",
   "installStore.problem.interfaceUnavailable": "The chosen app is no longer available. Choose another app or “Link later”.",
   "installStore.problem.interfaceConflict": "This app is already selected for another connection. Choose another app or “Link later”.",
@@ -216,16 +248,12 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.error.stillProcessing": "This install is still being processed. Wait a moment and try again.",
   "installStore.error.settingsInvalid": "Check the settings you entered.",
   "installStore.error.unavailable": "This install couldn't be verified.",
-  "installStore.error.noWorkspace": "There's no workspace to open this install in. Choose or create a workspace, then try again.",
   "installStore.error.continueUnconfirmed": "We couldn't confirm that the server received this; showing the current state.",
   // --- common -------------------------------------------------------------
   "common.loading": "Loading…",
   "common.retry": "Retry",
   "common.refresh": "Refresh",
-  "common.creating": "Creating…",
   "common.cancel": "Cancel",
-  "common.save": "Save",
-  "common.saving": "Saving…",
   "common.none": "None",
   "common.unknown": "Unknown",
   "common.dismiss": "Dismiss",
@@ -238,7 +266,6 @@ export const en: Record<keyof typeof ja, string> = {
   "common.hoursAgo": "{n}h ago",
   "common.daysAgo": "{n}d ago",
   "common.empty": "No data.",
-  "common.loadMore": "Load more",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
@@ -262,63 +289,8 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.dark": "Dark",
 
   // --- workspaces (スペース in the Japanese UI) -----------------------------------
-  "workspace.defaultName": "Personal",
-  "workspace.start.aria": "Start a workspace",
-  "workspace.start.kicker": "Getting started",
-  "workspace.start.title": "Create a workspace for your apps",
-  "workspace.start.body":
-    "A workspace keeps your apps, connections, history and usage together. It's yours alone to start.",
-  "workspace.start.create": "Create a workspace",
-  "workspace.start.creating": "Creating…",
-  "workspace.label": "Workspaces",
-  "workspace.switcherAria": "Switch workspace (current: {name})",
-  "workspace.loading": "Loading…",
-  "workspace.loadFailed": "Couldn't load workspaces — {message}",
-  "workspace.settings": "Workspace settings",
-  "workspace.unnamed": "Unnamed workspace",
+  "workspace.unnamed": "Unnamed",
   "workspace.createdOn": "Created {date}",
-  "workspace.scopeNote": "Workspace: {name}",
-  "workspace.noneTitle": "No workspace yet",
-  "workspace.noneMessage": "Start from Home and this page becomes available.",
-  "workspace.noneCta": "Go to Home",
-  "workspace.create.environment": "Separate an environment",
-  "workspace.create.environmentBody":
-    "Keep apps and connections apart, such as production and testing.",
-  "workspace.create.team": "Use with a team",
-  "workspace.create.teamBody": "Invite people and share apps and connections.",
-  "workspace.create.environmentNameLabel": "Environment name",
-  "workspace.create.teamNameLabel": "Team name",
-  "workspace.create.environmentPlaceholder": "e.g. Testing, Experiments",
-  "workspace.create.teamPlaceholder": "e.g. Design team, Client A",
-  "workspace.create.environmentHelp":
-    "You switch to the new workspace when it's created. It's yours alone to start.",
-  "workspace.create.teamHelp":
-    "After creating it, you continue to inviting members.",
-  "workspace.create.submit": "Create",
-  "workspace.create.failed": "Couldn't create the workspace — {message}",
-  "workspace.create.done": "Created “{name}” and switched to it.",
-  "workspace.thisWorkspace": "This workspace",
-  "workspace.name": "Name",
-  "workspace.nameHint": "The name members and the workspace switcher show.",
-  "workspace.nameRequired": "Enter a name.",
-  "workspace.saved": "Name saved.",
-  "workspace.notFound":
-    "This workspace wasn't found. Switch workspaces, or restore it from Archived below.",
-  "workspace.createdLabel": "Created",
-  "workspace.new.title": "Add a workspace",
-  "workspace.new.body": "Pick what it's for, and a workspace is created for it.",
-  "workspace.archive.title": "Archive this workspace",
-  "workspace.archive.body":
-    "It leaves the workspace switcher. Apps, connections, history and usage keep running and are not deleted. Restore it from Archived below.",
-  "workspace.archive.lastWorkspace": "Your last workspace can't be archived.",
-  "workspace.archive.cta": "Archive",
-  "workspace.archive.confirmTitle": "Archive “{name}”",
-  "workspace.archive.confirmMessage":
-    "It only leaves the workspace switcher. Its apps keep running, and its connections, history and usage stay. You can restore it any time.",
-  "workspace.archive.done": "Archived “{name}”. Its apps keep running.",
-  "workspace.archived.title": "Archived workspaces",
-  "workspace.archived.body": "Restoring brings a workspace back to the switcher.",
-  "workspace.archived.restore": "Restore",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -716,7 +688,7 @@ export const en: Record<keyof typeof ja, string> = {
   "policy.reason.provider_lockfile_missing": "The provider lock file wasn't recorded.",
   "policy.reason.provider_attestation_missing": "Where the provider was installed from couldn't be verified.",
   "policy.reason.provider_not_mirrored": "The provider wasn't installed from the required mirror.",
-  "policy.reason.credential_connection_scope": "This connection must belong to the workspace.",
+  "policy.reason.credential_connection_scope": "This connection must belong to the app owner.",
   "policy.reason.compatibility_report_missing": "There's no compatibility check for this version.",
   "policy.reason.compatibility_report_mismatch": "The compatibility check is for a different version.",
   "policy.reason.compatibility_not_runnable": "The compatibility check found it can't run.",
@@ -876,10 +848,10 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cancelConfirm.keep": "Keep running",
   "run.cost.required": "Estimated cost: ~{n}",
   "run.cost.unrated": "Usage measured; no price policy is configured.",
-  "run.cost.capacityBlocked": "This workspace can't run this action.",
+  "run.cost.capacityBlocked": "This app can't run this action.",
   "run.cost.billingCta": "Open billing",
   "run.cost.operatorHelp":
-    "An owner can review this workspace's usage and limits to enable it.",
+    "The owner can review usage and limits to enable this action.",
   "run.cost.quotaCta": "Review usage",
   "run.changes.title": "What will change",
   "run.changes.titleDone": "What changed",
@@ -955,62 +927,9 @@ export const en: Record<keyof typeof ja, string> = {
   // --- add flow (/new) -------------------------------------------------------
 
   // --- members ---------------------------------------------------------------
-  "members.role.owner": "Owner",
-  "members.role.admin": "Admin",
-  "members.role.member": "Member",
-  "members.role.viewer": "Viewer",
-  "members.title": "Members",
-  "members.subtitle": "People who use this workspace with you.",
-  "members.listLabel": "Member list",
-  "members.roleHelp.owner":
-    "Manages everything, including changing and removing members.",
-  "members.roleHelp.admin":
-    "Installs, updates and uninstalls apps, manages connections, and invites members.",
-  "members.roleHelp.member":
-    "Opens and uses apps. Can't install apps or change settings.",
-  "members.roleHelp.viewer":
-    "Sees apps and their state. Apps are told this person is a viewer.",
   "members.unnamed": "Member ({id})",
-  "members.loadFailedTitle": "Couldn't load members",
-  "members.invite.open": "Invite a member",
-  "members.removeTitle": "Remove “{name}” from this workspace",
-  "members.status.active": "Active",
-  "members.status.invited": "Invited",
-  "members.status.suspended": "Suspended",
-  "members.invite.subtitle":
-    "Enter the email of someone who has signed in to Takosumi once. They get access right away — no email is sent.",
-  "members.invite.email": "Email",
-  "members.invite.role": "Role",
-  "members.invite.cta": "Invite",
-  "members.invite.notFound":
-    "No Takosumi account was found for that email. Ask them to sign in once first.",
-  "members.invite.emailRequired": "Enter an email address.",
-  "members.invite.success": "Invited {email}. They have access now.",
-  "members.you": "you",
-  "members.changeRole": "Change role",
-  "members.roleSelectLabel": "Role for {name}",
-  "members.roleChangeConfirmTitle": "Change role",
-  "members.roleChangeConfirmMessage": "Change the role of {name} to “{role}”?",
-  "members.lastOwnerDemote":
-    "The last owner cannot be demoted. Appoint another owner first.",
-  "members.lastOwnerRemove":
-    "The last owner can't be removed. Appoint another owner first.",
-  "members.remove": "Remove",
-  "members.removeSelf": "Leave this workspace",
-  "members.removeSelfConfirm":
-    "You'll leave this workspace and lose access to its apps and connections. You can't rejoin on your own.",
-  "members.removeConfirm":
-    "{name} loses access to this workspace's apps and connections. Installed apps keep running. Invite them again to restore access.",
-  "members.empty": "No members yet.",
-  "members.viewerNote":
-    "Owners and admins invite members and change or remove them.",
 
   // --- connections -------------------------------------------------------------
-  "conn.subtitle":
-    "The connections your apps use to create resources in your cloud. Each one shows the apps that use it.",
-  "conn.title": "Connections",
-  "conn.footnote":
-    "To switch the connection an app uses, open the app and choose it in its settings.",
   "conn.operatorProvided": "Provided by the operator",
   "conn.apps.label": "Used by",
   "conn.apps.loading": "Checking…",
@@ -1044,7 +963,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.oauth.error.missingCode":
     "The authorization response was incomplete. Please try again.",
   "conn.oauth.error.forbidden":
-    "You can't add connections to this workspace. Ask an owner or admin.",
+    "You can't add this connection. Sign in with the account that owns it.",
   "conn.oauth.error.oauthFailed":
     "Authentication with the provider failed. Please wait a moment and try again.",
   "conn.oauth.errorCode": "Error code: {code}",
@@ -1141,9 +1060,9 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.depCreated": "Linked two apps",
   "notif.event.depDeleted": "Unlinked two apps",
   "notif.event.shareRequested":
-    "Received a request to share values between workspaces",
-  "notif.event.shareApproved": "Approved sharing values between workspaces",
-  "notif.event.shareRevoked": "Revoked sharing values between workspaces",
+    "Received a request to share values",
+  "notif.event.shareApproved": "Approved sharing values",
+  "notif.event.shareRevoked": "Revoked sharing values",
   "notif.event.groupCreated": "Started a grouped update",
   "notif.event.autoUpdateOn": "Automatic updates turned on",
   "notif.event.autoUpdateOff": "Automatic updates turned off",
@@ -1169,14 +1088,14 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.interfaceRetryRequestedNamed":
     "Retrying the screen setup for “{name}”",
   "notif.event.recorded": "Recorded activity",
-  "notif.otherWorkspace": "Other workspace: {name}",
+  "notif.otherWorkspace": "History: {name}",
 
   // --- activity -------------------------------------------------------------------
   "activity.actorYou": "You",
   "activity.actorSystem": "Takosumi (automatic)",
 
   // --- run group ---------------------------------------------------------------
-  "runGroup.title": "Workspace update",
+  "runGroup.title": "App updates",
   "runGroup.subtitle":
     "Changes to several apps can be reviewed and approved together.",
   "runGroup.approveAll": "Approve all",
@@ -1200,9 +1119,6 @@ export const en: Record<keyof typeof ja, string> = {
   "account.title": "Account",
   "account.sectionsLabel": "Account sections",
   "account.section.me": "You",
-  "account.section.members": "Members",
-  "account.section.billing": "Billing & usage",
-  "account.section.workspace": "Workspace",
   "account.section.cli": "CLI & API",
   "account.profile.title": "Signed in as",
   "account.profile.displayName": "Name",
@@ -1210,7 +1126,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.profile.notSet": "Not set",
   "account.profile.provider": "Signed in with",
   "account.profile.nameHint":
-    "Your name and email come from the account you signed in with. Members of your workspaces see your name; only their owners and admins see your email.",
+    "Your name and email come from the account you signed in with. App members see your name; only the app owner sees your email.",
   "account.language.title": "Language",
   "account.theme.title": "Appearance",
   "account.preferences.title": "Display & language",
@@ -1250,9 +1166,6 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.scopeCatalog.retry": "Retry permissions",
   "account.apiKeys.scopeCatalog.empty":
     "This environment has no permissions that can be granted here.",
-  "account.apiKeys.scopeCatalog.workspaceRequired":
-    "Create a workspace before making a key with this permission.",
-  "account.apiKeys.restrictWorkspace": "Only allow use in the current workspace",
   "account.apiKeys.create": "Create key",
   "account.apiKeys.createSubmit": "Create",
   "account.apiKeys.listLabel": "Your keys",
@@ -1266,7 +1179,6 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.error":
     "Could not complete the API key operation: {message}",
   "account.apiKeys.empty": "No keys yet.",
-  "account.apiKeys.workspaceBound": "This workspace only",
   "account.apiKeys.lastUsed": "Last used",
   "account.apiKeys.neverUsed": "Never",
   "account.apiKeys.status.active": "Active",
@@ -1280,20 +1192,20 @@ export const en: Record<keyof typeof ja, string> = {
     "Any CLI or automation using this key stops working immediately.",
 
   // --- billing -------------------------------------------------------------------
-  "billing.mode.disabled": "Takosumi doesn't charge for this workspace.",
+  "billing.mode.disabled": "Takosumi doesn't charge for this account.",
   "billing.mode.showback":
-    "Takosumi records this workspace's usage but doesn't bill it.",
+    "Takosumi records usage but doesn't bill it.",
   "billing.loadError": "Couldn't load charges: {message}",
   "billing.title": "Charges",
   "billing.ownersOnly":
-    "The workspace's owners and admins can see charges and usage.",
+    "The payer can see charges and usage.",
   "billing.cloudCosts":
     "Cloud resources your apps create are billed by each cloud.",
   "billing.usage.quantityLine": "Quantity {quantity}",
   "billing.usage.amountUnknown": "Amount unknown",
   "billing.usage.removedApp": "Removed app",
   "billing.usage.title": "Usage",
-  "billing.usage.subtitle": "Usage recorded for this workspace, newest first.",
+  "billing.usage.subtitle": "Usage recorded for apps you pay for.",
   "billing.usage.more": "Load more",
   "billing.usage.error": "Couldn't load usage: {message}",
   "billing.usage.empty": "No usage yet.",
@@ -1383,7 +1295,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.payment.status.disputed": "Disputed",
   "billing.commercial.transaction.title": "Usage transactions",
   "billing.commercial.transaction.subtitle":
-    "Charged and reversed wallet usage for this workspace.",
+    "Your charged and reversed wallet usage.",
   "billing.commercial.transaction.empty": "No usage transactions yet.",
   "billing.commercial.transaction.error":
     "Could not load usage transactions: {message}",

@@ -65,7 +65,8 @@ interface EnvPair {
 }
 
 export interface ConnectionCreateFormProps {
-  readonly workspaceId: string;
+  /** Omitted when a signed-in person creates a personal connection. */
+  readonly workspaceId?: string;
   /**
    * The credential-recipe catalog read, when the embedding screen already
    * holds one (the Connections tab labels its list from the same read). Read
@@ -215,10 +216,16 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
     connection: ProviderConnection,
     verify: boolean,
   ) => {
-    if (connection.workspaceId !== workspaceId()) return;
+    const matchesCurrentScope = () => {
+      const workspace = workspaceId();
+      return workspace
+        ? connection.workspaceId === workspace
+        : connection.workspaceId === undefined && connection.scope !== "operator";
+    };
+    if (!matchesCurrentScope()) return;
     clearForm();
     await props.onCreated(connection);
-    if (verify && connection.workspaceId === workspaceId()) {
+    if (verify && matchesCurrentScope()) {
       await props.verifyConnection(connection.id);
     }
   };
@@ -291,7 +298,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
       if (raw.length > 0) submitValues[field.envName] = raw;
     }
     const connection = await createConnection({
-      workspaceId: workspaceId(),
+      ...(workspaceId() ? { workspaceId: workspaceId() } : {}),
       provider: option.providerSource,
       credentialRecipe: option.credentialRecipe,
       displayName: displayName().trim() || option.label,
@@ -339,7 +346,7 @@ export default function ConnectionCreateForm(props: ConnectionCreateFormProps) {
       throw new Error(t("conn.error.invalidProvider"));
     }
     const connection = await createConnection({
-      workspaceId: workspaceId(),
+      ...(workspaceId() ? { workspaceId: workspaceId() } : {}),
       provider: name,
       credentialRecipe: {
         id: "generic-env",

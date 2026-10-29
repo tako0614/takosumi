@@ -9,6 +9,7 @@ import {
   loadConnectionUsage,
 } from "../../../../dashboard/src/lib/connection-usage.ts";
 import type {
+  AccessibleApp,
   Capsule,
   ProviderBindingSet,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -32,7 +33,95 @@ function bindings(capsuleId: string, connectionIds: readonly string[]): Provider
   };
 }
 
+function accessibleApp(
+  capsuleId: string,
+  name: string,
+  role: AccessibleApp["role"],
+): AccessibleApp {
+  return {
+    capsuleId,
+    name,
+    role,
+    ownerDisplayName: "Owner",
+    state: "installed",
+    primaryAction: "open",
+  } as AccessibleApp;
+}
+
 describe("loadConnectionUsage", () => {
+  test("personal connections inspect only apps owned by the caller", async () => {
+    const bindingReads: string[] = [];
+    const usage = await loadConnectionUsage(undefined, {
+      listAccessibleApps: async () => [
+        accessibleApp("cap_owner", "Owned app", "owner"),
+        accessibleApp("cap_member", "Member app", "member"),
+      ],
+      listCapsules: async () => {
+        throw new Error("personal app list must not use workspace fallback");
+      },
+      getBindingSet: async (capsuleId) => {
+        bindingReads.push(capsuleId);
+        return bindings(capsuleId, ["pc_personal"]);
+      },
+    });
+    expect(bindingReads).toEqual(["cap_owner"]);
+    expect(usage.incomplete).toBe(false);
+    expect(usage.appsByConnection.get("pc_personal")).toEqual([
+      { capsuleId: "cap_owner", name: "Owned app" },
+    ]);
+  });
+
+  test("apps 404 falls back only to a known legacy workspace", async () => {
+    let fallbackWorkspace: string | undefined;
+    const withWorkspace = await loadConnectionUsage("ws_legacy", {
+      listAccessibleApps: async () => undefined,
+      listCapsules: async (workspaceId) => {
+        fallbackWorkspace = workspaceId;
+        return [capsule("cap_legacy", "Legacy app")];
+      },
+      getBindingSet: async (capsuleId) => bindings(capsuleId, ["pc_legacy"]),
+    });
+    expect(fallbackWorkspace).toBe("ws_legacy");
+    expect(withWorkspace.incomplete).toBe(false);
+    expect(withWorkspace.appsByConnection.get("pc_legacy")).toEqual([
+      { capsuleId: "cap_legacy", name: "Legacy app" },
+    ]);
+
+    let fallbackCalled = false;
+    const withoutWorkspace = await loadConnectionUsage(undefined, {
+      listAccessibleApps: async () => undefined,
+      listCapsules: async () => {
+        fallbackCalled = true;
+        return [];
+      },
+      getBindingSet: async () => null,
+    });
+    expect(fallbackCalled).toBe(false);
+    expect(withoutWorkspace.appsByConnection.size).toBe(0);
+    expect(withoutWorkspace.incomplete).toBe(true);
+  });
+
+  test("an app-list authorization/service error is not hidden by legacy workspace data", async () => {
+    let fallbackCalled = false;
+    let thrown: unknown;
+    try {
+      await loadConnectionUsage("ws_legacy", {
+        listAccessibleApps: async () => {
+          throw new Error("403");
+        },
+        listCapsules: async () => {
+          fallbackCalled = true;
+          return [capsule("cap_legacy", "Legacy app")];
+        },
+        getBindingSet: async () => bindings("cap_legacy", ["pc_legacy"]),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toEqual(new Error("403"));
+    expect(fallbackCalled).toBe(false);
+  });
+
   test("maps each connection to the apps whose bindings name it, sorted by name", async () => {
     const usage = await loadConnectionUsage("ws_1", {
       listCapsules: async (workspaceId) => {

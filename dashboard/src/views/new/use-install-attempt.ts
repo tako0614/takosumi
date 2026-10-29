@@ -36,7 +36,6 @@ import {
   answerGitInstallAttempt,
   ControlApiError,
   createGitInstallAttempt,
-  createWorkspace,
   discardGitInstallAttempt,
   getGitInstallPlan,
   gitPlanReconcileDelayMs,
@@ -46,12 +45,7 @@ import {
 } from "../../lib/control-api.ts";
 import { randomUuid } from "../../lib/random-uuid.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
-import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import {
-  currentWorkspaceId,
-  selectAvailableWorkspaceId,
-  setCurrentWorkspaceId,
-} from "../../lib/workspace-state.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
@@ -132,12 +126,6 @@ export interface InstallAttemptPacing {
   readonly now?: () => number;
 }
 
-function defaultWorkspaceHandle(): string {
-  const time = Date.now().toString(36).slice(-6);
-  const random = Math.random().toString(36).slice(2, 8) || "new";
-  return `workspace-${time}-${random}`.slice(0, 39);
-}
-
 /** A failed request whose outcome the server may still have committed. */
 function outcomeUnknown(cause: unknown): boolean {
   return !(cause instanceof ControlApiError) || cause.status === 0 || cause.status >= 500;
@@ -156,6 +144,25 @@ class InstallAttemptStillProcessingError extends Error {
   constructor() {
     super("The install attempt is still being processed");
     this.name = "InstallAttemptStillProcessingError";
+  }
+}
+
+/** A fresh account has no legacy route when stable resolution is unavailable. */
+class SourceRefRequiredError extends Error {
+  constructor() {
+    super("Stable source resolution is unavailable for this account");
+    this.name = "SourceRefRequiredError";
+  }
+}
+
+async function resolveStoreVersion(workspaceId: string | undefined, url: string): Promise<ResolvedStoreVersion> {
+  try {
+    return await resolveStableSourceTag(workspaceId, url);
+  } catch (cause) {
+    if (!workspaceId && cause instanceof ControlApiError && cause.status === 404) {
+      throw new SourceRefRequiredError();
+    }
+    throw cause;
   }
 }
 
@@ -194,6 +201,9 @@ export async function discardInstallAttempt(
 
 /** Localized words for a failed install request. */
 export function installErrorMessage(cause: unknown): string {
+  if (cause instanceof SourceRefRequiredError) {
+    return t("installStore.error.sourceRefRequired");
+  }
   if (cause instanceof InstallAttemptStillProcessingError) {
     return t("installStore.error.stillProcessing");
   }
@@ -321,7 +331,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
    * beside it that could leave the first behind.
    */
   let pendingReplan:
-    | { readonly workspaceId: string; readonly request: CreateGitInstallAttemptRequest; readonly name: string; readonly refText?: string }
+    | { readonly workspaceId?: string; readonly request: CreateGitInstallAttemptRequest; readonly name: string; readonly refText?: string }
     | undefined;
 
   const now = options.pacing?.now ?? (() => Date.now());
@@ -329,6 +339,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 
   let disposed = false;
+  /** Only a page entered in an old Workspace context is bound to its selection. */
+  let legacyWorkspaceContext: string | undefined;
   /** Bumped whenever the attempt or workspace this page follows changes. */
   let epoch = 0;
   let driveRun: Promise<void> | undefined;
@@ -339,7 +351,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   let answerRun: Promise<unknown> | undefined;
   /** An unconfirmed start keeps its key so resending it cannot start twice. */
   let pendingStart:
-    | { readonly workspaceId: string; readonly body: string; readonly key: string }
+    | { readonly workspaceId?: string; readonly body: string; readonly key: string }
     | undefined;
 
   /** Stop following now: wake the pause and abort the reconcile in flight. */
@@ -412,7 +424,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     return retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
   });
 
-  const clearCaches = (workspaceId: string) => {
+  const clearCaches = (workspaceId?: string) => {
     clearCapsuleListCache(workspaceId);
     clearCurrentStateVersionCache(workspaceId);
     clearDashboardOverviewCache(workspaceId);
@@ -462,14 +474,15 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     next: GitInstallPlanResponse,
     expectedEpoch: number,
   ): GitInstallPlanResponse | undefined => {
-    if (disposed || expectedEpoch !== epoch) return undefined;
+    if (disposed || expectedEpoch !== epoch ||
+      (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceContext)) return undefined;
     const held = response();
     const attemptId = held?.installPlan.id ?? untrack(options.attemptId);
     if (
       !attemptId ||
       !attemptBelongsHere(next, {
         attemptId,
-        workspaceId: currentWorkspaceId(),
+        workspaceId: legacyWorkspaceContext,
         principalId: options.principalId,
       })
     ) {
@@ -514,34 +527,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     return next;
   };
 
-  /**
-   * The workspace an attempt in the URL is read in. Until the shell has
-   * chosen one, it is resolved here from the person's workspaces (choosing
-   * it runs the read); with none to choose, the page says so instead of
-   * loading forever.
-   */
-  const resolveWorkspace = (expected: number): void => {
-    void listWorkspacesCached()
-      .then((workspaces) => {
-        if (disposed || expected !== epoch) return;
-        const resolved = selectAvailableWorkspaceId(untrack(currentWorkspaceId), workspaces);
-        if (resolved) {
-          setCurrentWorkspaceId(resolved);
-          return;
-        }
-        setError(t("installStore.error.noWorkspace"));
-        setLoadFailed(true);
-      })
-      .catch(() => {
-        if (!disposed && expected === epoch) setLoadFailed(true);
-      });
-  };
-
   // The URL names the attempt; reading it never advances or answers it.
   createEffect(
     on([options.attemptId, currentWorkspaceId], ([attemptId, workspaceId]) => {
       const held = untrack(response);
-      if (held && held.installPlan.workspaceId !== workspaceId) {
+      if (held && legacyWorkspaceContext && legacyWorkspaceContext !== workspaceId) {
         // Never let an attempt keep writing under a workspace the person left.
         epoch += 1;
         halt();
@@ -559,12 +549,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setError(undefined);
       forgetSession();
       if (!attemptId) return;
+      legacyWorkspaceContext = workspaceId || undefined;
       attemptBaseVersion = untrack(editVersion);
       const expected = epoch;
-      if (!workspaceId) {
-        resolveWorkspace(expected);
-        return;
-      }
       setLoading(true);
       getGitInstallPlan(attemptId)
         .then((next) => {
@@ -682,30 +669,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     }
   };
 
-  const ensureWorkspace = async (): Promise<string> => {
-    const workspaces = await listWorkspacesCached();
-    const existing = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
-    if (existing) {
-      if (existing !== currentWorkspaceId()) setCurrentWorkspaceId(existing);
-      return existing;
-    }
-    const workspace = await createWorkspace({
-      handle: defaultWorkspaceHandle(),
-      displayName: t("workspace.defaultName"),
-      type: "personal",
-    });
-    setCurrentWorkspaceId(workspace.id);
-    window.dispatchEvent(new Event("takosumi:workspaces-changed"));
-    return workspace.id;
-  };
-
   /** POST one attempt; an unconfirmed POST is resent with the same key. */
   const postAttempt = async (
-    workspaceId: string,
+    workspaceId: string | undefined,
     request: CreateGitInstallAttemptRequest,
   ): Promise<GitInstallPlanResponse> => {
     const body = JSON.stringify(request);
-    const key = pendingStart?.workspaceId === workspaceId && pendingStart.body === body
+    const key = pendingStart && pendingStart.workspaceId === workspaceId && pendingStart.body === body
       ? pendingStart.key
       : randomUuid();
     pendingStart = { workspaceId, body, key };
@@ -724,11 +694,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     expected: number,
     adoptOptions: { readonly keepAnswers?: boolean } = {},
   ): boolean => {
-    if (disposed || expected !== epoch) return false;
+    if (disposed || expected !== epoch ||
+      (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceContext)) return false;
     if (
       !attemptBelongsHere(created, {
         attemptId: created.installPlan.id,
-        workspaceId: currentWorkspaceId(),
+        workspaceId: legacyWorkspaceContext,
         principalId: options.principalId,
       })
     ) {
@@ -763,14 +734,18 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     setMutating("start");
     setError(undefined);
     try {
-      const workspaceId = await ensureWorkspace();
+      // The mount's initial URL effect runs after the first microtask. Let it
+      // establish this page's epoch before a fast POST can resolve.
+      await Promise.resolve();
+      const workspaceId = currentWorkspaceId() || undefined;
+      legacyWorkspaceContext = workspaceId;
       const expected = epoch;
-      if (disposed || currentWorkspaceId() !== workspaceId) return;
+      if (disposed) return;
       let ref = candidate.ref.trim();
       if (startOptions.fromStore && !ref) {
         // A Store listing installs the newest released version unless the
         // person chose one; the exact commit read is shown afterwards.
-        const resolved = await resolveStableSourceTag(workspaceId, candidate.url);
+        const resolved = await resolveStoreVersion(workspaceId, candidate.url);
         if (!isImmutableSourceRevision(resolved.commit)) {
           throw new ControlApiError(
             502,
@@ -1151,17 +1126,18 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       if (disposed) return false;
       const latest = response() ?? current;
       const plan = latest.installPlan;
+      const planWorkspaceId = plan.workspaceId || undefined;
       const retained = sheet();
       const rows = retained ? withConnectionOverrides(retained.connections, overrides()) : [];
       const linkedRows = retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
       let replacement = pendingReplan;
-      if (!replacement || replacement.workspaceId !== plan.workspaceId) {
+      if (!replacement || replacement.workspaceId !== planWorkspaceId) {
         const typed = nameDraft()?.trim();
         const name = typed && appNameValue(typed) ? typed : (currentName() ?? plan.capsule.name);
         const refText = refDraft();
         let ref = refText ?? plan.source.ref;
         if (refText === "" && options.fromStore?.()) {
-          const resolved = await resolveStableSourceTag(plan.workspaceId, plan.source.url);
+          const resolved = await resolveStoreVersion(planWorkspaceId, plan.source.url);
           if (disposed) return false;
           if (!isImmutableSourceRevision(resolved.commit)) {
             throw new ControlApiError(
@@ -1187,9 +1163,9 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           if (disposed) return false;
           replanDiscarded = plan.id;
         }
-        replacement = { workspaceId: plan.workspaceId, request, name, ...(refText !== undefined ? { refText } : {}) };
+        replacement = { workspaceId: planWorkspaceId, request, name, ...(refText !== undefined ? { refText } : {}) };
       }
-      if (currentWorkspaceId() !== replacement.workspaceId) return false;
+      if (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceContext) return false;
       clearCaches(replacement.workspaceId);
       const expected = ++epoch;
       pendingReplan = replacement;
@@ -1369,8 +1345,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const discarded = latest.installPlan.phase === "discarded"
         ? latest
         : await discardInstallAttempt(latest.installPlan.id, latest.installPlan.generation, wait);
-      const workspaceId = discarded.installPlan.workspaceId;
-      if (disposed || currentWorkspaceId() !== workspaceId) return false;
+      const workspaceId = discarded.installPlan.workspaceId || undefined;
+      if (disposed || (legacyWorkspaceContext && currentWorkspaceId() !== legacyWorkspaceContext)) return false;
       clearCaches(workspaceId);
       const expected = ++epoch;
       const created = await postAttempt(workspaceId, restartRequest(discarded.installPlan));
@@ -1388,11 +1364,6 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     if (!attemptId || mutating()) return;
     const expected = epoch;
     setError(undefined);
-    if (!currentWorkspaceId()) {
-      setLoadFailed(false);
-      resolveWorkspace(expected);
-      return;
-    }
     setLoading(true);
     try {
       const next = await getGitInstallPlan(attemptId);

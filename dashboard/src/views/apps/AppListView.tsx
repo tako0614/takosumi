@@ -9,58 +9,35 @@
  * card's name opens the app page, where the app is kept.
  */
 import "../app/app-page.css";
-import {
-  createEffect,
-  createMemo,
-  createResource,
-  For,
-  Match,
-  onMount,
-  Show,
-  Switch,
-} from "solid-js";
-import { useNavigate } from "@solidjs/router";
-import { Plus, Search, Sparkles } from "lucide-solid";
+import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import { Search, Sparkles } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import AppFace from "../../components/AppFace.tsx";
 import { resolveAppIcon } from "../../lib/app-face.ts";
-import {
-  currentWorkspaceId,
-  selectAvailableWorkspaceId,
-  setCurrentWorkspaceId,
-} from "../../lib/workspace-state.ts";
+import { currentWorkspaceId, selectAvailableWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
-import {
-  clearCapsuleListCache,
-  listCapsulesCached,
-} from "../../lib/capsule-list.ts";
-import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
-import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
-import {
-  type ControlApiError,
-  createWorkspace,
-  type Capsule,
-  type Workspace,
-} from "../../lib/control-api.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
+import { getCapsuleApp, listAccessibleApps, type AccessibleApp } from "../../lib/control-api.ts";
 import { isVisibleServiceCapsule } from "../../lib/capsules-ui.ts";
-import { type AppState, appState, appStateRank } from "../../lib/app-page.ts";
+import { type AppState, appState, appStateRank, openableScreens } from "../../lib/app-page.ts";
 import {
-  type AuthorizedUiSurface,
   listAuthorizedUiSurfaces,
 } from "../../lib/ui-surface-interfaces.ts";
 import { locale, type MessageKey, t } from "../../i18n/index.ts";
 import { Badge, Button, type Tone, Toast } from "../../components/ui/index.ts";
-import { createAction } from "../account/lib/action.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import { OpenAppButton } from "../app/app-ui.tsx";
 import { appPageHref } from "../../lib/app-links.ts";
 
 /** One installed app on Home with the screens it may open. */
 interface HomeApp {
-  readonly inst: Capsule;
+  readonly inst: { readonly id: string; readonly name: string };
+  readonly displayName?: string;
+  readonly iconUrl?: string;
+  readonly role?: AccessibleApp["role"];
+  readonly ownerDisplayName?: string;
   readonly state: AppState;
-  readonly surfaces: readonly AuthorizedUiSurface[];
+  readonly surfaces: readonly { readonly name?: string; readonly url: string; readonly icon?: string }[];
 }
 
 const STATE_BADGE: Readonly<Partial<Record<AppState, { readonly label: MessageKey; readonly tone: Tone }>>> = {
@@ -75,137 +52,68 @@ export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
 }
 
+/** 404 is the only compatibility signal; service/auth failures stay visible. */
+async function loadHomeApps(): Promise<{ readonly apps: readonly HomeApp[]; readonly surfacesFailed: boolean }> {
+  const accessible = await listAccessibleApps();
+  if (accessible !== undefined) {
+    const rows = await Promise.all(accessible.map(async (entry): Promise<HomeApp> => {
+      let surfaces: HomeApp["surfaces"] = [];
+      let state = homeState(entry);
+      // A launcher URL must come from the app's authorized screen projection.
+      // The value-free apps list itself is never an external URL authority.
+      try {
+        const view = await getCapsuleApp(entry.capsuleId);
+        surfaces = openableScreens(view.screens);
+        if (state === "ready" && view.state === "installed" && view.version.updateAvailable) state = "update_available";
+      } catch { /* The app remains manageable when screen discovery is unavailable. */ }
+      return {
+        inst: { id: entry.capsuleId, name: entry.name },
+        displayName: typeof entry.displayName === "string" ? entry.displayName : entry.displayName?.[locale()],
+        iconUrl: entry.iconUrl,
+        role: entry.role,
+        ownerDisplayName: entry.ownerDisplayName,
+        state, surfaces,
+      };
+    }));
+    return { apps: rows, surfacesFailed: false };
+  }
+  const workspaces = await listWorkspacesCached();
+  const id = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
+  setCurrentWorkspaceId(id);
+  if (!id) return { apps: [], surfacesFailed: false };
+  const [capsules, surfaces] = await Promise.all([
+    listCapsulesCached(id, { includeDestroyed: false }),
+    listAuthorizedUiSurfaces(id).then((value) => ({ value, failed: false }), () => ({ value: [], failed: true })),
+  ]);
+  return {
+    apps: capsules.filter(isVisibleServiceCapsule).map((inst) => ({
+      inst, state: appState(inst), surfaces: surfaces.value.filter((surface) => surface.capsuleId === inst.id),
+    })), surfacesFailed: surfaces.failed,
+  };
+}
+function homeState(app: AccessibleApp): AppState {
+  switch (app.state) {
+    case "needs_attention": return "needs_attention";
+    case "update_available": return "update_available";
+    case "installing": case "updating": return "installing";
+    case "uninstalling": case "uninstall_scheduled": return "uninstalling";
+    case "uninstalled": case "stopped": return "stopped";
+    default: return "ready";
+  }
+}
 function Inner() {
-  const navigate = useNavigate();
-  const workspaceId = () => currentWorkspaceId() || undefined;
-  let recoveringWorkspaceSelection = false;
-
-  const clearWorkspaceProjectionCaches = (id: string) => {
-    clearDashboardOverviewCache(id);
-    clearCapsuleListCache(id);
-    clearCurrentStateVersionCache(id);
-    clearInstallConfigListCache(id);
-  };
-
-  const ensureAccessibleWorkspaceSelection = async (
-    options: { readonly force?: boolean } = {},
-  ) => {
-    if (recoveringWorkspaceSelection) return;
-    recoveringWorkspaceSelection = true;
-    try {
-      const current = currentWorkspaceId();
-      const workspaces = await listWorkspacesCached({
-        force: options.force,
-        selectedWorkspaceId: current || undefined,
-      });
-      const chosen = selectAvailableWorkspaceId(current, workspaces);
-      if (chosen !== current) {
-        if (current) clearWorkspaceProjectionCaches(current);
-        setCurrentWorkspaceId(chosen);
-      }
-    } finally {
-      recoveringWorkspaceSelection = false;
-    }
-  };
-
-  onMount(async () => {
-    try {
-      await ensureAccessibleWorkspaceSelection();
-    } catch {
-      // The shell workspace switcher and empty-state action handle this case.
-    }
-  });
-
-  // Home needs only the Capsule ledger and the authorized screens.
-  // `listCapsulesCached` follows the bounded API's nextCursor itself.
-  const [capsules, { refetch: refetchCapsules }] = createResource(
-    workspaceId,
-    (id) => listCapsulesCached(id, { includeDestroyed: false }),
-  );
-  createEffect(() => {
-    const error = capsules.error as ControlApiError | undefined;
-    const staleWorkspaceId = workspaceId();
-    if (
-      !staleWorkspaceId ||
-      !error ||
-      (error.status !== 403 && error.status !== 404)
-    ) {
-      return;
-    }
-    clearWorkspaceProjectionCaches(staleWorkspaceId);
-    void ensureAccessibleWorkspaceSelection({ force: true });
-  });
-  const [uiSurfaces, { refetch: refetchUiSurfaces }] = createResource(
-    workspaceId,
-    (id) => listAuthorizedUiSurfaces(id),
-  );
-  // Screen discovery can fail independently of the app list: the apps still
-  // show, with a notice that their Open buttons could not be read.
-  const surfacesFailed = () => Boolean(uiSurfaces.error);
-  const surfacesByCapsule = createMemo(() => {
-    const map = new Map<string, AuthorizedUiSurface[]>();
-    if (uiSurfaces.error) return map;
-    for (const surface of uiSurfaces() ?? []) {
-      const entries = map.get(surface.capsuleId) ?? [];
-      entries.push(surface);
-      map.set(surface.capsuleId, entries);
-    }
-    return map;
-  });
-  const apps = createMemo<readonly HomeApp[]>(() => {
-    const surfaces = surfacesByCapsule();
-    return (capsules.error ? [] : (capsules.latest ?? []))
-      .filter(isVisibleServiceCapsule)
-      .map((inst) => ({
-        inst,
-        state: appState(inst),
-        surfaces: surfaces.get(inst.id) ?? [],
-      }))
-      .sort(compareHomeApps);
-  });
-
-  const createFirstWorkspace = createAction(async (): Promise<Workspace> => {
-    const workspace = await createWorkspace({
-      handle: defaultWorkspaceHandle(),
-      displayName: t("workspace.defaultName"),
-      type: "personal",
-    });
-    setCurrentWorkspaceId(workspace.id);
-    window.dispatchEvent(new Event("takosumi:workspaces-changed"));
-    navigate("/new");
-    return workspace;
-  });
-
+  const [home, { refetch }] = createResource(loadHomeApps);
+  const apps = createMemo(() => [...(home.error ? [] : home.latest?.apps ?? [])].sort(compareHomeApps));
   return (
-    <Show
-      when={workspaceId()}
-      fallback={
-        <NoWorkspaceStartPanel
-          busy={createFirstWorkspace.busy()}
-          error={createFirstWorkspace.error()}
-          onCreate={() => void createFirstWorkspace.run()}
-        />
-      }
-    >
-      <Switch>
-        <Match when={capsules.loading || uiSurfaces.loading}>
-          <HomeSkeleton />
-        </Match>
-        <Match when={capsules.error}>
-          <Toast tone="error">
-            {fetchFailedMessage(capsules.error, t)}
-            <Button
-              variant="secondary"
-              size="sm"
-              type="button"
-              onClick={() => void refetchCapsules()}
-            >
-              {t("common.retry")}
-            </Button>
-          </Toast>
-        </Match>
-        <Match when={capsules.latest}>
-          <Show when={apps().length > 0} fallback={<WorkspaceStartPanel />}>
+    <Switch>
+      <Match when={home.loading}><HomeSkeleton /></Match>
+      <Match when={home.error}>
+        <Toast tone="error">{fetchFailedMessage(home.error, t)}
+          <Button variant="secondary" size="sm" type="button" onClick={() => void refetch()}>{t("common.retry")}</Button>
+        </Toast>
+      </Match>
+      <Match when={home.latest}>
+        <Show when={apps().length > 0} fallback={<AppStartPanel />}>
             <div class="ap-home" data-testid="home-apps">
               <div class="ap-home-head">
                 {/* The page's only heading. */}
@@ -217,14 +125,14 @@ function Inner() {
                   {t("apps.browse")}
                 </Button>
               </div>
-              <Show when={surfacesFailed()}>
+              <Show when={home.latest?.surfacesFailed}>
                 <Toast tone="error">
                   {t("apps.listIncomplete")}
                   <Button
                     variant="secondary"
                     size="sm"
                     type="button"
-                    onClick={() => void refetchUiSurfaces()}
+                    onClick={() => void refetch()}
                   >
                     {t("common.retry")}
                   </Button>
@@ -240,10 +148,9 @@ function Inner() {
                 </For>
               </ul>
             </div>
-          </Show>
-        </Match>
-      </Switch>
-    </Show>
+        </Show>
+      </Match>
+    </Switch>
   );
 }
 
@@ -257,6 +164,7 @@ function compareHomeApps(a: HomeApp, b: HomeApp): number {
 }
 
 function homeAppName(app: HomeApp): string {
+  if (app.displayName) return app.displayName;
   return app.surfaces.length === 1 && app.surfaces[0]!.name
     ? app.surfaces[0]!.name
     : app.inst.name;
@@ -289,13 +197,16 @@ function HomeAppCard(props: { readonly app: HomeApp }) {
       <AppFace
         class="ap-app-face"
         name={name()}
-        iconUrl={icon().imageSrc}
+        iconUrl={props.app.iconUrl ?? icon().imageSrc}
         emoji={icon().emoji}
       />
       <div class="ap-app-info">
         <a class="ap-app-name" href={pageHref()}>
           {name()}
         </a>
+        <Show when={props.app.role === "member"}>
+          <span class="ap-muted">{t("app.sharing.sharedBy", { name: props.app.ownerDisplayName ?? "" })}</span>
+        </Show>
         <Show when={badge()}>
           {(state) => (
             <span>
@@ -346,44 +257,8 @@ function HomeSkeleton() {
   );
 }
 
-function NoWorkspaceStartPanel(props: {
-  readonly busy: boolean;
-  readonly error: string | null;
-  readonly onCreate: () => void;
-}) {
-  return (
-    <section class="av-start" aria-label={t("workspace.start.aria")}>
-      <div class="av-start-copy">
-        <span class="av-start-kicker">{t("workspace.start.kicker")}</span>
-        <h2 class="av-start-title">{t("workspace.start.title")}</h2>
-        <p class="av-start-sub">{t("workspace.start.body")}</p>
-      </div>
-      <Button
-        variant="primary"
-        type="button"
-        busy={props.busy}
-        icon={<Plus size={18} />}
-        onClick={props.onCreate}
-      >
-        {props.busy
-          ? t("workspace.start.creating")
-          : t("workspace.start.create")}
-      </Button>
-      <Show when={props.error}>
-        {(message) => <Toast tone="error">{message()}</Toast>}
-      </Show>
-    </section>
-  );
-}
-
-function defaultWorkspaceHandle(): string {
-  const time = Date.now().toString(36).slice(-6);
-  const random = Math.random().toString(36).slice(2, 8) || "new";
-  return `workspace-${time}-${random}`.slice(0, 39);
-}
-
-/** The Workspace has no installed apps yet. */
-function WorkspaceStartPanel() {
+/** No apps have been installed yet. */
+function AppStartPanel() {
   return (
     <section class="av-start" aria-label={t("apps.start.aria")}>
       <div class="av-start-copy">

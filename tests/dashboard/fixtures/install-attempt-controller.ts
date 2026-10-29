@@ -43,16 +43,7 @@ mock.module(apiPath, () => ({
   answerGitInstallAttempt: scripted("answerGitInstallAttempt"),
   discardGitInstallAttempt: scripted("discardGitInstallAttempt"),
   resolveStableSourceTag: scripted("resolveStableSourceTag"),
-  createWorkspace: scripted("createWorkspace"),
   // The real delay schedule is kept; the pause itself is virtual (see mount).
-}));
-
-const workspaceListPath = resolve(dashboard, "src/lib/workspace-list.ts");
-const workspaceList = await import(workspaceListPath);
-let workspaces: readonly { readonly id: string }[] = [{ id: "ws_alpha" }];
-mock.module(workspaceListPath, () => ({
-  ...workspaceList,
-  listWorkspacesCached: async () => workspaces,
 }));
 
 const { setCurrentWorkspaceId } = await import(resolve(dashboard, "src/lib/workspace-state.ts"));
@@ -96,6 +87,10 @@ function inIntegration(response: GitInstallPlanResponse): GitInstallPlanResponse
     ...response,
     installPlan: { ...response.installPlan, capsule: { ...response.installPlan.capsule, environment: "integration" } },
   };
+}
+
+function withoutWorkspace(response: GitInstallPlanResponse): GitInstallPlanResponse {
+  return { ...response, installPlan: { ...response.installPlan, workspaceId: "" } };
 }
 
 const requirement = {
@@ -152,7 +147,7 @@ async function until(condition: () => boolean, label: string): Promise<void> {
  * A page with a virtual clock: each pause between reconcile commands is
  * recorded and advances the clock at once (yielding to the event loop).
  */
-function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number } = {}) {
+function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: number; readonly fromStore?: boolean } = {}) {
   let dispose!: () => void;
   const [attemptId, setAttemptId] = solid.createSignal<string | undefined>(initialAttemptId);
   const left: string[] = [];
@@ -178,6 +173,7 @@ function mount(initialAttemptId?: string, mountOptions: { readonly settleMs?: nu
       },
       // Tests that confirm by hand never race the page's own confirmation.
       settleMs: mountOptions.settleMs ?? 60_000,
+      fromStore: () => mountOptions.fromStore ?? false,
     });
   });
   return { attempt, dispose, attemptId, left, pauses, clock };
@@ -275,7 +271,7 @@ describe("install attempt controller", () => {
     });
   }
 
-  test("an attempt opened before the workspace is chosen waits for it, then reads the attempt", async () => {
+  test("an attempt opened without a workspace reads by explicit id", async () => {
     reset({ getGitInstallPlan: async () => respond(inputs(), 1) });
     setCurrentWorkspaceId("");
     try {
@@ -289,19 +285,15 @@ describe("install attempt controller", () => {
     }
   });
 
-  test("an attempt opened with no workspace to read it in says so instead of loading forever", async () => {
-    reset({});
+  test("an attempt missing at the scoped detail route is unavailable without a workspace", async () => {
+    reset({ getGitInstallPlan: async () => { throw new api.ControlApiError(404, "not_found", "not found"); } });
     setCurrentWorkspaceId("");
-    workspaces = [];
     try {
-      const { t } = await import(resolve(dashboard, "src/i18n/index.ts"));
       const page = mount(ID);
       await until(() => page.attempt.view().stage === "unavailable", "the refusal");
-      expect(page.attempt.error()).toBe(t("installStore.error.noWorkspace"));
-      expect(calls).toEqual([]);
+      expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
       page.dispose();
     } finally {
-      workspaces = [{ id: "ws_alpha" }];
       setCurrentWorkspaceId("ws_alpha");
     }
   });
@@ -327,6 +319,150 @@ describe("install attempt controller", () => {
     expect(reconciles).toBe(2);
     expect(calls.some(({ name }) => /apply|approve/u.test(name))).toBe(false);
     page.dispose();
+  });
+
+  test("Install without a workspace starts directly and resumes by scoped attempt id", async () => {
+    reset({
+      createGitInstallAttempt: async () => withoutWorkspace(respond(inputs(), 0)),
+      getGitInstallPlan: async () => withoutWorkspace(respond(inputs(), 0)),
+    });
+    setCurrentWorkspaceId("");
+    try {
+      const page = mount();
+      await page.attempt.start(candidate, { fromStore: false });
+      expect(page.attempt.view().stage).toBe("provide_inputs");
+      expect(calls.filter(({ name }) => name === "createGitInstallAttempt").map(({ args }) => args[0])).toEqual([undefined]);
+      expect(calls.some(({ name }) => name === "createWorkspace")).toBe(false);
+      page.dispose();
+
+      calls.length = 0;
+      const reopened = mount(ID);
+      await until(() => reopened.attempt.view().stage === "provide_inputs", "the reopened sheet");
+      expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
+      reopened.dispose();
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("Restart without a workspace preserves the attempt and request authority", async () => {
+    const second = "gip_00000000000000b2";
+    reset({
+      getGitInstallPlan: async () => withoutWorkspace(respond({ kind: "retry", code: "source_sync_failed", restart: true }, 4, "failed")),
+      discardGitInstallAttempt: async () => withoutWorkspace(respond({ kind: "none" }, 5, "discarded")),
+      createGitInstallAttempt: async () => withoutWorkspace(respond(inputs(), 0, undefined, second)),
+    });
+    setCurrentWorkspaceId("");
+    try {
+      const page = mount(ID);
+      await until(() => page.attempt.view().primary === "restart", "Restart");
+      expect(await page.attempt.restart()).toBe(true);
+      expect(calls.filter(({ name }) => name === "createGitInstallAttempt").map(({ args }) => args[0])).toEqual([undefined]);
+      expect(page.attemptId()).toBe(second);
+      page.dispose();
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("A changed Plan without a workspace prepares one replacement", async () => {
+    const second = "gip_00000000000000b2";
+    let creates = 0;
+    reset({
+      getGitInstallPlan: async () => withoutWorkspace(respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 4)),
+      discardGitInstallAttempt: async () => withoutWorkspace(respond({ kind: "none" }, 5, "discarded")),
+      createGitInstallAttempt: async () => {
+        creates += 1;
+        if (creates === 1) throw new api.ControlApiError(503, "unavailable", "unavailable");
+        return withoutWorkspace(respond(inputs(), 0, undefined, second));
+      },
+    });
+    setCurrentWorkspaceId("");
+    try {
+      const page = mount(ID, { settleMs: 5 });
+      await until(() => page.attempt.view().stage === "review", "the review");
+      page.attempt.changeVersion("v2.0.0");
+      await until(() => page.attempt.view().progress === "replanPaused", "the unknown replacement outcome");
+      page.attempt.resume();
+      await until(() => page.attemptId() === second, "the replacement");
+      const starts = calls.filter(({ name }) => name === "createGitInstallAttempt");
+      expect(starts).toHaveLength(2);
+      expect(starts[1]!.args).toEqual(starts[0]!.args);
+      expect(starts[0]!.args[0]).toBeUndefined();
+      expect(starts[0]!.args[1]).toMatchObject({ source: { ref: "v2.0.0" } });
+      expect(calls.filter(({ name }) => name === "discardGitInstallAttempt")).toHaveLength(1);
+      page.dispose();
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("Store install without a workspace resolves the stable version before starting", async () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    reset({
+      resolveStableSourceTag: async () => ({ tag: "v1.4.2", commit }),
+      createGitInstallAttempt: async () => withoutWorkspace(respond(inputs(), 0)),
+    });
+    setCurrentWorkspaceId("");
+    try {
+      const page = mount();
+      await page.attempt.start(candidate, { fromStore: true });
+      expect(page.attempt.view().stage).toBe("provide_inputs");
+      expect(calls.map(({ name }) => name)).toEqual(["resolveStableSourceTag", "createGitInstallAttempt"]);
+      expect(calls[0]!.args).toEqual([undefined, URL_]);
+      expect(calls[1]!.args[1]).toMatchObject({ source: { ref: commit } });
+      expect(page.attempt.resolvedVersion()).toEqual({ tag: "v1.4.2", commit });
+      page.dispose();
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("only a missing account stable resolver asks for an explicit version", async () => {
+    const { t } = await import(resolve(dashboard, "src/i18n/index.ts"));
+    setCurrentWorkspaceId("");
+    try {
+      for (const status of [404, 503]) {
+        reset({ resolveStableSourceTag: async () => { throw new api.ControlApiError(status, "unavailable", "unavailable"); } });
+        const page = mount();
+        await page.attempt.start(candidate, { fromStore: true });
+        expect(page.attempt.view().stage).toBe("candidate");
+        expect(calls.map(({ name }) => name)).toEqual(["resolveStableSourceTag"]);
+        expect(page.attempt.error() === t("installStore.error.sourceRefRequired")).toBe(status === 404);
+        page.dispose();
+      }
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
+  });
+
+  test("a Store Plan without a workspace resolves an emptied version before preparing again", async () => {
+    const second = "gip_00000000000000b2";
+    const commit = "abcdef0123456789abcdef0123456789abcdef01";
+    reset({
+      getGitInstallPlan: async () => {
+        const current = withoutWorkspace(respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 4));
+        return { ...current, installPlan: { ...current.installPlan, source: { ...current.installPlan.source, ref: "old-release" } } };
+      },
+      resolveStableSourceTag: async () => ({ tag: "v2.0.0", commit }),
+      discardGitInstallAttempt: async () => withoutWorkspace(respond({ kind: "none" }, 5, "discarded")),
+      createGitInstallAttempt: async () => withoutWorkspace(respond(inputs(), 0, undefined, second)),
+    });
+    setCurrentWorkspaceId("");
+    try {
+      const page = mount(ID, { settleMs: 5, fromStore: true });
+      await until(() => page.attempt.view().stage === "review", "the review");
+      page.attempt.changeVersion("");
+      await until(() => page.attemptId() === second, "the replacement");
+      expect(calls.map(({ name }) => name)).toEqual([
+        "getGitInstallPlan", "resolveStableSourceTag", "discardGitInstallAttempt", "createGitInstallAttempt",
+      ]);
+      expect(calls.find(({ name }) => name === "resolveStableSourceTag")?.args).toEqual([undefined, URL_]);
+      expect(calls.find(({ name }) => name === "createGitInstallAttempt")?.args[1]).toMatchObject({ source: { ref: commit } });
+      page.dispose();
+    } finally {
+      setCurrentWorkspaceId("ws_alpha");
+    }
   });
 
   test("setting values travel only in the confirming answer", async () => {

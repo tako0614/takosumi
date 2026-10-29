@@ -17,7 +17,8 @@ describe("Home", () => {
     expect(home).toContain("listCapsulesCached(id, { includeDestroyed: false })");
     expect(home).toContain(".filter(isVisibleServiceCapsule)");
     expect(home).toContain("state: appState(inst)");
-    expect(home).toContain("surfaces: surfaces.get(inst.id) ?? []");
+    expect(home).toContain("listAccessibleApps()");
+    expect(home).toContain("getCapsuleApp(entry.capsuleId)");
     // No app is dropped for lacking a screen.
     expect(home).not.toContain("if (!surfaces) continue");
     expect(home).toContain(".sort(compareHomeApps)");
@@ -43,18 +44,18 @@ describe("Home", () => {
     expect(home).toContain('t("apps.manageAria", { name: name() })');
   });
 
-  test("keeps Workspace recovery and the first-run panel", () => {
-    expect(home).toContain("ensureAccessibleWorkspaceSelection");
-    expect(home).toContain("error.status !== 403");
-    expect(home).toContain("clearInstallConfigListCache(id)");
-    expect(home).toContain("function WorkspaceStartPanel");
+  test("uses legacy list only when app ownership is unavailable and retains the first-run panel", () => {
+    expect(home).toContain("if (accessible !== undefined)");
+    expect(home).toContain("selectAvailableWorkspaceId");
+    expect(home).not.toContain("createWorkspace");
+    expect(home).toContain("function AppStartPanel");
     expect(home).toContain('href="/new"');
   });
 
   test("a failed screen read keeps the apps and says Open may be missing", () => {
-    expect(home).toContain("surfacesFailed()");
+    expect(home).toContain("home.latest?.surfacesFailed");
     expect(home).toContain('t("apps.listIncomplete")');
-    expect(home).toContain("refetchUiSurfaces()");
+    expect(home).toContain("refetch()");
   });
 
   test("Home is the all-apps list: /apps and /workloads redirect there; an app's page is /apps/:id", () => {

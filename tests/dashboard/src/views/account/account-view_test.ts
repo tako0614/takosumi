@@ -1,6 +1,6 @@
 /**
- * アカウント (`/account[/:section]`): you, members, billing & usage, the
- * workspace, and CLI/API keys as one page with sections. Source-text tests, like
+ * アカウント (`/account[/:section]`): profile, personal connections, usage,
+ * and CLI/API keys as one page with sections. Source-text tests, like
  * the rest of the dashboard view suite.
  */
 import { describe, expect, test } from "bun:test";
@@ -17,43 +17,37 @@ const read = (relativePath: string) =>
 
 const source = read("views/account/AccountView.tsx");
 const profile = read("views/account/sections/ProfileSection.tsx");
-const currentWorkspaceSource = read("views/account/lib/current-workspace.tsx");
 
 describe("AccountView", () => {
-  test("one page with the five account sections as sub-routes", () => {
+  test("one page with personal sections as sub-routes", () => {
     for (const [href, key] of [
       ["/account", "account.section.me"],
-      ["/account/members", "account.section.members"],
-      ["/account/billing", "account.section.billing"],
-      ["/account/workspace", "account.section.workspace"],
+      ["/account/connections", "account.section.connections"],
+      ["/account/usage", "account.section.usage"],
       ["/account/cli", "account.section.cli"],
     ] as const) {
       expect(source).toContain(`href: "${href}", labelKey: "${key}"`);
     }
     expect(source).toContain("<Tabs");
     expect(source).toContain("<ProfileSection session={props.session} />");
-    expect(source).toContain(
-      "<MembersTab workspaceId={workspaceId} session={props.session} />",
-    );
-    expect(source).toContain("<BillingTab workspaceId={workspaceId} />");
-    expect(source).toContain("<WorkspaceTab />");
+    expect(source).toContain("<ConnectionsTab />");
+    expect(source).toContain("<BillingTab />");
+    expect(source).not.toContain("MembersTab");
+    expect(source).not.toContain("WorkspaceTab");
     expect(source).toContain("TakosumiApiKeysCard");
-    expect(source).toContain("workspaceId={currentWorkspaceId() || undefined}");
+    expect(source).not.toContain("currentWorkspaceId");
     // An unknown section returns to the account page instead of a blank one.
     expect(source).toContain('fallback={<Navigate href="/account" />}');
     expect(ja["account.section.cli"]).toBe("CLI・APIから使う");
-    expect(ja["account.section.billing"]).toBe("料金と利用量");
-    expect(ja["account.section.workspace"]).toBe("スペース");
+    expect(ja["account.section.connections"]).toBe("接続");
+    expect(ja["account.section.usage"]).toBe("料金と利用量");
+    expect(en["account.section.usage"]).toBe("Billing and usage");
   });
 
-  test("workspace-scoped sections name their workspace only when there are two or more", () => {
-    expect(source).toContain("<WorkspaceScopeNote context={currentWorkspace} />");
-    expect(currentWorkspaceSource).toContain("list().length >= 2");
-    expect(currentWorkspaceSource).toContain(
-      "props.context.multiple() ? props.context.current() : undefined",
-    );
-    // Without a workspace, the page offers the next step instead of a dead end.
-    expect(source).toContain('t("workspace.noneCta")');
+  test("personal account sections do not load or ask the visitor to select a workspace", () => {
+    expect(source).not.toContain("WorkspaceScopeNote");
+    expect(source).not.toContain("createCurrentWorkspace");
+    expect(source).not.toContain("workspace.noneCta");
   });
 
   test("自分 shows the profile plainly and signs out last, not as a red headline", () => {
@@ -70,7 +64,7 @@ describe("AccountView", () => {
     expect(profile).not.toContain('variant="danger"');
     expect(profile).toContain('t("account.signOut.confirm")');
     // Who sees your name and email is stated where you read them.
-    expect(ja["account.profile.nameHint"]).toContain("オーナーと管理者");
+    expect(ja["account.profile.nameHint"]).toContain("アプリの所有者");
   });
 
   test("operator account pages stay listed and leave the SPA", () => {

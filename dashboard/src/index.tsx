@@ -46,7 +46,7 @@ const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 // --- Signed-in surface ---------------------------------------------------------
 // Every authenticated screen nests under ShellLayout (AuthGuard + AppShell) —
 // views no longer wrap themselves in the chrome. The primary destinations are
-// the four behaviors in views/account/components/shell/nav.ts.
+// the primary destinations in views/account/components/shell/nav.ts.
 const ShellLayout = lazy(
   () => import("./views/account/components/shell/ShellLayout.tsx"),
 );
@@ -57,9 +57,6 @@ const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
 const NotificationsView = lazy(
   () => import("./views/notifications/NotificationsView.tsx"),
-);
-const ConnectionsView = lazy(
-  () => import("./views/workspace/ConnectionsView.tsx"),
 );
 const AccountView = lazy(() => import("./views/account/AccountView.tsx"));
 
@@ -127,24 +124,22 @@ function NewRoute() {
 }
 
 /**
- * Where an old Workspace-settings tab lives now. Connections are the 接続
- * page; members, billing and the workspace itself are アカウント sections. Value
- * sharing and the management export left the UI (API and CLI only), so their
- * old tabs land on the workspace section; per-app screen recovery moved to each
- * app's page, which ホーム lists.
+ * Legacy workspace settings routes remain graceful entrances during migration.
+ * Personal connections and usage now live under Account; removed workspace
+ * management routes return to the Account profile.
  */
 function legacyWorkspaceSettingsTarget(tab: string | undefined): string {
   switch (tab) {
     case "members":
-      return "/account/members";
+      return "/account";
     case "connections":
-      return "/connections";
+      return "/account/connections";
     case "billing":
-      return "/account/billing";
+      return "/account/usage";
     case "interface-recovery":
       return "/";
     default:
-      return "/account/workspace";
+      return "/account";
   }
 }
 
@@ -177,14 +172,17 @@ function App() {
 
       {/* Signed-in surface — ShellLayout owns AuthGuard + chrome. Primary
           destinations: / (ホーム), /new (ストア: browse AND install in one
-          page), /connections (接続), /account (アカウント). An app's page
+          page), /account (アカウント: profile, personal connections and usage). An app's page
           (`/apps/:id`, canonical) and the run details opened from its history
           stay routable. */}
       <Route component={ShellLayout}>
         <Route path="/" component={AppListView} />
         <Route path="/new" component={NewRoute} />
-        <Route path="/connections" component={ConnectionsView} />
+        <Route path="/connections" component={() => <RedirectWithQuery to="/account/connections" />} />
         <Route path="/account" component={AccountView} />
+        <Route path="/account/billing" component={() => <RedirectWithQuery to="/account/usage" />} />
+        <Route path="/account/members" component={() => <Navigate href="/account" />} />
+        <Route path="/account/workspace" component={() => <Navigate href="/account" />} />
         <Route path="/account/:section" component={AccountView} />
         <Route path="/apps/:id" component={AppPage} />
         <Route path="/runs/:id" component={RunView} />
@@ -202,11 +200,12 @@ function App() {
       {/* Old paths → where that behavior lives now. Screens that were internal
           concepts (run list, activity, the all-apps list)
           became parts of each app's page, which ホーム lists. Settings,
-          management and Workspace tabs became 接続 and アカウント. /install is
+          management and Workspace tabs now lead to Account or Home. /install is
           the external install link (client-handled): it forwards its query to
           /new, where lib/install-link.ts pre-fills the Git form — pre-fill
           only, the visitor always confirms before anything installs. A
-          provider OAuth helper callback's /connections keeps its result query
+          provider OAuth helper callback's /connections forwards into Account
+          and keeps its result query
           too. The all-apps list is ホーム, so /apps lands there; an app's
           own page is /apps/:id. */}
       <Route path="/home" component={() => <Navigate href="/" />} />
@@ -232,7 +231,7 @@ function App() {
       />
       <Route
         path="/settings/billing"
-        component={() => <RedirectWithQuery to="/account/billing" />}
+        component={() => <RedirectWithQuery to="/account/usage" />}
       />
       <Route
         path="/settings/manage"
@@ -244,7 +243,7 @@ function App() {
       />
       <Route
         path="/advanced/workspace"
-        component={() => <Navigate href="/account/workspace" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/advanced/workspace/:tab"
@@ -252,7 +251,7 @@ function App() {
       />
       <Route
         path="/workspace/settings"
-        component={() => <Navigate href="/account/workspace" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/workspace/settings/:tab"
@@ -260,27 +259,27 @@ function App() {
       />
       <Route
         path="/members"
-        component={() => <Navigate href="/account/members" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/backups"
-        component={() => <Navigate href="/account/workspace" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/output-shares"
-        component={() => <Navigate href="/account/workspace" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/providers"
-        component={() => <Navigate href="/connections" />}
+        component={() => <Navigate href="/account/connections" />}
       />
       <Route
         path="/billing"
-        component={() => <RedirectWithQuery to="/account/billing" />}
+        component={() => <RedirectWithQuery to="/account/usage" />}
       />
       <Route
         path="/account/settings"
-        component={() => <Navigate href="/account/workspace" />}
+        component={() => <Navigate href="/account" />}
       />
       <Route
         path="/account/profile"

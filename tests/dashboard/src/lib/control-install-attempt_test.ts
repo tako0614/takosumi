@@ -46,7 +46,7 @@ test("starting sends the value-free attempt body with the caller's key", async (
     "key_one",
   );
   expect(calls).toEqual([{
-    url: "/api/v1/workspaces/ws_one/install-plans",
+    url: "/api/v1/install-plans",
     method: "POST",
     key: "key_one",
     body: { mode: "attempt", source: { url: "https://github.com/example/office.git" } },

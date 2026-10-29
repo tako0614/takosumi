@@ -3,7 +3,7 @@
  *
  * The fixture is intentionally shaped like the public dashboard projections,
  * not like an internal store/database row. It proves that the browser can
- * authenticate, navigate, switch Workspace scope, and render the canonical
+ * authenticate, navigate, manage owned/shared apps, and render the canonical
  * launcher projection without deploying anything.
  */
 
@@ -129,6 +129,147 @@ export const PORTABLE_CAPSULES = {
   ],
   ws_beta: [capsule("ws_beta", "cap_beta_office", "Beta Office")],
 } as const;
+
+/** Value-free app list returned by the workspace-less management API. */
+export const PORTABLE_APPS = [
+  {
+    capsuleId: "cap_repository_office",
+    name: PORTABLE_EXPECTATIONS.appName,
+    displayName: PORTABLE_EXPECTATIONS.appName,
+    role: "owner",
+    ownerDisplayName: "Portable E2E",
+    state: "installed",
+    primaryAction: "open",
+  },
+  {
+    capsuleId: "cap_beta_office",
+    name: "Beta Office",
+    displayName: "Beta Office",
+    role: "member",
+    ownerDisplayName: "Hanako Sato",
+    state: "installed",
+    primaryAction: "open",
+  },
+] as const;
+
+export const PORTABLE_PERSONAL_CONNECTIONS = [
+  {
+    ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1],
+    scope: "personal",
+    ownerAccountId: "sub_portable_e2e",
+    workspaceId: undefined,
+  },
+  PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0],
+] as const;
+
+export function portableUsageResponse() {
+  return {
+    usageEvents: [
+      {
+        id: "use_rated",
+        payerAccountId: "sub_portable_e2e",
+        capsuleId: "cap_repository_office",
+        kind: "runner_minute",
+        quantity: 3,
+        usdMicros: 12_000,
+        ratingStatus: "rated",
+        source: "runner",
+        idempotencyKey: "use_rated",
+        createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      },
+      {
+        id: "use_unrated",
+        payerAccountId: "sub_portable_e2e",
+        capsuleId: "cap_repository_office",
+        kind: "operation",
+        quantity: 1,
+        usdMicros: 0,
+        ratingStatus: "unrated",
+        source: "control",
+        idempotencyKey: "use_unrated",
+        createdAt: new Date(Date.now() - 26 * 3600_000).toISOString(),
+      },
+    ],
+  };
+}
+
+/** Owner-visible people for the primary app in sharing E2E fixtures. */
+export const PORTABLE_APP_MEMBERS = {
+  owner: {
+    accountId: "sub_portable_e2e",
+    displayName: "Portable E2E",
+    email: "portable-e2e@example.test",
+  },
+  members: [
+    {
+      accountId: "tsub_hanako0123456789",
+      displayName: "Hanako Sato",
+      email: "hanako@example.test",
+      status: "active",
+    },
+    {
+      accountId: "tsub_kenta0123456789",
+      displayName: "Kenta Ito",
+      email: "kenta@example.test",
+      status: "active",
+    },
+  ],
+} as const;
+
+export const PORTABLE_SHARED_APP_MEMBERS = {
+  owner: {
+    accountId: "tsub_hanako0123456789",
+    displayName: "Hanako Sato",
+  },
+  members: [
+    {
+      accountId: "sub_portable_e2e",
+      displayName: "Portable E2E",
+      email: "portable-e2e@example.test",
+      status: "active",
+    },
+  ],
+} as const;
+
+export function portableAppConnectionLabels(capsuleId: string) {
+  const ownerAccountId = capsuleId === "cap_beta_office"
+    ? "tsub_hanako0123456789"
+    : "sub_portable_e2e";
+  return {
+    projection: "app-owner-connection-labels",
+    ownerAccountId,
+    connections: [
+      {
+        id: capsuleId === "cap_beta_office" ? "pc_hanako_cloudflare" : "pc_cloudflare_direct",
+        displayName: "Cloudflare account",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        scope: "personal",
+        ownerAccountId,
+      },
+      ...(capsuleId === "cap_beta_office" ? [{
+        id: "pc_hanako_cloudflare_alt",
+        displayName: "Second Cloudflare account",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        scope: "personal",
+        ownerAccountId,
+      }] : []),
+      ...(capsuleId === "cap_beta_office" ? [{
+        id: "pc_hanako_aws",
+        displayName: "AWS account",
+        providerSource: "registry.opentofu.org/hashicorp/aws",
+        scope: "personal",
+        ownerAccountId,
+      }] : []),
+      {
+        id: "pc_takosumi_cloud",
+        displayName: "Takosumi hosted service",
+        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+        scope: "operator",
+        operatorBindable: true,
+      },
+    ],
+  };
+}
 
 function launcherInterface(
   workspaceId: string,
@@ -278,8 +419,9 @@ export function workspacesResponse() {
 // --- Install attempts (TASK-0115 Phase 3b) ----------------------------------
 //
 // A deterministic stand-in for the install-plan coordinator's attempt routes:
-// POST /workspaces/:id/install-plans (mode "attempt"), GET ?open=1, GET/PATCH/
-// DELETE /install-plans/:id and POST /install-plans/:id/reconcile. It follows
+// POST /install-plans (mode "attempt") and its legacy
+// /workspaces/:id/install-plans alias, GET ?open=1, GET/PATCH/DELETE
+// /install-plans/:id and POST /install-plans/:id/reconcile. It follows
 // the public contract shapes (contract/install-plans.ts) and keeps no setting
 // value: a confirming answer's values are only checked for presence.
 
@@ -714,9 +856,12 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
   /** Answer one request, or undefined when it is not an attempt route. */
   const handle = (request: InstallAttemptFixtureRequest): InstallAttemptFixtureResponse | undefined => {
     const method = request.method.toUpperCase();
-    const collection = request.path.match(/^\/api\/v1\/workspaces\/([^/]+)\/install-plans$/u);
+    const workspaceCollection = request.path.match(/^\/api\/v1\/workspaces\/([^/]+)\/install-plans$/u);
+    const collection = request.path === "/api/v1/install-plans" || workspaceCollection
+      ? true
+      : undefined;
     if (collection) {
-      if (decodeURIComponent(collection[1] ?? "") !== workspaceId) return attemptError(404, "not_found", "Workspace not found.");
+      if (workspaceCollection && decodeURIComponent(workspaceCollection[1] ?? "") !== workspaceId) return attemptError(404, "not_found", "Workspace not found.");
       if (method === "POST") return create(request);
       if (method === "GET") {
         const open = new URLSearchParams(request.search ?? "").get("open");

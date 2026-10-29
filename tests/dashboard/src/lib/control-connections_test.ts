@@ -30,33 +30,28 @@ afterEach(() => {
 });
 
 describe("connection list clients", () => {
-  test("skip network requests until a Workspace id is known", async () => {
+  test("lists personal connections without a workspace", async () => {
     const calls = stubFetch();
-
-    expect(await listConnections("")).toEqual([]);
-    expect(await listConnections("   ")).toEqual([]);
-    expect(await listConnections(undefined as unknown as string)).toEqual([]);
-    expect(await listProviderConnections("")).toEqual([]);
-    expect(await listProviderConnections("   ")).toEqual([]);
-    expect(
-      await listProviderConnections(undefined as unknown as string),
-    ).toEqual([]);
-
-    expect(calls()).toEqual([]);
+    expect(await listConnections()).toEqual([]);
+    expect(await listProviderConnections()).toEqual([]);
+    expect(calls()).toEqual([
+      "/api/v1/apps", "/api/v1/connections",
+      "/api/v1/apps", "/api/v1/apps", "/api/v1/connections",
+    ]);
   });
 
-  test("use normalized Workspace ids when loading Connections", async () => {
-    const calls = stubFetch();
-
+  test("uses normalized workspace ids only after apps 404", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input); calls.push(url);
+      return Response.json({}, { status: url === "/api/v1/apps" ? 404 : 200 });
+    }) as typeof fetch;
     expect(await listConnections(" space_1 ")).toEqual([]);
     expect(await listProviderConnections(" space_1 ")).toEqual([]);
-    expect(
-      await listReleaseOwnedProviderConnectionsWithSignal(" space_1 "),
-    ).toEqual([]);
-
-    expect(calls()).toEqual([
-      "/api/v1/connections?workspaceId=space_1",
-      "/api/v1/provider-connections?workspaceId=space_1",
+    expect(await listReleaseOwnedProviderConnectionsWithSignal(" space_1 ")).toEqual([]);
+    expect(calls).toEqual([
+      "/api/v1/apps", "/api/v1/connections?workspaceId=space_1",
+      "/api/v1/apps", "/api/v1/provider-connections?workspaceId=space_1",
       "/api/v1/provider-connections?workspaceId=space_1&projection=release-owned",
     ]);
   });

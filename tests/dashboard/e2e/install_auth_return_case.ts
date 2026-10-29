@@ -87,8 +87,7 @@ function liveInstallInputs(env: Readonly<Record<string, string | undefined>>) {
   const issuerVersion = requireInput(env.TAKOSUMI_E2E_EXPECTED_ISSUER_VERSION_ID, "issuer Version");
   if (!versionId.test(workerVersion) || !versionId.test(issuerVersion)) throw new Error("live install return Version must be a lowercase UUID");
   const account = requireInput(env.TAKOSUMI_E2E_EXPECTED_ACCOUNT_ID, "canonical account");
-  const workspace = requireInput(env.TAKOSUMI_E2E_WORKSPACE_NAME, "Workspace name");
-  if (!/^[A-Za-z0-9_.:-]{1,256}$/u.test(account) || workspace.length > 256) throw new Error("live install return identity input invalid");
+  if (!/^[A-Za-z0-9_.:-]{1,256}$/u.test(account)) throw new Error("live install return identity input invalid");
   const query = requireInput(env.TAKOSUMI_E2E_INSTALL_RETURN_QUERY, "install query");
   if (/[\u0000-\u0020\u007f#?]/u.test(query) || new TextEncoder().encode("/new?" + query).length > 4096) {
     throw new Error("live install return query invalid");
@@ -104,7 +103,7 @@ function liveInstallInputs(env: Readonly<Record<string, string | undefined>>) {
   const prefill = parseInstallPrefill("?" + query);
   if (!prefill?.name) throw new Error("live install return source or nested app context invalid");
   return Object.freeze({
-    app: sharedAppOrigin, issuer, workerVersion, issuerVersion, account, workspace,
+    app: sharedAppOrigin, issuer, workerVersion, issuerVersion, account,
     installPath: "/install?" + query, returnPath: "/new?" + query,
     name: prefill.name, git: prefill.git, ref: prefill.ref,
     sourcePath: prefill.sourcePath, modulePath: prefill.path || ".",
@@ -137,6 +136,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function knownAppRead(url: URL): boolean {
   const p = url.searchParams;
   if (["/.well-known/takosumi", "/api/v1/capabilities", "/__takosumi/platform/contributions", "/api/v1/account/session/me"].includes(url.pathname)) return url.search === "";
+  if (url.pathname === "/api/v1/apps") return exactKeys(p, ["cursor", "limit"]) && (p.get("limit") === null || /^\d+$/u.test(p.get("limit")!)) && (p.get("cursor")?.length ?? 0) <= 2048;
   if (url.pathname === "/api/v1/dashboard/bootstrap") {
     return exactKeys(p, ["includeWorkspaces", "workspaceLimit", "workspaceId", "includeNotifications"]) &&
       ["true", "false"].includes(p.get("includeWorkspaces") ?? "") &&
@@ -153,7 +153,7 @@ function knownAppRead(url: URL): boolean {
   // The not-installed app page offers an existing Git connection for a private
   // repository; reading the list starts nothing.
   if (url.pathname === "/api/v1/connections") {
-    return exactKeys(p, ["workspaceId", "cursor"]) && /^[A-Za-z0-9_.:-]{1,128}$/u.test(p.get("workspaceId") ?? "") &&
+    return exactKeys(p, ["workspaceId", "cursor"]) && (p.get("workspaceId") === null || /^[A-Za-z0-9_.:-]{1,128}$/u.test(p.get("workspaceId")!)) &&
       (p.get("cursor")?.length ?? 0) <= 2048;
   }
   return /^\/api\/v1\/workspaces\/[A-Za-z0-9_.:-]{1,128}\/activity$/u.test(url.pathname) &&
@@ -674,10 +674,7 @@ function registerLiveInstallReturnCase(): void {
           }
           const session = bootstrap ? body.session : body;
           if (!isRecord(session) || session.subject !== input.account || session.primaryAccountId !== input.account) { failures.push("authenticated account mismatch"); return; }
-          if (bootstrap && url.searchParams.get("includeWorkspaces") === "true") {
-            if (!Array.isArray(body.workspaces) || !body.workspaces.some((w: unknown) => isRecord(w) && w.displayName === input.workspace)) failures.push("expected authenticated Workspace missing");
-            else authenticatedBootstrap = true;
-          }
+          if (bootstrap) authenticatedBootstrap = true;
         };
         isolated.on("response", (response) => {
           const work = observe(response).catch(() => { failures.push("response observation unavailable"); });
@@ -713,7 +710,7 @@ function registerLiveInstallReturnCase(): void {
         const fields = page.getByTestId("install-source-fields").locator("input");
         await expect(fields).toHaveCount(1);
         await expect(fields.first()).toHaveValue(input.ref);
-        await expect(page.getByRole("button", { name: /ワークスペースを切り替え|Switch workspace/u }).first()).toContainText(input.workspace);
+        await expect(page.getByTestId("workspace-switcher")).toHaveCount(0);
         const session = await page.evaluate(async () => {
           const response = await fetch("/api/v1/account/session/me", { credentials: "include", headers: { accept: "application/json" } });
           const body: unknown = await response.json(); return { status: response.status, body };
@@ -722,7 +719,7 @@ function registerLiveInstallReturnCase(): void {
         expect(isRecord(session.body) && session.body.subject === input.account && session.body.primaryAccountId === input.account, "real canonical shared account required").toBe(true);
         await Promise.all([...pending]);
         expect(signedOutObserved, "signed-out entry must be observed before callback").toBe(true);
-        expect(authenticatedBootstrap, "authenticated real Workspace bootstrap required").toBe(true);
+        expect(authenticatedBootstrap, "authenticated account bootstrap required").toBe(true);
         expect(callbackSucceeded, "actual successful callback required").toBe(true);
         for (const kind of ["install-document", "sign-in-document", "rp-login", "issuer-authorization", "issuer-consent", "rp-callback", "returned-document"]) expect(counts.get(kind), kind).toBe(1);
         const appCookies = await isolated.cookies(input.app);
@@ -754,7 +751,6 @@ function registerInstallReturnInputCases(): void {
     TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID: "00000000-0000-4000-8000-000000000001",
     TAKOSUMI_E2E_EXPECTED_ISSUER_VERSION_ID: "00000000-0000-4000-8000-000000000002",
     TAKOSUMI_E2E_EXPECTED_ACCOUNT_ID: "tsub_fixture_account",
-    TAKOSUMI_E2E_WORKSPACE_NAME: "Owned fixture Workspace",
     TAKOSUMI_E2E_INSTALL_RETURN_QUERY: "git=https%3A%2F%2Fgit.example.test%2Facme%2Fnotes.git&ref=v1&name=notes&product=notes-app&return_uri=notesapp%3A%2F%2Fconnect",
   });
   const cookie = () => ({ name: issuerSessionCookie, value: "synthetic-selector-input-only", domain: "auth-staging.takos.jp", path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const, expires: 2000 });

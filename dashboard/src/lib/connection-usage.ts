@@ -1,18 +1,20 @@
 /**
  * Which installed apps use each connection, for the 接続 page.
  *
- * Derived from the existing reads: the workspace's app list and each app's
- * ProviderBinding set (`GET /api/v1/capsules/:id/provider-bindings`). The
- * control plane keeps binding sets per app and has no workspace-wide binding
- * index, so this is a bounded client fan-out instead of a new endpoint: reads
- * run a few at a time, and an app whose bindings cannot be read makes the
- * result incomplete rather than silently "unused".
+ * Derived from the caller's owner apps and each app's ProviderBinding set
+ * (`GET /api/v1/capsules/:id/provider-bindings`). The control plane keeps
+ * binding sets per app and has no owner-wide binding index, so this is a
+ * bounded client fan-out: reads run a few at a time, and an app whose bindings
+ * cannot be read makes the result incomplete rather than silently "unused".
+ * Legacy workspace app listing is used only when `/api/v1/apps` is absent.
  */
 import {
   type Capsule,
+  listAccessibleApps,
   getCapsuleProviderBindingSet,
   listCapsules,
 } from "./control-api.ts";
+import type { AccessibleApp } from "./control-api.ts";
 
 export interface ConnectionAppRef {
   readonly capsuleId: string;
@@ -32,11 +34,13 @@ export const CONNECTION_USAGE_CONCURRENCY = 4;
 export const CONNECTION_USAGE_APP_LIMIT = 200;
 
 type Deps = {
+  readonly listAccessibleApps?: typeof listAccessibleApps;
   readonly listCapsules: (workspaceId: string) => Promise<readonly Capsule[]>;
   readonly getBindingSet: typeof getCapsuleProviderBindingSet;
 };
 
 const DEFAULT_DEPS: Deps = {
+  listAccessibleApps,
   listCapsules: (workspaceId) =>
     listCapsules(workspaceId, { includeDestroyed: false }),
   getBindingSet: getCapsuleProviderBindingSet,
@@ -47,27 +51,47 @@ function appName(capsule: Capsule): string {
 }
 
 export async function loadConnectionUsage(
-  workspaceId: string,
+  workspaceId?: string,
   deps: Deps = DEFAULT_DEPS,
 ): Promise<ConnectionUsage> {
-  const capsules = (await deps.listCapsules(workspaceId)).filter(
-    (capsule) => capsule.status !== "destroyed",
-  );
-  const inspected = capsules.slice(0, CONNECTION_USAGE_APP_LIMIT);
-  let incomplete = inspected.length < capsules.length;
+  const accessibleApps = deps.listAccessibleApps
+    ? await deps.listAccessibleApps()
+    : undefined;
+  let capsules: readonly Capsule[];
+  let ownerApps: readonly ConnectionAppRef[];
+  if (accessibleApps === undefined) {
+    // A missing apps route is safe to bridge only if a known legacy workspace
+    // is available. Without one, usage is unknown rather than empty.
+    if (!workspaceId) return { appsByConnection: new Map(), incomplete: true };
+    capsules = (await deps.listCapsules(workspaceId)).filter(
+      (capsule) => capsule.status !== "destroyed",
+    );
+    ownerApps = capsules.map((capsule) => ({
+      capsuleId: capsule.id,
+      name: appName(capsule),
+    }));
+  } else {
+    // Members do not receive the owner's connection inventory; never include
+    // their apps in the connection-impact read either.
+    ownerApps = accessibleApps
+      .filter((app) => app.role === "owner")
+      .map(accessibleAppRef);
+  }
+  const inspected = ownerApps.slice(0, CONNECTION_USAGE_APP_LIMIT);
+  let incomplete = inspected.length < ownerApps.length;
   const apps = new Map<string, ConnectionAppRef[]>();
   let next = 0;
   const worker = async () => {
     while (next < inspected.length) {
-      const capsule = inspected[next++]!;
+      const app = inspected[next++]!;
       try {
-        const set = await deps.getBindingSet(capsule.id);
+        const set = await deps.getBindingSet(app.capsuleId);
         const seen = new Set<string>();
         for (const binding of set?.bindings ?? []) {
           if (!binding.connectionId || seen.has(binding.connectionId)) continue;
           seen.add(binding.connectionId);
           const list = apps.get(binding.connectionId) ?? [];
-          list.push({ capsuleId: capsule.id, name: appName(capsule) });
+          list.push(app);
           apps.set(binding.connectionId, list);
         }
       } catch {
@@ -85,4 +109,11 @@ export async function loadConnectionUsage(
     list.sort((a, b) => a.name.localeCompare(b.name));
   }
   return { appsByConnection: apps, incomplete };
+}
+
+function accessibleAppRef(app: AccessibleApp): ConnectionAppRef {
+  return {
+    capsuleId: app.capsuleId,
+    name: app.name.trim() || app.capsuleId,
+  };
 }

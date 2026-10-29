@@ -46,9 +46,7 @@ import {
 
 const EXPIRATION_DAYS = [30, 90, 365] as const;
 
-export default function TakosumiApiKeysCard(props: {
-  readonly workspaceId?: string;
-}) {
+export default function TakosumiApiKeysCard() {
   const [keys, { refetch }] = createResource(listTakosumiApiKeys);
   const [scopeCatalog, { refetch: refetchScopeCatalog }] = createResource(
     listTakosumiApiKeyScopeCatalog,
@@ -57,7 +55,6 @@ export default function TakosumiApiKeysCard(props: {
   const [expirationDays, setExpirationDays] = createSignal(90);
   const [scopes, setScopes] =
     createSignal<readonly TakosumiAccountsPatScope[]>([]);
-  const [restrictToWorkspace, setRestrictToWorkspace] = createSignal(true);
   const [created, setCreated] =
     createSignal<TakosumiAccountsCreatePatResponse>();
   const [copied, setCopied] = createSignal(false);
@@ -70,15 +67,10 @@ export default function TakosumiApiKeysCard(props: {
       scopeCatalog.error ? [] : (scopeCatalog.latest?.scopes ?? []),
   );
   const selfServiceScopes = createMemo(() =>
-    scopeCatalogEntries().filter((scope) => scope.selfService),
+    scopeCatalogEntries().filter(
+      (scope) => scope.selfService && scope.workspaceBinding === "optional",
+    ),
   );
-  const selectedScopesRequireWorkspace = createMemo(() => {
-    const selected = new Set(scopes());
-    return selfServiceScopes().some(
-      (scope) =>
-        selected.has(scope.scope) && scope.workspaceBinding === "required",
-    );
-  });
 
   const toggleScope = (scope: TakosumiAccountsPatScope, checked: boolean) => {
     setScopes((current) =>
@@ -99,10 +91,6 @@ export default function TakosumiApiKeysCard(props: {
     ) {
       return;
     }
-    if (selectedScopesRequireWorkspace() && !props.workspaceId) {
-      setError(t("account.apiKeys.scopeCatalog.workspaceRequired"));
-      return;
-    }
     setBusy(true);
     setError(undefined);
     setCopied(false);
@@ -114,10 +102,6 @@ export default function TakosumiApiKeysCard(props: {
           expires_at: new Date(
             Date.now() + expirationDays() * 24 * 60 * 60 * 1_000,
           ).toISOString(),
-          ...((restrictToWorkspace() || selectedScopesRequireWorkspace()) &&
-          props.workspaceId
-            ? { workspace_id: props.workspaceId }
-            : {}),
         },
         scopeCatalogEntries(),
       );
@@ -313,21 +297,6 @@ export default function TakosumiApiKeysCard(props: {
                 </Show>
               </Show>
             </FormField>
-            <Show when={props.workspaceId}>
-              <Checkbox
-                label={t("account.apiKeys.restrictWorkspace")}
-                checked={restrictToWorkspace() || selectedScopesRequireWorkspace()}
-                disabled={selectedScopesRequireWorkspace()}
-                onInput={(event) =>
-                  setRestrictToWorkspace(event.currentTarget.checked)
-                }
-              />
-            </Show>
-            <Show when={selectedScopesRequireWorkspace() && !props.workspaceId}>
-              <span class="wa-error" role="alert">
-                {t("account.apiKeys.scopeCatalog.workspaceRequired")}
-              </span>
-            </Show>
             <div class="wc-form-actions">
               <Button
                 variant="primary"
@@ -338,8 +307,7 @@ export default function TakosumiApiKeysCard(props: {
                   name().trim() === "" ||
                   scopes().length === 0 ||
                   scopeCatalog.loading ||
-                  Boolean(scopeCatalog.error) ||
-                  (selectedScopesRequireWorkspace() && !props.workspaceId)
+                  Boolean(scopeCatalog.error)
                 }
               >
                 {t("account.apiKeys.createSubmit")}
@@ -403,7 +371,7 @@ export default function TakosumiApiKeysCard(props: {
                               .join(" · ")}
                           </span>
                           <Show when={key.workspace_id}>
-                            <span>{t("account.apiKeys.workspaceBound")}</span>
+                            <span>{t("account.apiKeys.scopeRestricted")}</span>
                           </Show>
                           <span>
                             <Show

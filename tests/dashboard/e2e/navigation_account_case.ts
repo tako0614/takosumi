@@ -11,8 +11,10 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { REFERENCE_CREDENTIAL_RECIPES } from "../../../providers/credential-recipes.generated.ts";
 import {
+  PORTABLE_APPS,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
+  portableUsageResponse,
 } from "./fixture-data.ts";
 
 const DESKTOP = { width: 1440, height: 900 } as const;
@@ -43,36 +45,15 @@ function collectPageErrors(page: Page): string[] {
   return errors;
 }
 
-/** Narrow the fixture's workspace list to one workspace (bootstrap and page reads). */
-async function singleWorkspace(page: Page): Promise<void> {
-  await page.route(
-    (url) =>
-      url.pathname === "/api/v1/dashboard/bootstrap" ||
-      url.pathname === "/api/v1/workspaces",
-    async (route) => {
-      const response = await route.fetch();
-      const body = (await response.json()) as Record<string, unknown>;
-      const only = (list: unknown) =>
-        Array.isArray(list) ? list.filter((item) => item.id === "ws_alpha") : list;
-      if (Array.isArray(body.workspaces)) body.workspaces = only(body.workspaces);
-      for (const key of ["workspaceList"]) {
-        const page = body[key] as Record<string, unknown> | undefined;
-        if (page) Object.assign(page, { total: 1, returned: 1 });
-      }
-      if (typeof body.total === "number") Object.assign(body, { total: 1, returned: 1 });
-      await route.fulfill({ response, json: body });
-    },
-  );
-}
-
 const DIRECT = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1];
 const OPERATOR = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0];
 
-type AccountFixture = { readonly mutations: string[] };
+type AccountFixture = { readonly mutations: string[]; readonly reads: string[] };
 
 /** Stubs the reads 接続 and アカウント add on top of the fixture server. */
 async function accountFixture(page: Page): Promise<AccountFixture> {
   const mutations: string[] = [];
+  const reads: string[] = [];
   const handle = async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -80,6 +61,16 @@ async function accountFixture(page: Page): Promise<AccountFixture> {
     if (request.method() !== "GET") {
       mutations.push(`${request.method()} ${path}`);
       return route.fulfill({ status: 500, json: { error: "fixture_read_only" } });
+    }
+    reads.push(`${path}${url.search}`);
+    if (path === "/api/v1/apps") {
+      return route.fulfill({ json: { apps: PORTABLE_APPS } });
+    }
+    if (path === "/api/v1/connections") {
+      return route.fulfill({ json: { connections: [DIRECT, OPERATOR] } });
+    }
+    if (path === "/api/v1/usage") {
+      return route.fulfill({ json: portableUsageResponse() });
     }
     if (path === "/api/v1/provider-connections") {
       return route.fulfill({
@@ -113,72 +104,6 @@ async function accountFixture(page: Page): Promise<AccountFixture> {
             createdAt: "2026-08-01T00:00:00.000Z",
             updatedAt: "2026-08-01T00:00:00.000Z",
           },
-        },
-      });
-    }
-    if (path === "/api/v1/workspaces/ws_alpha/members") {
-      const row = (accountId: string, role: string, extra: object) => ({
-        id: `wsm_${accountId}`,
-        workspaceId: "ws_alpha",
-        accountId,
-        roles: [role],
-        status: "active",
-        createdAt: "2026-08-01T00:00:00.000Z",
-        updatedAt: "2026-08-01T00:00:00.000Z",
-        ...extra,
-      });
-      return route.fulfill({
-        json: {
-          members: [
-            row("sub_portable_e2e", "owner", {
-              displayName: "Portable E2E",
-              email: "portable-e2e@example.test",
-            }),
-            row("tsub_hanako0123456789", "admin", {
-              displayName: "Hanako Sato",
-              email: "hanako@example.test",
-            }),
-            row("tsub_kenta0123456789", "viewer", {
-              displayName: "Kenta Ito",
-              email: "kenta@example.test",
-            }),
-            row("tsub_noname0123456789", "member", {}),
-          ],
-        },
-      });
-    }
-    if (path === "/api/v1/workspaces/ws_alpha/billing") {
-      return route.fulfill({ json: { billing: { settings: { mode: "showback" } } } });
-    }
-    if (path === "/api/v1/workspaces/ws_alpha/usage") {
-      return route.fulfill({
-        json: {
-          usageEvents: [
-            {
-              id: "use_rated",
-              workspaceId: "ws_alpha",
-              capsuleId: "cap_repository_office",
-              kind: "runner_minute",
-              quantity: 3,
-              usdMicros: 12_000,
-              ratingStatus: "rated",
-              source: "runner",
-              idempotencyKey: "use_rated",
-              createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
-            },
-            {
-              id: "use_unrated",
-              workspaceId: "ws_alpha",
-              capsuleId: "cap_repository_office",
-              kind: "operation",
-              quantity: 1,
-              usdMicros: 0,
-              ratingStatus: "unrated",
-              source: "control",
-              idempotencyKey: "use_unrated",
-              createdAt: new Date(Date.now() - 26 * 3600_000).toISOString(),
-            },
-          ],
         },
       });
     }
@@ -228,66 +153,50 @@ async function accountFixture(page: Page): Promise<AccountFixture> {
     return route.fallback();
   };
   await page.route("**/api/v1/**", handle);
-  return { mutations };
+  return { mutations, reads };
 }
 
 export function registerNavigationAccountCases(mode: string): void {
   test.describe("Navigation, connections and account", () => {
     test.skip(mode !== "portable", "controlled API fixture; not production evidence");
 
-    test("the primary nav is the four behaviors and one workspace shows no switcher", async ({ page }) => {
+    test("primary navigation has no workspace switcher and Home lists owned and shared apps", async ({ page }) => {
       const errors = collectPageErrors(page);
+      const apiReads: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() === "GET" && new URL(request.url()).pathname.startsWith("/api/v1/")) {
+          apiReads.push(new URL(request.url()).pathname);
+        }
+      });
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
-      await singleWorkspace(page);
       await page.setViewportSize(DESKTOP);
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const sidebar = page.locator(".sidebar-nav");
-      await expect(sidebar.getByRole("link")).toHaveText(["ホーム", "ストア", "接続", "アカウント"]);
-      // One workspace: no switcher and no workspace name anywhere in the chrome.
-      await expect(page.getByRole("button", { name: /スペースを切り替え|Switch workspace/u })).toHaveCount(0);
-      await expect(page.locator(".sidebar")).not.toContainText(PORTABLE_EXPECTATIONS.workspaceName);
-      await expect(page.locator(".topbar")).not.toContainText(PORTABLE_EXPECTATIONS.workspaceName);
-      // The profile menu matches: アカウント, no run history.
+      await expect(sidebar.getByRole("link")).toHaveText(["ホーム", "ストア", "アカウント"]);
+      await expect(page.getByTestId("workspace-switcher")).toHaveCount(0);
+      await expect(page.locator(".sidebar")).not.toContainText(/workspace|space|スペース|ワークスペース/iu);
+      await expect(page.locator(".topbar")).not.toContainText(/workspace|space|スペース|ワークスペース/iu);
+      const home = page.getByTestId("home-apps");
+      await expect(home.getByTestId("home-app").filter({ hasText: PORTABLE_EXPECTATIONS.appName })).toBeVisible();
+      await expect(home.getByTestId("home-app").filter({ hasText: "Beta Office" })).toBeVisible();
+      await expect(home).toContainText("Hanako Sato");
+      expect(apiReads).toContain("/api/v1/apps");
+      expect(apiReads.some((path) => path === "/api/v1/workspaces" || path.startsWith("/api/v1/workspaces/"))).toBe(false);
       await page.getByRole("button", { name: /ユーザーメニュー|User menu/u }).click();
       const menu = page.getByRole("group", { name: /ユーザーメニュー|User menu/u });
       await expect(menu.getByRole("link", { name: "アカウント" })).toHaveAttribute("href", "/account");
       await expect(menu).not.toContainText("デプロイ履歴");
       await page.keyboard.press("Escape");
-      await shot(page, "nav-desktop-single-workspace");
+      await shot(page, "nav-desktop-app-ownership");
 
       await page.setViewportSize(PHONE);
       const tabs = page.locator(".mobile-tabs");
-      await expect(tabs.getByRole("link")).toHaveText(["ホーム", "ストア", "接続", "アカウント"]);
-      await expect(page.getByRole("button", { name: /スペースを切り替え|Switch workspace/u })).toHaveCount(0);
+      await expect(tabs.getByRole("link")).toHaveText(["ホーム", "ストア", "アカウント"]);
+      await expect(page.getByTestId("workspace-switcher")).toHaveCount(0);
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
       ).toBeLessThanOrEqual(1);
-      await shot(page, "nav-mobile-single-workspace");
-      expect(errors).toEqual([]);
-    });
-
-    test("two or more workspaces show a switcher by name with create-by-purpose", async ({ page }) => {
-      const errors = collectPageErrors(page);
-      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
-      await page.setViewportSize(DESKTOP);
-      await page.goto("/", { waitUntil: "domcontentloaded" });
-      const trigger = page.getByRole("button", { name: /スペースを切り替え/u }).first();
-      await expect(trigger).toBeVisible();
-      await trigger.click();
-      const menu = page.locator('[role="menu"]:visible').first();
-      await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
-      await expect(menu).toContainText(PORTABLE_EXPECTATIONS.switchWorkspaceName);
-      await expect(menu).not.toContainText("@workspace-");
-      await expect(menu.getByRole("menuitem", { name: "環境を分ける" })).toBeVisible();
-      await expect(menu.getByRole("menuitem", { name: "チームで使う" })).toBeVisible();
-      await shot(page, "workspace-switcher-desktop");
-      await page.keyboard.press("Escape");
-
-      await page.setViewportSize(PHONE);
-      const compact = page.getByRole("button", { name: /スペースを切り替え/u }).first();
-      await compact.click();
-      await expect(page.locator('[role="menu"]:visible').first()).toBeVisible();
-      await shot(page, "workspace-switcher-mobile");
+      await shot(page, "nav-mobile-app-ownership");
       expect(errors).toEqual([]);
     });
 
@@ -297,7 +206,8 @@ export function registerNavigationAccountCases(mode: string): void {
       const fixture = await accountFixture(page);
       await page.setViewportSize(DESKTOP);
       await page.goto("/connections", { waitUntil: "domcontentloaded" });
-      await expect(page.getByRole("heading", { name: "接続", level: 1 })).toBeVisible();
+      await expect(page).toHaveURL(/\/account\/connections$/u);
+      await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
       const direct = page.locator(".conn-card").filter({ hasText: DIRECT.displayName });
       const operator = page.locator(".conn-card").filter({ hasText: OPERATOR.displayName });
       await expect(direct.locator(".conn-apps")).toContainText("使っているアプリ");
@@ -319,7 +229,7 @@ export function registerNavigationAccountCases(mode: string): void {
       expect(errors).toEqual([]);
     });
 
-    test("アカウント sections: you, members by name, billing, workspace and CLI keys", async ({ page }) => {
+    test("アカウント has only personal profile, connections, usage and CLI sections", async ({ page }) => {
       const errors = collectPageErrors(page);
       await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
       const fixture = await accountFixture(page);
@@ -330,40 +240,30 @@ export function registerNavigationAccountCases(mode: string): void {
       const tabs = page.locator(".acct-tabs");
       await expect(tabs.getByRole("link")).toHaveText([
         "自分",
-        "メンバー",
+        "接続",
         "料金と利用量",
-        "スペース",
         "CLI・APIから使う",
       ]);
+      await expect(tabs).not.toContainText(/メンバー|スペース|workspace/iu);
       await expect(page.getByRole("button", { name: "このブラウザからサインアウト" })).toBeVisible();
-      await shots(page, "account-me");
+      await shots(page, "account-profile");
 
-      await tabs.getByRole("link", { name: "メンバー" }).click();
-      await expect(page).toHaveURL(/\/account\/members$/u);
-      const list = page.getByRole("list", { name: "メンバー一覧" });
-      await expect(list).toContainText("Hanako Sato");
-      await expect(list).toContainText("hanako@example.test");
-      await expect(list).toContainText("メンバー（tsub_nonam…）");
-      await expect(list).not.toContainText("tsub_hanako");
-      await expect(page.locator(".acct-roles")).toContainText("閲覧のみ");
-      await shots(page, "account-members");
+      await tabs.getByRole("link", { name: "接続" }).click();
+      await expect(page).toHaveURL(/\/account\/connections$/u);
+      await expect(page.getByRole("heading", { name: "アカウント", level: 1 })).toBeVisible();
+      await expect(page.getByText(DIRECT.displayName, { exact: true })).toBeVisible();
+      await expect(page.getByText(OPERATOR.displayName, { exact: true })).toBeVisible();
+      expect(fixture.reads).toContain("/api/v1/connections");
+      expect(fixture.reads.some((path) => path.startsWith("/api/v1/connections?"))).toBe(false);
+      await shots(page, "account-connections");
 
       await tabs.getByRole("link", { name: "料金と利用量" }).click();
-      await expect(page).toHaveURL(/\/account\/billing$/u);
-      await expect(page.getByText("Takosumi はこのスペースの利用量を記録しますが、請求はしません。")).toBeVisible();
+      await expect(page).toHaveURL(/\/account\/usage$/u);
+      await expect(page.getByRole("heading", { name: "利用量", level: 2 })).toBeVisible();
       await expect(page.locator(".acct-row-amount").filter({ hasText: "金額不明" })).toHaveCount(1);
-      await expect(page.locator(".acct-section")).not.toContainText("ショーバック");
-      await shots(page, "account-billing");
-
-      await tabs.getByRole("link", { name: "スペース" }).click();
-      await expect(page).toHaveURL(/\/account\/workspace$/u);
-      await expect(page.getByRole("textbox", { name: /名前/u }).first()).toHaveValue(
-        PORTABLE_EXPECTATIONS.workspaceName,
-      );
-      await expect(page.locator(".acct-section")).not.toContainText("@alpha");
-      await expect(page.getByRole("button", { name: /環境を分ける/u })).toBeVisible();
-      await expect(page.getByRole("button", { name: /チームで使う/u })).toBeVisible();
-      await shots(page, "account-workspace");
+      expect(fixture.reads.some((path) => path === "/api/v1/usage" || path.startsWith("/api/v1/usage?"))).toBe(true);
+      expect(fixture.reads.some((path) => path.startsWith("/api/v1/workspaces/"))).toBe(false);
+      await shots(page, "account-usage");
 
       await tabs.getByRole("link", { name: "CLI・APIから使う" }).click();
       await expect(page).toHaveURL(/\/account\/cli$/u);
@@ -382,12 +282,14 @@ export function registerNavigationAccountCases(mode: string): void {
       await accountFixture(page);
       for (const [from, to] of [
         ["/settings", "/account"],
-        ["/settings/billing", "/account/billing"],
+        ["/settings/billing", "/account/usage"],
         ["/settings/manage", "/account"],
-        ["/advanced/workspace", "/account/workspace"],
-        ["/advanced/workspace/members", "/account/members"],
-        ["/advanced/workspace/connections", "/connections"],
-        ["/members", "/account/members"],
+        ["/advanced/workspace", "/account"],
+        ["/advanced/workspace/members", "/account"],
+        ["/advanced/workspace/connections", "/account/connections"],
+        ["/connections", "/account/connections"],
+        ["/account/members", "/account"],
+        ["/account/workspace", "/account"],
         ["/runs", "/"],
         ["/activity", "/"],
         ["/graph", "/"],

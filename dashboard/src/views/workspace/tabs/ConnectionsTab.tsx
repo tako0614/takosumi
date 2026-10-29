@@ -1,5 +1,6 @@
 /**
- * 接続 — the behavior "connect my cloud". Lists the workspace's connections on the
+ * 接続 — the behavior "connect my cloud". Lists personal connections in Account
+ * (or workspace connections in the retained embedded surface) on the
  * session-authed control surface (`/api/v1/connections*`), and for each one
  * shows which installed apps use it, a test, and removal that names the
  * affected apps. The create form (guided recipe fields, provider OAuth popup,
@@ -75,8 +76,10 @@ import {
 } from "../../../components/ui/index.ts";
 import ConnectionCreateForm from "../connections/ConnectionCreateForm.tsx";
 import { appPageHref } from "../../../lib/app-links.ts";
+import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
 
 const INSTALL_RETURN_STORAGE_KEY = "takosumi.dashboard.installReturn";
+const PERSONAL_CONNECTION_USAGE_SOURCE = "personal";
 
 function providerConnectionProviderLabel(
   connection: ProviderConnection,
@@ -115,7 +118,8 @@ function oauthErrorHint(code: string): string | null {
 }
 
 export default function ConnectionsTab(props: {
-  readonly workspaceId: string;
+  /** Omitted on the personal Account > Connections page. */
+  readonly workspaceId?: string;
   readonly embedded?: boolean;
   readonly initialProviderSource?: string;
   readonly onChanged?: () => void;
@@ -126,12 +130,24 @@ export default function ConnectionsTab(props: {
   onCleanup(() => { disposed = true; });
 
   const [providerConnections, { refetch: refetchProviderConnections }] =
-    createResource(workspaceId, listProviderConnections);
+    createResource(
+      () => ({ workspaceId: workspaceId() }),
+      ({ workspaceId: id }) => listProviderConnections(id || currentWorkspaceId() || undefined),
+    );
   const [credentialRecipes] = createResource(connectionSetupCatalog);
-  // Which apps use each connection. Not read inside the install review.
+  // Personal ownership is authoritative. The selected legacy workspace is
+  // only a fallback if the new /apps endpoint is missing.
+  const legacyUsageWorkspaceId = () => workspaceId() || currentWorkspaceId() || undefined;
+  // Which owner apps use each connection. Not read inside the install review.
   const [usage, { refetch: refetchUsage }] = createResource(
-    () => (props.embedded ? null : workspaceId()),
-    (id) => loadConnectionUsage(id),
+    () => {
+      if (props.embedded) return null;
+      const id = legacyUsageWorkspaceId();
+      return id ? `legacy:${id}` : PERSONAL_CONNECTION_USAGE_SOURCE;
+    },
+    (source) => loadConnectionUsage(
+      source === PERSONAL_CONNECTION_USAGE_SOURCE ? undefined : source.slice("legacy:".length),
+    ),
   );
   /** Apps using the connection; `undefined` while unknown. */
   const appsUsing = (
@@ -140,9 +156,10 @@ export default function ConnectionsTab(props: {
     if (props.embedded || usage.loading || usage.error) return undefined;
     const known = usage.latest;
     if (!known) return undefined;
+    // Removal confirmation must not present a partial list as complete.
+    if (known.incomplete) return undefined;
     const apps = known.appsByConnection.get(connectionId) ?? [];
-    // An incomplete read cannot say "no app uses this".
-    return apps.length === 0 && known.incomplete ? undefined : apps;
+    return apps;
   };
   const installedCredentialRecipes = () =>
     credentialRecipes.error ? [] : (credentialRecipes.latest?.recipes ?? []);
@@ -179,7 +196,11 @@ export default function ConnectionsTab(props: {
     apps.map((app) => app.name).join(locale() === "ja" ? "、" : ", ");
 
   const afterConnectionCreated = async (connection: ProviderConnection) => {
-    if (disposed || connection.workspaceId !== workspaceId()) return;
+    const workspace = workspaceId();
+    const matchesScope = workspace
+      ? connection.workspaceId === workspace
+      : connection.scope !== "operator";
+    if (disposed || !matchesScope) return;
     // Never show a raw conn_… id in the toast — fall back to the provider name.
     setLastCreatedConnectionName(
       providerConnectionDisplayName(connection) ||
@@ -384,7 +405,7 @@ export default function ConnectionsTab(props: {
     void remove.run(connection.id);
   };
 
-  /** Workspace connections can be removed; operator-provided ones cannot. */
+  /** Personal/workspace connections can be removed; operator-provided ones cannot. */
   const removable = (connection: ProviderConnection) =>
     connection.scope !== "operator";
 
@@ -713,7 +734,7 @@ export default function ConnectionsTab(props: {
       {/* ----- register form ----- */}
       <ConnectionCreateForm
         open={shouldShowCreateForm()}
-        workspaceId={workspaceId()}
+        workspaceId={workspaceId() || currentWorkspaceId() || undefined}
         setupCatalog={credentialRecipes}
         initialProviderSource={props.initialProviderSource}
         onCreated={afterConnectionCreated}

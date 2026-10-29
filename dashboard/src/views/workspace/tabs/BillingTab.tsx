@@ -1,8 +1,8 @@
 /**
- * アカウント > 料金と利用量: what this workspace costs and what it used, in plain
- * words. Takosumi itself either charges nothing for the workspace or records use
- * without billing it; the clouds an app's resources run on bill separately.
- * An amount Takosumi has not priced is shown as unknown, never as zero.
+ * アカウント > 利用量: the signed-in person's recorded usage, in plain words.
+ * An amount Takosumi has not priced is shown as unknown, never as zero. The
+ * optional workspace branch remains for legacy callers and is not exposed on
+ * the Account page.
  *
  * Optional commercial account management is activated by a platform extension
  * contribution. The dashboard owns its native presentation while the extension
@@ -31,6 +31,7 @@ import {
   ControlApiError,
   getWorkspaceBilling,
   listWorkspaceUsagePage,
+  listPersonalUsagePage,
   type UsageEvent,
 } from "../../../lib/control-api.ts";
 import {
@@ -41,6 +42,7 @@ import {
   type PlatformContribution,
 } from "../../../lib/platform-contributions.ts";
 import { hasPlatformExtensionCapability } from "../../../lib/runtime-capabilities.ts";
+import { currentWorkspaceId } from "../../../lib/workspace-state.ts";
 import { createServiceNames } from "../../../lib/service-names.ts";
 import { intlLocale, type MessageKey, t } from "../../../i18n/index.ts";
 import {
@@ -55,17 +57,17 @@ import { friendlyError } from "../../../lib/error-copy.ts";
 import CommercialBillingPanel from "../../../components/billing/CommercialBillingPanel.tsx";
 import RelativeTime from "../../account/components/RelativeTime.tsx";
 
-/** What Takosumi does with this workspace's use, by billing mode. */
+/** What Takosumi did with legacy workspace usage, by billing mode. */
 const MODE_KEY: Record<string, MessageKey> = {
   disabled: "billing.mode.disabled",
   showback: "billing.mode.showback",
 };
 const USAGE_PAGE_SIZE = 25;
 
-export default function BillingTab(props: { readonly workspaceId: string }) {
+export default function BillingTab(props: { readonly workspaceId?: string }) {
   const [billing, { refetch }] = createResource(
-    () => props.workspaceId,
-    getWorkspaceBilling,
+    () => props.workspaceId ?? null,
+    (workspaceId) => workspaceId ? getWorkspaceBilling(workspaceId) : undefined,
   );
   const [contributions] = createResource(loadPlatformContributions);
   const appNames = createServiceNames(() => props.workspaceId);
@@ -74,6 +76,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   const [usageLoading, setUsageLoading] = createSignal(false);
   const [usageLoaded, setUsageLoaded] = createSignal(false);
   const [usageError, setUsageError] = createSignal<string | undefined>();
+  const [usageUnsupported, setUsageUnsupported] = createSignal(false);
 
   const current = createMemo(() => (billing.error ? undefined : billing()));
   const mode = createMemo(() => current()?.settings.mode ?? "disabled");
@@ -93,18 +96,23 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     if (usageLoading()) return;
     setUsageLoading(true);
     setUsageError(undefined);
+    setUsageUnsupported(false);
     try {
-      const page = await listWorkspaceUsagePage(props.workspaceId, {
+      const options = {
         limit: USAGE_PAGE_SIZE,
         ...(append && usageCursor() ? { cursor: usageCursor() } : {}),
-      });
+      };
+      const page = props.workspaceId
+        ? await listWorkspaceUsagePage(props.workspaceId, options)
+        : await listPersonalUsagePage(currentWorkspaceId() || undefined, options);
       setUsageRows((rows) =>
         append ? [...rows, ...page.usageEvents] : page.usageEvents,
       );
       setUsageCursor(page.nextCursor);
       setUsageLoaded(true);
     } catch (error) {
-      setUsageError(friendlyError(error, t).message);
+      if (error instanceof ControlApiError && error.status === 404) setUsageUnsupported(true);
+      else setUsageError(friendlyError(error, t).message);
     } finally {
       setUsageLoading(false);
     }
@@ -120,7 +128,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   return (
     <div class="acct-stack">
       <Switch>
-        <Match when={forbidden()}>
+        <Match when={props.workspaceId && forbidden()}>
           <Card>
             <CardHeader
               title={t("billing.title")}
@@ -128,7 +136,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             />
           </Card>
         </Match>
-        <Match when={billing.error}>
+        <Match when={props.workspaceId && billing.error}>
           <Toast tone="error">
             {t("billing.loadError", {
               message: friendlyError(billing.error, t).message,
@@ -138,7 +146,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             </Button>
           </Toast>
         </Match>
-        <Match when={current() && !commercialBillingEnabled()}>
+        <Match when={props.workspaceId && current() && !commercialBillingEnabled()}>
           <Card>
             <CardHeader title={t("billing.title")} />
             <CardSection>
@@ -149,60 +157,64 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         </Match>
       </Switch>
 
-      <For
-        each={platformContributionsForSlot(
-          contributions(),
-          "workspace.billing",
-        )}
-      >
-        {(contribution) => {
-          const label = () =>
-            platformContributionLabel(contribution, intlLocale());
-          const description = () =>
-            platformContributionDescription(contribution, intlLocale());
-          return (
-            <Switch>
-              <Match
-                when={
-                  contribution.presentation === "native" &&
-                  hasPlatformExtensionCapability("billing.commercial.v1")
-                }
-              >
-                <CommercialBillingPanel
-                  basePath={contribution.href}
-                  workspaceId={props.workspaceId}
-                  title={label()}
-                  description={description()}
-                />
-              </Match>
-              <Match when={contribution.presentation === "inline-frame"}>
-                <InlinePlatformContribution
-                  contribution={contribution}
-                  workspaceId={props.workspaceId}
-                />
-              </Match>
-              <Match when>
-                <Card>
-                  <CardHeader title={label()} subtitle={description()} />
-                  <a
-                    class="btn btn-secondary"
-                    href={platformContributionHref(
-                      contribution,
-                      props.workspaceId,
-                    )}
-                    rel="external"
+      <Show when={props.workspaceId} keyed>
+        {(workspaceId) => (
+          <For
+            each={platformContributionsForSlot(
+              contributions(),
+              "workspace.billing",
+            )}
+          >
+            {(contribution) => {
+              const label = () =>
+                platformContributionLabel(contribution, intlLocale());
+              const description = () =>
+                platformContributionDescription(contribution, intlLocale());
+              return (
+                <Switch>
+                  <Match
+                    when={
+                      contribution.presentation === "native" &&
+                      hasPlatformExtensionCapability("billing.commercial.v1")
+                    }
                   >
-                    {label()}
-                    <ExternalLink size={14} aria-hidden="true" />
-                  </a>
-                </Card>
-              </Match>
-            </Switch>
-          );
-        }}
-      </For>
+                    <CommercialBillingPanel
+                      basePath={contribution.href}
+                      workspaceId={workspaceId}
+                      title={label()}
+                      description={description()}
+                    />
+                  </Match>
+                  <Match when={contribution.presentation === "inline-frame"}>
+                    <InlinePlatformContribution
+                      contribution={contribution}
+                      workspaceId={workspaceId}
+                    />
+                  </Match>
+                  <Match when>
+                    <Card>
+                      <CardHeader title={label()} subtitle={description()} />
+                      <a
+                        class="btn btn-secondary"
+                        href={platformContributionHref(
+                          contribution,
+                          workspaceId,
+                        )}
+                        rel="external"
+                      >
+                        {label()}
+                        <ExternalLink size={14} aria-hidden="true" />
+                      </a>
+                    </Card>
+                  </Match>
+                </Switch>
+              );
+            }}
+          </For>
+        )}
+      </Show>
 
-      <Show when={!forbidden()}>
+      <Show when={(!props.workspaceId || !forbidden()) && !usageUnsupported()}>
         <section class="acct-list-section" aria-label={t("billing.usage.title")}>
           <h2 class="acct-list-title">{t("billing.usage.title")}</h2>
           <p class="muted">{t("billing.usage.subtitle")}</p>

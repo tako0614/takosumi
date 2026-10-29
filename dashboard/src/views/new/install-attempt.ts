@@ -183,24 +183,24 @@ export function restartRequest(
 }
 
 /**
- * The attempt shown on this page must be this person's, in this workspace.
- * Anything else is not offered for any action.
+ * The attempt shown on this page must be the explicit attempt id created by
+ * this person. A legacy Workspace context, when present on both sides, must
+ * also match; a new account-owned attempt needs no Workspace.
  */
 export function attemptBelongsHere(
   response: GitInstallPlanResponse,
   expected: {
     readonly attemptId: string;
-    readonly workspaceId: string;
+    readonly workspaceId?: string;
     readonly principalId: string;
   },
 ): boolean {
   const plan = response.installPlan;
   return Boolean(
     expected.attemptId &&
-      expected.workspaceId &&
       expected.principalId &&
       plan.id === expected.attemptId &&
-      plan.workspaceId === expected.workspaceId &&
+      (!expected.workspaceId || !plan.workspaceId || plan.workspaceId === expected.workspaceId) &&
       plan.createdBy === expected.principalId &&
       plan.mode === "attempt" &&
       plan.operation !== "revision",

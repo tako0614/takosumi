@@ -399,10 +399,11 @@ describe("starting and starting over", () => {
     });
   });
 
-  test("only this person's attempt in this workspace is shown", () => {
+  test("only this person's explicit attempt is shown, with legacy Workspace matching when available", () => {
     const response = respond(inputs());
     const here = { attemptId: ID, workspaceId: "ws_alpha", principalId: "sub_me" };
     expect(attemptBelongsHere(response, here)).toBe(true);
+    expect(attemptBelongsHere(response, { attemptId: ID, principalId: "sub_me" })).toBe(true);
     expect(attemptBelongsHere(response, { ...here, workspaceId: "ws_beta" })).toBe(false);
     expect(attemptBelongsHere(response, { ...here, principalId: "sub_other" })).toBe(false);
     expect(attemptBelongsHere(response, { ...here, attemptId: "gip_ffffffffffffffff" })).toBe(false);
