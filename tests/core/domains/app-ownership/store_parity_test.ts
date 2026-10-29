@@ -55,17 +55,64 @@ test("app ownership and members have memory/Postgres/D1 authority parity", async
     expect(await ownership.resolveAppAccess("member", initial.capsuleId)).toMatchObject({ role: "member", ownerAccountId: "legacy-owner" });
     expect(await ownership.resolveAppAccess("stranger", initial.capsuleId)).toBeUndefined();
     expect((await ownership.listAccessibleApps("member", { limit: 1 })).apps).toMatchObject([{ capsuleId: initial.capsuleId, role: "member" }]);
-    expect(await ownership.putOwnership({ ...initial, ownerAccountId: "member", ownershipEpoch: 1 })).toBe(true);
-    expect(await control.getCapsule(initial.capsuleId)).toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
+    expect(await ownership.putOwnership({ ...initial, ownerAccountId: "member", ownershipEpoch: 1 }, 0)).toBe(true);
+    expect(await ownership.getOwnership(initial.capsuleId)).toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
     expect(await ownership.resolveAppAccess("member", initial.capsuleId)).toMatchObject({ role: "owner", ownershipEpoch: 1 });
     expect(await ownership.listMembers(initial.capsuleId)).toEqual([]);
     expect(await ownership.resolveAppAccess("legacy-owner", initial.capsuleId)).toBeUndefined();
-    expect(await control.putCapsule({ ...capsule(), ownerAccountId: "stale-owner", ownershipEpoch: 0 }))
-      .toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
-    expect(await control.getCapsule(initial.capsuleId)).toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
+    // Capsule JSON is a source payload; ownership is read from its physical row.
+    if (name !== "memory") {
+      expect((await control.getCapsule(initial.capsuleId))?.ownerAccountId).toBeUndefined();
+    }
+    expect(await ownership.putOwnership({ ...initial, ownerAccountId: "stale-owner", ownershipEpoch: 1 }, 0)).toBe(false);
+    expect(await ownership.putOwnership({ ...initial, ownerAccountId: "stale-owner", ownershipEpoch: 0 }, 1)).toBe(false);
+    expect(await ownership.putOwnership({ ...initial, ownerAccountId: "stale-owner", ownershipEpoch: 1 }, 1)).toBe(false);
+    expect(await ownership.getOwnership(initial.capsuleId)).toMatchObject({ ownerAccountId: "member", ownershipEpoch: 1 });
     expect(await ownership.resolveAppAccess("member", initial.capsuleId)).toMatchObject({ role: "owner", ownershipEpoch: 1 });
     expect(await ownership.resolveAppAccess("stale-owner", initial.capsuleId)).toBeUndefined();
     expect(name).toBeTruthy();
+  }
+});
+
+test("concurrent transfers compare the old epoch and retain the losing recipient's member grant", async () => {
+  for (const { name, control, ownership } of await stores()) {
+    await control.putWorkspace(workspace());
+    await control.putCapsule(capsule());
+    expect(await ownership.initializeOwnershipIfMissing(initial)).toBe(true);
+    for (const accountId of ["recipient-a", "recipient-b"]) {
+      expect(await ownership.putMember({ capsuleId: initial.capsuleId, accountId,
+        status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+    }
+    const transferA = () => ownership.putOwnership({ ...initial, ownerAccountId: "recipient-a", ownershipEpoch: 1 }, 0);
+    const transferB = () => ownership.putOwnership({ ...initial, ownerAccountId: "recipient-b", ownershipEpoch: 1 }, 0);
+    // SqliteFakeD1 uses a single SQLite connection and cannot overlap BEGINs.
+    // The D1 case still exercises the same stale-epoch CAS after the first batch.
+    const [a, b] = name === "d1"
+      ? [await transferA(), await transferB()]
+      : await Promise.all([transferA(), transferB()]);
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+    const winner = a ? "recipient-a" : "recipient-b";
+    const loser = a ? "recipient-b" : "recipient-a";
+    expect(await ownership.getOwnership(initial.capsuleId)).toMatchObject({ ownerAccountId: winner, ownershipEpoch: 1 });
+    expect((await ownership.listMembers(initial.capsuleId)).map((member) => member.accountId)).toEqual([loser]);
+    expect(await ownership.putOwnership({ ...initial, ownerAccountId: loser, ownershipEpoch: 1 }, 0)).toBe(false);
+    expect((await ownership.listMembers(initial.capsuleId)).map((member) => member.accountId)).toEqual([loser]);
+    expect(name).toBeTruthy();
+  }
+});
+
+test("transferred ownership comes from the physical row when Capsule JSON retains its first owner", async () => {
+  for (const { name, control, ownership } of await stores()) {
+    await control.putWorkspace(workspace());
+    await control.putCapsule({ ...capsule(), ownerAccountId: initial.ownerAccountId,
+      ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: initial.storageRoot });
+    expect(await ownership.putOwnership({ ...initial, ownerAccountId: "new-owner", ownershipEpoch: 1 }, 0)).toBe(true);
+    expect(await ownership.getOwnership(initial.capsuleId)).toMatchObject({ ownerAccountId: "new-owner", ownershipEpoch: 1 });
+    expect(await ownership.resolveAppAccess("new-owner", initial.capsuleId)).toMatchObject({ role: "owner" });
+    expect(await ownership.resolveAppAccess(initial.ownerAccountId, initial.capsuleId)).toBeUndefined();
+    if (name !== "memory") {
+      expect((await control.getCapsule(initial.capsuleId))?.ownerAccountId).toBe(initial.ownerAccountId);
+    }
   }
 });
 
@@ -84,6 +131,13 @@ test("backfill payer and connection owner remain visible after durable readback"
     expect((await control.listUsageEvents("ws_app_owner"))[0]?.payerAccountId).toBe("legacy-owner");
     expect(await ownership.setConnectionOwnerIfMissing(connection.id, "other")).toBe(false);
     expect(await ownership.setUsagePayerIfMissing(event.id, "other")).toBe(false);
+    const personal = { ...connection, id: "conn_personal_owner", workspaceId: undefined };
+    await control.putConnection(personal);
+    expect(await ownership.setConnectionOwnerIfMissing(personal.id, "personal-owner")).toBe(true);
+    expect(await control.getConnection(personal.id)).toMatchObject({ ownerAccountId: "personal-owner" });
+    const operator = { ...personal, id: "conn_operator_owner", scope: "operator" as const };
+    await control.putConnection(operator);
+    expect(await ownership.setConnectionOwnerIfMissing(operator.id, "personal-owner")).toBe(false);
     expect(name).toBeTruthy();
   }
 });
@@ -219,6 +273,18 @@ test("app inventory pages mixed physical and legacy access without Workspace fal
   }
 });
 
+test("destroyed Capsules never resolve or appear in app access", async () => {
+  for (const { control, ownership } of await stores()) {
+    await control.putWorkspace(workspace());
+    const destroyed = { ...capsule(), id: "cap_destroyed_access", status: "destroyed" as const,
+      ownerAccountId: "destroyed-owner", ownershipEpoch: 0, managementState: "active" as const,
+      managementEpoch: 0, storageRoot: "apps/cap_destroyed_access" };
+    await control.putCapsule(destroyed);
+    expect(await ownership.resolveAppAccess("destroyed-owner", destroyed.id)).toBeUndefined();
+    expect(await ownership.listAccessibleApps("destroyed-owner")).toEqual({ apps: [] });
+  }
+});
+
 test("pre-v77 D1 app inventory uses legacy access without missing-column errors", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
@@ -228,26 +294,78 @@ test("pre-v77 D1 app inventory uses legacy access without missing-column errors"
   }, NOW);
   await releaseControlD1MaintenanceFence(db, fence, "2026-10-28T00:00:01.000Z");
   const control = new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
-  const ownership = new D1AppOwnershipStore(db, control);
+  const statements: string[] = [];
+  const ownershipDb = {
+    prepare(sql: string) { statements.push(sql); return db.prepare(sql); },
+  };
+  const ownership = new D1AppOwnershipStore(ownershipDb, control);
   await control.putWorkspace(workspace());
   await control.putWorkspaceMember({ id: "legacy_admin", workspaceId: workspace().id,
     accountId: "admin", roles: ["admin"], status: "active", createdAt: NOW, updatedAt: NOW });
   await control.putCapsule(capsule());
-  expect(await ownership.listAccessibleApps("admin", { limit: 1 })).toEqual({ apps: [
+  await control.putCapsule({ ...capsule(), id: "cap_app_owner_z", name: "app-owner-z", slug: "app-owner-z" });
+  const first = await ownership.listAccessibleApps("admin", { limit: 1 });
+  expect(first).toEqual({ apps: [
     { capsuleId: capsule().id, role: "member", ownerAccountId: workspace().ownerUserId, ownershipEpoch: 0 },
+  ], nextCursor: capsule().id });
+  expect(await ownership.listAccessibleApps("admin", { cursor: first.nextCursor, limit: 1 })).toEqual({ apps: [
+    { capsuleId: "cap_app_owner_z", role: "member", ownerAccountId: workspace().ownerUserId, ownershipEpoch: 0 },
   ] });
+  expect(statements.some((sql) => /from capsules c cross join input/iu.test(sql) && /limit \?/iu.test(sql))).toBe(true);
+  expect(statements.some((sql) => /select .*record_json from capsules/iu.test(sql))).toBe(false);
+});
+
+test("D1 ownership schema cache stores present columns but observes a later migration", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 76 });
+  const probes: string[] = [];
+  const countedDb = {
+    prepare(sql: string) { if (/pragma table_info\(capsules\)/iu.test(sql)) probes.push(sql); return db.prepare(sql); },
+  };
+  const control = new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
+  const ownership = new D1AppOwnershipStore(countedDb, control);
+  expect(await ownership.getOwnership("cap_late_v77")).toBeUndefined();
+  expect(await ownership.getOwnership("cap_late_v77")).toBeUndefined();
+  expect(probes).toHaveLength(2);
+  await ensureD1OpenTofuLedgerSchema(db);
+  await control.putWorkspace(workspace());
+  await control.putCapsule({ ...capsule(), id: "cap_late_v77" });
+  await db.prepare(`update capsules set owner_account_id='late-owner', ownership_epoch=4,
+    storage_root='apps/cap_late_v77' where id='cap_late_v77'`).run();
+  expect(await ownership.getOwnership("cap_late_v77")).toMatchObject({ ownerAccountId: "late-owner", ownershipEpoch: 4 });
+  const presentProbeCount = probes.length;
+  expect(await ownership.getOwnership("cap_late_v77")).toMatchObject({ ownerAccountId: "late-owner" });
+  expect(probes).toHaveLength(presentProbeCount);
+});
+
+test("D1 transfer rolls back the owner update when member cleanup fails", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const control = new CloudflareD1OpenTofuControlStore(db);
+  const ownership = new D1AppOwnershipStore(db, control);
+  await control.putWorkspace(workspace());
+  await control.putCapsule(capsule());
+  expect(await ownership.initializeOwnershipIfMissing(initial)).toBe(true);
+  expect(await ownership.putMember({ capsuleId: initial.capsuleId, accountId: "recipient",
+    status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+  await db.exec(`create trigger reject_owner_cleanup before delete on capsule_members
+    begin select raise(abort, 'member cleanup failed'); end;`);
+  await expect(ownership.putOwnership({ ...initial, ownerAccountId: "recipient", ownershipEpoch: 1 }, 0))
+    .rejects.toThrow("member cleanup failed");
+  expect(await ownership.getOwnership(initial.capsuleId)).toEqual(initial);
+  expect((await ownership.listMembers(initial.capsuleId)).map((member) => member.accountId)).toEqual(["recipient"]);
 });
 
 test("an orphan legacy membership cannot grant app inventory access", async () => {
   const db = new SqliteFakeD1();
   // Deliberately inconsistent retained rows: the old Workspace is absent.
   await db.exec(`
-    create table capsules(id text, space_id text, owner_account_id text, ownership_epoch integer,
+    create table capsules(id text, space_id text, status text, owner_account_id text, ownership_epoch integer,
       management_state text, management_epoch integer, storage_root text);
     create table capsule_members(capsule_id text, account_id text, status text);
     create table workspaces(id text, record_json text);
     create table workspace_members(workspace_id text, account_id text, status text, record_json text);
-    insert into capsules values('orphan','missing',null,0,'active',0,null);
+    insert into capsules values('orphan','missing','active',null,0,'active',0,null);
     insert into workspace_members values('missing','admin','active',
       '{"workspaceId":"missing","accountId":"admin","status":"active","roles":["admin"]}');
   `);

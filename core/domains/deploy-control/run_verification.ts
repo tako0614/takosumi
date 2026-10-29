@@ -106,7 +106,7 @@ export class RunVerificationService {
       environment: ctx.environment,
       generation,
       ...(priorState ? { priorState } : {}),
-    }, capsule.storageRoot);
+    }, await this.#store.getCapsuleStorageRoot(capsule.id));
     if (!planRun.sourceSnapshotId) {
       return {
         stateScope,

@@ -33,7 +33,7 @@ export interface AccountBillingBinding {
 export interface AppOwnershipStore extends AppAccessResolver {
   getOwnership(capsuleId: string): Promise<CapsuleOwnership | undefined>;
   /** Returns false if the Capsule or ownership schema does not yet exist. */
-  putOwnership(record: CapsuleOwnership): Promise<boolean>;
+  putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch?: number): Promise<boolean>;
   /** Backfill CAS: never replaces an app owner established by creation or transfer. */
   initializeOwnershipIfMissing(record: CapsuleOwnership): Promise<boolean>;
   listMembers(capsuleId: string): Promise<readonly CapsuleMember[]>;
@@ -141,6 +141,11 @@ function validOwnership(row: CapsuleOwnership): void {
   }
 }
 
+function validOwnershipEpochCas(record: CapsuleOwnership, expectedOwnershipEpoch: number): boolean {
+  return Number.isSafeInteger(expectedOwnershipEpoch) && expectedOwnershipEpoch >= 0 &&
+    (record.ownershipEpoch === expectedOwnershipEpoch || record.ownershipEpoch === expectedOwnershipEpoch + 1);
+}
+
 function validMember(row: CapsuleMember): void {
   if (!row.capsuleId || !row.accountId || !row.createdAt || !row.updatedAt ||
       (row.status !== "active" && row.status !== "invited")) {
@@ -157,7 +162,7 @@ function validBilling(row: AccountBillingBinding): void {
 abstract class BaseAppOwnershipStore implements AppOwnershipStore {
   constructor(protected readonly control: OpenTofuControlStore) {}
   abstract getOwnership(capsuleId: string): Promise<CapsuleOwnership | undefined>;
-  abstract putOwnership(record: CapsuleOwnership): Promise<boolean>;
+  abstract putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch?: number): Promise<boolean>;
   abstract initializeOwnershipIfMissing(record: CapsuleOwnership): Promise<boolean>;
   abstract listMembers(capsuleId: string): Promise<readonly CapsuleMember[]>;
   abstract putMember(record: CapsuleMember): Promise<boolean>;
@@ -170,7 +175,7 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
   async resolveAppAccess(accountId: string, capsuleId: string): Promise<AppAccess | undefined> {
     if (!accountId || !capsuleId) return undefined;
     const capsule = await this.control.getCapsule(capsuleId);
-    if (!capsule) return undefined;
+    if (!capsule || capsule.status === "destroyed") return undefined;
     const ownership = await this.getOwnership(capsuleId);
     if (ownership) {
       const role = accountId === ownership.ownerAccountId ? "owner" :
@@ -225,15 +230,18 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
       storageRoot: capsule.storageRoot ?? `apps/${id}`,
     } : undefined;
   }
-  async putOwnership(record: CapsuleOwnership): Promise<boolean> {
+  async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);
+    if (!validOwnershipEpochCas(record, expectedOwnershipEpoch)) return false;
     const capsule = await this.control.getCapsule(record.capsuleId);
-    if (!capsule) return false;
+    if (!capsule || (capsule.ownershipEpoch ?? 0) !== expectedOwnershipEpoch ||
+      (capsule.ownerAccountId != null && capsule.ownerAccountId !== record.ownerAccountId &&
+        record.ownershipEpoch !== expectedOwnershipEpoch + 1)) return false;
     const control = this.control as import("../deploy-control/store.ts").InMemoryOpenTofuControlStore;
     const { capsuleId: _capsuleId, ...fields } = record;
     void _capsuleId;
     const changed = typeof control.setCapsuleOwnership === "function"
-      ? control.setCapsuleOwnership(record)
+      ? control.setCapsuleOwnership(record, false, expectedOwnershipEpoch)
       : !!await this.control.putCapsule({ ...capsule, ...fields });
     if (!changed) return false;
     this.#members.delete(`${record.capsuleId}\0${record.ownerAccountId}`);
@@ -309,19 +317,10 @@ export class InMemoryAppOwnershipStore extends BaseAppOwnershipStore {
 
 export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
   constructor(readonly client: SqlClient, control: OpenTofuControlStore) { super(control); }
-  async #column(table: string, column: string, client: SqlClient = this.client): Promise<boolean> {
-    const rows = await client.query<{ exists: boolean }>(
-      `select exists(select 1 from information_schema.columns where table_schema=current_schema() and table_name=$1 and column_name=$2) as exists`,
-      [table, column]);
-    return rows.rows[0]?.exists === true;
-  }
-  async #table(table: string, client: SqlClient = this.client): Promise<boolean> { return this.#column(table, table === "takosumi_capsule_members" ? "capsule_id" : "account_id", client); }
   override async listAccessibleApps(accountId: string, page: { cursor?: string; limit?: number } = {}):
     Promise<{ apps: readonly AppAccess[]; nextCursor?: string }> {
     const limit = appListLimit(page);
     if (!accountId) return { apps: [] };
-    if (!await this.#column("takosumi_capsules", "owner_account_id") ||
-      !await this.#table("takosumi_capsule_members")) return super.listAccessibleApps(accountId, page);
     const rows = await this.client.query<AccessListRow>(`
       select c.id as capsule_id,
         case when c.owner_account_id=$1 or (c.owner_account_id is null and w.space_json->>'ownerUserId'=$1)
@@ -330,7 +329,7 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
         case when c.owner_account_id is null then 0 else c.ownership_epoch end as ownership_epoch
       from takosumi_capsules c
       left join takosumi_workspaces w on w.id=c.space_id
-      where c.id collate "C" > $2
+      where c.status <> 'destroyed' and c.id collate "C" > $2
         and (c.owner_account_id=$1
           or (c.owner_account_id is not null and exists (
             select 1 from takosumi_capsule_members m
@@ -349,19 +348,21 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
     return accessListPage(rows.rows, limit);
   }
   async getOwnership(id: string): Promise<CapsuleOwnership | undefined> {
-    if (!await this.#column("takosumi_capsules", "owner_account_id")) return undefined;
     const rows = await this.client.query<OwnershipRow>(
       `select owner_account_id, ownership_epoch, management_state, management_epoch, storage_root from takosumi_capsules where id=$1`, [id]);
     return ownerRow(id, rows.rows[0]);
   }
-  async putOwnership(record: CapsuleOwnership): Promise<boolean> {
+  async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);
-    if (!await this.#column("takosumi_capsules", "owner_account_id")) return false;
+    if (!validOwnershipEpochCas(record, expectedOwnershipEpoch)) return false;
     return await this.client.transaction(async (tx) => {
       const result = await tx.query(
-        `update takosumi_capsules set owner_account_id=$2, ownership_epoch=$3, management_state=$4, management_epoch=$5, storage_root=$6, slug=coalesce(slug, installation_json->>'slug') where id=$1`,
-        [record.capsuleId, record.ownerAccountId, record.ownershipEpoch, record.managementState, record.managementEpoch, record.storageRoot]);
-      if (result.rowCount > 0 && await this.#table("takosumi_capsule_members", tx)) {
+        `update takosumi_capsules set owner_account_id=$2, ownership_epoch=$3, management_state=$4, management_epoch=$5, storage_root=$6, slug=coalesce(slug, installation_json->>'slug')
+         where id=$1 and ownership_epoch=$7
+           and (owner_account_id is null or owner_account_id=$2 or $3=$7+1)
+         returning id`,
+        [record.capsuleId, record.ownerAccountId, record.ownershipEpoch, record.managementState, record.managementEpoch, record.storageRoot, expectedOwnershipEpoch]);
+      if (result.rowCount > 0) {
         await tx.query(`delete from takosumi_capsule_members where capsule_id=$1 and account_id=$2`, [record.capsuleId,record.ownerAccountId]);
       }
       return result.rowCount > 0;
@@ -369,25 +370,22 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
   }
   async initializeOwnershipIfMissing(record: CapsuleOwnership): Promise<boolean> {
     validOwnership(record);
-    if (!await this.#column("takosumi_capsules", "owner_account_id")) return false;
     return await this.client.transaction(async (tx) => {
       const result = await tx.query(
-        `update takosumi_capsules set owner_account_id=$2, ownership_epoch=$3, management_state=$4, management_epoch=$5, storage_root=$6, slug=coalesce(slug, installation_json->>'slug') where id=$1 and owner_account_id is null`,
+        `update takosumi_capsules set owner_account_id=$2, ownership_epoch=$3, management_state=$4, management_epoch=$5, storage_root=$6, slug=coalesce(slug, installation_json->>'slug') where id=$1 and owner_account_id is null returning id`,
         [record.capsuleId, record.ownerAccountId, record.ownershipEpoch, record.managementState, record.managementEpoch, record.storageRoot]);
-      if (result.rowCount > 0 && await this.#table("takosumi_capsule_members", tx)) {
+      if (result.rowCount > 0) {
         await tx.query(`delete from takosumi_capsule_members where capsule_id=$1 and account_id=$2`, [record.capsuleId,record.ownerAccountId]);
       }
       return result.rowCount > 0;
     });
   }
   async listMembers(id: string): Promise<readonly CapsuleMember[]> {
-    if (!await this.#table("takosumi_capsule_members")) return [];
     const rows = await this.client.query<MemberRow>(`select * from takosumi_capsule_members where capsule_id=$1 order by account_id`, [id]);
     return rows.rows.map(memberRow);
   }
   async putMember(record: CapsuleMember): Promise<boolean> {
     validMember(record);
-    if (!await this.#table("takosumi_capsule_members")) return false;
     const result = await this.client.query(
       `insert into takosumi_capsule_members (capsule_id,account_id,status,added_by,created_at,updated_at)
        select $1,$2,$3,$4,$5,$6 where exists(select 1 from takosumi_capsules where id=$1 and owner_account_id is not null and owner_account_id<>$2)
@@ -396,18 +394,15 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
     return result.rowCount > 0;
   }
   async deleteMember(id: string, accountId: string): Promise<boolean> {
-    if (!await this.#table("takosumi_capsule_members")) return false;
     const result = await this.client.query(`delete from takosumi_capsule_members where capsule_id=$1 and account_id=$2`,[id,accountId]);
     return result.rowCount > 0;
   }
   async getAccountBillingBinding(id: string): Promise<AccountBillingBinding | undefined> {
-    if (!await this.#table("takosumi_account_billing_bindings")) return undefined;
     const rows = await this.client.query<BillingRow>(`select * from takosumi_account_billing_bindings where account_id=$1`,[id]);
     return rows.rows[0] ? billingRow(rows.rows[0]) : undefined;
   }
   async putAccountBillingBinding(record: AccountBillingBinding): Promise<boolean> {
     validBilling(record);
-    if (!await this.#table("takosumi_account_billing_bindings")) return false;
     const result = await this.client.query(
       `insert into takosumi_account_billing_bindings (account_id,billing_authority,billing_ref,organization_ref,created_at,updated_at)
        values ($1,$2,$3,$4,$5,$6) on conflict (account_id) do update set billing_authority=excluded.billing_authority,billing_ref=excluded.billing_ref,organization_ref=excluded.organization_ref,updated_at=excluded.updated_at`,
@@ -415,13 +410,13 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
     return result.rowCount > 0;
   }
   async setConnectionOwnerIfMissing(id: string, owner: string): Promise<boolean> {
-    if (!id || !owner || !await this.#column("takosumi_connections", "owner_account_id")) return false;
+    if (!id || !owner) return false;
     const result = await this.client.query(
-      `update takosumi_connections set owner_account_id=$2 where id=$1 and owner_account_id is null and space_id is not null`, [id,owner]);
+      `update takosumi_connections set owner_account_id=$2 where id=$1 and owner_account_id is null and connection_json->>'scope'='workspace'`, [id,owner]);
     return result.rowCount > 0;
   }
   async setUsagePayerIfMissing(id: string, payer: string): Promise<boolean> {
-    if (!id || !payer || !await this.#column("takosumi_usage_events", "payer_account_id")) return false;
+    if (!id || !payer) return false;
     const result = await this.client.query(
       `update takosumi_usage_events set payer_account_id=$2 where id=$1 and payer_account_id is null`, [id,payer]);
     return result.rowCount > 0;
@@ -429,18 +424,43 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
 }
 
 export class D1AppOwnershipStore extends BaseAppOwnershipStore {
+  #presentColumns = new Set<string>();
   constructor(readonly db: D1Like, control: OpenTofuControlStore) { super(control); }
   async #column(table: string, column: string): Promise<boolean> {
-    // The table names are static private constants. A missing pre-v77 table has no columns.
+    const key = `${table}.${column}`;
+    if (this.#presentColumns.has(key)) return true;
+    // Do not cache absence: the same instance may observe the additive v77 migration later.
     const rows = await this.db.prepare(`pragma table_info(${table})`).all<{ name: string }>();
-    return (rows.results ?? []).some((row) => row.name === column);
+    const present = (rows.results ?? []).some((row) => row.name === column);
+    if (present) this.#presentColumns.add(key);
+    return present;
   }
   override async listAccessibleApps(accountId: string, page: { cursor?: string; limit?: number } = {}):
     Promise<{ apps: readonly AppAccess[]; nextCursor?: string }> {
     const limit = appListLimit(page);
     if (!accountId) return { apps: [] };
     if (!await this.#column("capsules", "owner_account_id") ||
-      !await this.#column("capsule_members", "capsule_id")) return super.listAccessibleApps(accountId, page);
+      !await this.#column("capsule_members", "capsule_id")) {
+      const result = await this.db.prepare(`
+        with input(account_id, cursor_id) as (values (?, ?))
+        select c.id as capsule_id, case when json_extract(w.record_json, '$.ownerUserId')=i.account_id
+          then 'owner' else 'member' end as role,
+          json_extract(w.record_json, '$.ownerUserId') as owner_account_id, 0 as ownership_epoch
+        from capsules c cross join input i
+        join workspaces w on w.id=c.space_id
+        where c.status<>'destroyed' and c.id collate binary>i.cursor_id collate binary
+          and coalesce(json_extract(w.record_json, '$.ownerUserId'), '')<>''
+          and (json_extract(w.record_json, '$.ownerUserId')=i.account_id or exists (
+            select 1 from workspace_members wm
+            where wm.workspace_id=c.space_id and wm.account_id=i.account_id and wm.status='active'
+              and json_extract(wm.record_json, '$.workspaceId')=wm.workspace_id
+              and json_extract(wm.record_json, '$.accountId')=wm.account_id
+              and json_extract(wm.record_json, '$.status')='active'
+              and json_type(wm.record_json, '$.roles')='array'
+              and exists(select 1 from json_each(wm.record_json, '$.roles') where value in ('owner','admin'))))
+        order by c.id collate binary asc limit ?`).bind(accountId, page.cursor ?? "", limit + 1).all<AccessListRow>();
+      return accessListPage(result.results ?? [], limit);
+    }
     const result = await this.db.prepare(`
       with input(account_id, cursor_id) as (values (?, ?))
       select c.id as capsule_id,
@@ -451,7 +471,7 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
         case when c.owner_account_id is null then 0 else c.ownership_epoch end as ownership_epoch
       from capsules c cross join input i
       left join workspaces w on w.id=c.space_id
-      where c.id collate binary > i.cursor_id collate binary
+      where c.status<>'destroyed' and c.id collate binary > i.cursor_id collate binary
         and (c.owner_account_id=i.account_id
           or (c.owner_account_id is not null and exists (
             select 1 from capsule_members m
@@ -475,14 +495,19 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
     const row = await this.db.prepare(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from capsules where id=?`).bind(id).first<OwnershipRow>();
     return ownerRow(id, row ?? undefined);
   }
-  async putOwnership(record: CapsuleOwnership): Promise<boolean> {
+  async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);
+    if (!validOwnershipEpochCas(record, expectedOwnershipEpoch)) return false;
     if (!await this.#column("capsules", "owner_account_id")) return false;
     if (!this.db.batch) throw new Error("D1 batch required for ownership mutation");
     const results = await this.db.batch([
-      this.db.prepare(`update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=? where id=?`)
-        .bind(record.ownerAccountId,record.ownershipEpoch,record.managementState,record.managementEpoch,record.storageRoot,record.capsuleId),
-      this.db.prepare(`delete from capsule_members where capsule_id=? and account_id=?`).bind(record.capsuleId,record.ownerAccountId),
+      this.db.prepare(`update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=?
+        where id=? and ownership_epoch=? and (owner_account_id is null or owner_account_id=? or ?=?)`)
+        .bind(record.ownerAccountId,record.ownershipEpoch,record.managementState,record.managementEpoch,record.storageRoot,
+          record.capsuleId,expectedOwnershipEpoch,record.ownerAccountId,record.ownershipEpoch,expectedOwnershipEpoch + 1),
+      // changes() belongs to the immediately preceding UPDATE in this batch.
+      this.db.prepare(`delete from capsule_members where capsule_id=? and account_id=? and changes()=1`)
+        .bind(record.capsuleId,record.ownerAccountId),
     ]);
     return (results[0]?.meta?.changes ?? 0) > 0;
   }
@@ -491,10 +516,11 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
     if (!await this.#column("capsules", "owner_account_id")) return false;
     if (!this.db.batch) throw new Error("D1 batch required for ownership mutation");
     const results = await this.db.batch([
-      this.db.prepare(`update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=? where id=? and owner_account_id is null`)
+      this.db.prepare(`update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=?
+        where id=? and owner_account_id is null`)
         .bind(record.ownerAccountId,record.ownershipEpoch,record.managementState,record.managementEpoch,record.storageRoot,record.capsuleId),
-      this.db.prepare(`delete from capsule_members where capsule_id=? and account_id=? and exists(select 1 from capsules where id=? and owner_account_id=?)`)
-        .bind(record.capsuleId,record.ownerAccountId,record.capsuleId,record.ownerAccountId),
+      this.db.prepare(`delete from capsule_members where capsule_id=? and account_id=? and changes()=1`)
+        .bind(record.capsuleId,record.ownerAccountId),
     ]);
     return (results[0]?.meta?.changes ?? 0) > 0;
   }
@@ -532,7 +558,8 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
   }
   async setConnectionOwnerIfMissing(id: string, owner: string): Promise<boolean> {
     if (!id || !owner || !await this.#column("connections", "owner_account_id")) return false;
-    const result = await this.db.prepare(`update connections set owner_account_id=? where id=? and owner_account_id is null and space_id is not null`).bind(owner,id).run();
+    const result = await this.db.prepare(`update connections set owner_account_id=? where id=? and owner_account_id is null
+      and json_extract(connection_json, '$.scope')='workspace'`).bind(owner,id).run();
     return (result.meta?.changes ?? 0) > 0;
   }
   async setUsagePayerIfMissing(id: string, payer: string): Promise<boolean> {

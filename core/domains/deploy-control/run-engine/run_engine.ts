@@ -5378,7 +5378,7 @@ export class RunEngine {
       subject: { kind: "capsule", id: capsule.id },
       environment,
       generation: nextGeneration,
-      ...(capsule.storageRoot === undefined ? {} : { storageRoot: capsule.storageRoot }),
+      storageRoot: await this.#store.getCapsuleStorageRoot(capsule.id),
     });
     if (!stateRef.trim()) {
       throw new OpenTofuControllerError(
@@ -6102,7 +6102,7 @@ export class RunEngine {
       workspaceId: scope.workspaceId,
       subject: scope.subject,
       runId: applyRun.id,
-      ...(capsule?.storageRoot === undefined ? {} : { storageRoot: capsule.storageRoot }),
+      ...(capsule ? { storageRoot: await this.#store.getCapsuleStorageRoot(capsule.id) } : {}),
     });
     if (!ref.trim()) {
       throw new OpenTofuControllerError(
