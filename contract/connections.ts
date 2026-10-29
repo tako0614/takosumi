@@ -281,8 +281,6 @@ export interface ProviderConnection {
   /** Personal connection owner; absent for operator connections or pre-v77 rows. */
   readonly ownerAccountId?: string;
   readonly workspaceId?: string;
-  /** Personal owner; absent on operator connections and pre-v77 records. */
-  readonly ownerAccountId?: string;
   readonly provider: string;
   readonly providerSource: string;
   /** Canonical credential materialization authority for provider connections. */

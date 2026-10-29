@@ -85,13 +85,13 @@ function pgConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumn
   if (!expected.ownerAccountId) return and(
     sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`,
     expected.workspaceId
-      ? sql`${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId})`
+      ? sql`(${pgSchema.connections.ownerAccountId} is null or ${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId}))`
       : isNull(pgSchema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
     sql`(${pgSchema.connections.connectionJson}::jsonb - 'ownerAccountId') = ${JSON.stringify(legacy)}::jsonb`,
-    eq(pgSchema.connections.ownerAccountId, ownerAccountId),
+    sql`coalesce(${pgSchema.connections.ownerAccountId}, ${pgSchema.connections.connectionJson}->>'ownerAccountId') = ${ownerAccountId}`,
   )!;
 }
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
@@ -1918,7 +1918,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       void _ignored;
       return result.rows[0]?.owner_account_id
         ? { ...record, ownerAccountId: result.rows[0].owner_account_id }
-        : record;
+        : connection;
     }));
   }
 

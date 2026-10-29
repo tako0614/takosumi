@@ -2646,7 +2646,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         .first<{ owner_account_id: string | null }>();
       const { ownerAccountId: _ignored, ...record } = connection;
       void _ignored;
-      return row?.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id } : record;
+      return row?.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id } : connection;
     }));
   }
 
@@ -13813,13 +13813,16 @@ function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumn
   if (!expected.ownerAccountId) return and(
     eq(schema.connections.connectionJson, expected),
     expected.workspaceId
-      ? sql`${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId})`
+      ? sql`(${schema.connections.ownerAccountId} is null or ${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId}))`
       : isNull(schema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;
   return and(
-    sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
-    eq(schema.connections.ownerAccountId, ownerAccountId),
+    sql`coalesce(${schema.connections.ownerAccountId}, json_extract(${schema.connections.connectionJson}, '$.ownerAccountId')) = ${ownerAccountId}`,
+    or(
+      eq(schema.connections.connectionJson, expected),
+      sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
+    ),
   )!;
 }
 
