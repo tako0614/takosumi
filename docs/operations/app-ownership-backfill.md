@@ -110,9 +110,15 @@ legacy Workspace decision and what the deployed per-app code decides:
 - For a Capsule without a row, the backfill's projection (Workspace owner
   becomes the owner, active owner/admin members become members). It can
   therefore run before the backfill (including on D1 v75), during it and after
-  it, and always shows what the cutover code would do at that moment.
+  it, and shows what the cutover code will decide once every app has its row.
+  Until the backfill writes an app's row, the live code still uses the
+  Workspace decision for that app, so run the check after the backfill (step 4
+  below) for the result the cutover will actually enforce.
 - Every Source used by live apps: its `ownerCapsuleId`, or every live Capsule
-  built from an ownerless Source, all of which must allow.
+  built from an ownerless Source. Every one of those apps must allow, each
+  under its own rule (an app with a row by its roster, an app without a row by
+  the projection); a Source of apps with and without rows is reported with
+  `ownershipSource: "mixed"`.
 - The legacy read rule lets every active Workspace member read, including
   members with no or unknown roles.
 

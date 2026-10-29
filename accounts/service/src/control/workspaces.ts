@@ -56,7 +56,7 @@ import {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { ProviderConnection } from "takosumi-contract/connections";
-import type { WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
+import { clampRunListLimit, type WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -119,6 +119,7 @@ import {
 import {
   requireWorkspaceAppsAccess,
   visibleActivityEvents,
+  visibleKeysetPage,
   workspaceAppVisibility,
   workspaceSourceApps,
 } from "./app-authorization.ts";
@@ -480,21 +481,31 @@ export async function handleWorkspaces(
       if (method === "GET") {
         const page = parseControlPageParams(url);
         if (!page.ok) return page.response;
-        const listed = await operations.backups.listBackups(workspaceId, page.params);
-        // A Workspace-wide backup carries every live app's state.
-        const liveApps = listed.backups.some((backup) => !backup.capsuleId)
-          ? (await operations.capsules.listCapsules(workspaceId))
-            .filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed")
-            .map((capsule) => capsule.id)
-          : [];
-        const appsOf = (backup: (typeof listed.backups)[number]): readonly string[] =>
-          backup.capsuleId ? [backup.capsuleId] : liveApps;
-        const backupVisibility = await workspaceAppVisibility({
-          operations, session: ctx.session, capsuleIds: listed.backups.flatMap(appsOf),
+        // A Workspace-wide backup carries every live app's state. The cursor
+        // only ever points at a backup the caller may view.
+        let liveApps: Promise<readonly string[]> | undefined;
+        const listed = await visibleKeysetPage({
+          limit: clampPageLimit(page.params.limit),
+          ...(page.params.cursor !== undefined ? { cursor: page.params.cursor } : {}),
+          read: async ({ cursor, limit }) => {
+            const backups = await operations.backups.listBackups(workspaceId, { ...(cursor !== undefined ? { cursor } : {}), limit });
+            return { items: backups.backups, ...(backups.nextCursor !== undefined ? { nextCursor: backups.nextCursor } : {}) };
+          },
+          visibility: async (backups) => {
+            const all = backups.some((backup) => !backup.capsuleId)
+              ? await (liveApps ??= operations.capsules.listCapsules(workspaceId).then((capsules) => capsules
+                .filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed")
+                .map((capsule) => capsule.id)))
+              : [];
+            const appsOf = (backup: (typeof backups)[number]): readonly string[] =>
+              backup.capsuleId ? [backup.capsuleId] : all;
+            const visibility = await workspaceAppVisibility({ operations, session: ctx.session, capsuleIds: backups.flatMap(appsOf) });
+            return (backup) => visibility.allows(appsOf(backup));
+          },
         });
         return json({
-          ...listed,
-          backups: listed.backups.filter((backup) => backupVisibility.allows(appsOf(backup))),
+          backups: listed.items,
+          ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
         } satisfies ListBackupsResponse);
       }
       if (method === "POST") {
@@ -1372,6 +1383,29 @@ function parseIncludeDestroyed(
   };
 }
 
+/** One page of the Workspace's Capsules the caller may view (see visibleKeysetPage). */
+async function visibleWorkspaceCapsulePage(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  workspaceId: string,
+  params: PageParams,
+  includeDestroyed: boolean,
+) {
+  return await visibleKeysetPage({
+    limit: clampPageLimit(params.limit),
+    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+    read: ({ cursor, limit }) => operations.capsules.listCapsulesPage(workspaceId, {
+      ...(cursor !== undefined ? { cursor } : {}),
+      limit,
+      includeDestroyed,
+    }),
+    visibility: async (capsules) => {
+      const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: capsules.map((capsule) => capsule.id) });
+      return (capsule) => visibility.allows([capsule.id]);
+    },
+  });
+}
+
 async function listWorkspaceCapsules(
   operations: ControlPlaneOperations,
   workspaceId: string,
@@ -1382,17 +1416,13 @@ async function listWorkspaceCapsules(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } = await operations.capsules.listCapsulesPage(
-    workspaceId,
-    {
-      ...page.params,
-      includeDestroyed: includeDestroyed.includeDestroyed,
-    },
+  // Apps the caller cannot view are omitted from this Workspace compat list,
+  // and the cursor never points at one of them.
+  const { items, nextCursor } = await visibleWorkspaceCapsulePage(
+    operations, session, workspaceId, page.params, includeDestroyed.includeDestroyed,
   );
-  // Apps the caller cannot view are omitted from this Workspace compat list.
-  const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: items.map((capsule) => capsule.id) });
   const capsules = await Promise.all(
-    items.filter((capsule) => visibility.allows([capsule.id])).map(async (capsule): Promise<PublicCapsule> => {
+    items.map(async (capsule): Promise<PublicCapsule> => {
       const projected = publicCapsule(capsule);
       if (capsule.status === "destroyed" || !capsule.currentStateVersionId) return projected;
       const adoptedSourceRevision =
@@ -1418,15 +1448,9 @@ async function listWorkspaceCurrentStateVersions(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items: pageItems, nextCursor } = await operations.capsules.listCapsulesPage(
-    workspaceId,
-    {
-      ...page.params,
-      includeDestroyed: includeDestroyed.includeDestroyed,
-    },
+  const { items, nextCursor } = await visibleWorkspaceCapsulePage(
+    operations, session, workspaceId, page.params, includeDestroyed.includeDestroyed,
   );
-  const stateVisibility = await workspaceAppVisibility({ operations, session, capsuleIds: pageItems.map((capsule) => capsule.id) });
-  const items = pageItems.filter((capsule) => stateVisibility.allows([capsule.id]));
   const stateVersions = operations.listStateVersionsByIds
     ? await listCurrentStateVersionsFromIdsRead(operations, workspaceId, items)
     : operations.listStateVersionsByWorkspace
@@ -1579,21 +1603,33 @@ async function createRestoreRun(
 // --- Activity --------------------------------------------------------------
 
 /** Runs of apps the caller cannot view are omitted (Workspace compat list). */
+function workspaceRunVisibility(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  workspaceId: string,
+): (runs: readonly Run[]) => Promise<(run: Run) => boolean> {
+  let sourceApps: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+  return async (runs) => {
+    if (!runs.length || !operations.appOwnership) return () => true;
+    const bySource = runs.some((run) => !run.capsuleId)
+      ? await (sourceApps ??= workspaceSourceApps(operations, workspaceId))
+      : new Map<string, readonly string[]>();
+    const appsOf = (run: Run): readonly string[] => run.capsuleId ? [run.capsuleId]
+      : run.subject?.kind === "capsule" ? [run.subject.id]
+      : bySource.get(run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : "")) ?? [];
+    const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: runs.flatMap(appsOf) });
+    return (run) => visibility.allows(appsOf(run));
+  };
+}
+
 async function visibleWorkspaceRuns(
   operations: ControlPlaneOperations,
   session: ControlSession,
   workspaceId: string,
   runs: readonly Run[],
 ): Promise<readonly Run[]> {
-  if (!runs.length || !operations.appOwnership) return runs;
-  const sourceApps = runs.some((run) => !run.capsuleId)
-    ? await workspaceSourceApps(operations, workspaceId)
-    : new Map<string, readonly string[]>();
-  const appsOf = (run: Run): readonly string[] => run.capsuleId ? [run.capsuleId]
-    : run.subject?.kind === "capsule" ? [run.subject.id]
-    : sourceApps.get(run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : "")) ?? [];
-  const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: runs.flatMap(appsOf) });
-  return runs.filter((run) => visibility.allows(appsOf(run)));
+  const allows = await workspaceRunVisibility(operations, session, workspaceId)(runs);
+  return runs.filter(allows);
 }
 
 async function workspaceRuns(
@@ -1612,16 +1648,19 @@ async function workspaceRuns(
   }
   const cursor = url.searchParams.get("cursor");
   if (operations.listRunsPage) {
-    const page = await operations.listRunsPage(
-      workspaceId,
-      {
-        ...(limit ? { limit } : {}),
-        ...(cursor !== null ? { cursor } : {}),
+    const listRunsPage = operations.listRunsPage.bind(operations);
+    // The cursor only ever points at a Run the caller may view.
+    const page = await visibleKeysetPage({
+      limit: clampRunListLimit(limit),
+      ...(cursor !== null ? { cursor } : {}),
+      read: async (request) => {
+        const runs = await listRunsPage(workspaceId, request);
+        return { items: runs.runs, ...(runs.nextCursor !== undefined ? { nextCursor: runs.nextCursor } : {}) };
       },
-    );
-    const visibleRuns = await visibleWorkspaceRuns(operations, session, workspaceId, page.runs);
+      visibility: workspaceRunVisibility(operations, session, workspaceId),
+    });
     return json({
-      runs: await Promise.all(visibleRuns.map((run) => publicRun(operations, run))),
+      runs: await Promise.all(page.items.map((run) => publicRun(operations, run))),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
     } satisfies ListRunsResponse);
   }

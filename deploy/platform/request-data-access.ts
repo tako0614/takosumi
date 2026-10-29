@@ -137,7 +137,11 @@ export const DASHBOARD_PUBLIC_ASSET_PATHS = [
   "/brand/takos.svg",
   "/brand/yurucommu.svg",
   "/brand/yurumeet.svg",
+  "/icons/takosumi-192.png",
+  "/icons/takosumi-512.png",
+  "/icons/takosumi-maskable-512.png",
   "/llms.txt",
+  "/manifest.webmanifest",
   "/robots.txt",
   "/tako.png",
   // Cloudflare's static-assets profile historically treated this path as an

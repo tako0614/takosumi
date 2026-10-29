@@ -157,6 +157,8 @@ const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {
   connection_not_owned_by_app_owner: "controlError.connectionNotOwned",
   ownership_transfer_pending: "controlError.ownershipTransferPending",
   workspace_frozen: "controlError.retiredManagement",
+  // A re-point that would leave only a pending link (409); the link is kept.
+  interface_link_approval_required: "controlError.interfaceLinkApprovalRequired",
   install_plan_reconcile_timeout: "error.planReconcileTimeout",
   revision_plan_reconcile_timeout: "error.planReconcileTimeout",
   // Raised by the dashboard itself with an English sentence and a 4xx
