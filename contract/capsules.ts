@@ -148,6 +148,12 @@ export interface Capsule {
   readonly managementEpoch?: number;
   readonly storageRoot?: string;
   readonly id: string;
+  /** Materialized app owner; absent only on pre-v77 rows awaiting backfill. */
+  readonly ownerAccountId?: string;
+  readonly ownershipEpoch?: number;
+  readonly managementState?: "active" | "draining" | "frozen";
+  readonly managementEpoch?: number;
+  readonly storageRoot?: string;
   readonly workspaceId: string;
   /**
    * Owning Project. Capsules live under a Project; a default Project

@@ -83,6 +83,27 @@ export const workspaceMembers = pgTable(
   ],
 );
 
+export const capsuleMembers = pgTable(names.capsuleMembers, {
+  capsuleId: text("capsule_id").notNull(),
+  accountId: text("account_id").notNull(),
+  status: text("status").notNull(),
+  addedBy: text("added_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.capsuleId, table.accountId] }),
+  index("takosumi_capsule_members_account_status_idx").on(table.accountId, table.status),
+]);
+
+export const accountBillingBindings = pgTable(names.accountBillingBindings, {
+  accountId: text("account_id").primaryKey(),
+  billingAuthority: text("billing_authority").notNull(),
+  billingRef: text("billing_ref").notNull(),
+  organizationRef: text("organization_ref"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // Retained independently of Workspace/Account deletion; no cascade FK.
 export const workspaceBillingIntents = pgTable(names.workspaceBillingIntents, {
   workspaceId: text("workspace_id").primaryKey(),
@@ -209,6 +230,7 @@ export const connections = pgTable(
     connectionJson: json("connection_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    ownerAccountId: text("owner_account_id"),
   },
   (table) => [
     index("takosumi_connections_space_idx").on(table.workspaceId),
@@ -294,6 +316,7 @@ export const capsules = pgTable(
     workspaceId: text("space_id").notNull(),
     projectId: text("project_id").notNull(),
     name: text("name").notNull(),
+    slug: text("slug"),
     environment: text("environment").notNull(),
     // Historical source-less rows may remain physically readable for operator
     // migration, but current Capsule writes and public contracts require Git.
@@ -309,6 +332,11 @@ export const capsules = pgTable(
     executionAuthorityEpoch: integer("execution_authority_epoch")
       .notNull()
       .default(1),
+    ownerAccountId: text("owner_account_id"),
+    ownershipEpoch: integer("ownership_epoch").notNull().default(0),
+    managementState: text("management_state").notNull().default("active"),
+    managementEpoch: integer("management_epoch").notNull().default(0),
+    storageRoot: text("storage_root"),
   },
   (table) => [
     uniqueIndex("takosumi_capsules_project_name_environment_active_unique")
@@ -629,6 +657,7 @@ export const usageEvents = pgTable(
     source: text("source").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     createdAt: text("created_at").notNull(),
+    payerAccountId: text("payer_account_id"),
   },
   (table) => [
     index("takosumi_usage_events_workspace_idx").on(table.workspaceId),
@@ -681,6 +710,9 @@ export const credentialMintEvents = pgTable(
     phase: text("phase").notNull(),
     eventJson: json("event_json").notNull(),
     createdAt: text("created_at").notNull(),
+    actorAccountId: text("actor_account_id"),
+    connectionOwnerAccountId: text("connection_owner_account_id"),
+    ownershipEpoch: integer("ownership_epoch"),
   },
   (table) => [
     index("takosumi_credential_mint_events_run_idx").on(table.runId),

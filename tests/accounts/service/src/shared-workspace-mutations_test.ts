@@ -102,7 +102,7 @@ async function changeActor(f: Fixture, workspaceId: string, patch: Partial<Works
   return changed;
 }
 
-async function request(f: Fixture, method: string, path: string, body?: Record<string, unknown>) {
+async function request(f: Fixture, method: string, path: string, body?: Record<string, unknown>, workspaceMutationsFrozen = false) {
   const url = new URL(`https://accounts.example.test/api/v1/${path}`);
   const response = await handleAuthenticatedControlRoute({
     request: new Request(url, {
@@ -117,6 +117,7 @@ async function request(f: Fixture, method: string, path: string, body?: Record<s
     operations: f.operations,
     subject,
     requireCurrentMembership: true,
+    workspaceMutationsFrozen,
   });
   if (!response) throw new Error("Workspace route was not dispatched");
   return response;
@@ -148,6 +149,48 @@ test("trusted shared POST creates one canonical Workspace and owner, then replay
   expect(await f.control.listWorkspaces()).toEqual([workspace]);
   expect(await f.control.listWorkspaceMembers(workspace.id)).toEqual([owner!]);
   expect(f.repairs().ownerRepairs).toBe(0);
+});
+
+test("Workspace creation and membership writes return the standard 409 envelope when frozen", async () => {
+  const f = fixture();
+  const create = await request(f, "POST", "workspaces", {
+    handle: "frozen-create", displayName: "Frozen create", type: "organization",
+  }, true);
+  expect(create.status).toBe(409);
+  expect(await create.json()).toMatchObject({ error: { code: "workspace_frozen", requestId: expect.any(String) } });
+  expect(await f.control.listWorkspaces()).toEqual([]);
+
+  const workspace = await seedWorkspace(f);
+  const owner = await seedMember(f, workspace.id, subject);
+  const add = await request(f, "POST", `workspaces/${workspace.id}/members`, { accountId: target, role: "member" }, true);
+  expect(add.status).toBe(409);
+  expect(await add.json()).toMatchObject({ error: { code: "workspace_frozen" } });
+  expect(await f.control.listWorkspaceMembers(workspace.id)).toEqual([owner]);
+
+  const remove = await request(f, "DELETE", `workspaces/${workspace.id}/members/${target}`, undefined, true);
+  expect(remove.status).toBe(409);
+  expect(await remove.json()).toMatchObject({ error: { code: "workspace_frozen" } });
+  expect(await f.control.listWorkspaceMembers(workspace.id)).toEqual([owner]);
+});
+
+test("frozen Workspace inventory reads do not trigger implicit personal bootstrap", async () => {
+  const f = fixture();
+  let ensured = 0;
+  (f.operations.workspaces as ControlPlaneOperations["workspaces"]).ensurePersonalWorkspace = async () => {
+    ensured += 1;
+    throw new Error("frozen list must not bootstrap");
+  };
+  const url = new URL("https://accounts.example.test/api/v1/workspaces");
+  const response = await handleAuthenticatedControlRoute({
+    request: new Request(url),
+    url,
+    store: f.accounts,
+    operations: f.operations,
+    subject,
+  });
+  expect(response?.status).toBe(200);
+  expect(ensured).toBe(0);
+  expect(await f.control.listWorkspaces()).toEqual([]);
 });
 
 for (const [label, type] of [

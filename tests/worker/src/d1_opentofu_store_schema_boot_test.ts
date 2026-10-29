@@ -788,7 +788,7 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed qualification verification accepts complete v75 and v76 ledgers during the additive rollout", async () => {
+test("predeployed qualification verification accepts complete v75/v76/v77 ledgers during the additive rollout", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 62,
@@ -807,9 +807,15 @@ test("predeployed qualification verification accepts complete v75 and v76 ledger
   await verifyD1OpenTofuLedgerSchemaPredeployed(v75);
   expect((await tableNames(v75)).has("interface_links")).toBe(false);
 
+  const v76 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(v76, { throughMigrationVersion: 76 });
+  await verifyD1OpenTofuLedgerSchemaPredeployed(v76);
+  expect((await tableNames(v76)).has("capsule_members")).toBe(false);
+
   const current = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(current);
   await verifyD1OpenTofuLedgerSchemaPredeployed(current);
+  expect((await tableNames(current)).has("capsule_members")).toBe(true);
   expect((await tableNames(current)).has("resource_identity_fences")).toBe(
     false,
   );
@@ -834,7 +840,7 @@ test("predeployed qualification verification accepts complete v75 and v76 ledger
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (77, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (78, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();
@@ -843,8 +849,8 @@ test("predeployed qualification verification accepts complete v75 and v76 ledger
   );
 });
 
-test("predeployed v71/v72/v73/v74/v75/v76 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
-  for (const head of [71, 72, 73, 74, 75, 76]) {
+test("predeployed v71-v77 bridge keeps billing at v72 and identity at v73 without request DDL", async () => {
+  for (const head of [71, 72, 73, 74, 75, 76, 77]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: head });
     await prepareInactiveBridgeMaintenance(db);
@@ -909,6 +915,7 @@ test("runtime bridge and qualification reject version-specific structural drift 
     { head: 74, index: "backups_created_by_run_id_idx" },
     { head: 74, index: "backups_legacy_created_by_run_text_idx" },
     { head: 76, index: "interface_links_current_consumer_requirement_unique" },
+    { head: 77, index: "capsule_members_account_status_idx" },
   ]) {
     const db = new SqliteFakeD1();
     await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: fixture.head });
@@ -918,7 +925,7 @@ test("runtime bridge and qualification reject version-specific structural drift 
     await expect(store.getWorkspace("absent")).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
     await expect(store.listWorkspacesForAccountPage("absent", { limit: 1 })).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
     if (fixture.head >= 73) await expect(verifyD1OpenTofuLedgerSchemaPredeployed(db)).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
-    expect((await indexNames(db, fixture.index.startsWith("workspace_billing") ? "workspace_billing_bindings" : fixture.index.startsWith("identity_") ? "identity_reconciliation_events" : fixture.index.startsWith("backups_") ? "backups" : fixture.index.startsWith("interface_links_") ? "interface_links" : "workspaces")).has(fixture.index)).toBe(false);
+    expect((await indexNames(db, fixture.index.startsWith("workspace_billing") ? "workspace_billing_bindings" : fixture.index.startsWith("identity_") ? "identity_reconciliation_events" : fixture.index.startsWith("backups_") ? "backups" : fixture.index.startsWith("interface_links_") ? "interface_links" : fixture.index.startsWith("capsule_members_") ? "capsule_members" : "workspaces")).has(fixture.index)).toBe(false);
   }
 });
 

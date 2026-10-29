@@ -5377,6 +5377,7 @@ export class RunEngine {
       subject: { kind: "capsule", id: capsule.id },
       environment,
       generation: nextGeneration,
+      ...(capsule.storageRoot === undefined ? {} : { storageRoot: capsule.storageRoot }),
     });
     if (!stateRef.trim()) {
       throw new OpenTofuControllerError(
@@ -6087,11 +6088,19 @@ export class RunEngine {
         `apply run ${applyRun.id} has no artifact-reference allocator or durable subject`,
       );
     }
+    const capsule = scope.subject.kind === "capsule"
+      ? await this.#store.getCapsule(scope.subject.id)
+      : undefined;
+    if (scope.subject.kind === "capsule" &&
+      (!capsule || capsule.workspaceId !== scope.workspaceId || capsule.environment !== scope.environment)) {
+      throw new OpenTofuControllerError("failed_precondition", "Capsule raw output allocation owner changed");
+    }
     const ref = await allocator.allocate({
       kind: "raw_output",
       workspaceId: scope.workspaceId,
       subject: scope.subject,
       runId: applyRun.id,
+      ...(capsule?.storageRoot === undefined ? {} : { storageRoot: capsule.storageRoot }),
     });
     if (!ref.trim()) {
       throw new OpenTofuControllerError(

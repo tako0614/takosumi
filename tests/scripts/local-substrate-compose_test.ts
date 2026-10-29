@@ -430,8 +430,8 @@ test("local-substrate cloud migration prepares core and accounts tables", () => 
 });
 
 test("node-postgres dashboard handler receives real control-plane operations", () => {
-  expect(nodePostgresServer).toContain(
-    "buildAccountsHandler(config, store, controlPlaneOperations)",
+  expect(nodePostgresServer).toMatch(
+    /buildAccountsHandler\(\s*config,\s*store,\s*controlPlaneOperations,\s*options\.workspaceMutationsFrozen,\s*\)/,
   );
   expect(nodePostgresServer).toContain("{ controlPlaneOperations }");
 });

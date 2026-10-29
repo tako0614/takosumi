@@ -8,6 +8,7 @@ import { stableStringify } from "../../core/adapters/source/digest.ts";
 import { verifyD1BackupOwnerIndexesPredeployed } from "./d1_opentofu_store.ts";
 import type { D1Database, R2Bucket } from "./bindings.ts";
 import { storedOwnerDatabase, storedOwnerRecord, storedOwnerRows } from "./stored-object-owner-resolver.ts";
+import { storedCapsuleArtifactRoot } from "./stored-capsule-root.ts";
 import { storedServiceUsageBucket, StoredServiceUsageError, type StoredBucketRole, type StoredServiceComposition } from "./stored-service-usage.ts";
 
 const SEGMENT = /^[A-Za-z0-9._-]+$/u;
@@ -225,7 +226,9 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
       // current human membership, Workspace existence or new admission.
       const capsule = run.capsuleId;
       const environment = run.environment;
-      if (row.type !== "restore" || !["failed", "cancelled", "expired"].includes(String(row.status)) || typeof capsule !== "string" || typeof environment !== "string" || row.installation_id !== capsule || row.environment !== environment || cleanup.scopeKey !== `workspaces/${run.workspaceId}/capsules/${capsule}/environments/${environment}/state-versions` || key !== cleanup.stateRef || !key.startsWith(`${cleanup.scopeKey}/restore-operations/`) || !/\/restore-operations\/[0-9]{8,16}-[0-9a-f]{24}\.tfstate\.enc$/u.test(key)) throw new StoredServiceUsageError();
+      if (row.type !== "restore" || !["failed", "cancelled", "expired"].includes(String(row.status)) || typeof capsule !== "string" || typeof environment !== "string" || row.installation_id !== capsule || row.environment !== environment) throw new StoredServiceUsageError();
+      const root = await storedCapsuleArtifactRoot(db, run.workspaceId as string, capsule, environment);
+      if (cleanup.scopeKey !== `${root}/environments/${environment}/state-versions` || key !== cleanup.stateRef || !key.startsWith(`${cleanup.scopeKey}/restore-operations/`) || !/\/restore-operations\/[0-9]{8,16}-[0-9a-f]{24}\.tfstate\.enc$/u.test(key)) throw new StoredServiceUsageError();
     } else {
       if (row.status !== "running" || typeof frozen.expectedLeaseToken !== "string" || !frozen.expectedLeaseToken || frozen.expectedLeaseToken.length > 1024 || row.lease_token !== frozen.expectedLeaseToken) throw new StoredServiceUsageError();
       if (frozen.bucketRole === "source") {
@@ -355,9 +358,10 @@ async function assertRunnerAllocation(db: D1Database, row: RecordValue, run: Rec
   const capsuleRow = capsules[0]!, capsule = storedOwnerRecord(capsuleRow.record_json);
   if (capsule.id !== context.capsuleId || capsule.workspaceId !== run.workspaceId || capsule.environment !== context.environment || capsuleRow.space_id !== run.workspaceId || capsuleRow.environment !== context.environment || !Number.isSafeInteger(capsuleRow.current_state_generation) || (capsuleRow.current_state_generation as number) < 0) throw new StoredServiceUsageError();
   if (row.type !== "restore" && (plan.capsuleCurrentStateVersionId !== capsuleRow.current_state_version_id || plan.capsuleExecutionAuthorityEpoch !== capsuleRow.execution_authority_epoch)) throw new StoredServiceUsageError();
+  const root = await storedCapsuleArtifactRoot(db, run.workspaceId as string, context.capsuleId, context.environment);
   const scope = input.scope;
   if (scope && (scope.subjectKind !== "capsule" || scope.workspaceId !== run.workspaceId || scope.subjectId !== context.capsuleId || scope.environment !== context.environment)) throw new StoredServiceUsageError();
-  const runPrefix = `workspaces/${run.workspaceId}/capsules/${context.capsuleId}/runs/${run.id}/`;
+  const runPrefix = `${root}/runs/${run.id}/`;
   if (input.bucketRole === "artifacts") {
     const allowed = planKinds.includes(String(row.type)) ? ["plan.bin.enc", "provider-lockfile.hcl.enc", "plan.json.zst.enc"] : applyKinds.includes(String(row.type)) ? ["outputs.raw.json.enc"] : [];
     if (!allowed.some(name => key === runPrefix + name)) throw new StoredServiceUsageError();
@@ -365,7 +369,7 @@ async function assertRunnerAllocation(db: D1Database, row: RecordValue, run: Rec
   }
   if (!scope) throw new StoredServiceUsageError();
   if (planKinds.includes(String(row.type))) {
-    const stateRef = `workspaces/${run.workspaceId}/capsules/${context.capsuleId}/environments/${context.environment}/state-versions/${String(capsuleRow.current_state_generation).padStart(8, "0")}.tfstate.enc`;
+    const stateRef = `${root}/environments/${context.environment}/state-versions/${String(capsuleRow.current_state_generation).padStart(8, "0")}.tfstate.enc`;
     if (dispatch || scope.generation !== capsuleRow.current_state_generation || scope.stateRef !== stateRef || key !== stateRef) throw new StoredServiceUsageError();
     return;
   }
@@ -377,7 +381,7 @@ async function assertRunnerAllocation(db: D1Database, row: RecordValue, run: Rec
     if (maximum !== null && (!Number.isSafeInteger(maximum) || (maximum as number) < 0)) throw new StoredServiceUsageError();
     generation = Math.max(generation, ((maximum as number | null) ?? 0) + 1);
   }
-  const prefix = `workspaces/${run.workspaceId}/capsules/${context.capsuleId}/environments/${context.environment}/state-versions/`;
+  const prefix = `${root}/environments/${context.environment}/state-versions/`;
   const stateRef = `${prefix}${String(generation).padStart(8, "0")}.tfstate.enc`;
   if (scope.generation !== generation || scope.stateRef !== stateRef) throw new StoredServiceUsageError();
   if (row.type === "restore") {

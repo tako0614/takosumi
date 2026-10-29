@@ -271,6 +271,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("connection_json"),
     nn("created_at"),
     nn("updated_at"),
+    nullable("owner_account_id"),
   ]);
 
   expect(getTableName(d1Schema.secretBlobs)).toBe("secret_blobs");
@@ -328,6 +329,11 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
     nn("updated_at"),
     defaulted("execution_authority_epoch"),
+    nullable("owner_account_id"),
+    defaulted("ownership_epoch"),
+    defaulted("management_state"),
+    defaulted("management_epoch"),
+    nullable("storage_root"),
   ]);
 
   expect(getTableName(d1Schema.projects)).toBe("projects");
@@ -425,6 +431,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("source"),
     nn("idempotency_key"),
     nn("created_at"),
+    nullable("payer_account_id"),
   ]);
 
   expect(getTableName(d1Schema.publicHostReservations)).toBe(
@@ -456,6 +463,9 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("phase"),
     nn("record_json"),
     nn("created_at"),
+    nullable("actor_account_id"),
+    nullable("connection_owner_account_id"),
+    nullable("ownership_epoch"),
   ]);
 
   expect(getTableName(d1Schema.securityFindings)).toBe("security_findings");
@@ -685,7 +695,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76,
+    61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -761,6 +771,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_backup_owner_lookup_indexes",
     "d1_workspace_financial_source",
     "d1_interface_links",
+    "d1_app_ownership",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1504,6 +1515,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("connection_json"),
     nn("created_at"),
     nn("updated_at"),
+    nullable("owner_account_id"),
   ]);
 
   expect(getTableName(postgresSchema.secretBlobs)).toBe(
@@ -1548,6 +1560,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("space_id"),
     nn("project_id"),
     nn("name"),
+    nullable("slug"),
     nn("environment"),
     // Physically nullable only for historical source-less Capsule rows.
     nullable("source_id"),
@@ -1558,6 +1571,11 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("created_at"),
     nn("updated_at"),
     defaulted("execution_authority_epoch"),
+    nullable("owner_account_id"),
+    defaulted("ownership_epoch"),
+    defaulted("management_state"),
+    defaulted("management_epoch"),
+    nullable("storage_root"),
   ]);
 
   expect(getTableName(postgresSchema.projects)).toBe("takosumi_projects");
@@ -1639,6 +1657,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("source"),
     nn("idempotency_key"),
     nn("created_at"),
+    nullable("payer_account_id"),
   ]);
 
   expect(getTableName(postgresSchema.publicHostReservations)).toBe(
@@ -1670,6 +1689,9 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("phase"),
     nn("event_json"),
     nn("created_at"),
+    nullable("actor_account_id"),
+    nullable("connection_owner_account_id"),
+    nullable("ownership_epoch"),
   ]);
 
   expect(getTableName(postgresSchema.securityFindings)).toBe(
@@ -1839,7 +1861,7 @@ test("Postgres v112 adds nullable compatibility declarations without upgrading l
     expect(result.rows).toEqual([
       { root_module_variable_declarations_json: null },
     ]);
-    expect(postgresStorageMigrationStatements.slice(-3).map((entry) => entry.version)).toEqual([120, 121, 122]);
+    expect(postgresStorageMigrationStatements.slice(-4).map((entry) => entry.version)).toEqual([120, 121, 122, 123]);
   } finally {
     await client.close();
   }

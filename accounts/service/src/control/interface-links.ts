@@ -13,12 +13,12 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
   if (candidates ? method !== "GET" : method !== "PUT" && method !== "DELETE") return methodNotAllowed(candidates ? "GET" : "PUT, DELETE");
   let controllingWorkspaceId = capsule.workspaceId;
   let authorizedProvider: { linkId: string; providerInterfaceId: string; providerCapsuleId: string } | undefined;
-  let allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: capsule.workspaceId });
+  let allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleId: capsule.id, appAction: candidates ? "view" : "change_interface_link" });
   if (!allowed && method === "DELETE") {
     const link = await service.getLatestCapsuleInterfaceLink(capsule.id, key);
     if (link) {
       const provider = await ctx.operations.capsules.getCapsule(link.providerCapsuleId);
-      allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: provider.workspaceId });
+      allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: provider.workspaceId, capsuleId: provider.id, appAction: "change_interface_link" });
       if (allowed) {
         controllingWorkspaceId = provider.workspaceId;
         authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
@@ -35,7 +35,7 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
     const writeFence: InterfaceLinkWriteFence = { assertCurrent: async () => {
       ctx.assertActive?.();
       if (ctx.session.reauthorizeBearer && !(await ctx.session.reauthorizeBearer())) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
-      if (!(await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: { ...ctx.session, requiredAccess: "write" }, workspaceId: controllingWorkspaceId }))) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
+      if (!(await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: { ...ctx.session, requiredAccess: "write" }, workspaceId: controllingWorkspaceId, capsuleId: capsule.id, appAction: "change_interface_link" }))) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
       const current = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
       if (current.managementEpoch !== initialAuthority.managementEpoch) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
       ctx.assertActive?.();

@@ -12,6 +12,7 @@ import {
   type DeployControlRouteContext,
   ensureWorkspaceCreatePermission,
   ensureWorkspacePermission,
+  errorEnvelope,
   nonEmptyString,
   readJsonBody,
   scopeAllows,
@@ -97,6 +98,16 @@ export function mountDeployControlWorkspaceRoutes(
         // Workspace creation is not scoped by an existing workspace id, so only
         // an unrestricted principal may mint new Workspaces.
         ensureWorkspaceCreatePermission(principal);
+        if (dependencies.workspaceMutationsFrozen !== false) {
+          return c.json(
+            errorEnvelope(
+              c,
+              "workspace_frozen",
+              "Workspace creation is temporarily frozen.",
+            ),
+            409,
+          );
+        }
         const body = await readJsonBody<CreateWorkspaceRequest>(
           c,
           "workspaceCreate",
