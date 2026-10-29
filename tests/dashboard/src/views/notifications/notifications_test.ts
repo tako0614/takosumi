@@ -125,9 +125,13 @@ describe("Notifications", () => {
     expect(notificationsLibSource).toContain(
       "export async function refreshNotificationFeed",
     );
-    expect(notificationsLibSource).toContain(
-      "isFailureAction(entry.event.action)",
-    );
+    // Failures settled by later Activity of the same app (removed, or replaced
+    // by a successful run) are excluded by the one shared attentionEvents.
+    expect(notificationsLibSource).toContain("export function attentionEvents");
+    expect(notificationsLibSource).toContain("open.has(entry.event)");
+    // The rows' 要対応 badge reads the same set, never the raw action alone.
+    expect(notificationsSource).toContain("attentionEvents(feed())");
+    expect(notificationsSource).not.toContain("isFailureAction(");
     // TopBar: one Workspace Activity request on navigation (TTL-throttled, no
     // polling loop), count via the shared derivation.
     expect(topBarSource).toContain(

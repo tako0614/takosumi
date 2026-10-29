@@ -51,6 +51,101 @@ export function isFailureAction(action: string): boolean {
   );
 }
 
+/** The app an event is about, when the backend recorded one. */
+function eventAppKey(event: ActivityEvent): string | undefined {
+  const recorded = (event.metadata ?? {}).capsuleId;
+  const target =
+    event.targetType === "capsule" && typeof event.targetId === "string"
+      ? event.targetId.trim()
+      : "";
+  const id =
+    typeof recorded === "string" && recorded.trim() ? recorded.trim() : target;
+  // Capsule ids are never reused, but keep the key Workspace-scoped anyway.
+  return id ? `${event.workspaceId}\u0000${id}` : undefined;
+}
+
+function eventTime(event: ActivityEvent): number {
+  const at = Date.parse(event.createdAt);
+  return Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
+}
+
+/** Removal is terminal for an app id: abandoned before apply (uninstall of a
+ * never-applied app, or a discarded install) or torn down by a destroy. */
+const APP_REMOVED_ACTIONS: ReadonlySet<string> = new Set([
+  "capsule.abandoned",
+  "run.destroyed",
+]);
+
+/** Failures a later successful apply of the same app replaces. A failed
+ * removal (destroy plan or destroy apply) is not replaced by an apply. */
+function appliedRunSettles(event: ActivityEvent): boolean {
+  const metadata = event.metadata ?? {};
+  switch (event.action) {
+    case "run.failed":
+      return (
+        metadata.operation !== "destroy" && metadata.phase !== "destroy_apply"
+      );
+    case "capsule.drift_detected":
+    case "resource.drift_detected":
+    case "capsule.auto_update_failed":
+    case "capsule.auto_update_apply_failed":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * The failures in a feed that still need someone to act, as a set of the
+ * feed's own events.
+ *
+ * A failure stops needing attention once later Activity of the same app
+ * settles it: the app was removed (uninstalled, discarded or destroyed — the
+ * event is about an app that no longer exists), a later successful apply
+ * replaced a failed review, apply, drift or auto-update, or the owner
+ * cancelled an uninstall that had stopped. Settled failures stay in the feed
+ * as history; they only stop counting as 要対応. Only events in the feed are
+ * consulted: a feed is the newest N events, so any later event of an app whose
+ * failure is shown is in the same feed.
+ */
+export function attentionEvents(
+  entries: readonly FeedEntry[] | undefined,
+): ReadonlySet<ActivityEvent> {
+  const removed = new Set<string>();
+  const lastApplied = new Map<string, number>();
+  const lastUninstallCancelled = new Map<string, number>();
+  const latest = (times: Map<string, number>, key: string, at: number) => {
+    if (at > (times.get(key) ?? Number.NEGATIVE_INFINITY)) times.set(key, at);
+  };
+  for (const { event } of entries ?? []) {
+    const key = eventAppKey(event);
+    if (!key) continue;
+    if (APP_REMOVED_ACTIONS.has(event.action)) removed.add(key);
+    else if (event.action === "run.applied") latest(lastApplied, key, eventTime(event));
+    else if (event.action === "capsule.uninstall_cancelled") {
+      latest(lastUninstallCancelled, key, eventTime(event));
+    }
+  }
+  const open = new Set<ActivityEvent>();
+  for (const { event } of entries ?? []) {
+    if (!isFailureAction(event.action)) continue;
+    const key = eventAppKey(event);
+    if (key) {
+      if (removed.has(key)) continue;
+      const at = eventTime(event);
+      if (appliedRunSettles(event) && (lastApplied.get(key) ?? Number.NEGATIVE_INFINITY) > at) continue;
+      if (
+        event.action === "capsule.uninstall_blocked" &&
+        (lastUninstallCancelled.get(key) ?? Number.NEGATIVE_INFINITY) > at
+      ) {
+        continue;
+      }
+    }
+    open.add(event);
+  }
+  return open;
+}
+
 function notificationWorkspaces(
   workspaces: readonly Workspace[],
   selectedWorkspaceId?: string,
@@ -166,20 +261,21 @@ export function workspaceNotificationFeed(
   return snapshot?.workspaceId === workspaceId ? snapshot.entries : undefined;
 }
 
-/** Total failures currently in the feed for a Workspace — the count both the
- * TopBar bell badge and the /notifications page's 要対応 banner show, from one
- * shared derivation. The count is scoped to the CURRENT Workspace when
- * `workspaceId` is given — the feed itself stays cross-Workspace (the page
- * labels other Workspaces' entries). An empty/absent `workspaceId` counts every
- * Workspace. */
+/** Unsettled failures currently in the feed for a Workspace — the count both
+ * the TopBar bell badge and the /notifications page's 要対応 banner show, from
+ * one shared derivation ({@link attentionEvents}). The count is scoped to the
+ * CURRENT Workspace when `workspaceId` is given — the feed itself stays
+ * cross-Workspace (the page labels other Workspaces' entries). An empty/absent
+ * `workspaceId` counts every Workspace. */
 export function attentionCount(
   entries: readonly FeedEntry[] | undefined,
   workspaceId?: string,
 ): number {
   const seenBefore = readAcknowledgedAt();
+  const open = attentionEvents(entries);
   return (entries ?? []).filter(
     (entry) =>
-      isFailureAction(entry.event.action) &&
+      open.has(entry.event) &&
       (!workspaceId || entry.event.workspaceId === workspaceId) &&
       !isAcknowledged(entry, seenBefore),
   ).length;
