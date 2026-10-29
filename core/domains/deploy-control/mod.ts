@@ -20,6 +20,7 @@ import type {
   PlanScopeSelector,
   ProviderConfigurationsEnvelope,
 } from "takosumi-contract";
+import { appRunAuthority } from "./app_run_admission.ts";
 import type {
   ApplyExpectedGuard,
   ApplyRun,
@@ -2237,6 +2238,7 @@ export class OpenTofuController {
       // attempt marker must be judged against the current record.
       const capsule = await this.#store.getCapsule(input.capsule.id);
       if (!capsule || capsule.autoUpdate !== true) return;
+      if (appRunAuthority(capsule) === undefined) return;
       if (capsule.autoUpdateAttemptSourceSnapshotId === input.snapshot.id) {
         return;
       }
@@ -2270,9 +2272,11 @@ export class OpenTofuController {
         updatedAt: new Date(this.#now()).toISOString(),
       });
       if (claim.kind !== "updated") return;
+      const appAuthority = appRunAuthority(claim.capsule);
+      if (appAuthority === undefined) return;
       await this.createCapsulePlan(
         claim.capsule.id,
-        { actor: "system:auto-update" },
+        { actor: appAuthority.kind === "owned" ? appAuthority.ownerAccountId : "system:auto-update" },
         {
           autoApplyRequested: true,
           sourceSnapshotId: input.snapshot.id,

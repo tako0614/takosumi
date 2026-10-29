@@ -8,6 +8,7 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { handleProjects } from "../../../../accounts/service/src/control/projects.ts";
 import { handleCapsules } from "../../../../accounts/service/src/control/capsules.ts";
+import { handleStateVersions } from "../../../../accounts/service/src/control/state-versions.ts";
 import {
   controllerErrorResponse,
   canAccessWorkspace,
@@ -1501,6 +1502,37 @@ function context(
     session: { subject: "tsub_owner" },
   };
 }
+
+test("drift and rollback Plans use the authenticated actor rather than request input", async () => {
+  for (const kind of ["drift", "rollback"] as const) {
+    const dispatched = new Error("authenticated plan dispatched");
+    let actor: string | undefined;
+    const operations = {
+      ...workspaceAuthorizationOperations(),
+      capsules: { getCapsule: async () => ({ id: "app_actor", workspaceId: workspace.id }) },
+      getStateVersion: async () => ({ stateVersion: { id: "state_actor", workspaceId: workspace.id } }),
+      createCapsuleDriftCheck: async (_id: string, options?: { actor?: string }) => {
+        actor = options?.actor;
+        throw dispatched;
+      },
+      createStateVersionRollbackPlan: async (_id: string, options?: { actor?: string }) => {
+        actor = options?.actor;
+        throw dispatched;
+      },
+    } as unknown as ControlPlaneOperations;
+    const path = kind === "drift" ? "/api/v1/capsules/app_actor/drift-check"
+      : "/api/v1/state-versions/state_actor/rollback-plan";
+    const ctx = context(operations, new Request(`https://app.example.test${path}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actor: "forged-owner" }),
+    }));
+    const result = kind === "drift"
+      ? handleCapsules(ctx, ["capsules", "app_actor", "drift-check"], "POST")
+      : handleStateVersions(ctx, ["state-versions", "state_actor", "rollback-plan"], "POST");
+    await expect(result).rejects.toBe(dispatched);
+    expect(actor).toBe(ctx.session.subject);
+  }
+});
 
 function workspaceCreateFixture() {
   const createCalls: Parameters<

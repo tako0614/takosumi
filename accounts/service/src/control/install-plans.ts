@@ -2831,6 +2831,13 @@ async function createOrObservePlanRun(
   operations: ControlPlaneOperations,
 ): Promise<StoredGitInstallPlan> {
   const exactRunId = plan.planRunId ?? deterministicPlanRunId(plan.id);
+  const capsule = await operations.capsules.getCapsule(plan.capsuleId!);
+  assertCapsuleMatches(capsule, plan);
+  // The install plan's creator is the authenticated Principal captured at
+  // creation. A synthetic coordinator id is only valid for legacy Capsules.
+  const planActor = capsule.ownerAccountId === undefined
+    ? installPlanRunActor(plan.id)
+    : plan.createdBy;
   let run: Run | undefined;
   try {
     run = await operations.getRun(exactRunId);
@@ -2839,17 +2846,24 @@ async function createOrObservePlanRun(
       throw error;
     }
   }
+  const existingRun = run !== undefined;
   if (!run) {
     const created = await operations.createCapsulePlan(plan.capsuleId!, {
       sourceSnapshotId: plan.sourceSnapshotId,
       planRunId: exactRunId,
       expectedWorkspaceManagementAuthority:
         plan.workspaceManagementAuthority,
-      actor: installPlanRunActor(plan.id),
+      actor: planActor,
     });
     run = await operations.getRun(created.planRun.id);
   }
-  assertRunMatches(run, plan, exactRunId);
+  assertRunMatches(
+    run,
+    plan,
+    exactRunId,
+    planActor,
+    existingRun && capsule.ownerAccountId !== undefined,
+  );
   if (
     run.status === "failed" ||
     run.status === "cancelled" ||
@@ -3723,6 +3737,8 @@ function assertRunMatches(
   run: Run,
   plan: StoredGitInstallPlan,
   exactRunId: string,
+  planActor: string,
+  allowLegacySyntheticActor: boolean,
 ): void {
   if (
     run.id !== exactRunId ||
@@ -3730,7 +3746,9 @@ function assertRunMatches(
     run.capsuleId !== plan.capsuleId ||
     run.sourceSnapshotId !== plan.sourceSnapshotId ||
     run.type !== "plan" ||
-    run.createdBy !== installPlanRunActor(plan.id)
+    (run.createdBy !== planActor &&
+      !(allowLegacySyntheticActor &&
+        run.createdBy === installPlanRunActor(plan.id)))
   ) {
     throw permanent(
       "plan_run_identity_conflict",

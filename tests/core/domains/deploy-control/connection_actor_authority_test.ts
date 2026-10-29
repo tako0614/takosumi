@@ -78,6 +78,7 @@ function connection(id: string, workspaceId: string): ProviderConnection {
     id,
     workspaceId,
     scope: "workspace",
+    ownerAccountId: "namespace-owner",
     provider: "registry.opentofu.org/example/example",
     providerSource: "registry.opentofu.org/example/example",
     credentialRecipe: {

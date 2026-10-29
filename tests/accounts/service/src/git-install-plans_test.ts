@@ -3879,6 +3879,11 @@ function installFixture(
     connections: {
       listProviderConnections: async () => options.providerConnections ?? [],
     },
+    getConnection: async (id: string) => {
+      const connection = options.providerConnections?.find((item) => item.id === id);
+      if (!connection) throw new OpenTofuControllerError("not_found", "missing");
+      return connection;
+    },
     listSources: async () => {
       sourceInventoryReads += 1;
       return { sources };
@@ -4783,6 +4788,7 @@ function providerConnection(
     workspaceId: WORKSPACE.id,
     provider,
     providerSource: provider,
+    ownerAccountId: WORKSPACE.ownerUserId,
     scope: "workspace",
     status: "verified",
     materialization: "secret",

@@ -2462,6 +2462,13 @@ export class RunEngine {
     );
     const storedPlanRunInputs = planRunInputs;
     const dispatchDiagnostics = genericRootDispatch?.diagnostics ?? [];
+    // Automatic app policy delegates authorization to its current owner;
+    // audit keeps the system trigger distinct from that account principal.
+    const eventActor = internal.autoApplyRequested ? "system:auto-update" : context.actor;
+    const automaticProvenance = internal.autoApplyRequested
+      ? { automatic: true, ...(capsule?.ownerAccountId !== undefined && context.actor
+        ? { authorizationAccountId: context.actor } : {}) }
+      : {};
     let planRun: PlanRun = {
       id: planRunId,
       workspaceId,
@@ -2514,8 +2521,9 @@ export class RunEngine {
             variablesDigest,
             runnerProfileId: profile.id,
             ...(internal.refreshOnly ? { refreshOnly: true } : {}),
+            ...automaticProvenance,
           },
-          context.actor,
+          eventActor,
         ),
         auditEvent(
           "plan",
@@ -2524,8 +2532,9 @@ export class RunEngine {
           {
             policyDecisionDigest,
             status: policy.status,
+            ...automaticProvenance,
           },
-          context.actor,
+          eventActor,
         ),
       ],
       createdAt: now,
@@ -2576,7 +2585,7 @@ export class RunEngine {
     if (prepared.status === "created") {
       await this.#recordActivity({
         workspaceId: planRun.workspaceId,
-        ...(context.actor ? { actorId: context.actor } : {}),
+        ...(eventActor ? { actorId: eventActor } : {}),
         action: "run.plan_created",
         targetType: "run",
         targetId: planRun.id,
@@ -2586,6 +2595,7 @@ export class RunEngine {
           capsuleId: planRun.capsuleId,
           policyStatus: planRun.policy.status,
           ...(planRun.refreshOnly ? { refreshOnly: true } : {}),
+          ...automaticProvenance,
         },
       });
       if (planRun.status === "failed") {

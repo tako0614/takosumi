@@ -87,7 +87,7 @@ function connectionSnapshots(input: AppMintLeaseBeginInput,
       const { ownerAccountId: _ignored, ...body } = record;
       void _ignored;
       const projected = row.owner_account_id ? { ...body, ownerAccountId: row.owner_account_id } : body;
-      if (stableStringify(projected) !== stableStringify(binding.expectedConnection)) return undefined;
+      if (stableStringify(projected) !== stableStringify(JSON.parse(JSON.stringify(binding.expectedConnection)))) return undefined;
       snapshots.push({ id: binding.id, authority: "stored", status: row.status,
         ownerAccountId: row.owner_account_id,
         connectionJson: typeof row.connection_json === "string" ? row.connection_json

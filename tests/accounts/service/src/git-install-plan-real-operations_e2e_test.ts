@@ -157,12 +157,31 @@ test("composed install routes create owned Source, sync, and Capsule authority w
   const capsule = await deployStore.getCapsule(capsuleId!);
   expect(capsule).toMatchObject({
     id: capsuleId,
+    ownerAccountId: "user_install_composition",
     sourceId,
     installConfigId,
     installingPrincipalId: "user_install_composition",
     status: "pending",
   });
   expect((await deployStore.getSource(sourceId))?.ownerCapsuleId).toBe(capsuleId);
+
+  const planned = await route("POST", `/api/v1/install-plans/${planId}/reconcile`);
+  expect(planned.status).toBe(200);
+  const planRunId = (await planned.json()).installPlan.planRunId as string;
+  expect(planRunId).toMatch(/^plan_[A-Za-z0-9]{16}$/u);
+  const run = await deployStore.getPlanRun(planRunId);
+  expect(run).toMatchObject({
+    id: planRunId,
+    capsuleId,
+    createdBy: "user_install_composition",
+    ownershipEpoch: 0,
+  });
+  const replay = await route("POST", `/api/v1/install-plans/${planId}/reconcile`);
+  expect(replay.status).toBe(200);
+  expect((await replay.json()).installPlan.planRunId).toBe(planRunId);
+  expect((await operations.listRuns(workspace.id)).filter((candidate) =>
+    candidate.id === planRunId
+  )).toHaveLength(1);
 
   const installConfig = await operations.capsules.getInstallConfig(installConfigId!);
   const otherCreatedAt = new Date().toISOString();

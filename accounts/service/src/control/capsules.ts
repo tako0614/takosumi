@@ -334,12 +334,11 @@ export async function handleCapsules(
             : undefined;
       const response = await operations.createCapsulePlan(
         capsuleId,
-        compatibilityReportId || runnerProfileId
-          ? {
-              ...(compatibilityReportId ? { compatibilityReportId } : {}),
-              ...(runnerProfileId ? { runnerProfileId } : {}),
-            }
-          : undefined,
+        {
+          actor: ctx.session.subject,
+          ...(compatibilityReportId ? { compatibilityReportId } : {}),
+          ...(runnerProfileId ? { runnerProfileId } : {}),
+        },
       );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
@@ -379,7 +378,7 @@ export async function handleCapsules(
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const response = await operations.createCapsuleDriftCheck(capsuleId);
+      const response = await operations.createCapsuleDriftCheck(capsuleId, { actor: ctx.session.subject });
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,

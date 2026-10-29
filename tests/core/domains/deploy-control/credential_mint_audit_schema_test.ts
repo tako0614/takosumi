@@ -34,4 +34,4 @@ test("mint audit writes app authority columns only when the schema has them", as
       }
     } finally { await pg.close(); }
   }
-});
+}, 30_000);

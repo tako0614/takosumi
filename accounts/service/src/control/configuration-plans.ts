@@ -508,6 +508,10 @@ async function finishConfigurationPlan(input: {
     await assertConfigurationPlanRun({
       run: existingPlan,
       capsule: current,
+      planActor: current.ownerAccountId === undefined
+        ? evidence.planCreatedBy
+        : input.receipt.actorSubject,
+      allowLegacySyntheticActor: current.ownerAccountId !== undefined,
       source,
       sourceSnapshot,
       targetInstallConfig: input.target,
@@ -990,6 +994,9 @@ async function createFreshPlanRun(input: {
   readonly expectedBaseStateVersionId: string | undefined;
   readonly evidence: ConfigurationEvidenceIdentity;
 }): Promise<string> {
+  const planActor = input.capsule.ownerAccountId === undefined
+    ? input.evidence.planCreatedBy
+    : input.ctx.session.subject;
   // Run persistence happens before private-input sidecars, notification, and
   // enqueue. The exact identity is derived from the sealed successor/evidence,
   // so a lost acknowledgement reuses the same durable PlanRun row and never
@@ -1007,7 +1014,7 @@ async function createFreshPlanRun(input: {
         currentStateGeneration: input.expectedBaseStateGeneration,
         currentStateVersionId: input.expectedBaseStateVersionId,
       },
-      actor: input.evidence.planCreatedBy,
+      actor: planActor,
       origin: { kind: "configuration" },
     },
   );
@@ -1016,6 +1023,7 @@ async function createFreshPlanRun(input: {
   await assertConfigurationPlanRun({
     run,
     capsule: input.capsule,
+    planActor,
     source: input.source,
     sourceSnapshot: input.sourceSnapshot,
     targetInstallConfig: input.targetInstallConfig,
@@ -1119,6 +1127,8 @@ function assertConfigurationCompatibilityPolicy(
 async function assertConfigurationPlanRun(input: {
   readonly run: PublicPlanRun;
   readonly capsule: Capsule;
+  readonly planActor: string;
+  readonly allowLegacySyntheticActor?: boolean;
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
   readonly targetInstallConfig: InstallConfig;
@@ -1142,7 +1152,9 @@ async function assertConfigurationPlanRun(input: {
     capsuleContext.environment !== input.capsule.environment ||
     input.run.sourceSnapshotId !== input.sourceSnapshot.id ||
     input.run.compatibilityReportId !== input.compatibilityReportId ||
-    input.run.createdBy !== input.evidence.planCreatedBy ||
+    (input.run.createdBy !== input.planActor &&
+      !(input.allowLegacySyntheticActor &&
+        input.run.createdBy === input.evidence.planCreatedBy)) ||
     input.run.capsuleExecutionAuthorityEpoch !== input.executionAuthorityEpoch ||
     (input.run.capsuleCurrentStateVersionId ?? null) !==
       (input.expectedBaseStateVersionId ?? null) ||

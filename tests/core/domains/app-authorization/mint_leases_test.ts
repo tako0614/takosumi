@@ -279,7 +279,11 @@ test("stored Connection revocation during driver wait blocks final credential re
       expectedManagementEpoch: 0, expectedActorAccountIds: ["owner"],
       connections: [{ id: connectionId, authority: "stored" as const,
         expectedConnection: { id: connectionId, status: "verified", ownerAccountId: "owner" } }] };
-    const valid = await leases.begin(input);
+    // Vault descriptors can retain an explicit undefined optional field after
+    // rotation; the durable JSON row correctly omits that field.
+    const valid = await leases.begin({ ...input, connections: input.connections.map((binding) => ({
+      ...binding, expectedConnection: { ...binding.expectedConnection, secretPartition: undefined },
+    })) });
     expect(valid, label).toBeDefined();
     expect(await leases.finish(valid!, "issued"), label).toBe(true);
     const lease = await leases.begin(input);

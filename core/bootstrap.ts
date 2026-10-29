@@ -820,7 +820,7 @@ export interface TakosumiOperations {
    * read-only plan that detects state drift. Never parks waiting_approval and can
    * never be applied; emits `capsule.drift_detected` on a non-empty summary.
    */
-  createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
@@ -848,6 +848,7 @@ export interface TakosumiOperations {
   /** Creates a rollback PLAN run from a StateVersion's Run provenance. */
   createStateVersionRollbackPlan(
     stateVersionId: string,
+    options?: { readonly actor?: string },
   ): Promise<PlanRunResponse>;
   /** Unified Run facade (§6.8): read / approve / cancel by run id. */
   getRun(id: string): Promise<Run>;
@@ -1973,8 +1974,8 @@ export async function createTakosumiService(
           ? { runnerProfileId: options.runnerProfileId }
           : {},
       ),
-    createCapsuleDriftCheck: (capsuleId) =>
-      opentofuController.createCapsuleDriftCheck(capsuleId),
+    createCapsuleDriftCheck: (capsuleId, options) =>
+      opentofuController.createCapsuleDriftCheck(capsuleId, { actor: options?.actor }),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
@@ -1991,8 +1992,8 @@ export async function createTakosumiService(
     getCurrentResourceInventory: (capsuleId) =>
       opentofuController.getCurrentResourceInventory(capsuleId),
     getOutput: (id) => opentofuController.getOutput(id),
-    createStateVersionRollbackPlan: (stateVersionId) =>
-      opentofuController.createStateVersionRollbackPlan(stateVersionId),
+    createStateVersionRollbackPlan: (stateVersionId, options) =>
+      opentofuController.createStateVersionRollbackPlan(stateVersionId, { actor: options?.actor }),
     getRun: (id) => opentofuController.getRun(id),
     listRuns: (workspaceId, options) =>
       opentofuController.listRuns(workspaceId, options),

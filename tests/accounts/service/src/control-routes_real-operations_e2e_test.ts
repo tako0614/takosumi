@@ -2338,6 +2338,46 @@ test("concurrent identical configuration Plan requests share one durable PlanRun
   ).toHaveLength(1);
 });
 
+test("owned Capsule configuration Plan records its authenticated creator and replays exact evidence", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-owned-actor",
+    { owned: true },
+  );
+  const first = await controlJson<CapsuleConfigurationPlanResponse>({
+    operations: fixture.operations,
+    store: fixture.accountStore,
+    cookie: fixture.cookie,
+    method: "POST",
+    path,
+    headers: { "idempotency-key": "owned-configuration-plan" },
+    body,
+  }, 201);
+  const plan = await fixture.operations.getRun(first.configurationPlan.planRunId);
+  expect(plan).toMatchObject({
+    capsuleId: fixture.seeded.capsule.id,
+    createdBy: "user_test",
+  });
+  expect(await fixture.deployStore.getPlanRun(plan.id)).toMatchObject({
+    ownershipEpoch: 0,
+    createdBy: "user_test",
+  });
+  const compatibilityRun = (await fixture.operations.listRuns(fixture.seeded.workspace.id))
+    .find((run) => run.id.startsWith("ccr_"));
+  expect(compatibilityRun?.createdBy).toMatch(/^capsule-configuration-plan:/u);
+
+  const replay = await controlJson<CapsuleConfigurationPlanResponse>({
+    operations: fixture.operations,
+    store: fixture.accountStore,
+    cookie: fixture.cookie,
+    method: "POST",
+    path,
+    headers: { "idempotency-key": "owned-configuration-plan" },
+    body,
+  }, 200);
+  expect(replay.configurationPlan.planRunId).toBe(plan.id);
+  expect(replay.configurationPlan.replayed).toBe(true);
+});
+
 test("configuration Plan authority fence aborts a target-current interleaving before Run persistence", async () => {
   const { fixture, path, body } = await configurationPlanRouteFixture(
     "configuration-plan-atomic-fence",
@@ -6104,7 +6144,7 @@ async function readReAdoptionGuard(
 
 async function configurationPlanRouteFixture(
   suffix: string,
-  options: { readonly deployStore?: OpenTofuControlStore } = {},
+  options: { readonly deployStore?: OpenTofuControlStore; readonly owned?: boolean } = {},
 ) {
   const genericInputs: readonly RepositoryInstallUxInput[] = [
     {
@@ -6140,6 +6180,23 @@ async function configurationPlanRouteFixture(
     repositoryManifest: { status: "absent" },
   });
   await seedProviderConnections(fixture.deployStore, fixture.seeded.capsule);
+  if (options.owned) {
+    if (!(fixture.deployStore instanceof InMemoryOpenTofuControlStore)) {
+      throw new Error("Owned fixture requires the in-memory authority store");
+    }
+    expect(fixture.deployStore.setCapsuleOwnership({
+      capsuleId: fixture.seeded.capsule.id,
+      ownerAccountId: "user_test",
+      ownershipEpoch: 0,
+      managementState: "active",
+      managementEpoch: 0,
+      storageRoot: `apps/${fixture.seeded.capsule.id}`,
+    })).toBe(true);
+    expect(await fixture.operations.appAccess?.resolveAppAccess(
+      "user_test",
+      fixture.seeded.capsule.id,
+    )).toMatchObject({ role: "owner" });
+  }
   const bindingSet = await fixture.operations.capsules.getProviderBindingSetByCapsule(
     fixture.seeded.capsule.id,
     fixture.seeded.capsule.environment,

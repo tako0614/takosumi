@@ -213,6 +213,7 @@ class CorruptingAutoApplyInputsStore extends InMemoryOpenTofuControlStore {
 async function buildActiveCapsule(options: {
   readonly autoUpdate: boolean;
   readonly store?: OpenTofuControlStore;
+  readonly ownedApp?: boolean;
 }) {
   const store = options.store ?? new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(store, {
@@ -223,6 +224,8 @@ async function buildActiveCapsule(options: {
     installConfigId: "cfg_a",
     name: "app",
   });
+  if (options.ownedApp) await store.putCapsule({ ...seeded.capsule,
+    ownerAccountId: seeded.workspace.ownerUserId!, ownershipEpoch: 3, managementState: "active", managementEpoch: 2 });
   await seedProviderConnections(store, seeded.capsule);
   let counter = 0;
   const newId = (prefix: string) =>
@@ -270,7 +273,8 @@ output "launch_url" {
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
   });
   // First apply: plan + manual apply → active at generation 1.
-  const first = await controller.createCapsulePlan("cap_auto0001");
+  const first = await controller.createCapsulePlan("cap_auto0001",
+    options.ownedApp ? { actor: seeded.workspace.ownerUserId! } : {});
   await controller.createApplyRun({
     planRunId: first.planRun.id,
     expected: applyExpectedGuardFromPlanRun(first.planRun),
@@ -289,8 +293,8 @@ output "launch_url" {
   return { store, controller, runner, initialPlanCalls, initialApplyCalls };
 }
 
-async function syncNewCommit(controller: OpenTofuController): Promise<void> {
-  const { run } = await controller.createSourceSync("src_a");
+async function syncNewCommit(controller: OpenTofuController, actor?: string): Promise<void> {
+  const { run } = await controller.createSourceSync("src_a", {}, undefined, actor);
   await controller.runQueuedSourceSync(run.id);
 }
 
@@ -333,6 +337,20 @@ test("an opted-in stale capsule auto-updates: plan + clean auto-apply, no client
   expect(autoPlan?.appliedApplyRunId).toBeTruthy();
   // It records the version change it made: the tracked ref's new commit.
   expect(autoPlan?.origin).toEqual({ kind: "revision", ref: newSnapshot?.ref });
+});
+
+test("owned app automatic policy uses its pinned owner authority and records the system trigger", async () => {
+  const { store, controller } = await buildActiveCapsule({ autoUpdate: true, ownedApp: true });
+  const ownerAccountId = (await store.getCapsule("cap_auto0001"))!.ownerAccountId!;
+  await syncNewCommit(controller, ownerAccountId);
+  const autoPlan = (await planRunsOf(controller, store)).find((run) => run.autoApplyRequested === true);
+  expect(autoPlan?.status).toBe("succeeded");
+  expect(autoPlan?.createdBy).toBe(ownerAccountId);
+  expect(autoPlan?.ownershipEpoch).toBe(3);
+  expect(autoPlan?.appliedApplyRunId).toBeTruthy();
+  expect(autoPlan?.auditEvents.find((event) => event.type === "plan.requested")).toMatchObject({
+    actor: "system:auto-update", data: { automatic: true, authorizationAccountId: ownerAccountId },
+  });
 });
 
 test("a running Plan can finish after drain and resume without minting a new-epoch automatic Apply", async () => {

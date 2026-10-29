@@ -694,7 +694,7 @@ export interface ControlPlaneOperations {
       readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
-  createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;
   /** Derived from current StateVersion provenance; never Source.defaultRef. */
   getCapsuleAdoptedSourceRevision(
     capsuleId: string,
@@ -748,6 +748,7 @@ export interface ControlPlaneOperations {
    */
   createStateVersionRollbackPlan(
     stateVersionId: string,
+    options?: { readonly actor?: string },
   ): Promise<PlanRunResponse>;
   getRun(id: string): Promise<Run>;
   approveRun(
