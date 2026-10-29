@@ -52,6 +52,8 @@ import {
   deleteCapsule,
   extractRunId,
   getCapsule,
+  getAppConnectionChoices,
+  resetAppOwnershipCache,
   getCapsuleApp,
   getCapsuleConfigurationContext,
   getCapsuleProviderBindingSet,
@@ -117,6 +119,8 @@ import AppSettingsSection from "./AppSettingsSection.tsx";
 import AppCreatedSection from "./AppCreatedSection.tsx";
 import AppHistorySection from "./AppHistorySection.tsx";
 import AppLinkedSection from "./AppLinkedSection.tsx";
+import AppSharingSection from "./AppSharingSection.tsx";
+import { appPrimaryAllowed, isAppRemovalRun, resolveAppRole } from "../../lib/app-access.ts";
 import RunPolicyReasons from "./RunPolicyReasons.tsx";
 
 /** Runs read per history page (the server accepts at most 100). */
@@ -167,6 +171,7 @@ export default function AppManagePage(props: {
   readonly capsuleId: string;
   /** Signed-in principal (kept for embedding pages; screens come from the server). */
   readonly principalId?: string;
+  readonly accountId?: string;
   /** The section the URL fragment names; scrolled to once the page settles. */
   readonly section?: AppPageSection;
   /** Shown once right after the install page applied the first install. */
@@ -192,6 +197,19 @@ export default function AppManagePage(props: {
   const capsule = () => contextLatest()?.capsule;
   const authorityGuard = () => contextLatest()?.authorityGuard;
   const workspaceId = () => capsule()?.workspaceId;
+  const [role, { refetch: refetchRole }] = createResource(
+    () => capsule() ? { capsuleId: capsuleId(), workspaceId: workspaceId(), accountId: props.accountId, principalId: props.principalId } : null,
+    resolveAppRole,
+  );
+  const appRole = () => role.error ? undefined : role();
+  const isOwner = () => appRole() === "owner";
+  const [sharingAvailable, setSharingAvailable] = createSignal(false);
+  const [memberChoices, { refetch: refetchMemberChoices }] = createResource(
+    () => appRole() === "member" ? capsuleId() : null,
+    (id) => getAppConnectionChoices(id),
+  );
+
+
 
   const [appView, { refetch: refetchApp }] = createResource(capsuleId, getCapsuleApp);
   const app = createLastGoodValue(appView, (value) => value.capsuleId === capsuleId());
@@ -239,8 +257,8 @@ export default function AppManagePage(props: {
     getCapsuleProviderBindingSet,
   );
   const [connections, { refetch: refetchConnections }] = createResource(
-    () => (managed() ? (workspaceId() ?? null) : null),
-    listProviderConnections,
+    () => (managed() && isOwner() ? { workspaceId: workspaceId() } : null),
+    (key) => listProviderConnections(key.workspaceId),
   );
   const [inventory, { refetch: refetchInventory }] = createResource(
     () => (managed() ? capsuleId() : null),
@@ -253,7 +271,7 @@ export default function AppManagePage(props: {
   const [hosted] = createResource(
     () => {
       const inst = capsule();
-      return inst && managed()
+      return inst && managed() && inst.workspaceId
         ? { workspaceId: inst.workspaceId, capsuleId: inst.id }
         : null;
     },
@@ -343,7 +361,7 @@ export default function AppManagePage(props: {
   let scrolledTo: string | undefined;
   createEffect(() => {
     const section = props.section;
-    if (!section || !capsule() || !app()) return;
+    if (!section || !capsule() || !app() || (section === "sharing" && !sharingAvailable())) return;
     const key = `${capsuleId()}:${section}`;
     if (scrolledTo === key) return;
     const settling = [installConfig, stateVersions, inventory, bindingSet, usage, historyFirst]
@@ -362,9 +380,12 @@ export default function AppManagePage(props: {
   };
 
   const refreshAll = async () => {
+    resetAppOwnershipCache();
     clearCaches();
     await Promise.allSettled([
       refetchApp(),
+      refetchRole(),
+      refetchMemberChoices(),
       refetchContext(),
       refetchStateVersions(),
       refetchHistory(),
@@ -462,7 +483,7 @@ export default function AppManagePage(props: {
     create: () => Promise<string | null | undefined>,
     options: { readonly restartable?: boolean; readonly action?: CapsuleAppAction | "continue_revision" } = {},
   ) => {
-    if (reviewBusy()) return;
+    if (reviewBusy() || appRole() === undefined || (purpose === "uninstall" && !isOwner())) return;
     // A result that arrives after the page moved to another app is dropped.
     const forCapsule = capsuleId();
     setStarting({ section, ...(options.action ? { action: options.action } : {}) });
@@ -509,7 +530,7 @@ export default function AppManagePage(props: {
 
   /** Opens the review of a run the server named (a plan waiting, a blocked plan). */
   const openRunReview = (runId: string, runType: RunType) => {
-    if (reviewBusy()) return;
+    if (reviewBusy() || (isAppRemovalRun(runType) && !isOwner())) return;
     setSectionError(undefined);
     setNotice(undefined);
     setReview({
@@ -532,7 +553,7 @@ export default function AppManagePage(props: {
       : view.progress.run
         ? { runId: view.progress.run.id, runType: view.progress.run.type }
         : undefined;
-    if (!target || dismissedRuns.has(target.runId)) return;
+    if (!target || dismissedRuns.has(target.runId) || (isAppRemovalRun(target.runType) && !isOwner())) return;
     setReview({
       section: "attention",
       purpose: reviewPurposeForRun(target.runType, view.applied),
@@ -545,7 +566,7 @@ export default function AppManagePage(props: {
   const policyReasonsOnCard = (runId: string) =>
     app()?.problems.some((problem) => problem.code === "policy_blocked" && problem.runId === runId) === true;
   const reviewPanel = (section: ReviewSection) => (
-    <Show when={review()?.section === section ? review() : undefined}>
+    <Show when={review()?.section === section && (review()?.purpose !== "uninstall" || isOwner()) ? review() : undefined}>
       {(active) => (
         <div class="ap-review" id="app-review" data-testid="app-review" data-review-purpose={active().purpose}>
           {/* A blocked plan's problem card already names its reasons. */}
@@ -672,6 +693,7 @@ export default function AppManagePage(props: {
         return extractRunId(await createStateVersionRollbackPlan(installed));
       }
       const run = await getRun(runId);
+      if (isAppRemovalRun(run.type) && !isOwner()) return undefined;
       const fresh = await getCapsule(run.capsuleId ?? capsuleId());
       return await retryPlanForRun(run, fresh, retryApi);
     }, { action: "retry" });
@@ -770,7 +792,7 @@ export default function AppManagePage(props: {
   };
   const uninstall = async () => {
     const inst = capsule();
-    if (!inst || uninstallBusy()) return;
+    if (!inst || !isOwner() || uninstallBusy()) return;
     const days = graceDays();
     const ok = await confirm({
       title: t("app.uninstall.confirmTitle"),
@@ -810,7 +832,7 @@ export default function AppManagePage(props: {
     }
   };
   const cancelUninstall = async () => {
-    if (uninstallBusy()) return;
+    if (!isOwner() || uninstallBusy()) return;
     setUninstallBusy(true);
     setUninstallError(undefined);
     try {
@@ -825,16 +847,19 @@ export default function AppManagePage(props: {
   };
   // The immediate teardown is a plan reviewed in place: its removal list,
   // the explicit check and the approval dialog all stay in front of it.
-  const uninstallNow = () =>
+  const uninstallNow = () => {
+    if (!isOwner()) return;
     void startReview(
       "attention",
       "uninstall",
       async () => extractRunId(await deleteCapsule(capsuleId(), { immediate: true })),
       { restartable: false, action: "uninstall_now" },
     );
+  };
 
   // --- the one primary action ---------------------------------------------------------
   const runPrimary = (view: CapsuleAppView) => {
+    if (!appPrimaryAllowed(appRole(), view)) return;
     const step = appPrimaryStep(view);
     switch (step.kind) {
       case "show_created":
@@ -999,7 +1024,7 @@ export default function AppManagePage(props: {
                         {t("app.action.reinstall")}
                       </Button>
                     </Match>
-                    <Match when={!primaryOpenInPlace(view()) && primaryLabel()}>
+                    <Match when={!primaryOpenInPlace(view()) && appPrimaryAllowed(appRole(), view()) && primaryLabel()}>
                       {(label) => (
                         <Button
                           variant={view().primaryAction === "uninstall_now" ? "danger" : "primary"}
@@ -1054,7 +1079,8 @@ export default function AppManagePage(props: {
                   <a href="#links">{t("app.links.title")}</a>
                   <a href="#created">{t("app.created.title")}</a>
                   <a href="#history">{t("app.history.title")}</a>
-                  <Show when={!view().uninstall.scheduled}>
+                  <Show when={sharingAvailable()}><a href="#sharing">{t("app.sharing.title")}</a></Show>
+                  <Show when={isOwner() && !view().uninstall.scheduled}>
                     <a href="#danger">{t("app.uninstall.title")}</a>
                   </Show>
                 </nav>
@@ -1068,7 +1094,13 @@ export default function AppManagePage(props: {
                 </AppSection>
               </Show>
 
+              <Show when={role.error}>
+                <Toast tone="error">{friendlyError(role.error, t).message}
+                  <Button variant="secondary" onClick={() => void refetchRole()}>{t("common.retry")}</Button>
+                </Toast>
+              </Show>
               <AppAttentionSection
+                canUninstall={isOwner()}
                 app={view()}
                 displayName={displayName()}
                 busy={reviewBusy() || uninstallBusy()}
@@ -1122,6 +1154,10 @@ export default function AppManagePage(props: {
                 <AppSettingsSection
                   capsuleId={capsuleId()}
                   workspaceId={inst().workspaceId}
+                  member={appRole() === "member"}
+                  accessKnown={appRole() !== undefined}
+                  memberConnectionChoices={settledValue(memberChoices)}
+                  canCreateConnection={isOwner()}
                   installConfig={installConfigValue()}
                   installConfigLoading={installConfig.loading}
                   authorityGuard={authorityGuard()}
@@ -1167,9 +1203,17 @@ export default function AppManagePage(props: {
                 onMore={() => void loadMoreHistory()}
               />
 
+              <AppSharingSection
+                capsuleId={capsuleId()}
+                role={appRole()}
+                accountId={props.accountId ?? props.principalId}
+                connectionNames={isSettled(connections) ? (settledValue(connections) ?? []).filter((connection) => connection.scope !== "operator").map((connection) => connection.displayName || connection.id) : undefined}
+                onChanged={refreshAll}
+                onAvailability={setSharingAvailable}
+              />
               <Show
                 when={
-                  !destroyed() && !view().uninstall.scheduled &&
+                  isOwner() && !destroyed() && !view().uninstall.scheduled &&
                   view().state !== "uninstalling" && view().state !== "uninstall_scheduled"
                 }
               >

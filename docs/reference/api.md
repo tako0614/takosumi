@@ -512,6 +512,15 @@ record を 200 で返します。値を変えるときは新しい key を使っ
 `reviewable` になった後の承認と apply は `Run` API だけが所有し、install-plan 専用 apply
 route はありません。
 
+試行が Capsule を作成して `planning` または `reviewable` になった後は、GET と open 一覧の
+response に `reviewSummary` を返します。`modulePath`、`appName`、`environment`、確定済み
+Provider Binding の接続 ID と表示名、Interface の選択、設定名と設定済みかどうかを、保存済み
+InstallConfig と BindingSet から読み取り専用で再構成します。設定の `value` は、受理済みの
+repository install UX が非機密と宣言した値だけに限ります。generic OpenTofu 変数と機密設定は
+`sensitive: true` と `set` のみで、値を返しません。Provider Connection の自動選択履歴は
+確定済み binding から復元できないため `autoSelected: null` です。この GET は Plan/Apply を
+進めません。
+
 `mode: "attempt"` で作ると、coordinator が試行全体を持ちます。Source sync、module 走査、
 互換性確認、Provider Connection の照合を自分で進め、利用者の判断が要るとき（module 候補が
 複数、接続の不足、必須設定、名前の衝突）と、Capsule を作る直前に、非終端の

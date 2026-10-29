@@ -3079,6 +3079,202 @@ async function reachReviewable(
   return reviewable;
 }
 
+test("GET and open listing reconstruct a committed attempt review without Plan or Apply", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  const before = fixture.mutationCount();
+  const generation = reviewable.installPlan.generation;
+  const first = await readPlan(fixture, planId);
+  const second = await readPlan(fixture, planId);
+  const listing = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  const listed = (await listing.json()).installPlans[0];
+  for (const response of [first, second, listed]) {
+    expect(response).toMatchObject({
+      installPlan: { id: planId, phase: "reviewable", generation },
+      nextAction: "review_run",
+      reviewSummary: {
+        modulePath: ".",
+        appName: "example",
+        environment: "production",
+        connections: [{
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_cloudflare01",
+          displayName: "conn_cloudflare01",
+          autoSelected: null,
+        }],
+        settings: [{ name: "region", sensitive: true, set: true }],
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain('"eu"');
+    expect(response.reviewSummary.settings[0].value).toBeUndefined();
+  }
+  expect(fixture.mutationCount()).toBe(before);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+});
+
+test("committed review resolves only selected personal connections owned by the app owner", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  const capsuleIndex = fixture.capsules.findIndex((capsule) => capsule.id === reviewable.installPlan.capsuleId);
+  fixture.capsules[capsuleIndex] = { ...fixture.capsules[capsuleIndex]!, ownerAccountId: "tsub_app_owner" };
+  fixture.operations.connections.listProviderConnections = async () => [];
+  const reads: string[] = [];
+  fixture.operations.getConnection = async (id) => {
+    reads.push(id);
+    return { ...providerConnection(CLOUDFLARE, id), workspaceId: undefined,
+      ownerAccountId: "tsub_app_owner", displayName: "Owner's cloud" };
+  };
+  const before = fixture.mutationCount();
+  const reopened = await readPlan(fixture, planId, ADMIN_SUBJECT);
+  expect(reopened.reviewSummary.connections[0].displayName).toBe("Owner's cloud");
+  expect(reads).toEqual(["conn_cloudflare01"]);
+  for (const change of ["foreign", "unavailable", "epoch", "transfer"] as const) {
+    fixture.operations.getConnection = async (id) => {
+      if (change === "unavailable") throw new Error("optional connection label unavailable");
+      if (change === "epoch") fixture.capsules[capsuleIndex] = {
+        ...fixture.capsules[capsuleIndex]!, ownershipEpoch: (fixture.capsules[capsuleIndex]!.ownershipEpoch ?? 0) + 1,
+      };
+      if (change === "transfer") fixture.capsules[capsuleIndex] = {
+        ...fixture.capsules[capsuleIndex]!, ownerAccountId: "tsub_new_owner",
+      };
+      return { ...providerConnection(CLOUDFLARE, id), workspaceId: undefined,
+        ownerAccountId: change === "foreign" ? "tsub_foreign" : "tsub_app_owner", displayName: "Do not disclose" };
+    };
+    const unavailable = await readPlan(fixture, planId);
+    expect(unavailable.reviewSummary.connections[0].displayName).toBe("conn_cloudflare01");
+    expect(JSON.stringify(unavailable)).not.toContain("Do not disclose");
+  }
+  expect(fixture.mutationCount()).toBe(before);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(reviewable.installPlan.generation);
+});
+
+test("committed review resolves selected Interface names without reading unrelated Interfaces", async () => {
+  const fixture = interfaceAttemptFixture();
+  const selected = addInterfaceProvider(fixture, "named");
+  const planId = await startAttempt(fixture);
+  await reachReviewable(fixture, planId);
+  const reads: string[] = [];
+  fixture.operations.interfaces!.get = async (id) => { reads.push(id); return selected; };
+  const before = fixture.mutationCount();
+  const reopened = await readPlan(fixture, planId);
+  expect(reopened.reviewSummary.interfaces[0]).toMatchObject({
+    choice: { kind: "interface", interfaceId: selected.metadata.id },
+    displayName: selected.metadata.name,
+  });
+  expect(reads).toEqual([selected.metadata.id]);
+  fixture.operations.interfaces!.get = async () => ({ ...selected,
+    metadata: { ...selected.metadata, workspaceId: "ws_foreign", name: "Foreign label" },
+  });
+  const foreign = await readPlan(fixture, planId);
+  expect(foreign.reviewSummary.interfaces[0].displayName).toBeUndefined();
+  expect(JSON.stringify(foreign)).not.toContain("Foreign label");
+  expect(fixture.mutationCount()).toBe(before);
+});
+
+for (const failure of ["config", "base", "bindings", "connections", "interface"] as const) {
+  test(`committed review omits only unavailable ${failure} data when a supporting read fails`, async () => {
+    const fixture = interfaceAttemptFixture();
+    const selected = addInterfaceProvider(fixture, "named");
+    const planId = await startAttempt(fixture);
+    const reviewable = await reachReviewable(fixture, planId);
+    const getConfig = fixture.operations.capsules.getInstallConfig;
+    fixture.operations.interfaces!.get = async () => selected;
+    const unavailable = async () => { throw new Error("supporting read unavailable"); };
+    if (failure === "config" || failure === "base") {
+      fixture.operations.capsules.getInstallConfig = async (id) => {
+        if (id === (failure === "config" ? reviewable.installPlan.installConfigId : reviewable.installPlan.installConfigBaseId)) return unavailable();
+        return getConfig(id);
+      };
+    }
+    if (failure === "bindings") fixture.operations.capsules.getProviderBindingSetByCapsule = unavailable;
+    if (failure === "connections") fixture.operations.connections.listProviderConnections = unavailable;
+    if (failure === "interface") fixture.operations.interfaces!.get = unavailable;
+    const before = fixture.mutationCount();
+    const reopened = await readPlan(fixture, planId);
+    expect(reopened.installPlan).toMatchObject({ phase: "reviewable", generation: reviewable.installPlan.generation });
+    expect(reopened.reviewSummary.appName).toBe("example");
+    expect(reopened.reviewSummary.settings).toEqual(failure === "config" ? [] : [{ name: "region", sensitive: true, set: true }]);
+    expect(reopened.reviewSummary.connections).toHaveLength(failure === "bindings" ? 0 : 1);
+    expect(reopened.reviewSummary.interfaces[0].displayName).toBe(failure === "interface" ? undefined : selected.metadata.name);
+    const listing = await fixture.request("/api/v1/workspaces/ws_install/install-plans?open=1");
+    expect(listing.status).toBe(200);
+    expect((await listing.json()).installPlans[0].reviewSummary).toEqual(reopened.reviewSummary);
+    expect(fixture.mutationCount()).toBe(before);
+    expect(fixture.approvalCalls).toBe(0);
+    expect(fixture.applyCalls).toBe(0);
+  });
+}
+
+test("GET reopens a committed public repository setting from the exact reviewed config", async () => {
+  const publicUrl = "https://app.example.test";
+  const fixture = attemptFixture({
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"d".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [{
+          name: "public_url",
+          source: { kind: "user" },
+          type: "string",
+          required: true,
+          label: { ja: "公開URL", en: "Public URL" },
+        }] } } },
+      },
+    },
+    providerConnections: [],
+    compatibilityRootProviderRequirements: [],
+    compatibilityRootModuleVariableDeclarations: [
+      { name: "public_url", type: "string", hasDefault: false },
+    ],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction).toMatchObject({
+    kind: "provide_inputs",
+    variables: [{ name: "public_url", sensitive: false, required: true }],
+  });
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { public_url: publicUrl },
+  });
+  expect(confirmed.status).toBe(200);
+  const planning = await confirmed.json();
+  expect(planning.installPlan.phase).toBe("planning");
+  expect(planning.reviewSummary.settings).toEqual([{
+    name: "public_url", type: "string", required: true,
+    sensitive: false, set: true, value: publicUrl,
+  }]);
+  expect(fixture.getInstallConfig(planning.installPlan.installConfigId)?.variableMapping)
+    .toMatchObject({ public_url: publicUrl });
+  const baseConfig = fixture.getInstallConfig(planning.installPlan.installConfigBaseId);
+  expect(baseConfig?.variableMapping).toEqual({});
+  expect(baseConfig?.variablePresentation ?? []).toEqual([]);
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(publicUrl);
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan.phase).toBe("reviewable");
+  const before = fixture.mutationCount();
+  const reopened = await readPlan(fixture, planId);
+  expect(reopened.reviewSummary).toMatchObject({
+    modulePath: ".", appName: "example", environment: "production",
+    settings: [{ name: "public_url", sensitive: false, set: true, value: publicUrl }],
+  });
+  expect(fixture.mutationCount()).toBe(before);
+  expect((await fixture.planStore.get(planId))?.generation)
+    .toBe(reviewable.installPlan.generation);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+});
+
 test("discarding an attempt abandons its never-applied Capsule and retires its Source", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);

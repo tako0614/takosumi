@@ -348,7 +348,7 @@ function PlanReview(props: {
 
 export function InstallScreen(props: {
   readonly attempt: InstallAttempt;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   /** The install started from a Store listing (an empty version means its newest release). */
   readonly fromStore: boolean;
   readonly onDone: (capsuleId: string) => void;
@@ -357,6 +357,7 @@ export function InstallScreen(props: {
   const view = () => props.attempt.view();
   const plan = () => props.attempt.response()?.installPlan;
   const sheet = () => props.attempt.sheet();
+  const summary = () => props.attempt.reviewSummary();
   const resubmitting = () => {
     const current = sheet();
     return Boolean(current && props.attempt.response()?.userAction.kind === "provide_inputs" && awaitingResubmission(current));
@@ -849,7 +850,22 @@ export function InstallScreen(props: {
         {(action) => <ModuleChoice attempt={props.attempt} action={action()} />}
       </Show>
 
-      <Show when={rows().length > 0}>
+      <Show when={summary()}>
+        <div class="iv-action-row">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={busy() || locked()}
+            data-testid="install-review-edit"
+            onClick={() => void attempt().editReviewSummary()}
+          >
+            {t("installStore.reviewEdit")}
+          </Button>
+          <p class="iv-muted">{t("installStore.reviewEditHint")}</p>
+        </div>
+      </Show>
+
+      <Show when={rows().length > 0 || (summary()?.connections.length ?? 0) > 0}>
         <section class="iv-sheet-block" aria-labelledby="iv-connections-title" data-testid="install-connections">
           <h3 id="iv-connections-title">{t("installStore.cloudConnection")}</h3>
           <p class="iv-muted">
@@ -862,14 +878,40 @@ export function InstallScreen(props: {
               </Show>
             )}
           </For>
+          <For each={summary()?.connections}>
+            {(connection) => (
+              <article class="iv-connection-row" data-testid="install-required-connection"
+                data-provider-source={connection.provider} data-module-local-name={connection.moduleLocalName}
+                data-child-alias={connection.childAlias ?? ""} data-connection-state="selected">
+                <div class="iv-connection-head">
+                  <strong>{readableProviderSourceLabel(connection.provider)}{connection.childAlias ? ` (${connection.childAlias})` : ""}</strong>
+                  <Show when={connection.autoSelected === true}>
+                    <Badge>{t("installStore.interfaces.automatic")}</Badge>
+                  </Show>
+                </div>
+                <p class="iv-connection-name">{connection.displayName}</p>
+              </article>
+            )}
+          </For>
         </section>
       </Show>
 
-      <Show when={interfaces().length > 0}>
+      <Show when={interfaces().length > 0 || (summary()?.interfaces.length ?? 0) > 0}>
         <section class="iv-sheet-block" aria-labelledby="iv-interfaces-title" data-testid="install-interfaces">
           <h3 id="iv-interfaces-title">{t("installStore.interfaces.title")}</h3>
           <For each={interfaceKeys()}>
             {(key, index) => <Show when={interfaceFor(key)}>{(requirement) => <InterfaceRow requirement={requirement()} index={index()} />}</Show>}
+          </For>
+          <For each={summary()?.interfaces}>
+            {(link) => (
+              <article class="iv-connection-row" data-testid="install-required-interface" data-requirement-key={link.requirementKey}>
+                <div class="iv-connection-head">
+                  <strong>{interfaceLabel(link.requirementKey)}</strong>
+                  <Show when={link.autoSelected}><Badge>{t("installStore.interfaces.automatic")}</Badge></Show>
+                </div>
+                <p class="iv-connection-name">{link.choice.kind === "interface" ? link.displayName || link.choice.interfaceId : t("installStore.interfaces.later")}</p>
+              </article>
+            )}
           </For>
         </section>
       </Show>
@@ -877,14 +919,31 @@ export function InstallScreen(props: {
       <Show when={variables().length > 0}>
         <section class="iv-sheet-block" aria-labelledby="iv-settings-title" data-testid="install-settings">
           <h3 id="iv-settings-title">{t("installStore.setupTitle")}</h3>
-          <Show when={requiredNames().length > 0}>
+          <Show when={summary()}>
+            {(review) => (
+              <div class="iv-fields">
+                <For each={review().settings}>
+                  {(setting) => (
+                    <FormField label={setting.name}>
+                      <output data-variable-name={setting.name}>
+                        {setting.sensitive || setting.value === undefined
+                          ? t(setting.set ? "installStore.reviewSet" : "installStore.reviewNotSet")
+                          : typeof setting.value === "string" ? setting.value : JSON.stringify(setting.value)}
+                      </output>
+                    </FormField>
+                  )}
+                </For>
+              </div>
+            )}
+          </Show>
+          <Show when={!summary() && requiredNames().length > 0}>
             <div class="iv-fields">
               <For each={requiredNames()}>
                 {(name) => <Show when={variableFor(name)}>{(variable) => <VariableField variable={variable()} />}</Show>}
               </For>
             </div>
           </Show>
-          <Show when={optionalNames().length > 0}>
+          <Show when={!summary() && optionalNames().length > 0}>
             <div class="iv-optional-settings" data-testid="install-optional-settings">
               <h4>{t("installStore.optionalSettings")}</h4>
               <p class="iv-muted">{t("installStore.optionalSettingsHint")}</p>

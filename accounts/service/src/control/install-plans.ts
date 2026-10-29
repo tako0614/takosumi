@@ -63,6 +63,7 @@ import {
   attemptIsExpired,
   bindingMatchesRequirement,
   checkAttemptVariables,
+  committedAttemptReviewSummary,
   connectionRequirements,
   connectionsReady,
   deterministicInitialCapsuleId,
@@ -3995,19 +3996,100 @@ async function installPlanResponseFor(
   stored: StoredGitInstallPlan,
 ): Promise<GitInstallPlanResponse> {
   const invalidated = await attemptInvalidation(ctx, stored);
+  const reviewSummary = stored.mode === "attempt" &&
+      (stored.phase === "planning" || stored.phase === "reviewable") &&
+      stored.capsuleId && stored.installConfigId
+    ? await committedReviewSummary(ctx.operations, stored)
+    : undefined;
   return installPlanResponse(
     publicGitInstallPlan(stored),
     invalidated
       ? { kind: "retry", code: invalidated, restart: true }
       : await userActionFor(ctx.operations, stored),
     invalidated,
+    reviewSummary,
   );
+}
+
+async function committedReviewSummary(
+  operations: ControlPlaneOperations,
+  plan: StoredGitInstallPlan,
+): Promise<GitInstallPlanResponse["reviewSummary"]> {
+  const capsuleId = plan.capsuleId;
+  const installConfigId = plan.installConfigId;
+  if (!capsuleId || !installConfigId) return undefined;
+  // Summary enrichment is optional. Its reads must never make the canonical
+  // attempt GET unavailable or discard the independently available sections.
+  const [installConfig, baseConfig, bindingSet, listed, capsule] = await Promise.all([
+    optionalReviewRead(() => operations.capsules.getInstallConfig(installConfigId)),
+    optionalReviewRead(() => plan.installConfigBaseId
+      ? operations.capsules.getInstallConfig(plan.installConfigBaseId)
+      : Promise.resolve(undefined)),
+    optionalReviewRead(() => operations.capsules.getProviderBindingSetByCapsule(
+      capsuleId, plan.capsule.environment,
+    )),
+    optionalReviewRead(() => operations.connections.listProviderConnections(plan.workspaceId)),
+    optionalReviewRead(() => operations.capsules.getCapsule(capsuleId)),
+  ]);
+  const owner = capsule?.id === capsuleId && capsule.workspaceId === plan.workspaceId
+    ? await reviewOwnerAccountId(operations, capsule)
+    : undefined;
+  const connections = (listed ?? []).filter((connection) => !connection.ownerAccountId);
+  const known = new Set(connections.map((connection) => connection.id));
+  const selectedIds = [...new Set((bindingSet?.bindings ?? []).map((binding) => binding.connectionId))];
+  const selectedInterfaceIds = [...new Set((plan.options.interfaceLinks ?? [])
+    .flatMap((link) => link.choice.kind === "interface" ? [link.choice.interfaceId] : []))];
+  const [personal, interfaces] = await Promise.all([
+    Promise.all(selectedIds.filter((id) => !known.has(id) && owner !== undefined).map((id) =>
+      optionalReviewRead(async () => {
+        // Read committed IDs only; never enumerate the owner's personal inventory.
+        const connection = await operations.getConnection(id);
+        return connection.id === id && connection.scope !== "operator" &&
+            connection.ownerAccountId === owner
+          ? connection
+          : undefined;
+      })
+    )),
+    Promise.all(selectedInterfaceIds.map((id) => optionalReviewRead(async () => {
+      const value = await operations.interfaces?.get?.(id);
+      return value?.metadata.id === id && value.metadata.workspaceId === plan.workspaceId
+        ? value
+        : undefined;
+    }))),
+  ]);
+  if (personal.some((connection) => connection !== undefined)) {
+    const current = await optionalReviewRead(() => operations.capsules.getCapsule(capsuleId));
+    if (current?.id === capsuleId && current.workspaceId === plan.workspaceId &&
+      current.ownershipEpoch === capsule?.ownershipEpoch &&
+      await reviewOwnerAccountId(operations, current) === owner) {
+      connections.push(...personal.flatMap((connection) => connection ? [connection] : []));
+    }
+  }
+  return committedAttemptReviewSummary({
+    plan, installConfig, baseConfig, bindingSet, connections,
+    interfaces: interfaces.flatMap((value) => value ? [value] : []),
+  });
+}
+
+/** Catch only optional presentation reads, never attempt admission or authority. */
+async function optionalReviewRead<T>(read: () => Promise<T>): Promise<T | undefined> {
+  try { return await read(); } catch { return undefined; }
+}
+
+async function reviewOwnerAccountId(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<string | undefined> {
+  if (capsule.ownerAccountId) return capsule.ownerAccountId;
+  const workspace = await optionalReviewRead(() => operations.workspaces.getWorkspace(capsule.workspaceId));
+  return workspace?.id === capsule.workspaceId ? workspace.ownerUserId : undefined;
 }
 
 function installPlanResponse(
   plan: GitInstallPlan,
   userAction: GitInstallPlanResponse["userAction"],
   invalidated: GitInstallPlanInvalidation | undefined,
+  reviewSummary?: GitInstallPlanResponse["reviewSummary"],
 ): GitInstallPlanResponse {
   const self = `/api/v1/install-plans/${encodeURIComponent(plan.id)}`;
   const reconcileable = invalidated === undefined &&
@@ -4022,6 +4104,7 @@ function installPlanResponse(
           : "none",
     userAction,
     ...(invalidated ? { invalidated } : {}),
+    ...(reviewSummary ? { reviewSummary } : {}),
     links: {
       self,
       ...(reconcileable ? { reconcile: `${self}/reconcile` } : {}),

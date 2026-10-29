@@ -165,7 +165,7 @@ describe("Notifications", () => {
     // when there is more than one workspace to tell apart.
     expect(ja["notif.otherWorkspace"]).toContain("{name}");
     expect(en["notif.otherWorkspace"]).toContain("{name}");
-    expect(ja["notif.otherWorkspace"]).toContain("スペース");
+    expect(ja["notif.otherWorkspace"]).not.toContain("スペース");
     expect(notificationsSource).toContain("workspaceName(workspace)");
     expect(notificationsSource).toContain("showWorkspace={multipleWorkspaces()}");
   });
@@ -201,7 +201,7 @@ describe("Notifications", () => {
     expect(activityCopySource).toContain('t("notif.event.failedNamed"');
     // Billing usage rows resolve app ids over removed apps the same way.
     expect(serviceNamesSource).toContain(
-      "listCapsulesCached(id, { includeDestroyed: true })",
+      "listCapsulesCached(key.workspaceId, { includeDestroyed: true })",
     );
     for (const key of [
       "notif.event.planReadyNamed",

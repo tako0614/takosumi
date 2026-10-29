@@ -20,9 +20,6 @@ const navSource = read("views/account/components/shell/nav.ts");
 const sidebarSource = read("views/account/components/shell/Sidebar.tsx");
 const mobileTabsSource = read("views/account/components/shell/MobileTabs.tsx");
 const topBarSource = read("views/account/components/shell/TopBar.tsx");
-const workspaceSwitcherSource = read(
-  "views/account/components/shell/WorkspaceSwitcher.tsx",
-);
 const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
 const runtimeCapabilitiesSource = read("lib/runtime-capabilities.ts");
 const indexSource = read("index.tsx");
@@ -74,7 +71,7 @@ describe("dashboard shell navigation layout", () => {
     }
   });
 
-  test("the primary nav is the four behaviors: home / store / connections / account", () => {
+  test("the primary nav is home / store / connections / account", () => {
     const primary = navSource.slice(
       navSource.indexOf("export const PRIMARY_NAV"),
       navSource.indexOf("export const SECTION_TITLES"),
@@ -83,7 +80,6 @@ describe("dashboard shell navigation layout", () => {
     expect(hrefs).toEqual(["/", "/new", "/connections", "/account"]);
     expect(primary).toContain('labelKey: "nav.home"');
     expect(primary).toContain('labelKey: "nav.store"');
-    expect(primary).toContain('labelKey: "nav.connections"');
     expect(primary).toContain('labelKey: "nav.account"');
     // An app's page and its run details keep ホーム selected.
     expect(primary).toContain('alsoActiveOn: ["/apps", "/runs", "/run-groups"]');
@@ -100,13 +96,16 @@ describe("dashboard shell navigation layout", () => {
     expect(topBarSource).not.toContain("const SECTION_TITLES");
     expect(ja["nav.home"]).toBe("ホーム");
     expect(ja["nav.store"]).toBe("ストア");
+    const connections = read("views/workspace/ConnectionsView.tsx");
+    expect(connections).toContain('<PageHeader title={t("nav.connections")} />');
+    expect(connections).toContain('<ConnectionsTab />');
+    expect(connections).not.toContain("Navigate");
     expect(ja["nav.connections"]).toBe("接続");
     expect(ja["nav.account"]).toBe("アカウント");
-    expect(en["nav.connections"]).toBe("Connections");
     expect(en["nav.account"]).toBe("Account");
   });
 
-  test("top bar titles follow the four behaviors", () => {
+  test("top bar titles follow the primary destinations", () => {
     for (const [pattern, key] of [
       ["/^\\/$/", "nav.home"],
       ["/^\\/apps(\\/|$)/", "nav.app"],
@@ -144,12 +143,15 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
-  test("top bar keeps the bell and profile, and the compact workspace switcher", () => {
+  test("top bar keeps the bell and profile without a workspace selector", () => {
     expect(topBarSource).not.toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
     expect(topBarSource).toContain("<UserMenu />");
-    expect(topBarSource).toContain("<WorkspaceSwitcher compact />");
-    expect(shellCssSource).toContain(".topbar-mobile-workspace");
+    expect(topBarSource).toContain("WorkspaceSwitcher");
+    const switcher = read("views/account/components/shell/WorkspaceSwitcher.tsx");
+    expect(switcher).toContain("!await appOwnershipAvailable()");
+    expect(switcher).toContain("legacy() === true");
+    expect(sidebarSource).not.toContain("WorkspaceSwitcher");
     expect(topBarSource).not.toContain("Wordmark");
   });
 

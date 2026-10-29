@@ -1,5 +1,6 @@
 import {
   listProviderConnections,
+  listLegacyProviderConnectionsWithSignal,
   startConnectionOAuth,
   type ConnectionOAuthSetup,
   type ProviderConnection,
@@ -8,7 +9,7 @@ import {
 /** The install form stays mounted; credentials and draft values never enter storage. */
 export async function connectProviderWithPopup(input: {
   readonly helper: ConnectionOAuthSetup;
-  readonly workspaceId: string;
+  readonly workspaceId?: string;
   readonly displayName?: string;
   readonly scopeHints?: import("./control-api.ts").ConnectionScopeHints;
   readonly signal: AbortSignal;
@@ -57,10 +58,14 @@ export async function connectProviderWithPopup(input: {
       if (!(error instanceof DOMException)) throw error;
       // Cross-origin location access is expected during provider consent.
     }
-    const connections = await listProviderConnections(input.workspaceId);
+    const connections = started.legacyWorkspaceId
+      ? await listLegacyProviderConnectionsWithSignal(started.legacyWorkspaceId, input.signal)
+      : await listProviderConnections();
     input.signal.throwIfAborted();
     const created = connections.find((row) => row.id === completedId && !before.has(row.id) &&
-      row.workspaceId === input.workspaceId && row.scope === "workspace" &&
+      (started.legacyWorkspaceId
+        ? row.workspaceId === started.legacyWorkspaceId && row.scope === "workspace"
+        : !row.workspaceId && row.scope !== "operator") &&
       row.credentialRecipe?.id === input.helper.credentialRecipe.id &&
       row.credentialRecipe.authMode === input.helper.credentialRecipe.authMode &&
       (row.status === "verified" || (row.status === "pending" && completedStatus === "pending")));

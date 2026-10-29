@@ -152,6 +152,11 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
 };
 
 const CODE_MESSAGES: Readonly<Record<string, MessageKey>> = {
+  app_access_denied: "controlError.appAccessDenied",
+  app_owner_only: "controlError.appOwnerOnly",
+  connection_not_owned_by_app_owner: "controlError.connectionNotOwned",
+  ownership_transfer_pending: "controlError.ownershipTransferPending",
+  workspace_frozen: "controlError.retiredManagement",
   install_plan_reconcile_timeout: "error.planReconcileTimeout",
   revision_plan_reconcile_timeout: "error.planReconcileTimeout",
   // Raised by the dashboard itself with an English sentence and a 4xx

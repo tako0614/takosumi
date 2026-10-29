@@ -109,3 +109,18 @@ describe("friendlyError for a Plan blocked by retired app links", () => {
     expect(friendlyError(error, (key) => en[key]).message).toBe(en["controlError.dependencyRetired"]);
   });
 });
+
+test("ownership errors explain app authority in the selected UI language", () => {
+  const cases = [
+    ["app_access_denied", "controlError.appAccessDenied"],
+    ["app_owner_only", "controlError.appOwnerOnly"],
+    ["connection_not_owned_by_app_owner", "controlError.connectionNotOwned"],
+    ["ownership_transfer_pending", "controlError.ownershipTransferPending"],
+    ["workspace_frozen", "controlError.retiredManagement"],
+  ] as const;
+  for (const [code, key] of cases) {
+    const error = new ControlApiError(409, code, "Internal compatibility management policy");
+    expect(friendlyError(error, (name) => ja[name]).message).toBe(ja[key]);
+    expect(friendlyError(error, (name) => en[name]).message).toBe(en[key]);
+  }
+});
