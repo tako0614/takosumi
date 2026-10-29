@@ -511,10 +511,10 @@ Activity. Failed cleanup keeps the rows for retry. Only pristine unowned Sources
 | Method | Path | Description |
 | --- | --- | --- |
 | POST | `/api/v1/workspaces/{workspaceId}/install-plans` | Create or replay an idempotent Git install plan or install attempt |
-| GET | `/api/v1/workspaces/{workspaceId}/install-plans` | List the caller's open install attempts for resume (`open=1`) |
+| GET | `/api/v1/workspaces/{workspaceId}/install-plans` | List the caller's unfinished installs (`open=1`) |
 | GET | `/api/v1/install-plans/{installPlanId}` | Read an install plan without advancing it |
 | PATCH | `/api/v1/install-plans/{installPlanId}` | Answer an install attempt that is waiting for input (generation CAS) |
-| DELETE | `/api/v1/install-plans/{installPlanId}` | Discard an install attempt and the never-applied app it created |
+| DELETE | `/api/v1/install-plans/{installPlanId}` | Discard an install attempt, or an install plan before it recorded its app |
 | POST | `/api/v1/install-plans/{installPlanId}/reconcile` | Explicitly advance an install plan toward a reviewable Run |
 
 An install plan created with `mode: "attempt"` is owned end to end by the
@@ -536,9 +536,30 @@ holder is working on the attempt, then abandons the never-applied Capsule it
 created and records the terminal `discarded` phase; if the abandonment stops,
 the attempt is left `failed` (`install_attempt_discard_incomplete`) and another
 `DELETE` finishes it. It is refused once the app is applying or applied, and
-for plans that are not attempts. Its dedicated Source is retired, polling and sync admission stop,
+for a plan that is not an attempt once it recorded its app (409
+`install_plan_not_attempt`). Its dedicated Source is retired, polling and sync admission stop,
 and archives and snapshot rows are removed. The same DELETE or the daily sweep resumes
 an interrupted retirement.
+
+An install plan created without `mode` (not an attempt) also checks, right
+before it creates the Capsule, that no live app uses its name in the same
+Workspace and environment. If one does, the plan ends `failed` with
+`capsule_name_conflict` instead of retrying. When the initial Capsule creation
+is refused with `failed_precondition` (`capsule_initial_authority_conflict`),
+for example because an app with the same name committed after that check, the
+plan does not retry either: if this plan's own deterministic Capsule already
+exists (its commit acknowledgement was lost), it is adopted and the plan moves
+on; a name collision ends it with `capsule_name_conflict`; anything else ends
+it `failed` with code and reason `capsule_initial_authority_conflict`. An
+attempt still returns to its input sheet. A plan that is not an attempt can be
+discarded by the member who started it, with `DELETE` and its
+`expectedGeneration`, while it has not recorded its Capsule (`syncing_source`
+through `creating_capsule`, or `failed` there). The discard first makes sure no
+lease holder works on it, abandons a never-applied Capsule left by a lost
+acknowledgement exactly as for an attempt, and records `discarded`
+(`install_plan_discarded`). Such plans are also listed by `open=1`. They never
+expire, and a drain settles only plans that were never claimed, so this
+`DELETE` is how a stopped plan stops blocking Workspace management.
 
 Once an attempt has created its Capsule and reached `planning` or `reviewable`,
 GET and the open-attempt list include `reviewSummary`. It reconstructs the

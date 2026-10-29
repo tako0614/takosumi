@@ -344,6 +344,25 @@ export function isOpenGitInstallAttemptPhase(phase: unknown): boolean {
   return phase !== "failed" && phase !== "discarded";
 }
 
+const UNFINISHED_NON_ATTEMPT_INSTALL_PHASES: ReadonlySet<string> = new Set([
+  "syncing_source",
+  "compiling_install",
+  "analyzing_compatibility",
+  "creating_capsule",
+]);
+
+/**
+ * An install plan that is not an attempt and has not recorded its Capsule.
+ * It is listed with the open attempts so its creator can see and discard it:
+ * it never expires, and nothing else ends one that stopped making progress.
+ * The SQL listings encode the same predicate.
+ */
+function isUnfinishedNonAttemptInstall(plan: StoredGitInstallPlan): boolean {
+  return plan.mode !== "attempt" &&
+    UNFINISHED_NON_ATTEMPT_INSTALL_PHASES.has(plan.phase) &&
+    plan.capsuleId == null;
+}
+
 /** A coordinator row still preparing a Plan for one Capsule. */
 export interface PreparingGitPlanCoordinator {
   readonly id: string;
@@ -470,7 +489,9 @@ export interface GitInstallPlanStore {
   ): Promise<TransitionGitInstallPlanResult>;
   /**
    * Newest-first attempt-mode install plans that are not failed/discarded and
-   * whose reviewable Capsule was never applied, filtered before the limit.
+   * whose reviewable Capsule was never applied, together with install plans
+   * that are not attempts and have not recorded a Capsule yet (syncing the
+   * Source through creating the Capsule), filtered before the limit.
    */
   listOpenAttempts(
     input: ListOpenGitInstallAttemptsInput,
@@ -748,15 +769,16 @@ export class InMemoryGitInstallPlanStore implements GitInstallPlanStore {
       .filter((plan) =>
         plan.workspaceId === input.workspaceId &&
         (input.actorSubject === undefined || plan.actorSubject === input.actorSubject) &&
-        plan.mode === "attempt" &&
         (plan.operation ?? "install") === "install" &&
-        isOpenGitInstallAttemptPhase(plan.phase) &&
-        // A reviewable attempt stays open only while its Capsule was never
-        // applied. Without a co-located Capsule reader the caller filters.
-        (plan.phase !== "reviewable" || plan.capsuleId === undefined ||
-          this.#workspaceManagementValidator?.isNeverAppliedCapsule?.(
-            plan.capsuleId,
-          ) !== false)
+        (plan.mode === "attempt"
+          ? isOpenGitInstallAttemptPhase(plan.phase) &&
+            // A reviewable attempt stays open only while its Capsule was never
+            // applied. Without a co-located Capsule reader the caller filters.
+            (plan.phase !== "reviewable" || plan.capsuleId === undefined ||
+              this.#workspaceManagementValidator?.isNeverAppliedCapsule?.(
+                plan.capsuleId,
+              ) !== false)
+          : isUnfinishedNonAttemptInstall(plan))
       )
       .sort((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt) ||

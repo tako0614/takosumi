@@ -51,6 +51,7 @@ import {
   installAttemptId,
   legacyCapsuleLocator,
   openAttemptStatusKey,
+  openEntryIsContinuable,
   repositoryLabel,
   versionLabel,
   withInstallAttempt,
@@ -256,13 +257,15 @@ function OpenAttempts(props: { readonly principalId: string }) {
                   <span class="iv-open-attempt-status">{t(openAttemptStatusKey(entry))}</span>
                 </div>
                 <div class="iv-open-attempt-actions">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    href={installAttemptHref(entry.installPlan.id)}
-                  >
-                    {t("installStore.continue")}
-                  </Button>
+                  <Show when={openEntryIsContinuable(entry)}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      href={installAttemptHref(entry.installPlan.id)}
+                    >
+                      {t("installStore.continue")}
+                    </Button>
+                  </Show>
                   <Button
                     type="button"
                     variant="ghost"

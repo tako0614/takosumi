@@ -429,7 +429,10 @@ export async function handleInstallPlans(
   return undefined;
 }
 
-/** GET /api/v1/workspaces/:id/install-plans?open=1 — the caller's attempts. */
+/**
+ * GET /api/v1/workspaces/:id/install-plans?open=1 — the caller's open
+ * attempts, and install plans that are not attempts and have no Capsule yet.
+ */
 async function listOpenInstallAttempts(
   ctx: ControlDispatchContext,
   workspaceId: string,
@@ -676,8 +679,9 @@ function casRefusal(
 }
 
 /**
- * Discards one install attempt on behalf of its creator. Nothing is ever
- * abandoned under a lease holder:
+ * Discards one install attempt (or an install plan that has not recorded its
+ * Capsule) on behalf of its creator. Nothing is ever abandoned under a lease
+ * holder:
  *
  * 1. Read-only checks first; a refusal there writes nothing.
  * 2. Where a lease holder could be creating or planning on the Capsule, a
@@ -699,7 +703,7 @@ async function discardAttemptRecord(
   diagnostic: GitInstallPlanDiagnostic,
 ): Promise<DiscardResult> {
   if (observed.phase === "discarded") {
-    await retireAttemptSource(ctx, observed);
+    await retireDiscardedPlanSource(ctx, observed);
     return { ok: true, plan: observed };
   }
   const store = ctx.operations.gitInstallPlans;
@@ -726,7 +730,9 @@ async function discardAttemptRecord(
         generation: observed.generation + 1,
         diagnostic: boundedDiagnostic({
           code: "install_attempt_discard_incomplete",
-          message: "Discarding this install attempt did not finish; discard it again.",
+          message: observed.mode === "attempt"
+            ? "Discarding this install attempt did not finish; discard it again."
+            : "Discarding this install plan did not finish; discard it again.",
         }),
         updatedAt: reservedAt,
         completedAt: reservedAt,
@@ -744,7 +750,9 @@ async function discardAttemptRecord(
     try {
       await ctx.operations.capsules.abandonUnappliedCapsule(
         check.capsule.id,
-        "install attempt discarded before first successful apply",
+        current.mode === "attempt"
+          ? "install attempt discarded before first successful apply"
+          : "install plan discarded before first successful apply",
         check.authority,
       );
     } catch (error) {
@@ -776,23 +784,25 @@ async function discardAttemptRecord(
     at: completedAt,
   });
   if (result.status !== "updated") return casRefusal(result.status);
-  await retireAttemptSource(ctx, result.plan);
+  await retireDiscardedPlanSource(ctx, result.plan);
   return { ok: true, plan: result.plan };
 }
 
 /**
  * Retirement is best effort after terminal commit. The deterministic Source
  * id covers a crash between Source creation and plan progress persistence.
+ * A recorded legacy or reviewed-preflight Source has another id and is left
+ * to the scheduled Source retirement once nothing references it.
  */
-async function retireAttemptSource(
+async function retireDiscardedPlanSource(
   ctx: ControlDispatchContext,
   plan: StoredGitInstallPlan,
 ): Promise<void> {
-  if (plan.mode !== "attempt") return;
+  if ((plan.operation ?? "install") !== "install") return;
   try {
     await ctx.operations.retireOwnedSource(
       deterministicInstallSourceId(plan.id),
-      "install attempt discarded",
+      plan.mode === "attempt" ? "install attempt discarded" : "install plan discarded",
     );
   } catch (error) {
     console.warn("install_attempt.source_retirement_failed", {
@@ -816,15 +826,41 @@ function discardRefusal(
   );
 }
 
-/** DELETE /api/v1/install-plans/:id — the creator discards an attempt. */
+/**
+ * Phases in which an install plan that is not an attempt can still be
+ * discarded: before it recorded a Capsule, or `failed` there (including an
+ * interrupted discard). Such a plan has no other exit: it never expires, and
+ * a drain settles only never-claimed plans.
+ */
+const NON_ATTEMPT_DISCARDABLE_PHASES: ReadonlySet<string> = new Set([
+  "syncing_source",
+  "compiling_install",
+  "analyzing_compatibility",
+  "creating_capsule",
+  "failed",
+  "discarded",
+]);
+
+function nonAttemptPlanIsDiscardable(plan: StoredGitInstallPlan): boolean {
+  return (plan.operation ?? "install") === "install" &&
+    plan.capsuleId === undefined &&
+    NON_ATTEMPT_DISCARDABLE_PHASES.has(plan.phase);
+}
+
+/**
+ * DELETE /api/v1/install-plans/:id — the creator discards an attempt, or an
+ * install plan that has not recorded its Capsule yet. Both use the same
+ * lease-free CAS steps; a never-applied Capsule committed without an
+ * acknowledgement is abandoned exactly as an attempt's is.
+ */
 async function discardInstallAttempt(
   ctx: ControlDispatchContext,
   stored: StoredGitInstallPlan,
 ): Promise<Response> {
-  if (stored.mode !== "attempt") {
+  if (stored.mode !== "attempt" && !nonAttemptPlanIsDiscardable(stored)) {
     return errorJson(
       "install_plan_not_attempt",
-      "Only install attempts can be discarded through this route.",
+      "This install plan already created its app; manage the app from its page instead. Only install attempts and install plans that have not created their app can be discarded.",
       409,
       ctx.request,
     );
@@ -847,16 +883,21 @@ async function discardInstallAttempt(
     );
   }
   if (stored.phase === "discarded") {
-    await retireAttemptSource(ctx, stored);
+    await retireDiscardedPlanSource(ctx, stored);
     return await installPlanJson(ctx, stored);
   }
   if (stored.generation !== expectedGeneration) {
     return generationConflict(ctx);
   }
-  const result = await discardAttemptRecord(ctx, stored, {
-    code: "install_attempt_discarded",
-    message: "The install attempt was discarded.",
-  });
+  const result = await discardAttemptRecord(ctx, stored, stored.mode === "attempt"
+    ? {
+        code: "install_attempt_discarded",
+        message: "The install attempt was discarded.",
+      }
+    : {
+        code: "install_plan_discarded",
+        message: "The install plan was discarded before it created its app.",
+      });
   if (!result.ok) return discardRefusal(ctx, result);
   return await installPlanJson(ctx, result.plan);
 }
@@ -2214,14 +2255,11 @@ async function createCapsule(
     source,
     snapshot,
   );
-  if (plan.mode === "attempt") {
-    const name = await nameProposal(operations, plan);
-    if (name.conflict) {
-      return failedPlan(plan, {
-        code: "capsule_name_conflict",
-        message: "Another app here already uses this name; choose a different name.",
-      });
-    }
+  // Every install mode checks the live name before the create-only commit. A
+  // duplicate name is persisted state, so retrying never clears it: an attempt
+  // reopens its sheet (reopenUserFixableFailure), any other install plan ends.
+  if ((await nameProposal(operations, plan)).conflict) {
+    return failedPlan(plan, capsuleNameConflictDiagnostic());
   }
   const materializedInstallConfig = plan.preflight
     ? await materializePreflightInitialInstallConfig({
@@ -2342,18 +2380,24 @@ async function createCapsule(
     }
     throw error;
   }
-  const created = await operations.capsules.createCapsuleInitialAuthority({
-    capsuleId,
-    workspaceId: plan.workspaceId,
-    name: plan.capsule.name,
-    environment: plan.capsule.environment,
-    sourceId: source.id,
-    installingPrincipalId: plan.createdBy,
-    expectedWorkspaceManagementAuthority: plan.workspaceManagementAuthority,
-    installConfig,
-    providerBindingSetId: deterministicInitialBindingSetId(plan.id),
-    providerBindings: resolved.bindings,
-  });
+  let created: Awaited<ReturnType<typeof operations.capsules.createCapsuleInitialAuthority>>;
+  try {
+    created = await operations.capsules.createCapsuleInitialAuthority({
+      capsuleId,
+      workspaceId: plan.workspaceId,
+      name: plan.capsule.name,
+      environment: plan.capsule.environment,
+      sourceId: source.id,
+      installingPrincipalId: plan.createdBy,
+      expectedWorkspaceManagementAuthority: plan.workspaceManagementAuthority,
+      installConfig,
+      providerBindingSetId: deterministicInitialBindingSetId(plan.id),
+      providerBindings: resolved.bindings,
+    });
+  } catch (error) {
+    if (structuredErrorReason(error) !== INITIAL_AUTHORITY_CONFLICT) throw error;
+    return await settleInitialAuthorityConflict(plan, ctx, error);
+  }
   const completedPlan = {
     ...plan,
     installConfigId: installConfig.id,
@@ -2361,6 +2405,46 @@ async function createCapsule(
   };
   assertCapsuleMatches(created.capsule, completedPlan);
   return await finishInitialInterfaceLinks(completedPlan, ctx);
+}
+
+const INITIAL_AUTHORITY_CONFLICT = "capsule_initial_authority_conflict";
+
+function capsuleNameConflictDiagnostic(): GitInstallPlanDiagnostic {
+  return {
+    code: "capsule_name_conflict",
+    message: "Another app here already uses this name; choose a different name.",
+  };
+}
+
+/**
+ * The create-only commit decides a conflict by comparing persisted rows (an
+ * exact replay is `replayed`), so retrying the same plan can never clear it.
+ * Settle it terminally, in this order:
+ *
+ * 1. This plan's own deterministic Capsule exists: an earlier commit whose
+ *    acknowledgement was lost, re-materialized with different bytes. Adopt it.
+ * 2. A live app already uses the name (it committed after the pre-check).
+ * 3. Otherwise fail, naming the precondition.
+ */
+async function settleInitialAuthorityConflict(
+  plan: StoredGitInstallPlan,
+  ctx: ControlDispatchContext,
+  error: unknown,
+): Promise<StoredGitInstallPlan> {
+  const adopted = await adoptCommittedInitialCapsule(plan, ctx);
+  if (adopted) return adopted;
+  if ((await nameProposal(ctx.operations, plan)).conflict) {
+    return failedPlan(plan, capsuleNameConflictDiagnostic());
+  }
+  return failedPlan(plan, {
+    code: INITIAL_AUTHORITY_CONFLICT,
+    message:
+      "Existing app, configuration or connection records conflict with creating this app.",
+    ...(error instanceof OpenTofuControllerError
+      ? { controllerCode: error.code }
+      : {}),
+    reason: INITIAL_AUTHORITY_CONFLICT,
+  });
 }
 
 async function adoptCommittedInitialCapsule(
