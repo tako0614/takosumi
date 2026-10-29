@@ -559,6 +559,8 @@ export type CapsuleAppState = (typeof CAPSULE_APP_STATES)[number];
  * - `fix_connection`: repair the ProviderConnection named by the first problem.
  * - `fix_interface_link`: select a working provider for the Interface requirement
  *   named by the first problem.
+ * - `review_interface_link`: a problem's own action only (never the primary
+ *   action): approve or decline the link another app asks this app for.
  * - `continue_install`: resume an install that stopped before a plan.
  * - `cancel_uninstall`: cancel the scheduled uninstall (the cancel command
  *   would admit it now).
@@ -576,6 +578,7 @@ export const CAPSULE_APP_ACTIONS = [
   "retry_screen",
   "fix_connection",
   "fix_interface_link",
+  "review_interface_link",
   "continue_install",
   "cancel_uninstall",
   "uninstall_now",
@@ -594,6 +597,9 @@ export type CapsuleAppAction = (typeof CAPSULE_APP_ACTIONS)[number];
  *   (error) or its Interface is temporarily not ready (warning).
  * - `interface_link_degraded`: an active link's provider is scheduled for removal.
  * - `interface_link_unset`: a requirement has no active, approved app link.
+ * - `interface_link_approval_pending`: info only, on the provider app; another
+ *   app's link to this app's Interface waits for the caller's approval
+ *   (`review_interface_link`). Never decides the primary action.
  * - `uninstall_failed`: a teardown that reached the provider failed; the
  *   problem names the failed removal Run.
  * - `uninstall_blocked`: the scheduled uninstall stopped (in either phase) and
@@ -622,6 +628,7 @@ export const CAPSULE_APP_PROBLEM_CODES = [
   "screen_unavailable",
   "interface_link_degraded",
   "interface_link_unset",
+  "interface_link_approval_pending",
   "uninstall_scheduled",
 ] as const;
 export type CapsuleAppProblemCode = (typeof CAPSULE_APP_PROBLEM_CODES)[number];
@@ -643,7 +650,7 @@ export interface CapsuleAppScreenFailure {
 
 export interface CapsuleAppProblem {
   readonly code: CapsuleAppProblemCode;
-  readonly severity: "error" | "warning";
+  readonly severity: "error" | "warning" | "info";
   /** The Run behind the problem, when one is. */
   readonly runId?: string;
   readonly runType?: RunType;
@@ -660,6 +667,8 @@ export interface CapsuleAppProblem {
   readonly requirementKey?: string;
   readonly interfaceLinkId?: string;
   readonly providerCapsuleId?: string;
+  /** `interface_link_approval_pending`: the app that asks for the link. */
+  readonly consumerCapsuleId?: string;
 }
 
 /** Value-free identity and display metadata of the app at the other end. */
@@ -698,11 +707,37 @@ export interface CapsuleAppLink {
   readonly otherApp?: CapsuleAppLinkedApp;
   /** The caller may manage at least one end of this link. */
   readonly canManage: boolean;
+  /**
+   * `usedBy` rows waiting for this app's consent: whether the caller may
+   * approve or decline (an owner or member of this provider app, never an
+   * installed app's own token, and only while the app accepts links).
+   */
+  readonly canApprove?: boolean;
 }
 
 export interface CapsuleAppLinks {
   readonly uses: readonly CapsuleAppLink[];
   readonly usedBy: readonly CapsuleAppLink[];
+}
+
+/**
+ * One link waiting for a provider app's consent
+ * (`GET /api/v1/capsules/:id/interface-links/requests`). Value-free: names,
+ * permission names and timestamps only, never Interface inputs or outputs.
+ */
+export interface CapsuleInterfaceLinkRequest {
+  readonly linkId: string;
+  /** The link generation `approve` / `decline` expect. */
+  readonly generation: number;
+  readonly consumerApp: CapsuleAppLinkedApp;
+  readonly requirementKey: string;
+  readonly providerInterfaceId: string;
+  readonly interfaceType: string;
+  readonly interfaceVersion: string;
+  readonly requestedPermissions: readonly string[];
+  /** The requesting account's display name, when the account still exists. */
+  readonly requestedByDisplayName?: string;
+  readonly createdAt: string;
 }
 
 /**

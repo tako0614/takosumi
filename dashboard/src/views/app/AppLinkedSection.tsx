@@ -4,9 +4,10 @@ import AppFace from "../../components/AppFace.tsx";
 import { Button, Select, Spinner } from "../../components/ui/index.ts";
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { appPageHref } from "../../lib/app-links.ts";
-import { getInterfaceLinkCandidates, revokeInterfaceLink, setInterfaceLink, type InterfaceLinkCandidate } from "../../lib/control-api.ts";
+import { decideInterfaceLink, getInterfaceLinkCandidates, revokeInterfaceLink, setInterfaceLink, type InterfaceLinkCandidate } from "../../lib/control-api.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { interfacePermissionList } from "../../lib/interface-labels.ts";
 import { AppSection } from "./app-ui.tsx";
 
 const STATE_LABELS: Record<CapsuleAppLink["state"], MessageKey> = {
@@ -99,6 +100,38 @@ export default function AppLinkedSection(props: {
       setBusy(false);
     }
   };
+  // The provider's consent. This page is the provider app: a pending usedBy
+  // row is decided here by link id and the generation the page read.
+  const decide = async (row: CapsuleAppLink, decision: "approve" | "decline") => {
+    if (busy() || !row.linkId) return;
+    const permissions = interfacePermissionList(row.permissions);
+    if (!(await confirm(decision === "approve"
+      ? {
+          title: t("app.links.approveTitle"),
+          message: t("app.links.approveHint", { name: name(row), permissions }),
+          confirmText: t("app.links.approve"), cancelText: t("common.cancel"),
+        }
+      : {
+          title: t("app.links.declineTitle"),
+          message: t("app.links.declineHint", { name: name(row) }),
+          confirmText: t("app.links.decline"), cancelText: t("common.cancel"), danger: true,
+        }))) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await decideInterfaceLink(props.app.capsuleId, row.linkId, decision, row.generation);
+      await refresh();
+    } catch (cause) {
+      setError(friendlyError(cause, t).message);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const stateText = (row: CapsuleAppLink, incoming: boolean) =>
+    !incoming && row.state === "pending_approval" && row.otherApp
+      ? t("app.links.waitingFor", { name: name(row) })
+      : t(STATE_LABELS[row.state]);
   const rows = (values: readonly CapsuleAppLink[], incoming: boolean) => (
     <ul class="ap-list">
       <For each={values}>{(row, index) => (
@@ -109,13 +142,19 @@ export default function AppLinkedSection(props: {
               {(app) => <a href={appPageHref(app().capsuleId)}>{name(row)}</a>}
             </Show>
             <span class="ap-detail">{row.interfaceType} · {row.interfaceVersion}</span>
-            <Show when={row.permissions.length > 0}><span class="ap-detail">{row.permissions.join(", ")}</span></Show>
-            <span>{t(STATE_LABELS[row.state])}</span>
+            <Show when={row.permissions.length > 0}><span class="ap-detail">{t("app.links.permissions", { permissions: interfacePermissionList(row.permissions) })}</span></Show>
+            <span data-testid="app-link-state">{stateText(row, incoming)}</span>
             <Show when={row.state === "active" && row.health !== "ok"}>
               <p class="wa-error">{t(HEALTH_LABELS[row.health as Exclude<typeof row.health, "ok">])}</p>
             </Show>
           </div>
-          <Show when={row.canManage}>
+          <Show when={incoming && row.state === "pending_approval" && row.canApprove === true && row.linkId}>
+            <div class="ap-row-actions" data-testid="app-link-request-actions">
+              <Button type="button" variant="primary" aria-label={t("app.links.approveNamed", { name: accessibleName(row, true, index()), permissions: interfacePermissionList(row.permissions) })} disabled={busy()} onClick={() => void decide(row, "approve")}>{t("app.links.approve")}</Button>
+              <Button type="button" variant="ghost" aria-label={t("app.links.declineNamed", { name: accessibleName(row, true, index()) })} disabled={busy()} onClick={() => void decide(row, "decline")}>{t("app.links.decline")}</Button>
+            </div>
+          </Show>
+          <Show when={row.canManage && !(incoming && row.state === "pending_approval" && row.canApprove === true)}>
             <div class="ap-row-actions">
               <Show when={!incoming}>
                 <Button type="button" variant="secondary" aria-label={t(row.state === "active" ? "app.links.changeNamed" : "app.links.chooseNamed", { name: accessibleName(row, false, index()) })} disabled={busy() || loading()} onClick={() => void startChoosing(row)}>

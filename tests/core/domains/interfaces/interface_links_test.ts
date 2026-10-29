@@ -4,15 +4,16 @@ import type { InterfaceLink } from "takosumi-contract/interfaces";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { InterfaceService, InterfaceServiceError, createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import type { ActivityRecorder } from "../../../../core/domains/activity/mod.ts";
 
 const NOW = "2026-07-13T12:00:00.000Z";
 const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.read", "mcp.write"], delivery: { type: "oauth2" } } as const;
 
-async function fixture(options: { readonly pending?: boolean; readonly issuer?: () => Promise<{ accessToken: string; expiresAt: string }> } = {}) {
+async function fixture(options: { readonly pending?: boolean; readonly issuer?: () => Promise<{ accessToken: string; expiresAt: string }>; readonly activity?: ActivityRecorder } = {}) {
   const stores = createInMemoryInterfaceStores();
   const capsules = new Map(["consumer", "provider_a", "provider_b"].map((id) => [id, { id, workspaceId: "ws", name: id, installConfigId: "config", status: "active" } as Capsule]));
   const state: { lookupFailure?: Error; capsuleReads: string[]; requirement: typeof requirement | { key: string; interface: { type: string; version: string }; permissions: readonly string[]; delivery: { type: string } } } = { requirement, capsuleReads: [] };
-  const service = new InterfaceService({ stores, now: () => NOW, capsules: { getCapsule: async (id) => { state.capsuleReads.push(id); if (state.lookupFailure && id === "provider_a") throw state.lookupFailure; const capsule = capsules.get(id); if (!capsule) throw new OpenTofuControllerError("not_found", "Capsule not found"); return capsule; }, getInstallConfig: async () => ({ requiredInterfaces: [state.requirement] }) as unknown as InstallConfig }, oauth2ResourceAuthorizer: () => true, credentialIssuer: { issuePrincipalOAuth2Token: options.issuer ?? (async () => ({ accessToken: "runtime-token", expiresAt: "2026-07-13T12:01:00.000Z" })) }, ...(options.pending ? { linkApprovalPolicy: { evaluate: async () => undefined } } : {}) });
+  const service = new InterfaceService({ stores, now: () => NOW, capsules: { getCapsule: async (id) => { state.capsuleReads.push(id); if (state.lookupFailure && id === "provider_a") throw state.lookupFailure; const capsule = capsules.get(id); if (!capsule) throw new OpenTofuControllerError("not_found", "Capsule not found"); return capsule; }, getInstallConfig: async () => ({ requiredInterfaces: [state.requirement] }) as unknown as InstallConfig }, oauth2ResourceAuthorizer: () => true, credentialIssuer: { issuePrincipalOAuth2Token: options.issuer ?? (async () => ({ accessToken: "runtime-token", expiresAt: "2026-07-13T12:01:00.000Z" })) }, ...(options.pending ? { linkApprovalPolicy: { evaluate: async () => undefined } } : {}), ...(options.activity ? { activity: options.activity } : {}) });
   const providers = await Promise.all(["provider_a", "provider_b"].map((id) => service.create({ workspaceId: "ws", name: id, ownerRef: { kind: "Capsule", id }, spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: `https://${id}.example.test/mcp` } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } } })));
   const link = async (index = 0) => (await service.ensureCapsuleInterfaceLinks({ workspaceId: "ws", capsuleId: "consumer", requirements: [requirement], selections: [{ requirementKey: "tools", interfaceId: providers[index]!.metadata.id, selection: "explicit" }] }))[0]!;
   const ensure = (principalId = "pairwise_consumer") => service.ensureCapsuleRequiredInterfaces({ workspaceId: "ws", capsuleId: "consumer", principalId, requirements: [requirement] });
@@ -680,4 +681,138 @@ test("a re-point that would only be pending is refused and keeps the current lin
     capsuleId: "consumer", requirementKey: "tools", interfaceId: policy.providers[1]!.metadata.id, expectedGeneration: revoked.generation,
   });
   expect(fresh).toMatchObject({ state: "pending_approval", providerInterfaceId: policy.providers[1]!.metadata.id });
+});
+
+function activityLog() {
+  const events: { action: string; actorId?: string; targetId: string; metadata?: Record<string, unknown> }[] = [];
+  const recorder: ActivityRecorder = { record: async (event) => { events.push({ action: event.action, ...(event.actorId ? { actorId: event.actorId } : {}), targetId: event.targetId, ...(event.metadata ? { metadata: event.metadata as Record<string, unknown> } : {}) }); return undefined; } };
+  return { events, recorder };
+}
+
+const providerOwner = { actorAccountId: "provider_owner", roles: [], requestId: "decide" };
+
+test("the provider approves a pending link; grants follow on the next sign-in and tokens work", async () => {
+  const log = activityLog();
+  const f = await fixture({ pending: true, activity: log.recorder });
+  const pending = await f.link();
+  expect(pending.state).toBe("pending_approval");
+  await f.ensure("alice");
+  expect(await f.service.listBindings(f.providers[0]!.metadata.id)).toHaveLength(0);
+  expect((await f.service.listProviderInterfaceLinkRequests("provider_a")).map((link) => link.id)).toEqual([pending.id]);
+  expect(await f.service.listProviderInterfaceLinkRequests("provider_b")).toEqual([]);
+
+  const approved = await f.service.approveInterfaceLink({ providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: pending.generation }, providerOwner);
+  expect(approved).toMatchObject({ id: pending.id, state: "active", generation: pending.generation + 1, approvedPermissions: ["mcp.read", "mcp.write"], approval: { kind: "provider_approved", approvedBy: "provider_owner", approvedAt: NOW } });
+  expect(await f.stores.links.getCurrent({ consumerCapsuleId: "consumer", requirementKey: "tools" })).toEqual(approved);
+  expect(await f.service.listProviderInterfaceLinkRequests("provider_a")).toEqual([]);
+
+  await f.ensure("alice");
+  const [binding] = await f.service.listBindings(f.providers[0]!.metadata.id);
+  expect(binding?.metadata.materializedFrom).toMatchObject({ linkId: pending.id });
+  expect(binding?.spec.permissions).toEqual(["mcp.read", "mcp.write"]);
+  expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+
+  const decided = log.events.filter((event) => event.action.startsWith("interface_link."));
+  expect(decided).toEqual([{ action: "interface_link.approved", actorId: "provider_owner", targetId: pending.id, metadata: {
+    interfaceLinkId: pending.id, generation: approved.generation, consumerCapsuleId: "consumer", providerCapsuleId: "provider_a",
+    providerInterfaceId: f.providers[0]!.metadata.id, requirementKey: "tools", interfaceType: "mcp.server", interfaceVersion: "1",
+    requestedPermissions: ["mcp.read", "mcp.write"], approvedPermissions: ["mcp.read", "mcp.write"],
+  } }]);
+  // Value-free: no Interface input (the provider endpoint) reaches Activity.
+  expect(JSON.stringify(log.events)).not.toContain("example.test");
+});
+
+test("an approval grants exactly the requested permissions; partial approval is refused for now", async () => {
+  const f = await fixture({ pending: true });
+  const pending = await f.link();
+  const approve = (approvedPermissions?: readonly string[]) => f.service.approveInterfaceLink({ providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: pending.generation, ...(approvedPermissions ? { approvedPermissions } : {}) }, providerOwner);
+  // A narrower set would leave the consumer with a lasting reapproval warning.
+  for (const invalid of [["mcp.read"], ["mcp.admin"], [], ["mcp.read", "mcp.read"], ["mcp.read", "mcp.write", "mcp.admin"]]) {
+    await expect(approve(invalid)).rejects.toMatchObject({ code: "invalid_argument", message: expect.stringContaining("Partial approval is not supported yet") });
+  }
+  expect(await f.stores.links.get(pending.id)).toEqual(pending);
+  const approved = await approve(["mcp.write", "mcp.read"]);
+  expect(approved.approvedPermissions).toEqual(["mcp.read", "mcp.write"]);
+  expect(approved.approvedPermissions).toEqual(approved.requestedPermissions);
+  await f.ensure("alice");
+  const [binding] = await f.service.listBindings(f.providers[0]!.metadata.id);
+  expect(binding?.spec.permissions).toEqual(["mcp.read", "mcp.write"]);
+  for (const permission of ["mcp.read", "mcp.write"]) {
+    expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+  }
+});
+
+test("a decline is terminal for that request; the consumer may select again and the new request can be approved", async () => {
+  const log = activityLog();
+  const f = await fixture({ pending: true, activity: log.recorder });
+  const pending = await f.link();
+  const declined = await f.service.declineInterfaceLink({ providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: pending.generation }, providerOwner);
+  expect(declined).toMatchObject({ state: "declined", generation: pending.generation + 1, approvedPermissions: [], declined: { declinedBy: "provider_owner", declinedAt: NOW } });
+  expect(declined.approval).toBeUndefined();
+  expect(await f.stores.links.getCurrent({ consumerCapsuleId: "consumer", requirementKey: "tools" })).toBeUndefined();
+  expect(await f.service.listProviderInterfaceLinkRequests("provider_a")).toEqual([]);
+  await f.ensure("alice");
+  expect(await f.service.listBindings(f.providers[0]!.metadata.id)).toHaveLength(0);
+  await expect(f.service.approveInterfaceLink({ providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: declined.generation }, providerOwner)).rejects.toMatchObject({ code: "conflict" });
+  expect(log.events.filter((event) => event.action.startsWith("interface_link.")).map((event) => [event.action, event.metadata?.approvedPermissions])).toEqual([["interface_link.declined", undefined]]);
+
+  const again = await f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, expectedGeneration: declined.generation });
+  expect(again).toMatchObject({ state: "pending_approval", generation: declined.generation + 1 });
+  expect(again.id).not.toBe(pending.id);
+  expect((await f.service.listProviderInterfaceLinkRequests("provider_a")).map((link) => link.id)).toEqual([again.id]);
+  const approved = await f.service.approveInterfaceLink({ providerCapsuleId: "provider_a", linkId: again.id, expectedGeneration: again.generation }, providerOwner);
+  expect(approved.state).toBe("active");
+  // The re-point rule still holds once the approved link is live.
+  await expect(f.service.putCapsuleInterfaceLink({ capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id, expectedGeneration: approved.generation })).rejects.toMatchObject({ code: "interface_link_approval_required", message: expect.stringContaining("Remove the current link") });
+});
+
+test("provider decisions keep the creation fences", async () => {
+  const f = await fixture({ pending: true });
+  const pending = await f.link();
+  const input = { providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: pending.generation };
+  await expect(f.service.approveInterfaceLink({ ...input, expectedGeneration: pending.generation + 1 }, providerOwner)).rejects.toMatchObject({ code: "conflict", message: "Interface link generation changed" });
+  await expect(f.service.approveInterfaceLink({ ...input, providerCapsuleId: "provider_b" }, providerOwner)).rejects.toMatchObject({ code: "not_found" });
+  await expect(f.service.declineInterfaceLink({ ...input, linkId: "ifl_missing" }, providerOwner)).rejects.toMatchObject({ code: "not_found" });
+
+  const provider = f.capsules.get("provider_a")!;
+  for (const scheduled of [{ ...provider, status: "uninstalled" }, { ...provider, uninstall: { phase: "scheduled" } }, { ...provider, status: "destroyed" }] as Capsule[]) {
+    f.capsules.set("provider_a", scheduled);
+    await expect(f.service.approveInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition", message: "provider app is not accepting Interface links" });
+    await expect(f.service.declineInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition" });
+  }
+  f.capsules.set("provider_a", { ...provider, uninstall: { phase: "cancelled" } } as Capsule);
+  const consumer = f.capsules.get("consumer")!;
+  f.capsules.set("consumer", { ...consumer, status: "destroyed" });
+  await expect(f.service.approveInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition", message: "consumer Capsule is destroyed" });
+  // The consumer must be live too: not scheduled for uninstall, not unapplied or stopped.
+  for (const notLive of [{ ...consumer, status: "uninstalled" }, { ...consumer, uninstall: { phase: "scheduled" } }, { ...consumer, status: "pending" }, { ...consumer, status: "disabled" }] as Capsule[]) {
+    f.capsules.set("consumer", notLive);
+    await expect(f.service.approveInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition", message: "consumer app is not accepting Interface links" });
+    await expect(f.service.declineInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition" });
+  }
+  f.capsules.set("consumer", consumer);
+  expect(await f.stores.links.get(pending.id)).toEqual(pending);
+
+  // The caller's authority is re-checked through the supplied fence before
+  // the write; a refusal there leaves the link pending.
+  let checks = 0;
+  const revoked = { assertCurrent: async () => { checks += 1; if (checks > 1) throw new InterfaceServiceError("permission_denied", "Interface link management access changed"); return undefined; } };
+  await expect(f.service.approveInterfaceLink(input, providerOwner, revoked)).rejects.toMatchObject({ code: "permission_denied" });
+  expect(await f.stores.links.get(pending.id)).toEqual(pending);
+
+  // An uninstall scheduled between the first check and the write is caught.
+  const late = { assertCurrent: async () => { if (checks++ > 2) f.capsules.set("provider_a", { ...provider, status: "uninstalled" }); return undefined; } };
+  await expect(f.service.approveInterfaceLink(input, providerOwner, late)).rejects.toMatchObject({ code: "failed_precondition" });
+  expect(await f.stores.links.get(pending.id)).toEqual(pending);
+});
+
+test("concurrent provider decisions have exactly one winner", async () => {
+  const f = await fixture({ pending: true });
+  const pending = await f.link();
+  const input = { providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: pending.generation };
+  const outcomes = await Promise.allSettled([f.service.approveInterfaceLink(input, providerOwner), f.service.declineInterfaceLink(input, providerOwner)]);
+  expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+  const rejected = outcomes.find((outcome) => outcome.status === "rejected") as PromiseRejectedResult;
+  expect(rejected.reason).toMatchObject({ code: "conflict" });
+  expect((await f.stores.links.get(pending.id))?.generation).toBe(pending.generation + 1);
 });

@@ -545,6 +545,119 @@ describe("Interface links are approved only by someone who may change the provid
     });
   }, 180_000);
 
+  async function provider(h: Harness, credential: Record<string, string>, method: "GET" | "POST", path: string, body?: unknown, providerId = PROVIDER) {
+    const url = new URL(`https://app.takosumi.test/api/v1/capsules/${providerId}/interface-links/${path}`);
+    const response = await handleControlRoute({
+      request: new Request(url, { method, headers: { ...credential, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+      url, store: h.accounts, operations: h.operations,
+    });
+    const text = await response!.text();
+    const parsed = JSON.parse(text) as { error?: { code: string; message: string }; link?: { id: string; state: string; generation: number; approvedPermissions: string[]; approval?: unknown }; requests?: Record<string, unknown>[] };
+    return { status: response!.status, code: parsed.error?.code, message: parsed.error?.message, body: parsed, text };
+  }
+
+  test("only the provider app's owner or a member lists and approves a pending link", async () => {
+    const { h, interfaceId } = await linkFixture();
+    h.accounts.saveAccount({ subject: APP_OWNER, displayName: "Consumer Owner", createdAt: Date.now(), updatedAt: Date.now() });
+    h.accounts.saveAccount({ subject: PROVIDER_OWNER, createdAt: Date.now(), updatedAt: Date.now() });
+    const pending = (await put(h, h.headers.session(APP_OWNER), interfaceId, 0)).body.link!;
+    const linkId = (await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))!.id;
+    expect(pending.state).toBe("pending_approval");
+    // Managing the consumer app gives nothing on the provider app.
+    expect(await provider(h, h.headers.session(APP_OWNER), "GET", "requests")).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await provider(h, h.headers.session(APP_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation })).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await provider(h, h.headers.session(APP_MEMBER), "POST", `${linkId}/decline`, { expectedGeneration: pending.generation })).toMatchObject({ status: 403, code: "app_access_denied" });
+    // An installed app's own token never decides, whoever it acts for.
+    expect(await provider(h, h.headers.oauth(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation })).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await provider(h, h.headers.oauth(PROVIDER_OWNER), "GET", "requests")).toMatchObject({ status: 403, code: "app_access_denied" });
+
+    const listed = await provider(h, h.headers.session(PROVIDER_OWNER), "GET", "requests");
+    expect(listed.status).toBe(200);
+    expect(listed.body.requests).toEqual([{
+      linkId, generation: pending.generation, consumerApp: expect.objectContaining({ capsuleId: CAPSULE }), requirementKey: "tools",
+      providerInterfaceId: interfaceId, interfaceType: "mcp.server", interfaceVersion: "1", requestedPermissions: ["mcp.read"],
+      requestedByDisplayName: "Consumer Owner", createdAt: expect.any(String),
+    }]);
+    expect(listed.text).not.toContain("provider.example.test");
+
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation + 1 })).toMatchObject({ status: 409, code: "conflict" });
+    // Partial (or widened) approval is refused for now; the link stays pending.
+    for (const approvedPermissions of [[], ["mcp.admin"], ["mcp.read", "mcp.admin"]]) {
+      expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, approvedPermissions }))
+        .toMatchObject({ status: 400, code: "invalid_request", message: expect.stringContaining("Partial approval is not supported yet") });
+    }
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, approvedPermissions: "mcp.read" })).toMatchObject({ status: 400, code: "invalid_request" });
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, note: "x" })).toMatchObject({ status: 400, code: "invalid_request" });
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "GET", `${linkId}/approve`)).toMatchObject({ status: 405 });
+    const approved = await provider(h, h.headers.pat(PROVIDER_OWNER, [PROVIDER]), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation });
+    expect(approved.status).toBe(200);
+    expect(approved.body.link).toMatchObject({ id: linkId, state: "active", generation: pending.generation + 1, approvedPermissions: ["mcp.read"], approval: { kind: "provider_approved", approvedBy: PROVIDER_OWNER } });
+    expect((await provider(h, h.headers.session(PROVIDER_OWNER), "GET", "requests")).body.requests).toEqual([]);
+    // The consumer's people get their grants on their next sign-in.
+    await h.core.interfaces.ensureCapsuleRequiredInterfaces({ workspaceId: WORKSPACE, capsuleId: CAPSULE, principalId: "pairwise_alice", requirements: [requirement] });
+    expect((await h.core.interfaces.listBindings(interfaceId)).map((binding) => [binding.spec.subjectRef.id, binding.metadata.materializedFrom?.source === "capsule_required_interface" ? binding.metadata.materializedFrom.linkId : undefined])).toEqual([["pairwise_alice", linkId]]);
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/decline`, { expectedGeneration: approved.body.link!.generation })).toMatchObject({ status: 409, code: "conflict" });
+  }, 180_000);
+
+  test("the request list names the requester by display name only, never an email or account id", async () => {
+    const { h, interfaceId } = await linkFixture();
+    h.accounts.saveAccount({ subject: PROVIDER_OWNER, createdAt: Date.now(), updatedAt: Date.now() });
+    await put(h, h.headers.session(APP_OWNER), interfaceId, 0);
+    const requester = async (account: { displayName?: string; email?: string }) => {
+      h.accounts.saveAccount({ subject: APP_OWNER, ...account, createdAt: Date.now(), updatedAt: Date.now() });
+      const listed = await provider(h, h.headers.session(PROVIDER_OWNER), "GET", "requests");
+      expect(listed.status).toBe(200);
+      expect(listed.text).not.toContain(APP_OWNER);
+      expect(listed.text).not.toContain("owner@example.test");
+      return (listed.body.requests as { requestedByDisplayName?: string }[])[0]!.requestedByDisplayName;
+    };
+    expect(await requester({ displayName: "Consumer Owner", email: "owner@example.test" })).toBe("Consumer Owner");
+    expect(await requester({ displayName: "owner@example.test", email: "owner@example.test" })).toBeUndefined();
+    expect(await requester({ displayName: "someone@else.example", email: "owner@example.test" })).toBeUndefined();
+    expect(await requester({ displayName: APP_OWNER })).toBeUndefined();
+    expect(await requester({ email: "owner@example.test" })).toBeUndefined();
+  }, 180_000);
+
+  test("a provider member declines; the consumer may select again; a requirement named requests keeps PUT", async () => {
+    const { h, interfaceId } = await linkFixture();
+    const PROVIDER_MEMBER = "acct_provider_member";
+    h.accounts.saveAccount({ subject: PROVIDER_MEMBER, createdAt: Date.now(), updatedAt: Date.now() });
+    expect(await h.ownership.putMember({ capsuleId: PROVIDER, accountId: PROVIDER_MEMBER, status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+    const pending = (await put(h, h.headers.session(APP_OWNER), interfaceId, 0)).body.link!;
+    const linkId = (await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))!.id;
+    expect(await provider(h, h.headers.session(PROVIDER_MEMBER), "POST", `${linkId}/decline`, { expectedGeneration: pending.generation, approvedPermissions: ["mcp.read"] })).toMatchObject({ status: 400, code: "invalid_request" });
+    const declined = await provider(h, h.headers.session(PROVIDER_MEMBER), "POST", `${linkId}/decline`, { expectedGeneration: pending.generation });
+    expect(declined.status).toBe(200);
+    expect(declined.body.link).toMatchObject({ state: "declined", approvedPermissions: [] });
+    const again = await put(h, h.headers.session(APP_OWNER), interfaceId, declined.body.link!.generation);
+    expect(again).toMatchObject({ status: 200, body: { link: { state: "pending_approval" } } });
+    // `requests` is only the provider listing for GET; PUT still addresses a requirement key.
+    const url = new URL(`https://app.takosumi.test/api/v1/capsules/${CAPSULE}/interface-links/requests`);
+    const response = await handleControlRoute({
+      request: new Request(url, { method: "PUT", headers: { ...h.headers.session(APP_OWNER), "content-type": "application/json" }, body: JSON.stringify({ interfaceId, expectedGeneration: 0 }) }),
+      url, store: h.accounts, operations: h.operations,
+    });
+    expect(response!.status).toBe(404);
+    expect(((await response!.json()) as { error: { message: string } }).error.message).toBe("Capsule Interface requirement not found");
+  }, 180_000);
+
+  test("an uninstall-scheduled provider or consumer app refuses decisions and keeps the link pending", async () => {
+    const { h, interfaceId } = await linkFixture();
+    h.accounts.saveAccount({ subject: PROVIDER_OWNER, createdAt: Date.now(), updatedAt: Date.now() });
+    const pending = (await put(h, h.headers.session(APP_OWNER), interfaceId, 0)).body.link!;
+    const linkId = (await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))!.id;
+    const providerCapsule = (await h.ledger.getCapsule(PROVIDER))!;
+    await h.ledger.putCapsule({ ...providerCapsule, status: "uninstalled", updatedAt: NOW });
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation })).toMatchObject({ status: 412, code: "failed_precondition" });
+    expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))?.state).toBe("pending_approval");
+    // The same for a consumer scheduled for uninstall.
+    await h.ledger.putCapsule({ ...providerCapsule, updatedAt: NOW });
+    const consumerCapsule = (await h.ledger.getCapsule(CAPSULE))!;
+    await h.ledger.putCapsule({ ...consumerCapsule, status: "uninstalled", updatedAt: NOW });
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation })).toMatchObject({ status: 412, code: "failed_precondition", message: "consumer app is not accepting Interface links" });
+    expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))?.state).toBe("pending_approval");
+  }, 180_000);
+
   test("an app token's candidate list omits apps it cannot view", async () => {
     const { h } = await linkFixture();
     const candidates = async (credential: Record<string, string>) => {

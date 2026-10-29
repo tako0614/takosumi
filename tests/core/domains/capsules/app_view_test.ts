@@ -54,6 +54,16 @@ const LINK: CapsuleAppLink = {
   candidateCount: 1,
 };
 
+/** An incoming link (`usedBy`) the caller may approve on this provider app. */
+const REQUEST: CapsuleAppLink = {
+  ...LINK,
+  linkId: "ifl_request",
+  consumerCapsuleId: "cap_requester",
+  providerCapsuleId: "cap_app",
+  state: "pending_approval",
+  canApprove: true,
+};
+
 /** A record exactly as the schedule command writes it. */
 const SCHEDULED: CapsuleUninstall = scheduledUninstallRecord({
   id: "uninstall_1",
@@ -261,6 +271,13 @@ const ROWS: readonly Row[] = [
     state: "installed",
     action: "open",
     problems: ["interface_link_unset"],
+  },
+  {
+    name: "a link request waiting for this provider's approval informs without replacing Open",
+    facts: facts({ interfaceLinkRequests: [REQUEST], screenCount: 1 }),
+    state: "installed",
+    action: "open",
+    problems: ["interface_link_approval_pending"],
   },
   {
     name: "an Interface repair in progress does not offer a racing action",
@@ -517,7 +534,11 @@ for (const row of ROWS) {
 
 test("every state and every primary action is reachable from the table", () => {
   expect(new Set(ROWS.map((row) => row.state))).toEqual(new Set(CAPSULE_APP_STATES));
-  expect(new Set(ROWS.map((row) => row.action))).toEqual(new Set(CAPSULE_APP_ACTIONS));
+  // `review_interface_link` is a problem card's own action only: an info
+  // problem never decides the primary action.
+  expect(new Set(ROWS.map((row) => row.action))).toEqual(
+    new Set(CAPSULE_APP_ACTIONS.filter((action) => action !== "review_interface_link")),
+  );
   expect(new Set(ROWS.flatMap((row) => row.problems))).toEqual(
     new Set(CAPSULE_APP_PROBLEM_CODES),
   );
@@ -545,6 +566,27 @@ test("link problems identify the requirement to repair and preserve approval war
     ["interface_link_unset", "warning"],
     ["interface_link_unset", "warning"],
   ]);
+});
+
+test("a link request stays below run, install and link problems and is offered only when approvable", () => {
+  const failed = deriveCapsuleAppStatus(facts({
+    latestRun: run({ status: "failed" }),
+    interfaceLinks: [{ ...LINK, state: "unset", generation: 0 }],
+    interfaceLinkRequests: [REQUEST, { ...REQUEST, linkId: "ifl_request_two", consumerCapsuleId: "cap_requester_two" }],
+  }));
+  expect(failed.primaryAction).toBe("retry");
+  expect(failed.problems.map((problem) => problem.code)).toEqual([
+    "run_failed", "interface_link_unset", "interface_link_approval_pending", "interface_link_approval_pending",
+  ]);
+  expect(failed.problems.slice(2)).toEqual([
+    { code: "interface_link_approval_pending", severity: "info", requirementKey: "data", interfaceLinkId: "ifl_request", consumerCapsuleId: "cap_requester" },
+    { code: "interface_link_approval_pending", severity: "info", requirementKey: "data", interfaceLinkId: "ifl_request_two", consumerCapsuleId: "cap_requester_two" },
+  ]);
+  const stalled = deriveCapsuleAppStatus(facts({ capsule: UNAPPLIED, interfaceLinkRequests: [REQUEST], now: Date.parse(UNAPPLIED.updatedAt) + 24 * 60 * 60 * 1000 }));
+  expect(stalled.problems.map((problem) => problem.code)).toEqual(["install_incomplete", "interface_link_approval_pending"]);
+  expect(stalled.primaryAction).toBe("continue_install");
+  const notApprovable = deriveCapsuleAppStatus(facts({ interfaceLinkRequests: [{ ...REQUEST, canApprove: false }, { ...REQUEST, state: "active" }] }));
+  expect(notApprovable.problems).toEqual([]);
 });
 
 test("a failed run takes priority over link repair, while an unapplied plan keeps review primary", () => {

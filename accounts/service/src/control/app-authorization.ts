@@ -322,6 +322,28 @@ export async function mayApproveInterfaceProvider(
 }
 
 /**
+ * Whether this credential may approve or decline Interface links waiting for
+ * `providerCapsuleId`. Approval hands the provider app's permissions to the
+ * consumer app's people, so it is a person's decision: an installed app's own
+ * OAuth token never decides, on any app (its own included). The one exception
+ * is an operator-designated delegate token (Takos), and only for ANOTHER app:
+ * the caller still needs `change_interface_link` on the provider app under its
+ * user's role there (`requireAppAccess` applies the token's own limits).
+ */
+export async function mayDecideInterfaceLinkRequests(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly session: AppAccessRequest["session"];
+  readonly providerCapsuleId: string;
+  readonly assertActive?: () => void;
+}): Promise<boolean> {
+  if (input.session.credential !== "oauth-access-token") return true;
+  if (!isInstalledAppToken(input.session) || input.session.appIds.includes(input.providerCapsuleId)) return false;
+  const delegates = await installedAppTokenDelegates(input.operations, input.session);
+  input.assertActive?.();
+  return delegates;
+}
+
+/**
  * Resources that belong to apps decide per app: every app in `capsuleIds` must
  * allow `action` under its own rule (the per-app decision when it has an
  * ownership row, the legacy Workspace decision when it has none). A resource

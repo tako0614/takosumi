@@ -2247,6 +2247,20 @@ export function revokeInterfaceLink(capsuleId: string, requirementKey: string, e
 }
 
 /**
+ * The provider app's consent to a pending link (`approve`) or its refusal
+ * (`decline`). Addressed to the PROVIDER app by link id, guarded by the
+ * link generation the page read.
+ */
+export function decideInterfaceLink(providerCapsuleId: string, linkId: string, decision: "approve" | "decline", expectedGeneration: number): Promise<{
+  readonly link: import("takosumi-contract").InterfaceLink;
+}> {
+  return controlFetch(
+    `${BASE}/capsules/${encodeURIComponent(providerCapsuleId)}/interface-links/${encodeURIComponent(linkId)}/${decision}`,
+    { method: "POST", body: { expectedGeneration } },
+  );
+}
+
+/**
  * Advances an install attempt bound to a never-applied app through its own
  * reconciliation until it asks for a review (`continue_install`), so the app
  * page never plans the Capsule beside the attempt. Resolves to the attempt's
