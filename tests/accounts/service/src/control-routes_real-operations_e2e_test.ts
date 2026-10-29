@@ -9,6 +9,7 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import { D1AppOwnershipStore, type AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { createConnectionOAuthHelpers } from "../../../../core/api/connection_oauth_helpers.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
@@ -429,6 +430,7 @@ async function createConnectionItemFixture(suffix: string) {
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
   });
@@ -695,6 +697,7 @@ test("account public generic-env registration retains the original Workspace aut
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
   });
@@ -853,6 +856,7 @@ test("account OAuth registration retains the original Workspace authority across
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     connectionOAuthHelpers: oauthHelpers,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
@@ -964,6 +968,7 @@ test(pauseBeforeVerification
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     connectionOAuthHelpers: oauthHelpers,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
@@ -5322,6 +5327,7 @@ test("account session control routes execute plan and apply through the real Ope
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(controlDatabase, deployStore),
     opentofuRunner: runner,
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     opentofuConnectionVault: fakeProviderVault() as never,
@@ -5917,6 +5923,7 @@ type ReAdoptionRouteFixtureOptions = {
   readonly currentInstallConfig?: Partial<InstallConfig>;
   readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
   readonly deployStore?: OpenTofuControlStore;
+  readonly appOwnershipStore?: AppOwnershipStore;
 };
 
 type ReAdoptionRouteFixture = Awaited<
@@ -6060,6 +6067,7 @@ output "launch_url" { value = var.public_url }
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     operatorInstallConfigs: options.genericDefault ? [] : [baseInstallConfig],
+    ...(options.appOwnershipStore ? { appOwnershipStore: options.appOwnershipStore } : {}),
   });
   const snapshotId = `snap_re_adoption_${suffix}`;
   const workspaceId = `ws_re_adoption_${suffix}`;
@@ -6145,7 +6153,11 @@ async function readReAdoptionGuard(
 
 async function configurationPlanRouteFixture(
   suffix: string,
-  options: { readonly deployStore?: OpenTofuControlStore; readonly owned?: boolean } = {},
+  options: {
+    readonly deployStore?: OpenTofuControlStore;
+    readonly appOwnershipStore?: AppOwnershipStore;
+    readonly owned?: boolean;
+  } = {},
 ) {
   const genericInputs: readonly RepositoryInstallUxInput[] = [
     {
@@ -6160,6 +6172,7 @@ async function configurationPlanRouteFixture(
     genericDefault: true,
     repositoryInputs: genericInputs,
     ...(options.deployStore ? { deployStore: options.deployStore } : {}),
+    ...(options.appOwnershipStore ? { appOwnershipStore: options.appOwnershipStore } : {}),
     currentInstallConfig: {
       modulePath: "deploy/opentofu/cloudflare",
       internal: {
@@ -6222,7 +6235,7 @@ async function configurationPlanRouteFixture(
 
 async function d1ReAdoptionRouteFixture(
   suffix: string,
-  options: Omit<ReAdoptionRouteFixtureOptions, "deployStore"> = {},
+  options: Omit<ReAdoptionRouteFixtureOptions, "deployStore" | "appOwnershipStore"> = {},
 ): Promise<{
   readonly database: SqliteFakeD1;
   readonly fixture: ReAdoptionRouteFixture;
@@ -6232,6 +6245,7 @@ async function d1ReAdoptionRouteFixture(
   const fixture = await reAdoptionRouteFixture(suffix, {
     ...options,
     deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
   });
   return { database, fixture };
 }
@@ -6242,7 +6256,10 @@ async function d1ConfigurationPlanRouteFixture(suffix: string): Promise<{
 }> {
   const database = new SqliteFakeD1();
   const deployStore = createCloudflareD1OpenTofuControlStore(database);
-  const fixture = await configurationPlanRouteFixture(suffix, { deployStore });
+  const fixture = await configurationPlanRouteFixture(suffix, {
+    deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
+  });
   return { database, fixture };
 }
 
