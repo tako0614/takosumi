@@ -40,25 +40,29 @@ const scopes = (sourceId: string): readonly Omit<ObservedTable, "rows">[] => [
   { table: "source_snapshots", where: "source_id = ?", args: [sourceId] },
   { table: "runs", where: "(type in ('source_sync', 'compatibility_check') and source_id = ?) or (type in ('plan', 'destroy_plan', 'drift_check') and installation_id in (select id from capsules where source_id = ?))", args: [sourceId, sourceId] },
   { table: "capsule_compatibility_reports", where: "source_id = ? or installation_id in (select id from capsules where source_id = ?)", args: [sourceId, sourceId] },
-  { table: "git_install_plans", where: "json_extract(record_json, '$.sourceId') = ? or json_extract(record_json, '$.preflight.sourceId') = ? or json_extract(record_json, '$.capsuleId') in (select id from capsules where source_id = ?)", args: [sourceId, sourceId, sourceId] },
+  { table: "git_install_plans", where: "json_extract(record_json, '$.sourceId') = ? or json_extract(record_json, '$.preflight.sourceId') = ? or json_extract(record_json, '$.capsuleId') in (select id from capsules where source_id = ?) or id in (select json_extract(record_json, '$.createdByInstallPlanId') from sources where id = ?)", args: [sourceId, sourceId, sourceId, sourceId] },
   { table: "install_configs", where: `
     id in (select install_config_id from capsules where source_id = ?)
     or id in (select json_extract(g.record_json, '$.installConfigId') from git_install_plans g
       where json_extract(g.record_json, '$.sourceId') = ?
         or json_extract(g.record_json, '$.preflight.sourceId') = ?
-        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?)
+        or g.id in (select json_extract(record_json, '$.createdByInstallPlanId') from sources where id = ?))
     or id in (select json_extract(g.record_json, '$.preflight.installConfigId') from git_install_plans g
       where json_extract(g.record_json, '$.sourceId') = ?
         or json_extract(g.record_json, '$.preflight.sourceId') = ?
-        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?)
+        or g.id in (select json_extract(record_json, '$.createdByInstallPlanId') from sources where id = ?))
     or id in (select json_extract(g.record_json, '$.installConfigBaseId') from git_install_plans g
       where json_extract(g.record_json, '$.sourceId') = ?
         or json_extract(g.record_json, '$.preflight.sourceId') = ?
-        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?)
+        or g.id in (select json_extract(record_json, '$.createdByInstallPlanId') from sources where id = ?))
     or id in (select json_extract(g.record_json, '$.revision.base.installConfigId') from git_install_plans g
       where json_extract(g.record_json, '$.sourceId') = ?
         or json_extract(g.record_json, '$.preflight.sourceId') = ?
-        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?))
+        or json_extract(g.record_json, '$.capsuleId') in (select id from capsules where source_id = ?)
+        or g.id in (select json_extract(record_json, '$.createdByInstallPlanId') from sources where id = ?))
     or json_extract(record_json, '$.internal.sourceSnapshotId') in
       (select id from source_snapshots where source_id = ?)
     or json_extract(record_json, '$.internal.genericOpenTofuSourceSnapshotId') in
@@ -67,7 +71,7 @@ const scopes = (sourceId: string): readonly Omit<ObservedTable, "rows">[] => [
       (select id from source_snapshots where source_id = ?)
     or json_extract(record_json, '$.internal.reAdoption.sourceSnapshotId') in
       (select id from source_snapshots where source_id = ?)`,
-    args: Array(17).fill(sourceId) },
+    args: Array(21).fill(sourceId) },
 ];
 
 async function rows(db: D1Database, sql: string, args: readonly unknown[] = []): Promise<PhysicalRow[]> {

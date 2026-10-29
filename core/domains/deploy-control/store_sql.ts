@@ -11985,7 +11985,8 @@ async function pgReadSourceOwnershipGroup(
          or record_json -> 'preflight' ->> 'sourceId' = $1
          or record_json ->> 'capsuleId' in
            (select id from takosumi_capsules where source_id = $1)
-      order by id`, [sourceId],
+         or id = $2
+      order by id`, [sourceId, source.createdByInstallPlanId ?? null],
   );
   const gitPlans = gitPlanRows.rows.map((row) => {
     const plan = parseJson(row.recordJson) as StoredGitInstallPlan;

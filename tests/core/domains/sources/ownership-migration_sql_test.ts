@@ -1,4 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../../core/domains/install-plans/source-reservation.ts";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { InstallConfig } from "takosumi-contract/install-configs";
@@ -7,7 +8,7 @@ import type { StoredGitInstallPlan } from "../../../../core/domains/install-plan
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { StoredSource } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
-import { migrateSourceOwnership, prepareSourceOwnershipMigration } from "../../../../core/domains/sources/ownership-migration.ts";
+import { inventorySourceOwnershipGroup, migrateSourceOwnership, prepareSourceOwnershipMigration } from "../../../../core/domains/sources/ownership-migration.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 
 setDefaultTimeout(30_000);
@@ -391,4 +392,29 @@ test("Postgres migration rejects grouped source-scoped Runs before copying", asy
       check.createdAt, JSON.stringify(check)],
   );
   await expect(store.readGroup(source.id)).rejects.toThrow("grouped_source_run:check_grouped");
+});
+
+test("Postgres inventory hydrates a lost-ack creator and blocks active or recent terminal plans", async () => {
+  const { store, source, client } = await fixture([]);
+  const now = "2026-10-30T00:00:00.000Z";
+  const planId = "git_lost_ack_pg";
+  const reservedId = deterministicInstallSourceId(planId);
+  await store.putSource({ ...source, id: reservedId,
+    ownerCapsuleId: deterministicInitialCapsuleId(planId), createdByInstallPlanId: planId });
+  const creator = { id: planId, workspaceId: source.workspaceId, actorSubject: "user_one",
+    idempotencyKeyHash: "lost_ack", requestDigest: "lost_ack", phase: "awaiting_input", mode: "attempt",
+    generation: 0, expiresAt: "2026-10-31T00:00:00.000Z", createdAt: NOW, updatedAt: NOW } as StoredGitInstallPlan;
+  await client.query(`insert into takosumi_git_install_plans
+    (id, workspace_id, actor_subject, idempotency_key_hash, request_digest, phase, generation, record_json, created_at, updated_at)
+    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)`,
+    [planId, source.workspaceId, creator.actorSubject, creator.idempotencyKeyHash, creator.requestDigest,
+      creator.phase, creator.generation, JSON.stringify(creator), NOW, NOW]);
+  let group = (await store.readGroup(reservedId))!;
+  expect(group.gitPlans.map((plan) => plan.id)).toEqual([planId]);
+  expect(inventorySourceOwnershipGroup(group, now).action).toBe("blocked");
+  const recent = { ...creator, phase: "discarded", completedAt: now };
+  await client.query("update takosumi_git_install_plans set phase = $1, record_json = $2::jsonb where id = $3",
+    [recent.phase, JSON.stringify(recent), planId]);
+  group = (await store.readGroup(reservedId))!;
+  expect(inventorySourceOwnershipGroup(group, now)).toMatchObject({ action: "blocked", reason: "source_creator_plan_still_active" });
 });

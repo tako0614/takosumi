@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../core/domains/install-plans/source-reservation.ts";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
@@ -465,4 +466,38 @@ test("operator dry-run response does not expose private InstallConfig authority"
   expect(body).not.toContain("workspaceManagementAuthority");
   expect(body).not.toContain("private_authority_do_not_expose");
   expect(JSON.parse(body).results[0].status).toBe("dry_run");
+});
+
+test("D1 inventory hydrates and fences a lost-ack creator by its immutable Source marker", async () => {
+  const db = new InterleavedD1();
+  const store = await fixture(db, []);
+  const now = "2026-10-28T00:00:00.000Z";
+  const planId = "git_lost_ack_creator";
+  const reservedId = deterministicInstallSourceId(planId);
+  await store.putSource({ ...(await store.getSource(sourceId))!, id: reservedId,
+    ownerCapsuleId: deterministicInitialCapsuleId(planId), createdByInstallPlanId: planId });
+  const creator: StoredGitInstallPlan = { id: planId, workspaceId, createdBy: "user_one",
+    actorSubject: "user_one", idempotencyKeyHash: "lost_ack", requestDigest: "lost_ack",
+    source: { name: "repo", url, ref: "main", path: "." }, capsule: { name: "new", environment: "production" },
+    options: {}, mode: "attempt", phase: "awaiting_input", generation: 0,
+    expiresAt: "2026-10-29T00:00:00.000Z", createdAt: t0, updatedAt: t0 };
+  const insert = (plan: StoredGitInstallPlan) => db.prepare(`insert into git_install_plans
+    (id, workspace_id, actor_subject, idempotency_key_hash, request_digest, phase, generation, record_json, created_at, updated_at)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(plan.id, plan.workspaceId, plan.actorSubject,
+      plan.idempotencyKeyHash, plan.requestDigest, plan.phase, plan.generation, JSON.stringify(plan), plan.createdAt, plan.updatedAt).run();
+  await insert(creator);
+  let group = (await store.readGroup(reservedId))!;
+  expect(group.gitPlans.map((plan) => plan.id)).toEqual([planId]);
+  expect(inventorySourceOwnershipGroup(group, now).action).toBe("blocked");
+  const recent = { ...creator, phase: "discarded" as const, completedAt: now };
+  await db.prepare("update git_install_plans set phase = ?, record_json = ? where id = ?")
+    .bind(recent.phase, JSON.stringify(recent), planId).run();
+  group = (await store.readGroup(reservedId))!;
+  expect(inventorySourceOwnershipGroup(group, now)).toMatchObject({ action: "blocked", reason: "source_creator_plan_still_active" });
+  await db.prepare("delete from git_install_plans where id = ?").bind(planId).run();
+  group = (await store.readGroup(reservedId))!;
+  const mutation = (await prepareSourceOwnershipMigration(group, new ObjectKeyArtifactReferenceAllocator(), now))!;
+  db.beforeNextBatch = async () => { await insert(creator); };
+  expect(await store.commitGroup(mutation)).toBe("conflict");
+  expect((await store.getSource(reservedId))?.status).toBe("active");
 });
