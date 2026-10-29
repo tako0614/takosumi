@@ -33,7 +33,9 @@ it.
 - #660: owner-only personal Workspace bootstrap remains available while
   organization creation and member mutations stay frozen.
 - #661: shadow role comparison follows the same owner/admin mapping as the
-  resolver, with diagnostic work outside the authorization critical path.
+  resolver. Shadow diagnostics sample 1% of Capsule-scoped checks; unsampled
+  requests perform no shadow ownership/member reads. The legacy authorization
+  result remains authoritative during this phase.
 
 ## Validation and handoff
 
