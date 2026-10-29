@@ -68,6 +68,31 @@ type BillingRow = {
   created_at: string;
   updated_at: string;
 };
+type AccessListRow = {
+  capsule_id: string;
+  role: "owner" | "member";
+  owner_account_id: string;
+  ownership_epoch: number;
+};
+
+function appListLimit(page: { limit?: number }): number {
+  const requested = page.limit ?? 50;
+  if (!Number.isFinite(requested)) throw new TypeError("App page limit must be finite");
+  return Math.max(1, Math.min(100, Math.floor(requested)));
+}
+
+function accessListPage(rows: readonly AccessListRow[], limit: number):
+  { apps: readonly AppAccess[]; nextCursor?: string } {
+  const apps = rows.slice(0, limit).map((row) => ({
+    capsuleId: row.capsule_id,
+    role: row.role,
+    ownerAccountId: row.owner_account_id,
+    ownershipEpoch: row.ownership_epoch,
+  }));
+  return rows.length > limit && apps.length
+    ? { apps, nextCursor: apps[apps.length - 1]!.capsuleId }
+    : { apps };
+}
 
 function ownerRow(capsuleId: string, row: OwnershipRow | undefined): CapsuleOwnership | undefined {
   if (!row?.owner_account_id) return undefined;
@@ -157,7 +182,7 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
     // Pre-v77 rows only. The Workspace's ownerUserId is the sole owner truth;
     // ordinary Workspace member/viewer roles never gain app management access.
     const workspace = await this.control.getWorkspace(capsule.workspaceId);
-    if (!workspace) return undefined;
+    if (!workspace?.ownerUserId) return undefined;
     if (workspace.ownerUserId === accountId) {
       return { capsuleId, role: "owner", ownerAccountId: accountId, ownershipEpoch: 0 };
     }
@@ -170,9 +195,7 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
 
   async listAccessibleApps(accountId: string, page: { cursor?: string; limit?: number } = {}):
     Promise<{ apps: readonly AppAccess[]; nextCursor?: string }> {
-    const requestedLimit = page.limit ?? 50;
-    if (!Number.isFinite(requestedLimit)) throw new TypeError("App page limit must be finite");
-    const limit = Math.max(1, Math.min(100, Math.floor(requestedLimit)));
+    const limit = appListLimit(page);
     const capsules = [...await this.control.listCapsules()].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const apps: AppAccess[] = [];
     let nextCursor: string | undefined;
@@ -293,6 +316,38 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
     return rows.rows[0]?.exists === true;
   }
   async #table(table: string, client: SqlClient = this.client): Promise<boolean> { return this.#column(table, table === "takosumi_capsule_members" ? "capsule_id" : "account_id", client); }
+  override async listAccessibleApps(accountId: string, page: { cursor?: string; limit?: number } = {}):
+    Promise<{ apps: readonly AppAccess[]; nextCursor?: string }> {
+    const limit = appListLimit(page);
+    if (!accountId) return { apps: [] };
+    if (!await this.#column("takosumi_capsules", "owner_account_id") ||
+      !await this.#table("takosumi_capsule_members")) return super.listAccessibleApps(accountId, page);
+    const rows = await this.client.query<AccessListRow>(`
+      select c.id as capsule_id,
+        case when c.owner_account_id=$1 or (c.owner_account_id is null and w.space_json->>'ownerUserId'=$1)
+          then 'owner' else 'member' end as role,
+        coalesce(c.owner_account_id, w.space_json->>'ownerUserId') as owner_account_id,
+        case when c.owner_account_id is null then 0 else c.ownership_epoch end as ownership_epoch
+      from takosumi_capsules c
+      left join takosumi_workspaces w on w.id=c.space_id
+      where c.id collate "C" > $2
+        and (c.owner_account_id=$1
+          or (c.owner_account_id is not null and exists (
+            select 1 from takosumi_capsule_members m
+            where m.capsule_id=c.id and m.account_id=$1 and m.status='active'))
+          or (c.owner_account_id is null and w.id is not null
+            and coalesce(w.space_json->>'ownerUserId', '')<>'' and (
+            w.space_json->>'ownerUserId'=$1
+            or exists (select 1 from takosumi_workspace_members wm
+              where wm.workspace_id=c.space_id and wm.account_id=$1 and wm.status='active'
+                and wm.member_json->>'workspaceId'=wm.workspace_id
+                and wm.member_json->>'accountId'=wm.account_id
+                and wm.member_json->>'status'='active'
+                and jsonb_typeof(wm.member_json->'roles')='array'
+                and (wm.member_json->'roles' ? 'owner' or wm.member_json->'roles' ? 'admin')))))
+      order by c.id collate "C" asc limit $3`, [accountId, page.cursor ?? "", limit + 1]);
+    return accessListPage(rows.rows, limit);
+  }
   async getOwnership(id: string): Promise<CapsuleOwnership | undefined> {
     if (!await this.#column("takosumi_capsules", "owner_account_id")) return undefined;
     const rows = await this.client.query<OwnershipRow>(
@@ -379,6 +434,41 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
     // The table names are static private constants. A missing pre-v77 table has no columns.
     const rows = await this.db.prepare(`pragma table_info(${table})`).all<{ name: string }>();
     return (rows.results ?? []).some((row) => row.name === column);
+  }
+  override async listAccessibleApps(accountId: string, page: { cursor?: string; limit?: number } = {}):
+    Promise<{ apps: readonly AppAccess[]; nextCursor?: string }> {
+    const limit = appListLimit(page);
+    if (!accountId) return { apps: [] };
+    if (!await this.#column("capsules", "owner_account_id") ||
+      !await this.#column("capsule_members", "capsule_id")) return super.listAccessibleApps(accountId, page);
+    const result = await this.db.prepare(`
+      with input(account_id, cursor_id) as (values (?, ?))
+      select c.id as capsule_id,
+        case when c.owner_account_id=i.account_id or
+          (c.owner_account_id is null and json_extract(w.record_json, '$.ownerUserId')=i.account_id)
+          then 'owner' else 'member' end as role,
+        coalesce(c.owner_account_id, json_extract(w.record_json, '$.ownerUserId')) as owner_account_id,
+        case when c.owner_account_id is null then 0 else c.ownership_epoch end as ownership_epoch
+      from capsules c cross join input i
+      left join workspaces w on w.id=c.space_id
+      where c.id collate binary > i.cursor_id collate binary
+        and (c.owner_account_id=i.account_id
+          or (c.owner_account_id is not null and exists (
+            select 1 from capsule_members m
+            where m.capsule_id=c.id and m.account_id=i.account_id and m.status='active'))
+          or (c.owner_account_id is null and w.id is not null
+            and coalesce(json_extract(w.record_json, '$.ownerUserId'), '')<>'' and (
+            json_extract(w.record_json, '$.ownerUserId')=i.account_id
+            or exists (select 1 from workspace_members wm
+              where wm.workspace_id=c.space_id and wm.account_id=i.account_id and wm.status='active'
+                and json_extract(wm.record_json, '$.workspaceId')=wm.workspace_id
+                and json_extract(wm.record_json, '$.accountId')=wm.account_id
+                and json_extract(wm.record_json, '$.status')='active'
+                and json_type(wm.record_json, '$.roles')='array'
+                and exists (select 1 from json_each(wm.record_json, '$.roles')
+                  where value in ('owner', 'admin'))))))
+      order by c.id collate binary asc limit ?`).bind(accountId, page.cursor ?? "", limit + 1).all<AccessListRow>();
+    return accessListPage(result.results ?? [], limit);
   }
   async getOwnership(id: string): Promise<CapsuleOwnership | undefined> {
     if (!await this.#column("capsules", "owner_account_id")) return undefined;
