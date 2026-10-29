@@ -648,60 +648,67 @@ export class SourcesService {
         `Source ${sourceId} shares an archive with another live Source`,
         { reason: "source_archive_shared_by_another_source" });
     }
-    // Each invocation handles one bounded page. The cursor advances only after
-    // idempotent physical deletion, so a crash resumes from retained rows.
-    let page = await this.#store.listSourceRetirementArchiveRefsPage(
-      sourceId, source.retirementArchiveCursor, 32, scope,
-    );
-    if (source.retirementSnapshotCount === undefined ||
-      source.retirementSourceSyncRunCount === undefined) {
-      source = await this.#writeSourceConfiguration({
-        source: { ...source, retirementSnapshotCount: page.snapshotCount,
-          retirementSourceSyncRunCount: page.sourceSyncRunCount,
-          updatedAt: this.#now().toISOString() },
-        expectedSource: source, expectedWorkspaceManagementAuthority: authority,
-      });
-      page = await this.#store.listSourceRetirementArchiveRefsPage(
+    // Drain bounded pages for at most 1,024 archives or five seconds between
+    // pages. Persist only after idempotent deletion, preserving crash retries.
+    const startedAt = performance.now();
+    let pages = 0;
+    while (true) {
+      let page = await this.#store.listSourceRetirementArchiveRefsPage(
         sourceId, source.retirementArchiveCursor, 32, scope,
       );
-    }
-    if (page.snapshotCount !== source.retirementSnapshotCount ||
-      page.sourceSyncRunCount !== source.retirementSourceSyncRunCount) {
-      // An operator migration can normalize a historical foreign ref. Restart
-      // from the first key; already deleted objects are safe to delete again.
-      source = await this.#writeSourceConfiguration({
-        source: { ...source, retirementArchiveCursor: undefined,
-          retirementSnapshotCount: page.snapshotCount,
-          retirementSourceSyncRunCount: page.sourceSyncRunCount,
-          updatedAt: this.#now().toISOString() },
-        expectedSource: source, expectedWorkspaceManagementAuthority: authority,
-      });
-      page = await this.#store.listSourceRetirementArchiveRefsPage(sourceId, undefined, 32, scope);
-    }
-    const archiveRefs = page.archiveRefs;
-    // Only this Source's own prefix is in its physical deletion custody.
-    if (archiveRefs.some((ref) => !ref.startsWith(scope))) {
-      throw new OpenTofuControllerError("failed_precondition",
-        `Source ${sourceId} has an archive outside its custody scope`,
-        { reason: "source_archive_outside_custody_scope" });
-    }
-    if (archiveRefs.length > 0) {
-      if (!this.#deleteRetiredSourceArchives) {
-        throw new OpenTofuControllerError("failed_precondition",
-          "Source archive custody is unavailable",
-          { reason: "source_archive_custody_unavailable" });
+      if (source.retirementSnapshotCount === undefined ||
+        source.retirementSourceSyncRunCount === undefined) {
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, retirementSnapshotCount: page.snapshotCount,
+            retirementSourceSyncRunCount: page.sourceSyncRunCount,
+            updatedAt: this.#now().toISOString() },
+          expectedSource: source, expectedWorkspaceManagementAuthority: authority,
+        });
+        page = await this.#store.listSourceRetirementArchiveRefsPage(
+          sourceId, source.retirementArchiveCursor, 32, scope,
+        );
       }
-      await this.#deleteRetiredSourceArchives({
-        workspaceId: source.workspaceId, sourceId, archiveRefs,
-      });
-    }
-    if (page.hasMore) {
-      source = await this.#writeSourceConfiguration({
-        source: { ...source, retirementArchiveCursor: archiveRefs.at(-1),
-          updatedAt: this.#now().toISOString() },
-        expectedSource: source, expectedWorkspaceManagementAuthority: authority,
-      });
-      return "deferred";
+      if (page.snapshotCount !== source.retirementSnapshotCount ||
+        page.sourceSyncRunCount !== source.retirementSourceSyncRunCount) {
+        // An operator migration can normalize a historical foreign ref. Restart
+        // from the first key; already deleted objects are safe to delete again.
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, retirementArchiveCursor: undefined,
+            retirementSnapshotCount: page.snapshotCount,
+            retirementSourceSyncRunCount: page.sourceSyncRunCount,
+            updatedAt: this.#now().toISOString() },
+          expectedSource: source, expectedWorkspaceManagementAuthority: authority,
+        });
+        page = await this.#store.listSourceRetirementArchiveRefsPage(sourceId, undefined, 32, scope);
+      }
+      const archiveRefs = page.archiveRefs;
+      // Only this Source's own prefix is in its physical deletion custody.
+      if (archiveRefs.some((ref) => !ref.startsWith(scope))) {
+        throw new OpenTofuControllerError("failed_precondition",
+          `Source ${sourceId} has an archive outside its custody scope`,
+          { reason: "source_archive_outside_custody_scope" });
+      }
+      if (archiveRefs.length > 0) {
+        if (!this.#deleteRetiredSourceArchives) {
+          throw new OpenTofuControllerError("failed_precondition",
+            "Source archive custody is unavailable",
+            { reason: "source_archive_custody_unavailable" });
+        }
+        await this.#deleteRetiredSourceArchives({
+          workspaceId: source.workspaceId, sourceId, archiveRefs,
+        });
+      }
+      if (page.hasMore) {
+        source = await this.#writeSourceConfiguration({
+          source: { ...source, retirementArchiveCursor: archiveRefs.at(-1),
+            updatedAt: this.#now().toISOString() },
+          expectedSource: source, expectedWorkspaceManagementAuthority: authority,
+        });
+        pages++;
+        if (pages >= 32 || performance.now() - startedAt >= 5_000) return "deferred";
+        continue;
+      }
+      break;
     }
     const result = await this.#store.retireSource({
       expectedSource: source,

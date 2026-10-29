@@ -392,6 +392,32 @@ test("webhook with a good bearer triggers a deduped sync and IGNORES the payload
   expect(syncCalls).toEqual([{ sourceId: SOURCE_ID, dedupe: true }]);
 });
 
+test("an authenticated webhook acknowledges an inactive Source without retry work", async () => {
+  const { ops, verifyCalls } = makeWebhookOps();
+  const { request, url } = webhookRequest({}, { bearer: "good-secret" });
+  const response = await handleSourceWebhookRequest(request, url, {
+    ...ops,
+    createSourceReconciliationSyncs: async () => {
+      throw new OpenTofuControllerError("failed_precondition", "Source is not active",
+        { reason: "source_not_active" });
+    },
+  });
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ accepted: true, runIds: [] });
+  expect(verifyCalls).toHaveLength(1);
+});
+
+test("authenticated webhook infrastructure and unrelated precondition failures remain visible", async () => {
+  const { ops } = makeWebhookOps();
+  for (const error of [new Error("storage failed"),
+    new OpenTofuControllerError("failed_precondition", "Source changed", { reason: "source_configuration_conflict" })]) {
+    const { request, url } = webhookRequest({}, { bearer: "good-secret" });
+    await expect(handleSourceWebhookRequest(request, url, {
+      ...ops, createSourceReconciliationSyncs: async () => { throw error; },
+    })).rejects.toBe(error);
+  }
+});
+
 test("webhook rejects a non-POST method (405)", async () => {
   const { ops } = makeWebhookOps();
   const { request, url } = webhookRequest({}, { method: "GET", bearer: "x" });
@@ -432,7 +458,7 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
 });
 
 test("scheduled source poll batch is operator configurable with a bounded default", () => {
-  expect(scheduledSourcePollBatch({} as never)).toBe(25);
+  expect(scheduledSourcePollBatch({} as never)).toBe(5);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "2",
@@ -442,12 +468,12 @@ test("scheduled source poll batch is operator configurable with a bounded defaul
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "0",
     } as never),
-  ).toBe(25);
+  ).toBe(5);
   expect(
     scheduledSourcePollBatch({
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "not-a-number",
     } as never),
-  ).toBe(25);
+  ).toBe(5);
 });
 
 
