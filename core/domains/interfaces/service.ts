@@ -55,7 +55,9 @@ export type InterfaceServiceErrorCode =
   | "not_found"
   | "already_exists"
   | "conflict"
-  | "failed_precondition";
+  | "failed_precondition"
+  /** A re-point would leave only a pending link; the current link is kept (409). */
+  | "interface_link_approval_required";
 
 export class InterfaceServiceError extends Error {
   constructor(
@@ -190,6 +192,13 @@ export type InterfaceBindingDeliveryHandlerRegistry = Readonly<
 
 export interface InterfaceLinkWriteFence {
   assertCurrent(): Promise<WorkspaceManagementAuthority | undefined>;
+  /**
+   * Per-request provider approval authority from the caller's own
+   * authorization. When present, a new or replaced link is created active only
+   * if the approval policy agrees AND this returns true for the provider app;
+   * otherwise it is created `pending_approval`.
+   */
+  mayApproveProvider?(provider: { readonly capsuleId: string; readonly workspaceId: string }): Promise<boolean>;
 }
 
 export interface InterfaceLinkApprovalPolicy {
@@ -796,9 +805,20 @@ export class InterfaceService {
     if (siblingLinks.some((link) => link.requirementKey !== input.requirement.key && link.providerInterfaceId === iface.metadata.id && (link.state === "active" || link.state === "pending_approval"))) throw new InterfaceServiceError("conflict", "selected provider conflicts with another consumer requirement");
     if (current?.providerInterfaceId === iface.metadata.id && (current.state === "active" || current.state === "pending_approval") && linkMatchesRequirementExactly(current, input.requirement)) return current;
     const requestedBy = actor?.actorAccountId ?? "system";
-    const approval = await this.#linkApprovalPolicy.evaluate({ consumerWorkspaceId: input.workspaceId, providerWorkspaceId: iface.metadata.workspaceId, requestedBy });
+    let approval = await this.#linkApprovalPolicy.evaluate({ consumerWorkspaceId: input.workspaceId, providerWorkspaceId: iface.metadata.workspaceId, requestedBy });
+    if (approval && suppliedFence?.mayApproveProvider &&
+      !(await suppliedFence.mayApproveProvider({ capsuleId: iface.metadata.ownerRef.id, workspaceId: iface.metadata.workspaceId }))) {
+      approval = undefined;
+    }
     const now = this.#now();
     const liveCurrent = current && (current.state === "active" || current.state === "pending_approval");
+    // A replacement revokes the current link. Without provider approval the
+    // replacement would only be pending (and nothing approves it yet), so the
+    // app would lose its Interface: refuse and keep the current link. Only a
+    // brand-new link (no live current one) may start as pending_approval.
+    if (liveCurrent && !approval) {
+      throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept");
+    }
     const next: InterfaceLink = {
       id: `ifl_${crypto.randomUUID().replaceAll("-", "")}`,
       ...scope,

@@ -22,7 +22,9 @@ import {
 } from "../../../runner/entrypoint.ts";
 import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 import {
+  parseLsRemoteRef,
   resolveSourceCommit,
+  resolveSourceRef,
   assertTrackedSourceSnapshotArchiveable,
   createDeterministicArchive,
   readRepositoryInstallMetadata,
@@ -199,6 +201,23 @@ test("parseLsRemoteCommit resolves an exact branch ref", () => {
   expect(out).toBe("7fd1a60b01f91b314f59955a4e4d4e80d8edf11d");
 });
 
+test("parseLsRemoteRef records the full name of the ref that was chosen", () => {
+  const a = "a".repeat(40);
+  const b = "b".repeat(40);
+  // git ls-remote matches name suffixes: these bare names reach PR refs.
+  expect(parseLsRemoteRef(`${a}\trefs/pull/1/head\n`, "1/head")).toEqual({ commit: a, resolvedRef: "refs/pull/1/head" });
+  expect(parseLsRemoteRef(`${a}\trefs/pull/2/merge\n`, "2/merge")).toEqual({ commit: a, resolvedRef: "refs/pull/2/merge" });
+  expect(parseLsRemoteRef(`${a}\trefs/heads/feature/head\n`, "head")).toEqual({ commit: a, resolvedRef: "refs/heads/feature/head" });
+  expect(parseLsRemoteRef(`${a}\trefs/heads/main\n${b}\trefs/heads/x/main\n`, "main")).toEqual({ commit: a, resolvedRef: "refs/heads/main" });
+  // Peeled annotated tag: the commit, named by the tag without ^{}.
+  expect(parseLsRemoteRef(`${a}\trefs/tags/v1\n${b}\trefs/tags/v1^{}\n`, "v1")).toEqual({ commit: b, resolvedRef: "refs/tags/v1" });
+  // HEAD with --symref resolves to its branch; without it, there is no name.
+  expect(parseLsRemoteRef(`ref: refs/heads/main\tHEAD\n${a}\tHEAD\n`, "HEAD")).toEqual({ commit: a, resolvedRef: "refs/heads/main" });
+  expect(parseLsRemoteRef(`${a}\tHEAD\n`, "HEAD")).toEqual({ commit: a });
+  expect(parseLsRemoteRef(`${a}\trefs/heads/main\n`, "refs/heads/main")).toEqual({ commit: a, resolvedRef: "refs/heads/main" });
+  expect(parseLsRemoteRef("", "main")).toBeUndefined();
+});
+
 test("parseLsRemoteCommit prefers the peeled annotated tag object", () => {
   const stdout = [
     "1111111111111111111111111111111111111111\trefs/tags/v1.0.0",
@@ -293,6 +312,11 @@ test("resolveSourceCommit resolves an explicit remote HEAD without guessing main
     await expect(resolveSourceCommit(source, { context })).resolves.toBe(
       expectedCommit,
     );
+    // HEAD is recorded as the branch it points at, never as bare "HEAD".
+    await expect(resolveSourceRef(source, { context })).resolves.toEqual({
+      commit: expectedCommit,
+      resolvedRef: "refs/heads/master",
+    });
 
     const clone = join(root, "clone");
     await shallowCloneAtCommit(source, expectedCommit, clone, { context });
@@ -429,6 +453,9 @@ test("resolveSourceCommit peels an annotated tag to its commit", async () => {
     await expect(
       resolveSourceCommit(source, { context: { env: commandEnv() } }),
     ).resolves.toBe(expectedCommit);
+    await expect(
+      resolveSourceRef(source, { context: { env: commandEnv() } }),
+    ).resolves.toEqual({ commit: expectedCommit, resolvedRef: "refs/tags/v1.0.0" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

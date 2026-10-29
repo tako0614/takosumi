@@ -45,6 +45,7 @@ import {
   requireWorkspaceAccess,
   type ControlDispatchContext,
 } from "./shared.ts";
+import { requireResourceAccess } from "./app-authorization.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;
@@ -290,11 +291,16 @@ export async function handleRevisionPlans(
   if (!stored || !isStoredGitRevisionPlan(stored)) {
     return errorJson("not_found", "Revision plan not found.", 404);
   }
-  const auth = await requireWorkspaceAccess({
+  // A revision plan changes one existing app's version.
+  const auth = await requireResourceAccess({
     operations: ctx.operations,
     store: ctx.store,
     session: ctx.session,
     workspaceId: stored.workspaceId,
+    capsuleId: stored.capsuleId,
+    action: method === "GET" || method === "HEAD" ? "view" : "update",
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
   });
   if (!auth.ok) return auth.response;
 

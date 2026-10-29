@@ -1,7 +1,8 @@
 import type { Capsule } from "takosumi-contract/install-configs";
 import { InterfaceServiceError, type InterfaceLinkWriteFence } from "../../../../core/domains/interfaces/service.ts";
 import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpers.ts";
-import { type ControlDispatchContext, canAccessWorkspace, controlPlaneUnavailable } from "./shared.ts";
+import { type ControlDispatchContext, controlPlaneUnavailable } from "./shared.ts";
+import { mayApproveInterfaceProvider, requireAppAccess } from "./app-authorization.ts";
 
 /** The caller supplies the canonical consumer Capsule; each side authorizes itself. */
 export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, capsule: Capsule, segments: readonly string[], method: string): Promise<Response> {
@@ -11,36 +12,60 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
   const candidates = segments.length === 5 && segments[4] === "candidates";
   if (!key || (segments.length !== 4 && !candidates)) return errorJson("not_found", "Interface link route not found", 404);
   if (candidates ? method !== "GET" : method !== "PUT" && method !== "DELETE") return methodNotAllowed(candidates ? "GET" : "PUT, DELETE");
-  let controllingWorkspaceId = capsule.workspaceId;
+  // Each side authorizes as its own app: the consumer for every action, the
+  // provider only to revoke a link that points at it.
+  let controlling: Capsule = capsule;
   let authorizedProvider: { linkId: string; providerInterfaceId: string; providerCapsuleId: string } | undefined;
-  let allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleId: capsule.id, appAction: candidates ? "view" : "change_interface_link" });
-  if (!allowed && method === "DELETE") {
+  const decide = (app: Capsule, action: "view" | "change_interface_link", session = ctx.session) => requireAppAccess({
+    operations: ctx.operations, store: ctx.store, session, workspaceId: app.workspaceId, capsuleId: app.id, capsule: app, action,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  let decision = await decide(capsule, candidates ? "view" : "change_interface_link");
+  if (!decision.ok && method === "DELETE") {
     const link = await service.getLatestCapsuleInterfaceLink(capsule.id, key);
     if (link) {
       const provider = await ctx.operations.capsules.getCapsule(link.providerCapsuleId);
-      allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: provider.workspaceId, capsuleId: provider.id, appAction: "change_interface_link" });
-      if (allowed) {
-        controllingWorkspaceId = provider.workspaceId;
+      const providerDecision = await decide(provider, "change_interface_link");
+      if (providerDecision.ok) {
+        decision = providerDecision;
+        controlling = provider;
         authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
       }
     }
   }
-  if (!allowed) return errorJson("forbidden", "The authenticated session cannot manage this Interface link.", 403);
+  if (!decision.ok) return decision.response;
+  const controllingWorkspaceId = controlling.workspaceId;
   try {
     if (candidates) {
       const { requirement } = await service.getInterfaceLinkRequirement(capsule.id, key);
-      return json(await service.listInterfaceLinkCandidateView({ workspaceId: capsule.workspaceId, capsuleId: capsule.id, requirement }), 200, { "cache-control": "no-store" });
+      const view = await service.listInterfaceLinkCandidateView({ workspaceId: capsule.workspaceId, capsuleId: capsule.id, requirement });
+      if (ctx.session.credential !== "oauth-access-token") return json(view, 200, { "cache-control": "no-store" });
+      // An app's own token sees only providers its own grant could already
+      // view; it never enumerates other apps' Interfaces.
+      const visible = [];
+      for (const candidate of view.candidates) {
+        const provider = await ctx.operations.capsules.getCapsule(candidate.providerCapsuleId);
+        if ((await decide(provider, "view")).ok) visible.push(candidate);
+      }
+      return json({ ...view, candidates: visible }, 200, { "cache-control": "no-store" });
     }
     const initialAuthority = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
     const writeFence: InterfaceLinkWriteFence = { assertCurrent: async () => {
       ctx.assertActive?.();
       if (ctx.session.reauthorizeBearer && !(await ctx.session.reauthorizeBearer())) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
-      if (!(await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: { ...ctx.session, requiredAccess: "write" }, workspaceId: controllingWorkspaceId, capsuleId: capsule.id, appAction: "change_interface_link" }))) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
+      if (!(await decide(controlling, "change_interface_link", { ...ctx.session, requiredAccess: "write" })).ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
       const current = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
       if (current.managementEpoch !== initialAuthority.managementEpoch) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
       ctx.assertActive?.();
       return initialAuthority;
-    } };
+    }, mayApproveProvider: (provider) => mayApproveInterfaceProvider({
+      // A link is approved at creation only when the requester may change
+      // links on the PROVIDER app too; otherwise it waits as pending_approval.
+      operations: ctx.operations, store: ctx.store, session: ctx.session, consumerCapsuleId: capsule.id, provider,
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+    }) };
     const body = await readJsonObject(ctx.request);
     if (!body) return errorJson("invalid_request", "JSON object is required", 400);
     if (typeof body.expectedGeneration !== "number" || !Number.isSafeInteger(body.expectedGeneration) || body.expectedGeneration < 0) return errorJson("invalid_request", "expectedGeneration must be a non-negative integer", 400);
@@ -51,6 +76,8 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
     return json({ link: await service.putCapsuleInterfaceLink({ capsuleId: capsule.id, requirementKey: key, interfaceId: body.interfaceId, expectedGeneration: body.expectedGeneration, ...(typeof body.expectedRequirementFingerprint === "string" ? { expectedRequirementFingerprint: body.expectedRequirementFingerprint } : {}) }, actor, writeFence) });
   } catch (error) {
     if (!(error instanceof InterfaceServiceError)) throw error;
+    // interface_link_approval_required (a re-point that would leave the app
+    // with only a pending link) is a 409 like the other conflicts.
     return errorJson(error.code, error.message, error.code === "permission_denied" ? 403 : error.code === "not_found" ? 404 : error.code === "invalid_argument" ? 400 : error.code === "failed_precondition" ? 412 : 409);
   }
 }

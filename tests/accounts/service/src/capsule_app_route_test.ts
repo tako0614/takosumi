@@ -377,6 +377,15 @@ test("app connection issues include the canonical owner's personal connections",
           storageRoot: "app://canonical_owner",
         }),
       } as NonNullable<ControlPlaneOperations["appOwnership"]>,
+      // Per-app authorization: the viewing Workspace owner is a member of
+      // the canonical owner's app, not its owner.
+      appAccess: {
+        resolveAppAccess: async (accountId: string, capsuleId: string) =>
+          accountId === OWNER && capsuleId === CAPSULE
+            ? { capsuleId, role: "member" as const, ownerAccountId: "canonical_owner", ownershipEpoch: 1 }
+            : undefined,
+        listAccessibleApps: async () => ({ apps: [] }),
+      },
       accountResources: {
         listConnections: async (accountId: string) => ({
           items: accountId === "canonical_owner" ? [personal] : [],

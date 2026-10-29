@@ -406,8 +406,8 @@ export async function runSourceSync(
     const gitContext = await timer.measure("source_git_credentials", () =>
       prepareSourceGitContext(source, credentials, credentialDir, signal),
     );
-    const resolvedCommit = await timer.measure("source_ref_resolve", () =>
-      resolveSourceCommit(source, gitContext),
+    const { commit: resolvedCommit, resolvedRef } = await timer.measure("source_ref_resolve", () =>
+      resolveSourceRef(source, gitContext),
     );
     await timer.measure("source_clone", () =>
       shallowCloneAtCommit(
@@ -464,6 +464,7 @@ export async function runSourceSync(
           status: "succeeded",
           exitCode: 0,
           resolvedCommit,
+          ...(resolvedRef ? { resolvedRef } : {}),
           archiveDigest: reuseSnapshot.archiveDigest,
           archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
           repositoryInstallMetadata,
@@ -507,6 +508,7 @@ export async function runSourceSync(
         status: "succeeded",
         exitCode: 0,
         resolvedCommit,
+        ...(resolvedRef ? { resolvedRef } : {}),
         archiveDigest,
         archiveSizeBytes: archiveBytes.byteLength,
         repositoryInstallMetadata,
@@ -895,13 +897,36 @@ export async function resolveSourceCommit(
   source: SourceSyncSource,
   git: SourceGitContext,
 ): Promise<string> {
+  return (await resolveSourceRef(source, git)).commit;
+}
+
+/**
+ * The commit plus the FULL name of the ref it came from (`refs/heads/…`,
+ * `refs/tags/…`, or whatever a fallback matched, such as `refs/pull/1/head`).
+ * `HEAD` is resolved through `--symref` to the branch it points at. A raw
+ * commit, or a `HEAD` without a symref line, has no `resolvedRef`.
+ */
+export interface ResolvedSourceRef {
+  readonly commit: string;
+  readonly resolvedRef?: string;
+}
+
+export async function resolveSourceRef(
+  source: SourceSyncSource,
+  git: SourceGitContext,
+): Promise<ResolvedSourceRef> {
   if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.ref)) {
-    return source.ref.toLowerCase();
+    return { commit: source.ref.toLowerCase() };
   }
   // Do not depend on an earlier Run having created the subprocess cwd.
   await mkdir(RUN_ROOT, { recursive: true, mode: 0o700 });
   const result = await runCommand(
-    ["git", "ls-remote", "--", source.url, source.ref, `${source.ref}^{}`],
+    [
+      "git", "ls-remote",
+      // Only HEAD needs its symbolic target; other refs resolve unchanged.
+      ...(source.ref === "HEAD" ? ["--symref"] : []),
+      "--", source.url, source.ref, `${source.ref}^{}`,
+    ],
     { cwd: RUN_ROOT, context: git.context },
   );
   if (result.exitCode !== 0) {
@@ -909,9 +934,9 @@ export async function resolveSourceCommit(
       `git ls-remote failed: ${redactCredentialOutput(result.stderr || result.stdout, git.context)}`,
     );
   }
-  const commit = parseLsRemoteCommit(result.stdout, source.ref);
-  if (!commit) throw new SourceRefNotFoundError(source.ref);
-  return commit;
+  const resolved = parseLsRemoteRef(result.stdout, source.ref);
+  if (!resolved) throw new SourceRefNotFoundError(source.ref);
+  return resolved;
 }
 
 // Parse `git ls-remote` output ("<sha>\t<refname>") and pick the commit for the
@@ -921,16 +946,35 @@ export function parseLsRemoteCommit(
   stdout: string,
   ref: string,
 ): string | undefined {
+  return parseLsRemoteRef(stdout, ref)?.commit;
+}
+
+/** parseLsRemoteCommit plus the full name of the row that was chosen. */
+export function parseLsRemoteRef(
+  stdout: string,
+  ref: string,
+): ResolvedSourceRef | undefined {
   const lines = stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  // `--symref` adds "ref: refs/heads/main\tHEAD" lines.
+  const symrefs = new Map<string, string>();
+  for (const line of lines) {
+    const symref = /^ref:\s+(refs\/\S+)\s+(\S+)$/u.exec(line);
+    if (symref) symrefs.set(symref[2]!, symref[1]!);
+  }
   const rows = lines.flatMap((line) => {
     const [sha, name] = line.split(/\s+/, 2);
     if (!sha || !name || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(sha)) return [];
     return [{ sha: sha.toLowerCase(), name }];
   });
   if (rows.length === 0) return undefined;
+  const chosen = (row: { readonly sha: string; readonly name: string }): ResolvedSourceRef => {
+    const name = row.name.endsWith("^{}") ? row.name.slice(0, -3) : row.name;
+    const full = name.startsWith("refs/") ? name : symrefs.get(name);
+    return full ? { commit: row.sha, resolvedRef: full } : { commit: row.sha };
+  };
   const candidates = [
     `refs/heads/${ref}`,
     `refs/tags/${ref}^{}`,
@@ -939,12 +983,12 @@ export function parseLsRemoteCommit(
   ];
   for (const candidate of candidates) {
     const match = rows.find((row) => row.name === candidate);
-    if (match) return match.sha;
+    if (match) return chosen(match);
   }
   // Annotated-tag peel: prefer the peeled object when both forms are present.
   const peeled = rows.find((row) => row.name.endsWith("^{}"));
-  if (peeled) return peeled.sha;
-  return rows.length === 1 ? rows[0]!.sha : undefined;
+  if (peeled) return chosen(peeled);
+  return rows.length === 1 ? chosen(rows[0]!) : undefined;
 }
 
 export async function shallowCloneAtCommit(

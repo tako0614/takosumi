@@ -111,7 +111,6 @@ import {
   publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireWorkspaceAccess,
 } from "./shared.ts";
 import {
   booleanValue,
@@ -145,6 +144,8 @@ import {
 import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
 import { handleCapsuleInterfaceLinks } from "./interface-links.ts";
 import { handleCapsuleApp, handleCapsuleRuns } from "./capsule-app.ts";
+import { requireAppAccess, requireOwnerForDelegateCodeChange } from "./app-authorization.ts";
+import type { AppAction } from "takosumi-contract/app-access";
 import {
   WorkspaceManagementAdmissionConflictError,
   type WorkspaceManagementAuthority,
@@ -185,20 +186,27 @@ export async function handleCapsules(
         }
       })()
       : undefined;
-    const auth = await requireWorkspaceAccess({
+    const auth = await requireAppAccess({
       operations,
       store,
+      session: ctx.session,
       workspaceId: capsule.workspaceId,
       capsuleId: capsule.id,
-      ...((method === "DELETE" && segments.length === 2) ||
-        (method === "POST" && segments.length === 3 &&
-          ["abandon", "uninstall", "cancel-uninstall"].includes(segments[2] ?? "")
-        ) ? { appAction: "uninstall" as const } : {}),
-      session: ctx.session,
+      capsule,
+      action: await capsuleRouteAppAction(request, segments, method),
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
     // A refused caller must not append Activity to another Workspace by
     // repeatedly guessing a Capsule ID.
     if (!auth.ok) return auth.response;
+    if (method === "POST" && segments.length === 3 &&
+      (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) {
+      const codeChange = await requireOwnerForDelegateCodeChange({
+        operations, store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleIds: [capsule.id],
+      });
+      if (!codeChange.ok) return codeChange.response;
+    }
     const requireCapturedManagement = (): WorkspaceManagementAuthority => {
       if (!capturedManagement) throw new Error("Capsule management authority was not captured");
       if (!capturedManagement.ok) throw capturedManagement.error;
@@ -437,6 +445,46 @@ export async function handleCapsules(
     }
   }
   return undefined;
+}
+
+/**
+ * AppAction for `/capsules/:id[/leaf]`. Reads are `view`; anything that
+ * destroys or abandons the app is `uninstall` (owner only); a configuration
+ * plan that selects connections is `choose_connection`. Unknown writes map to
+ * `change_settings` and then 404 in the handler.
+ */
+async function capsuleRouteAppAction(
+  request: Request,
+  segments: readonly string[],
+  method: string,
+): Promise<AppAction> {
+  const leaf = segments.length === 2 ? undefined : segments[2];
+  if (method === "GET" || method === "HEAD") return "view";
+  if (leaf === "configuration-plans" && segments.length === 3) {
+    // A configuration plan that selects provider connections is the
+    // connection choice; the handler re-reads and validates the body.
+    const body = await readJsonObject(request.clone()).catch(() => null);
+    return Array.isArray(body?.providerBindings) && body.providerBindings.length > 0
+      ? "choose_connection"
+      : "change_settings";
+  }
+  if (leaf === undefined) return method === "DELETE" ? "uninstall" : "change_settings";
+  switch (leaf) {
+    case "abandon":
+    case "uninstall":
+    case "cancel-uninstall":
+    case "destroy-plan":
+      return "uninstall";
+    case "plan":
+    case "revision-plans":
+    case "drift-check":
+      return "update";
+    case "install-config-re-adoptions":
+    case "backups":
+      return "change_settings";
+    default:
+      return "change_settings";
+  }
 }
 
 const API_PATCHABLE_CAPSULE_STATUSES: ReadonlySet<Capsule["status"]> = new Set([

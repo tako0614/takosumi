@@ -56,7 +56,7 @@ import {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { ProviderConnection } from "takosumi-contract/connections";
-import type { WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
+import { clampRunListLimit, type WorkspaceManagementAuthority } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -116,6 +116,14 @@ import {
   requireWorkspaceAccess,
   resolveProviderBindings,
 } from "./shared.ts";
+import {
+  requireWorkspaceAppsAccess,
+  visibleActivityEvents,
+  visibleKeysetPage,
+  workspaceAppVisibility,
+  workspaceSourceApps,
+} from "./app-authorization.ts";
+import type { AppAction } from "takosumi-contract/app-access";
 import {
   booleanValue,
   connectionCredentialFiles,
@@ -206,6 +214,11 @@ export async function handleWorkspaces(
       session: ctx.session,
     });
     if (!auth.ok) return auth.response;
+    // Workspace-level bulk actions still need the Workspace decision above,
+    // but must not reach an app with an ownership row that the caller cannot
+    // manage per app.
+    const appsAuth = await workspaceBulkAppAuthorization(ctx, workspaceId, segments, method);
+    if (appsAuth && !appsAuth.ok) return appsAuth.response;
     if (segments.length === 2) {
       if (method === "GET")
         return json({
@@ -378,7 +391,7 @@ export async function handleWorkspaces(
     }
     if (leaf === "capsules" && segments.length === 3) {
       if (method === "GET")
-        return await listWorkspaceCapsules(operations, workspaceId, url);
+        return await listWorkspaceCapsules(operations, workspaceId, url, ctx.session);
       return methodNotAllowed("GET");
     }
     if (leaf === "current-state-versions" && segments.length === 3) {
@@ -387,15 +400,16 @@ export async function handleWorkspaces(
         operations,
         workspaceId,
         url,
+        ctx.session,
       );
     }
     if (leaf === "runs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await workspaceRuns(operations, workspaceId, url);
+      return await workspaceRuns(operations, workspaceId, url, ctx.session);
     }
     if (leaf === "activity" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await workspaceActivity(operations, workspaceId, url);
+      return await workspaceActivity(operations, workspaceId, url, ctx.session);
     }
     if (
       leaf === "interface-materialization-failures" &&
@@ -410,11 +424,15 @@ export async function handleWorkspaces(
           400,
         );
       }
+      const failures = await operations.listInterfaceMaterializationFailures(
+        workspaceId,
+        limit ? { limit } : {},
+      );
+      const failureVisibility = await workspaceAppVisibility({
+        operations, session: ctx.session, capsuleIds: failures.map((failure) => failure.capsuleId),
+      });
       return json({
-        failures: await operations.listInterfaceMaterializationFailures(
-          workspaceId,
-          limit ? { limit } : {},
-        ),
+        failures: failures.filter((failure) => failureVisibility.allows([failure.capsuleId])),
       });
     }
     if (
@@ -463,12 +481,32 @@ export async function handleWorkspaces(
       if (method === "GET") {
         const page = parseControlPageParams(url);
         if (!page.ok) return page.response;
-        return json(
-          (await operations.backups.listBackups(
-            workspaceId,
-            page.params,
-          )) satisfies ListBackupsResponse,
-        );
+        // A Workspace-wide backup carries every live app's state. The cursor
+        // only ever points at a backup the caller may view.
+        let liveApps: Promise<readonly string[]> | undefined;
+        const listed = await visibleKeysetPage({
+          limit: clampPageLimit(page.params.limit),
+          ...(page.params.cursor !== undefined ? { cursor: page.params.cursor } : {}),
+          read: async ({ cursor, limit }) => {
+            const backups = await operations.backups.listBackups(workspaceId, { ...(cursor !== undefined ? { cursor } : {}), limit });
+            return { items: backups.backups, ...(backups.nextCursor !== undefined ? { nextCursor: backups.nextCursor } : {}) };
+          },
+          visibility: async (backups) => {
+            const all = backups.some((backup) => !backup.capsuleId)
+              ? await (liveApps ??= operations.capsules.listCapsules(workspaceId).then((capsules) => capsules
+                .filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed")
+                .map((capsule) => capsule.id)))
+              : [];
+            const appsOf = (backup: (typeof backups)[number]): readonly string[] =>
+              backup.capsuleId ? [backup.capsuleId] : all;
+            const visibility = await workspaceAppVisibility({ operations, session: ctx.session, capsuleIds: backups.flatMap(appsOf) });
+            return (backup) => visibility.allows(appsOf(backup));
+          },
+        });
+        return json({
+          backups: listed.items,
+          ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
+        } satisfies ListBackupsResponse);
       }
       if (method === "POST") {
         const backup = await operations.backups.createBackup({
@@ -533,6 +571,31 @@ export async function handleWorkspaces(
     }
   }
   return undefined;
+}
+
+async function workspaceBulkAppAuthorization(
+  ctx: ControlDispatchContext,
+  workspaceId: string,
+  segments: readonly string[],
+  method: string,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response } | undefined> {
+  if (method !== "POST") return undefined;
+  const leaf = segments[2];
+  const common = {
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  };
+  let action: AppAction | undefined;
+  if ((leaf === "plan-update" || leaf === "drift-check") && segments.length === 3) action = "update";
+  else if (leaf === "backups" && segments.length === 3) action = "change_settings";
+  else if (leaf === "interface-materialization-failures" && segments.length === 5 && segments[4] === "retries") action = "update";
+  // Workspace backup restores are retired above (404); app restores go
+  // through the Run approval of the restore Run (rollback).
+  if (!action) return undefined;
+  return await requireWorkspaceAppsAccess({ ...common, workspaceId, action });
 }
 
 function isLauncherDocument(
@@ -1320,21 +1383,43 @@ function parseIncludeDestroyed(
   };
 }
 
+/** One page of the Workspace's Capsules the caller may view (see visibleKeysetPage). */
+async function visibleWorkspaceCapsulePage(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  workspaceId: string,
+  params: PageParams,
+  includeDestroyed: boolean,
+) {
+  return await visibleKeysetPage({
+    limit: clampPageLimit(params.limit),
+    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+    read: ({ cursor, limit }) => operations.capsules.listCapsulesPage(workspaceId, {
+      ...(cursor !== undefined ? { cursor } : {}),
+      limit,
+      includeDestroyed,
+    }),
+    visibility: async (capsules) => {
+      const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: capsules.map((capsule) => capsule.id) });
+      return (capsule) => visibility.allows([capsule.id]);
+    },
+  });
+}
+
 async function listWorkspaceCapsules(
   operations: ControlPlaneOperations,
   workspaceId: string,
   url: URL,
+  session: ControlSession,
 ): Promise<Response> {
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } = await operations.capsules.listCapsulesPage(
-    workspaceId,
-    {
-      ...page.params,
-      includeDestroyed: includeDestroyed.includeDestroyed,
-    },
+  // Apps the caller cannot view are omitted from this Workspace compat list,
+  // and the cursor never points at one of them.
+  const { items, nextCursor } = await visibleWorkspaceCapsulePage(
+    operations, session, workspaceId, page.params, includeDestroyed.includeDestroyed,
   );
   const capsules = await Promise.all(
     items.map(async (capsule): Promise<PublicCapsule> => {
@@ -1357,17 +1442,14 @@ async function listWorkspaceCurrentStateVersions(
   operations: ControlPlaneOperations,
   workspaceId: string,
   url: URL,
+  session: ControlSession,
 ): Promise<Response> {
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } = await operations.capsules.listCapsulesPage(
-    workspaceId,
-    {
-      ...page.params,
-      includeDestroyed: includeDestroyed.includeDestroyed,
-    },
+  const { items, nextCursor } = await visibleWorkspaceCapsulePage(
+    operations, session, workspaceId, page.params, includeDestroyed.includeDestroyed,
   );
   const stateVersions = operations.listStateVersionsByIds
     ? await listCurrentStateVersionsFromIdsRead(operations, workspaceId, items)
@@ -1520,10 +1602,41 @@ async function createRestoreRun(
 
 // --- Activity --------------------------------------------------------------
 
+/** Runs of apps the caller cannot view are omitted (Workspace compat list). */
+function workspaceRunVisibility(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  workspaceId: string,
+): (runs: readonly Run[]) => Promise<(run: Run) => boolean> {
+  let sourceApps: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+  return async (runs) => {
+    if (!runs.length || !operations.appOwnership) return () => true;
+    const bySource = runs.some((run) => !run.capsuleId)
+      ? await (sourceApps ??= workspaceSourceApps(operations, workspaceId))
+      : new Map<string, readonly string[]>();
+    const appsOf = (run: Run): readonly string[] => run.capsuleId ? [run.capsuleId]
+      : run.subject?.kind === "capsule" ? [run.subject.id]
+      : bySource.get(run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : "")) ?? [];
+    const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: runs.flatMap(appsOf) });
+    return (run) => visibility.allows(appsOf(run));
+  };
+}
+
+async function visibleWorkspaceRuns(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  workspaceId: string,
+  runs: readonly Run[],
+): Promise<readonly Run[]> {
+  const allows = await workspaceRunVisibility(operations, session, workspaceId)(runs);
+  return runs.filter(allows);
+}
+
 async function workspaceRuns(
   operations: ControlPlaneOperations,
   workspaceId: string,
   url: URL,
+  session: ControlSession,
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
   if (limit === "invalid") {
@@ -1535,15 +1648,19 @@ async function workspaceRuns(
   }
   const cursor = url.searchParams.get("cursor");
   if (operations.listRunsPage) {
-    const page = await operations.listRunsPage(
-      workspaceId,
-      {
-        ...(limit ? { limit } : {}),
-        ...(cursor !== null ? { cursor } : {}),
+    const listRunsPage = operations.listRunsPage.bind(operations);
+    // The cursor only ever points at a Run the caller may view.
+    const page = await visibleKeysetPage({
+      limit: clampRunListLimit(limit),
+      ...(cursor !== null ? { cursor } : {}),
+      read: async (request) => {
+        const runs = await listRunsPage(workspaceId, request);
+        return { items: runs.runs, ...(runs.nextCursor !== undefined ? { nextCursor: runs.nextCursor } : {}) };
       },
-    );
+      visibility: workspaceRunVisibility(operations, session, workspaceId),
+    });
     return json({
-      runs: await Promise.all(page.runs.map((run) => publicRun(operations, run))),
+      runs: await Promise.all(page.items.map((run) => publicRun(operations, run))),
       ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
     } satisfies ListRunsResponse);
   }
@@ -1554,7 +1671,8 @@ async function workspaceRuns(
       400,
     );
   }
-  const runs = await operations.listRuns(workspaceId, limit ? { limit } : {});
+  const runs = await visibleWorkspaceRuns(operations, session, workspaceId,
+    await operations.listRuns(workspaceId, limit ? { limit } : {}));
   return json({
     runs: await Promise.all(runs.map((run) => publicRun(operations, run))),
   } satisfies ListRunsResponse);
@@ -1564,6 +1682,7 @@ async function workspaceActivity(
   operations: ControlPlaneOperations,
   workspaceId: string,
   url: URL,
+  session: ControlSession,
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
   if (limit === "invalid") {
@@ -1573,7 +1692,9 @@ async function workspaceActivity(
       400,
     );
   }
-  const events = await operations.activity.list(workspaceId, limit);
+  const events = await visibleActivityEvents({
+    operations, session, workspaceId, events: await operations.activity.list(workspaceId, limit),
+  });
   return json({ events });
 }
 

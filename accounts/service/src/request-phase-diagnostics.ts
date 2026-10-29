@@ -35,19 +35,22 @@ export interface RequestPhaseObserver {
     phase: RequestDiagnosticPhase,
     operation: () => T | Promise<T>,
   ): Promise<T>;
-  /** Emits value-free per-app shadow comparison data; no account or Capsule ids. */
-  observeAppAccessShadow?(input: AppAccessShadowDiagnostic): void | Promise<void>;
+  /** Reports an app request decided by the rollout Workspace fallback; no ids. */
+  observeAppAuthorizationFallback?(input: AppAuthorizationFallbackDiagnostic): void | Promise<void>;
 }
 
-export interface AppAccessShadowDiagnostic {
-  readonly resolverAvailable: boolean;
-  readonly resolverSucceeded: boolean;
-  readonly bearerWorkspaceAllowed: boolean;
-  readonly workspaceAllowed: boolean;
-  readonly appAllowed: boolean;
-  readonly workspaceRole: "owner" | "member" | null;
-  readonly appRole: "owner" | "member" | null;
-  readonly roleDiff: "same" | "workspace_only" | "app_only" | "role_mismatch" | "unavailable";
+/**
+ * Why an app-scoped request used the Workspace decision during the v75→v78
+ * rollout: no ownership port, a pre-ownership schema, or a Capsule that the
+ * backfill has not reached yet.
+ */
+export type AppAuthorizationFallbackReason =
+  | "ownership_store_unavailable"
+  | "ownership_schema_unavailable"
+  | "capsule_not_backfilled";
+
+export interface AppAuthorizationFallbackDiagnostic {
+  readonly reason: AppAuthorizationFallbackReason;
 }
 
 const PHASES = new Set<RequestDiagnosticPhase>([
@@ -176,11 +179,12 @@ export function createRequestPhaseDiagnostics(
         ...(probe && /^[a-f0-9]{16}$/u.test(probe) ? { probeId: probe } : {}),
       };
       return {
-        observeAppAccessShadow(input: AppAccessShadowDiagnostic): void {
+        observeAppAuthorizationFallback(input: AppAuthorizationFallbackDiagnostic): void {
           try {
             console.info(JSON.stringify({
-              event: "app_access_shadow",
-              ...input,
+              event: "app_authorization_fallback",
+              ...metadata,
+              reason: input.reason,
             }));
           } catch {
             // Diagnostic output must never affect request execution.

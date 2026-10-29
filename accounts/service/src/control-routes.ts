@@ -80,6 +80,7 @@ import type {
   RequestPhaseObserver,
   RequestDiagnosticPhase,
 } from "./request-phase-diagnostics.ts";
+import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
 
 const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
 
@@ -209,6 +210,8 @@ interface ControlRouteContext {
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
   readonly workspaceMutationsFrozen?: boolean;
+  /** Operator-designated repositories whose installed app may delegate. */
+  readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -645,6 +648,11 @@ export async function handleControlRoute(
         ...(bearer.auth.appIds !== undefined ? { appIds: bearer.auth.appIds } : {}),
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
+          : {}),
+        // Operator configuration: only an installed app's own token can be a
+        // delegate, and code changes of a designated app are owner-only.
+        ...(context.installedAppDelegationSources?.length
+          ? { installedAppDelegationSources: context.installedAppDelegationSources }
           : {}),
         requiredAccess,
         reauthorizeBearer,

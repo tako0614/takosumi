@@ -43,7 +43,6 @@ import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { RunReadWaiter } from "./run-read-deadline.ts";
 import {
   measureRequestPhaseOperation,
-  type AppAccessShadowDiagnostic,
   type RequestPhaseObserver,
 } from "../request-phase-diagnostics.ts";
 import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
@@ -92,8 +91,13 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import { appActionAllowed, type AppAccess, type AppAction } from "takosumi-contract/app-access";
+import { appActionAllowed, type AppAction } from "takosumi-contract/app-access";
 import type { AccountsStore } from "../store.ts";
+import {
+  installedAppRevisionDelegates,
+  installedAppSourceIsDesignated,
+  type InstalledAppDelegationSource,
+} from "../installed-app-delegation.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -136,6 +140,14 @@ export interface ControlSession {
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
+  /**
+   * Operator-designated repositories (with allowed refs) whose installed app
+   * may use its own OAuth token as a Workspace delegation. Operator
+   * configuration copied by the authenticated Accounts dispatcher onto every
+   * session (it also makes code changes of such apps owner-only); never read
+   * from an HTTP field.
+   */
+  readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   /**
    * Authorization intent derived from the HTTP method at the authenticated
    * dispatch boundary. Workspace members may read; only owner/admin members
@@ -571,6 +583,13 @@ type WorkspaceAccessResult =
       readonly response: Response;
     };
 
+/**
+ * The legacy Workspace decision. App-scoped routes use `requireAppAccess`
+ * (control/app-authorization.ts), which falls back to this decision only while
+ * the addressed Capsule has no ownership row. Workspace-level routes (lists,
+ * Workspace settings, unowned preflight Sources, Workspace connections) keep
+ * it until Phase 9.
+ */
 export async function requireWorkspaceAccess(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
@@ -598,14 +617,15 @@ export async function requireWorkspaceAccess(input: {
   if (canAccess) {
     return { ok: true };
   }
-  return {
-    ok: false,
-    response: errorJson(
-      "forbidden",
-      "The authenticated session cannot access this Workspace.",
-      403,
-    ),
-  };
+  return { ok: false, response: workspaceAccessForbidden() };
+}
+
+export function workspaceAccessForbidden(): Response {
+  return errorJson(
+    "forbidden",
+    "The authenticated session cannot access this Workspace.",
+    403,
+  );
 }
 
 export async function canAccessWorkspace(input: {
@@ -625,52 +645,33 @@ export async function canAccessWorkspace(input: {
   // workspace A, or an OAuth token issued for a Capsule in A, would otherwise
   // read B's Capsules, Runs, and Outputs through every id-addressed route.
   // The restriction is applied before membership, never instead of it.
-  const bearerAllowed = bearerWorkspaceAllows(input.session, input.workspaceId);
-  const finish = async (workspaceAllowed: boolean): Promise<boolean> => {
-    if (input.capsuleId) {
-      try {
-        if (!input.operations.appAccess && !input.diagnostics?.observeAppAccessShadow) return workspaceAllowed;
-        // Diagnostic sampling has no authority. Keep 99% of requests free of
-        // the extra ownership/member reads while the legacy decision is live.
-        if (Math.random() >= 0.01) return workspaceAllowed;
-        await observeAppAccessShadow({
-          operations: input.operations,
-          session: input.session,
-          workspaceId: input.workspaceId,
-          capsuleId: input.capsuleId,
-          appAction: input.appAction,
-          bearerAllowed,
-          workspaceAllowed,
-          workspace: input.workspace,
-          diagnostics: input.diagnostics,
-        });
-      } catch {
-        // The shadow port cannot replace or fail the legacy authorization result.
-      }
-    }
-    return workspaceAllowed;
-  };
-  if (!bearerAllowed) {
-    return await finish(false);
+  if (!bearerWorkspaceAllows(input.session, input.workspaceId)) return false;
+  // An installed app's own token reaches only its own app, unless the
+  // operator designated the app as a Workspace delegate (Takos-style).
+  if (isInstalledAppToken(input.session) &&
+    !(input.capsuleId !== undefined && input.session.appIds.includes(input.capsuleId)) &&
+    !(await installedAppTokenDelegates(input.operations, input.session))) {
+    return false;
   }
+  input.assertActive?.();
   if (input.session.appIds !== undefined && input.session.credential !== "oauth-access-token") {
     // A PAT's Workspace binding identifies its issuance scope, not authority
     // over every app in that Workspace. Only a live app grant may proceed.
     if (!input.capsuleId || !input.session.appIds.includes(input.capsuleId) || !input.operations.appAccess) {
-      return await finish(false);
+      return false;
     }
     const access = await input.operations.appAccess.resolveAppAccess(input.session.subject, input.capsuleId);
     input.assertActive?.();
     if (!access || access.capsuleId !== input.capsuleId ||
       !appActionAllowed(access.role, input.appAction ?? (input.session.requiredAccess === "write" ? "change_settings" : "view"))) {
-      return await finish(false);
+      return false;
     }
     const capsule = await input.operations.capsules.getCapsule(input.capsuleId);
     input.assertActive?.();
-    return await finish(capsule.workspaceId === input.workspaceId);
+    return capsule.workspaceId === input.workspaceId;
   }
   // The OAuth compatibility path is limited to an issuance-bound Workspace.
-  if (input.session.appIds !== undefined && !input.session.workspaceId) return await finish(false);
+  if (input.session.appIds !== undefined && !input.session.workspaceId) return false;
 
   const workspace =
     input.workspace ??
@@ -680,9 +681,9 @@ export async function canAccessWorkspace(input: {
       () => input.operations.workspaces.getWorkspace(input.workspaceId),
     ));
   input.assertActive?.();
-  if (workspace.id !== input.workspaceId) return await finish(false);
+  if (workspace.id !== input.workspaceId) return false;
   if (!input.session.requireCurrentMembership &&
-    workspace.ownerUserId === input.session.subject) return await finish(true);
+    workspace.ownerUserId === input.session.subject) return true;
 
   const mayUseMember = (member: PublicWorkspaceMember | undefined): boolean =>
     member?.status === "active" &&
@@ -703,7 +704,7 @@ export async function canAccessWorkspace(input: {
       ),
     );
     input.assertActive?.();
-    return await finish(mayUseMember(member));
+    return mayUseMember(member);
   }
   const members = await measureRequestPhaseOperation(
     input.diagnostics,
@@ -711,92 +712,89 @@ export async function canAccessWorkspace(input: {
     () => input.operations.members.listMembers(input.workspaceId),
   );
   input.assertActive?.();
-  return await finish(mayUseMember(
+  return mayUseMember(
     members.find((member) => member.accountId === input.session.subject),
-  ));
+  );
+}
+
+/** An installed app's own OAuth token: issued to its per-install client, bound to its Capsule. */
+export function isInstalledAppToken(
+  session: ControlSession,
+): session is ControlSession & { readonly appIds: readonly string[] } {
+  return session.credential === "oauth-access-token" && session.appIds !== undefined;
+}
+
+const installedAppDelegationDecisions = new WeakMap<ControlSession, Promise<boolean>>();
+
+/**
+ * Workspace delegation for an installed app's own token. Server-side only:
+ * the token's single bound Capsule must be live (active or stale, no scheduled
+ * uninstall) in the token's Workspace, and its currently adopted (applied)
+ * revision must come from that Capsule's own Source (whose URL cannot be
+ * patched) at a designated path, and its snapshot's resolved full ref
+ * (`resolvedRef`) must be an allowed `refs/heads/…` or `refs/tags/…` name.
+ * Bare names, an unresolved `HEAD`, `refs/pull/*`, raw commits and snapshots
+ * without `resolvedRef` never qualify. Memoized per session object.
+ */
+export function installedAppTokenDelegates(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+): Promise<boolean> {
+  const sources = session.installedAppDelegationSources;
+  if (!isInstalledAppToken(session) || !sources?.length || session.appIds.length !== 1 || !session.workspaceId) {
+    return Promise.resolve(false);
+  }
+  let decision = installedAppDelegationDecisions.get(session);
+  if (!decision) {
+    const capsuleId = session.appIds[0]!;
+    const workspaceId = session.workspaceId;
+    decision = (async () => {
+      try {
+        const capsule = await operations.capsules.getCapsule(capsuleId);
+        if (capsule.id !== capsuleId || capsule.workspaceId !== workspaceId ||
+          (capsule.status !== "active" && capsule.status !== "stale") ||
+          (capsule.uninstall !== undefined && capsule.uninstall.phase !== "cancelled")) return false;
+        const adopted = await operations.getCapsuleAdoptedSourceRevision(capsule.id);
+        if (!adopted) return false;
+        const source = (await operations.getSource(capsule.sourceId)).source;
+        if (source.id !== capsule.sourceId || source.workspaceId !== capsule.workspaceId ||
+          (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id)) return false;
+        const snapshot = await operations.getSourceSnapshot(adopted.sourceSnapshotId);
+        if (snapshot.id !== adopted.sourceSnapshotId || snapshot.sourceId !== source.id) return false;
+        // The runner-resolved full ref, never the requested name.
+        return installedAppRevisionDelegates(sources, { url: source.url, path: adopted.path, resolvedRef: snapshot.resolvedRef });
+      } catch (error) {
+        if (controllerErrorCode(error) === "not_found") return false;
+        throw error;
+      }
+    })();
+    installedAppDelegationDecisions.set(session, decision);
+  }
+  return decision;
 }
 
 /**
- * Best-effort Phase 3 comparison only. It deliberately runs after the legacy
- * answer is computed, does not delay or replace that answer, and only reports
- * booleans and coarse roles through the opt-in diagnostic observer.
+ * A designated delegate app (by Source URL and path, any ref): changing what
+ * it deploys (ref, path, re-adopted config) is owner-only, because its own
+ * token carries Workspace delegation.
  */
-async function observeAppAccessShadow(input: {
-  readonly operations: ControlPlaneOperations;
-  readonly session: ControlSession;
-  readonly workspaceId: string;
-  readonly capsuleId: string;
-  readonly appAction?: AppAction;
-  readonly bearerAllowed: boolean;
-  readonly workspaceAllowed: boolean;
-  readonly workspace?: Workspace;
-  readonly diagnostics?: RequestPhaseObserver;
-}): Promise<void> {
-  const resolver = input.operations.appAccess;
-  const diagnostic = input.diagnostics?.observeAppAccessShadow;
-  if (!resolver && !diagnostic) return;
-  let appAccess: AppAccess | undefined;
-  let resolverSucceeded = false;
-  let workspaceRole: "owner" | "member" | null = null;
-  const action = input.appAction ?? (input.session.requiredAccess === "write" ? "change_settings" : "view");
-  const [appResult, workspaceRoleResult] = await Promise.allSettled([
-    resolver?.resolveAppAccess(input.session.subject, input.capsuleId) ?? Promise.resolve(undefined),
-    resolveWorkspaceRole(input),
-  ]);
-  if (appResult.status === "fulfilled" &&
-    (!appResult.value || appResult.value.capsuleId === input.capsuleId)) {
-    appAccess = appResult.value;
-    resolverSucceeded = resolver !== undefined;
-  }
-  if (workspaceRoleResult.status === "fulfilled") workspaceRole = workspaceRoleResult.value;
-  const appRole = appAccess?.role ?? null;
-  const appAllowed = input.bearerAllowed && appAccess !== undefined &&
-    appActionAllowed(appAccess.role, action);
-  let roleDiff: "same" | "workspace_only" | "app_only" | "role_mismatch" | "unavailable";
-  if (!resolverSucceeded || workspaceRoleResult.status !== "fulfilled") roleDiff = "unavailable";
-  else if (workspaceRole === appRole) roleDiff = "same";
-  else if (workspaceRole === null) roleDiff = "app_only";
-  else if (appRole === null) roleDiff = "workspace_only";
-  else roleDiff = "role_mismatch";
-  const observation: AppAccessShadowDiagnostic = {
-      resolverAvailable: resolver !== undefined,
-      resolverSucceeded,
-      bearerWorkspaceAllowed: input.bearerAllowed,
-      workspaceAllowed: input.workspaceAllowed,
-      appAllowed,
-      workspaceRole,
-      appRole,
-      roleDiff,
-  };
+export async function isDesignatedDelegateApp(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  capsuleId: string,
+): Promise<boolean> {
+  const sources = session.installedAppDelegationSources;
+  if (!sources?.length) return false;
   try {
-    await diagnostic?.call(input.diagnostics, observation);
-  } catch {
-    // Diagnostics have no authority and must not affect the route response.
+    const capsule = await operations.capsules.getCapsule(capsuleId);
+    const source = (await operations.getSource(capsule.sourceId)).source;
+    const adopted = await operations.getCapsuleAdoptedSourceRevision(capsule.id);
+    return installedAppSourceIsDesignated(sources, { url: source.url, path: source.defaultPath }) ||
+      (adopted !== undefined && installedAppSourceIsDesignated(sources, { url: source.url, path: adopted.path }));
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return false;
+    throw error;
   }
-  if (resolverSucceeded && (input.workspaceAllowed !== appAllowed || roleDiff !== "same")) {
-    try {
-      console.warn(JSON.stringify({ event: "app_access_shadow_mismatch", ...observation }));
-    } catch {
-      // Value-free warning output is still best-effort only.
-    }
-  }
-}
-
-async function resolveWorkspaceRole(input: {
-  readonly operations: ControlPlaneOperations;
-  readonly session: ControlSession;
-  readonly workspaceId: string;
-  readonly workspace?: Workspace;
-}): Promise<"owner" | "member" | null> {
-  const workspace = input.workspace ?? await input.operations.workspaces.getWorkspace(input.workspaceId);
-  if (workspace.id !== input.workspaceId) return null;
-  if (workspace.ownerUserId === input.session.subject) return "owner";
-  const member = input.operations.members.getMember
-    ? await input.operations.members.getMember(input.workspaceId, input.session.subject)
-    : (await input.operations.members.listMembers(input.workspaceId)).find((row) => row.accountId === input.session.subject);
-  if (member?.status !== "active" || member.workspaceId !== input.workspaceId ||
-    member.accountId !== input.session.subject) return null;
-  return member.roles.includes("owner") || member.roles.includes("admin") ? "member" : null;
 }
 
 export function jsonStatus(body: unknown, status: number): Response {

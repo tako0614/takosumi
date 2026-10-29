@@ -2463,6 +2463,65 @@ test("matching observed Interfaces remain automatic and explicit choices overrid
   }
 });
 
+test("install-time Interface links need the provider app's consent (explicit and auto_single)", async () => {
+  const PROVIDER_OWNER = "acct_provider_owner";
+  for (const providerCase of ["owned_unmanaged", "owned_managed", "unowned"] as const) {
+    for (const explicit of [false, true]) {
+      const fixture = interfaceAttemptFixture();
+      const provider = addInterfaceProvider(fixture, "owned");
+      // An explicit choice needs a second candidate, or the sheet auto-selects.
+      if (explicit) addInterfaceProvider(fixture, "other");
+      const providerCapsuleId = provider.metadata.ownerRef.id;
+      const ownership = {
+        capsuleId: providerCapsuleId, ownerAccountId: PROVIDER_OWNER, ownershipEpoch: 0,
+        managementState: "active", managementEpoch: 0, storageRoot: `apps/${providerCapsuleId}`,
+      } as const;
+      const owned = providerCase !== "unowned";
+      Object.assign(fixture.operations, {
+        appOwnership: {
+          getOwnership: async (id: string) => owned && id === providerCapsuleId ? ownership : undefined,
+          readOwnershipFence: async (id: string) => ({
+            schemaAvailable: true,
+            ...(owned && id === providerCapsuleId ? { ownership } : {}),
+          }),
+          listMembers: async () => [],
+        },
+        appAccess: {
+          // The installer is the Workspace owner; once the provider app has
+          // an ownership row that grants nothing on it by itself.
+          resolveAppAccess: async (accountId: string, capsuleId: string) => {
+            if (!owned || capsuleId !== providerCapsuleId) return undefined;
+            if (accountId === PROVIDER_OWNER) return { capsuleId, role: "owner", ownerAccountId: PROVIDER_OWNER, ownershipEpoch: 0 };
+            return providerCase === "owned_managed" && accountId === WORKSPACE.ownerUserId
+              ? { capsuleId, role: "member", ownerAccountId: PROVIDER_OWNER, ownershipEpoch: 0 }
+              : undefined;
+          },
+          listAccessibleApps: async () => ({ apps: [] }),
+        },
+      });
+      const planId = await startAttempt(fixture);
+      const paused = await reconcileUntilIdle(fixture, planId);
+      const confirmed = await answer(fixture, planId, {
+        expectedGeneration: paused.installPlan.generation,
+        ...(explicit
+          ? { interfaceLinks: [{ requirementKey: "storage", choice: { kind: "interface", interfaceId: provider.metadata.id } }] }
+          : {}),
+        continue: true,
+        variables: { region: "eu" },
+      });
+      expect(confirmed.status, `${providerCase} explicit=${explicit}`).toBe(200);
+      expect((await confirmed.json()).installPlan.phase).toBe("planning");
+      expect([...fixture.interfaceLinks.values()], `${providerCase} explicit=${explicit}`).toMatchObject([{
+        interfaceId: provider.metadata.id,
+        selection: explicit ? "explicit" : "auto_single",
+        // Unowned providers keep the rollout fallback (the Workspace owner
+        // may approve); owned providers need the installer's app role.
+        state: providerCase === "owned_unmanaged" ? "pending_approval" : "active",
+      }]);
+    }
+  }
+});
+
 test("observed Interface candidates are compared with the current sheet on submission", async () => {
   const fixture = interfaceAttemptFixture();
   const planId = await startAttempt(fixture);
@@ -3996,6 +4055,8 @@ function installFixture(
     readonly selection: "explicit" | "auto_single";
     readonly capsuleId: string;
     readonly requirements: readonly CapsuleRequiredInterface[];
+    /** What the real service would store, from the fence's provider consent. */
+    readonly state: "active" | "pending_approval";
     revoked: boolean;
   }>();
   let loseInterfaceLinkAck = options.loseInterfaceLinkAckOnce === true;
@@ -4070,7 +4131,10 @@ function installFixture(
           readonly interfaceId: string;
           readonly selection: "explicit" | "auto_single";
         }[];
-      }, _actor: unknown, writeFence?: { assertCurrent(): Promise<unknown> }) => {
+      }, _actor: unknown, writeFence?: {
+        assertCurrent(): Promise<unknown>;
+        mayApproveProvider?(provider: { readonly capsuleId: string; readonly workspaceId: string }): Promise<boolean>;
+      }) => {
         interfaceLinkEnsureCalls += 1;
         await writeFence?.assertCurrent();
         await beforeInterfaceLinkWrite?.();
@@ -4090,12 +4154,19 @@ function installFixture(
           if (existing && existing.interfaceId !== selection.interfaceId) {
             throw new Error("provider changed during retry");
           }
-          if (!existing) interfaceLinks.set(key, {
-            ...selection,
-            capsuleId: input.capsuleId,
-            requirements: input.requirements,
-            revoked: false,
-          });
+          if (!existing) {
+            const provider = interfaceCandidates.find((candidate) => candidate.metadata.id === selection.interfaceId)!;
+            const approved = writeFence?.mayApproveProvider
+              ? await writeFence.mayApproveProvider({ capsuleId: provider.metadata.ownerRef.id, workspaceId: provider.metadata.workspaceId })
+              : true;
+            interfaceLinks.set(key, {
+              ...selection,
+              capsuleId: input.capsuleId,
+              requirements: input.requirements,
+              state: approved ? "active" : "pending_approval",
+              revoked: false,
+            });
+          }
         }
         if (loseInterfaceLinkAck) {
           loseInterfaceLinkAck = false;

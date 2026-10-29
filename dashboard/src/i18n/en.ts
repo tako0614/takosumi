@@ -11,6 +11,7 @@ export const en: Record<keyof typeof ja, string> = {
   "controlError.connectionNotOwned": "Choose a connection belonging to this app’s owner.",
   "controlError.ownershipTransferPending": "Ownership is being transferred. Try again after it completes or is cancelled.",
   "controlError.retiredManagement": "This operation is retired. Manage members from the app’s sharing section.",
+  "controlError.interfaceLinkApprovalRequired": "The linked app has to approve this change, so the link was not changed. The current link keeps working.",
   "account.apiKeys.scopeRestricted": "Restricted",
   "account.section.usage": "Billing and usage",
   "installStore.error.sourceRefRequired": "Enter a version to install this app.",

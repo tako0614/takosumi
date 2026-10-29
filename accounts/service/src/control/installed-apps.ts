@@ -5,6 +5,7 @@ import type { InstallConfig } from "takosumi-contract";
 import type { Source } from "takosumi-contract";
 import { json, methodNotAllowed } from "../http-helpers.ts";
 import { type ControlDispatchContext } from "./shared.ts";
+import { workspaceAppVisibility } from "./app-authorization.ts";
 
 function storeState(capsule: { status: string; currentStateVersionId?: string; currentStateGeneration: number }): InstalledAppSummary["state"] {
   if (!capsule.currentStateVersionId && capsule.currentStateGeneration === 0) return "installing";
@@ -35,7 +36,12 @@ export async function handleWorkspaceInstalledApps(
 ): Promise<Response> {
   if (method !== "GET") return methodNotAllowed("GET");
   const capsules = await ctx.operations.capsules.listCapsules(workspaceId);
-  const live = capsules.filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed");
+  const workspaceLive = capsules.filter((capsule) => capsule.workspaceId === workspaceId && capsule.status !== "destroyed");
+  // Apps the caller cannot view are omitted (Workspace compat read).
+  const visibility = await workspaceAppVisibility({
+    operations: ctx.operations, session: ctx.session, capsuleIds: workspaceLive.map((capsule) => capsule.id),
+  });
+  const live = workspaceLive.filter((capsule) => visibility.allows([capsule.id]));
   const configIds = [...new Set(live.map((capsule) => capsule.installConfigId))];
   // One batch read avoids per-app D1 requests. Missing or unusable configs omit
   // only their own rows and make the summary explicitly incomplete.

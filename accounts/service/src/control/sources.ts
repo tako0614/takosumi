@@ -100,6 +100,7 @@ import {
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
+  isInstalledAppToken,
   isRecord,
   jsonStatus,
   parseControlPageParams,
@@ -137,8 +138,18 @@ import {
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
-import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
+import { clampPageLimit, decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import {
+  requireAppAccess,
+  requireOwnerForDelegateCodeChange,
+  requireResourceAccess,
+  sourceCapsuleIds,
+  visibleKeysetPage,
+  workspaceAppVisibility,
+  workspaceSourceApps,
+} from "./app-authorization.ts";
+import type { AppAction } from "takosumi-contract/app-access";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string }>,
@@ -152,6 +163,32 @@ function sourceWorkspaceIdentityMissing(): Response {
     "source is missing Workspace identity",
     500,
   );
+}
+
+/**
+ * An app's Source decides per app (its owner, or every live Capsule built
+ * from an ownerless Source); a Source no app uses stays Workspace-scoped.
+ */
+function sourceOwnerCapsuleId(source: Readonly<{ ownerCapsuleId?: string }>): string | undefined {
+  return stringValue(source.ownerCapsuleId);
+}
+
+async function requireSourceAccess(
+  ctx: ControlDispatchContext,
+  source: Readonly<{ id: string; ownerCapsuleId?: string }>,
+  workspaceId: string,
+  action: AppAction,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+  return await requireResourceAccess({
+    operations: ctx.operations,
+    store: ctx.store,
+    session: ctx.session,
+    workspaceId,
+    capsuleIds: await sourceCapsuleIds(ctx.operations, { id: source.id, workspaceId, ...(sourceOwnerCapsuleId(source) ? { ownerCapsuleId: sourceOwnerCapsuleId(source) } : {}) }),
+    action,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
 }
 
 export async function handleSources(
@@ -177,7 +214,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({ operations, store, workspaceId, session: ctx.session });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "change_settings");
       if (!auth.ok) return auth.response;
       if ((await request.text()).length !== 0) {
         return errorJson("invalid_request", "Hook secret rotation accepts no request body.", 400);
@@ -213,12 +250,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "update");
       if (!auth.ok) return auth.response;
       const response = await operations.createSourceSync(sourceId, {
         dedupe: true,
@@ -238,12 +270,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "view");
       if (!auth.ok) return auth.response;
       const page = parseControlPageParams(url);
       if (!page.ok) return page.response;
@@ -267,12 +294,7 @@ export async function handleSources(
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "view");
       if (!auth.ok) return auth.response;
       const sourceSnapshot = await operations.getSourceSnapshot(
         sourceSnapshotId,
@@ -299,12 +321,7 @@ export async function handleSources(
         .captureManagementAuthority(workspaceId)
         .then((authority) => ({ ok: true as const, authority }))
         .catch((error) => ({ ok: false as const, error }));
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      const auth = await requireSourceAccess(ctx, source, workspaceId, "update");
       if (!auth.ok) return auth.response;
       const body = await readOptionalJsonObject(request);
       if (body === null) {
@@ -332,6 +349,32 @@ export async function handleSources(
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const capsuleId = stringValue(body.capsuleId);
+      if (isInstalledAppToken(ctx.session)) {
+        // An app's own token may check only against its own app's config; it
+        // never creates a Workspace-level InstallConfig or probes another one.
+        const own = await operations.capsules.getCapsule(ctx.session.appIds[0]!);
+        const requestedConfig = stringValue(body.installConfigId);
+        if (body.compileInstallUx === true || (requestedConfig !== undefined && requestedConfig !== own.installConfigId)) {
+          return errorJson("app_access_denied", "An installed app can only check its own app's configuration.", 403);
+        }
+      }
+      if (capsuleId && !(await sourceCapsuleIds(operations, { id: source.id, workspaceId, ...(sourceOwnerCapsuleId(source) ? { ownerCapsuleId: sourceOwnerCapsuleId(source) } : {}) })).includes(capsuleId)) {
+        // A check that targets an existing app also needs that app's update
+        // permission, independently of the Source's own authority.
+        const target = await operations.capsules.getCapsule(capsuleId);
+        const targetAuth = await requireAppAccess({
+          operations,
+          store,
+          session: ctx.session,
+          workspaceId: target.workspaceId,
+          capsuleId: target.id,
+          capsule: target,
+          action: "update",
+          ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+          ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+        });
+        if (!targetAuth.ok) return targetAuth.response;
+      }
       // A manual compatibility check may select an existing DB-owned
       // InstallConfig. Repository compilation uses the generic host config.
       const installConfigId = stringValue(body.installConfigId);
@@ -565,12 +608,11 @@ export async function handleSources(
           return { ok: false as const, error };
         }
       })() : undefined;
-      const auth = await requireWorkspaceAccess({
-        operations,
-        store,
-        workspaceId,
-        session: ctx.session,
-      });
+      // Removing an app's own Source removes what the app is built from, so
+      // it is owner-only like uninstall; unowned preflight Sources stay
+      // Workspace-scoped.
+      const auth = await requireSourceAccess(ctx, source, workspaceId,
+        method === "GET" || method === "HEAD" ? "view" : method === "DELETE" ? "uninstall" : "change_settings");
       if (!auth.ok) return auth.response;
       if (method === "GET") {
         return json({ source: publicSource(source) });
@@ -580,6 +622,19 @@ export async function handleSources(
         if (body === null) {
           return errorJson("invalid_json", "invalid json body", 400);
         }
+        // An installed app's own token keeps the Source's current connection
+        // (the same rule as configuration plans); it never chooses another.
+        if (isInstalledAppToken(ctx.session) && Object.prototype.hasOwnProperty.call(body, "authConnectionId") &&
+          (body.authConnectionId ?? null) !== ((source as { authConnectionId?: string }).authConnectionId ?? null)) {
+          return errorJson("app_access_denied", "An installed app cannot choose the Source's connection.", 403);
+        }
+        if (body.defaultRef !== undefined || body.defaultPath !== undefined) {
+          const codeChange = await requireOwnerForDelegateCodeChange({
+            operations, store, session: ctx.session, workspaceId,
+            capsuleIds: await sourceCapsuleIds(operations, source),
+          });
+          if (!codeChange.ok) return codeChange.response;
+        }
         const response = await operations.patchSource(
           sourceId,
           body as PatchSourceRequest,
@@ -587,9 +642,8 @@ export async function handleSources(
         return json({ ...response, source: publicSource(response.source) });
       }
       if (method === "DELETE") {
-        // Write scope already gated above: only an owner/admin member with a
-        // Workspace-wide credential reaches here (member sessions and
-        // read-only bearers observe 403 from `requireWorkspaceAccess`).
+        // Write scope already gated above: the app owner for an app's Source,
+        // or an owner/admin Workspace member for an unowned preflight Source.
         if (!captured) throw new Error("Source deletion authority was not captured");
         if (!captured.ok) throw captured.error;
         const response = await operations.deleteSource(
@@ -673,19 +727,29 @@ export async function handleCompatibilityReports(
     const reportId = decodeURIComponent(segments[1] ?? "");
     const response = await operations.getCompatibilityReport(reportId);
     const report = response.report;
-    const reportWorkspaceId = report.sourceId
-      ? sourceWorkspaceId((await operations.getSource(report.sourceId)).source)
+    const reportSource = report.sourceId
+      ? (await operations.getSource(report.sourceId)).source
+      : undefined;
+    const reportWorkspaceId = reportSource
+      ? sourceWorkspaceId(reportSource)
       : report.capsuleId
         ? (await operations.capsules.getCapsule(report.capsuleId)).workspaceId
         : undefined;
     if (!reportWorkspaceId) {
       return errorJson("not_found", "compatibility report not found", 404);
     }
-    const auth = await requireWorkspaceAccess({
+    // A report about an app (directly or through its own Source) is that
+    // app's view; a preflight report on an unowned Source stays Workspace.
+    const auth = await requireResourceAccess({
       operations,
       store,
-      workspaceId: reportWorkspaceId,
       session: ctx.session,
+      workspaceId: reportWorkspaceId,
+      capsuleIds: report.capsuleId ? [report.capsuleId]
+        : reportSource ? await sourceCapsuleIds(operations, reportSource) : [],
+      action: "view",
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
     if (!auth.ok) return auth.response;
     return json(await publicCompatibilityReportResponse(operations, response));
@@ -718,10 +782,31 @@ async function listSources(
   if (!auth.ok) return auth.response;
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
-  const response = await operations.listSources(workspaceId, page.params);
+  // Sources of apps the caller cannot view are omitted (Workspace compat
+  // list), and the cursor never points at one of them.
+  let sourceApps: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+  const listed = await visibleKeysetPage({
+    limit: clampPageLimit(page.params.limit),
+    ...(page.params.cursor !== undefined ? { cursor: page.params.cursor } : {}),
+    read: async ({ cursor, limit }) => {
+      const response = await operations.listSources(workspaceId, { ...(cursor !== undefined ? { cursor } : {}), limit });
+      return { items: response.sources, ...(response.nextCursor !== undefined ? { nextCursor: response.nextCursor } : {}) };
+    },
+    visibility: async (sources) => {
+      const bySource = operations.appOwnership
+        ? await (sourceApps ??= workspaceSourceApps(operations, workspaceId))
+        : new Map<string, readonly string[]>();
+      const appsOf = (source: Source): readonly string[] => {
+        const owner = sourceOwnerCapsuleId(source);
+        return owner ? [owner] : bySource.get(source.id) ?? [];
+      };
+      const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: sources.flatMap(appsOf) });
+      return (source) => visibility.allows(appsOf(source));
+    },
+  });
   return json({
-    ...response,
-    sources: response.sources.map(publicSource),
+    sources: listed.items.map(publicSource),
+    ...(listed.nextCursor !== undefined ? { nextCursor: listed.nextCursor } : {}),
   });
 }
 

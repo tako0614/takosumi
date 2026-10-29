@@ -21,6 +21,7 @@ export const ja = {
   "controlError.connectionNotOwned": "このアプリの所有者の接続を選んでください。",
   "controlError.ownershipTransferPending": "所有権の譲渡中です。完了または取り消しの後にもう一度お試しください。",
   "controlError.retiredManagement": "この操作は利用できなくなりました。メンバーはアプリの共有から管理してください。",
+  "controlError.interfaceLinkApprovalRequired": "連携先アプリの承認が必要なため、連携先を変更できません。今の連携はそのまま使えます。",
   "account.apiKeys.scopeRestricted": "制限あり",
   "account.section.usage": "料金と利用量",
   "installStore.error.sourceRefRequired": "インストールする版を入力してください。",

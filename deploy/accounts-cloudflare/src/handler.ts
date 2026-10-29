@@ -34,6 +34,7 @@ import {
   type WorkspaceBillingEnrollmentPort,
   resolveD1AccountsSchemaMode,
   resolveTakosumiMobileOidcClientId,
+  parseInstalledAppDelegationSources,
   parseWorkspaceMutationsFrozen,
 } from "@takosjp/takosumi-accounts-service";
 import {
@@ -90,6 +91,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY?: string;
   /** Defaults to frozen; set false/off/0 only for an explicit rollback. */
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
+  /** JSON array of `{ url, path }` repositories whose installed app may delegate. */
+  readonly TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
@@ -1284,6 +1287,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ...(hostedSessionPolicy ? { hostedSessionPolicy: true } : {}),
     workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
       env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+    ),
+    installedAppDelegationSources: parseInstalledAppDelegationSources(
+      env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
     ),
     ...(hostedSessionPolicy && options.identityMergeReconciler
       ? { identityMergeReconciler: options.identityMergeReconciler(env) }

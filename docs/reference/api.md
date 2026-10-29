@@ -236,6 +236,40 @@ health/metrics、operator-only `/internal/v1` はそれぞれ独立した protoc
 
 PATには `appIds` を指定できます。実効権限はscopeと現在のアプリ内の役割の積です。アプリに束縛したPATはアカウント全体の個人接続や使用量を読めません。旧Workspace route・claimは互換期間だけ維持します。インストールされたアプリへのOIDCサインインは全アカウントに開き、`takosumi.capsule_id` でアプリを示します。現在の所有者・メンバーだけに `takosumi.app_role` を発行します。
 
+### アプリ管理の権限
+
+アプリに所有記録 (`capsules.owner_account_id`) があるとき、管理操作の可否はそのアプリでの役割だけで決まります。Workspaceの所有者・管理者であっても、アプリの所有者・メンバーでなければ管理できません。逆に、アプリの所有者・メンバーはWorkspaceのメンバーでなくても管理できます。アプリを使うだけの人はメンバーではなく、アプリ自身のURLとアクセス規則で利用します。
+
+| 操作 (`AppAction`) | 所有者 | メンバー | 主なroute |
+| --- | --- | --- | --- |
+| 表示 (`view`) | 可 | 可 | `GET /capsules/{id}` と配下のGET、そのアプリのRun・StateVersion・Source・InstallConfig・互換レポートのGET |
+| 設定変更 (`change_settings`) | 可 | 可 | `PATCH /capsules/{id}`、`configuration-plans`、`install-config-re-adoptions`、`backups`、所有Sourceの `PATCH`・hook secret |
+| 更新 (`update`) | 可 | 可 | `plan`、`revision-plans`、`drift-check`、所有Sourceの `sync`・`compatibility-check`、通常のRunの承認・適用・取消 |
+| ロールバック (`rollback`) | 可 | 可 | `POST /state-versions/{id}/rollback-plan`、restore Runの承認 |
+| 接続の選択 (`choose_connection`) | 可 | 可 | `providerBindings` を含む `configuration-plans`。選べるのは所有者の接続とoperatorのbindable接続だけ |
+| Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}` |
+| アンインストール (`uninstall`) | 可 | 不可 | `DELETE /capsules/{id}`、`uninstall`・`cancel-uninstall`・`abandon`・`destroy-plan`、destroy Runの承認・適用・取消、所有Sourceの `DELETE` |
+| 所有者の譲渡 (`transfer_ownership`) | 可 | 不可 | `ownership-transfers` |
+| メンバー管理 (`manage_members`) | 可 | 不可 | `members` の追加・削除 (メンバー本人の離脱は可) |
+
+拒否は `403 app_access_denied` (役割がない) または `403 app_owner_only` (所有者だけの操作) です。所有記録の確認と役割の読み取りの間に所有者が変わった場合は `409 conflict` を返し、再試行を求めます。完了したアンインストール後も、残っている所有記録の所有者・メンバーは履歴を表示できます。
+
+Sourceは所有アプリ (`ownerCapsuleId`) のものです。所有アプリの無い既存のSourceは、それを使う稼働中のアプリすべてのものとして扱います。操作には、それらのアプリすべてで、各アプリの規則で許されることが必要です。所有記録のあるアプリはアプリでの判定、所有記録の無いアプリは従来のWorkspace判定です。片方の規則がもう片方の代わりになることはありません。そのSourceの `source_sync` Runと互換レポートも同じです。Sourceが削除済みのRunはアプリに属さないものとしてWorkspace判定で決めます。
+
+Interface linkは、要求者が提供側アプリでも `change_interface_link` を持つとき (所有記録の無い提供側はWorkspace判定) だけ作成時に承認されます。それ以外は `pending_approval` で作られます。インストール時に作るlink (明示的な選択と、候補が1つだけのときの自動選択) も同じ規則です。さらに、インストールを進める人がインストール計画の作成者 (承認者として記録される人) であることも必要です。
+
+既存のlinkの付け替えで、新しいlinkが `pending_approval` になる場合は `409 interface_link_approval_required` で拒否し、今のlink (activeでもpendingでも) をそのまま残します。`pending_approval` のlinkを承認するAPIはまだ無いので、付け替えるとアプリがInterfaceを失うためです。今のlinkが無いときは、新しいlinkを `pending_approval` で作れます。
+
+資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリ自身のOAuthアクセストークン (アプリごとのOIDC clientに発行され、そのアプリに束縛されたtoken) は、そのアプリ自身だけに使えます。別のアプリのroute、別のアプリに属するRun・Source・インストール計画、Workspace単位のroute (一覧、`install-plans` の作成など) は `403` です。自分のアプリでも、アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通ります。アンインストール (`destroy-plan`、`DELETE /capsules/{id}`、destroy Runの承認・適用を含む)・譲渡・メンバー管理・新しい接続の選択には使えず、他のアプリのInterfaceを承認することもありません (下の代理指定のアプリを除く)。例外は、operatorが `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` で指定したリポジトリと許可したrefから現在適用されているアプリ (Takosのように利用者の代わりにアプリをインストールするアプリ) だけです。判定はサーバー側で、tokenに束縛されたアプリが同じWorkspaceで稼働中 (無効化・アンインストール予定でない) であり、そのアプリのSource (URLは変更できない) と適用中のrevisionのpathが指定と一致し、さらにrunnerがそのrevisionのsnapshotに記録した完全なref名 (`resolvedRef`) が許可した `refs/heads/…`・`refs/tags/…` に一致するかで行います。インストール時に指定したrefの名前 (`main`、`HEAD` など) は使いません (`git ls-remote` は名前の末尾で照合するため、`1/head` のような名前が `refs/pull/1/head` に解決されることがあるためです)。refを指定しないインストールの `HEAD` は、runnerが既定のbranch (`refs/heads/…`) として記録します。`resolvedRef` の無いsnapshot (commit SHAで取得したもの、この記録を始める前に取得したもの)、`refs/pull/*` など `refs/heads/`・`refs/tags/` 以外のrefは対象外で、clientの申告は使いません。代理に指定されたアプリの配備内容 (revision plan、`rollback-plan`、Sourceの `defaultRef`・`defaultPath`、InstallConfigの再採用) を変えられるのは所有者だけです (所有記録の無いアプリではWorkspaceの所有者だけ)。代理に指定されたアプリのtokenは、利用者が所有者である他のアプリ (所有記録の無いアプリではWorkspaceの所有者) をアンインストールできますが、自分自身のアプリのアンインストール・譲渡・メンバー管理はできません。Interface linkは、利用者が提供側アプリでも `change_interface_link` を持つときだけ作成時に承認します。代理でないアプリのtokenは自分のアプリのplanを作れますが、Runの承認・適用・取消はできません (人のセッションかPATが必要)。Runには作った人 (tokenの利用者と同じ) しか記録されず、どのclientが作ったかを区別できないため、取消も一律に拒否します。Sourceの接続 (`authConnectionId`) を変えることや、`compatibility-check` でWorkspaceのInstallConfigを作ること・他のアプリのInstallConfigを指定することもできません。指定されたアプリのtokenは、束縛されたWorkspaceの中で、アプリでの役割とWorkspace判定の両方を満たす範囲だけ使えます。operatorが登録するstatic client (アプリに束縛されないtoken) は従来どおりです。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も、アプリでの役割とWorkspace判定の両方を要求します。
+
+Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者のいないpreflight Source、Workspaceの接続) はPhase 9まで従来のWorkspace判定で互換提供します。ただし一覧 (`/workspaces/{id}/capsules`・`runs`・`activity`・`current-state-versions`・`backups`・`installed-apps`・`interface-materialization-failures`、`/dashboard/overview`、`/sources?workspaceId=`) は、所有記録のあるアプリのうち呼び出し元が表示できないアプリの行を含めません。所有記録のあるアプリへの操作はアプリでの判定を通ります。
+
+一覧の `nextCursor` は、返した最後の行 (表示できる行) を指します。表示できない行のIDや時刻はcursorに入りません。表示できない行を除くため、1ページが `limit` より短くなることがあります。ページを埋めるために内部で最大10ページ (1ページ100行) まで追加で読みます。それでも表示できる行が見つからないときは、cursorを返さずに一覧をそこで終えます。cursorは暗号化していません (Accountsの制御routeには使える既存の鍵が無いため)。
+
+Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCapsuleIds` は全員)、Interfaceの所有アプリ (`ownerId`)、bindingの対象Capsule (`subjectId`) と、binding・tokenのInterfaceの提供側アプリ、Source (それを使うアプリ、または所有アプリ)、それでもアプリが分からないときはRun (`runId`、Run対象、`metadata.runId`・`planRunId`・`applyRunId`) でアプリに結び付けます。アプリを示さないbackupはWorkspace全体のbackupで、稼働中の全アプリに属します。所有記録のあるアプリがWorkspaceにある間は、アプリを決められないイベント (Run・Interfaceが見つからない、読み取りの上限を超えた、手がかりが無い) を表示しません。`workspace`・`connection` のイベントと、アプリに属さないと分かったイベント (どのアプリも使わないRun・Source、削除済みのSource) はWorkspace判定のまま表示します。`/dashboard/bootstrap?includeNotifications=true` の通知も同じ規則です。読み取りは、WorkspaceのCapsule一覧と所有記録の一括読み取りが先です。所有記録のあるアプリが無ければ (v75では全アプリ)、それ以上読みません。ある場合のRun・Source・Interfaceの読み取りは、重複を除いて並列に行い、1リクエスト50件までです。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
+
+**移行中の扱い。** 所有記録がまだ使えないアプリは、そのリクエストに限り従来のWorkspace判定で決めます。対象は、所有ストアがない構成、D1 v77 / Postgres v123 より前のschema、backfillがまだ所有記録を書いていないアプリです。所有記録が書かれた時点から、そのアプリはアプリでの判定だけになります。従来判定を使ったことは、IDを含まない構造化ログ `app_authorization_workspace_fallback` (`reason` は `ownership_store_unavailable`・`ownership_schema_unavailable`・`capsule_not_backfilled`) に、isolateごとに5分に1回まとめて残します。判定ごとに所有記録を1回読み、所有記録があるときは役割の解決でもう一度読みます。所有ストアの既存のschema確認を使い、D1 v77より前では「schemaが無い」結果を60秒保持するので、判定ごとの確認queryは発生しません。
+
 ### Account views
 
 | メソッド | パス                          | 説明                                                      |

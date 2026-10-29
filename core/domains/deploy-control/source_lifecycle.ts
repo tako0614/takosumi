@@ -387,6 +387,7 @@ export class SourceLifecycleService {
       url: running.url,
       ref: running.ref,
       resolvedCommit: result.resolvedCommit,
+      ...(sourceSnapshotResolvedRef(result.resolvedRef) ? { resolvedRef: sourceSnapshotResolvedRef(result.resolvedRef) } : {}),
       path: running.path,
       archiveRef,
       archiveDigest: result.archiveDigest,
@@ -716,6 +717,17 @@ function sourceSnapshotMatchesRun(
     snapshot.ref === running.ref &&
     snapshot.path === running.path
   );
+}
+
+/**
+ * A runner-reported full ref name, kept only when it is a plain `refs/…` name
+ * (anything else is dropped, so nothing that relies on it can be misled).
+ */
+function sourceSnapshotResolvedRef(value: string | undefined): string | undefined {
+  if (typeof value !== "string" || value.length > 256 || !value.startsWith("refs/")) return undefined;
+  if (!/^refs\/[A-Za-z0-9._\/+@-]+$/u.test(value) || value.includes("..") || value.includes("//") ||
+    value.endsWith("/") || value.endsWith(".lock") || value.includes("@{")) return undefined;
+  return value;
 }
 
 function isExactImmutableGitCommit(value: string): boolean {

@@ -111,10 +111,10 @@ import {
 } from "./sources.ts";
 import {
   controllerErrorCode,
-  requireWorkspaceAccess,
   resolveProviderBindings,
   type ControlDispatchContext,
 } from "./shared.ts";
+import { mayApproveInterfaceProvider, requireResourceAccess } from "./app-authorization.ts";
 
 const MAX_IDEMPOTENCY_KEY_BYTES = 256;
 const MAX_DIAGNOSTIC_CODE = 64;
@@ -398,11 +398,21 @@ export async function handleInstallPlans(
   if (!plan || plan.operation === "revision") {
     return errorJson("not_found", "Install plan not found.", 404);
   }
-  const auth = await requireWorkspaceAccess({
+  // Before its Capsule exists an install attempt is Workspace work. Once the
+  // app exists, the attempt is that app's: reading is view, answering is a
+  // settings change, discarding abandons the app (owner only).
+  const auth = await requireResourceAccess({
     operations: ctx.operations,
     store: ctx.store,
     session: ctx.session,
     workspaceId: plan.workspaceId,
+    capsuleId: plan.capsuleId,
+    action: method === "GET" || method === "HEAD" ? "view"
+      : method === "DELETE" ? "uninstall"
+      : segments[2] === "reconcile" ? "update"
+      : "change_settings",
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
   });
   if (!auth.ok) return auth.response;
 
@@ -2402,11 +2412,13 @@ async function finishInitialInterfaceLinks(
         selections,
       }, { actorAccountId: plan.createdBy, roles: [], requestId: plan.id }, {
         assertCurrent: async () => {
-          const auth = await requireWorkspaceAccess({
+          const auth = await requireResourceAccess({
             operations,
             store: ctx.store,
             session: ctx.session,
             workspaceId: plan.workspaceId,
+            capsuleId: plan.capsuleId,
+            action: "change_interface_link",
           });
           if (!auth.ok) {
             throw new OpenTofuControllerError("permission_denied", "Interface link access is no longer available.");
@@ -2425,6 +2437,21 @@ async function finishInitialInterfaceLinks(
           }
           return authority;
         },
+        // Same provider-side consent as PUT /capsules/:id/interface-links:
+        // the link is approved only when the person continuing the install
+        // is the plan's creator (recorded as the approver) and may change
+        // links on the provider app. Otherwise it is created pending_approval.
+        mayApproveProvider: async (provider) =>
+          ctx.session.subject === plan.createdBy &&
+          await mayApproveInterfaceProvider({
+            operations,
+            store: ctx.store,
+            session: ctx.session,
+            consumerCapsuleId: plan.capsuleId!,
+            provider,
+            ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+            ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+          }),
       });
     } catch (error) {
       if (error instanceof InterfaceServiceError &&
