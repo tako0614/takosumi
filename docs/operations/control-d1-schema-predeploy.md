@@ -113,6 +113,57 @@ repair forward with the same source/manifest; database restoration requires the
 separate recovery procedure. This surface never publishes a Worker, creates a
 credential, restores a database, releases automatically, or retries a mutation.
 
+### Fixed production v75 to v79 transition
+
+The TASK-0118 rollout uses a third temporary owner surface,
+`takosumi-control-d1-schema-production-v75-v79`. It has the same shape as the
+v66-to-v75 lane: only `plan`, `verify`, `apply`, and `release`; production and
+canonical head 79 are fixed; apply always retains the in-place fence; caller
+environment, predecessor, export, and forward-repair overrides are refused; and
+the plan stays pinned to the v79 manifest when the catalog advances. Staging has
+no fixed lane: the generic staging surface applies the same catalog.
+
+```bash
+bun run deploy -- takosumi-control-d1-schema-production-v75-v79 plan
+bun run deploy -- takosumi-control-d1-schema-production-v75-v79 apply \
+  --confirm-manifest sha256:<reviewed-v79-manifest>
+bun run deploy -- takosumi-control-d1-schema-production-v75-v79 release \
+  --confirm-manifest sha256:<reviewed-v79-manifest>
+bun run deploy -- takosumi-control-d1-schema-production-v75-v79 verify
+```
+
+Order: this lane runs **after** a platform Worker that accepts heads 71 through
+79 serves, and after every other Worker bound to the same Control D1 (for
+example a separate auth Worker) has been updated the same way. A Worker
+accepts only the heads it knows; one built before the TASK-0118 schema changes
+accepts 71 through 75, fails every request closed on v76 or later, and is no
+longer a restore target once v76 commits. The full
+operator order (deploy, schema, Source ownership, backfill, cutover
+verification, delegation) is in
+[App ownership expansion and backfill](./app-ownership-backfill.md#rollout-order).
+
+Admission before any fence batch requires the exact canonical ledger at 75 with
+absent or inactive maintenance, or the same exact active source/manifest/target
+fence at 75 through 79. A target still at 66 refuses here and uses the v66-to-v75
+lane first. Wrong, missing, tampered, or future ledger rows refuse. Queued or
+running Runs, unknown Run statuses, and every retained lease refuse, and the
+fence transaction repeats that predicate atomically, as in the v66-to-v75 lane.
+
+The window applies 76 (`interface_links`), 77 (per-app ownership columns,
+`capsule_members`, `account_billing_bindings`), 78 (ownership-transfer ledger
+and credential mint leases) and 79 (nonunique indexes
+`usage_events(workspace_id, created_at, id)`, `backups(space_id, created_at,
+id)`, `capsules(space_id, source_id)`, `connections(owner_account_id,
+created_at, id)` and `capsule_ownership_transfers(capsule_id, state,
+ownership_epoch)`). All are additive. Before the first production apply,
+independently review the exact source and manifest, a populated fault-forward
+rehearsal at the real target's shape, the measured v79 index-build time at
+production row counts with margin below D1's request limit, and a fresh Time
+Travel bookmark and export taken in the window. Apply retains the fence through
+every partial head; read back the v79-compatible runtime before `release`, then
+`verify` and run authenticated Control read/write smoke. After 76 commits, only
+forward repair from the same source and manifest is valid.
+
 ### Compatibility-report declarations: v67 to v68
 
 This is a nullable, no-backfill expansion. Historical reports have no retained
@@ -292,26 +343,30 @@ the ledger row or indexes to accommodate an older binary. Local synthetic
 native fixtures are evidence for the implementation, not approval to apply a
 live database migration or qualify an operator's physical source.
 
-### Additive Interface links and app ownership (D1 76–78)
+### Additive Interface links, app ownership and list indexes (D1 76–79)
 
-Current bootstrap targets 78. The compatible ordinary bridge accepts complete,
-checksummed heads 71 through 78 with the separate runtime floors above.
+Current bootstrap targets 79. The compatible ordinary bridge accepts complete,
+checksummed heads 71 through 79 with the separate runtime floors above.
 During the additive rollout, `verifyD1OpenTofuLedgerSchemaPredeployed` accepts
-complete v75 through v78 catalogs and their physical Financial source hooks. Staging
+complete v75 through v79 catalogs and their physical Financial source hooks. Staging
 and the dedicated auth release use this same read-only verifier, so v75 remains
-supported until the later fenced rollout. Indexed Backup reads retain their 74
-floor and recheck the exact index shapes.
+supported until the fenced rollout. Indexed Backup reads retain their 74
+floor and recheck the exact index shapes; at 79 the verifier also requires the
+five list indexes by name, key columns and DDL.
 
 Migration 76 adds only `interface_links`; it does not change existing Binding
 rows or per-app ownership. On v75, link reads are empty and link writes return
 `failed_precondition`, while sign-in and Capsule retirement remain available.
 The table-absence probe retries after one second and failed probes are not
 cached. Per-app ownership expansion belongs to the later v77 migration. The
-production v75-to-v78 rollout adds the v78 transfer ledger and mint leases in
-the same window without modifying v77 checksums. It is a separate operator action in one fenced
-window; no rollout is performed by this code change. The historical production
-v66-to-v75 owner remains pinned to its v75 plan even when the default catalog
-advances.
+production v75-to-v79 rollout adds the v78 transfer ledger and mint leases and
+the v79 list indexes in the same window without modifying the v76-v78
+checksums (they are pinned by tests, and a rehearsal target may already hold
+v78). Its PostgreSQL counterparts are catalogs 122-125. It is a separate
+operator action in one fenced window, run only after the v71-v79-compatible
+Worker serves; no rollout is performed by this code change. The historical
+production v66-to-v75 owner remains pinned to its v75 plan even when the
+default catalog advances.
 
 Migration 75 adds the Workspace Financial source heads, immutable raw events,
 materializations and receiver receipts. Its PostgreSQL counterpart is catalog

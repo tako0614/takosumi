@@ -13,6 +13,9 @@ ledger and credential mint leases move to additive D1 v78
 (`d1_app_authorization`) and PostgreSQL v124. The existing Drizzle mirror
 describes the resulting schema. A future operator window applies v75 through
 v78 together; no migration has been executed against a deployed database.
+(Superseded: the window now applies v75 through v79, after the v71-v79
+compatible Worker is deployed; see
+[the rollout order](../../operations/app-ownership-backfill.md#rollout-order).)
 The v77 checksum is pinned by a regression test.
 
 ## Authorization and issuance

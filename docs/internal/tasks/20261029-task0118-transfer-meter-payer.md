@@ -97,7 +97,8 @@ validates every reached row before choosing an interval.
 ## Deferred and known limits
 
 - An index on `(capsule_id, state, ownership_epoch)` for the transfer ledger
-  is deferred to the later contract schema change; this PR adds no DDL. The
+  is deferred to the later contract schema change; this PR adds no DDL.
+  (Later added as D1 v79 / PostgreSQL v125 in the same rollout window.) The
   recipient walk cannot see an accepted row off the chain (for example a
   second accepted row for an epoch with a different recipient). The accept CAS
   cannot produce one: there is one pending row per app and an epoch CAS.
