@@ -101,25 +101,58 @@ bun scripts/verify-app-access-cutover.ts --adapter=/absolute/operator/ownership-
 
 It uses the same operator adapter module as the backfill
 (`openOwnershipBackfill()`), never writes, needs no mutation freeze and ignores
-`workspaceMutationsFrozen`. Use read-only credentials where available. For every
-live Capsule and every account that can manage it under either rule, it compares
-three access classes (`view`, `manage`, `owner_only`) between the legacy
-Workspace decision and the per-app decision after the backfill. Capsules
-without an ownership row are projected with the backfill's own inference
-(Workspace owner becomes the owner, active owner/admin members become members),
-so it can run before the backfill (including on D1 v75) and again after it.
+`workspaceMutationsFrozen`. Use read-only credentials where available. It
+compares three access classes (`view`, `manage`, `owner_only`) between the
+legacy Workspace decision and what the deployed per-app code decides:
 
-The JSON report lists `differences` with a `reason`:
+- For a Capsule that already has an ownership row, exactly that row's owner
+  and its active `capsule_members` (what the live resolver reads).
+- For a Capsule without a row, the backfill's projection (Workspace owner
+  becomes the owner, active owner/admin members become members). It can
+  therefore run before the backfill (including on D1 v75), during it and after
+  it, and always shows what the cutover code would do at that moment.
+- Every Source used by live apps: its `ownerCapsuleId`, or every live Capsule
+  built from an ownerless Source, all of which must allow.
+- The legacy read rule lets every active Workspace member read, including
+  members with no or unknown roles.
 
-- `workspace_reader_not_app_member`: a Workspace `member`/`viewer` could read
-  the app; they are not migrated and lose access. Confirm or add them as app
-  members before the cutover.
-- `workspace_manager_not_app_owner`: a Workspace admin becomes an app member and
-  loses owner-only actions (uninstall, transfer, member management).
-- `workspace_manager_not_app_member`: a Workspace owner/admin is outside an
-  explicit app roster (a new or transferred app) and loses the app.
+The JSON report lists `differences` (`capsuleId` or `sourceId`) with a `reason`:
+
+- `workspace_reader_not_app_member`: an active Workspace member/viewer (or
+  role-less member) could read the app; they are not migrated and lose access.
+  Confirm or add them as app members before the cutover.
+- `workspace_manager_not_app_owner`: a Workspace owner/admin who is an app
+  member loses owner-only actions (uninstall, transfer, member management).
+- `workspace_manager_not_app_member`: a Workspace owner/admin is outside the
+  app's roster (a new or transferred app, or an owner row written before its
+  member rows) and loses the app.
+- `app_role_beyond_workspace_role`: a Workspace member/viewer who is an app
+  owner/member gains management.
 - `app_role_without_workspace_role`: an app owner/member without Workspace
   membership gains the app (for example after a transfer).
+
+`affectsBothRequiredCredentials: true` marks differences that also apply to
+installed-app OAuth tokens and `requireCurrentMembership` compositions, which
+need both decisions; they never gain access.
+
+### Order and preconditions
+
+1. Complete the Source ownership migration
+   ([source-ownership-migration.md](./source-ownership-migration.md)) where
+   possible. Ownerless Sources keep working (they belong to every live app
+   built from them), but a Source shared by several apps then needs every one
+   of those apps to allow each action.
+2. Apply the D1 v77/v78 (Postgres v123) schema.
+3. Run the backfill to completion (every batch, until a dry-run reports no
+   pending writes) with Workspace mutations frozen. Backfill writes a Capsule's
+   owner row and its member rows as separate writes, possibly in different
+   batches. If the cutover code is already deployed, an owner/admin who will be
+   migrated as an app member is locked out of that app between the owner write
+   and the member write. Run the backfill in the maintenance window **before**
+   deploying the cutover release, or accept that window.
+4. Run this tool (expect `differenceCount: 0` for the Phase 0 inventory) and
+   review every difference.
+5. Deploy the cutover release.
 
 Each difference is a decision by design of TASK-0118; review them, not just the
 count. The Phase 0 production inventory (5 Workspaces, 2 owners, 0 non-owner

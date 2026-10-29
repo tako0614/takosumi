@@ -229,3 +229,53 @@ test("destroyed apps stay readable to their retained owner and members only", as
   expect(await outcome(await decide(operations, "app_member", "view"))).toBe("app:member");
   expect(await outcome(await decide(operations, "ws_owner", "view"))).toBe("403:app_access_denied");
 }, 180_000);
+
+/** Counting D1 double, adapted from the review probe. */
+function countingD1(columns: string[], options: { readonly failPragma?: string; readonly failSelect?: string } = {}) {
+  const log: string[] = [];
+  const db = {
+    prepare(sql: string) {
+      const statement = {
+        bind() { return statement; },
+        async all() {
+          log.push(sql);
+          if (sql.startsWith("pragma") && options.failPragma) throw new Error(options.failPragma);
+          return { results: sql.startsWith("pragma table_info(capsules)") ? columns.map((name) => ({ name })) : [] };
+        },
+        async first() {
+          log.push(sql);
+          if (options.failSelect) throw new Error(options.failSelect);
+          return { owner_account_id: "acct", ownership_epoch: 0, management_state: "active", management_epoch: 0, storage_root: "x" };
+        },
+      };
+      return statement;
+    },
+  };
+  return { db, log, pragmas: () => log.filter((query) => query.startsWith("pragma")).length };
+}
+
+test("a pre-v77 D1 probes the ownership schema at most once per TTL for the fence", async () => {
+  let now = 1_000;
+  const d1 = countingD1(["id", "space_id"]);
+  const store = new D1AppOwnershipStore(d1.db as never, {} as never, () => now);
+  for (let index = 0; index < 5; index++) expect(await store.readOwnershipFence("cap")).toEqual({ schemaAvailable: false });
+  expect(d1.pragmas()).toBe(1);
+  now += 60_001;
+  expect(await store.readOwnershipFence("cap")).toEqual({ schemaAvailable: false });
+  expect(d1.pragmas()).toBe(2);
+});
+
+test("a v77 D1 keeps the positive probe cached and reads one row per fence", async () => {
+  const d1 = countingD1(["id", "owner_account_id"]);
+  const store = new D1AppOwnershipStore(d1.db as never, {} as never);
+  for (let index = 0; index < 5; index++) await store.readOwnershipFence("cap");
+  expect(d1.pragmas()).toBe(1);
+  expect(d1.log.length).toBe(6);
+});
+
+test("transient D1 failures are errors, never a schema-absent fallback", async () => {
+  await expect(new D1AppOwnershipStore(countingD1(["id"], { failPragma: "D1_ERROR: Network connection lost." }).db as never, {} as never)
+    .readOwnershipFence("cap")).rejects.toThrow("Network connection lost");
+  await expect(new D1AppOwnershipStore(countingD1(["owner_account_id"], { failSelect: "D1_ERROR: Overloaded" }).db as never, {} as never)
+    .readOwnershipFence("cap")).rejects.toThrow("Overloaded");
+});
