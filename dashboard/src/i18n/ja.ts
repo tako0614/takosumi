@@ -48,7 +48,6 @@ export const ja = {
   "app.sharing.transfersUnavailable": "このサーバーでは所有権の譲渡を確認できません。",
   "app.sharing.removeAria": "{name}さんをメンバーから削除",
   "app.sharing.cancelTransfer": "譲渡を取り消す",
-  "app.sharing.transferId": "譲渡ID",
   "app.sharing.acceptTransfer": "所有権を受け取る",
   "app.sharing.acceptConfirm": "このアプリの所有者となり、利用料金を支払います。現在のメンバーとの共有と接続は解除されるため、自分の接続と共有するメンバーを設定してください。",
   "app.sharing.ownerConnectionsOnly": "所有者の接続だけを使えます。接続の選択肢が取得できないため、現在の接続を保持します。",
