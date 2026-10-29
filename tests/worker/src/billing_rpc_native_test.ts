@@ -26,19 +26,24 @@ async function callerBundle(root: string): Promise<string> {
             capsuleId: "capsule_native_rpc", now: 1700000000000,
             planResourceChanges: [{ address: "test.one", type: "test", actions: ["create"] }],
           };
+          const appCtx = {
+            workspaceId: ctx.workspaceId,
+            capsuleId: ctx.capsuleId, payerAccountId: "canonical_native_owner", runId: ctx.runId, now: ctx.now,
+            planResourceChanges: ctx.planResourceChanges,
+          };
           const plan = await ports.showbackRater.ratePlan(ctx);
           const quota = await ports.quotaPolicy.evaluatePlanQuota({
-            ...ctx, estimatedUsdMicros: plan.usdMicros, ratingStatus: plan.ratingStatus,
+            ...appCtx, estimatedUsdMicros: plan.usdMicros, ratingStatus: plan.ratingStatus,
           });
           const reservation = await ports.billingEnforcement.reservePlanBilling({
-            ...ctx, mode: "disabled", estimatedUsdMicros: plan.usdMicros,
+            ...appCtx, mode: "disabled", estimatedUsdMicros: plan.usdMicros,
             ratingStatus: plan.ratingStatus, policyPassedBeforeBilling: true,
           });
-          await ports.billingEnforcement.assertReservationSatisfied(ctx);
+          await ports.billingEnforcement.assertReservationSatisfied(appCtx);
           await ports.billingEnforcement.captureRunBilling({
-            ...ctx, applyRunId: "apply_native_rpc", capturedUsdMicros: plan.usdMicros, ratingStatus: plan.ratingStatus,
+            ...appCtx, applyRunId: "apply_native_rpc", capturedUsdMicros: plan.usdMicros, ratingStatus: plan.ratingStatus,
           });
-          await ports.billingEnforcement.releaseReservation(ctx);
+          await ports.billingEnforcement.releaseReservation(appCtx);
           const usage = await ports.showbackRater.rateUsage({
             ...ctx, kind: "runner_minute", quantity: 1.5, source: "runner", createdAt: "2026-10-14T00:00:00.000Z",
           });
@@ -74,14 +79,14 @@ const HOST = `
     }
     assertReservationSatisfied(ctx) {
       if (ctx.runId === "host_error") throw new Error("synthetic-private-host-subject-secret");
-      if (ctx.billingSubjectId !== "canonical_native_owner") throw new Error("wrong subject");
+      if (ctx.payerAccountId !== "canonical_native_owner" || ctx.workspaceId !== "workspace_native_rpc" || "billingSubjectId" in ctx) throw new Error("wrong subject");
     }
     captureRunBilling(ctx) {
       if (ctx.runId !== "plan_native_rpc" || ctx.applyRunId !== "apply_native_rpc" || ctx.capturedUsdMicros !== 37)
         throw new Error("incorrect capture context");
     }
     releaseReservation(ctx) {
-      if (ctx.runId !== "plan_native_rpc" || ctx.workspaceId !== "workspace_native_rpc") throw new Error("incorrect release context");
+      if (ctx.runId !== "plan_native_rpc" || ctx.capsuleId !== "capsule_native_rpc") throw new Error("incorrect release context");
     }
     evaluatePlanQuota(ctx) {
       return { reasons: [], audit: { amount: ctx.estimatedUsdMicros, rating: ctx.ratingStatus } };

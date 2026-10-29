@@ -4253,12 +4253,19 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   // Provider-neutral OSS showback ledger. Commercial plans, subscriptions,
   // balances, reservations, payment-provider records, and settlement live in
   // the host extension and never enter this store.
+  /** Canonical physical owner/epoch for billing; undefined on legacy schemas. */
+  getAppBillingOwnership(capsuleId: string): Promise<Pick<Capsule, "ownerAccountId" | "ownershipEpoch"> | undefined>;
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
   listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]>;
   getCapsuleUsageTotals(capsuleId: string): Promise<CapsuleUsageTotals>;
   /** Keyset-paged usage-event listing for a Workspace (spec §30 pagination). */
   listUsageEventsPage(
     workspaceId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>>;
+  /** Payer-only history. Rows are never inferred from a Workspace owner. */
+  listUsageEventsForPayerPage(
+    payerAccountId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>>;
 
@@ -8572,15 +8579,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async getAppBillingOwnership(capsuleId: string): Promise<Pick<Capsule, "ownerAccountId" | "ownershipEpoch"> | undefined> {
+    const capsule = this.#capsules.get(capsuleId);
+    return capsule ? { ownerAccountId: capsule.ownerAccountId, ownershipEpoch: capsule.ownershipEpoch ?? 0 } : undefined;
+  }
+
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = Array.from(this.#usageEvents.values()).find(
       (row) => row.idempotencyKey === event.idempotencyKey,
     );
     if (existing) return existing;
-    const payerAccountId = event.payerAccountId ??
-      (event.capsuleId ? (await this.getCapsule(event.capsuleId))?.ownerAccountId : undefined) ??
-      (await this.getWorkspace(event.workspaceId))?.ownerUserId;
-    const normalized = normalizeUsageEvent(payerAccountId ? { ...event, payerAccountId } : event);
+    const normalized = normalizeUsageEvent(event);
     this.#usageEvents.set(event.id, normalized);
     return normalized;
   }
@@ -8624,6 +8633,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       (a, b) =>
         b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
     );
+    return pageSortedDesc(newestFirst, params);
+  }
+
+  async listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    const newestFirst = Array.from(this.#usageEvents.values())
+      .filter((event) => event.payerAccountId === payerAccountId)
+      .sort(
+        (a, b) =>
+          b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+      );
     return pageSortedDesc(newestFirst, params);
   }
 

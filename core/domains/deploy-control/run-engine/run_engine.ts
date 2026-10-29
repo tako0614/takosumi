@@ -9132,6 +9132,7 @@ export class RunEngine {
       quantity,
       usdMicros: rating.usdMicros,
       ratingStatus: rating.ratingStatus,
+      ...(rating.payerAccountId ? { payerAccountId: rating.payerAccountId } : {}),
       source: "runner",
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt,

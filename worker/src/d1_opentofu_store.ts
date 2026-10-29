@@ -44,7 +44,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
-import { integer, real, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
 
 // Admission guard inserts deliberately target the pre-v77 column set. A
 // predeployed v75/v76 database must be able to reject an unsafe write without
@@ -97,15 +97,6 @@ function capsuleWithoutPhysicalOwnership(capsule: Capsule): Capsule {
   void _storageRoot;
   return record as Capsule;
 }
-
-const legacyUsageEventsTable = sqliteTable("usage_events", {
-  id: text("id").primaryKey(), workspaceId: text("workspace_id"), capsuleId: text("capsule_id"),
-  runId: text("run_id"), meterId: text("meter_id"), resourceFamily: text("resource_family"),
-  resourceId: text("resource_id"), operation: text("operation"), resourceMetadataJson: text("resource_metadata_json"),
-  kind: text("kind"), quantity: real("quantity"), usdMicros: integer("usd_micros"),
-  ratingStatus: text("rating_status"), source: text("source"), idempotencyKey: text("idempotency_key"),
-  createdAt: text("created_at"),
-});
 
 const legacyCredentialMintEventsTable = sqliteTable("credential_mint_events", {
   id: text("id").primaryKey(), runId: text("run_id"), workspaceId: text("space_id"),
@@ -2703,26 +2694,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .bind(owner, connection.id).run();
   }
 
-  async #withUsagePayers(rows: readonly UsageEvent[]): Promise<readonly UsageEvent[]> {
-    if (!rows.length || !await this.#v77Column("usage_events", "payer_account_id")) return rows;
-    const payers = new Map<string, string>();
-    for (const ids of chunkD1InQueryValues([...new Set(rows.map((row) => row.id))])) {
-      const payerRows = await this.#orm.select({ id: schema.usageEvents.id, payerAccountId: schema.usageEvents.payerAccountId })
-        .from(schema.usageEvents).where(inArray(schema.usageEvents.id, [...ids])).all();
-      for (const row of payerRows) if (row.payerAccountId) payers.set(row.id, row.payerAccountId);
-    }
-    return rows.map((event) => {
-      const payerAccountId = payers.get(event.id);
-      return payerAccountId ? { ...event, payerAccountId } : event;
-    });
-  }
-
-  async #capsuleOwnerAccountId(capsuleId: string): Promise<string | undefined> {
-    if (!await this.#v77Column("capsules", "owner_account_id")) return undefined;
-    const row = await this.db.prepare(`select owner_account_id from capsules where id=?`)
-      .bind(capsuleId).first<{ owner_account_id: string | null }>();
-    return row?.owner_account_id ?? undefined;
-  }
   #financialSourceStore():SqlWorkspaceFinancialSource {
     const db=this.db;
     const port:FinancialSourceSqlPort={dialect:"d1",
@@ -2772,6 +2743,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly #orm: DrizzleD1Database<typeof schema>;
   readonly #schemaMode: D1OpenTofuControlSchemaMode;
   #initialized?: Promise<void>;
+  #usagePayerColumnPresent = false;
   #predeployedSchemaVerified: boolean;
   #requestMaintenanceScope?: D1RequestMaintenanceScope;
 
@@ -11319,6 +11291,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   // -- usage ledger -----------------------------------------------------------
 
+  async getAppBillingOwnership(capsuleId: string): Promise<Pick<Capsule, "ownerAccountId" | "ownershipEpoch"> | undefined> {
+    await this.#ensureSchema();
+    if (!await this.#v77Column("capsules", "owner_account_id") || !await this.#v77Column("capsules", "ownership_epoch")) return undefined;
+    const row = await this.db.prepare(`select owner_account_id, ownership_epoch from capsules where id=?`)
+      .bind(capsuleId).first<{ readonly owner_account_id: string | null; readonly ownership_epoch: number }>();
+    return row ? { ownerAccountId: row.owner_account_id ?? undefined, ownershipEpoch: row.ownership_epoch } : undefined;
+  }
+
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     usageEventUsdMicros(event);
     const existing = await this.#usageEventByIdempotencyKey(
@@ -11326,41 +11306,30 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
     if (existing) return existing;
     await this.#ensureSchema();
-    const payerAccountId = event.payerAccountId ??
-      (event.capsuleId ? await this.#capsuleOwnerAccountId(event.capsuleId) : undefined) ??
-      (await this.getWorkspace(event.workspaceId))?.ownerUserId;
-    const storedEvent = payerAccountId ? { ...event, payerAccountId } : event;
-    const payerColumn = await this.#v77Column("usage_events", "payer_account_id");
-    const values = {
-      id: event.id,
-      workspaceId: event.workspaceId,
-      capsuleId: event.capsuleId ?? null,
-      runId: event.runId ?? null,
-      meterId: event.meterId ?? null,
-      resourceFamily: event.resourceFamily ?? null,
-      resourceId: event.resourceId ?? null,
-      operation: event.operation ?? null,
-      kind: event.kind,
-      quantity: event.quantity,
-      usdMicros: event.usdMicros,
-      ratingStatus: event.ratingStatus,
-      source: event.source,
-      idempotencyKey: event.idempotencyKey,
-      createdAt: event.createdAt,
-    };
     try {
-      if (payerColumn) {
-        await this.#orm.insert(schema.usageEvents).values({
-          ...values,
-          resourceMetadataJson: event.resourceMetadata ?? null,
-          payerAccountId: storedEvent.payerAccountId ?? null,
-        }).run();
-      } else {
-        await this.#orm.insert(legacyUsageEventsTable).values({
-          ...values,
-          resourceMetadataJson: event.resourceMetadata ? JSON.stringify(event.resourceMetadata) : null,
-        }).run();
+      const columns = [
+        "id", "workspace_id", "capsule_id", "run_id", "meter_id",
+        "resource_family", "resource_id", "operation", "resource_metadata_json",
+        "kind", "quantity", "usd_micros", "rating_status", "source",
+        "idempotency_key", "created_at",
+      ];
+      const values: unknown[] = [
+        event.id, event.workspaceId, event.capsuleId ?? null, event.runId ?? null,
+        event.meterId ?? null, event.resourceFamily ?? null, event.resourceId ?? null,
+        event.operation ?? null,
+        event.resourceMetadata == null ? null : JSON.stringify(event.resourceMetadata),
+        event.kind,
+        event.quantity, event.usdMicros, event.ratingStatus, event.source,
+        event.idempotencyKey, event.createdAt,
+      ];
+      if (await this.#hasUsagePayerColumn()) {
+        columns.push("payer_account_id");
+        values.push(event.payerAccountId ?? null);
       }
+      const placeholders = values.map(() => "?").join(", ");
+      await this.db.prepare(
+        `insert into usage_events (${columns.join(", ")}) values (${placeholders}) on conflict (idempotency_key) do nothing`,
+      ).bind(...values).run();
     } catch (error) {
       const raced = await this.#usageEventByIdempotencyKey(
         event.idempotencyKey,
@@ -11368,7 +11337,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       if (raced && isD1UsageEventIdempotencyError(error)) return raced;
       throw error;
     }
-    return storedEvent;
+    const winner = await this.#usageEventByIdempotencyKey(event.idempotencyKey);
+    if (!winner) throw new Error("usage event winner missing after insert");
+    return winner;
   }
 
   async listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {
@@ -11378,7 +11349,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .from(schema.usageEvents)
       .where(eq(schema.usageEvents.workspaceId, workspaceId))
       .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id));
-    return await this.#withUsagePayers(rows.map(usageEventFromRow));
+    return this.#usageEventsWithPayer(rows.map(usageEventFromRow));
   }
 
   async getCapsuleUsageTotals(
@@ -11417,7 +11388,61 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .orderBy(desc(schema.usageEvents.createdAt), desc(schema.usageEvents.id))
       .limit(limit + 1);
-    return pageFromProbe(await this.#withUsagePayers(rows.map(usageEventFromRow)), limit);
+    return pageFromProbe(await this.#usageEventsWithPayer(rows.map(usageEventFromRow)), limit);
+  }
+
+  async listUsageEventsForPayerPage(
+    payerAccountId: string,
+    params: PageParams,
+  ): Promise<Page<UsageEvent>> {
+    await this.#ensureSchema();
+    if (!(await this.#hasUsagePayerColumn())) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const where = cursor
+      ? `payer_account_id = ? and (created_at < ? or (created_at = ? and id < ?))`
+      : `payer_account_id = ?`;
+    const values = cursor
+      ? [payerAccountId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1]
+      : [payerAccountId, limit + 1];
+    const result = await this.db.prepare(
+      `select id, workspace_id as workspaceId, capsule_id as capsuleId, run_id as runId, meter_id as meterId, resource_family as resourceFamily, resource_id as resourceId, operation, resource_metadata_json as resourceMetadataJson, kind, quantity, usd_micros as usdMicros, rating_status as ratingStatus, source, idempotency_key as idempotencyKey, created_at as createdAt, payer_account_id as payerAccountId from usage_events where ${where} order by created_at desc, id desc limit ?`,
+    ).bind(...values).all<Parameters<typeof usageEventFromRow>[0]>();
+    if (result.success !== true || !Array.isArray(result.results)) {
+      throw new Error("Usage payer page read result unavailable");
+    }
+    return pageFromProbe(result.results.map(usageEventFromRow), limit);
+  }
+
+  async #hasUsagePayerColumn(): Promise<boolean> {
+    if (this.#usagePayerColumnPresent) return true;
+    const columns = await d1ColumnNames(this.db, "usage_events");
+    const present = columns.has("payer_account_id");
+    if (present) this.#usagePayerColumnPresent = true;
+    return present;
+  }
+
+  async #usageEventsWithPayer(events: readonly UsageEvent[]): Promise<UsageEvent[]> {
+    if (!events.length || !(await this.#hasUsagePayerColumn())) return [...events];
+    const payerById = new Map<string, string | null>();
+    for (let start = 0; start < events.length; start += 90) {
+      const batch = events.slice(start, start + 90);
+      const placeholders = batch.map(() => "?").join(", ");
+      const result = await this.db.prepare(
+        `select id, payer_account_id from usage_events where id in (${placeholders})`,
+      ).bind(...batch.map((event) => event.id)).all<{
+        readonly id: string;
+        readonly payer_account_id: string | null;
+      }>();
+      if (result.success !== true || !Array.isArray(result.results)) {
+        throw new Error("Usage payer metadata read result unavailable");
+      }
+      for (const row of result.results) payerById.set(row.id, row.payer_account_id);
+    }
+    return events.map((event) => {
+      const payerAccountId = payerById.get(event.id);
+      return payerAccountId ? { ...event, payerAccountId } : event;
+    });
   }
 
   async #usageEventByIdempotencyKey(
@@ -11429,7 +11454,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .from(schema.usageEvents)
       .where(eq(schema.usageEvents.idempotencyKey, idempotencyKey))
       .get();
-    return row ? (await this.#withUsagePayers([usageEventFromRow(row)]))[0] : undefined;
+    return row
+      ? (await this.#usageEventsWithPayer([usageEventFromRow(row)]))[0]
+      : undefined;
   }
 
   // -- backups (§33 layer 1 / §26 R2_BACKUPS) ----------------------------------
