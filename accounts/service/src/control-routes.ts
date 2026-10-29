@@ -66,6 +66,7 @@ import {
 import { handleProjects } from "./control/projects.ts";
 import { handleInstallPlans } from "./control/install-plans.ts";
 import { handleRevisionPlans } from "./control/revision-plans.ts";
+import { isWorkspaceMutationRoute, workspaceFrozenResponse } from "./workspace-mutations-freeze.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -199,6 +200,7 @@ interface ControlRouteContext {
   readonly runStreamTiming?: RunStreamTiming;
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
+  readonly workspaceMutationsFrozen?: boolean;
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -508,6 +510,7 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.runStreamTiming ? { runStreamTiming: context.runStreamTiming } : {}),
           ...(context.assertActive ? { assertActive: context.assertActive } : {}),
           ...(context.withinRunReadDeadline ? { withinRunReadDeadline: context.withinRunReadDeadline } : {}),
+          ...(context.workspaceMutationsFrozen !== undefined ? { workspaceMutationsFrozen: context.workspaceMutationsFrozen } : {}),
           session: context.session,
         }),
       ),
@@ -672,6 +675,7 @@ interface DispatchInput {
   readonly runStreamTiming?: RunStreamTiming;
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
+  readonly workspaceMutationsFrozen?: boolean;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -682,6 +686,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
   }
   const segments = rawSegments;
   const method = input.request.method;
+  if (input.workspaceMutationsFrozen !== false && isWorkspaceMutationRoute(segments, method)) {
+    return workspaceFrozenResponse(input.request);
+  }
   const key = segments[0];
   const handler = key !== undefined ? RESOURCE_HANDLERS[key] : undefined;
   if (handler) {
@@ -695,6 +702,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       ...(input.runStreamTiming ? { runStreamTiming: input.runStreamTiming } : {}),
       ...(input.assertActive ? { assertActive: input.assertActive } : {}),
       ...(input.withinRunReadDeadline ? { withinRunReadDeadline: input.withinRunReadDeadline } : {}),
+      workspaceMutationsFrozen: input.workspaceMutationsFrozen !== false,
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

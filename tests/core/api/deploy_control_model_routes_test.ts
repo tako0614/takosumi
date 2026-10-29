@@ -15,6 +15,7 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
 async function service(opentofuControlStore?: InMemoryOpenTofuControlStore) {
   return await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     opentofuControlStore,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",

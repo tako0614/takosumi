@@ -204,8 +204,13 @@ export async function buildComposedServer(
     productDiscovery: {
       mobileOidcClientId: config.mobileOidcClientId,
     },
-    createAccountsHandler: (controlPlaneOperations) =>
-      buildAccountsHandler(config, store, controlPlaneOperations),
+    createAccountsHandler: (controlPlaneOperations, options) =>
+      buildAccountsHandler(
+        config,
+        store,
+        controlPlaneOperations,
+        options.workspaceMutationsFrozen,
+      ),
     preHandle: (req) => preHandleNonServiceRequest(req, pool),
     ...(staticAssets ? { staticAssets } : {}),
     ...(overrides.opentofuRunner
@@ -305,6 +310,7 @@ async function buildAccountsHandler(
   config: NodeAccountsServerConfig,
   store: PostgresAccountsStore,
   controlPlaneOperations?: ControlPlaneOperations,
+  workspaceMutationsFrozen = true,
 ): Promise<AccountsHandler> {
   const commonOptions = {
     issuer: config.issuer,
@@ -316,6 +322,7 @@ async function buildAccountsHandler(
     ...(config.passkeys ? { passkeys: config.passkeys } : {}),
     ...(config.upstreamOAuth ? { upstreamOAuth: config.upstreamOAuth } : {}),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    workspaceMutationsFrozen,
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }
       : {}),

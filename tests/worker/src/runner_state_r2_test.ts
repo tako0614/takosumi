@@ -1405,7 +1405,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
 // receiver, and takeover could only answer `runner_mutation_indeterminate`
 // because no completion receipt existed. These pin the deadline hierarchy that
 // makes the runner stop first and record a determined outcome instead.
-async function deadlineApplyFixture(applyRunId: string) {
+async function deadlineApplyFixture(applyRunId: string, storageRoot?: string) {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1419,12 +1419,9 @@ async function deadlineApplyFixture(applyRunId: string) {
   const stateScope = {
     ...SCOPE,
     generation: 1,
-    stateRef: `${STATE_PREFIX}/00000001.tfstate.enc`,
+    stateRef: `${storageRoot ?? "workspaces/spc_1/capsules/inst_1"}/environments/production/state-versions/00000001.tfstate.enc`,
   };
-  const rawOutputRef = RAW_OUTPUT_REF.replace(
-    "/runs/plan_1/",
-    `/runs/${applyRunId}/`,
-  );
+  const rawOutputRef = `${storageRoot ?? "workspaces/spc_1/capsules/inst_1"}/runs/${applyRunId}/outputs.raw.json.enc`;
   const body = JSON.stringify({
     kind: "takosumi.opentofu-run@v1",
     action: "apply",
@@ -1457,6 +1454,31 @@ async function deadlineApplyFixture(applyRunId: string) {
     });
   return { artifacts, state, stateScope, rawOutputRef, request };
 }
+
+test("new Capsule apply writes state and outputs under its apps root", async () => {
+  const fixture = await deadlineApplyFixture("apply_app", "apps/inst_1");
+  const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (request.method === "GET" && path === "/runs/plan_1/artifacts/tfstate") {
+        return new Response(NEW_STATE_BYTES, { headers: { "content-type": "application/json" } });
+      }
+      if (request.method === "GET" && path === "/runs/plan_1/artifacts/outputs") {
+        return Response.json({});
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const response = await runner.fetch(fixture.request());
+  assert.equal(response.status, 200);
+  assert.ok(fixture.state.body(fixture.stateScope.stateRef));
+  assert.ok(fixture.state.body("apps/inst_1/environments/production/state-versions/current.json"));
+  assert.ok(fixture.artifacts.body(fixture.rawOutputRef));
+});
 
 test("a budget-timed-out apply persists partial state and a completion receipt that a takeover adopts", async () => {
   const applyRunId = "apply_deadline_timeout";

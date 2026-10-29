@@ -84,6 +84,8 @@ async function authenticatedControlRequest(input: {
   readonly method?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string;
+  /** Legacy route characterization opts out; separate tests exercise default freeze. */
+  readonly workspaceMutationsFrozen?: boolean;
 }): Promise<Response> {
   const url = new URL(`https://app.example.test${input.path}`);
   const response = await handleControlRoute({
@@ -98,6 +100,7 @@ async function authenticatedControlRequest(input: {
     url,
     store: input.store,
     operations: input.operations,
+    workspaceMutationsFrozen: input.workspaceMutationsFrozen ?? false,
   });
   expect(response).toBeDefined();
   return response!;
@@ -1576,7 +1579,7 @@ test("Workspace create defaults only an omitted type and preserves canonical typ
     });
 
     const response = await handleWorkspaces(
-      context(fixture.operations, request),
+      { ...context(fixture.operations, request), workspaceMutationsFrozen: false },
       ["workspaces"],
       "POST",
     );
@@ -1590,6 +1593,24 @@ test("Workspace create defaults only an omitted type and preserves canonical typ
       ownerUserId: "tsub_owner",
     });
   }
+});
+
+test("default-frozen personal POST refuses a bootstrap result owned by another subject", async () => {
+  const fixture = workspaceCreateFixture();
+  let ensures = 0;
+  fixture.operations.workspaces.ensurePersonalWorkspace = async () => {
+    ensures += 1;
+    return { ...workspace, type: "personal", ownerUserId: "tsub_other" };
+  };
+  const request = new Request("https://app.example.test/api/v1/workspaces", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle: "owner-bound", type: "personal" }),
+  });
+  const response = await handleWorkspaces(context(fixture.operations, request), ["workspaces"], "POST");
+  expect(response?.status).toBe(500);
+  expect(await response?.json()).toMatchObject({ error: { code: "failed_precondition" } });
+  expect(ensures).toBe(1);
+  expect(fixture.createCalls).toHaveLength(0);
 });
 
 test("Project create/list/get routes are a facade over canonical operations", async () => {
@@ -2708,6 +2729,39 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
   expect(response?.status).toBe(200);
   expect(await response?.json()).toMatchObject({ workspaces: [workspace] });
   expect(fixture.workspacePageCalls).toHaveLength(2);
+});
+
+test("frozen Workspace list preserves the real WorkspacesService and ensures the personal singleton", async () => {
+  const controlStore = new InMemoryOpenTofuControlStore();
+  const workspacesService = new WorkspacesService({ store: controlStore });
+  const existing = await workspacesService.createWorkspace({
+    handle: "frozen-list-owner",
+    displayName: "Frozen list owner",
+    type: "personal",
+    ownerUserId: "tsub_frozen_list_owner",
+  });
+  let ensureCalls = 0;
+  const ensure = workspacesService.ensurePersonalWorkspace.bind(workspacesService);
+  workspacesService.ensurePersonalWorkspace = async (ownerUserId, handle) => {
+    ensureCalls += 1;
+    return await ensure(ownerUserId, handle);
+  };
+  const operations = {
+    ...operationsFixture().operations,
+    workspaces: workspacesService,
+  } as unknown as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    store: new InMemoryAccountsStore(),
+    operations,
+    subject: "tsub_frozen_list_owner",
+  });
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({ workspaces: [existing] });
+  expect(ensureCalls).toBe(1);
 });
 
 test("Workspace list adopts and repairs an existing personal Workspace missing from membership", async () => {

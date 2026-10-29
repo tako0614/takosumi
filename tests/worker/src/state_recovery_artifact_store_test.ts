@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import type { Capsule } from "takosumi-contract/capsules";
+import type { OpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import type { R2Bucket, R2ListOptions, R2Object, R2ObjectBody, R2Objects, R2PutOptions } from "../../../worker/src/bindings.ts";
 import {
   RECOVERY_STATE_MAX_BYTES,
@@ -29,7 +31,11 @@ function stateBytes(overrides: Record<string, unknown> = {}): Uint8Array {
   }));
 }
 
-async function fixture(plaintext = stateBytes()) {
+async function fixture(plaintext = stateBytes(), storageRoot?: string, capsuleOverride?: Partial<Capsule>) {
+  const workspaceId = capsuleOverride?.workspaceId ?? "workspace_recovery_test";
+  const environment = capsuleOverride?.environment ?? "production";
+  let capsuleReads = 0;
+  let rootReads = 0;
   const bucket = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE,
@@ -38,11 +44,25 @@ async function fixture(plaintext = stateBytes()) {
     bucket,
     crypto,
     allocator: new ObjectKeyArtifactReferenceAllocator(),
+    capsules: {
+      async getCapsule(id) {
+        capsuleReads += 1;
+        return {
+          id,
+          workspaceId,
+          environment,
+        } as Capsule;
+      },
+      async getCapsuleStorageRoot(id) {
+        rootReads += 1;
+        return storageRoot ?? `workspaces/${workspaceId}/capsules/${id}`;
+      },
+    } as Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">,
   });
   const input: StageRecoveryStateInput = {
-    workspaceId: "workspace_recovery_test",
-    capsuleId: "capsule_recovery_test",
-    environment: "production",
+    workspaceId,
+    capsuleId: capsuleOverride?.id ?? "capsule_recovery_test",
+    environment,
     generation: 1,
     failedApplyRunId: "apply_failed_test",
     recoveryRunId: "run_recovery_test",
@@ -50,8 +70,40 @@ async function fixture(plaintext = stateBytes()) {
     custodyEvidenceDigest: `sha256:${"a".repeat(64)}`,
     plaintext,
   };
-  return { bucket, crypto, store, input };
+  return { bucket, crypto, store, input, get capsuleReads() { return capsuleReads; }, get rootReads() { return rootReads; } };
 }
+
+test("recovery stages and verifies under a trusted persisted apps root", async () => {
+  const f = await fixture(stateBytes(), "apps/capsule_recovery_test");
+  const { bucket, store, input } = f;
+  const staged = await store.stage(input);
+  assert.equal(staged.artifact.stateRef,
+    "apps/capsule_recovery_test/environments/production/state-versions/00000001.tfstate.enc");
+  assert.equal(bucket.putCount, 1);
+  assert.deepEqual(await store.verify({
+    workspaceId: input.workspaceId, capsuleId: input.capsuleId,
+    failedApplyRunId: input.failedApplyRunId, recoveryRunId: input.recoveryRunId,
+    artifactHandle: staged.handle,
+  }), staged.artifact);
+  assert.equal(f.capsuleReads, 3);
+  assert.equal(f.rootReads, 3);
+});
+
+test("recovery refuses a persisted Capsule whose Workspace or environment differs from the supplied scope", async () => {
+  const workspaceMismatch = await fixture();
+  await assert.rejects(workspaceMismatch.store.stage({
+    ...workspaceMismatch.input,
+    workspaceId: "workspace_other",
+  }), /recovery state allocation failed/u);
+  assert.equal(workspaceMismatch.bucket.putCount, 0);
+
+  const environmentMismatch = await fixture();
+  await assert.rejects(environmentMismatch.store.stage({
+    ...environmentMismatch.input,
+    environment: "staging",
+  }), /recovery state allocation failed/u);
+  assert.equal(environmentMismatch.bucket.putCount, 0);
+});
 
 test("stages encrypted generation-one state and verifies exact bounded readback", async () => {
   const { bucket, store, input } = await fixture();
@@ -81,12 +133,13 @@ test("conditional no-overwrite reconciles an exact retry without a second PUT", 
 });
 
 test("opaque handle round-trips every dotted scope identifier", async () => {
-  const { store, input } = await fixture();
+  const { store, input } = await fixture(stateBytes(), undefined, {
+    workspaceId: "workspace.with.dots",
+    id: "capsule.with.dots",
+    environment: "production.eu.west",
+  });
   const dottedInput: StageRecoveryStateInput = {
     ...input,
-    workspaceId: "workspace.with.dots",
-    capsuleId: "capsule.with.dots",
-    environment: "production.eu.west",
     failedApplyRunId: "apply.failed.create",
     recoveryRunId: "run.recovery.1",
   };

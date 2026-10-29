@@ -643,7 +643,7 @@ describe("Capsule execution authority", () => {
       await expect(vault.register(registration, undefined, null)).rejects.toThrow();
       expect(await store.getConnection("conn_registration_2")).toBeUndefined();
       expect(await store.getSecretBlob("conn_registration_2")).toBeUndefined();
-      expect(await store.getConnection(first.id)).toEqual(first);
+      expect(await store.getConnection(first.id)).toEqual({ ...first, ownerAccountId: workspace.ownerUserId });
       expect(await store.getSecretBlob(first.id)).toEqual(firstBlob);
       await database.prepare("DROP TRIGGER reject_registration_blob").run();
 
@@ -658,7 +658,7 @@ describe("Capsule execution authority", () => {
       expect(await store.getConnection(candidate.connection.id)).toBeUndefined();
       expect(await store.getSecretBlob(candidate.connection.id)).toBeUndefined();
       const fresh = await vault.register(registration, undefined, null);
-      expect(await new CloudflareD1OpenTofuControlStore(database).getConnection(fresh.id)).toEqual(fresh);
+      expect(await new CloudflareD1OpenTofuControlStore(database).getConnection(fresh.id)).toEqual({ ...fresh, ownerAccountId: workspace.ownerUserId });
       expect(await store.getSecretBlob(fresh.id)).toBeDefined();
     } finally {
       await runtime.dispose();
@@ -691,7 +691,7 @@ describe("Capsule execution authority", () => {
       await database.prepare("CREATE TRIGGER reject_revoke_connection BEFORE DELETE ON connections BEGIN SELECT RAISE(ABORT, 'fixture revoke failure'); END").run();
       await expect(vault.revoke(connection.id, undefined, null)).rejects.toThrow();
       const reopened = new CloudflareD1OpenTofuControlStore(database);
-      expect(await reopened.getConnection(connection.id)).toEqual(connection);
+      expect(await reopened.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: workspace.ownerUserId });
       expect(await reopened.getSecretBlob(connection.id)).toEqual(blob);
       await database.prepare("DROP TRIGGER reject_revoke_connection").run();
       const original = await service.captureManagementAuthority(workspace.id);
@@ -831,7 +831,7 @@ describe("Capsule execution authority", () => {
         }
         expect(interleavedOnce).toBe(true);
         const reopened = new CloudflareD1OpenTofuControlStore(database);
-        expect(await reopened.getConnection(connection.id)).toEqual(connection);
+        expect(await reopened.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: workspace.ownerUserId });
         expect(await reopened.getSecretBlob(connection.id)).toEqual(
           mutation === "rotate" ? { ...blob, ciphertext: "cm90YXRlZA==" } : blob,
         );

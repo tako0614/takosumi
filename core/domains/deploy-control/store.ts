@@ -103,6 +103,7 @@ import type {
   Workspace,
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
+import type { CapsuleMember } from "../app-ownership/store.ts";
 import { parseWorkspaceMemberRecord } from "./store_row_mappers.ts";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
@@ -3899,7 +3900,10 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   resolveCapsuleExecutionAuthorities(
     inputs: readonly CapsuleExecutionAuthorityInput[],
   ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
+  /** Exact persisted JSON snapshot; physical ownership metadata is read separately. */
   getCapsule(id: string): Promise<Capsule | undefined>;
+  /** Persisted artifact allocation root, with the legacy root before ownership expansion. */
+  getCapsuleStorageRoot(id: string): Promise<string | undefined>;
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
   getCapsuleByName(
     projectId: string,
@@ -4361,6 +4365,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   #gitInstallPlanStore: InMemoryGitInstallPlanStore | undefined;
   readonly #personalWorkspaceBootstrapIds = new Map<string, string>();
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
+  readonly #capsuleMembers = new Map<string, CapsuleMember>();
   readonly #workspaceBillingIntents = new Map<string, StoredWorkspaceBillingBindingIntent>();
   readonly #workspaceBillingBindings = new Map<string, WorkspaceBillingBinding>();
   readonly #financialSource = new MemoryWorkspaceFinancialSource();
@@ -6272,7 +6277,17 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putCapsule(capsuleInput: Capsule): Promise<Capsule> {
-    const capsule = normalizeCapsule(capsuleInput);
+    const current = this.#capsules.get(capsuleInput.id);
+    // Ordinary record writes cannot replace the separate ownership authority.
+    // SQL/D1 preserve the physical tuple in the same way.
+    const capsule = normalizeCapsule(current?.ownerAccountId ? {
+      ...capsuleInput,
+      ownerAccountId: current.ownerAccountId,
+      ownershipEpoch: current.ownershipEpoch ?? 0,
+      managementState: current.managementState ?? "active",
+      managementEpoch: current.managementEpoch ?? 0,
+      storageRoot: current.storageRoot ?? `apps/${current.id}`,
+    } : capsuleInput);
     for (const existing of this.#capsules.values()) {
       if (
         existing.id !== capsule.id &&
@@ -6293,6 +6308,22 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     this.#setCapsule(capsule);
     return Promise.resolve(capsule);
+  }
+
+  /** In-memory implementation of the same single-row ownership update as SQL/D1. */
+  setCapsuleOwnership(record: {
+    readonly capsuleId: string; readonly ownerAccountId: string; readonly ownershipEpoch: number;
+    readonly managementState: "active" | "draining" | "frozen"; readonly managementEpoch: number;
+    readonly storageRoot: string;
+  }, onlyIfMissing = false, expectedOwnershipEpoch?: number): boolean {
+    const current = this.#capsules.get(record.capsuleId);
+    if (!current || (onlyIfMissing && current.ownerAccountId) ||
+      (expectedOwnershipEpoch !== undefined && (current.ownershipEpoch ?? 0) !== expectedOwnershipEpoch)) return false;
+    this.#capsules.set(record.capsuleId, { ...current,
+      ownerAccountId: record.ownerAccountId, ownershipEpoch: record.ownershipEpoch,
+      managementState: record.managementState, managementEpoch: record.managementEpoch,
+      storageRoot: record.storageRoot });
+    return true;
   }
 
   createCapsuleInitialAuthority(
@@ -6386,7 +6417,33 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     this.#capsuleExecutionAuthorityEpochs.set(capsule.id, 1);
     this.#capsules.set(capsule.id, capsule);
     this.#providerBindingSets.set(providerBindingSet.id, providerBindingSet);
+    if (capsule.ownerAccountId) {
+      for (const member of this.#workspaceMembers.values()) {
+        if (member.workspaceId !== capsule.workspaceId || member.accountId === capsule.ownerAccountId ||
+          member.status !== "active" || !member.roles.some((role) => role === "owner" || role === "admin")) continue;
+        this.#capsuleMembers.set(`${capsule.id}\0${member.accountId}`, {
+          capsuleId: capsule.id, accountId: member.accountId, status: "active",
+          addedBy: capsule.ownerAccountId, createdAt: capsule.createdAt, updatedAt: capsule.createdAt,
+        });
+      }
+    }
     return Promise.resolve({ status: "created", capsule });
+  }
+
+  listCapsuleMembers(capsuleId: string): readonly CapsuleMember[] {
+    return [...this.#capsuleMembers.values()].filter((member) => member.capsuleId === capsuleId)
+      .map((member) => structuredClone(member));
+  }
+
+  putCapsuleMember(member: CapsuleMember): boolean {
+    const capsule = this.#capsules.get(member.capsuleId);
+    if (!capsule?.ownerAccountId || capsule.ownerAccountId === member.accountId) return false;
+    this.#capsuleMembers.set(`${member.capsuleId}\0${member.accountId}`, structuredClone(member));
+    return true;
+  }
+
+  deleteCapsuleMember(capsuleId: string, accountId: string): boolean {
+    return this.#capsuleMembers.delete(`${capsuleId}\0${accountId}`);
   }
 
   #setCapsule(capsule: Capsule): void {
@@ -6446,6 +6503,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getCapsule(id: string): Promise<Capsule | undefined> {
     return Promise.resolve(this.#capsules.get(id));
+  }
+
+  getCapsuleStorageRoot(id: string): Promise<string | undefined> {
+    const capsule = this.#capsules.get(id);
+    return Promise.resolve(capsule ? capsule.storageRoot ?? `workspaces/${capsule.workspaceId}/capsules/${capsule.id}` : undefined);
   }
 
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
@@ -7644,8 +7706,27 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   }
 
   putConnection(connection: ProviderConnection): Promise<ProviderConnection> {
-    this.#connections.set(connection.id, connection);
-    return Promise.resolve(connection);
+    const owned = this.#ownedConnection(connection);
+    this.#connections.set(connection.id, owned);
+    return Promise.resolve(owned);
+  }
+
+  #ownedConnection(connection: ProviderConnection): ProviderConnection {
+    if (connection.scope !== "workspace" || !connection.workspaceId) return connection;
+    const ownerAccountId = this.#connections.get(connection.id)?.ownerAccountId ??
+      connection.ownerAccountId ?? this.#workspaces.get(connection.workspaceId)?.ownerUserId;
+    return ownerAccountId ? { ...connection, ownerAccountId } : connection;
+  }
+
+  #connectionSnapshotMatches(current: ProviderConnection | undefined, expected: ProviderConnection): boolean {
+    if (!current) return false;
+    if (JSON.stringify(current) === JSON.stringify(expected)) return true;
+    if (!current.ownerAccountId || expected.ownerAccountId || !current.workspaceId ||
+      current.workspaceId !== expected.workspaceId ||
+      this.#workspaces.get(current.workspaceId)?.ownerUserId !== current.ownerAccountId) return false;
+    const { ownerAccountId: _owner, ...legacy } = current;
+    void _owner;
+    return JSON.stringify(legacy) === JSON.stringify(expected);
   }
 
   async createConnectionRegistration(input: CreateConnectionRegistrationInput): Promise<boolean> {
@@ -7661,7 +7742,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     // No await between the authority/collision checks and publishing either row.
     if (secretBlob) this.#secretBlobs.set(connection.id, secretBlob);
-    this.#connections.set(connection.id, connection);
+    this.#connections.set(connection.id, this.#ownedConnection(connection));
     return true;
   }
 
@@ -7673,7 +7754,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
     const current = this.#connections.get(expectedConnection.id);
-    if (!current || JSON.stringify(current) !== JSON.stringify(expectedConnection)) return false;
+    if (!this.#connectionSnapshotMatches(current, expectedConnection)) return false;
     this.#secretBlobs.delete(expectedConnection.id);
     this.#connections.delete(expectedConnection.id);
     return true;
@@ -7689,10 +7770,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (!this.#connectionActorAuthorityMatches(actorAuthority)) return false;
     const current = this.#connections.get(expectedConnection.id);
     const blob = this.#secretBlobs.get(expectedConnection.id) ?? null;
-    if (!current || JSON.stringify(current) !== JSON.stringify(expectedConnection) ||
+    if (!this.#connectionSnapshotMatches(current, expectedConnection) ||
       JSON.stringify(blob) !== JSON.stringify(expectedSecretBlob)) return false;
     // No await between the management, row and material predicates and write.
-    this.#connections.set(replacement.id, replacement);
+    this.#connections.set(replacement.id, this.#ownedConnection(replacement));
     if (replacementSecretBlob) this.#secretBlobs.set(replacement.id, replacementSecretBlob);
     return true;
   }
@@ -7709,7 +7790,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   createConnectionIfAbsent(connection: ProviderConnection): Promise<boolean> {
     if (this.#connections.has(connection.id)) return Promise.resolve(false);
-    this.#connections.set(connection.id, connection);
+    this.#connections.set(connection.id, this.#ownedConnection(connection));
     return Promise.resolve(true);
   }
 
@@ -7721,11 +7802,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     if (
       !current ||
       replacement.id !== expected.id ||
-      JSON.stringify(current) !== JSON.stringify(expected)
+      !this.#connectionSnapshotMatches(current, expected)
     ) {
       return Promise.resolve(false);
     }
-    this.#connections.set(replacement.id, replacement);
+    this.#connections.set(replacement.id, this.#ownedConnection(replacement));
     return Promise.resolve(true);
   }
 
@@ -8491,14 +8572,25 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
+  async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
     const existing = Array.from(this.#usageEvents.values()).find(
       (row) => row.idempotencyKey === event.idempotencyKey,
     );
-    if (existing) return Promise.resolve(existing);
-    const normalized = normalizeUsageEvent(event);
+    if (existing) return existing;
+    const payerAccountId = event.payerAccountId ??
+      (event.capsuleId ? (await this.getCapsule(event.capsuleId))?.ownerAccountId : undefined) ??
+      (await this.getWorkspace(event.workspaceId))?.ownerUserId;
+    const normalized = normalizeUsageEvent(payerAccountId ? { ...event, payerAccountId } : event);
     this.#usageEvents.set(event.id, normalized);
-    return Promise.resolve(normalized);
+    return normalized;
+  }
+
+  /** Additive backfill only; never change an already attributed payer. */
+  setUsagePayerIfMissing(eventId: string, payerAccountId: string): boolean {
+    const current = this.#usageEvents.get(eventId);
+    if (!current || current.payerAccountId) return false;
+    this.#usageEvents.set(eventId, { ...current, payerAccountId });
+    return true;
   }
 
   listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]> {

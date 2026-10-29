@@ -504,6 +504,11 @@ export class CapsulesService {
     }
     const capsule: Capsule = {
       id: request.capsuleId,
+      ownerAccountId: workspace.ownerUserId,
+      ownershipEpoch: 0,
+      managementState: "active",
+      managementEpoch: 0,
+      storageRoot: `apps/${request.capsuleId}`,
       workspaceId: request.workspaceId,
       projectId: project.id,
       name: request.name,
@@ -566,7 +571,9 @@ export class CapsulesService {
       result.status === "replayed" &&
       (workspaceManagementKnownStopped || workspaceManagementAuthorityMismatch)
     ) {
-      return { capsule: result.capsule, replayed: true };
+      const persisted = await this.#store.getCapsule(result.capsule.id);
+      if (!persisted) throw new Error("Created Capsule vanished before replay readback");
+      return { capsule: persisted, replayed: true };
     }
     const activity = {
       workspaceId: result.capsule.workspaceId,
@@ -591,8 +598,10 @@ export class CapsulesService {
     } else if (result.status === "created") {
       await this.#activity.record(activity);
     }
+    const persisted = await this.#store.getCapsule(result.capsule.id);
+    if (!persisted) throw new Error("Created Capsule vanished before readback");
     return {
-      capsule: result.capsule,
+      capsule: persisted,
       replayed: result.status === "replayed",
     };
   }
