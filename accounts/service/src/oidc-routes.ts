@@ -398,7 +398,7 @@ async function resolveOidcAuthorizationSubject(input: {
     const installConfig = await input.operations.capsules.getInstallConfig(
       capsule.installConfigId,
     );
-    if (liveGrant.role && (installConfig.requiredInterfaces?.length ?? 0) > 0) {
+    if (liveGrant.appRole && (installConfig.requiredInterfaces?.length ?? 0) > 0) {
       const ensureRequiredInterfaces =
         input.operations.interfaces?.ensureCapsuleRequiredInterfaces;
       if (ensureRequiredInterfaces) await ensureRequiredInterfaces.call(input.operations.interfaces, {
