@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
@@ -375,6 +376,32 @@ test("webhook with a good bearer triggers a deduped sync and IGNORES the payload
   expect((await response.json()).runId).toBe("ssr_1");
   expect(verifyCalls).toEqual([{ sourceId: SOURCE_ID, secret: "good-secret" }]);
   expect(syncCalls).toEqual([{ sourceId: SOURCE_ID, dedupe: true }]);
+});
+
+test("an authenticated webhook acknowledges an inactive Source without retry work", async () => {
+  const { ops, verifyCalls } = makeWebhookOps();
+  const { request, url } = webhookRequest({}, { bearer: "good-secret" });
+  const response = await handleSourceWebhookRequest(request, url, {
+    ...ops,
+    createSourceReconciliationSyncs: async () => {
+      throw new OpenTofuControllerError("failed_precondition", "Source is not active",
+        { reason: "source_not_active" });
+    },
+  });
+  expect(response.status).toBe(202);
+  expect(await response.json()).toEqual({ accepted: true, runIds: [] });
+  expect(verifyCalls).toHaveLength(1);
+});
+
+test("authenticated webhook infrastructure and unrelated precondition failures remain visible", async () => {
+  const { ops } = makeWebhookOps();
+  for (const error of [new Error("storage failed"),
+    new OpenTofuControllerError("failed_precondition", "Source changed", { reason: "source_configuration_conflict" })]) {
+    const { request, url } = webhookRequest({}, { bearer: "good-secret" });
+    await expect(handleSourceWebhookRequest(request, url, {
+      ...ops, createSourceReconciliationSyncs: async () => { throw error; },
+    })).rejects.toBe(error);
+  }
 });
 
 test("webhook rejects a non-POST method (405)", async () => {

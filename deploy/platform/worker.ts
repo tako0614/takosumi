@@ -138,6 +138,7 @@ import {
   type CapsuleRunCredentialLedger,
 } from "../../core/domains/deploy-control/run_credential_context.ts";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
+import { structuredErrorReason } from "../../core/domains/deploy-control/errors.ts";
 import {
   OpenTofuControllerError,
   RUN_HEARTBEAT_STALE_MS,
@@ -4280,7 +4281,16 @@ export async function handleSourceWebhookRequest(
   }
   // Payload is untrusted and ignored; addresses come only from durable Source
   // defaults and current Capsule StateVersion provenance.
-  const runs = await operations.createSourceReconciliationSyncs(sourceId);
+  let runs: Awaited<ReturnType<SourceWebhookOperations["createSourceReconciliationSyncs"]>>;
+  try {
+    runs = await operations.createSourceReconciliationSyncs(sourceId);
+  } catch (error) {
+    // A valid delivery can race retirement marking. Acknowledge that no-op so
+    // the Git host does not retry a Source whose sync admission is closed.
+    if (!(error instanceof OpenTofuControllerError) ||
+      error.code !== "failed_precondition" || structuredErrorReason(error) !== "source_not_active") throw error;
+    runs = [];
+  }
   return Response.json(
     {
       accepted: true,
