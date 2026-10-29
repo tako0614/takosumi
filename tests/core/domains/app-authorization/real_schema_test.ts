@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import type { AppAccessResolver } from "../../../../contract/app-access.ts";
 import type { D1Like } from "../../../../core/adapters/storage/d1.ts";
-import { D1_APP_OWNERSHIP_TRANSFER_SCHEMA, PG_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../../../core/domains/app-authorization/schema.ts";
 import { D1AppAuthorizationStore, SqlAppAuthorizationStore } from "../../../../core/domains/app-authorization/store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -15,34 +14,20 @@ const emptyAccess: AppAccessResolver = {
 test("D1 mutation store uses the actual current ledger tables", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
-  const capsuleColumns = await db.prepare("pragma table_info(capsules)").all<{ name: string }>();
-  const existing = new Set(capsuleColumns.results.map((row) => row.name));
-  for (const [name, definition] of [
-    ["owner_account_id", "text"], ["ownership_epoch", "integer not null default 0"],
-    ["management_state", "text not null default 'active'"], ["management_epoch", "integer not null default 0"],
-  ] as const) {
-    if (!existing.has(name)) await db.exec(`alter table capsules add column ${name} ${definition}`);
-  }
-  await db.exec(`create table if not exists capsule_members (
-    capsule_id text not null, account_id text not null, status text not null,
-    added_by text, created_at text not null, updated_at text not null,
-    primary key(capsule_id,account_id)
-  )`);
-  for (const statement of D1_APP_OWNERSHIP_TRANSFER_SCHEMA) await db.exec(statement);
   await db.prepare(`insert into capsules (
     id,space_id,project_id,name,slug,source_id,install_config_id,
     environment,current_state_generation,status,record_json,created_at,updated_at,
     owner_account_id,ownership_epoch,management_state,management_epoch
   ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
     "cap_real", "ws_real", "prj_real", "app", "app", "src_real", "cfg_real",
-    "production", 0, "active", JSON.stringify({ id: "cap_real", ownerAccountId: "owner", ownershipEpoch: 0 }),
+    "production", 0, "active", JSON.stringify({ id: "cap_real", workspaceId: "ws_real", sourceId: "src_real", ownerAccountId: "owner", ownershipEpoch: 0 }),
     "2026-01-01", "2026-01-01", "owner", 0, "active", 0,
   ).run();
   const store = new D1AppAuthorizationStore(db as unknown as D1Like, emptyAccess);
   expect(await store.addMember({ capsuleId: "cap_real", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 0 })).toEqual({ accountId: "member", status: "active" });
   expect((await store.listMembers("cap_real")).members).toEqual([{ accountId: "member", status: "active" }]);
   await db.prepare(`insert into sources (id,space_id,status,record_json,created_at,updated_at) values (?,?,?,?,?,?)`)
-    .bind("src_real", "ws_real", "active", JSON.stringify({ id: "src_real", ownerCapsuleId: "cap_real" }), "2026-01-01", "2026-01-01").run();
+    .bind("src_real", "ws_real", "active", JSON.stringify({ id: "src_real", workspaceId: "ws_real", ownerCapsuleId: "cap_real" }), "2026-01-01", "2026-01-01").run();
   const sync = { id: "sync_real", kind: "source_sync", workspaceId: "ws_real", sourceId: "src_real",
     actorAccountId: "member", url: "https://example.test/repo", ref: "main", path: ".", archiveRef: "archive",
     status: "queued", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
@@ -75,25 +60,13 @@ test("D1 mutation store uses the actual current ledger tables", async () => {
 test("PostgreSQL mutation store uses the actual current ledger tables", async () => {
   const client = await PGliteSqlClient.create();
   try {
-    for (const sql of [
-      `alter table takosumi_capsules add column if not exists owner_account_id text`,
-      `alter table takosumi_capsules add column if not exists ownership_epoch integer not null default 0`,
-      `alter table takosumi_capsules add column if not exists management_state text not null default 'active'`,
-      `alter table takosumi_capsules add column if not exists management_epoch integer not null default 0`,
-    ]) await client.exec(sql);
-    await client.exec(`create table if not exists takosumi_capsule_members (
-      capsule_id text not null, account_id text not null, status text not null,
-      added_by text, created_at text not null, updated_at text not null,
-      primary key(capsule_id,account_id)
-    )`);
-    await client.exec(PG_APP_OWNERSHIP_TRANSFER_SCHEMA);
     await client.query(`insert into takosumi_capsules (
       id,space_id,project_id,name,environment,source_id,install_config_id,
       current_state_version_id,status,installation_json,created_at,updated_at,
       owner_account_id,ownership_epoch,management_state,management_epoch
     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)`, [
       "cap_real", "ws_real", "prj_real", "app", "production", "src_real", "cfg_real",
-      null, "active", JSON.stringify({ id: "cap_real", ownerAccountId: "owner", ownershipEpoch: 0 }),
+      null, "active", JSON.stringify({ id: "cap_real", workspaceId: "ws_real", sourceId: "src_real", ownerAccountId: "owner", ownershipEpoch: 0 }),
       "2026-01-01", "2026-01-01", "owner", 0, "active", 0,
     ]);
     const store = new SqlAppAuthorizationStore(client, emptyAccess);
@@ -101,7 +74,7 @@ test("PostgreSQL mutation store uses the actual current ledger tables", async ()
     expect((await store.listMembers("cap_real")).members).toEqual([{ accountId: "member", status: "active" }]);
     await client.query(`insert into takosumi_sources (id,space_id,status,source_json,created_at,updated_at)
       values ($1,$2,$3,$4::jsonb,$5,$6)`, ["src_real", "ws_real", "active",
-      JSON.stringify({ id: "src_real", ownerCapsuleId: "cap_real" }), "2026-01-01", "2026-01-01"]);
+      JSON.stringify({ id: "src_real", workspaceId: "ws_real", ownerCapsuleId: "cap_real" }), "2026-01-01", "2026-01-01"]);
     const sync = { id: "sync_real", kind: "source_sync", workspaceId: "ws_real", sourceId: "src_real",
       actorAccountId: "member", url: "https://example.test/repo", ref: "main", path: ".", archiveRef: "archive",
       status: "queued", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };

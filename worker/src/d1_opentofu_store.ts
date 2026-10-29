@@ -44,6 +44,7 @@ import {
 } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { alias, integer, real, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
+import { D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA, D1_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../core/domains/app-authorization/schema.ts";
 
 // Admission guard inserts deliberately target the pre-v77 column set. A
 // predeployed v75/v76 database must be able to reject an unsafe write without
@@ -2643,7 +2644,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async #connectionSnapshotMatches(current: ProviderConnection | undefined, expected: ProviderConnection): Promise<boolean> {
     if (!current) return false;
-    if (JSON.stringify(current) === JSON.stringify(expected)) return true;
+    if (stableStringify(current) === stableStringify(expected)) return true;
     // A pre-v77 caller can still hold the just-registered JSON snapshot while
     // the physical owner column has already been initialized. Only the exact
     // immutable Workspace owner may account for that one additive difference.
@@ -2653,13 +2654,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (workspace?.ownerUserId !== current.ownerAccountId) return false;
     const { ownerAccountId: _owner, ...legacy } = current;
     void _owner;
-    return JSON.stringify(legacy) === JSON.stringify(expected);
+    return stableStringify(legacy) === stableStringify(expected);
   }
 
   async #initializeConnectionPhysicalOwner(connection: ProviderConnection): Promise<void> {
-    if (connection.scope === "operator" || !connection.workspaceId ||
+    if (connection.scope === "operator" ||
       !await this.#v77Column("connections", "owner_account_id")) return;
-    const owner = connection.ownerAccountId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId;
+    const owner = connection.scope === "personal" ? connection.ownerAccountId
+      : connection.ownerAccountId ?? (connection.workspaceId
+        ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId : undefined);
     if (!owner) return;
     await this.db.prepare(`update connections set owner_account_id=? where id=? and owner_account_id is null`)
       .bind(owner, connection.id).run();
@@ -2953,6 +2956,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     await this.#ensureSchema();
+    const appOwnershipPhysical = await this.#v77Column("capsules", "owner_account_id");
     const run = input.run;
     // Probe the complete immutable preparation before admission. An exact
     // replay is observation-only and remains idempotent while a Workspace is
@@ -3022,7 +3026,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           ]
         : []),
       ...(run.capsuleId !== undefined
-        ? [d1AppPlanAdmissionGuardStmt(this.#orm, run)]
+        ? [d1AppPlanAdmissionGuardStmt(this.#orm, run, appOwnershipPhysical)]
         : []),
     ];
     try {
@@ -3191,6 +3195,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
     assertD1AtomicCommitBatch(this.db, "beginApplyRun");
     await this.#ensureSchema();
+    const appOwnershipPhysical = await this.#v77Column("capsules", "owner_account_id");
     // Probe the complete existing row before checking mutable Workspace
     // admission. An occupied id is read-only adoption (including while the
     // Workspace drains); only a new row needs an active captured tuple.
@@ -3229,7 +3234,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           )
         : undefined;
     const appGuard = run.capsuleId !== undefined
-      ? d1AppApplyAdmissionGuardStmt(this.#orm, run)
+      ? d1AppApplyAdmissionGuardStmt(this.#orm, run, appOwnershipPhysical)
       : undefined;
     const insert = this.#orm
       .insert(schema.runs)
@@ -3309,6 +3314,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     await this.#ensureSchema();
+    const appOwnershipPhysical = input.setLeaseToken !== undefined &&
+      (input.kind === "plan" || input.kind === "apply")
+      ? await this.#v77Column("capsules", "owner_account_id") : false;
     const types =
       input.kind === "plan"
         ? [RUN_KIND_PLAN, "destroy_plan", "drift_check"]
@@ -3497,7 +3505,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       : d1RunJsonPreservingAuthority(persisted);
     const appClaim = input.setLeaseToken !== undefined &&
         (input.kind === "plan" || input.kind === "apply")
-      ? d1AppClaimAdmissionWhere(this.#orm, input)
+      ? d1AppClaimAdmissionWhere(this.#orm, input, appOwnershipPhysical)
       : undefined;
     const result = await this.#orm
       .update(schema.runs)
@@ -8952,9 +8960,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     assertD1AtomicCommitBatch(this.db, "createConnectionRegistration");
     await this.#ensureSchema();
     const ownershipColumnAvailable = await this.#v77Column("connections", "owner_account_id");
-    const connectionOwnerAccountId = connection.scope === "workspace" && connection.workspaceId
-      ? actorAuthority?.expectedWorkspace.ownerUserId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
-      : undefined;
+    const connectionOwnerAccountId = connection.scope === "personal"
+      ? connection.ownerAccountId
+      : connection.scope === "workspace" && connection.workspaceId
+        ? actorAuthority?.expectedWorkspace.ownerUserId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
+        : undefined;
 
     // Match the other durable adapters' classification order: an occupied
     // identity is only a create-only false result when the captured Workspace
@@ -12838,26 +12848,35 @@ function d1CapsuleAbandonmentEligibility(
 }
 
 /** App authority lives in JSON until v77 physical columns are available. */
-function d1AppPlanAuthorityWhere(capsuleJson: SQL, planJson: SQL, continuation: SQL): SQL {
-  const owner = sql`json_extract(${capsuleJson}, '$.ownerAccountId')`;
-  const ownerEpoch = sql`json_extract(${capsuleJson}, '$.ownershipEpoch')`;
-  const managementEpoch = sql`json_extract(${capsuleJson}, '$.managementEpoch')`;
-  const state = sql`json_extract(${capsuleJson}, '$.managementState')`;
+function d1AppPlanAuthorityWhere(capsuleJson: SQL, planJson: SQL, continuation: SQL,
+  physical: boolean): SQL {
+  const owner = physical ? sql`${schema.capsules.ownerAccountId}`
+    : sql`json_extract(${capsuleJson}, '$.ownerAccountId')`;
+  const ownerEpoch = physical ? sql`${schema.capsules.ownershipEpoch}`
+    : sql`json_extract(${capsuleJson}, '$.ownershipEpoch')`;
+  const managementEpoch = physical ? sql`${schema.capsules.managementEpoch}`
+    : sql`json_extract(${capsuleJson}, '$.managementEpoch')`;
+  const state = physical ? sql`${schema.capsules.managementState}`
+    : sql`json_extract(${capsuleJson}, '$.managementState')`;
+  const legacy = physical ? sql`${schema.capsules.ownerAccountId} IS NULL`
+    : sql`json_type(${capsuleJson}, '$.ownerAccountId') IS NULL
+      AND json_type(${capsuleJson}, '$.ownershipEpoch') IS NULL
+      AND json_type(${capsuleJson}, '$.managementEpoch') IS NULL
+      AND json_type(${capsuleJson}, '$.managementState') IS NULL`;
+  const ownedShape = physical ? sql`${schema.capsules.ownerAccountId} IS NOT NULL`
+    : sql`json_type(${capsuleJson}, '$.ownerAccountId') = 'text'
+      AND json_type(${capsuleJson}, '$.ownershipEpoch') = 'integer'
+      AND json_type(${capsuleJson}, '$.managementEpoch') = 'integer'`;
   const planOwnerEpoch = sql`json_extract(${planJson}, '$.ownershipEpoch')`;
   const planManagementEpoch = sql`json_extract(${planJson}, '$.appManagementEpoch')`;
   return sql`json_valid(${capsuleJson}) = 1 AND json_valid(${planJson}) = 1 AND (
-    (json_type(${capsuleJson}, '$.ownerAccountId') IS NULL
-      AND json_type(${capsuleJson}, '$.ownershipEpoch') IS NULL
-      AND json_type(${capsuleJson}, '$.managementEpoch') IS NULL
-      AND json_type(${capsuleJson}, '$.managementState') IS NULL
+    ((${legacy})
       AND json_type(${planJson}, '$.ownershipEpoch') IS NULL
       AND json_type(${planJson}, '$.appManagementEpoch') IS NULL)
     OR
-    (json_type(${capsuleJson}, '$.ownerAccountId') = 'text'
+    ((${ownedShape})
       AND length(trim(${owner})) > 0
-      AND json_type(${capsuleJson}, '$.ownershipEpoch') = 'integer'
       AND ${ownerEpoch} BETWEEN 0 AND 9007199254740991
-      AND json_type(${capsuleJson}, '$.managementEpoch') = 'integer'
       AND ${managementEpoch} BETWEEN 0 AND 9007199254740991
       AND json_type(${planJson}, '$.ownershipEpoch') = 'integer'
       AND json_type(${planJson}, '$.appManagementEpoch') = 'integer'
@@ -12868,8 +12887,10 @@ function d1AppPlanAuthorityWhere(capsuleJson: SQL, planJson: SQL, continuation: 
           AND ${managementEpoch} = ${planManagementEpoch} + 1))))`;
 }
 
-function d1LegacyAppWhere(capsuleJson: SQL): SQL {
-  return sql`json_valid(${capsuleJson}) = 1
+function d1LegacyAppWhere(capsuleJson: SQL, physical: boolean): SQL {
+  return physical
+    ? sql`json_valid(${capsuleJson}) = 1 AND ${schema.capsules.ownerAccountId} IS NULL`
+    : sql`json_valid(${capsuleJson}) = 1
     AND json_type(${capsuleJson}, '$.ownerAccountId') IS NULL
     AND json_type(${capsuleJson}, '$.ownershipEpoch') IS NULL
     AND json_type(${capsuleJson}, '$.managementEpoch') IS NULL
@@ -12891,7 +12912,7 @@ function d1LegacyPlanUnpinnedWhere(
 }
 
 function d1AppPlanAdmissionGuardStmt(
-  orm: DrizzleD1Database<typeof schema>, run: PlanRun,
+  orm: DrizzleD1Database<typeof schema>, run: PlanRun, physical: boolean,
 ) {
   const capsule = schema.capsules;
   const current = orm.select({ one: sql`1` }).from(capsule).where(and(
@@ -12899,11 +12920,11 @@ function d1AppPlanAdmissionGuardStmt(
     eq(capsule.workspaceId, run.workspaceId),
     d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`,
       sql`${JSON.stringify({ ownershipEpoch: run.ownershipEpoch, appManagementEpoch: run.appManagementEpoch })}`,
-      sql`0`),
+      sql`0`, physical),
   ));
   const anyCapsule = orm.select({ one: sql`1` }).from(capsule)
     .where(eq(capsule.id, run.capsuleId!));
-  return orm.insert(capsule).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
+  return orm.insert(legacyCapsuleGuardTable).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
     .from(sql`(select 1) as app_plan_guard_source`)
     .where(and(notExists(current),
       run.ownershipEpoch === undefined && run.appManagementEpoch === undefined
@@ -12912,32 +12933,32 @@ function d1AppPlanAdmissionGuardStmt(
 }
 
 function d1AppApplyAdmissionGuardStmt(
-  orm: DrizzleD1Database<typeof schema>, run: ApplyRun,
+  orm: DrizzleD1Database<typeof schema>, run: ApplyRun, physical: boolean,
 ) {
   const capsule = schema.capsules;
   const plan = schema.runs;
   const current = orm.select({ one: sql`1` }).from(capsule).where(and(
     eq(capsule.id, run.capsuleId!),
     eq(capsule.workspaceId, run.workspaceId),
-    or(and(d1LegacyAppWhere(sql`${capsule.recordJson}`),
+    or(and(d1LegacyAppWhere(sql`${capsule.recordJson}`, physical),
       d1LegacyPlanUnpinnedWhere(orm, sql`${run.planRunId}`)),
       exists(orm.select({ one: sql`1` }).from(plan).where(and(
       eq(plan.id, run.planRunId),
       inArray(plan.type, [RUN_KIND_PLAN, "destroy_plan", "drift_check"]),
       eq(plan.capsuleId, run.capsuleId!),
       eq(plan.workspaceId, run.workspaceId),
-      d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${plan.runJson}`, sql`0`),
+      d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${plan.runJson}`, sql`0`, physical),
     )))),
   ));
   const existing = orm.select({ one: sql`1` }).from(schema.runs)
     .where(eq(schema.runs.id, run.id));
-  return orm.insert(capsule).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
+  return orm.insert(legacyCapsuleGuardTable).select(orm.select(d1InvalidCapsuleGuardRow(run.capsuleId!))
     .from(sql`(select 1) as app_apply_guard_source`)
     .where(and(notExists(current), notExists(existing))));
 }
 
 function d1AppClaimAdmissionWhere(
-  orm: DrizzleD1Database<typeof schema>, input: TransitionRunInput,
+  orm: DrizzleD1Database<typeof schema>, input: TransitionRunInput, physical: boolean,
 ): SQL {
   const capsule = schema.capsules;
   const plan = alias(schema.runs, "app_claim_plan");
@@ -12951,19 +12972,19 @@ function d1AppClaimAdmissionWhere(
     : d1LegacyPlanUnpinnedWhere(orm,
       sql`json_extract(${schema.runs.runJson}, '$.planRunId')`);
   const planWhere = input.kind === "plan"
-    ? d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${schema.runs.runJson}`, continuation)
+    ? d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${schema.runs.runJson}`, continuation, physical)
     : exists(orm.select({ one: sql`1` }).from(plan).where(and(
       eq(plan.id, sql`json_extract(${schema.runs.runJson}, '$.planRunId')`),
       inArray(plan.type, [RUN_KIND_PLAN, "destroy_plan", "drift_check"]),
       eq(plan.capsuleId, schema.runs.capsuleId),
       eq(plan.workspaceId, schema.runs.workspaceId),
-      d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${plan.runJson}`, continuation),
+      d1AppPlanAuthorityWhere(sql`${capsule.recordJson}`, sql`${plan.runJson}`, continuation, physical),
     )));
   return sql`(${schema.runs.capsuleId} IS NULL OR ${exists(
     orm.select({ one: sql`1` }).from(capsule).where(and(
       eq(capsule.id, schema.runs.capsuleId),
       eq(capsule.workspaceId, schema.runs.workspaceId),
-      or(and(d1LegacyAppWhere(sql`${capsule.recordJson}`), legacyPlanWhere), planWhere),
+      or(and(d1LegacyAppWhere(sql`${capsule.recordJson}`, physical), legacyPlanWhere), planWhere),
     )),
   )})`;
 }
@@ -13678,8 +13699,11 @@ function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
   if (!expected.ownerAccountId) return eq(schema.connections.connectionJson, expected);
   const { ownerAccountId, ...legacy } = expected;
   return and(
-    sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
     eq(schema.connections.ownerAccountId, ownerAccountId),
+    or(
+      eq(schema.connections.connectionJson, expected),
+      sql`json_remove(${schema.connections.connectionJson}, '$.ownerAccountId') = ${JSON.stringify(legacy)}`,
+    ),
   )!;
 }
 
@@ -16277,6 +16301,8 @@ const D1_APP_OWNERSHIP_STATEMENTS = [
     created_at text not null,
     updated_at text not null
   )`,
+  ...D1_APP_OWNERSHIP_TRANSFER_SCHEMA,
+  ...D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA,
 ] as const;
 
 const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [
@@ -20667,7 +20693,7 @@ const D1_RUNTIME_STRUCTURE_PROJECTION = `(
     'foreignKeys', (select count(*) from pragma_foreign_key_list(master.name))))
   from sqlite_master master where master.type = 'table' and master.name in (
     'workspaces', 'workspace_members', 'interface_bindings', 'interface_links', 'scheduled_sweep_cursors',
-    'capsules', 'capsule_members', 'connections', 'usage_events', 'credential_mint_events', 'account_billing_bindings',
+    'capsules', 'capsule_members', 'capsule_ownership_transfers', 'app_credential_mint_leases', 'connections', 'usage_events', 'credential_mint_events', 'account_billing_bindings',
     'workspace_billing_intents', 'workspace_billing_bindings',
     'identity_reconciliation_operations', 'identity_reconciliation_events', 'backups',
     'workspace_financial_sources','workspace_financial_events','workspace_financial_materializations','workspace_financial_receipts')
@@ -20740,7 +20766,7 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
       const column = table.columns.find((item) => item.name === columnName);
       return !column || column.type.toLowerCase() !== type || column.notnull !== required || column.pk !== pk;
     }) || indexes.some(([indexName, columns, partial = 0]) => !table.indexes.some((index) => index.name === indexName && index.unique === 1 && index.partial === partial && stableStringify(index.columns) === stableStringify(columns))) ||
-      ((name === "interface_links" || name === "capsule_members" || name === "account_billing_bindings" || name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
+      ((name === "interface_links" || name === "capsule_members" || name === "capsule_ownership_transfers" || name === "app_credential_mint_leases" || name === "account_billing_bindings" || name.startsWith("identity_reconciliation_") || name.startsWith("workspace_financial_")) && table.foreignKeys !== 0)) throw new Error("D1 OpenTofu predeployed schema verification failed");
   };
   check("workspaces", [["id", "text", 0, 1], ["handle", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1], ["updated_at", "text", 1],
     ["owner_user_id", "text", 0], ["workspace_type", "text", 0], ["personal_bootstrap_owner_id", "text", 0], ["management_state", "text", 1], ["management_epoch", "integer", 1]],
@@ -20785,6 +20811,24 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
     hasColumns("credential_mint_events", [["actor_account_id", "text", 0], ["connection_owner_account_id", "text", 0], ["ownership_epoch", "integer", 0]]);
     check("capsule_members", [["capsule_id", "text", 1, 1], ["account_id", "text", 1, 2], ["status", "text", 1], ["added_by", "text", 0], ["created_at", "text", 1], ["updated_at", "text", 1]]);
     check("account_billing_bindings", [["account_id", "text", 0, 1], ["billing_authority", "text", 1], ["billing_ref", "text", 1], ["organization_ref", "text", 0], ["created_at", "text", 1], ["updated_at", "text", 1]]);
+    check("capsule_ownership_transfers", [["id", "text", 0, 1], ["capsule_id", "text", 1],
+      ["from_account_id", "text", 1], ["to_account_id", "text", 1], ["ownership_epoch", "integer", 1],
+      ["drain_management_epoch", "integer", 0], ["state", "text", 1], ["created_at", "text", 1],
+      ["updated_at", "text", 1]],
+      [["capsule_ownership_transfers_one_pending", ["capsule_id"], 1]]);
+    check("app_credential_mint_leases", [["id", "text", 0, 1], ["capsule_id", "text", 1],
+      ["run_id", "text", 1], ["owner_account_id", "text", 1], ["ownership_epoch", "integer", 1],
+      ["management_epoch", "integer", 1], ["actor_account_ids_json", "text", 1], ["expires_at", "integer", 1],
+      ["created_at", "text", 1]]);
+    const mintLeases = tables.get("app_credential_mint_leases")!;
+    const mintLeaseIndex = mintLeases.indexes.find((index) => index.name === "app_credential_mint_leases_capsule_expiry");
+    if (normalizedD1IndexSql(mintLeases.sql) !== normalizedD1IndexSql(
+      D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA[0].replace(/^create table if not exists /u, "create table ")) ||
+      !mintLeaseIndex || mintLeaseIndex.unique !== 0 || mintLeaseIndex.partial !== 0 ||
+      stableStringify(mintLeaseIndex.columns) !== stableStringify(["capsule_id", "expires_at"]) ||
+      normalizedD1IndexSql(mintLeaseIndex.sql) !== normalizedD1IndexSql(D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA[1])) {
+      throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
     for (const [name, statement] of [["capsule_members", D1_APP_OWNERSHIP_STATEMENTS[5]], ["account_billing_bindings", D1_APP_OWNERSHIP_STATEMENTS[12]]] as const) {
       if (normalizedD1IndexSql(tables.get(name)?.sql ?? null) !== normalizedD1IndexSql(statement)) throw new Error("D1 OpenTofu predeployed schema verification failed");
     }
@@ -20796,6 +20840,22 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
     const memberIndex = tables.get("capsule_members")!.indexes.find(index => index.name === "capsule_members_account_status_idx");
     if (!memberIndex || memberIndex.unique !== 0 || memberIndex.partial !== 0 || stableStringify(memberIndex.columns) !== stableStringify(["account_id", "status"]) ||
       normalizedD1IndexSql(memberIndex.sql) !== normalizedD1IndexSql(D1_APP_OWNERSHIP_STATEMENTS[6])) throw new Error("D1 OpenTofu predeployed schema verification failed");
+    const transfer = tables.get("capsule_ownership_transfers")!;
+    if (normalizedD1IndexSql(transfer.sql) !== normalizedD1IndexSql(
+      D1_APP_OWNERSHIP_TRANSFER_SCHEMA[0].replace(/^create table if not exists /u, "create table "))) {
+      throw new Error("D1 OpenTofu predeployed schema verification failed");
+    }
+    for (const [position, name, columns, unique, partial] of [
+      [1, "capsule_ownership_transfers_one_pending", ["capsule_id"], 1, 1],
+      [2, "capsule_ownership_transfers_recipient", ["to_account_id", "state"], 0, 0],
+    ] as const) {
+      const index = transfer.indexes.find((item) => item.name === name);
+      if (!index || index.unique !== unique || index.partial !== partial ||
+        stableStringify(index.columns) !== stableStringify(columns) ||
+        normalizedD1IndexSql(index.sql) !== normalizedD1IndexSql(D1_APP_OWNERSHIP_TRANSFER_SCHEMA[position])) {
+        throw new Error("D1 OpenTofu predeployed schema verification failed");
+      }
+    }
   }
   check("scheduled_sweep_cursors", [["lane", "text", 0, 1], ["generation", "integer", 1], ["cursor_created_at", "text", 0], ["cursor_id", "text", 0], ["upper_created_at", "text", 0], ["upper_id", "text", 0]]);
   if (head >= 72) {

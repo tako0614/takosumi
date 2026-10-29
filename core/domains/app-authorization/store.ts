@@ -47,6 +47,8 @@ type OwnerRow = {
   ownership_epoch: number;
   management_state: string;
   management_epoch: number;
+  space_id: string;
+  source_id: string | null;
 };
 type MemberRow = { account_id: string; status: string };
 type TransferRow = {
@@ -58,7 +60,8 @@ type TransferRow = {
   drain_management_epoch: number | null;
   state: string;
 };
-type RunRow = { id: string; kind: string; status: string; lease_token: string | null; run_json: unknown; source_id?: string | null };
+type RunRow = { id: string; kind: string; status: string; lease_token: string | null; run_json: unknown;
+  source_id?: string | null; space_id?: string | null; source_space_id?: string | null; source_json?: unknown };
 
 const unavailable = () => new AppAuthorizationError("feature_unavailable", "App ownership storage is unavailable.");
 const conflict = (message: string) => new AppAuthorizationError("conflict", message);
@@ -179,6 +182,23 @@ function revokedSourceSync(row: RunRow, actorAccountId: string, now: number): Re
   return failedSourceSync(row, now, "app_access_revoked", "App membership was removed before this source sync started.", actorAccountId);
 }
 
+function assertSourceRunScope(row: RunRow, owner: OwnerRow, capsuleId: string): void {
+  let source: Record<string, unknown> | undefined;
+  try {
+    source = typeof row.source_json === "string" ? JSON.parse(row.source_json) as Record<string, unknown>
+      : row.source_json as Record<string, unknown> | undefined;
+  } catch { throw conflict("Source sync app or Workspace linkage is inconsistent."); }
+  const run = parseRunJson(row);
+  if (row.kind !== "source_sync" || !owner.source_id || row.source_id !== owner.source_id ||
+    row.space_id !== owner.space_id || row.source_space_id !== owner.space_id ||
+    !source || typeof source !== "object" || Array.isArray(source) ||
+    source.id !== row.source_id || source.workspaceId !== owner.space_id ||
+    source.ownerCapsuleId !== capsuleId || run.kind !== "source_sync" ||
+    run.workspaceId !== owner.space_id || run.sourceId !== row.source_id) {
+    throw conflict("Source sync app or Workspace linkage is inconsistent.");
+  }
+}
+
 function targetRuns(rows: readonly RunRow[], actor: string): { row: RunRow; cancelled: Record<string, unknown> }[] {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const planCreator = (planId: unknown): unknown => {
@@ -212,7 +232,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
 
   async #owner(tx: SqlClient, capsuleId: string, lock: boolean): Promise<OwnerRow | undefined> {
     const result = await tx.query<OwnerRow>(
-      `select owner_account_id, ownership_epoch, management_state, management_epoch
+      `select owner_account_id, ownership_epoch, management_state, management_epoch,space_id,source_id
        from takosumi_capsules where id=$1 ${lock ? "for update" : ""}`,
       [capsuleId],
     );
@@ -281,6 +301,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         // Keep that order here; Source sync enqueue does not lock Capsule, so
         // fence inserts while selecting and settling its run rows.
         await tx.query(`lock table takosumi_runs in share row exclusive mode`);
+        if (owner.source_id) await tx.query(`select id from takosumi_sources where id=$1 for update`, [owner.source_id]);
         const rows = await tx.query<RunRow>(
           `select id,kind,status,lease_token,run_json from takosumi_runs
            where installation_id=$1 and status in ('queued','waiting_approval','running') limit 81 for update`,
@@ -298,7 +319,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         const ambiguousSource = await tx.query<{ id: string }>(
           `select r.id from takosumi_runs r
            join takosumi_capsules c on c.id=$1 and c.source_id=r.source_id
-           join takosumi_sources s on s.id=r.source_id
+           left join takosumi_sources s on s.id=r.source_id
            where r.kind='source_sync' and r.status in ('queued','running')
              and r.run_json->>'actorAccountId'=$2
              and s.source_json->>'ownerCapsuleId' is distinct from $1
@@ -307,7 +328,8 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         );
         if (ambiguousSource.rows.length > 0) throw conflict("Source sync cannot be attributed to this app safely.");
         const sourceRows = await tx.query<RunRow>(
-          `select r.id,r.kind,r.status,r.lease_token,r.run_json,r.source_id
+          `select r.id,r.kind,r.status,r.lease_token,r.run_json,r.source_id,r.space_id,
+             s.space_id as source_space_id,s.source_json
            from takosumi_runs r join takosumi_sources s on s.id=r.source_id
            where r.kind='source_sync' and r.status in ('queued','running')
              and r.run_json->>'actorAccountId'=$2
@@ -316,17 +338,13 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
           [input.capsuleId, input.accountId],
         );
         if (sourceRows.rows.length > 80) throw conflict("Too many active Source sync Runs for atomic member removal.");
-        if (sourceRows.rows.some((row) => row.status === "running" || row.lease_token !== null)) {
-          throw conflict("Member has an active Source sync Run; removal must wait for it to settle.");
+        for (const row of sourceRows.rows) assertSourceRunScope(row, owner, input.capsuleId);
+        if (sourceRows.rows.some((row) => row.status === "queued" && row.lease_token !== null)) {
+          throw conflict("A queued Source sync Run has a lease and cannot be revoked safely.");
         }
         const cancels = targetRuns([...rows.rows, ...plans], input.accountId).filter(({ row }) =>
           row.status === "queued" || row.status === "waiting_approval"
         );
-        if ([...rows.rows, ...plans].some((row) => row.status === "running" &&
-          (parseRunJson(row).createdBy === input.accountId ||
-            plans.some((plan) => plan.id === parseRunJson(row).planRunId && parseRunJson(plan).createdBy === input.accountId)))) {
-          throw conflict("Member has an active Run; removal must wait for it to settle.");
-        }
         for (const { row, cancelled } of cancels) {
           await tx.query(
             `update takosumi_runs set status='cancelled',lease_token=null,heartbeat_at=null,run_json=$2::jsonb where id=$1`,
@@ -338,6 +356,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         }
         const now = Date.now();
         for (const row of sourceRows.rows) {
+          if (row.status !== "queued") continue;
           await tx.query(
             `update takosumi_runs set status='failed',lease_token=null,heartbeat_at=null,run_json=$2::jsonb where id=$1`,
             [row.id, JSON.stringify(revokedSourceSync(row, input.accountId, now))],
@@ -410,6 +429,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         // #lockedTransfer took Capsule then transfer. Keep Runs last, matching
         // canonical admission's Capsule -> Runs order while fencing Source sync.
         await tx.query(`lock table takosumi_runs in share row exclusive mode`);
+        if (owner.source_id) await tx.query(`select id from takosumi_sources where id=$1 for update`, [owner.source_id]);
         // Persist drain on the first call; a caller retries after in-flight Runs settle.
         if (owner.management_state === "active") {
           await tx.query(
@@ -441,14 +461,15 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
         const ambiguousSource = await tx.query<{ id: string }>(
           `select r.id from takosumi_runs r
            join takosumi_capsules c on c.id=$1 and c.source_id=r.source_id
-           join takosumi_sources s on s.id=r.source_id
+           left join takosumi_sources s on s.id=r.source_id
            where r.kind='source_sync' and (r.status in ('queued','running') or r.lease_token is not null)
              and s.source_json->>'ownerCapsuleId' is distinct from $1 limit 1`,
           [transfer.capsule_id],
         );
         if (ambiguousSource.rows.length > 0) throw conflict("Source sync cannot be attributed to this app safely.");
         const sourceRows = await tx.query<RunRow>(
-          `select r.id,r.kind,r.status,r.lease_token,r.run_json,r.source_id
+          `select r.id,r.kind,r.status,r.lease_token,r.run_json,r.source_id,r.space_id,
+             s.space_id as source_space_id,s.source_json
            from takosumi_runs r join takosumi_sources s on s.id=r.source_id
            where r.kind='source_sync' and (r.status in ('queued','running') or r.lease_token is not null)
              and s.source_json->>'ownerCapsuleId'=$1
@@ -456,6 +477,7 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
           [transfer.capsule_id],
         );
         if (sourceRows.rows.length > 80) throw conflict("Too many active Source sync Runs for atomic transfer drain.");
+        for (const row of sourceRows.rows) assertSourceRunScope(row, owner, transfer.capsule_id);
         for (const row of sourceRows.rows) {
           if (row.status !== "queued") continue;
           await tx.query(
@@ -471,6 +493,11 @@ export class SqlAppAuthorizationStore implements AppAuthorizationMutations {
           [transfer.capsule_id],
         );
         if (active.rows.length > 0) return { transferId: input.transferId, state: "pending" as const };
+        const minting = await tx.query<{ id: string }>(
+          `select id from takosumi_app_credential_mint_leases where capsule_id=$1 and expires_at>$2 limit 1`,
+          [transfer.capsule_id, Date.now()],
+        );
+        if (minting.rows.length > 0) return { transferId: input.transferId, state: "pending" as const };
         const now = new Date().toISOString();
         await tx.query(`delete from takosumi_provider_env_binding_sets where installation_id=$1`, [transfer.capsule_id]);
         // The owner is represented only by capsules.owner_account_id. A prior
@@ -518,7 +545,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
   }
   #owner(id: string) {
     return this.db.prepare(
-      `select owner_account_id,ownership_epoch,management_state,management_epoch from capsules where id=?`,
+      `select owner_account_id,ownership_epoch,management_state,management_epoch,space_id,source_id from capsules where id=?`,
     ).bind(id).first<OwnerRow>();
   }
   #transfer(id: string) {
@@ -543,10 +570,13 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       if (error instanceof AppAuthorizationError) throw error;
       if (schemaError(error)) throw unavailable();
       const message = error instanceof Error ? error.message : String(error);
-      if (/CHECK constraint failed.*(state|capsule_ownership_transfers)|constraint failed.*invalid/i.test(message)) {
+      // #guard deliberately inserts state='invalid'. Match only the transfer
+      // ledger's exact CHECK expression; unrelated SQL constraints remain
+      // visible as storage errors rather than being misreported as a race.
+      if (/(?:^|:\s)CHECK constraint failed: (?:capsule_ownership_transfers_state_check|state in \('pending','accepted','cancelled'\))$/.test(message)) {
         throw conflict("App ownership changed during the write.");
       }
-      throw unavailable();
+      throw error;
     }
   }
   async listMembers(capsuleId: string) {
@@ -612,7 +642,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       const ambiguousSource = await this.db.prepare(
         `select r.id from runs r
          join capsules c on c.id=? and c.source_id=r.source_id
-         join sources s on s.id=r.source_id
+         left join sources s on s.id=r.source_id
          where r.type='source_sync' and r.status in ('queued','running')
            and json_extract(r.run_json,'$.actorAccountId')=?
            and json_extract(s.record_json,'$.ownerCapsuleId') is not ?
@@ -620,7 +650,8 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       ).bind(input.capsuleId, input.accountId, input.capsuleId).first<{ id: string }>();
       if (ambiguousSource) throw conflict("Source sync cannot be attributed to this app safely.");
       const sourceResult = await this.db.prepare(
-        `select r.id,r.type as kind,r.status,r.lease_token,r.run_json,r.source_id
+        `select r.id,r.type as kind,r.status,r.lease_token,r.run_json,r.source_id,r.space_id,
+           s.space_id as source_space_id,s.record_json as source_json
          from runs r join sources s on s.id=r.source_id
          where r.type='source_sync' and r.status in ('queued','running')
            and json_extract(r.run_json,'$.actorAccountId')=?
@@ -629,17 +660,11 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       ).bind(input.accountId, input.capsuleId).all<RunRow>();
       const sourceRows = sourceResult.results ?? [];
       if (sourceRows.length > 80) throw conflict("Too many active Source sync Runs for atomic member removal.");
-      if (sourceRows.some((row) => row.status === "running" || row.lease_token !== null)) {
-        throw conflict("Member has an active Source sync Run; removal must wait for it to settle.");
+      for (const row of sourceRows) assertSourceRunScope(row, owner, input.capsuleId);
+      if (sourceRows.some((row) => row.status === "queued" && row.lease_token !== null)) {
+        throw conflict("A queued Source sync Run has a lease and cannot be revoked safely.");
       }
       const all = [...activeRows, ...plans];
-      const byId = new Map(all.map((row) => [row.id, row]));
-      const owned = (row: RunRow): boolean => {
-        const run = parseRunJson(row);
-        const plan = typeof run.planRunId === "string" ? byId.get(run.planRunId) : undefined;
-        return run.createdBy === input.accountId || (plan && parseRunJson(plan).createdBy === input.accountId) === true;
-      };
-      if (all.some((row) => row.status === "running" && owned(row))) throw conflict("Member has an active Run; removal must wait for it to settle.");
       const cancels = targetRuns(all, input.accountId);
       const statements: D1LikePreparedStatement[] = [
         this.#ownerGuard(input.capsuleId, owner.owner_account_id, input.expectedOwnershipEpoch),
@@ -677,8 +702,10 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
         statements.push(this.#guard(
           `exists(select 1 from runs r join sources s on s.id=r.source_id
            where r.id=? and r.status=? and r.run_json=? and r.lease_token is ?
-             and r.source_id=? and json_extract(s.record_json,'$.ownerCapsuleId')=?)`,
-          [row.id, row.status, row.run_json, row.lease_token, row.source_id, input.capsuleId],
+             and r.source_id=? and r.space_id=? and s.space_id=? and s.record_json=?
+             and exists(select 1 from capsules c where c.id=? and c.space_id=? and c.source_id=?))`,
+          [row.id, row.status, row.run_json, row.lease_token, row.source_id, row.space_id,
+            row.source_space_id, row.source_json, input.capsuleId, owner.space_id, owner.source_id],
         ));
       }
       for (const { row, cancelled } of cancels) {
@@ -691,6 +718,7 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       }
       const now = Date.now();
       for (const row of sourceRows) {
+        if (row.status !== "queued") continue;
         statements.push(this.db.prepare(
           `update runs set status='failed',lease_token=null,heartbeat_at=null,run_json=? where id=?`,
         ).bind(JSON.stringify(revokedSourceSync(row, input.accountId, now)), row.id));
@@ -774,19 +802,21 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
       const ambiguousSource = await this.db.prepare(
         `select r.id from runs r
          join capsules c on c.id=? and c.source_id=r.source_id
-         join sources s on s.id=r.source_id
+         left join sources s on s.id=r.source_id
          where r.type='source_sync' and (r.status in ('queued','running') or r.lease_token is not null)
            and json_extract(s.record_json,'$.ownerCapsuleId') is not ? limit 1`,
       ).bind(transfer.capsule_id, transfer.capsule_id).first<{ id: string }>();
       if (ambiguousSource) throw conflict("Source sync cannot be attributed to this app safely.");
       const sourceResult = await this.db.prepare(
-        `select r.id,r.type as kind,r.status,r.lease_token,r.run_json,r.source_id
+        `select r.id,r.type as kind,r.status,r.lease_token,r.run_json,r.source_id,r.space_id,
+           s.space_id as source_space_id,s.record_json as source_json
          from runs r join sources s on s.id=r.source_id
          where r.type='source_sync' and (r.status in ('queued','running') or r.lease_token is not null)
            and json_extract(s.record_json,'$.ownerCapsuleId')=? limit 81`,
       ).bind(transfer.capsule_id).all<RunRow>();
       const sourceRows = sourceResult.results ?? [];
       if (sourceRows.length > 80) throw conflict("Too many active Source sync Runs for atomic transfer drain.");
+      for (const row of sourceRows) assertSourceRunScope(row, owner, transfer.capsule_id);
       const nowMs = Date.now();
       const settleStatements: D1LikePreparedStatement[] = [
         this.#transferGuard(transfer),
@@ -821,8 +851,10 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
         settleStatements.push(this.#guard(
           `exists(select 1 from runs r join sources s on s.id=r.source_id
            where r.id=? and r.status=? and r.run_json=? and r.lease_token is ?
-             and r.source_id=? and json_extract(s.record_json,'$.ownerCapsuleId')=?)`,
-          [row.id, row.status, row.run_json, row.lease_token, row.source_id, transfer.capsule_id],
+             and r.source_id=? and r.space_id=? and s.space_id=? and s.record_json=?
+             and exists(select 1 from capsules c where c.id=? and c.space_id=? and c.source_id=?))`,
+          [row.id, row.status, row.run_json, row.lease_token, row.source_id, row.space_id,
+            row.source_space_id, row.source_json, transfer.capsule_id, owner.space_id, owner.source_id],
         ));
       }
       for (const row of queuedRows.slice(0, 80)) {
@@ -849,10 +881,16 @@ export class D1AppAuthorizationStore implements AppAuthorizationMutations {
            and (r.status in ('queued','running','waiting_approval') or r.lease_token is not null) limit 1`,
       ).bind(transfer.capsule_id, transfer.capsule_id).first<{ id: string }>();
       if (active) return { transferId: input.transferId, state: "pending" as const };
+      const minting = await this.db.prepare(
+        `select id from app_credential_mint_leases where capsule_id=? and expires_at>? limit 1`,
+      ).bind(transfer.capsule_id, Date.now()).first<{ id: string }>();
+      if (minting) return { transferId: input.transferId, state: "pending" as const };
       const now = new Date().toISOString();
       await this.#batch([
         this.#transferGuard(transfer),
         this.#ownerGuard(transfer.capsule_id, transfer.from_account_id, transfer.ownership_epoch, "draining"),
+        this.#guard(`not exists(select 1 from app_credential_mint_leases where capsule_id=? and expires_at>?)`,
+          [transfer.capsule_id, Date.now()]),
         this.#guard(
           `not exists(select 1 from runs r left join sources s on s.id=r.source_id
            where (r.installation_id=? or (r.type='source_sync' and json_extract(s.record_json,'$.ownerCapsuleId')=?))

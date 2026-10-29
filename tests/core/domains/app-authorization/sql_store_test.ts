@@ -2,7 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, test } from "bun:test";
 import type { AppAccessResolver } from "../../../../contract/app-access.ts";
 import type { SqlClient, SqlParameters, SqlQueryResult, SqlTransaction } from "../../../../core/adapters/storage/sql.ts";
-import { PG_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../../../core/domains/app-authorization/schema.ts";
+import { PG_APP_CREDENTIAL_MINT_LEASE_SCHEMA, PG_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../../../core/domains/app-authorization/schema.ts";
 import { SqlAppAuthorizationStore } from "../../../../core/domains/app-authorization/store.ts";
 
 function sqlPort(db: PGlite): SqlClient {
@@ -31,7 +31,7 @@ async function fixture() {
   await db.exec(`create table takosumi_capsules (
     id text primary key, owner_account_id text, ownership_epoch integer not null,
     management_state text not null, management_epoch integer not null,
-    installation_json jsonb not null, source_id text
+    installation_json jsonb not null, source_id text, space_id text
   );
   create table takosumi_capsule_members (
     capsule_id text not null, account_id text not null, status text not null,
@@ -40,16 +40,16 @@ async function fixture() {
   );
   create table takosumi_runs (
     id text primary key, installation_id text, kind text not null, status text not null,
-    lease_token text, heartbeat_at bigint, run_json jsonb not null, source_id text
+    lease_token text, heartbeat_at bigint, run_json jsonb not null, source_id text, space_id text
   );
-  create table takosumi_sources (id text primary key, source_json jsonb not null);
+  create table takosumi_sources (id text primary key, source_json jsonb not null, space_id text);
   create table takosumi_plan_run_inputs (plan_run_id text primary key, inputs_json jsonb not null);
   create table takosumi_provider_env_binding_sets (installation_id text not null, profile_json jsonb not null);
   insert into takosumi_capsules values ('cap1','owner',4,'active',0,
-    '{"id":"cap1","ownerAccountId":"owner","ownershipEpoch":4,"managementState":"active","managementEpoch":0}', 'src1');
+    '{"id":"cap1","ownerAccountId":"owner","ownershipEpoch":4,"managementState":"active","managementEpoch":0}', 'src1', 'ws1');
   insert into takosumi_capsule_members values ('cap1','member','active','owner','2026-01-01','2026-01-01');
   insert into takosumi_provider_env_binding_sets values ('cap1','{}');`);
-  await db.exec(PG_APP_OWNERSHIP_TRANSFER_SCHEMA);
+  await db.exec(PG_APP_OWNERSHIP_TRANSFER_SCHEMA + PG_APP_CREDENTIAL_MINT_LEASE_SCHEMA);
   const access: AppAccessResolver = {
     async resolveAppAccess(accountId, capsuleId) {
       const result = await db.query<{ owner_account_id: string; ownership_epoch: number }>(
@@ -87,26 +87,46 @@ describe("PostgreSQL app authorization mutation store", () => {
     } finally { await db.close(); }
   });
 
-  test("queued app Source sync fails atomically and running Source sync blocks revocation", async () => {
+  test("running app Source sync keeps its lease while queued Source sync fails on member removal", async () => {
     const { db, store } = await fixture();
     try {
       const now = "2026-01-01T00:00:00.000Z";
       const run = { id: "sync1", kind: "source_sync", workspaceId: "ws1", sourceId: "src1",
         actorAccountId: "member", url: "https://example.test/repo", ref: "main", path: ".",
         archiveRef: "archive", status: "queued", createdAt: now, updatedAt: now };
-      await db.query(`insert into takosumi_sources values ('src1','{"id":"src1","ownerCapsuleId":"cap1"}'::jsonb)`);
-      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id)
-        values ($1,null,'source_sync','queued',null,null,$2::jsonb,'src1')`, ["sync1", JSON.stringify(run)]);
+      await db.query(`insert into takosumi_sources values ('src1','{"id":"src1","workspaceId":"ws1","ownerCapsuleId":"cap1"}'::jsonb,'ws1')`);
+      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id,space_id)
+        values ($1,null,'source_sync','queued',null,null,$2::jsonb,'src1','ws1')`, ["sync1", JSON.stringify(run)]);
       await db.query(`update takosumi_runs set status='running',lease_token='lease',run_json=$1::jsonb where id='sync1'`,
         [JSON.stringify({ ...run, status: "running" })]);
-      await expect(store.removeMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 4 })).rejects.toMatchObject({ code: "conflict" });
-      expect((await db.query(`select account_id from takosumi_capsule_members`)).rows).toEqual([{ account_id: "member" }]);
-      await db.query(`update takosumi_runs set status='queued',lease_token=null,run_json=$1::jsonb where id='sync1'`, [JSON.stringify(run)]);
+      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id,space_id)
+        values ($1,null,'source_sync','queued',null,null,$2::jsonb,'src1','ws1')`,
+        ["sync2", JSON.stringify({ ...run, id: "sync2" })]);
       await store.removeMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 4 });
-      const row = (await db.query<{ status: string; run_json: Record<string, unknown> }>(`select status,run_json from takosumi_runs where id='sync1'`)).rows[0];
+      expect((await db.query(`select status,lease_token from takosumi_runs where id='sync1'`)).rows[0])
+        .toEqual({ status: "running", lease_token: "lease" });
+      const row = (await db.query<{ status: string; run_json: Record<string, unknown> }>(`select status,run_json from takosumi_runs where id='sync2'`)).rows[0];
       expect(row?.status).toBe("failed");
       expect(row?.run_json).toMatchObject({ status: "failed", errorCode: "app_access_revoked", finishedAt: expect.any(String) });
       expect((await db.query(`select account_id from takosumi_capsule_members`)).rows).toHaveLength(0);
+      expect(await store.resolveAppAccess("member", "cap1")).toBeUndefined();
+    } finally { await db.close(); }
+  });
+
+  test("cross-Workspace physical Source row blocks member removal", async () => {
+    const { db, store } = await fixture();
+    try {
+      const now = "2026-01-01T00:00:00.000Z";
+      const run = { id: "sync1", kind: "source_sync", workspaceId: "ws1", sourceId: "src1",
+        actorAccountId: "member", url: "https://example.test/repo", ref: "main", path: ".",
+        archiveRef: "archive", status: "queued", createdAt: now, updatedAt: now };
+      await db.query(`insert into takosumi_sources values ('src1','{"id":"src1","workspaceId":"ws1","ownerCapsuleId":"cap1"}'::jsonb,'other')`);
+      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id,space_id)
+        values ($1,null,'source_sync','queued',null,null,$2::jsonb,'src1','ws1')`, ["sync1", JSON.stringify(run)]);
+      await expect(store.removeMember({ capsuleId: "cap1", actorAccountId: "owner", accountId: "member", expectedOwnershipEpoch: 4 }))
+        .rejects.toMatchObject({ code: "conflict" });
+      expect((await db.query(`select status from takosumi_runs where id='sync1'`)).rows[0]).toEqual({ status: "queued" });
+      expect((await db.query(`select account_id from takosumi_capsule_members`)).rows).toEqual([{ account_id: "member" }]);
     } finally { await db.close(); }
   });
 
@@ -114,7 +134,7 @@ describe("PostgreSQL app authorization mutation store", () => {
     const { db, store } = await fixture();
     try {
       await db.query(`insert into takosumi_capsule_members values ('cap1','new','active','owner','2026-01-01','2026-01-01')`);
-      await db.query(`insert into takosumi_sources values ('src1','{"id":"src1","ownerCapsuleId":"cap1"}'::jsonb)`);
+      await db.query(`insert into takosumi_sources values ('src1','{"id":"src1","workspaceId":"ws1","ownerCapsuleId":"cap1"}'::jsonb,'ws1')`);
       const transfer = await store.createTransfer({ capsuleId: "cap1", actorAccountId: "owner", toAccountId: "new", expectedOwnershipEpoch: 4 });
       await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json) values ('run1','cap1','plan','running','lease',1,'{"id":"run1","status":"running"}')`);
       for (const [id, status] of [["planq", "queued"], ["planw", "waiting_approval"]] as const) {
@@ -125,10 +145,10 @@ describe("PostgreSQL app authorization mutation store", () => {
       const sync = { id: "syncq", kind: "source_sync", workspaceId: "ws1", sourceId: "src1",
         actorAccountId: "owner", url: "https://example.test/repo", ref: "main", path: ".", archiveRef: "archive",
         status: "queued", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
-      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id)
-        values ($1,null,'source_sync','queued',null,null,$2::jsonb,'src1')`, ["syncq", JSON.stringify(sync)]);
-      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id)
-        values ($1,null,'source_sync','running','lease',1,$2::jsonb,'src1')`,
+      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id,space_id)
+        values ($1,null,'source_sync','queued',null,null,$2::jsonb,'src1','ws1')`, ["syncq", JSON.stringify(sync)]);
+      await db.query(`insert into takosumi_runs (id,installation_id,kind,status,lease_token,heartbeat_at,run_json,source_id,space_id)
+        values ($1,null,'source_sync','running','lease',1,$2::jsonb,'src1','ws1')`,
         ["syncr", JSON.stringify({ ...sync, id: "syncr", status: "running" })]);
       expect((await store.acceptTransfer({ transferId: transfer.transferId, actorAccountId: "new" })).state).toBe("pending");
       expect((await db.query<{ management_state: string }>(`select management_state from takosumi_capsules where id='cap1'`)).rows[0]?.management_state).toBe("draining");

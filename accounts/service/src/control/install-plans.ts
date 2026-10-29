@@ -2269,6 +2269,7 @@ async function createCapsule(
     operations,
     plan.workspaceId,
     requestedBindings,
+    plan.createdBy,
   );
   if (!resolved.ok) {
     return failedPlan(plan, {

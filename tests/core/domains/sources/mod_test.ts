@@ -2707,3 +2707,19 @@ test("readCapsuleSourceFiles keeps module paths relative to the snapshot archive
     undefined,
   ]);
 });
+
+test("an app-owned Source accepts its owner's personal Git connection and refuses another person's", async () => {
+  const { store, service } = makeService();
+  const connection: ProviderConnection = {
+    id: "conn_personal_git", ownerAccountId: "user_1", scope: "personal",
+    provider: "source_git_https_token", providerSource: "git", kind: "source_git_https_token",
+    materialization: "secret", status: "verified", envNames: ["GIT_HTTPS_TOKEN"],
+    createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putConnection(connection);
+  const created = await service.ensureOwnedSource(ownedSourceRequest({ authConnectionId: connection.id }));
+  expect(created.source.authConnectionId).toBe(connection.id);
+  await store.putConnection({ ...connection, id: "conn_foreign_git", ownerAccountId: "someone_else" });
+  await expect(service.ensureOwnedSource(ownedSourceRequest({ id: "src_1122334455667788", authConnectionId: "conn_foreign_git" })))
+    .rejects.toMatchObject({ code: "connection_not_owned_by_app_owner" });
+});

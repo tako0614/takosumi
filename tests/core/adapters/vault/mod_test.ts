@@ -51,9 +51,10 @@ function makeVault(
   overrides: {
     fetch?: typeof fetch;
     allowedProviderConfigUrls?: readonly string[];
+    store?: InMemoryOpenTofuControlStore;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = overrides.store ?? new InMemoryOpenTofuControlStore();
   seedWorkspace(store, "space_1");
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
@@ -764,7 +765,22 @@ test("opening a blob swapped onto a different connection id fails the aad bind",
 });
 
 test("opening a blob moved to a different account owner fails the v3 aad bind", async () => {
-  const { store, vault } = makeVault();
+  class CorruptedOwnerStore extends InMemoryOpenTofuControlStore {
+    corruptedOwner = false;
+    override async getConnection(id: string) {
+      const connection = await super.getConnection(id);
+      return connection && this.corruptedOwner
+        ? { ...connection, ownerAccountId: "different-owner" } : connection;
+    }
+    override async listConnections(workspaceId: string) {
+      const connections = await super.listConnections(workspaceId);
+      return this.corruptedOwner
+        ? connections.map((connection) => ({ ...connection, ownerAccountId: "different-owner" }))
+        : connections;
+    }
+  }
+  const corruptedStore = new CorruptedOwnerStore();
+  const { store, vault } = makeVault({ store: corruptedStore });
   const original = await markVerified(
     store,
     await vault.register({
@@ -779,7 +795,9 @@ test("opening a blob moved to a different account owner fails the v3 aad bind", 
 
   // Account ownership is the v3 AAD boundary. A swapped public row cannot
   // decrypt the old owner's sealed material.
-  await store.putConnection({ ...original, ownerAccountId: "different-owner" });
+  // Normal writes preserve the owner; simulate corruption at the storage read
+  // boundary to test the cryptographic owner binding independently.
+  corruptedStore.corruptedOwner = true;
 
   await expect(
     vault.mint("space_1", ["registry.opentofu.org/cloudflare/cloudflare"]),

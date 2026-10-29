@@ -293,7 +293,7 @@ export class SourcesService {
       await this.#captureWorkspaceManagementAuthority(request.workspaceId);
     if (request.authConnectionId !== undefined) {
       requireNonEmptyString(request.authConnectionId, "authConnectionId");
-      await this.#requireConnectionInWorkspace(request.authConnectionId, request.workspaceId);
+      await this.#requireConnectionInWorkspace(request.authConnectionId, request.workspaceId, request.ownerCapsuleId);
     }
     const source: StoredSource = {
       id: request.id, workspaceId: request.workspaceId, name: request.name,
@@ -399,6 +399,7 @@ export class SourcesService {
       await this.#requireConnectionInWorkspace(
         patch.authConnectionId as string,
         stored.workspaceId,
+        stored.ownerCapsuleId,
       );
     }
     const persisted = await this.#writeSourceConfiguration({
@@ -1668,8 +1669,16 @@ export class SourcesService {
   async #requireConnectionInWorkspace(
     connectionId: string,
     workspaceId: string,
+    ownerCapsuleId?: string,
   ): Promise<void> {
     const connection = await this.#store.getConnection(connectionId);
+    const capsule = ownerCapsuleId ? await this.#store.getCapsule(ownerCapsuleId) : undefined;
+    if (connection?.scope === "workspace" && connection.workspaceId === workspaceId && capsule?.ownerAccountId === undefined) return;
+    if (connection && (connection.scope === "personal" || capsule?.ownerAccountId !== undefined || (ownerCapsuleId && !capsule))) {
+      const ownerAccountId = capsule?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
+      if (ownerAccountId && connection.ownerAccountId === ownerAccountId) return;
+      throw new OpenTofuControllerError("connection_not_owned_by_app_owner", "Source connection is not owned by the app owner");
+    }
     if (!connection || connection.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",

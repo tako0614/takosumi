@@ -1602,3 +1602,20 @@ test("a git source ProviderConnection cannot back a provider binding", async () 
     /git source connection/,
   );
 });
+
+test("an owned app can bind its owner's bridged connection across legacy namespaces", async () => {
+  const { store, model, service } = await setup();
+  const ownerAccountId = model.workspace.ownerUserId;
+  await store.putWorkspace({ ...model.workspace, id: "workspace_legacy_owner", handle: "legacy-owner" });
+  const ownedConnection = { ...connection({ id: "conn_owner_bridge", workspaceId: "workspace_legacy_owner" }), ownerAccountId };
+  await store.putConnection(ownedConnection);
+  await transitionProviderBindingSetForFixture(store, {
+    id: "binding_owner_bridge", workspaceId: model.workspace.id, capsuleId: model.capsule.id,
+    environment: model.capsule.environment, bindings: [{ provider: CLOUDFLARE, connectionId: ownedConnection.id }],
+    createdAt: NOW, updatedAt: NOW,
+  });
+  const capsule = { ...model.capsule, ownerAccountId, ownershipEpoch: 0, managementState: "active" as const, managementEpoch: 0 };
+  expect((await service.resolveProviderBindings(capsule))[0]?.connection.id).toBe(ownedConnection.id);
+  await expect(service.resolveProviderBindings({ ...capsule, ownerAccountId: "someone_else" }))
+    .rejects.toMatchObject({ code: "permission_denied", details: { reason: "connection_not_owned_by_app_owner" } });
+});

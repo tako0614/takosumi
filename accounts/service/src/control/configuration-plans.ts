@@ -222,6 +222,7 @@ export async function handleCapsuleConfigurationPlans(
     ctx.operations,
     authority.capsule.workspaceId,
     request.providerBindings,
+    authority.capsule.ownerAccountId,
   );
   if (!resolvedBindings.ok) {
     return errorJson(

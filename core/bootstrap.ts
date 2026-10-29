@@ -78,6 +78,7 @@ import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import { sqlAccountResourceReader, type AccountResourceReader } from "./domains/account-resources/read.ts";
 import { SqlAppAuthorizationStore, type AppAuthorizationMutations } from "./domains/app-authorization/store.ts";
+import { SqlAppMintLeaseStore, type AppMintLeaseStore } from "./domains/app-authorization/mint-leases.ts";
 import {
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";
@@ -377,8 +378,9 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
-  /** Canonical ownership resolver; pre-v77 hosts use the temporary adapter. */
+  /** Optional host override for the canonical ownership resolver during rollout. */
   readonly appAccessResolver?: AppAccessResolver;
+  readonly appMintLeaseStore?: AppMintLeaseStore;
   readonly accountResourceReader?: AccountResourceReader;
   /** Host factory binds atomic app mutations to the same canonical resolver. */
   readonly appAuthorizationFactory?: (access: AppAccessResolver) => AppAuthorizationMutations;
@@ -1178,6 +1180,7 @@ export async function createTakosumiService(
   // every provider-using run (this is what the shipped worker was previously
   // missing — provider plan/apply + private-git source_sync had no vault to mint).
   const appAccess = options.appAccessResolver ?? appOwnershipStore;
+  const appMintLeases = options.appMintLeaseStore ?? (options.sqlClient ? new SqlAppMintLeaseStore(options.sqlClient) : undefined);
   const opentofuConnectionVault =
     options.opentofuConnectionVault ??
     (options.secretCrypto
@@ -1185,6 +1188,7 @@ export async function createTakosumiService(
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
           appAccessResolver: appAccess,
+          ...(appMintLeases ? { appMintLeases } : {}),
           operatorProviderConnections: operatorProviderConnectionProjection,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
           credentialDrivers: credentialRecipeDrivers,

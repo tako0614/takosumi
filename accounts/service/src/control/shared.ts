@@ -466,6 +466,7 @@ export async function resolveProviderBindings(
   operations: ControlPlaneOperations,
   workspaceId: string,
   bindings: ProviderBindings,
+  appOwnerAccountId?: string,
 ): Promise<
   | { readonly ok: true; readonly bindings: ProviderBindings }
   | { readonly ok: false; readonly message: string }
@@ -480,7 +481,20 @@ export async function resolveProviderBindings(
   }
   const resolved: ProviderBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
-    const connection = visibleById.get(binding.connectionId);
+    let connection = visibleById.get(binding.connectionId);
+    // Personal connections have no legacy namespace. Resolve only explicitly
+    // selected IDs; members never receive the owner's connection inventory.
+    if (!connection || (appOwnerAccountId && connection.scope !== "operator" && connection.ownerAccountId !== appOwnerAccountId)) {
+      try {
+        const candidate = await operations.getConnection(binding.connectionId);
+        const owner = appOwnerAccountId ?? (await operations.workspaces.getWorkspace(workspaceId)).ownerUserId;
+        if (candidate.scope !== "operator" && candidate.ownerAccountId === owner) connection = candidate;
+        else connection = undefined;
+      } catch (error) {
+        if (controllerErrorCode(error) !== "not_found") throw error;
+        connection = undefined;
+      }
+    }
     if (!connection) {
       return {
         ok: false,

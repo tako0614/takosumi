@@ -579,7 +579,8 @@ export class ConnectionsService {
     }
     if (
       connection.scope === "workspace" &&
-      connection.workspaceId !== capsule.workspaceId
+      connection.workspaceId !== capsule.workspaceId &&
+      capsule.ownerAccountId === undefined
     ) {
       throw new OpenTofuControllerError(
         "permission_denied",

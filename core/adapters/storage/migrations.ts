@@ -1,6 +1,7 @@
 // Dependency and OutputShare tables are retired pending a later contract schema
 // version. Keep their historical CREATE TABLE statements byte-identical so the
 // boot-time schema fingerprint and existing migration history remain unchanged.
+import { PG_APP_CREDENTIAL_MINT_LEASE_SCHEMA, PG_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../domains/app-authorization/schema.ts";
 type StorageDomain =
   | "space"
   | "deploy"
@@ -5280,7 +5281,7 @@ create index if not exists takosumi_interface_links_provider_capsule_idx
       id: "deploy.app_ownership.expand",
       version: 123,
       domain: "deploy",
-      description: "TASK-0118 Phase 3: expand per-Capsule owner, members, Connection owner, usage payer and account billing; backfill and owner slug uniqueness follow separately.",
+      description: "TASK-0118: expand per-Capsule owner, members, ownership transfers, Connection owner, usage payer and account billing; backfill and owner slug uniqueness follow separately.",
       sql: `-- expand only. Keep legacy Workspace rows and indexes for the bridge.
 alter table takosumi_capsules add column owner_account_id text;
 alter table takosumi_capsules add column slug text;
@@ -5310,6 +5311,8 @@ create table takosumi_account_billing_bindings (
   organization_ref text,
   created_at text not null,
   updated_at text not null
-);`,
+);
+${PG_APP_OWNERSHIP_TRANSFER_SCHEMA}
+${PG_APP_CREDENTIAL_MINT_LEASE_SCHEMA}`,
     },
   ]);

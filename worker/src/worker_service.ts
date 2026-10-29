@@ -24,6 +24,7 @@ import { requireRuntimeBindingDerivationKey } from "../../core/domains/deploy-co
 import { D1GitInstallPlanStore } from "../../core/domains/install-plans/d1_store.ts";
 import { d1AccountResourceReader } from "../../core/domains/account-resources/read.ts";
 import { D1AppAuthorizationStore } from "../../core/domains/app-authorization/store.ts";
+import { D1AppMintLeaseStore } from "../../core/domains/app-authorization/mint-leases.ts";
 import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "../../accounts/service/src/control-route-inventory.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type {
@@ -381,6 +382,7 @@ export async function createWorkerServiceApp(
     role,
     accountResourceReader: d1AccountResourceReader(env.TAKOSUMI_CONTROL_DB),
     appAuthorizationFactory: (access) => new D1AppAuthorizationStore(env.TAKOSUMI_CONTROL_DB, access),
+    appMintLeaseStore: new D1AppMintLeaseStore(env.TAKOSUMI_CONTROL_DB),
     ...(accountsStore ? { publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS } : {}),
     ...(accountsStore ? {
       validateUninstallRequester: (requester, workspaceId) =>

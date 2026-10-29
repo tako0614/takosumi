@@ -43,7 +43,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
-import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 
 // Drizzle enumerates every modeled column in INSERT, including omitted fields.
@@ -57,6 +57,34 @@ const pgLegacyConnectionsTable = pgTable("takosumi_connections", {
   connectionJson: jsonb("connection_json").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+const pgLegacyCapsulesTable = pgTable("takosumi_capsules", {
+  id: text("id").primaryKey(),
+  workspaceId: text("space_id").notNull(),
+  projectId: text("project_id").notNull(),
+  name: text("name").notNull(),
+  environment: text("environment").notNull(),
+  sourceId: text("source_id"),
+  installConfigId: text("install_config_id").notNull(),
+  currentStateVersionId: text("current_state_version_id"),
+  status: text("status").notNull(),
+  capsuleJson: jsonb("installation_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  executionAuthorityEpoch: integer("execution_authority_epoch").notNull().default(1),
+});
+
+const pgLegacyCredentialMintEventsTable = pgTable("takosumi_credential_mint_events", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull(),
+  workspaceId: text("space_id").notNull(),
+  capsuleId: text("installation_id"),
+  sourceId: text("source_id"),
+  connectionId: text("connection_id").notNull(),
+  phase: text("phase").notNull(),
+  eventJson: jsonb("event_json").notNull(),
+  createdAt: text("created_at").notNull(),
 });
 
 const pgLegacyUsageSelect = {
@@ -1922,14 +1950,14 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     }));
   }
 
-  async #withCapsuleOwnership(capsule: Capsule | undefined): Promise<Capsule | undefined> {
+  async #withCapsuleOwnership(capsule: Capsule | undefined, client: SqlClient = this.#client): Promise<Capsule | undefined> {
     if (!capsule) return undefined;
     const legacyRoot = `workspaces/${capsule.workspaceId}/capsules/${capsule.id}`;
-    if (!await this.#v77Column("takosumi_capsules", "owner_account_id")) {
+    if (!await this.#v77Column("takosumi_capsules", "owner_account_id", client)) {
       return capsule.storageRoot && capsule.storageRoot !== legacyRoot
         ? { ...capsule, storageRoot: legacyRoot } : capsule;
     }
-    const result = await this.#client.query<{
+    const result = await client.query<{
       owner_account_id: string | null; ownership_epoch: number; management_state: "active" | "draining" | "frozen";
       management_epoch: number; storage_root: string | null;
     }>(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from takosumi_capsules where id=$1`, [capsule.id]);
@@ -1965,13 +1993,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     connection: ProviderConnection, client: SqlClient = this.#client,
     ownerAccountId?: string,
   ): Promise<void> {
-    if (connection.scope === "operator" || !connection.workspaceId ||
+    if (connection.scope === "operator" ||
       !await this.#v77Column("takosumi_connections", "owner_account_id", client)) return;
-    const owner = ownerAccountId ?? connection.ownerAccountId ??
-      (client === this.#client
+    const owner = connection.scope === "personal"
+      ? connection.ownerAccountId
+      : ownerAccountId ?? connection.ownerAccountId ??
+      (connection.workspaceId && client === this.#client
         ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
-        : (await client.query<{ owner_user_id: string | null }>(
-          `select owner_user_id from takosumi_workspaces where id=$1`, [connection.workspaceId])).rows[0]?.owner_user_id);
+        : connection.workspaceId
+          ? (await client.query<{ owner_user_id: string | null }>(
+            `select owner_user_id from takosumi_workspaces where id=$1`, [connection.workspaceId])).rows[0]?.owner_user_id
+          : undefined);
     if (!owner) return;
     await client.query(`update takosumi_connections set owner_account_id=$2 where id=$1 and owner_account_id is null`,
       [connection.id, owner]);
@@ -2142,7 +2174,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           } catch {
             persistedCapsule = undefined;
           }
-          const capsule = persistedCapsule
+          const capsule = await this.#withCapsuleOwnership(persistedCapsule
             ? {
                 ...persistedCapsule,
                 ...(row?.installConfigId
@@ -2151,7 +2183,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
                 currentStateVersionId:
                   row?.currentStateVersionId ?? undefined,
               }
-            : undefined;
+            : undefined, transaction);
           if (input.expectedCapsulePlanAuthority !== undefined) {
             assertCapsulePlanCreationFence(
               capsule,
@@ -2457,11 +2489,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         const capsuleRow = capsuleRows.rows[0];
         let persistedCapsule: Capsule | undefined;
         try {
-          persistedCapsule = capsuleRow
+          persistedCapsule = await this.#withCapsuleOwnership(capsuleRow
             ? normalizeOptionalCapsuleRecord(
                 parseJson(capsuleRow.capsuleJson) as Capsule,
               )
-            : undefined;
+            : undefined, transaction);
         } catch {
           persistedCapsule = undefined;
         }
@@ -3075,9 +3107,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
             current = lockedRun;
             let capsule: Capsule | undefined;
             try {
-              capsule = capsuleRows.rows[0]
+              capsule = await this.#withCapsuleOwnership(capsuleRows.rows[0]
                 ? normalizeOptionalCapsuleRecord(parseJson(capsuleRows.rows[0].capsuleJson) as Capsule)
-                : undefined;
+                : undefined, transaction);
             } catch {
               capsule = undefined;
             }
@@ -3174,9 +3206,39 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           input.terminalRun.workspaceId,
         );
 
-        // Lock the held SourceSync row before validating its lease. This
-        // preserves same-lease heartbeat semantics while ensuring a takeover
-        // that won the row lock is observed as the ordinary CAS loss.
+        // A cheap unlocked read preserves the stale-lease fast path. Recheck
+        // after taking the Capsule census lock: transfer accepts with Capsule
+        // then Run locks, so settlement must take them in that order too.
+        const candidateRows = await transaction.query<{
+          readonly kind: string;
+          readonly workspaceId: string;
+          readonly sourceId: string | null;
+          readonly status: string;
+          readonly leaseToken: string | null;
+        }>(
+          `select kind, space_id as "workspaceId", source_id as "sourceId",
+                  status, lease_token as "leaseToken"
+             from takosumi_runs where id = $1`,
+          [input.terminalRun.id],
+        );
+        const candidateRun = candidateRows.rows[0];
+        if (!candidateRun || candidateRun.kind !== RUN_KIND_SOURCE_SYNC ||
+          candidateRun.workspaceId !== input.terminalRun.workspaceId ||
+          candidateRun.sourceId !== input.terminalRun.sourceId ||
+          candidateRun.status !== "running" || candidateRun.leaseToken !== input.leaseToken) {
+          return { won: false as const };
+        }
+
+        // Lock the complete Workspace Capsule census before the held Run.
+        // Normal Capsule admission and lifecycle writes take this Workspace
+        // lock first, so the census cannot gain or lose a row during settlement.
+        const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
+          transaction,
+          input.terminalRun.workspaceId,
+        );
+
+        // The locked reread preserves same-lease heartbeat semantics and
+        // observes a takeover that won the row lock as an ordinary CAS loss.
         const currentRows = await transaction.query<{
           readonly id: string;
           readonly kind: string;
@@ -3229,15 +3291,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           // conflict, not an acknowledged lease loss.
           throw new SourceSyncSettlementConflictError();
         }
-
-        // Lock the complete Workspace Capsule census before resolving any
-        // adopted-source lineage. Normal Capsule admission and lifecycle
-        // writes take this Workspace-first lock, so the census cannot gain or
-        // lose a row while the settlement is being observed.
-        const lockedCapsules = await pgLockSourceSyncSettlementCapsules(
-          transaction,
-          input.terminalRun.workspaceId,
-        );
 
         // The Source cursor is part of this same settlement. Lock its exact
         // row (when present) before helper observation; Source creation also
@@ -7051,10 +7104,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
   async putCapsule(capsule: Capsule): Promise<Capsule> {
     const values = capsuleValues(capsule);
     await this.#db
-      .insert(pgSchema.capsules)
+      .insert(pgLegacyCapsulesTable)
       .values(values)
       .onConflictDoUpdate({
-        target: pgSchema.capsules.id,
+        target: pgLegacyCapsulesTable.id,
         set: {
           workspaceId: values.workspaceId,
           projectId: values.projectId,
@@ -7263,7 +7316,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         createdAt: installConfig.createdAt,
         updatedAt: installConfig.updatedAt,
       });
-      await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
+      await db.insert(pgLegacyCapsulesTable).values(capsuleValues(capsule));
       await this.#initializeCapsulePhysicalOwner(capsule, transaction);
       if (capsule.ownerAccountId &&
         await this.#v77Column("takosumi_capsules", "owner_account_id", transaction)) {
@@ -11097,7 +11150,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent> {
     const ownershipColumns = await this.#v77Column("takosumi_credential_mint_events", "actor_account_id");
-    await this.#pgUpsert(pgSchema.credentialMintEvents, {
+    await this.#pgUpsert(ownershipColumns ? pgSchema.credentialMintEvents : pgLegacyCredentialMintEventsTable, {
       id: event.id,
       runId: event.runId,
       // Physical columns space_id / installation_id are frozen; the contract
