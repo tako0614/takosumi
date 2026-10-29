@@ -229,8 +229,9 @@ for (const backend of backends) {
       await setManagement("active", 2);
       await expect(service.declineInterfaceLink({ providerCapsuleId: "provider", linkId: second.id, expectedGeneration: second.generation }, actor, fence(1))).rejects.toMatchObject({ code: "conflict" });
 
-      const approved = await service.approveInterfaceLink({ providerCapsuleId: "provider", linkId: first.id, expectedGeneration: first.generation, approvedPermissions: ["storage.read"] }, actor, fence(2));
-      expect(approved).toMatchObject({ state: "active", generation: 2, approvedPermissions: ["storage.read"], approval: { kind: "provider_approved", approvedBy: "provider-owner" } });
+      await expect(service.approveInterfaceLink({ providerCapsuleId: "provider", linkId: first.id, expectedGeneration: first.generation, approvedPermissions: ["storage.read"] }, actor, fence(2))).rejects.toMatchObject({ code: "invalid_argument" });
+      const approved = await service.approveInterfaceLink({ providerCapsuleId: "provider", linkId: first.id, expectedGeneration: first.generation }, actor, fence(2));
+      expect(approved).toMatchObject({ state: "active", generation: 2, approvedPermissions: ["storage.read", "storage.write"], approval: { kind: "provider_approved", approvedBy: "provider-owner" } });
       expect(await stores.links.get(first.id)).toEqual(approved);
       const declined = await service.declineInterfaceLink({ providerCapsuleId: "provider", linkId: second.id, expectedGeneration: second.generation }, actor, fence(2));
       expect(declined).toMatchObject({ state: "declined", generation: 2, approvedPermissions: [], declined: { declinedBy: "provider-owner" } });
@@ -240,9 +241,11 @@ for (const backend of backends) {
 
       for (const capsuleId of ["consumer", "consumer_two"]) await service.ensureCapsuleRequiredInterfaces({ workspaceId: "workspace", capsuleId, principalId: `${capsuleId}_alice`, requirements: [requirement] });
       const bindings = await service.listBindings(iface.metadata.id);
-      expect(bindings.map((binding) => [binding.spec.subjectRef.id, binding.spec.permissions])).toEqual([["consumer_alice", ["storage.read"]]]);
-      expect((await service.issueToken(iface.metadata.id, { permission: "storage.read" }, { workspaceId: "workspace", subjectId: "consumer_alice" })).access_token).toBe("runtime-token");
-      await expect(service.issueToken(iface.metadata.id, { permission: "storage.write" }, { workspaceId: "workspace", subjectId: "consumer_alice" })).rejects.toThrow("grant not found");
+      expect(bindings.map((binding) => [binding.spec.subjectRef.id, binding.spec.permissions])).toEqual([["consumer_alice", ["storage.read", "storage.write"]]]);
+      for (const permission of ["storage.read", "storage.write"]) {
+        expect((await service.issueToken(iface.metadata.id, { permission }, { workspaceId: "workspace", subjectId: "consumer_alice" })).access_token).toBe("runtime-token");
+      }
+      await expect(service.issueToken(iface.metadata.id, { permission: "storage.read" }, { workspaceId: "workspace", subjectId: "consumer_two_alice" })).rejects.toThrow("grant not found");
     } finally { await close(); }
   });
 

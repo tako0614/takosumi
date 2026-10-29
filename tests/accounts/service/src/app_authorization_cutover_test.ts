@@ -581,7 +581,12 @@ describe("Interface links are approved only by someone who may change the provid
     expect(listed.text).not.toContain("provider.example.test");
 
     expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation + 1 })).toMatchObject({ status: 409, code: "conflict" });
-    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, approvedPermissions: ["mcp.admin"] })).toMatchObject({ status: 400, code: "invalid_argument" });
+    // Partial (or widened) approval is refused for now; the link stays pending.
+    for (const approvedPermissions of [[], ["mcp.admin"], ["mcp.read", "mcp.admin"]]) {
+      expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, approvedPermissions }))
+        .toMatchObject({ status: 400, code: "invalid_request", message: expect.stringContaining("Partial approval is not supported yet") });
+    }
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, approvedPermissions: "mcp.read" })).toMatchObject({ status: 400, code: "invalid_request" });
     expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation, note: "x" })).toMatchObject({ status: 400, code: "invalid_request" });
     expect(await provider(h, h.headers.session(PROVIDER_OWNER), "GET", `${linkId}/approve`)).toMatchObject({ status: 405 });
     const approved = await provider(h, h.headers.pat(PROVIDER_OWNER, [PROVIDER]), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation });
@@ -592,6 +597,25 @@ describe("Interface links are approved only by someone who may change the provid
     await h.core.interfaces.ensureCapsuleRequiredInterfaces({ workspaceId: WORKSPACE, capsuleId: CAPSULE, principalId: "pairwise_alice", requirements: [requirement] });
     expect((await h.core.interfaces.listBindings(interfaceId)).map((binding) => [binding.spec.subjectRef.id, binding.metadata.materializedFrom?.source === "capsule_required_interface" ? binding.metadata.materializedFrom.linkId : undefined])).toEqual([["pairwise_alice", linkId]]);
     expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/decline`, { expectedGeneration: approved.body.link!.generation })).toMatchObject({ status: 409, code: "conflict" });
+  }, 180_000);
+
+  test("the request list names the requester by display name only, never an email or account id", async () => {
+    const { h, interfaceId } = await linkFixture();
+    h.accounts.saveAccount({ subject: PROVIDER_OWNER, createdAt: Date.now(), updatedAt: Date.now() });
+    await put(h, h.headers.session(APP_OWNER), interfaceId, 0);
+    const requester = async (account: { displayName?: string; email?: string }) => {
+      h.accounts.saveAccount({ subject: APP_OWNER, ...account, createdAt: Date.now(), updatedAt: Date.now() });
+      const listed = await provider(h, h.headers.session(PROVIDER_OWNER), "GET", "requests");
+      expect(listed.status).toBe(200);
+      expect(listed.text).not.toContain(APP_OWNER);
+      expect(listed.text).not.toContain("owner@example.test");
+      return (listed.body.requests as { requestedByDisplayName?: string }[])[0]!.requestedByDisplayName;
+    };
+    expect(await requester({ displayName: "Consumer Owner", email: "owner@example.test" })).toBe("Consumer Owner");
+    expect(await requester({ displayName: "owner@example.test", email: "owner@example.test" })).toBeUndefined();
+    expect(await requester({ displayName: "someone@else.example", email: "owner@example.test" })).toBeUndefined();
+    expect(await requester({ displayName: APP_OWNER })).toBeUndefined();
+    expect(await requester({ email: "owner@example.test" })).toBeUndefined();
   }, 180_000);
 
   test("a provider member declines; the consumer may select again; a requirement named requests keeps PUT", async () => {
@@ -617,7 +641,7 @@ describe("Interface links are approved only by someone who may change the provid
     expect(((await response!.json()) as { error: { message: string } }).error.message).toBe("Capsule Interface requirement not found");
   }, 180_000);
 
-  test("an uninstall-scheduled provider app refuses decisions and keeps the link pending", async () => {
+  test("an uninstall-scheduled provider or consumer app refuses decisions and keeps the link pending", async () => {
     const { h, interfaceId } = await linkFixture();
     h.accounts.saveAccount({ subject: PROVIDER_OWNER, createdAt: Date.now(), updatedAt: Date.now() });
     const pending = (await put(h, h.headers.session(APP_OWNER), interfaceId, 0)).body.link!;
@@ -625,6 +649,12 @@ describe("Interface links are approved only by someone who may change the provid
     const providerCapsule = (await h.ledger.getCapsule(PROVIDER))!;
     await h.ledger.putCapsule({ ...providerCapsule, status: "uninstalled", updatedAt: NOW });
     expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation })).toMatchObject({ status: 412, code: "failed_precondition" });
+    expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))?.state).toBe("pending_approval");
+    // The same for a consumer scheduled for uninstall.
+    await h.ledger.putCapsule({ ...providerCapsule, updatedAt: NOW });
+    const consumerCapsule = (await h.ledger.getCapsule(CAPSULE))!;
+    await h.ledger.putCapsule({ ...consumerCapsule, status: "uninstalled", updatedAt: NOW });
+    expect(await provider(h, h.headers.session(PROVIDER_OWNER), "POST", `${linkId}/approve`, { expectedGeneration: pending.generation })).toMatchObject({ status: 412, code: "failed_precondition", message: "consumer app is not accepting Interface links" });
     expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools"))?.state).toBe("pending_approval");
   }, 180_000);
 

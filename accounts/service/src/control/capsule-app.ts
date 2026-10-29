@@ -427,9 +427,9 @@ async function readAppLinks(
     const canManage = await mayManage(capsule) ||
       (otherApp !== undefined && await mayManage(otherApp));
     // This app is the provider of a usedBy row: its owner or a member decides,
-    // never an installed app's own token, and only while it accepts links.
+    // never an installed app's own token, and only while both apps accept links.
     const canApprove = direction === "usedBy" && link?.state === "pending_approval"
-      ? acceptsLinks(capsule) && await mayDecide() && await mayManage(capsule)
+      ? acceptsLinks(capsule) && consumer !== undefined && acceptsLinks(consumer) && await mayDecide() && await mayManage(capsule)
       : undefined;
     return {
       ...(link ? {

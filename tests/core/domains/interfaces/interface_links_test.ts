@@ -722,20 +722,24 @@ test("the provider approves a pending link; grants follow on the next sign-in an
   expect(JSON.stringify(log.events)).not.toContain("example.test");
 });
 
-test("an approval may narrow the requested permissions and never widens them", async () => {
+test("an approval grants exactly the requested permissions; partial approval is refused for now", async () => {
   const f = await fixture({ pending: true });
   const pending = await f.link();
   const approve = (approvedPermissions?: readonly string[]) => f.service.approveInterfaceLink({ providerCapsuleId: "provider_a", linkId: pending.id, expectedGeneration: pending.generation, ...(approvedPermissions ? { approvedPermissions } : {}) }, providerOwner);
-  for (const invalid of [["mcp.admin"], [], ["mcp.read", "mcp.read"], [""]]) {
-    await expect(approve(invalid)).rejects.toMatchObject({ code: "invalid_argument" });
+  // A narrower set would leave the consumer with a lasting reapproval warning.
+  for (const invalid of [["mcp.read"], ["mcp.admin"], [], ["mcp.read", "mcp.read"], ["mcp.read", "mcp.write", "mcp.admin"]]) {
+    await expect(approve(invalid)).rejects.toMatchObject({ code: "invalid_argument", message: expect.stringContaining("Partial approval is not supported yet") });
   }
-  expect((await f.stores.links.get(pending.id))?.state).toBe("pending_approval");
-  const approved = await approve(["mcp.read"]);
-  expect(approved.approvedPermissions).toEqual(["mcp.read"]);
+  expect(await f.stores.links.get(pending.id)).toEqual(pending);
+  const approved = await approve(["mcp.write", "mcp.read"]);
+  expect(approved.approvedPermissions).toEqual(["mcp.read", "mcp.write"]);
+  expect(approved.approvedPermissions).toEqual(approved.requestedPermissions);
   await f.ensure("alice");
   const [binding] = await f.service.listBindings(f.providers[0]!.metadata.id);
-  expect(binding?.spec.permissions).toEqual(["mcp.read"]);
-  await expect(f.service.issueToken(f.providers[0]!.metadata.id, { permission: "mcp.write" }, { workspaceId: "ws", subjectId: "alice" })).rejects.toThrow("grant not found");
+  expect(binding?.spec.permissions).toEqual(["mcp.read", "mcp.write"]);
+  for (const permission of ["mcp.read", "mcp.write"]) {
+    expect((await f.service.issueToken(f.providers[0]!.metadata.id, { permission }, { workspaceId: "ws", subjectId: "alice" })).access_token).toBe("runtime-token");
+  }
 });
 
 test("a decline is terminal for that request; the consumer may select again and the new request can be approved", async () => {
@@ -780,7 +784,14 @@ test("provider decisions keep the creation fences", async () => {
   const consumer = f.capsules.get("consumer")!;
   f.capsules.set("consumer", { ...consumer, status: "destroyed" });
   await expect(f.service.approveInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition", message: "consumer Capsule is destroyed" });
+  // The consumer must be live too: not scheduled for uninstall, not unapplied or stopped.
+  for (const notLive of [{ ...consumer, status: "uninstalled" }, { ...consumer, uninstall: { phase: "scheduled" } }, { ...consumer, status: "pending" }, { ...consumer, status: "disabled" }] as Capsule[]) {
+    f.capsules.set("consumer", notLive);
+    await expect(f.service.approveInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition", message: "consumer app is not accepting Interface links" });
+    await expect(f.service.declineInterfaceLink(input, providerOwner)).rejects.toMatchObject({ code: "failed_precondition" });
+  }
   f.capsules.set("consumer", consumer);
+  expect(await f.stores.links.get(pending.id)).toEqual(pending);
 
   // The caller's authority is re-checked through the supplied fence before
   // the write; a refusal there leaves the link pending.

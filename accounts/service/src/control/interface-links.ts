@@ -157,8 +157,21 @@ async function handleInterfaceLinkRequests(ctx: ControlDispatchContext, provider
       : await service.declineInterfaceLink(input, actor, writeFence);
     return json({ link });
   } catch (error) {
+    // A refused approval body (today: partial approval, not supported yet) is
+    // a request-shape error like the checks above.
+    if (verb === "approve" && error instanceof InterfaceServiceError && error.code === "invalid_argument") return errorJson("invalid_request", error.message, 400);
     return interfaceLinkError(error);
   }
+}
+
+/**
+ * The requester's display name only: never an email address or an account
+ * id, even when an identity provider put one into the display name.
+ */
+function requesterDisplayName(account: { readonly displayName?: string; readonly email?: string } | undefined, accountId: string): string | undefined {
+  const name = account?.displayName?.trim();
+  if (!name || name === accountId || name === account?.email?.trim() || /[^\s@]+@[^\s@]+\.[^\s@]+/u.test(name)) return undefined;
+  return name;
 }
 
 async function projectInterfaceLinkRequests(ctx: ControlDispatchContext, links: readonly InterfaceLink[]): Promise<CapsuleInterfaceLinkRequest[]> {
@@ -178,7 +191,7 @@ async function projectInterfaceLinkRequests(ctx: ControlDispatchContext, links: 
     if (!requester) {
       requester = link.requestedBy === "system"
         ? Promise.resolve(undefined)
-        : Promise.resolve(ctx.store.findAccount(link.requestedBy as TakosumiSubject)).then((account) => account?.displayName?.trim() || undefined);
+        : Promise.resolve(ctx.store.findAccount(link.requestedBy as TakosumiSubject)).then((account) => requesterDisplayName(account, link.requestedBy));
       accounts.set(link.requestedBy, requester);
     }
     const [consumerApp, requestedByDisplayName] = await Promise.all([display, requester]);

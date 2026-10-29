@@ -917,10 +917,10 @@ export class InterfaceService {
   }
 
   /**
-   * Provider consent for one pending link. The link becomes active with the
-   * approved subset of its requested permissions (all of them by default);
-   * the consumer's people get their grants on their next sign-in, exactly as
-   * for a link approved at creation.
+   * Provider consent for one pending link. The link becomes active with
+   * exactly its requested permissions (partial approval is not supported
+   * yet); the consumer's people get their grants on their next sign-in,
+   * exactly as for a link approved at creation.
    */
   approveInterfaceLink(input: {
     readonly providerCapsuleId: string;
@@ -996,9 +996,9 @@ export class InterfaceService {
 
   /**
    * The creation fences for a provider decision: the link is still pending
-   * and current, the provider app is installed and not scheduled for
-   * uninstall, the consumer app still exists in the same Workspace, and the
-   * selected Interface is still the provider app's.
+   * and current, both apps are installed (active or stale) and not scheduled
+   * for uninstall in the same Workspace, and the selected Interface is still
+   * the provider app's.
    */
   async #assertLinkAwaitsDecision(link: InterfaceLink): Promise<void> {
     const current = await this.#stores.links.getCurrent({ consumerCapsuleId: link.consumerCapsuleId, requirementKey: link.requirementKey });
@@ -1012,6 +1012,7 @@ export class InterfaceService {
     const [provider, consumer] = await Promise.all([read(link.providerCapsuleId), read(link.consumerCapsuleId)]);
     if (!provider || !["active", "stale"].includes(provider.status) || (provider.uninstall && provider.uninstall.phase !== "cancelled")) throw new InterfaceServiceError("failed_precondition", "provider app is not accepting Interface links");
     if (!consumer || consumer.status === "destroyed" || consumer.workspaceId !== provider.workspaceId) throw new InterfaceServiceError("failed_precondition", "consumer Capsule is destroyed");
+    if (!["active", "stale"].includes(consumer.status) || (consumer.uninstall && consumer.uninstall.phase !== "cancelled")) throw new InterfaceServiceError("failed_precondition", "consumer app is not accepting Interface links");
     const iface = await this.#stores.interfaces.get(link.providerInterfaceId);
     if (!iface || iface.metadata.workspaceId !== provider.workspaceId || iface.metadata.ownerRef.kind !== "Capsule" || iface.metadata.ownerRef.id !== provider.id || iface.spec.type !== link.interface.type || iface.spec.version !== link.interface.version) {
       throw new InterfaceServiceError("failed_precondition", "selected Interface provider is unavailable");
@@ -4094,18 +4095,18 @@ function linkMatchesRequirementExactly(link: InterfaceLink, requirement: Capsule
 }
 
 /**
- * The provider's approved subset, in the link's requested order. Omitted means
- * every requested permission; an approval never widens the request and never
- * approves nothing (that is a decline).
+ * An approval grants exactly the requested permissions. A narrower approval
+ * would leave the consumer with a lasting `reapproval_required` health and no
+ * way to ask again short of revoking, so partial approval is refused until it
+ * has its own health and re-request path. `approved`, when sent, must name the
+ * requested set (any order).
  */
 function approvedLinkPermissions(link: InterfaceLink, approved: readonly string[] | undefined): string[] {
-  if (approved === undefined) return [...link.requestedPermissions];
-  if (!Array.isArray(approved) || approved.some((permission) => typeof permission !== "string" || !permission)) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must be an array of permission names");
-  const unique = new Set(approved);
-  if (unique.size !== approved.length) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must not repeat a permission");
-  if (approved.some((permission) => !link.requestedPermissions.includes(permission))) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must be a subset of the requested permissions");
-  if (unique.size === 0 && link.requestedPermissions.length > 0) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must name at least one permission; decline the link instead");
-  return link.requestedPermissions.filter((permission) => unique.has(permission));
+  if (approved !== undefined && (!Array.isArray(approved) || approved.some((permission) => typeof permission !== "string") ||
+    new Set(approved).size !== approved.length || !samePermissionSet(approved, link.requestedPermissions))) {
+    throw new InterfaceServiceError("invalid_argument", "Partial approval is not supported yet: approvedPermissions must be exactly the requested permissions; approve all of them or decline the link");
+  }
+  return [...link.requestedPermissions];
 }
 
 function samePermissionSet(left: readonly string[], right: readonly string[]): boolean {

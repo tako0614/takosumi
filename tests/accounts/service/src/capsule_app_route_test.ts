@@ -13,7 +13,7 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import type { CapsuleInterfaceMaterializationFailure } from "../../../../core/domains/interfaces/materialization_intent_failures.ts";
 import type { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
 import { SCHEDULED_DESTROY_BLOCKED_REASONS } from "../../../../core/domains/capsules/uninstall_finalize.ts";
-import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import { createInMemoryInterfaceStores, type InterfaceService } from "../../../../core/domains/interfaces/mod.ts";
 import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   seedCapsuleModel,
@@ -818,11 +818,43 @@ test("a pending incoming link offers approval to the provider as an info problem
   expect(readOnly.links.usedBy[0]).toMatchObject({ state: "pending_approval", canApprove: false });
   expect(readOnly.problems).toEqual([]);
 
+  // A request from a consumer scheduled for uninstall cannot be approved.
+  const requester = (await h.ledger.getCapsule("cap_link_consumer"))!;
+  await h.ledger.putCapsule({ ...requester, status: "uninstalled" });
+  const leaving = await h.app();
+  expect(leaving.links.usedBy[0]).toMatchObject({ state: "pending_approval", canApprove: false });
+  expect(leaving.problems).toEqual([]);
+  await h.ledger.putCapsule(requester);
+
   // A provider scheduled for uninstall no longer accepts links.
   await h.ledger.putCapsule({ ...capsule, status: "uninstalled" });
   const scheduled = await h.app();
   expect(scheduled.links.usedBy[0]).toMatchObject({ state: "pending_approval", canApprove: false });
   expect(scheduled.problems.some((problem) => problem.code === "interface_link_approval_pending")).toBe(false);
+});
+
+test("a provider-approved link is healthy for the consumer; partial approval is refused so no lasting reapproval warning appears", async () => {
+  const permissions = ["data.read", "data.write"];
+  const h = await linkedFixture({ ...LINK_REQUIREMENT, permissions }, permissions);
+  // The consumer unlinked and asked again: a pending link waits for the provider.
+  const revoked: InterfaceLink = { ...h.link, state: "revoked", generation: 2, revoked: { revokedBy: OWNER, revokedAt: h.link.updatedAt } };
+  expect(await h.interfaceStores.links.compareAndSet(revoked, 1)).toBe(true);
+  const { approval: _approval, ...base } = h.link;
+  const pending: InterfaceLink = { ...base, id: "ifl_app_data_request", generation: 3, state: "pending_approval", approvedPermissions: [] };
+  expect(await h.interfaceStores.links.replace({ record: pending, expected: revoked })).toBe(true);
+  const waiting = await h.app();
+  expect(waiting.links.uses[0]).toMatchObject({ state: "pending_approval" });
+  const service = h.core.interfaces as unknown as InterfaceService;
+  const decision = { providerCapsuleId: h.provider.capsule.id, linkId: pending.id, expectedGeneration: pending.generation };
+  await expect(service.approveInterfaceLink({ ...decision, approvedPermissions: ["data.read"] }, { actorAccountId: OWNER, roles: [], requestId: "partial" })).rejects.toMatchObject({ code: "invalid_argument" });
+  expect(await h.interfaceStores.links.get(pending.id)).toEqual(pending);
+  // The record a full approval writes (core tests drive the service write;
+  // this fixture's in-memory stores have no management validator for it).
+  const approved: InterfaceLink = { ...pending, state: "active", generation: 4, approvedPermissions: [...pending.requestedPermissions], approval: { kind: "provider_approved", approvedBy: OWNER, approvedAt: pending.updatedAt } };
+  expect(await h.interfaceStores.links.compareAndSet(approved, pending.generation)).toBe(true);
+  const app = await h.app();
+  expect(app.links.uses[0]).toMatchObject({ linkId: pending.id, state: "active", health: "ok", permissions });
+  expect(app.problems).toEqual([]);
 });
 
 test("an unset requirement is visible and a link read failure is explicitly incomplete", async () => {

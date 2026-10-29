@@ -127,7 +127,8 @@ A link gives the consumer app's people the provider app's permissions, so it nee
 provider app's consent. When the person creating the link is also the provider app's owner
 or a member, the link is approved at creation and becomes active. Otherwise it is created
 `pending_approval`; the provider app's owner or a member then approves it (active) or
-declines it (`declined`). An approval may grant only a subset of the requested permissions.
+declines it (`declined`). An approval grants exactly the requested permissions (partial approval
+is not supported yet), and both apps must be live and not scheduled for uninstall.
 Being the consumer app's owner or member is not enough to approve, and an installed app's
 own token never approves or declines (an app the operator designated to act for its user
 does so only when that user is the provider app's owner or a member).

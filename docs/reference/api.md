@@ -258,7 +258,7 @@ Sourceは所有アプリ (`ownerCapsuleId`) のものです。所有アプリの
 
 Interface linkは、要求者が提供側アプリでも `change_interface_link` を持つとき (所有記録の無い提供側はWorkspace判定) だけ作成時に承認されます。それ以外は `pending_approval` で作られます。インストール時に作るlink (明示的な選択と、候補が1つだけのときの自動選択) も同じ規則です。さらに、インストールを進める人がインストール計画の作成者 (承認者として記録される人) であることも必要です。
 
-`pending_approval` のlinkは、提供側アプリの所有者かメンバー (所有記録の無い提供側はWorkspace判定) が `POST /capsules/{providerId}/interface-links/{linkId}/approve` で承認すると active になり、`decline` で断ると `declined` になります。判定は提供側アプリの `change_interface_link` で、利用側アプリの所有者・メンバーであることは何も与えません。承認・拒否のどちらも、linkがまだ承認待ちで今のlinkであること、`expectedGeneration` が一致すること、提供側アプリが稼働中でアンインストール予定でないこと、利用側アプリが残っていることを確かめ、書き込みの直前に呼び出し元の役割 (所有者の譲渡によるepochの変化を含む) をもう一度確かめます。承認では `approvedPermissions` で要求された権限の一部だけを渡せます (省略時は要求のすべて。要求に無い権限や空の一覧は `400`)。承認後、利用側アプリを使う人には、作成時に承認されたlinkと同じく次のサインインでBindingが作られます。どちらの側からも `DELETE` で取り消せます。断られた後や承認された後も、利用側は改めて提供元を選べます。
+`pending_approval` のlinkは、提供側アプリの所有者かメンバー (所有記録の無い提供側はWorkspace判定) が `POST /capsules/{providerId}/interface-links/{linkId}/approve` で承認すると active になり、`decline` で断ると `declined` になります。判定は提供側アプリの `change_interface_link` で、利用側アプリの所有者・メンバーであることは何も与えません。承認・拒否のどちらも、linkがまだ承認待ちで今のlinkであること、`expectedGeneration` が一致すること、提供側と利用側の両方のアプリが稼働中 (`active` か `stale`) でアンインストール予定でないことを確かめ、書き込みの直前に呼び出し元の役割 (所有者の譲渡によるepochの変化を含む) をもう一度確かめます。承認は要求された権限をそのまま渡します。一部だけの承認はまだ扱わず、`approvedPermissions` を送るときは要求と同じ組 (順不同) でなければ `400 invalid_request` です (一部だけを承認すると、利用側に再承認の警告が残り続け、取り消す以外に頼み直す方法が無いためです)。承認後、利用側アプリを使う人には、作成時に承認されたlinkと同じく次のサインインでBindingが作られます。どちらの側からも `DELETE` で取り消せます。断られた後や承認された後も、利用側は改めて提供元を選べます。
 
 既存のlinkの付け替えで、新しいlinkが `pending_approval` になる場合は `409 interface_link_approval_required` で拒否し、今のlink (activeでもpendingでも) をそのまま残します。承認されるまでアプリがInterfaceを失わないようにするためです。承認を求めるときは、今のlinkを `DELETE` してから選び直すと、新しいlinkが `pending_approval` で作られ、提供側アプリの所有者かメンバーが承認できます。`pending_approval` のlinkは、同じ提供側を指定して `PUT` しても今のlinkがそのまま返り、有効になりません。
 
@@ -494,10 +494,10 @@ write アクセスを確かめます。
 承認待ちの一覧 `GET .../interface-links/requests` は提供側アプリの `change_interface_link` を求め、
 `{ requests: [{ linkId, generation, consumerApp: { capsuleId, name, displayName?, iconUrl? }, requirementKey,
 providerInterfaceId, interfaceType, interfaceVersion, requestedPermissions, requestedByDisplayName?, createdAt }] }`
-を返します。値を含みません (名前・権限名・時刻だけ)。`approve` の本文は `{ expectedGeneration, approvedPermissions? }`、
+を返します。値を含みません (名前・権限名・時刻だけ)。`requestedByDisplayName` は依頼した人の表示名だけで、メールアドレスやアカウントIDは返しません (表示名が無いとき、またはメールアドレスやアカウントIDと同じ・メールアドレスの形のときは省きます)。`approve` の本文は `{ expectedGeneration, approvedPermissions? }`、
 `decline` は `{ expectedGeneration }` で、どちらも提供側アプリの write アクセスを求め、成功時は `{ link: InterfaceLink }` を返します。
 承認した link は `approval.kind: "provider_approved"`、断った link は `declined: { declinedBy, declinedAt }` を持ちます。
-承認待ちでない link や generation の不一致は 409、提供側がアンインストール予定・利用側が削除済みは 412 です。
+承認待ちでない link や generation の不一致は 409、提供側か利用側が稼働中でない (アンインストール予定・削除済みを含む) ときは 412 です。
 Activity には `interface_link.approved` / `interface_link.declined` を、id・権限名・type/version だけで記録します。
 権限不足は 403、不正な入力は 400、generation の競合は 409、利用不可の提供元は 412 です。
 承認判断は policy port が持ち、現在の Workspace 構成では同じ Workspace の連携を即時承認します。
