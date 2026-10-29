@@ -260,6 +260,87 @@ describe("Takosumi runtime binding materializer", () => {
     });
   }
 
+  // Adding a `secret.generated` slot must not move any value the Capsule
+  // already holds. The derived lanes have no stored generation to carry: each
+  // binding's value is a pure function of the host key and that binding's own
+  // derivation parts, so the guarantee is that no other binding enters those
+  // parts. Both lanes must keep agreeing byte for byte across the change.
+  for (const profileContract of [PROFILE_V1, PROFILE_V2] as const) {
+    test(`adding a generated secret moves no derived value in either lane (${profileContract})`, async () => {
+      const withSlot = (bindings: readonly string[]) => {
+        const base = runtimeBindingInstallConfig({}, profileContract);
+        return {
+          ...base,
+          runtimeBindingMaterialization: {
+            ...base.runtimeBindingMaterialization!,
+            generatedSecrets: bindings.map((binding) => ({
+              binding,
+              bytes: 32 as const,
+              encoding: "hex" as const,
+            })),
+          },
+        };
+      };
+      const coreValues = async (bindings: readonly string[]) => {
+        const store = new InMemoryOpenTofuControlStore();
+        const config = withSlot(bindings);
+        const seeded = await seedCapsuleModel(store, {
+          workspaceId: "ws_1",
+          capsuleId: "cap_1",
+          installConfigId: config.id,
+          installConfig: {
+            runtimeBindingMaterialization: {
+              contract: profileContract,
+              generatedSecrets: config.runtimeBindingMaterialization
+                .generatedSecrets,
+            } as never,
+          },
+        });
+        const core = createRuntimeInputMaterializer({
+          store,
+          crypto: new PlaceholderSecretBoundaryCrypto(),
+          values: runtimeInputDerivedValueSource(DERIVATION_KEY),
+          clock: () => NOW,
+        });
+        const values = (await core.materialize({
+          workspaceId: seeded.workspace.id,
+          capsuleId: seeded.capsule.id,
+          installConfigId: seeded.installConfig.id,
+          providerInstance: runtimeInputProviderInstance({
+            moduleLocalName: "takoform",
+          }),
+          phase: "apply",
+        })).toRunnerDispatch().values;
+        expect(
+          await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`),
+        ).toBeUndefined();
+        return values;
+      };
+      const platformValues = async (bindings: readonly string[]) =>
+        (await createRuntimeBindingMaterializer({
+          control: runtimeBindingControl(withSlot(bindings)),
+        }).materializeRuntimeBindings(
+          runtimeBindingCall("apply", {
+            bindings: [...bindings, ...RUNTIME_BINDINGS.slice(1)],
+          }),
+        )).values;
+
+      const before = await platformValues(["ENCRYPTION_KEY"]);
+      const after = await platformValues(["ENCRYPTION_KEY", "WEB_PUSH_KEY"]);
+      expect(after.ENCRYPTION_KEY).toBe(before.ENCRYPTION_KEY!);
+      expect(after.WEB_PUSH_KEY).toMatch(/^[a-f0-9]{64}$/u);
+      expect(after.WEB_PUSH_KEY).not.toBe(after.ENCRYPTION_KEY!);
+
+      const coreBefore = await coreValues(["ENCRYPTION_KEY"]);
+      const coreAfter = await coreValues(["ENCRYPTION_KEY", "WEB_PUSH_KEY"]);
+      expect(coreBefore).toEqual({ ENCRYPTION_KEY: before.ENCRYPTION_KEY! });
+      expect(coreAfter).toEqual({
+        ENCRYPTION_KEY: after.ENCRYPTION_KEY!,
+        WEB_PUSH_KEY: after.WEB_PUSH_KEY!,
+      });
+    });
+  }
+
   // The OIDC half of the same profile. Both lanes must hand the Worker the one
   // Accounts client the Capsule has: a second client id, subject, or redirect
   // URI would mean two identities under one Capsule, which the shared Accounts
