@@ -93,6 +93,10 @@ export class RunVerificationService {
       );
     }
     if (!ctx) return {};
+    const capsule = await this.#store.getCapsule(ctx.capsuleId);
+    if (!capsule || capsule.workspaceId !== ctx.workspaceId || capsule.environment !== ctx.environment) {
+      throw new OpenTofuControllerError("failed_precondition", "Capsule state allocation owner changed");
+    }
     const stateScope = await this.#stateScope({
       workspaceId: ctx.workspaceId,
       subject: {
@@ -102,7 +106,7 @@ export class RunVerificationService {
       environment: ctx.environment,
       generation,
       ...(priorState ? { priorState } : {}),
-    });
+    }, await this.#store.getCapsuleStorageRoot(capsule.id));
     if (!planRun.sourceSnapshotId) {
       return {
         stateScope,
@@ -161,6 +165,7 @@ export class RunVerificationService {
 
   async #stateScope(
     input: Omit<DispatchStateScope, "stateRef">,
+    storageRoot?: string,
   ): Promise<DispatchStateScope> {
     const allocator = this.#artifactReferenceAllocator;
     if (!allocator || !input.subject) {
@@ -175,6 +180,7 @@ export class RunVerificationService {
       subject: input.subject,
       environment: input.environment,
       generation: input.generation,
+      ...(storageRoot === undefined ? {} : { storageRoot }),
     });
     if (!stateRef.trim()) {
       throw new OpenTofuControllerError(

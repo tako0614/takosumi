@@ -5,11 +5,13 @@
  * the host's ArtifactReferenceAllocator.
  */
 import type { ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
+import { capsuleArtifactRoot } from "../../core/adapters/storage/artifact-references.ts";
 import {
   VERIFIED_RECOVERY_ARTIFACT_FORMAT,
   type RecoveryArtifactVerifier,
   type VerifiedRecoveryArtifact,
 } from "../../core/domains/deploy-control/operator_state_recovery.ts";
+import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import { stableJsonDigest } from "../../core/adapters/source/digest.ts";
 import type { R2Bucket, R2Object, R2ObjectBody } from "./bindings.ts";
 import { storedServiceUsageBucket, type StoredServiceComposition } from "./stored-service-usage.ts";
@@ -68,11 +70,14 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   readonly #allocator: ArtifactReferenceAllocator;
   readonly #storageUsage: ArtifactStorageUsagePort | undefined;
   readonly #storedService: StoredServiceComposition | undefined;
+  readonly #capsules: Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">;
 
   constructor(input: {
     readonly bucket: R2Bucket;
     readonly crypto: StateArtifactCrypto;
     readonly allocator: ArtifactReferenceAllocator;
+    /** Trusted persisted Capsule identity and physical-root authority. */
+    readonly capsules: Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">;
     /** Trusted optional host capability; an HTTP caller cannot select it. */
     readonly storageUsage?: ArtifactStorageUsagePort;
     readonly storedService?: StoredServiceComposition;
@@ -81,6 +86,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     this.#bucket = input.bucket;
     this.#crypto = input.crypto;
     this.#allocator = input.allocator;
+    this.#capsules = input.capsules;
     this.#storageUsage = input.storageUsage;
     this.#storedService = input.storedService;
   }
@@ -234,18 +240,29 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
   async #allocate(scope: RecoveryStateArtifactScope, validate = true): Promise<string> {
     if (validate) validateScope(scope);
     let ref: string;
+    let root: string;
     try {
+      const capsule = await this.#capsules.getCapsule(scope.capsuleId);
+      if (!capsule || capsule.workspaceId !== scope.workspaceId || capsule.environment !== scope.environment) {
+        throw recoveryArtifactError("recovery state scope is not the persisted Capsule");
+      }
+      const persistedRoot = await this.#capsules.getCapsuleStorageRoot(scope.capsuleId);
+      if (typeof persistedRoot !== "string" || !persistedRoot) {
+        throw recoveryArtifactError("recovery state storage root is unavailable");
+      }
+      root = capsuleArtifactRoot(scope.workspaceId, scope.capsuleId, persistedRoot);
       ref = await this.#allocator.allocate({
         kind: "state",
         workspaceId: scope.workspaceId,
         subject: { kind: "capsule", id: scope.capsuleId },
         environment: scope.environment,
         generation: 1,
+        ...(persistedRoot === undefined ? {} : { storageRoot: persistedRoot }),
       });
     } catch {
       throw recoveryArtifactError("recovery state allocation failed");
     }
-    const canonical = `workspaces/${safeSegment(scope.workspaceId)}/capsules/${safeSegment(scope.capsuleId)}/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
+    const canonical = `${root}/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
     if (ref !== canonical) throw recoveryArtifactError("recovery state allocation is not canonical");
     return ref;
   }

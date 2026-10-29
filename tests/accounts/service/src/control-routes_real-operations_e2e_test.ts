@@ -1021,7 +1021,10 @@ test(pauseBeforeVerification
   });
   if (pauseBeforeVerification) {
     expect(registered).toBeDefined();
-    expect(await deployStore.getConnection(connectionId)).toEqual(registered);
+    expect(await deployStore.getConnection(connectionId)).toEqual({
+      ...registered,
+      ownerAccountId: "user_test",
+    });
     expect(callbackResponse?.headers.get("location")).toContain("connection_status=pending");
   }
 });

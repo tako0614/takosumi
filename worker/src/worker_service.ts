@@ -49,6 +49,7 @@ import {
 } from "./release_activator.ts";
 import { CloudflareD1ObservabilitySink } from "./d1_observability.ts";
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
+import { D1AppOwnershipStore } from "../../core/domains/app-ownership/store.ts";
 import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
   type TakosumiOperatorCapabilities,
@@ -57,6 +58,7 @@ import {
   D1AccountsStore,
   issueInterfaceOAuthAccessToken,
   resolveD1AccountsSchemaMode,
+  parseWorkspaceMutationsFrozen,
   validateUninstallRequester,
 } from "@takosjp/takosumi-accounts-service";
 import {
@@ -412,6 +414,10 @@ export async function createWorkerServiceApp(
     ),
     artifactReferenceAllocator: backupStorage.allocator,
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
+    appOwnershipStore: new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB, opentofuControlStore),
+    workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
+      env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+    ),
     ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK
       ? { interfaceProjectionSink: env.TAKOSUMI_INTERFACE_PROJECTION_SINK }
       : {}),

@@ -6,6 +6,7 @@ import {
   PostgresAccountsStore,
   type PostgresQueryClient,
 } from "@takosjp/takosumi-accounts-service";
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { Run } from "takosumi-contract/runs";
@@ -149,6 +150,58 @@ test("composed app builds Accounts with the canonical control operations facade"
     new Request("http://localhost/dashboard"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
+});
+
+test("default-frozen Node composition bootstraps a fresh account and accepts its install plan", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const subject = "tsub_node_fresh_install";
+  store.saveAccount({ subject, displayName: "Fresh installer", createdAt: now, updatedAt: now });
+  store.saveAccountSession({ sessionId: "sess_node_fresh_install", subject,
+    createdAt: now, expiresAt: now + 60_000 });
+  const { buildComposedApp } = await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: store as unknown as PostgresAccountsStore,
+    createAccountsHandler: (operations, options) => createAccountsHandler({
+      issuer: testConfig().issuer, store, controlPlaneOperations: operations,
+      workspaceMutationsFrozen: options.workspaceMutationsFrozen,
+    }),
+    runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN },
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+  const call = async (path: string, init: RequestInit = {}) => await created.app.fetch(
+    new Request(`http://localhost:8787${path}`, { ...init,
+      headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_node_fresh_install`,
+        origin: "http://localhost:8787", ...init.headers },
+    }));
+  const listed = await call("/api/v1/workspaces");
+  assert.equal(listed.status, 200);
+  const { workspaces } = await listed.json() as { workspaces: Array<{ id: string; type: string; ownerUserId: string }> };
+  assert.equal(workspaces.length, 1);
+  assert.equal(workspaces[0]?.type, "personal");
+  assert.equal(workspaces[0]?.ownerUserId, subject);
+  const workspaceId = workspaces[0]!.id;
+  const replay = await call("/api/v1/workspaces", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle: "another-handle", type: "personal" }) });
+  assert.equal(replay.status, 201);
+  assert.equal((await replay.json() as { workspace: { id: string } }).workspace.id, workspaceId);
+  const blocked = await call("/api/v1/workspaces", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ handle: "blocked-team", type: "organization" }) });
+  assert.equal(blocked.status, 409);
+  const install = await call(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/install-plans`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "idempotency-key": "node-fresh-install" },
+    body: JSON.stringify({
+      source: { name: "node-fresh", url: "https://github.com/takos/example.git", ref: "main", path: "." },
+      capsule: { name: "node-fresh", environment: "production" },
+      options: { modulePath: ".", providerBindings: [] },
+    }),
+  });
+  assert.equal(install.status, 201);
+  assert.equal((await install.json() as { installPlan: { workspaceId: string } }).installPlan.workspaceId, workspaceId);
 });
 
 test("composed app forwards one explicit OpenTofu store and operator config set", async () => {
@@ -616,15 +669,21 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
   const spy = accountsHandlerSpy();
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  let accountsFreezeFlag: boolean | undefined;
   const created = await buildComposedApp({
     config: testConfig(),
     store: store as unknown as PostgresAccountsStore,
-    accountsHandler: spy.handler,
+    createAccountsHandler: (_operations, options) => {
+      accountsFreezeFlag = options.workspaceMutationsFrozen;
+      return spy.handler;
+    },
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+      TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN: "false",
     },
     interfaceOAuth2ResourceAuthorizer: () => true,
   });
+  assert.equal(accountsFreezeFlag, false);
   const app = created.app;
   const workspace = await created.operations.workspaces.createWorkspace({
     handle: "role-gate",

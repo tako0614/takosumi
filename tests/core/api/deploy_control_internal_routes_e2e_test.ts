@@ -65,6 +65,7 @@ test("bootstrap builds the ConnectionVault from secretCrypto alone (production w
   // register (and run credential mint) fail closed with "vault is not configured".
   const { app } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
@@ -130,6 +131,7 @@ test("Credential Recipe discovery and generic-env connection routes round-trip",
   });
   const { app } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
@@ -278,6 +280,7 @@ test(`Workspace draining ${stopMoment} rejects generic-env setup without changin
   });
   const { app } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
@@ -363,6 +366,7 @@ test(`Workspace draining ${stopMoment} rejects generic-env setup without changin
 test("Credential Recipe discovery exposes the service-installed open catalog", async () => {
   const { app } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
@@ -398,6 +402,7 @@ test("Credential Recipe discovery exposes the service-installed open catalog", a
 test("Core exposes no Credential Recipes when the host installs no catalog", async () => {
   const { app } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
@@ -438,6 +443,7 @@ async function seedCapsuleViaRoutes(
   const store = new InMemoryOpenTofuControlStore();
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
