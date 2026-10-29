@@ -1649,8 +1649,10 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       await this.archiveStore.write(job.archiveRef, bytes);
     }
     const phaseTimings = phaseTimingsFromRunnerResult(result);
+    const resolvedRef = stringValue(result, "resolvedRef");
     return {
       resolvedCommit,
+      ...(resolvedRef ? { resolvedRef } : {}),
       archiveDigest,
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),

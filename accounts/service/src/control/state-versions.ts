@@ -130,7 +130,7 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { requireResourceAccess } from "./app-authorization.ts";
+import { requireOwnerForDelegateCodeChange, requireResourceAccess } from "./app-authorization.ts";
 
 export async function handleStateVersions(
   ctx: ControlDispatchContext,
@@ -163,6 +163,17 @@ export async function handleStateVersions(
     }
     if (segments[2] === "rollback-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
+      // A rollback plans an earlier snapshot: for a designated delegate app
+      // that changes what it deploys, which only its owner may do.
+      if (stateVersion.capsuleId) {
+        const codeChange = await requireOwnerForDelegateCodeChange({
+          operations, store, session: ctx.session, workspaceId: stateVersion.workspaceId,
+          capsuleIds: [stateVersion.capsuleId],
+          ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+          ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+        });
+        if (!codeChange.ok) return codeChange.response;
+      }
       const response =
         await operations.createStateVersionRollbackPlan(stateVersionId, { actor: ctx.session.subject });
       return jsonStatus(

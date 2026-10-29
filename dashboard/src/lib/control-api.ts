@@ -826,6 +826,7 @@ export interface SourceSnapshot {
   readonly url: string;
   readonly ref: string;
   readonly resolvedCommit: string;
+  readonly resolvedRef?: string;
   readonly path: string;
   readonly archiveRef: string;
   readonly archiveDigest: string;

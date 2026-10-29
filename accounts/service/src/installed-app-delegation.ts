@@ -10,8 +10,8 @@ import {
  * delegation, for example Takos installing apps for its user. Every other
  * installed app's token is confined to its own app. The decision is
  * server-side: the app's recorded Source URL and its currently adopted
- * (applied) revision's path and ref are compared with this list; no client
- * claim is consulted.
+ * (applied) revision's path and the full ref name the runner resolved for it
+ * (`resolvedRef`) are compared with this list; no client claim is consulted.
  */
 export const INSTALLED_APP_DELEGATION_SOURCES_ENV =
   "TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES" as const;
@@ -79,16 +79,17 @@ export function parseInstalledAppDelegationSources(
   }));
 }
 
-/** Raw commits and anything outside heads/tags (for example `refs/pull/*`) never qualify. */
-function refMatches(allowed: string, ref: string): boolean {
-  if (/^[0-9a-f]{7,64}$/iu.test(ref)) return false;
-  const candidates = ref.startsWith("refs/")
-    ? (ref.startsWith("refs/heads/") || ref.startsWith("refs/tags/") ? [ref] : [])
-    // A bare name resolves to a branch or a tag; both are maintainer-controlled.
-    : ref.includes("pull/") || ref.startsWith("refs") ? [] : [`refs/heads/${ref}`, `refs/tags/${ref}`];
-  return candidates.some((candidate) => allowed.endsWith("*")
-    ? candidate.startsWith(allowed.slice(0, -1)) && candidate.length > allowed.length - 1
-    : candidate === allowed);
+/**
+ * Only the FULL ref name the runner resolved counts: a requested bare name can
+ * match other refs by suffix (`1/head` → `refs/pull/1/head`), so it is never
+ * expanded here. Anything outside `refs/heads/` and `refs/tags/` (pull request
+ * refs, raw commits, an unresolved `HEAD`) never qualifies.
+ */
+function refMatches(allowed: string, resolvedRef: string): boolean {
+  if (!resolvedRef.startsWith("refs/heads/") && !resolvedRef.startsWith("refs/tags/")) return false;
+  return allowed.endsWith("*")
+    ? resolvedRef.startsWith(allowed.slice(0, -1)) && resolvedRef.length > allowed.length - 1
+    : resolvedRef === allowed;
 }
 
 /** True when the app's Source coordinate is one of the designated repositories (ref not considered). */
@@ -101,12 +102,17 @@ export function installedAppSourceIsDesignated(
   }));
 }
 
-/** True when the deployed revision (URL, path and ref) is a designated delegate revision. */
+/**
+ * True when the deployed revision (URL, path and the snapshot's resolved full
+ * ref) is a designated delegate revision. A snapshot without `resolvedRef`
+ * (raw commit, or fetched before it was recorded) never delegates.
+ */
 export function installedAppRevisionDelegates(
   sources: readonly InstalledAppDelegationSource[],
-  revision: { readonly url: string; readonly path: string; readonly ref: string },
+  revision: { readonly url: string; readonly path: string; readonly resolvedRef: string | undefined },
 ): boolean {
-  const ref = revision.ref.trim();
+  const ref = revision.resolvedRef;
+  if (ref === undefined || ref !== ref.trim() || !ref) return false;
   return sources.some((selector) =>
     installConfigSourceCoordinateMatches(selector, {
       url: revision.url, path: normalizeInstallConfigSourcePath(revision.path || "."),

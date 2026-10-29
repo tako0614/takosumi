@@ -731,8 +731,10 @@ const installedAppDelegationDecisions = new WeakMap<ControlSession, Promise<bool
  * the token's single bound Capsule must be live (active or stale, no scheduled
  * uninstall) in the token's Workspace, and its currently adopted (applied)
  * revision must come from that Capsule's own Source (whose URL cannot be
- * patched) at a designated path and an allowed ref. Raw commits and
- * `refs/pull/*` never qualify. Memoized per session object.
+ * patched) at a designated path, and its snapshot's resolved full ref
+ * (`resolvedRef`) must be an allowed `refs/heads/…` or `refs/tags/…` name.
+ * Bare names, an unresolved `HEAD`, `refs/pull/*`, raw commits and snapshots
+ * without `resolvedRef` never qualify. Memoized per session object.
  */
 export function installedAppTokenDelegates(
   operations: ControlPlaneOperations,
@@ -759,7 +761,8 @@ export function installedAppTokenDelegates(
           (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id)) return false;
         const snapshot = await operations.getSourceSnapshot(adopted.sourceSnapshotId);
         if (snapshot.id !== adopted.sourceSnapshotId || snapshot.sourceId !== source.id) return false;
-        return installedAppRevisionDelegates(sources, { url: source.url, path: adopted.path, ref: adopted.ref });
+        // The runner-resolved full ref, never the requested name.
+        return installedAppRevisionDelegates(sources, { url: source.url, path: adopted.path, resolvedRef: snapshot.resolvedRef });
       } catch (error) {
         if (controllerErrorCode(error) === "not_found") return false;
         throw error;

@@ -176,8 +176,29 @@ variable to the Takos repository coordinate, for example
 with the exact URL the Takos Capsule was installed from and the refs it is
 deployed from, before deploying this release; otherwise Takos's delegated
 install, approve and apply requests return 403. Delegation follows the applied
-revision: a Takos Capsule redeployed from a pull-request ref or a raw commit is
-not a delegate, and only its owner can change its ref or path.
+revision: the full ref name the runner recorded on its snapshot (`resolvedRef`)
+must be an allowed `refs/heads/…` or `refs/tags/…` name. A Takos Capsule
+redeployed from a pull-request ref or a raw commit is not a delegate, and only
+its owner can change its ref or path or roll it back.
+
+Snapshots fetched before this release have no `resolvedRef`, so after deploying
+the Takos Capsule is **not** a delegate until its applied snapshot records one:
+
+1. Deploy the runner from this release together with the control plane (the
+   runner reports `resolvedRef`; an older runner leaves every snapshot without
+   it and no app delegates).
+2. As the Takos app's owner, trigger a sync of its Source
+   (`POST /api/v1/sources/{sourceId}/sync`).
+3. If the Source's ref still resolves to the applied commit and the applied
+   snapshot is the newest snapshot of that Source, ref and path, the sync
+   reuses that snapshot and writes `resolvedRef` into it in place: delegation
+   works at once, no apply needed. If the ref has moved on (or a newer snapshot
+   of the same lane exists), the sync creates a new snapshot and the applied one
+   stays without `resolvedRef`: update the Takos app (plan and apply) to the new
+   snapshot to restore delegation.
+4. Confirm by calling a Workspace route with the Takos app's token (for example
+   its install flow) or by reading the applied snapshot
+   (`GET /api/v1/sources/{sourceId}/snapshots`, field `resolvedRef`).
 
 Failure recovery preserves the additive schema and existing storage roots.
 Use a reviewed forward repair for incorrect backfill data. Do not drop the new

@@ -210,15 +210,17 @@ export async function handleRuns(
     }
     const leaf = segments[2];
     // Plan review stays with a person: an installed app's own token may
-    // create plans but not approve, apply or cancel another person's Run,
-    // unless the operator designated the app as a Workspace delegate.
+    // create plans but not approve, apply or cancel Runs, unless the operator
+    // designated the app as a Workspace delegate. Runs record only the person
+    // who created them (`createdBy`, which is also the token's user), not the
+    // credential or client, so "a Run this app created" cannot be told apart
+    // from the user's own Runs: cancel is refused for such tokens entirely.
     if (operate && (leaf === "approve" || leaf === "apply" || leaf === "cancel") &&
       isInstalledAppToken(ctx.session) &&
-      !(leaf === "cancel" && run.createdBy === ctx.session.subject) &&
       !(await installedAppTokenDelegates(operations, ctx.session))) {
       return errorJson(
         "app_access_denied",
-        "Approving or applying a Run requires an account session, a personal access token or a designated delegate app.",
+        "Approving, applying or cancelling a Run requires an account session, a personal access token or a designated delegate app.",
         403,
       );
     }

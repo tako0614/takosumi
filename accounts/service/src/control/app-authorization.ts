@@ -143,15 +143,26 @@ export async function requireAppAccess(input: AppAccessRequest): Promise<AppAuth
   // An installed app's OAuth token acts for the app, never as its owner:
   // uninstall (including destroy plans and destroy Runs), ownership transfer
   // and member management are refused on every path, fallback included.
+  // One exception: an operator-designated delegate token (Takos) may
+  // uninstall ANOTHER app for its user when the user may (the app's owner;
+  // the Workspace owner while the app has no ownership row). It never
+  // uninstalls its own app, and never transfers ownership or manages members.
+  let delegatedUninstall = false;
   if (input.session.credential === "oauth-access-token" && OWNER_ONLY_ACTIONS.has(input.action)) {
-    return {
-      ok: false,
-      response: errorJson(
-        "app_access_denied",
-        "Uninstall, ownership transfer and member management require an account session or personal access token.",
-        403,
-      ),
-    };
+    delegatedUninstall = input.action === "uninstall" && isInstalledAppToken(input.session) &&
+      !input.session.appIds.includes(input.capsuleId) &&
+      await installedAppTokenDelegates(input.operations, input.session);
+    input.assertActive?.();
+    if (!delegatedUninstall) {
+      return {
+        ok: false,
+        response: errorJson(
+          "app_access_denied",
+          "Uninstall, ownership transfer and member management require an account session or personal access token.",
+          403,
+        ),
+      };
+    }
   }
   const fence = await readOwnershipFence(input.operations, input.capsuleId);
   input.assertActive?.();
@@ -167,6 +178,10 @@ export async function requireAppAccess(input: AppAccessRequest): Promise<AppAuth
       ...(input.assertActive ? { assertActive: input.assertActive } : {}),
       ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     });
+    input.assertActive?.();
+    if (allowed && delegatedUninstall && !(await isWorkspaceOwner(input.operations, input.session, input.workspaceId))) {
+      return { ok: false, response: appOwnerOnly() };
+    }
     input.assertActive?.();
     return allowed
       ? { ok: true, authority: "workspace", fallbackReason: fence.reason }
@@ -267,7 +282,8 @@ async function retainedDestroyedAppAccess(
  * decision as every other app-scoped request: the per-app role once the
  * provider has an ownership row, the Workspace decision only while it has
  * none. An installed app's own OAuth token never approves another app's
- * Interface. A false result makes the link `pending_approval`.
+ * Interface unless it is an operator-designated delegate token whose user has
+ * that action on the provider. A false result makes the link `pending_approval`.
  */
 export async function mayApproveInterfaceProvider(
   input: AuthorizationContext & {
@@ -276,7 +292,14 @@ export async function mayApproveInterfaceProvider(
   },
 ): Promise<boolean> {
   if (input.provider.capsuleId === input.consumerCapsuleId) return true;
-  if (input.session.credential === "oauth-access-token") return false;
+  // An app's own token never approves another app's Interface, except an
+  // operator-designated delegate token (Takos installing for its user): it
+  // approves only when its USER may change links on the provider app (the
+  // decision below applies the user's role and the token's own limits).
+  if (input.session.credential === "oauth-access-token" &&
+    !(isInstalledAppToken(input.session) && await installedAppTokenDelegates(input.operations, input.session))) {
+    return false;
+  }
   const provider = await input.operations.capsules.getCapsule(input.provider.capsuleId);
   input.assertActive?.();
   if (provider.id !== input.provider.capsuleId || provider.workspaceId !== input.provider.workspaceId) return false;
@@ -725,10 +748,22 @@ export async function requireWorkspaceAppsAccess(
   return { ok: true };
 }
 
+/** The legacy stand-in for "the app's owner" while an app has no ownership row. */
+async function isWorkspaceOwner(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  workspaceId: string,
+): Promise<boolean> {
+  const workspace = await operations.workspaces.getWorkspace(workspaceId);
+  return workspace.id === workspaceId && workspace.ownerUserId !== undefined &&
+    workspace.ownerUserId === session.subject;
+}
+
 /**
- * Changing what a designated delegate app deploys (its ref, path or adopted
- * config) is owner-only: the app's own token carries Workspace delegation.
- * Runs after the ordinary decision; the rollout fallback keeps its decision.
+ * Changing what a designated delegate app deploys (its ref, path, adopted
+ * config, or a rollback to an earlier snapshot) is owner-only: the app's own
+ * token carries Workspace delegation. Runs after the ordinary decision; while
+ * the app has no ownership row, only the Workspace owner may.
  */
 export async function requireOwnerForDelegateCodeChange(
   input: AuthorizationContext & { readonly workspaceId: string; readonly capsuleIds: readonly string[] },
@@ -739,6 +774,11 @@ export async function requireOwnerForDelegateCodeChange(
     const decision = await requireAppAccess({ ...input, capsuleId, action: "change_settings" });
     if (!decision.ok) return decision;
     if (decision.authority === "app" && decision.access.role !== "owner") return { ok: false, response: appOwnerOnly() };
+    // Without an ownership row the Workspace owner stands in for the app owner.
+    if (decision.authority === "workspace" && !(await isWorkspaceOwner(input.operations, input.session, input.workspaceId))) {
+      return { ok: false, response: appOwnerOnly() };
+    }
+    input.assertActive?.();
   }
   return { ok: true };
 }

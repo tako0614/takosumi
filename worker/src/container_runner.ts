@@ -738,8 +738,10 @@ export class CloudflareContainerOpenTofuRunner
       throw new Error("runner source sync returned an incomplete result");
     }
     const phaseTimings = phaseTimingsFromContainerResult(result);
+    const resolvedRef = stringFromRecord(result, "resolvedRef");
     return {
       resolvedCommit,
+      ...(resolvedRef ? { resolvedRef } : {}),
       archiveDigest,
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),

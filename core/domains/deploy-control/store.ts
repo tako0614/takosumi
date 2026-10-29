@@ -3008,6 +3008,8 @@ export function mergeReusableSourceSnapshotObservations(
   };
   const merged = {
     ...existing,
+    // The latest resolution names the ref (an older row may predate the field).
+    ...(observed.resolvedRef !== undefined ? { resolvedRef: observed.resolvedRef } : {}),
     repositoryInstallMetadata: preserveOrRefresh(existing.repositoryInstallMetadata, observed.repositoryInstallMetadata),
     repositoryManifest: preserveOrRefresh(existing.repositoryManifest, observed.repositoryManifest),
     repositoryModules: preserveOrRefresh(existing.repositoryModules, observed.repositoryModules),

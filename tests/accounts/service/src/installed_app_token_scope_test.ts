@@ -35,6 +35,8 @@ async function fixture(options: {
   readonly delegationSources?: readonly InstalledAppDelegationSource[];
   /** The delegate Capsule's adopted (applied) revision ref. */
   readonly delegateRef?: string;
+  /** The full ref the runner resolved for the delegate's adopted snapshot; null: none recorded. */
+  readonly delegateResolvedRef?: string | null;
 } = {}) {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
@@ -76,6 +78,11 @@ async function fixture(options: {
       resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
     }]),
   );
+  // What the runner recorded on each adopted snapshot.
+  const resolvedRefs = new Map<string, string | undefined>([
+    ["src_third_party", "refs/heads/main"], ["src_other", "refs/heads/main"],
+    ["src_takos", options.delegateResolvedRef === null ? undefined : options.delegateResolvedRef ?? "refs/heads/main"],
+  ]);
   const runs = new Map<string, Run>(
     [THIRD_PARTY, OTHER].map((capsuleId) => [`run_${capsuleId}`, {
       id: `run_${capsuleId}`, workspaceId: WORKSPACE, capsuleId, environment: "production", type: "plan",
@@ -104,10 +111,18 @@ async function fixture(options: {
     getSourceSnapshot: async (id: string) => {
       const sourceId = id.replace(/^snap_/u, "");
       if (!sources.has(sourceId)) throw new OpenTofuControllerError("not_found", "missing");
-      return { id, sourceId, workspaceId: WORKSPACE };
+      const resolvedRef = resolvedRefs.get(sourceId);
+      return { id, sourceId, workspaceId: WORKSPACE, ...(resolvedRef !== undefined ? { resolvedRef } : {}) };
     },
     approveRun: async () => reached(),
     cancelRun: async () => reached(),
+    createCapsuleDestroyPlan: async () => reached(),
+    createStateVersionRollbackPlan: async () => reached(),
+    getStateVersion: async (id: string) => {
+      const capsuleId = id.replace(/^sv_/u, "");
+      if (![THIRD_PARTY, OTHER, DELEGATE].includes(capsuleId)) throw new OpenTofuControllerError("not_found", "missing");
+      return { stateVersion: { id, workspaceId: WORKSPACE, capsuleId, environment: "production", generation: 1, createdByRunId: "run_x", createdAt: NOW } };
+    },
     createApplyRun: async () => reached(),
     patchSource: async () => reached(),
   } as unknown as ControlPlaneOperations;
@@ -118,11 +133,11 @@ async function fixture(options: {
     accounts.saveAccountSession({ sessionId: `sess_${subject}`, subject, createdAt: Date.now(), expiresAt: Date.now() + 60_000 });
     return { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_${subject}` };
   }
-  function appToken(capsuleId: string, workspaceId = WORKSPACE): Record<string, string> {
-    const token = `fixture-oauth-${capsuleId}-${workspaceId}`;
+  function appToken(capsuleId: string, workspaceId = WORKSPACE, subject = USER): Record<string, string> {
+    const token = `fixture-oauth-${capsuleId}-${workspaceId}-${subject}`;
     accounts.saveAccessToken(token, {
       clientId: `client_${capsuleId}`, scope: "openid capsules:read capsules:write",
-      subject: `pairwise_${capsuleId}`, takosumiSubject: USER, capsuleId, workspaceId,
+      subject: `pairwise_${capsuleId}_${subject}`, takosumiSubject: subject, capsuleId, workspaceId,
       expiresAt: Date.now() + 60_000,
     });
     return { authorization: `Bearer ${token}` };
@@ -146,7 +161,7 @@ async function fixture(options: {
     try { parsed = JSON.parse(text); } catch { /* empty body */ }
     return { status: response!.status, code: parsed.error?.code, message: parsed.error?.message };
   }
-  return { core, ledger, appToken, call, session, adopted, sources, runs };
+  return { core, ledger, appToken, call, session, adopted, sources, runs, resolvedRefs };
 }
 
 const WORKSPACE_ROUTES = (h: Awaited<ReturnType<typeof fixture>>, token: Record<string, string>) => [
@@ -254,21 +269,34 @@ describe("delegation source configuration", () => {
 });
 
 describe("delegation follows the deployed revision's ref", () => {
-  const delegated = async (ref: string) => {
-    const h = await fixture({ delegationSources: [DELEGATE_SOURCE], delegateRef: ref });
+  /** `requested` is the ref as installed; `resolved` the full ref the runner recorded (null: none). */
+  const delegated = async (requested: string, resolved: string | null, refs: readonly string[] = DELEGATE_SOURCE.refs) => {
+    const h = await fixture({ delegationSources: [{ ...DELEGATE_SOURCE, refs }], delegateRef: requested, delegateResolvedRef: resolved });
     return (await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE))).status;
   };
 
-  test("allowed branch and tag delegate; a PR ref, a raw or fork-only commit never do", async () => {
-    expect(await delegated("main")).toBe(200);
-    expect(await delegated("refs/heads/main")).toBe(200);
-    expect(await delegated("v1.4.2")).toBe(200);
-    expect(await delegated("refs/tags/v2.0.0")).toBe(200);
-    expect(await delegated("refs/pull/999/head")).toBe(403);
-    expect(await delegated("pull/999/head")).toBe(403);
-    expect(await delegated("0123456789abcdef0123456789abcdef01234567")).toBe(403);
-    expect(await delegated("feedfacefeedfacefeedfacefeedfacefeedface")).toBe(403);
-    expect(await delegated("refs/heads/feature")).toBe(403);
+  test("only the resolved full branch or tag name delegates", async () => {
+    expect(await delegated("main", "refs/heads/main")).toBe(200);
+    expect(await delegated("refs/heads/main", "refs/heads/main")).toBe(200);
+    // An install without a ref records HEAD; the runner resolves it to the default branch.
+    expect(await delegated("HEAD", "refs/heads/main")).toBe(200);
+    expect(await delegated("v1.4.2", "refs/tags/v1.4.2")).toBe(200);
+    expect(await delegated("refs/tags/v2.0.0", "refs/tags/v2.0.0")).toBe(200);
+    expect(await delegated("feature", "refs/heads/feature")).toBe(403);
+  }, 180_000);
+
+  test("bare names that resolve to pull request refs, unresolved HEAD, raw commits and old snapshots never delegate", async () => {
+    // The measured attack: bare names matched by ls-remote suffix while the
+    // allow-list holds prefixes that their bare expansion would have matched.
+    const wide = ["refs/heads/main", "refs/tags/1*", "refs/tags/2*", "refs/heads/h*"];
+    expect(await delegated("1/head", "refs/pull/1/head", wide)).toBe(403);
+    expect(await delegated("2/merge", "refs/pull/2/merge", wide)).toBe(403);
+    expect(await delegated("head", "refs/pull/7/head", wide)).toBe(403);
+    expect(await delegated("pull/999/head", "refs/pull/999/head")).toBe(403);
+    expect(await delegated("HEAD", null)).toBe(403);
+    expect(await delegated("main", null)).toBe(403);
+    expect(await delegated("0123456789abcdef0123456789abcdef01234567", null)).toBe(403);
+    expect(await delegated("main", "refs/heads/main ")).toBe(403);
   }, 180_000);
 
   test("the Source's default ref does not matter; a newly applied ref does", async () => {
@@ -276,6 +304,7 @@ describe("delegation follows the deployed revision's ref", () => {
     h.sources.get("src_takos")!.defaultRef = "refs/pull/999/head";
     expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE))).status).toBe(200);
     h.adopted.set(DELEGATE, { ...h.adopted.get(DELEGATE)!, ref: "refs/pull/999/head" });
+    h.resolvedRefs.set("src_takos", "refs/pull/999/head");
     expect((await h.call("GET", `/capsules/${OTHER}/provider-bindings`, h.appToken(DELEGATE, WORKSPACE))).status).toBe(403);
   }, 180_000);
 
@@ -288,13 +317,17 @@ describe("delegation follows the deployed revision's ref", () => {
     }
   }, 180_000);
 
-  test("a designated delegate approves and applies other apps' Runs; a non-delegated token only cancels its user's own", async () => {
+  test("a designated delegate approves, applies and cancels other apps' Runs; a non-delegated token cancels nothing", async () => {
     const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
     expect(await h.call("POST", `/runs/run_${OTHER}/approve`, h.appToken(DELEGATE), {})).toMatchObject({ status: 409, message: "reached" });
-    h.runs.set(`run_${THIRD_PARTY}`, { ...h.runs.get(`run_${THIRD_PARTY}`)!, createdBy: USER } as Run);
-    expect(await h.call("POST", `/runs/run_${THIRD_PARTY}/cancel`, h.appToken(THIRD_PARTY), {})).toMatchObject({ status: 409, message: "reached" });
-    h.runs.set(`run_${THIRD_PARTY}`, { ...h.runs.get(`run_${THIRD_PARTY}`)!, createdBy: MEMBER } as Run);
-    expect(await h.call("POST", `/runs/run_${THIRD_PARTY}/cancel`, h.appToken(THIRD_PARTY), {})).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect(await h.call("POST", `/runs/run_${OTHER}/cancel`, h.appToken(DELEGATE), {})).toMatchObject({ status: 409, message: "reached" });
+    // Runs record only the person (the token's user), not the client: even the
+    // user's own Run of the token's own app is not cancellable by that token.
+    for (const createdBy of [USER, MEMBER]) {
+      h.runs.set(`run_${THIRD_PARTY}`, { ...h.runs.get(`run_${THIRD_PARTY}`)!, createdBy } as Run);
+      expect(await h.call("POST", `/runs/run_${THIRD_PARTY}/cancel`, h.appToken(THIRD_PARTY), {}), createdBy).toMatchObject({ status: 403, code: "app_access_denied" });
+    }
+    expect(await h.call("POST", `/runs/run_${THIRD_PARTY}/cancel`, h.session(USER), {})).toMatchObject({ status: 409, message: "reached" });
   }, 180_000);
 });
 
@@ -321,5 +354,75 @@ describe("an app token keeps its own Source connection and its own config", () =
     expect(await h.call("PATCH", "/sources/src_third_party", token, { autoSync: true })).toMatchObject({ status: 409, message: "reached" });
     expect(await h.call("POST", "/sources/src_third_party/compatibility-check", token, { compileInstallUx: true, capsuleName: "x" })).toMatchObject({ status: 403, code: "app_access_denied" });
     expect(await h.call("POST", "/sources/src_third_party/compatibility-check", token, { installConfigId: "cfg_someone_else" })).toMatchObject({ status: 403, code: "app_access_denied" });
+  }, 180_000);
+});
+
+describe("review round 3: delegate uninstall, rollback and Interface approval", () => {
+  test("a delegate token uninstalls another app its user owns, never its own app, and never transfers", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    expect(await h.call("POST", `/capsules/${OTHER}/destroy-plan`, h.appToken(DELEGATE), {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", `/capsules/${DELEGATE}/destroy-plan`, h.appToken(DELEGATE), {})).toMatchObject({ status: 403, code: "app_access_denied" });
+    // The token's user is only a member of OTHER: the app role refuses.
+    expect(await h.call("POST", `/capsules/${OTHER}/destroy-plan`, h.appToken(DELEGATE, WORKSPACE, MEMBER), {})).toMatchObject({ status: 403 });
+    expect(await h.call("POST", `/capsules/${OTHER}/ownership-transfers`, h.appToken(DELEGATE), { toAccountId: MEMBER })).toMatchObject({ status: 403, code: "app_access_denied" });
+    // A token that is not a designated delegate stays refused.
+    expect(await h.call("POST", `/capsules/${THIRD_PARTY}/destroy-plan`, h.appToken(THIRD_PARTY), {})).toMatchObject({ status: 403, code: "app_access_denied" });
+    const undesignated = await fixture();
+    expect(await undesignated.call("POST", `/capsules/${OTHER}/destroy-plan`, undesignated.appToken(DELEGATE), {})).toMatchObject({ status: 403, code: "app_access_denied" });
+  }, 180_000);
+
+  test("without ownership rows a delegate token uninstalls only for the Workspace owner", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE], owned: false });
+    await h.ledger.putWorkspaceMember({ id: "wsm_member_admin", workspaceId: WORKSPACE, accountId: MEMBER, roles: ["admin"], status: "active", createdAt: NOW, updatedAt: NOW });
+    expect(await h.call("POST", `/capsules/${OTHER}/destroy-plan`, h.appToken(DELEGATE), {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await h.call("POST", `/capsules/${OTHER}/destroy-plan`, h.appToken(DELEGATE, WORKSPACE, MEMBER), {})).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect(await h.call("POST", `/capsules/${DELEGATE}/destroy-plan`, h.appToken(DELEGATE), {})).toMatchObject({ status: 403, code: "app_access_denied" });
+  }, 180_000);
+
+  test("rolling a delegate app back is owner-only (the Workspace owner without ownership rows)", async () => {
+    const owned = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    expect(await owned.call("POST", `/state-versions/sv_${DELEGATE}/rollback-plan`, owned.session(MEMBER), {})).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect(await owned.call("POST", `/state-versions/sv_${DELEGATE}/rollback-plan`, owned.session(USER), {})).toMatchObject({ status: 409, message: "reached" });
+    // Ordinary apps keep member rollbacks.
+    expect(await owned.call("POST", `/state-versions/sv_${OTHER}/rollback-plan`, owned.session(MEMBER), {})).toMatchObject({ status: 409, message: "reached" });
+    const fallback = await fixture({ delegationSources: [DELEGATE_SOURCE], owned: false });
+    await fallback.ledger.putWorkspaceMember({ id: "wsm_member_admin", workspaceId: WORKSPACE, accountId: MEMBER, roles: ["admin"], status: "active", createdAt: NOW, updatedAt: NOW });
+    expect(await fallback.call("POST", `/state-versions/sv_${DELEGATE}/rollback-plan`, fallback.session(MEMBER), {})).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect(await fallback.call("POST", `/capsules/${DELEGATE}/revision-plans`, fallback.session(MEMBER), {})).toMatchObject({ status: 403, code: "app_owner_only" });
+    expect(await fallback.call("POST", `/state-versions/sv_${DELEGATE}/rollback-plan`, fallback.session(USER), {})).toMatchObject({ status: 409, message: "reached" });
+    expect(await fallback.call("POST", `/state-versions/sv_${OTHER}/rollback-plan`, fallback.session(MEMBER), {})).toMatchObject({ status: 409, message: "reached" });
+  }, 180_000);
+
+  test("a delegate token approves an Interface link only when its user may change the provider app", async () => {
+    const h = await fixture({ delegationSources: [DELEGATE_SOURCE] });
+    const requirement = { key: "tools", interface: { type: "mcp.server", version: "1" }, permissions: ["mcp.read"], delivery: { type: "oauth2" } } as const;
+    const consumer = (await h.ledger.getCapsule(OTHER))!;
+    const config = (await h.ledger.getInstallConfig(consumer.installConfigId))!;
+    await h.ledger.putInstallConfig({ ...config, requiredInterfaces: [requirement] });
+    const STRANGER_APP = "cap_stranger_provider";
+    await h.ledger.putCapsule({ ...consumer, id: STRANGER_APP, name: STRANGER_APP, slug: STRANGER_APP, updatedAt: NOW });
+    expect(await h.core.appOwnership.initializeOwnershipIfMissing({
+      capsuleId: STRANGER_APP, ownerAccountId: "acct_stranger", ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${STRANGER_APP}`,
+    })).toBe(true);
+    const iface = async (owner: string) => (await h.core.interfaces.create({
+      workspaceId: WORKSPACE, name: `${owner}-tools`, ownerRef: { kind: "Capsule", id: owner },
+      spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: `https://${owner}.example.test/mcp` } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } },
+    })).metadata.id;
+    const owned = await iface(THIRD_PARTY);
+    const stranger = await iface(STRANGER_APP);
+    // The user owns THIRD_PARTY: the delegate token's link is approved.
+    const approved = await h.call("PUT", `/capsules/${OTHER}/interface-links/tools`, h.appToken(DELEGATE), { interfaceId: owned, expectedGeneration: 0 });
+    expect(approved.status).toBe(200);
+    expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(OTHER, "tools"))).toMatchObject({ state: "active", providerCapsuleId: THIRD_PARTY });
+    // Re-pointing to an app the user has no role on would only be pending: refused, link kept.
+    const repoint = await h.call("PUT", `/capsules/${OTHER}/interface-links/tools`, h.appToken(DELEGATE), { interfaceId: stranger, expectedGeneration: 1 });
+    expect(repoint).toMatchObject({ status: 409, code: "interface_link_approval_required" });
+    // The same app's own (non-delegate) token never approves: after an unlink, its new link is pending.
+    const latest = (await h.core.interfaces.getLatestCapsuleInterfaceLink(OTHER, "tools"))!;
+    expect((await h.call("DELETE", `/capsules/${OTHER}/interface-links/tools`, h.session(USER), { expectedGeneration: latest.generation })).status).toBe(200);
+    const revoked = (await h.core.interfaces.getLatestCapsuleInterfaceLink(OTHER, "tools"))!;
+    expect((await h.call("PUT", `/capsules/${OTHER}/interface-links/tools`, h.appToken(OTHER), { interfaceId: owned, expectedGeneration: revoked.generation })).status).toBe(200);
+    expect((await h.core.interfaces.getLatestCapsuleInterfaceLink(OTHER, "tools"))).toMatchObject({ state: "pending_approval" });
   }, 180_000);
 });

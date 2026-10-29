@@ -251,8 +251,15 @@ export interface SourceSnapshot {
   /** Registered Git Source that produced this snapshot. */
   readonly sourceId: string;
   readonly url: string;
+  /** The ref as requested (for example `HEAD`, `main` or `v1.2.0`). */
   readonly ref: string;
   readonly resolvedCommit: string;
+  /**
+   * Full name of the Git ref `ref` resolved to (`refs/heads/main`,
+   * `refs/tags/v1.2.0`, or a fallback match such as `refs/pull/1/head`).
+   * Absent for a raw commit and for snapshots fetched before it was recorded.
+   */
+  readonly resolvedRef?: string;
   readonly path: string;
   readonly archiveRef: string;
   readonly archiveDigest: string;

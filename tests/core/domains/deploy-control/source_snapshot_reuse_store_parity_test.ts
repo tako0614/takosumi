@@ -290,3 +290,32 @@ test("in-memory lane retry refreshes its owner and ignores unrelated app changes
   await expect(store.commitSourceSyncSuccess(changedOwner)).rejects.toThrow("SourceSync settlement observations changed");
   expect((await store.getSourceSyncRun("ssr_reuse_5"))?.status).toBe("running");
 });
+
+test("a same-commit re-sync records resolvedRef on the existing snapshot in every store", async () => {
+  const postgres = await PGliteSqlClient.create();
+  try {
+    const stores: ReadonlyArray<[string, OpenTofuControlStore]> = [
+      ["memory", new InMemoryOpenTofuControlStore()],
+      ["postgres", new SqlOpenTofuControlStore({ client: postgres })],
+      ["d1", new CloudflareD1OpenTofuControlStore(new SqliteFakeD1())],
+    ];
+    for (const [label, store] of stores) {
+      await store.putWorkspace(workspace());
+      await store.putSource(source());
+      const a = "a".repeat(40);
+      // A snapshot fetched before the runner recorded resolvedRef (it may be adopted).
+      expect((await commit(store, 1, a, "HEAD")).won, label).toBe(true);
+      expect((await store.getSourceSnapshot("snap_reuse_1"))?.resolvedRef, label).toBeUndefined();
+      const resynced = await commit(store, 2, a, "HEAD", ".", { resolvedRef: "refs/heads/main" });
+      expect(resynced.snapshot?.id, label).toBe("snap_reuse_1");
+      expect((await store.getSourceSnapshot("snap_reuse_1"))?.resolvedRef, label).toBe("refs/heads/main");
+      expect((await store.listSourceSnapshots(SOURCE)).length, label).toBe(1);
+      // A new commit is a new snapshot; the earlier one keeps its record.
+      const b = "b".repeat(40);
+      expect((await commit(store, 3, b, "HEAD", ".", { resolvedRef: "refs/heads/main" })).snapshot?.id, label).toBe("snap_reuse_3");
+      expect((await store.getSourceSnapshot("snap_reuse_1"))?.resolvedRef, label).toBe("refs/heads/main");
+    }
+  } finally {
+    await postgres.close();
+  }
+});

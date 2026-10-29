@@ -588,3 +588,26 @@ test("draining during auto-update admission retains Source results without consu
     ),
   ).toHaveLength(0);
 });
+
+test("a source sync records the runner's full resolved ref and drops anything that is not a plain refs/ name", async () => {
+  for (const [reported, recorded] of [
+    ["refs/heads/main", "refs/heads/main"],
+    ["refs/pull/1/head", "refs/pull/1/head"],
+    ["HEAD", undefined],
+    ["refs/heads/../main", undefined],
+    ["refs/heads/main\n", undefined],
+    [undefined, undefined],
+  ] as const) {
+    const { store, controller, runner } = await buildActiveCapsule({ autoUpdate: false });
+    runner.sourceSyncResult = {
+      ...runner.sourceSyncResult,
+      resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
+      ...(reported !== undefined ? { resolvedRef: reported } : {}),
+    };
+    await syncNewCommit(controller);
+    const snapshots = await store.listSourceSnapshots("src_a");
+    const latest = snapshots.find((snapshot) => snapshot.resolvedCommit === "0123456789abcdef0123456789abcdef01234567");
+    expect(latest, String(reported)).toBeDefined();
+    expect(latest?.resolvedRef, String(reported)).toBe(recorded);
+  }
+});

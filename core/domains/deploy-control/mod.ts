@@ -1029,6 +1029,12 @@ export interface OpenTofuSourceSyncJob {
 
 export interface OpenTofuSourceSyncResult {
   readonly resolvedCommit: string;
+  /**
+   * Full name of the Git ref the runner resolved (`refs/heads/main` for
+   * `HEAD` through its symref, `refs/pull/1/head` when a bare name matched a
+   * pull request ref). Absent for raw commits and runners that predate it.
+   */
+  readonly resolvedRef?: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
   /** Repository-root presentation metadata captured from the same Git commit. */

@@ -3306,6 +3306,7 @@ export function sourceSchemas(): Record<string, Record<string, unknown>> {
         url: { type: "string" },
         ref: { type: "string" },
         resolvedCommit: { type: "string" },
+        resolvedRef: { type: "string" },
         path: {
           type: "string",
           description:
