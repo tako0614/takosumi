@@ -4,7 +4,10 @@ This runbook is the operator gate for the OSS Takosumi control-ledger D1
 adapter. Run it before deploying a platform Worker that requires a newer
 control schema. A hosted composition may add tables, but it must predeploy this
 OSS-owned subset first and must not rely on request traffic to create or repair
-it.
+it. Exception: the TASK-0118 v75 -> v79 transition is Worker first, because the
+Worker serving v75 rejects v76 and later while the new release accepts heads 71
+through 79 and keeps the v75 behavior on v75
+([Fixed production v75 to v79 transition](#fixed-production-v75-to-v79-transition)).
 
 ## Official owner entrypoint
 
@@ -137,9 +140,11 @@ Order: this lane runs **after** a platform Worker that accepts heads 71 through
 example a separate auth Worker) has been updated the same way. A Worker
 accepts only the heads it knows; one built before the TASK-0118 schema changes
 accepts 71 through 75, fails every request closed on v76 or later, and is no
-longer a restore target once v76 commits. The full
-operator order (deploy, schema, Source ownership, backfill, cutover
-verification, delegation) is in
+longer a restore target once v76 commits. Where Takos installs apps, re-sync
+its Source after that deploy and let those Runs finish before this lane. The
+full operator order (deploy with the app ownership kill switch frozen, Takos
+re-sync, schema, Source ownership, backfill, cutover verification, re-enabling
+app ownership writes) is in
 [App ownership expansion and backfill](./app-ownership-backfill.md#rollout-order).
 
 Admission before any fence batch requires the exact canonical ledger at 75 with
