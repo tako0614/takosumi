@@ -371,7 +371,7 @@ async function seedSnapshot(client: PGliteSqlClient, source: StoredSource, id: s
 
 /** Physical row as an older release wrote it; never goes through the current report writer. */
 async function insertStoredReport(client: PGliteSqlClient, row: { readonly id: string;
-  readonly sourceId: string; readonly capsuleId?: string; readonly sourceSnapshotId: string;
+  readonly sourceId: string | null; readonly capsuleId?: string; readonly sourceSnapshotId: string;
   readonly providers: unknown }): Promise<void> {
   await client.query(
     `insert into takosumi_capsule_compatibility_reports
@@ -475,6 +475,89 @@ test("Postgres migration blocks only the group holding an unreadable compatibili
     [source.id, "committed", "retire", undefined]]);
   expect((await store.getSource(source.id))?.retiringAt).toBe("2026-10-30T00:00:00.000Z");
   expect((await store.getSource(damaged.id))?.retiringAt).toBeUndefined();
+});
+
+async function insertSource(client: PGliteSqlClient, template: StoredSource, id: string): Promise<StoredSource> {
+  const source = { ...template, id, name: id };
+  await client.query(
+    `insert into takosumi_sources (id, space_id, status, source_json, created_at, updated_at)
+     values ($1, $2, $3, $4::jsonb, $5, $6)`,
+    [source.id, source.workspaceId, source.status, JSON.stringify(source), NOW, NOW],
+  );
+  return source;
+}
+
+async function insertCapsule(client: PGliteSqlClient, source: StoredSource, id: string,
+  extra: Partial<Capsule> = {}): Promise<void> {
+  const capsule: Capsule = { id, workspaceId: source.workspaceId, projectId: "prj_migrate",
+    name: id, slug: id, sourceId: source.id, installConfigId: `cfg_${id}`,
+    environment: "production", currentStateGeneration: 0, status: "active",
+    createdAt: NOW, updatedAt: NOW, ...extra };
+  await client.query(
+    `insert into takosumi_capsules
+      (id, space_id, project_id, name, environment, source_id, install_config_id,
+       status, installation_json, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)`,
+    [id, capsule.workspaceId, capsule.projectId, capsule.name, capsule.environment,
+      capsule.sourceId, capsule.installConfigId, capsule.status, JSON.stringify(capsule), NOW, NOW],
+  );
+  const config: InstallConfig = { id: capsule.installConfigId, workspaceId: source.workspaceId,
+    name: id, variableMapping: {}, outputAllowlist: {}, policy: {}, createdAt: NOW, updatedAt: NOW };
+  await client.query(
+    `insert into takosumi_install_configs (id, space_id, config_json, created_at, updated_at)
+     values ($1, $2, $3::jsonb, $4, $5)`,
+    [config.id, config.workspaceId, JSON.stringify(config), NOW, NOW],
+  );
+}
+
+async function pointCapsuleAtReport(client: PGliteSqlClient, capsuleId: string, reportId: string) {
+  await client.query(
+    `update takosumi_capsules
+        set installation_json = installation_json || jsonb_build_object('compatibilityReportId', $2::text)
+      where id = $1`, [capsuleId, reportId],
+  );
+}
+
+test("Postgres split keeps a report without a Source and the moved app's reference to it", async () => {
+  const { client, store, source } = await fixture(["cap_a", "cap_b"]);
+  const snapshot = await seedSnapshot(client, source, "snap_june");
+  await insertStoredReport(client, { id: "report_unscoped", sourceId: null, capsuleId: "cap_b",
+    sourceSnapshotId: snapshot.id, providers: RETIRED_FLAT_PROVIDERS });
+  await pointCapsuleAtReport(client, "cap_b", "report_unscoped");
+  const before = await physicalReports(client);
+  const allocator = new ObjectKeyArtifactReferenceAllocator();
+  const [dry] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, { now: NOW });
+  expect(dry).toMatchObject({ status: "dry_run", inventory: { action: "split", splitCapsuleIds: ["cap_b"],
+    notices: [{ code: "legacy_unscoped_report_kept", count: 1 }] } });
+  const [applied] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+    { apply: true, now: NOW });
+  expect(applied?.status).toBe("committed");
+  // Not copied, no Source inferred, binding unchanged.
+  expect(await physicalReports(client)).toEqual(before);
+  const moved = (await store.getCapsule("cap_b"))!;
+  expect(moved.sourceId).not.toBe(source.id);
+  expect(moved.compatibilityReportId).toBe("report_unscoped");
+  const rerun = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} });
+  expect(rerun.map((item) => [item.inventory.sourceId, item.status]).sort())
+    .toEqual([[moved.sourceId, "unchanged"], [source.id, "unchanged"]].sort());
+});
+
+test("Postgres blocks only the groups whose apps share one report without a Source", async () => {
+  const { client, store, source } = await fixture(["cap_a"]);
+  const snapshot = await seedSnapshot(client, source, "snap_june_shared");
+  await insertStoredReport(client, { id: "report_unscoped_shared", sourceId: null, capsuleId: "cap_a",
+    sourceSnapshotId: snapshot.id, providers: [] });
+  const borrower = await insertSource(client, source, "src_borrower");
+  await insertCapsule(client, borrower, "cap_borrower", { compatibilityReportId: "report_unscoped_shared" });
+  const unrelated = await insertSource(client, source, "src_unrelated");
+  const results = await migrateSourceOwnership(store, new ObjectKeyArtifactReferenceAllocator(),
+    { copyVerified: async () => {} }, { apply: true, now: "2026-10-30T00:00:00.000Z" });
+  expect(results.map((item) => [item.inventory.sourceId, item.status, item.inventory.reason])).toEqual([
+    [borrower.id, "blocked", "compatibility_report_unscoped_shared"],
+    [source.id, "blocked", "compatibility_report_unscoped_shared"],
+    [unrelated.id, "committed", undefined]]);
+  expect((await store.getSource(source.id))?.ownerCapsuleId).toBeUndefined();
+  expect((await store.getSource(borrower.id))?.ownerCapsuleId).toBeUndefined();
 });
 
 test("Postgres SourceSync admission rejects disabled and retiring Sources but replays exact rows", async () => {

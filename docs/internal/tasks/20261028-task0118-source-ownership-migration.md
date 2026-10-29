@@ -90,11 +90,24 @@ webhook before using it; the old verifier is never duplicated.
 The original compatibility report and producer Run remain as Source history,
 with their moved Capsule association cleared after the app-specific clone is
 created. The migration never interprets a report's analysis: it re-points
-identity columns and copies every other stored column verbatim, so reports
-written before the two-layer provider graph (a flat `providers_json` array,
-before 2026-08-27) move unchanged instead of failing their group. A report row
-with malformed JSON or an unrecognized provider column blocks only its group as
-`source_ownership_migration_compatibility_report_unreadable`. Both resulting groups can be inventoried again without treating that
+identity columns and copies every other stored column verbatim. It accepts
+exactly these `providers_json` shapes, without converting any of them: the
+current `{ providerPackages, rootProviderRequirements }` graph; a flat array
+(2026-06-07 to 2026-08-27 17:07 UTC, including `[]`) whose elements have
+`source` and `allowed` plus only `aliases`, `versionConstraint`,
+`credentialSources` (`takosumi_managed`/`user_env_set`), `ownershipOptions`,
+`credentialRequired` and `localName`; and a flat array (2026-08-27 17:07 UTC
+until the graph) whose elements have `source`, `moduleLocalName` and `allowed`
+plus only `childAlias`, `version` and `credentialRequired`. A report row with
+malformed JSON or any other provider value blocks only its group as
+`source_ownership_migration_compatibility_report_unreadable`.
+A report with NULL `source_id` (before 2026-07-14) does not block its group
+while every app that references it is in that group. Retire and backfill leave it
+untouched. A split does not copy it or infer a Source for it, and the moved app
+keeps referencing the original row. The dry-run then counts it under
+`inventory.notices` as `legacy_unscoped_report_kept`. If apps of different groups
+reference it, now or after the planned split, only those groups are blocked as
+`compatibility_report_unscoped_shared`. Both resulting groups can be inventoried again without treating that
 history as a foreign Capsule reference. InstallConfig rows are guarded with
 the group and retain their other private fields.
 The CLI automatically resumes verified archive copies in bounded POST batches

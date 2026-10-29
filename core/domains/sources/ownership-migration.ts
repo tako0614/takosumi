@@ -45,6 +45,18 @@ export interface SourceOwnershipMigrationReport {
   readonly capsuleId?: string;
   readonly sourceSnapshotId: string;
   readonly stored: SourceOwnershipMigrationStoredReport;
+  /**
+   * Only for a report without a Source: every app, in any Source, that
+   * references it through its Capsule binding, the Capsule's report id, one of
+   * its Runs or one of its install plans. The adapter reads this with the group.
+   * Missing evidence makes the report block its group.
+   */
+  readonly unscopedReferences?: readonly SourceOwnershipMigrationReportReference[];
+}
+
+export interface SourceOwnershipMigrationReportReference {
+  readonly capsuleId: string;
+  readonly sourceId: string | null;
 }
 
 /** Non-identity report columns exactly as stored, JSON columns decoded. */
@@ -159,7 +171,19 @@ export interface SourceOwnershipMigrationInventory {
   readonly inFlightRunIds: readonly string[];
   /** Split Sources need a new webhook secret before webhook delivery resumes. */
   readonly webhookReregistrationRequired?: boolean;
+  /** Counted, non-blocking facts about rows the plan deliberately leaves as they are. */
+  readonly notices?: readonly SourceOwnershipMigrationNotice[];
   readonly reason?: string;
+}
+
+/**
+ * `legacy_unscoped_report_kept`: a compatibility report without a Source (from
+ * before 2026-07-14) that a split app references. It is not copied and no
+ * Source is inferred for it; the app keeps pointing at the original row.
+ */
+export interface SourceOwnershipMigrationNotice {
+  readonly code: "legacy_unscoped_report_kept";
+  readonly count: number;
 }
 
 export interface SourceOwnershipMigrationArchiveCopy {
@@ -240,6 +264,10 @@ export function inventorySourceOwnershipGroup(
     ? snapshotById.get(ownerEvidence.adoptedSnapshotId) : undefined;
   const ownerLaneMismatch = !!ownerAdopted &&
     (source.defaultRef !== ownerAdopted.ref || source.defaultPath !== ownerAdopted.path);
+  const splitIds = new Set(live.length > 1 ? live.filter((id) => id !== ownerCapsuleId) : []);
+  const scopedReports = group.reports.filter((report) => report.sourceId !== null);
+  const unscoped = group.reports.filter((report) => report.sourceId === null)
+    .map((report) => ({ report, use: unscopedReportUse(report, source.id, splitIds) }));
   let reason: string | undefined;
   if (group.capsules.some(({ capsule }) => capsule.sourceId !== source.id || capsule.workspaceId !== source.workspaceId)) {
     reason = "capsule_source_scope_mismatch";
@@ -251,10 +279,13 @@ export function inventorySourceOwnershipGroup(
     run.sourceId !== source.id || run.workspaceId !== source.workspaceId ||
     (run.capsuleId && !group.capsules.some(({ capsule }) => capsule.id === run.capsuleId)))) {
     reason = "compatibility_run_source_scope_mismatch";
-  } else if (group.reports.some((report) => report.sourceId !== source.id ||
+  } else if (scopedReports.some((report) => report.sourceId !== source.id ||
     !snapshotById.has(report.sourceSnapshotId) ||
-    (report.capsuleId && !group.capsules.some(({ capsule }) => capsule.id === report.capsuleId)))) {
+    (report.capsuleId && !group.capsules.some(({ capsule }) => capsule.id === report.capsuleId))) ||
+    unscoped.some(({ use }) => use === "unknown")) {
     reason = "compatibility_report_source_scope_mismatch";
+  } else if (unscoped.some(({ use }) => use === "shared")) {
+    reason = "compatibility_report_unscoped_shared";
   } else if (group.gitPlans.some((plan) =>
     (plan.sourceId && plan.sourceId !== source.id) ||
     (plan.preflight?.sourceId && plan.preflight.sourceId !== source.id) ||
@@ -309,6 +340,8 @@ export function inventorySourceOwnershipGroup(
     : source.ownerCapsuleId === undefined ? "backfill"
     : foreignArchiveRefs > 0 || ownerLaneMismatch ? "normalize"
     : "none";
+  const keptUnscoped = action === "split"
+    ? unscoped.filter(({ use }) => use === "split_app").length : 0;
   return {
     sourceId: source.id, workspaceId: source.workspaceId, action, ownerCapsuleId,
     liveCapsuleIds: live, destroyedCapsuleIds: destroyed,
@@ -318,7 +351,30 @@ export function inventorySourceOwnershipGroup(
     foreignArchiveRefs,
     inFlightRunIds: inFlight, ...(reason ? { reason } : {}),
     ...(action === "split" ? { webhookReregistrationRequired: true } : {}),
+    ...(keptUnscoped > 0 ? { notices: [{ code: "legacy_unscoped_report_kept" as const, count: keptUnscoped }] } : {}),
   };
+}
+
+/**
+ * How this group uses a report without a Source. It never blocks the group
+ * while every referencing app is in this group and stays together through a
+ * split. It blocks only when apps of different groups reference it, now or
+ * after the planned split, because no single Source can own it.
+ */
+function unscopedReportUse(
+  report: SourceOwnershipMigrationReport,
+  sourceId: string,
+  splitIds: ReadonlySet<string>,
+): "unknown" | "unreferenced" | "shared" | "retained_app" | "split_app" {
+  const references = report.unscopedReferences;
+  if (!references) return "unknown";
+  const inGroup = references.filter((reference) => reference.sourceId === sourceId);
+  if (inGroup.length === 0) return "unreferenced";
+  if (inGroup.length !== references.length) return "shared";
+  const resultingSources = new Set(inGroup.map((reference) =>
+    splitIds.has(reference.capsuleId) ? reference.capsuleId : ""));
+  if (resultingSources.size > 1) return "shared";
+  return resultingSources.has("") ? "retained_app" : "split_app";
 }
 
 function isTerminalPlan(plan: StoredGitInstallPlan): boolean {
@@ -379,7 +435,10 @@ export async function prepareSourceOwnershipMigration(
       if (run.capsuleId === capsuleId) retainedCompatibilityRuns.push({ ...run, capsuleId: undefined });
     }
     for (const report of group.reports) {
-      if (report.capsuleId === capsuleId) retainedReports.push({ ...report, capsuleId: undefined });
+      // A report without a Source keeps its app binding: it is not copied.
+      if (report.sourceId !== null && report.capsuleId === capsuleId) {
+        retainedReports.push({ ...report, capsuleId: undefined });
+      }
     }
   }
   const activity = await Promise.all(splits.map(async (split) => ({
@@ -449,11 +508,15 @@ async function prepareSplit(
     if (plan.preflight?.sourceSnapshotId) referencedIds.add(plan.preflight.sourceSnapshotId);
   }
   for (const run of originalCompatibilityRuns) if (run.sourceSnapshotId) referencedIds.add(run.sourceSnapshotId);
-  const originalReports = group.reports.filter((report) => report.capsuleId === capsuleId ||
+  const originalReports = group.reports.filter((report) => report.sourceId !== null &&
+    (report.capsuleId === capsuleId ||
     report.id === evidence.capsule.compatibilityReportId || plans.some((plan) => plan.compatibilityReportId === report.id) ||
     originalCompatibilityRuns.some((run) => run.compatibilityReportId === report.id) ||
-    originalGitPlans.some((plan) => plan.compatibilityReportId === report.id || plan.preflight?.compatibilityReportId === report.id));
+    originalGitPlans.some((plan) => plan.compatibilityReportId === report.id || plan.preflight?.compatibilityReportId === report.id)));
   const reportSet = new Set(originalReports.map((report) => report.id));
+  // Inventory already refused reports without a Source that another resulting
+  // Source references; the rest stay where they are and keep their id.
+  const keptUnscoped = new Set(group.reports.filter((report) => report.sourceId === null).map((report) => report.id));
   if (originalReports.some((report) => report.capsuleId && report.capsuleId !== capsuleId)) {
     throw new Error(`source_ownership_migration_foreign_capsule_report:${capsuleId}`);
   }
@@ -461,7 +524,9 @@ async function prepareSplit(
     ...plans.map((plan) => plan.compatibilityReportId),
     ...originalCompatibilityRuns.map((run) => run.compatibilityReportId),
     ...originalGitPlans.flatMap((plan) => [plan.compatibilityReportId, plan.preflight?.compatibilityReportId])]) {
-    if (id && !reportSet.has(id)) throw new Error(`source_ownership_migration_missing_report:${id}`);
+    if (id && !reportSet.has(id) && !keptUnscoped.has(id)) {
+      throw new Error(`source_ownership_migration_missing_report:${id}`);
+    }
   }
   for (const report of originalReports) referencedIds.add(report.sourceSnapshotId);
   for (const id of referencedIds) if (!originalSnapshots.has(id)) throw new Error(`source_ownership_migration_missing_snapshot:${id}`);
@@ -529,21 +594,27 @@ async function prepareSplit(
     [run.id, await deterministicId("run", run.id, capsuleId, "split")] as const)));
   const reports = originalReports.map((report) => ({ ...report, id: reportIds.get(report.id)!,
     sourceId: newSourceId, sourceSnapshotId: requiredMap(snapshotIds, report.sourceSnapshotId) }));
+  // A copied report gets its copy id; a kept report without a Source keeps its own.
+  const mapReport = (id: string): string => {
+    const mapped = reportIds.get(id) ?? (keptUnscoped.has(id) ? id : undefined);
+    if (!mapped) throw new Error(`source_ownership_migration_unmapped_report:${id}`);
+    return mapped;
+  };
   const compatibilityRuns = originalCompatibilityRuns.map((run) => ({ ...run,
     id: requiredMap(compatibilityRunIds, run.id), sourceId: newSourceId,
     sourceSnapshotId: run.sourceSnapshotId ? requiredMap(snapshotIds, run.sourceSnapshotId) : undefined,
-    compatibilityReportId: run.compatibilityReportId ? requiredMap(reportIds, run.compatibilityReportId) : undefined }));
+    compatibilityReportId: run.compatibilityReportId ? mapReport(run.compatibilityReportId) : undefined }));
   const planRuns = plans.map((plan) => ({ ...plan,
     sourceSnapshotId: plan.sourceSnapshotId ? requiredMap(snapshotIds, plan.sourceSnapshotId) : undefined,
     compatibilityReportId: plan.compatibilityReportId ? reportIds.get(plan.compatibilityReportId) ?? plan.compatibilityReportId : undefined }));
   const gitPlans = originalGitPlans.map((plan) => ({ ...plan, sourceId: newSourceId,
     sourceSnapshotId: plan.sourceSnapshotId ? requiredMap(snapshotIds, plan.sourceSnapshotId) : undefined,
     sourceSyncRunId: plan.sourceSyncRunId ? requiredMap(runIds, plan.sourceSyncRunId) : undefined,
-    compatibilityReportId: plan.compatibilityReportId ? requiredMap(reportIds, plan.compatibilityReportId) : undefined,
+    compatibilityReportId: plan.compatibilityReportId ? mapReport(plan.compatibilityReportId) : undefined,
     compatibilityCheckRunId: plan.compatibilityCheckRunId ? requiredMap(compatibilityRunIds, plan.compatibilityCheckRunId) : undefined,
     preflight: plan.preflight ? { ...plan.preflight, sourceId: newSourceId,
       sourceSnapshotId: requiredMap(snapshotIds, plan.preflight.sourceSnapshotId),
-      compatibilityReportId: requiredMap(reportIds, plan.preflight.compatibilityReportId),
+      compatibilityReportId: mapReport(plan.preflight.compatibilityReportId),
       compatibilityCheckRunId: requiredMap(compatibilityRunIds, plan.preflight.compatibilityCheckRunId) } : undefined }));
   const source: StoredSource = { ...original, id: newSourceId, ownerCapsuleId: capsuleId,
     createdByInstallPlanId: undefined, defaultRef: laneRef, defaultPath: lanePath,
@@ -591,7 +662,7 @@ function blockedResult(
     foreignArchiveRefs: 0, inFlightRunIds: group?.inFlightRunIds ?? [], reason,
   };
   return { inventory: observed ? { ...observed, action: "blocked",
-    webhookReregistrationRequired: undefined, reason } : fallback,
+    webhookReregistrationRequired: undefined, notices: undefined, reason } : fallback,
     status: "blocked", copies: 0, bytes: 0 };
 }
 

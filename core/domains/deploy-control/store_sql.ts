@@ -145,6 +145,7 @@ import type { ActivityEvent } from "takosumi-contract/activity";
 import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import { inventorySourceOwnershipGroup, sourceOwnershipMigrationReportFromRow, sourceOwnershipSplitCopyId,
   type SourceOwnershipMigrationGroup, type SourceOwnershipMigrationMutation,
+  type SourceOwnershipMigrationReport, type SourceOwnershipMigrationReportReference,
   type SourceOwnershipMigrationStore } from "../sources/ownership-migration.ts";
 import type { StoredGitInstallPlan } from "../install-plans/store.ts";
 import {
@@ -12547,12 +12548,27 @@ async function pgReadSourceOwnershipGroup(
       where source_id = $1 or source_snapshot_id in
         (select id from takosumi_source_snapshots where source_id = $1)
         or installation_id in (select id from takosumi_capsules where source_id = $1)
+        -- A report without a Source (before 2026-07-14) belongs to the group
+        -- through an app reference: a Capsule, Run or install plan of an app.
+        or (source_id is null and id in (
+          select installation_json ->> 'compatibilityReportId' from takosumi_capsules where source_id = $1
+          union select run_json ->> 'compatibilityReportId' from takosumi_runs
+            where installation_id in (select id from takosumi_capsules where source_id = $1)
+          union select record_json ->> 'compatibilityReportId' from takosumi_git_install_plans
+            where record_json ->> 'capsuleId' in (select id from takosumi_capsules where source_id = $1)
+          union select record_json -> 'preflight' ->> 'compatibilityReportId' from takosumi_git_install_plans
+            where record_json ->> 'capsuleId' in (select id from takosumi_capsules where source_id = $1)))
       order by id`, [sourceId],
   );
   // The migration moves reports without interpreting them, so rows from older
   // releases (for example a retired flat providers_json array) are carried
   // verbatim rather than read through the current report contract.
-  const reports = reportRows.rows.map((row) => sourceOwnershipMigrationReportFromRow(row, parseJson));
+  const reports: SourceOwnershipMigrationReport[] = [];
+  for (const row of reportRows.rows) {
+    const report = sourceOwnershipMigrationReportFromRow(row, parseJson);
+    reports.push(report.sourceId !== null ? report
+      : { ...report, unscopedReferences: await pgUnscopedReportReferences(client, report.id) });
+  }
   const gitPlanRows = await client.query<{
     id: string; workspaceId: string; phase: string; generation: number;
     reconcileLeaseToken: string | null; recordJson: unknown;
@@ -12657,6 +12673,28 @@ async function pgReadSourceOwnershipGroup(
   return { source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans,
     installConfigs,
     inFlightRunIds: [...new Set(inFlightRunIds)].sort() };
+}
+
+/**
+ * Every app, in any Source, that references a report without a Source. Read in
+ * the group's transaction, so the commit's re-read compares it too.
+ */
+async function pgUnscopedReportReferences(
+  client: SqlClient,
+  reportId: string,
+): Promise<readonly SourceOwnershipMigrationReportReference[]> {
+  const found = await client.query<{ capsuleId: string; sourceId: string | null }>(
+    `select c.id as "capsuleId", c.source_id as "sourceId" from takosumi_capsules c
+      where c.id in (select installation_id from takosumi_capsule_compatibility_reports where id = $1)
+         or c.installation_json ->> 'compatibilityReportId' = $1
+         or c.id in (select installation_id from takosumi_runs
+           where run_json ->> 'compatibilityReportId' = $1)
+         or c.id in (select record_json ->> 'capsuleId' from takosumi_git_install_plans
+           where record_json ->> 'compatibilityReportId' = $1
+              or record_json -> 'preflight' ->> 'compatibilityReportId' = $1)
+      order by c.id`, [reportId],
+  );
+  return found.rows.map((row) => ({ capsuleId: row.capsuleId, sourceId: row.sourceId ?? null }));
 }
 
 /** All row changes for one Source happen under the caller's serializable transaction. */
@@ -12838,7 +12876,10 @@ async function pgCommitSourceOwnershipGroup(
         (run.sourceSnapshotId !== undefined &&
           !split.snapshots.some((snapshot) => snapshot.id === run.sourceSnapshotId)) ||
         (run.compatibilityReportId !== undefined &&
-          !split.reports.some((report) => report.id === run.compatibilityReportId))) {
+          !split.reports.some((report) => report.id === run.compatibilityReportId) &&
+          // A kept report without a Source is referenced by its original id.
+          !expected.reports.some((report) => report.id === run.compatibilityReportId &&
+            report.sourceId === null))) {
         throw new TypeError("invalid split compatibility Run");
       }
       await transaction.query(

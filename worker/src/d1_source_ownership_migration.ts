@@ -20,6 +20,7 @@ import { stableStringify } from "../../core/adapters/source/digest.ts";
 import type {
   SourceOwnershipMigrationGroup,
   SourceOwnershipMigrationMutation,
+  SourceOwnershipMigrationReportReference,
 } from "../../core/domains/sources/ownership-migration.ts";
 import type { D1Database, D1PreparedStatement } from "./bindings.ts";
 
@@ -41,7 +42,19 @@ const scopes = (sourceId: string): readonly Omit<ObservedTable, "rows">[] => [
   { table: "capsules", where: "source_id = ?", args: [sourceId] },
   { table: "source_snapshots", where: "source_id = ?", args: [sourceId] },
   { table: "runs", where: "(type in ('source_sync', 'compatibility_check') and source_id = ?) or (type in ('plan', 'destroy_plan', 'drift_check') and installation_id in (select id from capsules where source_id = ?))", args: [sourceId, sourceId] },
-  { table: "capsule_compatibility_reports", where: "source_id = ? or installation_id in (select id from capsules where source_id = ?)", args: [sourceId, sourceId] },
+  // A report without a Source (before 2026-07-14) belongs to the group through
+  // an app reference: its binding, or a Capsule, Run or install plan of an app.
+  { table: "capsule_compatibility_reports", where: `source_id = ?
+    or installation_id in (select id from capsules where source_id = ?)
+    or (source_id is null and id in (
+      select json_extract(record_json, '$.compatibilityReportId') from capsules where source_id = ?
+      union select case when json_valid(run_json) then json_extract(run_json, '$.compatibilityReportId') end
+        from runs where installation_id in (select id from capsules where source_id = ?)
+      union select json_extract(record_json, '$.compatibilityReportId') from git_install_plans
+        where json_extract(record_json, '$.capsuleId') in (select id from capsules where source_id = ?)
+      union select json_extract(record_json, '$.preflight.compatibilityReportId') from git_install_plans
+        where json_extract(record_json, '$.capsuleId') in (select id from capsules where source_id = ?)))`,
+    args: Array(6).fill(sourceId) },
   { table: "git_install_plans", where: "json_extract(record_json, '$.sourceId') = ? or json_extract(record_json, '$.preflight.sourceId') = ? or json_extract(record_json, '$.capsuleId') in (select id from capsules where source_id = ?) or id in (select json_extract(record_json, '$.createdByInstallPlanId') from sources where id = ?)", args: [sourceId, sourceId, sourceId, sourceId] },
   { table: "install_configs", where: `
     id in (select install_config_id from capsules where source_id = ?)
@@ -143,6 +156,28 @@ async function splitId(prefix: string, originalId: string, capsuleId: string): P
   const parts = [originalId, capsuleId, "split"];
   const material = parts.map((part) => `${part.length}:${part}`).join("|");
   return `${prefix}_${(await sha256HexOfStringAsync(material)).slice(0, 32)}`;
+}
+
+/**
+ * Every app, in any Source, that references a report without a Source. The
+ * commit never writes such a report, so this evidence only decides whether the
+ * group may proceed; it is not part of the write fence.
+ */
+async function d1UnscopedReportReferences(
+  db: D1Database,
+  reportId: string,
+): Promise<readonly SourceOwnershipMigrationReportReference[]> {
+  const found = await rows(db, `select c.id as capsule_id, c.source_id as source_id from capsules c
+    where c.id in (select installation_id from capsule_compatibility_reports where id = ?)
+      or json_extract(c.record_json, '$.compatibilityReportId') = ?
+      or c.id in (select installation_id from runs
+        where case when json_valid(run_json) then json_extract(run_json, '$.compatibilityReportId') end = ?)
+      or c.id in (select json_extract(record_json, '$.capsuleId') from git_install_plans
+        where json_extract(record_json, '$.compatibilityReportId') = ?
+          or json_extract(record_json, '$.preflight.compatibilityReportId') = ?)
+    order by c.id`, Array(5).fill(reportId));
+  return found.map((row) => ({ capsuleId: String(row.capsule_id),
+    sourceId: row.source_id === null ? null : String(row.source_id) }));
 }
 
 export async function listD1SourceOwnershipIds(db: D1Database): Promise<readonly string[]> {
@@ -260,6 +295,8 @@ export async function readD1SourceOwnershipGroup(
     rootModuleVariableDeclarationsJson: row.root_module_variable_declarations_json ?? null,
     rootModuleOutputsJson: row.root_module_outputs_json, createdAt: row.created_at,
   }, decodeD1JsonColumn));
+  const reportsWithEvidence = await Promise.all(reports.map(async (report) => report.sourceId !== null ? report
+    : { ...report, unscopedReferences: await d1UnscopedReportReferences(db, report.id) }));
   const directRunRows = await pagedRows(db, "runs", `(source_id = ? or installation_id in
     (select id from capsules where source_id = ?)) and
     status in ('queued', 'running', 'waiting_approval')`, [sourceId, sourceId]);
@@ -277,7 +314,7 @@ export async function readD1SourceOwnershipGroup(
       .map((row) => `git_install_plan:${row.id}`),
   ];
   const group: SourceOwnershipMigrationGroup = {
-    source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports, gitPlans,
+    source, capsules, snapshots, syncRuns, compatibilityRuns, planRuns, reports: reportsWithEvidence, gitPlans,
     installConfigs, inFlightRunIds,
   };
   observations.set(group, observed);
@@ -454,18 +491,26 @@ export async function commitD1SourceOwnershipGroup(
           compatibilityReportId: plan.compatibilityReportId }, `PlanRun:${plan.id}`), plan.id));
     }
     const originalGitPlans = mutation.expected.gitPlans.filter((plan) => plan.capsuleId === split.capsuleId);
-    const originalReports = mutation.expected.reports.filter((report) => report.capsuleId === split.capsuleId ||
-      report.id === mutation.expected.capsules.find(({ capsule }) => capsule.id === split.capsuleId)?.capsule.compatibilityReportId ||
-      mutation.expected.planRuns.some((plan) => plan.capsuleId === split.capsuleId && plan.compatibilityReportId === report.id) ||
-      originalGitPlans.some((plan) => plan.compatibilityReportId === report.id ||
-        plan.preflight?.compatibilityReportId === report.id));
-    if (originalReports.length !== split.reports.length) throw new Error("D1 Source ownership report copy count mismatch");
-    split.reports.forEach((report, index) => {
-      const base = oldRow(physicalByTable, "capsule_compatibility_reports", originalReports[index]!.id);
+    // Find each copy's original by its deterministic copy id, not by position,
+    // so the selection stays exactly the core plan's.
+    const originalReportsByCopyId = new Map(await Promise.all(mutation.expected.reports.map(async (report) =>
+      [await splitId("cgr", report.id, split.capsuleId), report] as const)));
+    for (const report of split.reports) {
+      const original = originalReportsByCopyId.get(report.id);
+      if (!original || original.sourceId !== mutation.sourceId || report.sourceId !== split.source.id ||
+        (report.capsuleId !== undefined && report.capsuleId !== split.capsuleId) ||
+        !split.snapshots.some((snapshot) => snapshot.id === report.sourceSnapshotId) ||
+        report.sourceSnapshotId !== await splitId("snap", original.sourceSnapshotId, split.capsuleId) ||
+        stableStringify(report) !== stableStringify({ ...original, id: report.id,
+          sourceId: report.sourceId, sourceSnapshotId: report.sourceSnapshotId })) {
+        throw new Error(`D1 Source ownership split report mismatch: ${report.id}`);
+      }
+      // Only identity changes; the stored analysis columns are the fenced original row.
+      const base = oldRow(physicalByTable, "capsule_compatibility_reports", original.id);
       statements.push(insertRow(db, "capsule_compatibility_reports", { ...base,
         id: report.id, source_id: split.source.id, installation_id: report.capsuleId ?? null,
         source_snapshot_id: report.sourceSnapshotId }));
-    });
+    }
     const originalPlans = originalGitPlans;
     if (originalPlans.length !== split.gitPlans.length) throw new Error("D1 Source ownership Git plan count mismatch");
     split.gitPlans.forEach((plan, index) => {

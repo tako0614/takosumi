@@ -507,12 +507,113 @@ describe("stored compatibility reports from older releases", () => {
     expect(JSON.stringify(results)).not.toContain("cgr_damaged");
   });
 
-  test("a report without a Source blocks its group by scope, not as a read failure", () => {
+  test("June-era enrichment and the 2026-08-27 provider-neutral rows are readable", () => {
+    for (const providers of [
+      [{ source: "registry.opentofu.org/cloudflare/cloudflare", aliases: [], allowed: true,
+        credentialSources: ["takosumi_managed"] }],
+      [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random", allowed: true }],
+    ]) {
+      expect(sourceOwnershipMigrationReportFromRow(reportRow({ providersJson: JSON.stringify(providers) }),
+        decodeText).stored.providers).toEqual(providers);
+    }
+  });
+});
+
+describe("compatibility reports without a Source (before 2026-07-14)", () => {
+  const now = "2026-10-28T00:00:00.000Z";
+  function unscoped(id: string, snapshotId: string, capsuleId: string | undefined,
+    references: readonly [string, string | null][]): SourceOwnershipMigrationReport {
+    return { ...report(id, "unused", snapshotId, RETIRED_FLAT_PROVIDERS), sourceId: null,
+      ...(capsuleId ? { capsuleId } : {}),
+      unscopedReferences: references.map(([refCapsuleId, sourceId]) => ({ capsuleId: refCapsuleId, sourceId })) };
+  }
+
+  test("missing reference evidence fails closed by scope", () => {
     const base = group("src_unscoped_report", [["cap_a", "active"]]);
-    const snap = snapshot("snap_unscoped", base.source.id, "ssr_unscoped");
-    expect(inventorySourceOwnershipGroup({ ...base, snapshots: [snap],
-      reports: [{ ...report("cgr_unscoped", base.source.id, snap.id, []), sourceId: null }] }))
+    expect(inventorySourceOwnershipGroup({ ...base,
+      reports: [{ ...report("cgr_unscoped", base.source.id, "snap_other", []), sourceId: null }] }))
       .toMatchObject({ action: "blocked", reason: "compatibility_report_source_scope_mismatch" });
+  });
+
+  test("backfill and retire groups proceed and leave the report untouched", async () => {
+    const backfill = group("src_unscoped_backfill", [["cap_live", "active"]]);
+    const retire = group("src_unscoped_retire", [["cap_gone", "destroyed"]]);
+    const store = new FixtureStore();
+    store.groups.set(backfill.source.id, { ...backfill,
+      // The report's snapshot can belong to another Source; the report is not moved.
+      reports: [unscoped("cgr_backfill", "snap_elsewhere", "cap_live", [["cap_live", backfill.source.id]])] });
+    store.groups.set(retire.source.id, { ...retire,
+      reports: [unscoped("cgr_retire", "snap_elsewhere", "cap_gone", [["cap_gone", retire.source.id]])] });
+    const results = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+      { apply: true, now });
+    expect(results.map((result) => [result.inventory.sourceId, result.inventory.action, result.status,
+      result.inventory.notices])).toEqual([
+      [backfill.source.id, "backfill", "committed", undefined],
+      [retire.source.id, "retire", "committed", undefined]]);
+    expect(store.groups.get(backfill.source.id)?.reports).toEqual(
+      [unscoped("cgr_backfill", "snap_elsewhere", "cap_live", [["cap_live", backfill.source.id]])]);
+  });
+
+  test("a split keeps the report and its references instead of copying it", async () => {
+    const base = group("src_unscoped_split", [["cap_a", "active"], ["cap_b", "active"]]);
+    const snap = snapshot("snap_unscoped_split", base.source.id, "ssr_unscoped_split");
+    const legacy = unscoped("cgr_unscoped_b", "snap_from_june", "cap_b", [["cap_b", base.source.id]]);
+    const observed: SourceOwnershipMigrationGroup = { ...base,
+      capsules: [{ capsule: capsule("cap_a", base.source.id) },
+        { capsule: capsule("cap_b", base.source.id, "active", legacy.id), adoptedSnapshotId: snap.id }],
+      snapshots: [snap], syncRuns: [syncRun("ssr_unscoped_split", base.source.id, snap.id)],
+      planRuns: [plan("plan_b", "cap_b", snap.id, legacy.id)],
+      gitPlans: [{ ...gitPlan("git_b", "cap_b", base.source.id, snap.id, "ssr_unscoped_split", legacy.id),
+        compatibilityCheckRunId: undefined, preflight: undefined } as unknown as StoredGitInstallPlan],
+      reports: [legacy] };
+    const inventory = inventorySourceOwnershipGroup(observed, now);
+    expect(inventory).toMatchObject({ action: "split", splitCapsuleIds: ["cap_b"],
+      notices: [{ code: "legacy_unscoped_report_kept", count: 1 }] });
+    const mutation = (await prepareSourceOwnershipMigration(observed, allocator, now))!;
+    const split = mutation.splits[0]!;
+    expect(split.reports).toEqual([]);
+    expect(mutation.retainedReports).toEqual([]);
+    expect(split.capsule.compatibilityReportId).toBe(legacy.id);
+    expect(split.planRuns[0]?.compatibilityReportId).toBe(legacy.id);
+    expect(split.gitPlans[0]?.compatibilityReportId).toBe(legacy.id);
+    const store = new FixtureStore();
+    store.groups.set(base.source.id, observed);
+    const [dry] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, { now });
+    expect(dry?.inventory.notices).toEqual([{ code: "legacy_unscoped_report_kept", count: 1 }]);
+    const [applied] = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} },
+      { apply: true, now });
+    expect(applied?.status).toBe("committed");
+    expect(store.groups.get(base.source.id)?.reports).toEqual([legacy]);
+  });
+
+  test("apps of different groups referencing one report block only those groups", async () => {
+    const owner = group("src_unscoped_owner", [["cap_owner", "active"]]);
+    const borrower = group("src_unscoped_borrower", [["cap_borrower", "active"]]);
+    const unrelated = group("src_unscoped_unrelated", [["cap_unrelated", "active"]]);
+    const references: [string, string | null][] = [["cap_borrower", borrower.source.id],
+      ["cap_owner", owner.source.id]];
+    const store = new FixtureStore();
+    store.groups.set(owner.source.id, { ...owner,
+      reports: [unscoped("cgr_shared", "snap_june", "cap_owner", references)] });
+    store.groups.set(borrower.source.id, { ...borrower,
+      reports: [unscoped("cgr_shared", "snap_june", "cap_owner", references)] });
+    store.groups.set(unrelated.source.id, unrelated);
+    const results = await migrateSourceOwnership(store, allocator, { copyVerified: async () => {} }, { now });
+    expect(results.map((result) => [result.inventory.sourceId, result.status, result.inventory.reason])).toEqual([
+      [borrower.source.id, "blocked", "compatibility_report_unscoped_shared"],
+      [owner.source.id, "blocked", "compatibility_report_unscoped_shared"],
+      [unrelated.source.id, "dry_run", undefined]]);
+  });
+
+  test("a split that would leave one report referenced from two Sources is blocked", () => {
+    const base = group("src_unscoped_both", [["cap_a", "active"], ["cap_b", "active"]]);
+    const observed: SourceOwnershipMigrationGroup = { ...base,
+      reports: [unscoped("cgr_both", "snap_june", "cap_b", [["cap_a", base.source.id], ["cap_b", base.source.id]])] };
+    expect(inventorySourceOwnershipGroup(observed, now))
+      .toMatchObject({ action: "blocked", reason: "compatibility_report_unscoped_shared" });
+    // The same references are fine while both apps stay in one Source.
+    const single = group("src_unscoped_both", [["cap_a", "active"], ["cap_b", "destroyed"]]);
+    expect(inventorySourceOwnershipGroup({ ...single, reports: observed.reports }, now).action).toBe("backfill");
   });
 });
 

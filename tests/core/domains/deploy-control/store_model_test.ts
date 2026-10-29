@@ -945,11 +945,22 @@ test("provider column classification recognizes the retired flat array without c
   // written when analysis found no provider or failed.
   expect(classifyStoredCapsuleCompatibilityProviderColumn([])).toBe("retired_flat_array");
   expect(classifyStoredCapsuleCompatibilityProviderColumn([
+    // 2026-07-29 .. 08-27 analyzer requirement.
     { source: "registry.opentofu.org/cloudflare/cloudflare", localName: "cloudflare",
       versionConstraint: "~> 4.0", aliases: ["zone"], allowed: true, credentialRequired: true },
+    // 2026-06-20 .. 06-27 ownership enrichment.
     { source: "registry.opentofu.org/hashicorp/aws", aliases: [], allowed: false,
       ownershipOptions: ["own_key"] },
+    // 2026-06-09 .. 06-20 catalog credential-source enrichment.
+    { source: "registry.opentofu.org/cloudflare/cloudflare", aliases: [], allowed: true,
+      credentialSources: ["takosumi_managed", "user_env_set"] },
     { source: "registry.opentofu.org/hashicorp/random", allowed: true },
+  ])).toBe("retired_flat_array");
+  // 2026-08-27 provider-neutral requirement, still stored as a flat list.
+  expect(classifyStoredCapsuleCompatibilityProviderColumn([
+    { source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random", allowed: true },
+    { source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare",
+      childAlias: "zone", version: "4.52.0", allowed: true, credentialRequired: true },
   ])).toBe("retired_flat_array");
   for (const damaged of [
     "graph",
@@ -959,8 +970,14 @@ test("provider column classification recognizes the retired flat array without c
     [{ allowed: true }],
     [{ source: "registry.opentofu.org/hashicorp/random" }],
     [{ source: "registry.opentofu.org/hashicorp/random", allowed: "yes" }],
-    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, moduleLocalName: "random" }],
     [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, aliases: [1] }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, credentialSources: ["own_key"] }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, credentialSources: "user_env_set" }],
+    [{ source: "registry.opentofu.org/hashicorp/random", allowed: true, unexpected: true }],
+    // The two element shapes never mix, and the provider-neutral one is closed too.
+    [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random", allowed: true, aliases: [] }],
+    [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "random" }],
+    [{ source: "registry.opentofu.org/hashicorp/random", moduleLocalName: "", allowed: true }],
   ]) {
     expect(() => classifyStoredCapsuleCompatibilityProviderColumn(damaged)).toThrow();
   }
