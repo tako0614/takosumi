@@ -1,3 +1,4 @@
+import { convergeOwnedSourceLane } from "../../sources/owned-lane.ts";
 /**
  * Run / Capsule-lifecycle orchestration engine (P3 god-file split).
  *
@@ -5509,6 +5510,7 @@ export class RunEngine {
         `Capsule ${capsule.id} disappeared before Restore commit`,
       );
     }
+    await this.#convergeSourceLaneAfterCommit(committed.capsule);
     await this.#notifyRestore({ phase: "succeeded", run: completed });
     await this.#recordActivity({
       workspaceId: run.workspaceId,
@@ -10266,6 +10268,7 @@ export class RunEngine {
       );
     }
     if (committed.applyRunLeaseLost) return "lease_lost";
+    if (committed.capsule) await this.#convergeSourceLaneAfterCommit(committed.capsule);
     // The atomic commit above is the terminal-state authority. Notify before
     // billing/activity side effects so Interface safety observes the durable
     // ApplyRun + Output/State generation immediately.
@@ -10431,6 +10434,7 @@ export class RunEngine {
       throw new ArtifactLedgerTailAmbiguousError(input.applyRun.id, error);
     }
     if (committed.applyRunLeaseLost) return "lease_lost";
+    if (committed.capsule && stateVersion) await this.#convergeSourceLaneAfterCommit(committed.capsule);
     await this.#notifyTerminal(failed);
     return {
       failed,
@@ -11892,6 +11896,8 @@ export class RunEngine {
         return { applyRun: (await this.getApplyRun(running.id)).applyRun };
       }
       ledgerCommitted = true;
+      // Archive cleanup is bounded recovery work owned by the Source sweeper.
+      // The terminal destroy response must not wait for archive custody.
       await this.#retireModuleVariableMaterializationAfterDestroy({
         planRun,
         applyRun: completed,
@@ -12247,6 +12253,16 @@ export class RunEngine {
       installConfigId: installConfig.id,
       phase: "post_apply",
     });
+  }
+
+  async #convergeSourceLaneAfterCommit(capsule: Capsule): Promise<void> {
+    try {
+      await convergeOwnedSourceLane(this.#store, capsule.sourceId, () => new Date(this.#now()));
+    } catch (error) {
+      // Applied state is already committed. Polling and revision creation also
+      // converge this lane and recover a failed post-commit write.
+      log.warn("deploy_control.source_lane_convergence_failed", { capsuleId: capsule.id, error: errorMessage(error) });
+    }
   }
 
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {

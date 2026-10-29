@@ -7,15 +7,14 @@ import {
   type CapsuleSourceRevisionReader,
 } from "./capsule_source_revision.ts";
 
-/** Same bounded Workspace census used by Source reconciliation. */
-export const MAX_SOURCE_RECONCILIATION_CAPSULES = 1_000;
-
 /**
  * Only fields consumed by the provenance resolver are fenced for historical
  * Runs. Heartbeats/audit appends do not change an already adopted revision.
- * Source configuration and cursor are captured in full. Paths are trusted
+ * Source configuration and cursor are fenced; the scheduler attempt marker is excluded. Paths are trusted
  * source constants, shared by the JS and SQL read-set validators.
  */
+export const MAX_SOURCE_RECONCILIATION_CAPSULES = 1_000;
+
 export const SOURCE_SYNC_SETTLEMENT_READ_PATHS = {
   source: ["$"],
   state: ["$.id", "$.workspaceId", "$.capsuleId", "$.environment", "$.generation", "$.createdByRunId"],
@@ -37,7 +36,7 @@ export interface SourceSyncSettlementRead {
 export type SourceSyncSettlementReader = CapsuleSourceRevisionReader;
 
 export interface SourceSyncSettlementObservation {
-  /** Complete non-destroyed Workspace census, including otherwise ineligible Capsules. */
+  /** The owner, or live referencing legacy apps until ownership backfill. */
   readonly capsules: readonly Capsule[];
   readonly reads: readonly SourceSyncSettlementRead[];
   readonly changes: readonly {
@@ -59,6 +58,10 @@ export function projectSourceSyncSettlementRead(
   record: unknown,
 ): Readonly<Record<string, unknown>> | null {
   if (record === undefined || record === null) return null;
+  if (kind === "source" && typeof record === "object" && !Array.isArray(record)) {
+    const { lastAutoSyncAttemptAt: _marker, ...configuration } = record as Record<string, unknown>;
+    record = configuration;
+  }
   const value: Record<string, unknown> = {};
   for (const path of SOURCE_SYNC_SETTLEMENT_READ_PATHS[kind]) {
     let current: unknown = record;
@@ -109,8 +112,7 @@ export async function observeSourceSyncSettlement(
   if (terminalRun.status !== "succeeded" || !terminalRun.finishedAt) {
     throw new SourceSyncSettlementConflictError();
   }
-  // Stores supply a bounded non-destroyed census (at most limit + 1 rows),
-  // using their native query/Map boundary rather than loading all tombstones.
+  // Stores read only the Source owner. Other apps cannot affect this settlement.
   const capsules = structuredClone(observedCapsules);
   if (capsules.length > MAX_SOURCE_RECONCILIATION_CAPSULES ||
     new Set(capsules.map((capsule) => capsule.id)).size !== capsules.length ||
@@ -142,7 +144,10 @@ export async function observeSourceSyncSettlement(
     getSourceSnapshot: (id) => read("snapshot", id, () => reader.getSourceSnapshot(id)),
   };
   // Even an empty census must fence the Source whose cursor will be merged.
-  await tracked.getSource(terminalRun.sourceId);
+  const source = await tracked.getSource(terminalRun.sourceId);
+  if (capsules.some((capsule) =>
+      (source?.ownerCapsuleId !== undefined && capsule.id !== source.ownerCapsuleId) ||
+      capsule.sourceId !== terminalRun.sourceId)) throw new SourceSyncSettlementConflictError();
   const changes: SourceSyncSettlementObservation["changes"][number][] = [];
   for (const capsule of capsules) {
     if (capsule.sourceId !== terminalRun.sourceId ||

@@ -19,7 +19,9 @@ import type {
   ApplyRun,
   PlanRun,
 } from "@takosumi/internal/deploy-control-api";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import type { StateVersion } from "takosumi-contract/state-versions";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import type { CapsuleCompatibilityAnalyzer } from "../../../../core/domains/sources/capsule_compatibility.ts";
 
@@ -253,16 +255,13 @@ class ReconciliationBarrierStore extends MutableWorkspaceManagementStore {
   readonly releaseEnumeration = deferred<void>();
   #pauseNextEnumeration = true;
 
-  override async listCapsulesPage(
-    workspaceId: string,
-    params: Parameters<InMemoryOpenTofuControlStore["listCapsulesPage"]>[1],
-  ) {
+  override async getCapsule(id: string) {
     if (this.#pauseNextEnumeration) {
       this.#pauseNextEnumeration = false;
       this.enumerationStarted.resolve();
       await this.releaseEnumeration.promise;
     }
-    return await super.listCapsulesPage(workspaceId, params);
+    return await super.getCapsule(id);
   }
 }
 
@@ -355,6 +354,60 @@ function makeService(
       : {}),
   });
   return { store, service };
+}
+
+async function adoptFixtureSnapshot(
+  store: InMemoryOpenTofuControlStore,
+  capsule: Capsule,
+  snapshot: SourceSnapshot,
+): Promise<Capsule> {
+  const planId = `plan_${capsule.id}`;
+  const applyId = `apply_${capsule.id}`;
+  const stateVersionId = `state_${capsule.id}`;
+  const plan = {
+    id: planId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    operation: "create",
+    source: { kind: "git", commit: snapshot.resolvedCommit },
+    sourceSnapshotId: snapshot.id,
+    sourceDigest: `sha256:${"b".repeat(64)}`,
+    variablesDigest: `sha256:${"c".repeat(64)}`,
+    appliedApplyRunId: applyId,
+    status: "succeeded",
+  } as unknown as PlanRun;
+  const apply = {
+    id: applyId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    planRunId: planId,
+    operation: "create",
+    stateVersionId,
+    status: "succeeded",
+    expected: { capsuleId: capsule.id, planRunId: planId },
+  } as unknown as ApplyRun;
+  await store.putSourceSnapshot(snapshot);
+  await store.putPlanRun(plan);
+  await store.putApplyRun(apply);
+  await store.putStateVersion({
+    id: stateVersionId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    environment: capsule.environment,
+    generation: 1,
+    stateRef: `state://${capsule.id}/1`,
+    digest: `sha256:${"a".repeat(64)}`,
+    createdByRunId: applyId,
+    createdAt: "2026-06-06T00:00:00.000Z",
+  } satisfies StateVersion);
+  const applied = {
+    ...capsule,
+    status: "active" as const,
+    currentStateGeneration: 1,
+    currentStateVersionId: stateVersionId,
+  };
+  await store.putCapsule(applied);
+  return applied;
 }
 
 async function seedConnection(
@@ -1420,7 +1473,7 @@ test("createSync propagates unknown management reads instead of treating them as
   }
 });
 
-test("reconciliation keeps one captured authority across default and adopted lanes", async () => {
+test("reconciliation keeps its captured authority while converging the owner lane", async () => {
   const dispatched: unknown[] = [];
   const store = new ReconciliationBarrierStore();
   const { service } = makeService({
@@ -1602,6 +1655,155 @@ test("listAutoSyncSourcesDue returns only active autoSync sources, capped", asyn
   expect((await service.listAutoSyncSourcesDue(0)).length).toBe(0);
 });
 
+test("reconciliation converges an ownerless Source with one live applied Capsule", async () => {
+  const { store, service } = makeService();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", sourceId: "src_ownerless_single", capsuleId: "cap_ownerless_single",
+    snapshotId: "snap_ownerless_default", installConfigId: "cfg_ownerless_single",
+    name: "ownerless-single", legacySharedSource: true,
+  });
+  const adopted = {
+    ...seeded.snapshot,
+    id: "snap_ownerless_applied",
+    ref: "release/v2",
+    path: "infra/live",
+    resolvedCommit: "1".repeat(40),
+    archiveRef: "workspaces/workspace_1/sources/src_ownerless_single/snapshots/snap_ownerless_applied/source.tar.zst",
+    fetchedByRunId: "run_ownerless_applied",
+  };
+  await adoptFixtureSnapshot(store, seeded.capsule, adopted);
+
+  const created = await service.createReconciliationSyncs(seeded.source.id, { scheduled: true });
+  const persistedSource = await store.getSource(seeded.source.id);
+  expect(persistedSource?.ownerCapsuleId).toBeUndefined();
+  expect(persistedSource).toMatchObject({
+    defaultRef: adopted.ref,
+    defaultPath: adopted.path,
+  });
+  expect(created).toHaveLength(1);
+  expect(created[0]?.run).toMatchObject({ ref: adopted.ref, path: adopted.path });
+  expect(await store.listSourceSyncRuns(seeded.source.id)).toHaveLength(1);
+});
+
+test("reconciliation preserves the default and polls distinct applied lanes for shared ownerless Sources", async () => {
+  const { store, service } = makeService();
+  const first = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", sourceId: "src_ownerless_shared", capsuleId: "cap_ownerless_a",
+    snapshotId: "snap_ownerless_a_default", installConfigId: "cfg_ownerless_a",
+    name: "ownerless-a", legacySharedSource: true,
+  });
+  const second = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", sourceId: "src_ownerless_shared", capsuleId: "cap_ownerless_b",
+    snapshotId: "snap_ownerless_b_default", installConfigId: "cfg_ownerless_b",
+    name: "ownerless-b", legacySharedSource: true,
+  });
+  const adoptedA = {
+    ...first.snapshot,
+    id: "snap_ownerless_a_applied",
+    ref: "release/v1",
+    path: "infra/a",
+    resolvedCommit: "2".repeat(40),
+    archiveRef: "workspaces/workspace_1/sources/src_ownerless_shared/snapshots/snap_ownerless_a_applied/source.tar.zst",
+    fetchedByRunId: "run_ownerless_a_applied",
+  };
+  const adoptedB = {
+    ...second.snapshot,
+    id: "snap_ownerless_b_applied",
+    ref: "release/v2",
+    path: "infra/b",
+    resolvedCommit: "3".repeat(40),
+    archiveRef: "workspaces/workspace_1/sources/src_ownerless_shared/snapshots/snap_ownerless_b_applied/source.tar.zst",
+    fetchedByRunId: "run_ownerless_b_applied",
+  };
+  await adoptFixtureSnapshot(store, first.capsule, adoptedA);
+  await adoptFixtureSnapshot(store, second.capsule, adoptedB);
+
+  await service.createReconciliationSyncs(first.source.id, { scheduled: true });
+  const source = await store.getSource(first.source.id);
+  const runs = await store.listSourceSyncRuns(first.source.id);
+  expect(source?.ownerCapsuleId).toBeUndefined();
+  expect(source).toMatchObject({ defaultRef: "main", defaultPath: "." });
+  expect(runs.map(({ ref, path }) => [ref, path]).sort()).toEqual([
+    ["main", "."], ["release/v1", "infra/a"], ["release/v2", "infra/b"],
+  ]);
+});
+
+test("scheduled reconciliation skips commit-pinned lanes while a webhook can observe them", async () => {
+  const { store, service } = makeService();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", sourceId: "src_commit_pinned", capsuleId: "cap_commit_pinned",
+    snapshotId: "snap_commit_pinned_default", installConfigId: "cfg_commit_pinned",
+    name: "commit-pinned", legacySharedSource: true,
+  });
+  const adopted = {
+    ...seeded.snapshot,
+    id: "snap_commit_pinned_applied",
+    ref: "a".repeat(40),
+    path: "infra/pinned",
+    resolvedCommit: "a".repeat(40),
+    archiveRef: "workspaces/workspace_1/sources/src_commit_pinned/snapshots/snap_commit_pinned_applied/source.tar.zst",
+    fetchedByRunId: "run_commit_pinned_applied",
+  };
+  await adoptFixtureSnapshot(store, seeded.capsule, adopted);
+
+  expect(await service.createReconciliationSyncs(seeded.source.id, { scheduled: true })).toEqual([]);
+  expect(await store.listSourceSyncRuns(seeded.source.id)).toEqual([]);
+  expect(await service.createReconciliationSyncs(seeded.source.id)).toHaveLength(1);
+  expect(await store.listSourceSyncRuns(seeded.source.id)).toMatchObject([{ ref: adopted.ref, path: adopted.path }]);
+});
+
+test("owned Source reconciliation follows only its owner's adopted lane", async () => {
+  const { store, service } = makeService();
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", sourceId: "src_owned_fixture", capsuleId: "cap_owned_lane",
+    snapshotId: "snap_owned_default", installConfigId: "cfg_owned_lane", name: "owned-lane",
+  });
+  const ownedSource: StoredSource = {
+    ...seeded.source,
+    id: "src_owned_lane",
+    ownerCapsuleId: seeded.capsule.id,
+    createdByInstallPlanId: "gip_owned_lane",
+  };
+  await store.putSource(ownedSource);
+  const ownerCapsule = { ...seeded.capsule, sourceId: ownedSource.id };
+  await store.putCapsule(ownerCapsule);
+  const adoptedOwner = {
+    ...seeded.snapshot,
+    id: "snap_owned_applied",
+    sourceId: ownedSource.id,
+    ref: "release/owner",
+    path: "infra/owner",
+    resolvedCommit: "4".repeat(40),
+    archiveRef: "workspaces/workspace_1/sources/src_owned_lane/snapshots/snap_owned_applied/source.tar.zst",
+    fetchedByRunId: "run_owned_applied",
+  };
+  const appliedOwner = await adoptFixtureSnapshot(store, ownerCapsule, adoptedOwner);
+
+  const foreignSeed = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1", sourceId: "src_foreign_fixture", capsuleId: "cap_foreign_lane",
+    snapshotId: "snap_foreign_default", installConfigId: "cfg_foreign_lane", name: "foreign-lane",
+  });
+  const foreignCapsule = { ...foreignSeed.capsule, sourceId: ownedSource.id };
+  await store.putCapsule(foreignCapsule);
+  const adoptedForeign = {
+    ...foreignSeed.snapshot,
+    id: "snap_foreign_applied",
+    sourceId: ownedSource.id,
+    ref: "release/foreign",
+    path: "infra/foreign",
+    resolvedCommit: "5".repeat(40),
+    archiveRef: "workspaces/workspace_1/sources/src_owned_lane/snapshots/snap_foreign_applied/source.tar.zst",
+    fetchedByRunId: "run_foreign_applied",
+  };
+  await adoptFixtureSnapshot(store, foreignCapsule, adoptedForeign);
+
+  await service.createReconciliationSyncs(ownedSource.id, { scheduled: true });
+  const persisted = await store.getSource(ownedSource.id);
+  const runs = await store.listSourceSyncRuns(ownedSource.id);
+  expect(persisted).toMatchObject({ ownerCapsuleId: appliedOwner.id, defaultRef: adoptedOwner.ref, defaultPath: adoptedOwner.path });
+  expect(runs.map(({ ref, path }) => [ref, path])).toEqual([[adoptedOwner.ref, adoptedOwner.path]]);
+});
+
 test("permanent reconciliation preparation failure quarantines a Source", async () => {
   const { store, service } = makeService();
   const { source } = await service.createSource({
@@ -1615,24 +1817,11 @@ test("permanent reconciliation preparation failure quarantines a Source", async 
   expect(await service.listAutoSyncSourcesDue(25)).toEqual([]);
 });
 
-test("a permanently unenumerable Source leaves the due queue instead of starving later Sources", async () => {
+test("reconciliation does not enumerate unrelated apps in a large Workspace", async () => {
   const { store, service } = makeService();
-  const { source } = await service.createSource({
-    workspaceId: "workspace_1", name: "over-limit", url: "https://github.com/a/b", autoSync: true,
-  });
-  for (let index = 0; index < 1_001; index += 1) {
-    await store.putCapsule({
-      id: `cap_limit_${index}`, workspaceId: "workspace_1", projectId: "prj_default_workspace_1",
-      name: `limit-${index}`, slug: `limit-${index}`, sourceId: source.id,
-      installConfigId: "cfg_unused", environment: "production", currentStateGeneration: 0,
-      status: "active", createdAt: "2026-06-06T00:00:00.000Z", updatedAt: "2026-06-06T00:00:00.000Z",
-    });
-  }
-  await expect(service.createReconciliationSyncs(source.id)).rejects.toMatchObject({
-    code: "resource_exhausted", details: { reason: "source_reconciliation_capsule_limit" },
-  });
-  expect((await store.getSource(source.id))?.status).toBe("error");
-  expect(await service.listAutoSyncSourcesDue(1)).toEqual([]);
+  const { source } = await service.createSource({ workspaceId: "workspace_1", name: "preflight", url: "https://github.com/a/b" });
+  store.listCapsulesPage = async () => { throw new Error("workspace census is forbidden"); };
+  expect((await service.createReconciliationSyncs(source.id)).length).toBe(1);
 });
 
 test("missing platform archive allocator keeps a Source eligible after platform repair", async () => {

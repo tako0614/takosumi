@@ -47,6 +47,7 @@ import type {
 import type { Output as Output } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
+import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import {
   assertWorkspaceManagementAdmission,
@@ -873,9 +874,7 @@ export class BackupsService {
       ) {
         // Historical records may predate the Git-only Capsule invariant. New
         // Capsule execution always has a registered Source.
-        const sourceSnapshot = capsule.sourceId
-          ? await latestSourceSnapshot(this.#store, capsule.sourceId)
-          : undefined;
+        const sourceSnapshot = await getCapsuleAdoptedSourceSnapshot(this.#store, capsule);
         const produced = await this.#serviceDataRunner.run({
           workspaceId,
           capturedAt,
@@ -959,17 +958,6 @@ export class BackupsService {
       entries,
     };
   }
-}
-
-async function latestSourceSnapshot(
-  store: OpenTofuControlStore,
-  sourceId: string,
-): Promise<SourceSnapshot | undefined> {
-  const snapshots = [...(await store.listSourceSnapshots(sourceId))].sort(
-    (a, b) =>
-      b.fetchedAt.localeCompare(a.fetchedAt) || b.id.localeCompare(a.id),
-  );
-  return snapshots[0];
 }
 
 /**

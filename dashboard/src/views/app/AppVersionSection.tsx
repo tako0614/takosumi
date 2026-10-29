@@ -74,7 +74,8 @@ export default function AppVersionSection(props: {
               when={current()}
               fallback={
                 <span class="ap-muted" data-incomplete={props.versionIncomplete ? "version" : undefined}>
-                  {props.versionIncomplete ? t("app.incomplete.version") : t("app.version.unknown")}
+                  {props.version.uninstalled ? t("app.version.uninstalled")
+                    : props.versionIncomplete ? t("app.incomplete.version") : t("app.version.unknown")}
                 </span>
               }
             >

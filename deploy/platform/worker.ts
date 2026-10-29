@@ -1,3 +1,4 @@
+import { runSourceMaintenanceSchedule } from "../../worker/src/source_maintenance_schedule.ts";
 // Operator-deployed Takosumi platform worker composition.
 //
 // This single worker hosts the accounts plane (bare-origin OIDC issuer +
@@ -75,6 +76,7 @@ import {
   type SharedAuthEnvironment,
 } from "../../worker/src/shared_auth_rpc.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
+import { handleSourceOwnershipMigrationOperatorRequest } from "../../worker/src/source_ownership_migration_operator.ts";
 import { fenceControlDatabase } from "./fenced-control-database.ts";
 import { handlePlatformBrowserBillingRequest } from "./browser-billing.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
@@ -138,6 +140,7 @@ import {
   type CapsuleRunCredentialLedger,
 } from "../../core/domains/deploy-control/run_credential_context.ts";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
+import { structuredErrorReason } from "../../core/domains/deploy-control/errors.ts";
 import {
   OpenTofuControllerError,
   RUN_HEARTBEAT_STALE_MS,
@@ -671,6 +674,8 @@ export default {
   ): Promise<Response> {
     const sharedIngressFailure = sharedAuthRequestFailure(request, env);
     if (sharedIngressFailure) return sharedIngressFailure;
+    const sourceOwnershipMigrationResponse = await handleSourceOwnershipMigrationOperatorRequest(request, env);
+    if (sourceOwnershipMigrationResponse) return sourceOwnershipMigrationResponse;
     const privateFilesResponse = await handlePlatformPrivateRunFilesRequest(request, env, context);
     if (privateFilesResponse) return privateFilesResponse;
     const metricsResponse = await handlePlatformMetricsRequest(request, env);
@@ -881,8 +886,8 @@ export default {
     }
     return accountsResponse;
   },
-  // Scheduled cron tick. Source polling runs only on its exact hourly schedule;
-  // other maintenance crons must never fan out SourceSyncRun Durable Objects.
+  // Scheduled cron tick. Source jobs claim persisted hourly/daily start markers
+  // from the existing five-minute tick or their dedicated cron expressions.
   // When the `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO
   // runs the current compatibility drift sweep for Workspaces with active
   // Capsules.
@@ -907,9 +912,18 @@ export default {
       typeof event === "object" && event !== null
         ? Reflect.get(event, "cron")
         : undefined;
-    if (scheduledSourcePollEnabledForCron(cron)) {
-      await runScheduledSourcePoll(env);
-    }
+    await schedulePlatformSideEffect(runSourceMaintenanceSchedule({
+      db: env.TAKOSUMI_CONTROL_DB,
+      cron,
+      retirementEnabled: env.TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED !== "0",
+      poll: () => runScheduledSourcePoll(env),
+      sweep: () => runScheduledSourceRetirement(env),
+    }).catch((error: unknown) => {
+      console.warn(JSON.stringify({
+        event: "source_maintenance_schedule_failed",
+        errorName: error instanceof Error ? error.name : "unknown",
+      }));
+    }), context);
     await runScheduledOpenTofuRunRepair(env);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
@@ -4157,12 +4171,14 @@ const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
  * need. Kept narrow so the seam-level handlers are unit-testable with a stub.
  */
 export interface SourceWebhookOperations {
+  getSource(sourceId: string): Promise<unknown>;
   verifySourceHookSecret(
     sourceId: string,
     presentedSecret: string,
   ): Promise<boolean>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly { readonly run: { readonly id: string } }[]>;
 }
 
@@ -4279,7 +4295,16 @@ export async function handleSourceWebhookRequest(
   }
   // Payload is untrusted and ignored; addresses come only from durable Source
   // defaults and current Capsule StateVersion provenance.
-  const runs = await operations.createSourceReconciliationSyncs(sourceId);
+  let runs: Awaited<ReturnType<SourceWebhookOperations["createSourceReconciliationSyncs"]>>;
+  try {
+    runs = await operations.createSourceReconciliationSyncs(sourceId);
+  } catch (error) {
+    // A valid delivery can race retirement marking. Acknowledge that no-op so
+    // the Git host does not retry a Source whose sync admission is closed.
+    if (!(error instanceof OpenTofuControllerError) ||
+      error.code !== "failed_precondition" || structuredErrorReason(error) !== "source_not_active") throw error;
+    runs = [];
+  }
   return Response.json(
     {
       accepted: true,
@@ -4296,17 +4321,8 @@ function bearerFromAuthorization(header: string): string | undefined {
 }
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
-const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 25;
-const SCHEDULED_SOURCE_POLL_CRONS = new Set([
-  "0 * * * *",
-  "5 * * * *",
-]);
-
-/** Source polling is hourly; webhook delivery owns low-latency updates. */
-export function scheduledSourcePollEnabledForCron(cron: unknown): boolean {
-  return typeof cron === "string" && SCHEDULED_SOURCE_POLL_CRONS.has(cron);
-}
-
+// Start conservatively while previously unpolled Sources enter the cadence.
+const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 5;
 export function scheduledSourcePollBatch(env: DeployControlEnv): number {
   return positiveInteger(
     Number(env.TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH),
@@ -4334,13 +4350,28 @@ export async function pollAutoSyncSources(
   const sources = await operations.controller.listAutoSyncSourcesDue(batch);
   for (const source of sources) {
     try {
-      await operations.createSourceReconciliationSyncs(source.id);
+      await operations.createSourceReconciliationSyncs(source.id, { scheduled: true });
     } catch {
       // Best-effort: one bad source must not abort the whole poll.
       console.warn("scheduled.source_poll_reconciliation_failed", {
         sourceCount: sources.length,
       });
     }
+  }
+}
+
+const SCHEDULED_SOURCE_RETIREMENT_LIMIT = 25;
+
+async function runScheduledSourceRetirement(env: DeployControlEnv): Promise<void> {
+  try {
+    const result = await (await deployControlSeam(env).operations())
+      .sweepRetiredSources({ limit: SCHEDULED_SOURCE_RETIREMENT_LIMIT });
+    console.log(JSON.stringify({ event: "source_retirement_sweep", ...result }));
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "source_retirement_sweep_failed",
+      errorName: error instanceof Error ? error.name : "unknown",
+    }));
   }
 }
 
