@@ -195,7 +195,7 @@ test("credential mint ownership audit columns persist on all backends", async ()
   }
 });
 
-test("new Capsule, Connection, and usage writes assign owner and payer", async () => {
+test("new Capsule and Connection writes assign owners while usage preserves the supplied payer", async () => {
   for (const { control, ownership } of await stores()) {
     await control.putWorkspace(workspace());
     const app = { ...capsule(), ownerAccountId: "app-owner", storageRoot: "apps/cap_app_owner",
@@ -215,8 +215,14 @@ test("new Capsule, Connection, and usage writes assign owner and payer", async (
     const usage: UsageEvent = { id: "usage_new", workspaceId: workspace().id, capsuleId: app.id,
       kind: "runner_minute", quantity: 1, usdMicros: 0, ratingStatus: "unrated", source: "runner",
       idempotencyKey: "usage_new", createdAt: NOW };
-    expect(await control.putUsageEvent(usage)).toMatchObject({ payerAccountId: "app-owner" });
-    expect((await control.listUsageEvents(workspace().id))[0]).toMatchObject({ payerAccountId: "app-owner" });
+    // Only reservation/meter resolution or the migration decides the payer.
+    // Ordinary writes must preserve missing attribution even with a known owner.
+    expect(await control.putUsageEvent(usage)).not.toHaveProperty("payerAccountId");
+    const reserved = { ...usage, id: "usage_reserved", idempotencyKey: "usage_reserved", payerAccountId: "reserved-owner" };
+    expect(await control.putUsageEvent(reserved)).toEqual(reserved);
+    const rows = await control.listUsageEvents(workspace().id);
+    expect(rows.find((row) => row.id === usage.id)).toEqual(usage);
+    expect(rows.find((row) => row.id === reserved.id)).toEqual(reserved);
   }
 });
 
