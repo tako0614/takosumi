@@ -29,6 +29,7 @@ import type {
   GitInstallPlanInterfaceRequirement,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
+  GitInstallPlanReviewSummary,
   GitInstallPlanUserAction,
   PatchGitInstallPlanRequest,
 } from "takosumi-contract";
@@ -69,6 +70,7 @@ import {
   progressSignature,
   replanRequest,
   restartRequest,
+  reviewSummarySheet,
   retainedBindings,
   retainedInterfaceLinks,
   sameBindings,
@@ -282,6 +284,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const [resolvedVersion, setResolvedVersion] = createSignal<ResolvedStoreVersion>();
   /** The last sheet the coordinator asked for, kept while it moves past it. */
   const [sheet, setSheet] = createSignal<ProvideInputs>();
+  /** Committed choices on a GET-only reopen; never treated as live candidates. */
+  const [reviewSummary, setReviewSummary] = createSignal<GitInstallPlanReviewSummary>();
   /** Connections chosen after the sheet went behind; the next attempt uses them. */
   const [overrides, setOverrides] = createSignal<ConnectionOverrides>({});
   /** Linked app edits made after the Plan, kept until the replacement receives them. */
@@ -442,6 +446,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
   const forgetSession = () => {
     forgetInputs();
     setSheet(undefined);
+    setReviewSummary(undefined);
     setOverrides({});
     setInterfaceOverrides({});
     setInterfaceLinksToSend(undefined);
@@ -497,6 +502,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     // the coordinator's word again: no Plan was asked for from it yet.
     if (next.userAction.kind === "provide_inputs") {
       setSheet(next.userAction);
+      setReviewSummary(undefined);
       // Connections chosen but not yet received stay shown until they are.
       const unsent = untrack(bindingsToSend);
       setOverrides(unsent ? overridesForBindings(next.userAction.connections, unsent) : {});
@@ -514,13 +520,21 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       setPlanVersion(undefined);
       // Still asking for the sheet: no confirmation went through.
       unconfirmedPlanVersion = undefined;
-    } else if (attemptPastInputs(next.installPlan.phase) && untrack(planVersion) === undefined) {
+    } else if (attemptPastInputs(next.installPlan.phase)) {
+      if (!untrack(sheet) && next.reviewSummary) {
+        const hydrated = reviewSummarySheet(next.reviewSummary);
+        setSheet(hydrated.sheet);
+        setDrafts(hydrated.drafts);
+        setReviewSummary(next.reviewSummary);
+      }
       // Past the sheet with no answer that dated the Plan (a lost answer, or
       // an attempt opened again): date it by the earliest confirmation that
       // may have made it, or else by when this page began following it, so
       // any later edit marks it out of date (never the other way round).
-      setPlanVersion(unconfirmedPlanVersion ?? attemptBaseVersion);
-      unconfirmedPlanVersion = undefined;
+      if (untrack(planVersion) === undefined) {
+        setPlanVersion(unconfirmedPlanVersion ?? attemptBaseVersion);
+        unconfirmedPlanVersion = undefined;
+      }
     }
     setResponse(next);
     setLoadFailed(false);
@@ -709,6 +723,12 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     // Preparing again keeps the person's answers (and the sheet they see)
     // for the new attempt; anything else starts from nothing.
     if (!adoptOptions.keepAnswers) forgetSession();
+    else if (reviewSummary()) {
+      // A committed review belongs to its old attempt. Keep only public
+      // drafts while the replacement obtains its own candidate/input sheet.
+      setReviewSummary(undefined);
+      setSheet(undefined);
+    }
     setPlanVersion(undefined);
     unconfirmedPlanVersion = undefined;
     attemptBaseVersion = untrack(editVersion);
@@ -1128,6 +1148,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       const plan = latest.installPlan;
       const planWorkspaceId = plan.workspaceId || undefined;
       const retained = sheet();
+      const reviewed = reviewSummary();
       const rows = retained ? withConnectionOverrides(retained.connections, overrides()) : [];
       const linkedRows = retained ? withInterfaceOverrides(retained.interfaces, interfaceOverrides()) : [];
       let replacement = pendingReplan;
@@ -1153,9 +1174,11 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
           name,
           ref,
           ...(retained ? { modulePath: retained.modulePath } : {}),
-          providerBindings: retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
-          ...(linkedRows.length > 0 || plan.options.interfaceLinks !== undefined
-            ? { interfaceLinks: retained ? retainedInterfaceLinks(linkedRows, plan.options.interfaceLinks) : plan.options.interfaceLinks }
+          providerBindings: reviewed ? reviewed.connections.map(({ displayName: _label, autoSelected: _automatic, ...binding }) => binding)
+            : retained ? retainedBindings(rows) : (plan.options.providerBindings ?? []),
+          ...(reviewed || linkedRows.length > 0 || plan.options.interfaceLinks !== undefined
+            ? { interfaceLinks: reviewed ? reviewed.interfaces.map(({ requirementKey, choice }) => ({ requirementKey, choice }))
+              : retained ? retainedInterfaceLinks(linkedRows, plan.options.interfaceLinks) : plan.options.interfaceLinks }
             : {}),
         });
         if (plan.phase !== "discarded" && replanDiscarded !== plan.id) {
@@ -1176,7 +1199,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       replanDiscarded = undefined;
       // A start sent again as it was may carry older connections than the
       // person chose meanwhile: the new sheet receives the current ones.
-      if (retained) {
+      if (retained && !reviewed) {
         const chosen = retainedBindings(rows);
         if (!sameBindings(chosen, replacement.request.options?.providerBindings ?? [])) {
           setBindingsToSend(chosen);
@@ -1184,7 +1207,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       }
       // Read again after the await: a choice made while the replacement
       // POST was in flight belongs to its first sheet, never its old Plan.
-      if (retained) {
+      if (retained && !reviewed) {
         const requirementKeys = created.userAction.kind === "provide_inputs"
           ? new Set(created.userAction.interfaces.map((requirement) => requirement.requirementKey)) : undefined;
         const chosen = retainedInterfaceLinks(latestLinkedRows, plan.options.interfaceLinks)
@@ -1196,7 +1219,7 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
       }
       // The new attempt starts with these answers; until its own sheet
       // arrives the screen keeps showing them.
-      if (retained && created.userAction.kind !== "provide_inputs") {
+      if (retained && !reviewed && created.userAction.kind !== "provide_inputs") {
         setSheet({
           ...retained,
           connections: rows,
@@ -1227,6 +1250,13 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     } finally {
       if (!disposed) setMutating(undefined);
     }
+  };
+
+  /** Explicit editing obtains a fresh input sheet through the usual replan. */
+  const editReviewSummary = async (): Promise<boolean> => {
+    if (!reviewSummary() || mutating() || locked()) return false;
+    edited();
+    return await replan();
   };
 
   // Connections the new attempt did not start with are its sheet's first
@@ -1409,6 +1439,8 @@ export function useInstallAttempt(options: InstallAttemptOptions) {
     commitVersion,
     resolvedVersion,
     sheet,
+    reviewSummary,
+    editReviewSummary,
     connectionRows,
     interfaceRows,
     refDraft,

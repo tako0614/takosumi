@@ -3010,6 +3010,108 @@ async function reachReviewable(
   return reviewable;
 }
 
+test("GET and open listing reconstruct a committed attempt review without Plan or Apply", async () => {
+  const fixture = attemptFixture();
+  const planId = await startAttempt(fixture);
+  const reviewable = await reachReviewable(fixture, planId);
+  const before = fixture.mutationCount();
+  const generation = reviewable.installPlan.generation;
+  const first = await readPlan(fixture, planId);
+  const second = await readPlan(fixture, planId);
+  const listing = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  const listed = (await listing.json()).installPlans[0];
+  for (const response of [first, second, listed]) {
+    expect(response).toMatchObject({
+      installPlan: { id: planId, phase: "reviewable", generation },
+      nextAction: "review_run",
+      reviewSummary: {
+        modulePath: ".",
+        appName: "example",
+        environment: "production",
+        connections: [{
+          provider: CLOUDFLARE,
+          moduleLocalName: "cloudflare",
+          connectionId: "conn_cloudflare01",
+          displayName: "conn_cloudflare01",
+          autoSelected: null,
+        }],
+        settings: [{ name: "region", sensitive: true, set: true }],
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain('"eu"');
+    expect(response.reviewSummary.settings[0].value).toBeUndefined();
+  }
+  expect(fixture.mutationCount()).toBe(before);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+  expect((await fixture.planStore.get(planId))?.generation).toBe(generation);
+});
+
+test("GET reopens a committed public repository setting from the exact reviewed config", async () => {
+  const publicUrl = "https://app.example.test";
+  const fixture = attemptFixture({
+    repositoryManifest: {
+      status: "present",
+      digest: `sha256:${"d".repeat(64)}`,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [{
+          name: "public_url",
+          source: { kind: "user" },
+          type: "string",
+          required: true,
+          label: { ja: "公開URL", en: "Public URL" },
+        }] } } },
+      },
+    },
+    providerConnections: [],
+    compatibilityRootProviderRequirements: [],
+    compatibilityRootModuleVariableDeclarations: [
+      { name: "public_url", type: "string", hasDefault: false },
+    ],
+  });
+  const planId = await startAttempt(fixture);
+  const paused = await reconcileUntilIdle(fixture, planId);
+  expect(paused.userAction).toMatchObject({
+    kind: "provide_inputs",
+    variables: [{ name: "public_url", sensitive: false, required: true }],
+  });
+  const confirmed = await answer(fixture, planId, {
+    expectedGeneration: paused.installPlan.generation,
+    continue: true,
+    variables: { public_url: publicUrl },
+  });
+  expect(confirmed.status).toBe(200);
+  const planning = await confirmed.json();
+  expect(planning.installPlan.phase).toBe("planning");
+  expect(planning.reviewSummary.settings).toEqual([{
+    name: "public_url", type: "string", required: true,
+    sensitive: false, set: true, value: publicUrl,
+  }]);
+  expect(fixture.getInstallConfig(planning.installPlan.installConfigId)?.variableMapping)
+    .toMatchObject({ public_url: publicUrl });
+  const baseConfig = fixture.getInstallConfig(planning.installPlan.installConfigBaseId);
+  expect(baseConfig?.variableMapping).toEqual({});
+  expect(baseConfig?.variablePresentation ?? []).toEqual([]);
+  expect(JSON.stringify(await fixture.planStore.get(planId))).not.toContain(publicUrl);
+  const reviewable = await reconcileUntilIdle(fixture, planId);
+  expect(reviewable.installPlan.phase).toBe("reviewable");
+  const before = fixture.mutationCount();
+  const reopened = await readPlan(fixture, planId);
+  expect(reopened.reviewSummary).toMatchObject({
+    modulePath: ".", appName: "example", environment: "production",
+    settings: [{ name: "public_url", sensitive: false, set: true, value: publicUrl }],
+  });
+  expect(fixture.mutationCount()).toBe(before);
+  expect((await fixture.planStore.get(planId))?.generation)
+    .toBe(reviewable.installPlan.generation);
+  expect(fixture.approvalCalls).toBe(0);
+  expect(fixture.applyCalls).toBe(0);
+});
+
 test("discarding an attempt abandons its never-applied Capsule and retires its Source", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);

@@ -467,6 +467,17 @@ for plans that are not attempts. Its dedicated Source is retired, polling and sy
 and archives and snapshot rows are removed. The same DELETE or the daily sweep resumes
 an interrupted retirement.
 
+Once an attempt has created its Capsule and reached `planning` or `reviewable`,
+GET and the open-attempt list include `reviewSummary`. It reconstructs the
+module path, app name, environment, committed Provider Binding connection IDs
+and display labels, Interface choices, and setting names and set markers from
+the stored InstallConfig and BindingSet. A setting `value` appears only for a
+non-sensitive input in an accepted repository install UX. Generic OpenTofu
+variables and sensitive settings expose only `sensitive: true` and `set`, never
+their values. Historical automatic Provider Connection selection cannot be
+recovered from a committed binding, so its `autoSelected` is `null`. These
+reads do not advance Plan or Apply.
+
 For `userAction.kind: "provide_inputs"`, `interfaces` lists each `requirementKey`, exact
 type/version, permissions, value-free candidates, `choice`, and `autoSelected`. No candidates
 allows later. One is selected automatically only if it is not private and is not also a

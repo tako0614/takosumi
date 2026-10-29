@@ -33,6 +33,7 @@ import { assertExpectedResponseUrl } from "../../../scripts/dashboard-browser-e2
 import { registerInstallAuthReturnCase } from "./install_auth_return_case.ts";
 import { registerNavigationAccountCases } from "./navigation_account_case.ts";
 import { registerAppSharingCases } from "./app_sharing_case.ts";
+import { registerInstallReopenCases } from "./install_reopen_case.ts";
 
 type Expectations = {
   readonly appName: string;
@@ -2124,4 +2125,27 @@ registerInstallDetailCases(mode, (page, needsProvider) => stubProviderDestinatio
   [],
   needsProvider ? [{ source: "registry.opentofu.org/cloudflare/cloudflare", moduleLocalName: "cloudflare", credentialRequired: true }] : [],
   { resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }, { type: "cloudflare_d1_database", count: 2, allowed: true }] },
+));
+registerInstallReopenCases(mode, (page) => stubProviderDestinationFixture(
+  page,
+  [{
+    id: "pc_account_42",
+    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    status: "verified",
+    scope: "workspace",
+    workspaceId: "ws_alpha",
+    displayName: "Takosumi account · account-42",
+  }],
+  [{
+    source: "registry.opentofu.org/cloudflare/cloudflare",
+    moduleLocalName: "cloudflare",
+    credentialRequired: true,
+  }],
+  {
+    resources: [{ type: "cloudflare_workers_script", count: 1, allowed: true }],
+    variables: [
+      { name: "domain", type: "string", required: false, sensitive: false, label: { en: "Domain", ja: "ドメイン" } },
+      { name: "api_token", type: "string", required: true, sensitive: true, label: { en: "API token", ja: "APIトークン" } },
+    ],
+  },
 ));

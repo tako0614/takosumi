@@ -218,6 +218,92 @@ describe("install attempt controller", () => {
     page.dispose();
   });
 
+  const retainedReview: NonNullable<GitInstallPlanResponse["reviewSummary"]> = {
+    modulePath: "deploy", appName: "office", environment: "integration",
+    connections: [{ provider: requirement.provider, moduleLocalName: "cloudflare", connectionId: "conn_b", displayName: "B", autoSelected: null }],
+    interfaces: [{ requirementKey: "chat", choice: { kind: "interface", interfaceId: "if_a" }, autoSelected: true }],
+    settings: [
+      { name: "domain", type: "string", required: true, sensitive: false, set: true, value: "office.example.test" },
+      { name: "api_token", sensitive: true, set: true },
+    ],
+  };
+  for (const phase of ["planning", "reviewable"] as const) {
+    test(`a GET-only ${phase} reopen restores a read-only sheet without any mutation`, async () => {
+      const action = phase === "planning" ? { kind: "wait", phase } as const : { kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" } as const;
+      const retained = { ...inIntegration(respond(action, 7)), reviewSummary: retainedReview };
+      reset({ getGitInstallPlan: async () => retained });
+      const page = mount(ID, { settleMs: 5 });
+      try {
+        await until(() => page.attempt.response() !== undefined, "the retained attempt");
+        expect(page.attempt.sheet()?.modulePath).toBe("deploy");
+        expect(page.attempt.reviewSummary()).toEqual(retainedReview);
+        expect(page.attempt.drafts()).toEqual({ domain: { value: "office.example.test", touched: true } });
+        expect(page.attempt.drafts().api_token).toBeUndefined();
+        expect(page.attempt.outdated()).toBe(false);
+        await new Promise((done) => setTimeout(done, 30));
+        expect(calls.map(({ name }) => name)).toEqual(["getGitInstallPlan"]);
+        expect(page.attempt.response()).toBe(retained);
+      } finally { page.dispose(); }
+    });
+  }
+
+  test("editing a reopened review replans with saved choices and public values but asks for secrets again", async () => {
+    const SECOND = "gip_00000000000000b2";
+    reset({
+      getGitInstallPlan: async () => ({ ...inIntegration(respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 7)), reviewSummary: retainedReview }),
+      discardGitInstallAttempt: async () => inIntegration(respond({ kind: "none" }, 8, "discarded")),
+      createGitInstallAttempt: async () => inIntegration(respond(inputs({
+        modulePath: "deploy", missing: [], connections: [{ ...requirement, selectedConnectionId: "conn_b" }],
+        variables: [
+          { name: "domain", type: "string", required: true, sensitive: false },
+          { name: "api_token", type: "string", required: true, sensitive: true },
+        ],
+      }), 0, undefined, SECOND)),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "review", "the review");
+      expect(await page.attempt.editReviewSummary()).toBe(true);
+      expect(page.attempt.response()?.installPlan.id).toBe(SECOND);
+      expect(page.attempt.reviewSummary()).toBeUndefined();
+      expect(page.attempt.drafts()).toEqual({ domain: { value: "office.example.test", touched: true } });
+      const created = calls.find(({ name }) => name === "createGitInstallAttempt")?.args[1];
+      expect(created).toMatchObject({
+        capsule: { name: "office", environment: "integration" },
+        options: {
+          modulePath: "deploy",
+          providerBindings: [{ provider: requirement.provider, moduleLocalName: "cloudflare", connectionId: "conn_b" }],
+          interfaceLinks: [{ requirementKey: "chat", choice: { kind: "interface", interfaceId: "if_a" } }],
+        },
+      });
+      expect(JSON.stringify(created)).not.toContain("office.example.test");
+      await new Promise((done) => setTimeout(done, 30));
+      expect(calls.filter(({ name }) => name === "answerGitInstallAttempt")).toEqual([]);
+      expect(page.attempt.view().applyBlock).toBe("settings");
+    } finally { page.dispose(); }
+  });
+
+  test("a replacement that fails before inputs never shows its predecessor's committed review", async () => {
+    const SECOND = "gip_00000000000000b2";
+    reset({
+      getGitInstallPlan: async () => ({ ...respond({ kind: "review_run", planRunId: "run_plan", capsuleId: "cap_office" }, 7), reviewSummary: retainedReview }),
+      discardGitInstallAttempt: async () => respond({ kind: "none" }, 8, "discarded"),
+      createGitInstallAttempt: async () => respond({ kind: "wait", phase: "syncing_source" }, 0, undefined, SECOND),
+      reconcileGitInstallPlan: async () => respond({ kind: "retry", code: "source_sync_failed", restart: true }, 1, "failed", SECOND),
+    });
+    const page = mount(ID, { settleMs: 5 });
+    try {
+      await until(() => page.attempt.view().stage === "review", "the old review");
+      expect(await page.attempt.editReviewSummary()).toBe(true);
+      await until(() => page.attempt.response()?.installPlan.phase === "failed", "the replacement failure");
+      expect(page.attempt.response()?.installPlan.id).toBe(SECOND);
+      expect(page.attempt.reviewSummary()).toBeUndefined();
+      expect(page.attempt.sheet()).toBeUndefined();
+      expect(page.attempt.drafts().api_token).toBeUndefined();
+      expect(calls.filter(({ name }) => name === "answerGitInstallAttempt")).toEqual([]);
+    } finally { page.dispose(); }
+  });
+
   test("editing a reopened integration Plan recreates it in integration", async () => {
     const SECOND = "gip_00000000000000b2";
     reset({

@@ -4,7 +4,9 @@ import type { InstallConfig } from "takosumi-contract/install-configs";
 import {
   attemptInputFacts,
   checkAttemptVariables,
+  committedAttemptReviewSummary,
 } from "../../../../accounts/service/src/control/install-attempt-facts.ts";
+import type { StoredGitInstallPlan } from "../../../../core/domains/install-plans/store.ts";
 
 const publicUrlVariable = "public_url";
 const acceptedProjections = (urlVariable = publicUrlVariable) => [
@@ -108,6 +110,77 @@ function inputFacts(installConfig: InstallConfig = config()) {
   if (!result.ok) throw new Error("expected install attempt input facts");
   return result.facts;
 }
+
+test("committed review exposes only values backed by accepted non-secret repository presentation", () => {
+  const installConfig: InstallConfig = {
+    ...config({ variableMapping: {
+      public_url: "https://app.example.test",
+      api_token: "do-not-project-token",
+      generic_setting: "do-not-project-generic",
+    } }),
+    variablePresentation: [
+      { name: "public_url", type: "string", label: { ja: "URL", en: "URL" } },
+      { name: "api_token", type: "string", label: { ja: "Token", en: "Token" } },
+    ],
+  };
+  const plan = {
+    sourceSnapshotId: "snapshot_install_attempt_variables",
+    installConfigBaseId: "cfg_base",
+    capsule: { name: "example", environment: "production" },
+    options: { interfaceLinks: [
+      { requirementKey: "storage", choice: { kind: "interface", interfaceId: "if_storage" } },
+      { requirementKey: "cache", choice: { kind: "later" } },
+    ] },
+    autoSelectedInterfaceKeys: ["storage"],
+    attemptFacts: { inputs: {
+      modulePath: ".",
+      requirements: [],
+      resources: [],
+      variables: [
+        { name: "public_url", type: "string", required: false, sensitive: false },
+        { name: "api_token", type: "string", required: false, sensitive: true },
+        { name: "generic_setting", type: "string", required: false, sensitive: true },
+      ],
+    } },
+  } as unknown as StoredGitInstallPlan;
+  const bindingSet = {
+    id: "pbs_review", workspaceId: "ws_review", capsuleId: "cap_review",
+    environment: "production", bindings: [], createdAt: "", updatedAt: "",
+  };
+  const baseConfig: InstallConfig = {
+    ...config(), id: "cfg_base", variableMapping: {}, variablePresentation: [],
+  };
+  const summary = committedAttemptReviewSummary({
+    plan, installConfig, baseConfig, bindingSet, connections: [],
+  });
+  expect(summary.settings).toEqual([
+    { name: "public_url", type: "string", required: false, sensitive: false, set: true,
+      value: "https://app.example.test" },
+    { name: "api_token", sensitive: true, set: true },
+    { name: "generic_setting", sensitive: true, set: true },
+  ]);
+  expect(summary.interfaces).toEqual([
+    { requirementKey: "storage", choice: { kind: "interface", interfaceId: "if_storage" }, autoSelected: true },
+    { requirementKey: "cache", choice: { kind: "later" }, autoSelected: false },
+  ]);
+  expect(JSON.stringify(summary)).not.toContain("do-not-project");
+  const untrusted = committedAttemptReviewSummary({
+    plan, installConfig: {
+      ...installConfig,
+      internal: { reason: "per_install_overrides", genericOpenTofuVariableContractDigest: "digest" },
+    },
+    baseConfig, bindingSet, connections: [],
+  });
+  expect(untrusted.settings[0]).toEqual({ name: "public_url", sensitive: true, set: true });
+  expect(JSON.stringify(untrusted)).not.toContain("https://app.example.test");
+  const operatorOwned = committedAttemptReviewSummary({
+    plan, installConfig,
+    baseConfig: { ...baseConfig, variableMapping: { public_url: "operator-private-value" } },
+    bindingSet, connections: [],
+  });
+  expect(operatorOwned.settings[0]).toEqual({ name: "public_url", sensitive: true, set: true });
+  expect(JSON.stringify(operatorOwned)).not.toContain("operator-private-value");
+});
 
 test("provided accepted repository OIDC public URL must be a canonical HTTPS origin", () => {
   const facts = inputFacts();

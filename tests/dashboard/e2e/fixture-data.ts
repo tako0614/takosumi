@@ -497,6 +497,8 @@ interface StoredAttempt {
   source: { name: string; url: string; ref: string; path: string; authConnectionId?: string };
   capsule: { name: string; environment: string };
   options: { modulePath?: string; providerBindings?: readonly Record<string, unknown>[]; interfaceLinks?: readonly GitInstallPlanInterfaceLinkRequest[] };
+  /** Test-only public values and value-free presence markers for the committed settings. */
+  settings?: readonly { name: string; type: InstallAttemptFixtureVariable["type"]; required: boolean; sensitive: boolean; set: boolean; value?: unknown }[];
   phase: AttemptPhase;
   awaitingInput?: "module" | "inputs";
   generation: number;
@@ -648,6 +650,40 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
     }
   };
 
+  const reviewSummary = (attempt: StoredAttempt) => {
+    if (attempt.phase !== "planning" && attempt.phase !== "reviewable") return undefined;
+    if (!attempt.capsuleId || !attempt.planRunId) return undefined;
+    const connections = requirementRows(attempt).flatMap((row) => {
+      const connectionId = row.selectedConnectionId;
+      if (!connectionId) return [];
+      const candidate = row.candidates.find((entry) => entry.id === connectionId);
+      return [{
+        provider: row.provider,
+        moduleLocalName: row.moduleLocalName,
+        ...(row.childAlias !== undefined ? { childAlias: row.childAlias } : {}),
+        ...(row.rootAlias !== undefined ? { rootAlias: row.rootAlias } : {}),
+        connectionId,
+        displayName: candidate?.displayName ?? connectionId,
+        // Persisted provider bindings do not retain whether the person chose
+        // this row or it was the only available candidate.
+        autoSelected: null,
+      }];
+    });
+    const interfaces = interfaceRows(attempt).flatMap((row) => row.choice ? [{
+      requirementKey: row.requirementKey,
+      choice: row.choice,
+      autoSelected: row.autoSelected,
+    }] : []);
+    return {
+      modulePath: attempt.options.modulePath ?? modules[0]?.path ?? ".",
+      appName: attempt.capsule.name,
+      environment: attempt.capsule.environment,
+      connections,
+      interfaces,
+      settings: attempt.settings ?? [],
+    };
+  };
+
   const respond = (attempt: StoredAttempt, status = 200): InstallAttemptFixtureResponse => {
     const action = userAction(attempt);
     return {
@@ -676,6 +712,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         userAction: action,
         ...(attempt.invalidated ? { invalidated: attempt.invalidated } : {}),
         links: { self: `/api/v1/install-plans/${attempt.id}`, reconcile: `/api/v1/install-plans/${attempt.id}/reconcile` },
+        ...(reviewSummary(attempt) ? { reviewSummary: reviewSummary(attempt) } : {}),
       },
     };
   };
@@ -766,6 +803,7 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
         ...(bindings ? { providerBindings: bindings } : {}),
         ...(Array.isArray(optionsBody?.interfaceLinks) ? { interfaceLinks: optionsBody.interfaceLinks as unknown as readonly GitInstallPlanInterfaceLinkRequest[] } : {}),
       },
+      settings: [],
       phase: "syncing_source",
       generation: 0,
       rounds: 0,
@@ -830,6 +868,13 @@ export function createInstallAttemptFixture(options: InstallAttemptFixtureOption
       if (missingVariables.length > 0) {
         return attemptError(400, "invalid_request", `The settings are incomplete: ${missingVariables.join(", ")}.`, "install_variable_required");
       }
+      attempt.settings = (options.variables ?? []).map((variable) => {
+        const set = Object.hasOwn(values, variable.name);
+        const metadata = { name: variable.name, type: variable.type, required: variable.required, sensitive: variable.sensitive };
+        if (!set) return { ...metadata, set };
+        if (variable.sensitive) return { ...metadata, set: true };
+        return { ...metadata, set: true, value: values[variable.name] };
+      });
       move(attempt, "creating_capsule");
       move(attempt, "planning");
       return respond(attempt);

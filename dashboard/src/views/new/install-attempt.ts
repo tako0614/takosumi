@@ -27,6 +27,7 @@ import type {
   GitInstallPlanInvalidation,
   GitInstallPlanProviderBindingRequest,
   GitInstallPlanResponse,
+  GitInstallPlanReviewSummary,
   GitInstallPlanUserAction,
   GitInstallPlanVariablePresentation,
   JsonValue,
@@ -219,6 +220,44 @@ export interface VariableDraft {
 export type VariableDrafts = Readonly<Record<string, VariableDraft>>;
 
 type ProvideInputs = Extract<GitInstallPlanUserAction, { kind: "provide_inputs" }>;
+
+/**
+ * Reopened review metadata is a read-only sheet, never a new input request.
+ * Public values stay in component memory for an explicit edit/replan. A secret
+ * set marker is presentation only and must never become a draft or default.
+ */
+export function reviewSummarySheet(summary: GitInstallPlanReviewSummary): {
+  readonly sheet: ProvideInputs;
+  readonly drafts: VariableDrafts;
+} {
+  const variables = summary.settings.map((setting) => ({
+    name: setting.name,
+    type: setting.sensitive ? "unknown" as const : setting.type ?? "unknown" as const,
+    required: setting.sensitive ? true : setting.required === true,
+    sensitive: setting.sensitive,
+  }));
+  const drafts: Record<string, VariableDraft> = {};
+  for (const setting of summary.settings) {
+    if (setting.sensitive || !setting.set || setting.value === undefined) continue;
+    drafts[setting.name] = {
+      value: variableInitialText({
+        name: setting.name, type: setting.type ?? "unknown",
+        required: setting.required === true, sensitive: false,
+        defaultValue: setting.value,
+      }),
+      touched: true,
+    };
+  }
+  return {
+    sheet: {
+      kind: "provide_inputs", modulePath: summary.modulePath,
+      resources: [], connections: [], interfaces: [], variables,
+      name: { current: summary.appName, proposed: summary.appName, conflict: false },
+      missing: [],
+    },
+    drafts,
+  };
+}
 
 /** The text a field starts with. Secret fields always start empty. */
 export function variableInitialText(

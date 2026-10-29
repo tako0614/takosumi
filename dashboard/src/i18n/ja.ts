@@ -212,6 +212,10 @@ export const ja = {
   "installStore.listingUnavailable":
     "このアプリをストアから取得できませんでした。",
   // --- install attempt (TASK-0115 Phase 3b) --------------------------------
+  "installStore.reviewEdit": "接続・設定を編集",
+  "installStore.reviewEditHint": "変更後、インストール内容をもう一度確認します。秘密の設定は再入力してください。",
+  "installStore.reviewSet": "設定済み",
+  "installStore.reviewNotSet": "未設定",
   "installStore.secretHint": "入力した値は保存されません。作られるものを確認するときにだけ送ります。",
   "installStore.secretJsonHint": "JSON は1行で入力してください。入力中も表示されません。",
   "installStore.derivedHint": "空欄のときは、アプリ名から決まります。",

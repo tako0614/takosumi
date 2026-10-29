@@ -63,6 +63,7 @@ import {
   attemptIsExpired,
   bindingMatchesRequirement,
   checkAttemptVariables,
+  committedAttemptReviewSummary,
   connectionRequirements,
   connectionsReady,
   deterministicInitialCapsuleId,
@@ -3932,19 +3933,45 @@ async function installPlanResponseFor(
   stored: StoredGitInstallPlan,
 ): Promise<GitInstallPlanResponse> {
   const invalidated = await attemptInvalidation(ctx, stored);
+  const reviewSummary = stored.mode === "attempt" &&
+      (stored.phase === "planning" || stored.phase === "reviewable") &&
+      stored.capsuleId && stored.installConfigId
+    ? await committedReviewSummary(ctx.operations, stored)
+    : undefined;
   return installPlanResponse(
     publicGitInstallPlan(stored),
     invalidated
       ? { kind: "retry", code: invalidated, restart: true }
       : await userActionFor(ctx.operations, stored),
     invalidated,
+    reviewSummary,
   );
+}
+
+async function committedReviewSummary(
+  operations: ControlPlaneOperations,
+  plan: StoredGitInstallPlan,
+): Promise<GitInstallPlanResponse["reviewSummary"]> {
+  const [installConfig, baseConfig, bindingSet, connections] = await Promise.all([
+    operations.capsules.getInstallConfig(plan.installConfigId!),
+    plan.installConfigBaseId
+      ? operations.capsules.getInstallConfig(plan.installConfigBaseId)
+      : Promise.resolve(undefined),
+    operations.capsules.getProviderBindingSetByCapsule(
+      plan.capsuleId!,
+      plan.capsule.environment,
+    ),
+    operations.connections.listProviderConnections(plan.workspaceId),
+  ]);
+  if (!bindingSet) return undefined;
+  return committedAttemptReviewSummary({ plan, installConfig, baseConfig, bindingSet, connections });
 }
 
 function installPlanResponse(
   plan: GitInstallPlan,
   userAction: GitInstallPlanResponse["userAction"],
   invalidated: GitInstallPlanInvalidation | undefined,
+  reviewSummary?: GitInstallPlanResponse["reviewSummary"],
 ): GitInstallPlanResponse {
   const self = `/api/v1/install-plans/${encodeURIComponent(plan.id)}`;
   const reconcileable = invalidated === undefined &&
@@ -3959,6 +3986,7 @@ function installPlanResponse(
           : "none",
     userAction,
     ...(invalidated ? { invalidated } : {}),
+    ...(reviewSummary ? { reviewSummary } : {}),
     links: {
       self,
       ...(reconcileable ? { reconcile: `${self}/reconcile` } : {}),

@@ -202,6 +202,10 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.listingUnavailable":
     "This app is no longer available from the Store.",
   // --- install attempt (TASK-0115 Phase 3b) --------------------------------
+  "installStore.reviewEdit": "Edit connections and settings",
+  "installStore.reviewEditHint": "Review the install again after editing. Enter secret settings again.",
+  "installStore.reviewSet": "Set",
+  "installStore.reviewNotSet": "Not set",
   "installStore.secretHint": "Not saved. Sent only to check what will be created.",
   "installStore.secretJsonHint": "Enter the JSON on one line; it stays hidden as you type.",
   "installStore.derivedHint": "Left empty, it comes from the app name.",
