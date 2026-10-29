@@ -16,6 +16,7 @@ import type { StoredInstallConfig, StoredSource } from "../deploy-control/store.
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import type { StoredGitInstallPlan } from "../install-plans/store.ts";
+import { sourceCreatorPlanAllowsRetirement } from "./retirement_policy.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -193,10 +194,7 @@ export function inventorySourceOwnershipGroup(
     } else {
       const creator = group.gitPlans.find((plan) => plan.id === source.createdByInstallPlanId);
       if (creator && creator.workspaceId === source.workspaceId &&
-        creator.phase !== "discarded" &&
-        !(creator.phase === "failed" && creator.mode !== "attempt") &&
-        (creator.phase === "reviewable" || !creator.expiresAt ||
-          !Number.isFinite(Date.parse(creator.expiresAt)) || Date.parse(creator.expiresAt) + DAY_MS > nowMs)) {
+        !sourceCreatorPlanAllowsRetirement(creator, nowMs)) {
         reason = "source_creator_plan_still_active";
       }
     }

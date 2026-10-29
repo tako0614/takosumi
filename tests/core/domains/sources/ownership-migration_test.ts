@@ -306,7 +306,7 @@ describe("operator Source ownership migration", () => {
     expect(inventorySourceOwnershipGroup(old, "invalid-time")).toMatchObject({ action: "blocked",
       reason: "retirement_grace_not_elapsed" });
     const creator = { id: "git_review", workspaceId: "ws_1", sourceId: old.source.id,
-      phase: "reviewable" } as StoredGitInstallPlan;
+      phase: "reviewable", updatedAt: "2026-10-26T00:00:00.000Z" } as StoredGitInstallPlan;
     const withCreator: SourceOwnershipMigrationGroup = { ...old,
       source: { ...old.source, createdByInstallPlanId: creator.id }, gitPlans: [creator] };
     expect(inventorySourceOwnershipGroup(withCreator, now)).toMatchObject({ action: "blocked",
@@ -320,6 +320,23 @@ describe("operator Source ownership migration", () => {
       action: "blocked", reason: "source_plan_still_active" });
     expect(inventorySourceOwnershipGroup({ ...withCreator,
       gitPlans: [{ ...creator, phase: "discarded" }] }, now).action).toBe("retire");
+    const cutoff = "2026-10-27T00:00:00.000Z";
+    for (const phase of ["discarded", "failed"] as const) {
+      expect(inventorySourceOwnershipGroup({ ...withCreator,
+        gitPlans: [{ ...creator, phase, completedAt: cutoff }] }, now).action).toBe("retire");
+      expect(inventorySourceOwnershipGroup({ ...withCreator,
+        gitPlans: [{ ...creator, phase, completedAt: "2026-10-27T00:00:00.001Z" }] }, now))
+        .toMatchObject({ action: "blocked", reason: "source_creator_plan_still_active" });
+    }
+    expect(inventorySourceOwnershipGroup({ ...withCreator,
+      gitPlans: [{ ...creator, phase: "failed", mode: "attempt" }] }, now))
+      .toMatchObject({ action: "blocked", reason: "source_creator_plan_still_active" });
+    expect(inventorySourceOwnershipGroup({ ...withCreator,
+      gitPlans: [{ ...creator, phase: "awaiting_input", mode: "attempt", expiresAt: cutoff }] }, now).action)
+      .toBe("retire");
+    expect(inventorySourceOwnershipGroup({ ...withCreator,
+      gitPlans: [{ ...creator, phase: "failed", mode: "attempt", expiresAt: cutoff }] }, now).action)
+      .toBe("retire");
   });
 
   test("read and preparation failures block one group and preserve later dry runs", async () => {

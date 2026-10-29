@@ -36,3 +36,5 @@ Implementation and focused regression coverage are complete. Complete-gate and C
 - #647: recover only deterministic install-plan orphans after the terminal/expiry grace; retain operator marking for legacy ownerless Sources. Isolate maintenance marker failures and start hourly polling conservatively.
 - Validation: focused regressions and static phases locally; the full portable gate runs in CI on all four heads. Stop local work if SSD free space falls below 2 GB.
 - Report: `/root/dev/tmp/tk0118/phase2-fix2-report.md`.
+
+- The sweeper and #649 operator inventory share the creator-plan predicate. Discard/non-attempt failure grace uses `completedAt` (or `updatedAt` for retained records); expiry grace uses `expiresAt`. Recent terminal transitions and resumable failed attempts remain protected.
