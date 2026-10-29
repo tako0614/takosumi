@@ -70,13 +70,14 @@ for (const version of [75, 76]) {
         capsule.name,capsule.slug,capsule.sourceId,capsule.installConfigId,capsule.environment,
         capsule.currentStateGeneration,capsule.status,JSON.stringify(capsule),capsule.createdAt,capsule.updatedAt).run();
     const expectedRoot = `workspaces/${workspace.id}/capsules/${capsule.id}`;
-    expect((await control.getCapsule(capsule.id))?.storageRoot).toBe(expectedRoot);
-    expect((await control.listCapsules(workspace.id))[0]?.storageRoot).toBe(expectedRoot);
-    expect((await control.getCapsulesByIds([capsule.id]))[0]?.storageRoot).toBe(expectedRoot);
-    expect((await control.getCapsuleByName(capsule.projectId, capsule.name, capsule.environment))?.storageRoot).toBe(expectedRoot);
+    expect((await control.getCapsule(capsule.id))?.storageRoot).toBe(capsule.storageRoot);
+    expect((await control.listCapsules(workspace.id))[0]?.storageRoot).toBe(capsule.storageRoot);
+    expect((await control.getCapsulesByIds([capsule.id]))[0]?.storageRoot).toBe(capsule.storageRoot);
+    expect((await control.getCapsuleByName(capsule.projectId, capsule.name, capsule.environment))?.storageRoot).toBe(capsule.storageRoot);
+    expect(await control.getCapsuleStorageRoot(capsule.id)).toBe(expectedRoot);
     expect(new ObjectKeyArtifactReferenceAllocator().allocate({ kind: "state", workspaceId: workspace.id,
       subject: { kind: "capsule", id: capsule.id }, environment: capsule.environment, generation: 1,
-      storageRoot: (await control.getCapsule(capsule.id))?.storageRoot }))
+      storageRoot: await control.getCapsuleStorageRoot(capsule.id) }))
       .toBe(`${expectedRoot}/environments/production/state-versions/00000001.tfstate.enc`);
     expect(await ownership.resolveAppAccess("owner", capsule.id)).toMatchObject({ role: "owner" });
     expect(await ownership.resolveAppAccess("admin", capsule.id)).toMatchObject({ role: "member" });
@@ -85,6 +86,7 @@ for (const version of [75, 76]) {
     }
     await control.putCapsule({ ...capsule, name: "Updated legacy app" });
     expect((await control.getCapsule(capsule.id))?.name).toBe("Updated legacy app");
+    expect(await control.getCapsuleStorageRoot(capsule.id)).toBe(expectedRoot);
     expect(await db.prepare("select name from pragma_table_info('capsules') where name='storage_root'").first()).toBeNull();
   }, 180_000);
 

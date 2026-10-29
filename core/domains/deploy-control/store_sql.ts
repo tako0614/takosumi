@@ -6983,7 +6983,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         },
       });
     await this.#initializeCapsulePhysicalOwner(capsule);
-    return (await this.#withCapsuleOwnership(normalizeCapsuleRecord(capsule))) ?? normalizeCapsuleRecord(capsule);
+    return normalizeCapsuleRecord(capsule);
   }
 
   async createCapsuleInitialAuthority(
@@ -7180,8 +7180,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       });
       await db.insert(pgSchema.capsules).values(capsuleValues(capsule));
       await this.#initializeCapsulePhysicalOwner(capsule, transaction);
-      if (capsule.ownerAccountId &&
-        await this.#v77Column("takosumi_capsules", "owner_account_id", transaction)) {
+      if (capsule.ownerAccountId) {
         await transaction.query(
           `insert into takosumi_capsule_members
              (capsule_id, account_id, status, added_by, created_at, updated_at)

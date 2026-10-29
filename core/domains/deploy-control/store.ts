@@ -6315,9 +6315,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     readonly capsuleId: string; readonly ownerAccountId: string; readonly ownershipEpoch: number;
     readonly managementState: "active" | "draining" | "frozen"; readonly managementEpoch: number;
     readonly storageRoot: string;
-  }, onlyIfMissing = false): boolean {
+  }, onlyIfMissing = false, expectedOwnershipEpoch?: number): boolean {
     const current = this.#capsules.get(record.capsuleId);
-    if (!current || (onlyIfMissing && current.ownerAccountId)) return false;
+    if (!current || (onlyIfMissing && current.ownerAccountId) ||
+      (expectedOwnershipEpoch !== undefined && (current.ownershipEpoch ?? 0) !== expectedOwnershipEpoch)) return false;
     this.#capsules.set(record.capsuleId, { ...current,
       ownerAccountId: record.ownerAccountId, ownershipEpoch: record.ownershipEpoch,
       managementState: record.managementState, managementEpoch: record.managementEpoch,
