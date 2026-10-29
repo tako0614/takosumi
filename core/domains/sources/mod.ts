@@ -1,3 +1,6 @@
+import type { GitInstallPlanStore } from "../install-plans/store.ts";
+import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
+import { sourceCreatorPlanAllowsRetirement, sourceCreatorPlanMatchesSource } from "./retirement_policy.ts";
 /**
  * Source domain service (Core Specification §6 / §7).
  *
@@ -153,6 +156,7 @@ export interface EnsureOwnedSourceRequest {
 
 export interface SourcesServiceDependencies {
   readonly store: OpenTofuControlStore;
+  readonly plans?: Pick<GitInstallPlanStore, "get">;
   /** Host authority for opaque durable source-archive references. */
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly enqueueSourceSync?: EnqueueSourceSync;
@@ -172,6 +176,7 @@ export interface SourcesServiceDependencies {
 
 export class SourcesService {
   readonly #store: OpenTofuControlStore;
+  readonly #plans?: Pick<GitInstallPlanStore, "get">;
   readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
   readonly #enqueue: EnqueueSourceSync;
   readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
@@ -187,6 +192,7 @@ export class SourcesService {
 
   constructor(deps: SourcesServiceDependencies) {
     this.#store = deps.store;
+    this.#plans = deps.plans;
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#enqueue = deps.enqueueSourceSync ?? (() => Promise.resolve());
     this.#compatibilityAnalyzer =
@@ -601,9 +607,28 @@ export class SourcesService {
       const owner = source!.ownerCapsuleId
         ? await this.#store.getCapsule(source!.ownerCapsuleId)
         : undefined;
-      if (source!.ownerCapsuleId && (!owner || owner.id !== source!.ownerCapsuleId ||
-        owner.workspaceId !== source!.workspaceId || owner.sourceId !== sourceId ||
-        owner.status !== "destroyed")) {
+      let uncreatedReservation = false;
+      if (source!.ownerCapsuleId && !owner && isInstallPlanSourceReservation(source!)) {
+        const creator = await this.#plans?.get(source!.createdByInstallPlanId!);
+        uncreatedReservation = !!creator && sourceCreatorPlanMatchesSource(source!, creator) &&
+          sourceCreatorPlanAllowsRetirement(creator, this.#now().getTime(), 0);
+        if (uncreatedReservation) {
+          let cursor: string | undefined;
+          do {
+            const page = await this.#store.listCapsulesPage(source!.workspaceId, {
+              limit: 100, includeDestroyed: true, ...(cursor ? { cursor } : {}),
+            });
+            if (page.items.some((capsule) => capsule.sourceId === sourceId)) {
+              uncreatedReservation = false;
+              break;
+            }
+            cursor = page.nextCursor;
+          } while (cursor !== undefined);
+        }
+      }
+      if (source!.ownerCapsuleId && ((!owner && !uncreatedReservation) || (owner && (
+        owner.id !== source!.ownerCapsuleId || owner.workspaceId !== source!.workspaceId ||
+        owner.sourceId !== sourceId || owner.status !== "destroyed")))) {
         throw new OpenTofuControllerError("failed_precondition",
           `Source ${sourceId} owner Capsule is not destroyed`,
           { reason: "source_owner_not_destroyed" });

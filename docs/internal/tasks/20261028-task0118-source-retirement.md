@@ -35,3 +35,5 @@ Implementation and verification are in progress.
 - #647: recover only deterministic install-plan orphans after the terminal/expiry grace; retain operator marking for legacy ownerless Sources. Isolate maintenance marker failures and start hourly polling conservatively.
 - Validation: focused regressions and static phases locally; the full portable gate runs in CI on all four heads. Stop local work if SSD free space falls below 2 GB.
 - Report: `/root/dev/tmp/tk0118/phase2-fix2-report.md`.
+
+- Independent review found normal install Sources already reserve their owner id before Capsule creation. Recover those reservations only with matching deterministic Source/owner/creator scope, terminal/expiry evidence and any-status Capsule absence. Keep arbitrary missing owners blocked in service, physical custody, and all final store guards; cover lost Source acknowledgements.

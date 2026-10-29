@@ -20,7 +20,9 @@ legacy ownerless Source は古いという理由だけでは削除せず、opera
 付けたものだけを再開する。例外は `createdByInstallPlanId` のある deterministic Source で、
 同じ Workspace の creator plan が discard、非 attempt の failed、または attempt の expiry から
 24時間以上経過し、Source 自体も作成から24時間以上経過し、Capsule が存在・参照していない場合だけ
-mark なしで回収する。failed attempt は expiry までは再開可能として保護する。
+mark なしで回収する。Capsule 作成前の予約 `ownerCapsuleId` も、creator から導いた Source / owner ID と
+creator の参照が一致し、全状態の Capsule が不在の場合だけ同じ回収対象になる。
+任意の missing owner は引き続き拒否する。failed attempt は expiry までは再開可能として保護する。
 非終端 install plan の参照が残る Source は保留する。
 destroy Apply の応答では archive を削除せず、sweeper が回収する。
 
