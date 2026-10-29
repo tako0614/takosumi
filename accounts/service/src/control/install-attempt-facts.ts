@@ -7,8 +7,9 @@
  * an attempt pauses. Live data that can change while the actor looks at the
  * sheet — eligible Provider Connections and app-name collisions — is read
  * again for every projection, so creating a connection elsewhere is visible
- * on the next read without another coordinator write. No variable value is
- * captured, projected or compared here.
+ * on the next read without another coordinator write. Attempt facts capture
+ * no variable values. A committed review may project only values explicitly
+ * declared non-sensitive by the accepted repository presentation.
  */
 import type {
   GitInstallPlanConnectionCandidate,
@@ -18,6 +19,7 @@ import type {
   GitInstallPlanModuleCandidate,
   GitInstallPlanNameProposal,
   GitInstallPlanProviderBindingRequest,
+  GitInstallPlanReviewSummary,
   GitInstallPlanUserAction,
   GitInstallPlanVariablePresentation,
   JsonValue,
@@ -28,6 +30,7 @@ import type {
   Capsule,
   InstallConfig,
 } from "takosumi-contract/install-configs";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 import type {
   CapsuleCompatibilityReport,
   CapsuleRootModuleVariableDeclaration,
@@ -36,7 +39,7 @@ import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connect
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { isSecretKey } from "takosumi-contract/redaction";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import type { CapsuleRequiredInterface } from "takosumi-contract/interfaces";
+import type { CapsuleRequiredInterface, Interface } from "takosumi-contract/interfaces";
 import { accountsOidcModuleVariableProfile } from "../../../../core/domains/deploy-control/accounts_oidc_module_variable_profile.ts";
 
 import type {
@@ -547,6 +550,85 @@ export function effectiveInterfaceLinks(
     requirementKey: row.requirementKey,
     choice: row.choice!,
   }));
+}
+
+/**
+ * Reconstruct the committed review sheet. A generic OpenTofu value is always
+ * write-only; only a compiled repository presentation permits a public value.
+ * The coordinator's pre-commit answers are never used as value authority.
+ */
+export function committedAttemptReviewSummary(input: {
+  readonly plan: StoredGitInstallPlan;
+  readonly installConfig?: InstallConfig;
+  readonly baseConfig?: InstallConfig;
+  readonly bindingSet?: ProviderBindingSet;
+  readonly connections: readonly ProviderConnection[];
+  readonly interfaces?: readonly Interface[];
+}): GitInstallPlanReviewSummary {
+  const { plan, installConfig, baseConfig, bindingSet } = input;
+  const displayNames = new Map(input.connections.map((connection) => [
+    connection.id,
+    connection.displayName || connection.id,
+  ]));
+  const interfaceNames = new Map((input.interfaces ?? []).map((value) => [
+    value.metadata.id, value.metadata.name,
+  ]));
+  const trustedRepositoryPresentation = baseConfig !== undefined &&
+    typeof plan.installConfigBaseId === "string" &&
+    installConfig?.installExperience?.repositoryInstallUx?.status === "accepted" &&
+    installConfig.internal?.sourceSnapshotId === plan.sourceSnapshotId &&
+    typeof installConfig.internal?.repositoryInstallUxDigest === "string" &&
+    baseConfig.id === plan.installConfigBaseId;
+  const presented = new Map(
+    (installConfig?.variablePresentation ?? []).map((entry) => [entry.name, entry]),
+  );
+  return {
+    modulePath: installConfig?.modulePath ?? plan.installModulePath ??
+      plan.attemptFacts?.inputs?.modulePath ?? plan.options.modulePath ?? ".",
+    appName: plan.capsule.name,
+    environment: plan.capsule.environment,
+    connections: (bindingSet?.bindings ?? []).map((binding) => ({
+      provider: binding.provider,
+      moduleLocalName: binding.moduleLocalName ?? binding.provider.split("/").at(-1) ?? "",
+      ...(binding.childAlias !== undefined ? { childAlias: binding.childAlias } : {}),
+      ...(binding.rootAlias !== undefined ? { rootAlias: binding.rootAlias } : {}),
+      connectionId: binding.connectionId,
+      displayName: displayNames.get(binding.connectionId) ?? binding.connectionId,
+      // The committed binding set does not distinguish an explicit answer
+      // from a sole-candidate selection. Do not invent that provenance.
+      autoSelected: null,
+    })),
+    interfaces: (plan.options.interfaceLinks ?? []).map((link) => ({
+      requirementKey: link.requirementKey,
+      choice: link.choice,
+      ...(link.choice.kind === "interface" && interfaceNames.get(link.choice.interfaceId)
+        ? { displayName: interfaceNames.get(link.choice.interfaceId) }
+        : {}),
+      autoSelected: plan.autoSelectedInterfaceKeys?.includes(link.requirementKey) === true,
+    })),
+    settings: (installConfig ? plan.attemptFacts?.inputs?.variables ?? [] : []).map((variable) => {
+      const set = Object.prototype.hasOwnProperty.call(
+        installConfig?.variableMapping ?? {},
+        variable.name,
+      );
+      const declaration = presented.get(variable.name);
+      const publicValue = trustedRepositoryPresentation &&
+        variable.sensitive === false &&
+        declaration !== undefined && declaration.secret !== true &&
+        !Object.prototype.hasOwnProperty.call(baseConfig.variableMapping, variable.name) &&
+        !baseConfig.variablePresentation?.some((entry) => entry.name === variable.name) &&
+        !isSecretKey(variable.name);
+      return {
+        name: variable.name,
+        sensitive: !publicValue,
+        set,
+        ...(publicValue ? { type: variable.type, required: variable.required } : {}),
+        ...(set && publicValue
+          ? { value: installConfig?.variableMapping[variable.name] as JsonValue }
+          : {}),
+      };
+    }),
+  };
 }
 
 /** Live collision check against active Capsules in the default Project. */

@@ -11,6 +11,7 @@ import {
   getGitInstallPlan,
   listOpenGitInstallAttempts,
   reconcileGitInstallPlan,
+  resetAppOwnershipCache,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
 const ID = "gip_0123456789abcdef";
@@ -24,6 +25,7 @@ function record(reply: (call: Call) => unknown = () => ({
   nextAction: "none",
   userAction: { kind: "none" },
 })): Call[] {
+  resetAppOwnershipCache();
   const calls: Call[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const call = {
@@ -33,7 +35,7 @@ function record(reply: (call: Call) => unknown = () => ({
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     };
     calls.push(call);
-    return new Response(JSON.stringify(reply(call)), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(call.url === "/api/v1/apps" ? { apps: [] } : reply(call)), { headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   return calls;
 }
@@ -45,8 +47,8 @@ test("starting sends the value-free attempt body with the caller's key", async (
     { mode: "attempt", source: { url: "https://github.com/example/office.git" } },
     "key_one",
   );
-  expect(calls).toEqual([{
-    url: "/api/v1/workspaces/ws_one/install-plans",
+  expect(calls).toEqual([{ url: "/api/v1/apps", method: "GET", key: null, body: undefined }, {
+    url: "/api/v1/install-plans",
     method: "POST",
     key: "key_one",
     body: { mode: "attempt", source: { url: "https://github.com/example/office.git" } },

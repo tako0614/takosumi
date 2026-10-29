@@ -16,7 +16,7 @@ export function isProviderConnectionCandidate(
 ): boolean {
   return (
     isWorkspaceBindableOperatorConnection(connection) ||
-    (connection.scope === "workspace" && connection.status === "verified")
+    (["workspace", "personal", "account"].includes(connection.scope) && connection.status === "verified")
   );
 }
 

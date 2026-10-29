@@ -184,10 +184,9 @@ describe("i18n dictionaries", () => {
       );
     }
     expect(ja["nav.connections"]).toBe("接続");
-    // スペース is the Japanese UI word; English keeps the product noun
-    // Workspace, never the retired "Space" alias.
-    expect(ja["account.section.workspace"]).toBe("スペース");
-    expect(en["account.section.workspace"]).toBe("Workspace");
+    // Account has personal connections and usage; workspace UI is retired.
+    expect(Object.hasOwn(ja, "account.section.workspace")).toBe(false);
+    expect(Object.hasOwn(en, "account.section.workspace")).toBe(false);
     for (const key of keys) {
       expect({ key, retiredAlias: /\bspaces?\b/iu.test(en[key]) }).toEqual({
         key,

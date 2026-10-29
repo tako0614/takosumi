@@ -27,6 +27,7 @@ export default function AppPage() {
             <AppManagePage
               capsuleId={capsuleId}
               principalId={session.subject}
+              accountId={session.primaryAccountId ?? session.subject}
               {...(section() ? { section: section()! } : {})}
             />
           )}

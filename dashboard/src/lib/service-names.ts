@@ -6,6 +6,7 @@
  * unnamed wording or the id, never to an error.
  */
 import { type Accessor, createMemo, createResource } from "solid-js";
+import { listAccessibleApps } from "./control-api.ts";
 import { listCapsulesCached } from "./capsule-list.ts";
 import { readyOrUndefined } from "./resource-read.ts";
 
@@ -13,8 +14,12 @@ export function createServiceNames(
   workspaceId: () => string | null | undefined,
 ): Accessor<ReadonlyMap<string, string>> {
   const [services] = createResource(
-    () => workspaceId() || null,
-    (id) => listCapsulesCached(id, { includeDestroyed: true }),
+    () => ({ workspaceId: workspaceId() || undefined }),
+    async (key) => {
+      const apps = await listAccessibleApps();
+      if (apps !== undefined) return apps.map((app) => ({ id: app.capsuleId, name: app.name }));
+      return key.workspaceId ? await listCapsulesCached(key.workspaceId, { includeDestroyed: true }) : [];
+    },
   );
   return createMemo(
     () =>

@@ -11,10 +11,11 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import {
-  PORTABLE_CAPSULES,
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
+  PORTABLE_SHARED_APP_MEMBERS,
   PORTABLE_SOURCE_COMMIT,
+  portableAppConnectionLabels,
 } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import { resolvePortableOrigin } from "./portable-origin.ts";
@@ -91,6 +92,104 @@ function runPage(runs: readonly { readonly createdAt: string }[]) {
 export function registerAppPageCases(mode: DashboardE2EMode) {
   test.describe("Installed app page", () => {
     test.skip(mode !== "portable", "deterministic app page fixture; not production evidence");
+
+    test("a member can choose only marked owner connection labels in app settings", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
+      const requests: string[] = [];
+      const configurationBodies: unknown[] = [];
+      const capsuleId = "cap_beta_office";
+      const configId = `cfg_${capsuleId}`;
+      page.on("request", (request) => {
+        const url = new URL(request.url());
+        if (url.pathname === "/api/v1/connections") requests.push(`${request.method()} ${url.pathname}${url.search}`);
+      });
+      await page.route("**/api/v1/**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        const path = url.pathname;
+        if (path === "/api/v1/apps") {
+          return route.fulfill({ json: { apps: [{
+            capsuleId, name: "Beta Office", displayName: "Beta Office", role: "member",
+            ownerDisplayName: "Hanako Sato", state: "installed", primaryAction: "open",
+          }] } });
+        }
+        if (path === "/api/v1/connections" && url.searchParams.get("projection") === "labels") {
+          return route.fulfill({ json: portableAppConnectionLabels(capsuleId) });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}/members`) {
+          return route.fulfill({ json: PORTABLE_SHARED_APP_MEMBERS });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}`) {
+          return route.fulfill({ json: { capsule: {
+            id: capsuleId, workspaceId: "ws_beta", name: "Beta Office", slug: "beta-office",
+            sourceId: `src_${capsuleId}`, installConfigId: configId, environment: "production",
+            currentStateVersionId: "sv_member", currentStateGeneration: 1, status: "active",
+            freshness: "fresh", createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+          }, installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}/app`) {
+          return route.fulfill({ json: { app: appView(capsuleId, "Beta Office", {
+            version: { updateAvailable: false, stale: false, autoUpdate: false },
+            uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
+          }) } });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}/provider-bindings`) {
+          return route.fulfill({ json: { providerBindingSet: {
+            id: "pbs_member_e2e", workspaceId: "ws_beta", capsuleId, environment: "production",
+            bindings: [
+              { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "pc_hanako_cloudflare" },
+              { provider: "registry.opentofu.org/hashicorp/aws", moduleLocalName: "aws", connectionId: "pc_hanako_aws" },
+            ],
+            createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+          } } });
+        }
+        if (path === `/api/v1/capsule-configs/${configId}`) {
+          return route.fulfill({ json: { installConfig: {
+            id: configId, workspaceId: "ws_beta", name: "Beta Office",
+            sourceSelector: { kind: "git", url: "https://github.com/example/beta-office.git", ref: "main", path: "." },
+            policy: {}, variableMapping: {}, outputAllowlist: {}, interfaceBlueprints: [],
+            createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+          } } });
+        }
+        if (path === `/api/v1/capsules/${capsuleId}/state-versions`) return route.fulfill({ json: { stateVersions: [] } });
+        if (path === `/api/v1/capsules/${capsuleId}/runs`) return route.fulfill({ json: { runs: [] } });
+        if (path === `/api/v1/capsules/${capsuleId}/current-resource-inventory`) return route.fulfill({ json: { inventory: null } });
+        if (path === `/api/v1/capsules/${capsuleId}/usage-summary`) return route.fulfill({ json: { summary: { capsuleId, usdMicros: 0, eventCount: 0, ratedEventCount: 0, unratedEventCount: 0 } } });
+        if (path === `/api/v1/capsules/${capsuleId}/configuration-plans` && request.method() === "POST") {
+          configurationBodies.push(request.postDataJSON());
+          return route.fulfill({ status: 201, json: {
+            capsule: { id: capsuleId, workspaceId: "ws_beta", name: "Beta Office", installConfigId: configId },
+            configurationPlan: { replayed: false, previousInstallConfigId: configId, targetInstallConfigId: `${configId}_next`, sourceSnapshotId: "snap_member", planRunId: "run_member_configuration_plan" },
+            links: { run: "/api/v1/runs/run_member_configuration_plan" },
+          } });
+        }
+        if (path === "/api/v1/runs/run_member_configuration_plan") return route.fulfill({ json: { run: { id: "run_member_configuration_plan", type: "plan", status: "succeeded", capsuleId, summary: { add: 0, change: 1, destroy: 0 }, policyStatus: "pass", planResources: [] } } });
+        if (path === "/api/v1/runs/run_member_configuration_plan/cost") return route.fulfill({ json: { cost: { runId: "run_member_configuration_plan", billingMode: "disabled", estimatedUsdMicros: 0, ratingStatus: "not_applicable", blocked: false, reasons: [] } } });
+        if (path === "/api/v1/runs/run_member_configuration_plan/logs") return route.fulfill({ json: { diagnostics: [], auditEvents: [] } });
+        return route.fallback();
+      });
+
+      await page.goto(`/apps/${capsuleId}`, { waitUntil: "domcontentloaded" });
+      const settings = page.getByTestId("app-settings");
+      await expect(settings.getByTestId("app-connection-row").nth(0).locator("select")).toHaveValue("pc_hanako_cloudflare");
+      await expect(settings.locator('option[value="pc_hanako_cloudflare"]')).toHaveCount(1);
+      await expect(settings.getByRole("button", { name: /Connect|Add connection/u })).toHaveCount(0);
+      await expect.poll(() => requests.length).toBeGreaterThan(0);
+      expect(requests).toEqual([`GET /api/v1/connections?capsuleId=${capsuleId}&projection=labels`]);
+      const cloudflare = settings.getByTestId("app-connection-row").nth(0).locator("select");
+      await cloudflare.selectOption("pc_hanako_cloudflare_alt");
+      await settings.getByRole("button", { name: "Review", exact: true }).click();
+      await expect.poll(() => configurationBodies.length).toBe(1);
+      expect(configurationBodies[0]).toEqual({
+        variablePatch: { set: {}, remove: [] },
+        providerBindings: [
+          { provider: CLOUDFLARE, moduleLocalName: "cloudflare", connectionId: "pc_hanako_cloudflare_alt" },
+          { provider: "registry.opentofu.org/hashicorp/aws", moduleLocalName: "aws", connectionId: "pc_hanako_aws" },
+        ],
+        interfaceBlueprints: [],
+        expected: { authorityGuard: AUTHORITY_GUARD },
+      });
+    });
 
     test("keeps an installed app: open, update, settings, what it created and history in place", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
@@ -215,6 +314,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
             createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
           } } });
         }
+        if (path === "/api/v1/connections") return route.fulfill({ json: { connections: PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS } });
         if (path === "/api/v1/provider-connections") return route.fulfill({ json: { providerConnections: PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS } });
         if (path === `/api/v1/capsules/${CAPSULE_ID}/usage-summary`) {
           return route.fulfill({ json: { summary: { capsuleId: CAPSULE_ID, usdMicros: 1_230_000, eventCount: 5, ratedEventCount: 5, unratedEventCount: 0 } } });
@@ -355,7 +455,7 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       const review = versionSection.getByTestId("app-review");
       await expect(review.getByRole("heading", { name: "What the update changes" })).toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare R2 Bucket");
-      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
+      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs for this app.");
       await expect(page).toHaveURL(new RegExp(`/apps/${CAPSULE_ID}$`, "u"));
       await capture(page, "app-update-review");
       // A clean Plan waits for consent: no Apply across Run poll intervals.
@@ -478,10 +578,21 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
           seenMutations.push(`${request.method()} ${path}`);
         }
+        if (path === "/api/v1/apps") {
+          return route.fulfill({ json: { apps: (Object.keys(apps) as AppId[]).map((id) => ({
+            capsuleId: id,
+            name: apps[id].name,
+            role: "owner",
+            ownerDisplayName: "Portable E2E",
+            state: "installed",
+            primaryAction: "open",
+          })) } });
+        }
         const app = (Object.keys(apps) as AppId[]).find((id) => path.startsWith(`/api/v1/capsules/${id}`));
         if (app) {
           const rest = path.slice(`/api/v1/capsules/${app}`.length);
           if (rest === "") return route.fulfill({ json: { capsule: capsule(app), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
+          if (rest === "/members") return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
           if (rest === "/state-versions") return route.fulfill({ json: { stateVersions: [{ id: `sv_${app}`, workspaceId: "ws_alpha", capsuleId: app, environment: "production", generation: 1, createdByRunId: `run_install_${app}`, createdAt: now }] } });
           if (rest === "/app") {
             return route.fulfill({ json: { app: appView(app, apps[app].name, {
@@ -656,10 +767,21 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
           seenMutations.push(`${request.method()} ${path}${url.search}`);
         }
+        if (path === "/api/v1/apps") {
+          return route.fulfill({ json: { apps: [removeApp, retryApp].map((app) => ({
+            capsuleId: app.id,
+            name: app.name,
+            role: "owner",
+            ownerDisplayName: "Portable E2E",
+            state: "needs_attention",
+            primaryAction: "retry",
+          })) } });
+        }
         for (const app of [removeApp, retryApp]) {
           const base = `/api/v1/capsules/${app.id}`;
           if (!path.startsWith(base)) continue;
           const rest = path.slice(base.length);
+          if (rest === "/members") return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
           if (rest === "" && request.method() === "DELETE" && url.searchParams.get("immediate") === "true") {
             removals += 1;
             runs.set(`run_destroy_plan_${removals}`, destroyPlan(removals));
@@ -911,7 +1033,18 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         if (shouldRecordControlPlaneMutation(mode, origin, request.url(), request.method())) {
           seenMutations.push(`${request.method()} ${path}`);
         }
+        if (path === "/api/v1/apps") {
+          return route.fulfill({ json: { apps: [{
+            capsuleId: ID,
+            name: NAME,
+            role: "owner",
+            ownerDisplayName: "Portable E2E",
+            state: "installed",
+            primaryAction: "open",
+          }] } });
+        }
         const base = `/api/v1/capsules/${ID}`;
+        if (path === `${base}/members`) return route.fulfill({ json: { owner: { accountId: "sub_portable_e2e", displayName: "Portable E2E", email: "portable-e2e@example.test" }, members: [] } });
         if (path === base) return route.fulfill({ json: { capsule: capsule(), installConfigReAdoption: { authorityGuard: AUTHORITY_GUARD } } });
         if (path === `${base}/app`) {
           return viewUnavailable
@@ -1175,23 +1308,35 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
       await expect(page.getByRole("heading", { name: "App not found" })).toHaveCount(0);
     });
 
-    test("Home shows every installed app with its state and opens only apps with a screen", async ({ page }) => {
+    test("Home shows every accessible app with its state and opens only apps with a screen", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("tg_lang", "en"));
       const errors = pageErrors(page);
       const traffic = monitorDashboardTraffic(page, mode);
-      const base = PORTABLE_CAPSULES.ws_alpha[0];
-      const app = (id: string, name: string, patch: Record<string, unknown>) => ({
-        ...base, id, name, slug: id, sourceId: `src_${id}`, installConfigId: `cfg_${id}`,
-        currentStateVersionId: `sv_${id}`, ...patch,
+      const ids = ["cap_repository_office", "cap_storage", "cap_blog", "cap_mail", "cap_chat", "cap_old"] as const;
+      const apps = [
+        { capsuleId: ids[0], name: PORTABLE_EXPECTATIONS.appName, role: "owner", state: "installed", primaryAction: "open" },
+        { capsuleId: ids[1], name: "Object Storage", role: "member", state: "stopped", primaryAction: "view_resources" },
+        { capsuleId: ids[2], name: "Team Blog", role: "member", state: "installed", primaryAction: "open" },
+        { capsuleId: ids[3], name: "Mail Relay", role: "owner", state: "needs_attention", primaryAction: "retry" },
+        { capsuleId: ids[4], name: "Chat", role: "owner", state: "installing", primaryAction: "open" },
+        { capsuleId: ids[5], name: "Old Wiki", role: "owner", state: "uninstall_scheduled", primaryAction: "open" },
+      ];
+      await page.route("**/api/v1/**", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname === "/api/v1/apps") return route.fulfill({ json: { apps } });
+        const appId = ids.find((id) => url.pathname === `/api/v1/capsules/${id}/app`);
+        if (appId) {
+          const row = apps[ids.indexOf(appId)]!;
+          return route.fulfill({ json: { app: appView(appId, row.name, {
+            screens: appId === "cap_repository_office" ? [{ interfaceId: "if_launcher", name: "app.launcher", title: PORTABLE_EXPECTATIONS.appName, url: PORTABLE_EXPECTATIONS.appUrl }] : [],
+            state: row.state,
+            primaryAction: row.primaryAction,
+            ...(appId === "cap_blog" ? { version: { updateAvailable: true, stale: true, autoUpdate: false } } : {}),
+            uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy: [] } },
+          }) } });
+        }
+        return route.fallback();
       });
-      await page.route((url) => url.pathname === "/api/v1/workspaces/ws_alpha/capsules", (route) => route.fulfill({ json: { capsules: [
-        { ...base, currentStateVersionId: "sv_office" },
-        app("cap_storage", "Object Storage", {}),
-        app("cap_blog", "Team Blog", { freshness: "stale" }),
-        app("cap_mail", "Mail Relay", { status: "error" }),
-        app("cap_chat", "Chat", { status: "pending", currentStateGeneration: 0, currentStateVersionId: undefined, updatedAt: new Date().toISOString() }),
-        app("cap_old", "Old Wiki", { status: "uninstalled" }),
-      ] } }));
       await page.goto("/", { waitUntil: "domcontentloaded" });
       const cards = page.getByTestId("home-app");
       await expect(cards).toHaveCount(6);

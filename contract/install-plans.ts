@@ -459,12 +459,49 @@ export type GitInstallPlanInvalidation =
   | "install_attempt_expired"
   | "workspace_management_changed";
 
+/** Read-only reconstruction of the choices committed for an install attempt. */
+export interface GitInstallPlanReviewSummary {
+  readonly modulePath: string;
+  readonly appName: string;
+  readonly environment: string;
+  readonly connections: readonly {
+    readonly provider: string;
+    readonly moduleLocalName: string;
+    readonly childAlias?: string;
+    readonly rootAlias?: string;
+    readonly connectionId: string;
+    /** Current display label, falling back to the committed id. */
+    readonly displayName: string;
+    /** Historical explicit/automatic choice is unknown for retained provider rows. */
+    readonly autoSelected: boolean | null;
+  }[];
+  readonly interfaces: readonly {
+    readonly requirementKey: string;
+    readonly choice: GitInstallPlanInterfaceChoice;
+    /** Current selected Interface label, when its metadata is available. */
+    readonly displayName?: string;
+    readonly autoSelected: boolean;
+  }[];
+  readonly settings: readonly {
+    readonly name: string;
+    readonly type?: GitInstallPlanVariablePresentation["type"];
+    readonly required?: boolean;
+    readonly sensitive: boolean;
+    /** True when the committed InstallConfig contains the setting. */
+    readonly set: boolean;
+    /** Only trusted, non-sensitive repository presentation permits a value. */
+    readonly value?: JsonValue;
+  }[];
+}
+
 export interface GitInstallPlanResponse {
   readonly installPlan: GitInstallPlan;
   readonly nextAction: "reconcile" | "review_run" | "none";
   readonly userAction: GitInstallPlanUserAction;
   /** Present when the attempt can no longer advance; `userAction` is `retry`. */
   readonly invalidated?: GitInstallPlanInvalidation;
+  /** Available after an attempt has committed its initial Capsule authority. */
+  readonly reviewSummary?: GitInstallPlanReviewSummary;
   readonly links: {
     readonly self: string;
     readonly reconcile?: string;

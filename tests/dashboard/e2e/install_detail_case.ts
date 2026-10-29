@@ -6,6 +6,7 @@ import {
   PORTABLE_UI_SURFACES,
   type InstallAttemptFixture,
   type InstallAttemptFixtureOptions,
+  workspacesResponse,
 } from "./fixture-data.ts";
 
 type BaseFixture = { readonly mutations: string[] };
@@ -20,7 +21,7 @@ const cloudflare = "registry.opentofu.org/cloudflare/cloudflare";
 const sourceUrl = `/new?git=https%3A%2F%2Fgithub.com%2Fexample%2Fcloudflare-service.git&ref=${sourceCommit}&path=.&name=cloudflare-service`;
 const domainField = /^Domain(?:\s*\*)?$/;
 const applyMutation = `POST /api/v1/runs/${planId}/apply`;
-const attemptPost = "POST /api/v1/workspaces/ws_alpha/install-plans";
+const attemptPost = "POST /api/v1/install-plans";
 
 /**
  * One app behind the install-plan coordinator: the attempt routes come from
@@ -45,7 +46,7 @@ async function detailFixture(
   let retryCount = 0;
   let retryFailed = false;
   let screensUnreadable = false;
-  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), id: "conn_inline_fixture", displayName: "My Cloudflare" };
+  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), scope: "personal", ownerAccountId: "sub_portable_e2e", workspaceId: undefined, id: "conn_inline_fixture", displayName: "My Cloudflare" };
   const attempts: InstallAttemptFixture = createInstallAttemptFixture({
     capsuleId: capId,
     planRunId: planId,
@@ -145,6 +146,7 @@ async function detailFixture(
     if (path === "/api/v1/connections/conn_inline_fixture/test") { connected = true; return route.fulfill({ json: { status: "verified" } }); }
     if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") return route.fulfill({ json: { installConfig: {
       id: "cfg-default-opentofu-capsule", name: "Example", policy: {}, variableMapping: {}, variablePresentation: [],
+      sourceSelector: { url: "https://github.com/example/cloudflare-service.git", path: "." }, modulePath: ".",
       outputAllowlist: {}, createdAt: now, updatedAt: now,
     } } });
     if (path === `/api/v1/capsules/${capId}`) {
@@ -550,7 +552,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const review = await waitForPlan(page);
       await expect(installSheet(page).getByTestId("install-basics")).toBeVisible();
       await expect(review.getByTestId("install-plan-resources")).toContainText("Cloudflare Workers Script");
-      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs in this workspace.");
+      await expect(review.getByTestId("install-plan-cost")).toContainText("Takosumi doesn't calculate costs for this app.");
       await captureInstallState(page, "app-two-step-review");
       expect(f.mutations).not.toContain(applyMutation);
       // Decision 2.
@@ -653,7 +655,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
         await expect(costBlock.getByRole("heading", { name: "Cost estimate", exact: true })).toBeVisible();
         const expectedCost = {
           rated_zero: "The estimate is $0.00.",
-          not_applicable: "Takosumi doesn't calculate costs in this workspace.",
+          not_applicable: "Takosumi doesn't calculate costs for this app.",
           unrated: "Usage measured; no price policy is configured.",
           unavailable: "Couldn't load the cost estimate. Treat the cost as unknown.",
         }[cost];
@@ -738,7 +740,7 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const sheet = await openInstallSheet(page);
       const name = sheet.getByTestId("install-app-name");
       await expect(name).toHaveValue("cloudflare-service");
-      await expect(sheet).toContainText("Another app in this workspace already uses this name.");
+      await expect(sheet).toContainText("An app with this name already exists.");
       await expect(page.getByTestId("install-apply-reason")).toHaveText("Check what you entered");
       await name.fill("Not A Valid Name");
       await expect(sheet).toContainText("Use lowercase letters");
@@ -813,6 +815,8 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       expect(f.mutations.filter((m) => m === attemptPost)).toHaveLength(1);
     });
     test("unfinished installs are listed on the Store page and can continue or stop", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha"));
+      await page.route("**/api/v1/workspaces", (route) => route.fulfill({ json: workspacesResponse() }));
       const f = await detailFixture(page, base, true);
       await page.goto(sourceUrl);
       await expect(await openInstallSheet(page)).toHaveAttribute("data-install-state", "connections");
