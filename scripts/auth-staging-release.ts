@@ -11,6 +11,7 @@ import { verifyD1OpenTofuLedgerSchemaPredeployed } from "../worker/src/d1_opento
 import { assertControlD1MaintenanceInactive } from "../worker/src/d1_schema_maintenance.ts";
 import { upstreamOAuthOptionsFromEnvironment } from "../accounts/service/src/upstream-config.ts";
 import { OWNER_OPERATION_ENTRYPOINT } from "../accounts/service/src/owner-operation-contract.ts";
+import { APP_OWNERSHIP_MUTATIONS_ENV, parseAppOwnershipMutationsFrozen } from "../accounts/service/src/app-ownership-mutations-freeze.ts";
 import { authStagingOwnerTargetBindingDigest, createAuthStagingOwnerGraphReader, parseAuthStagingOwnerGraphExpectation } from "./auth-staging-owner-graph.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -74,8 +75,9 @@ export function parseAuthStagingTarget(value: unknown): AuthStagingTarget {
   const vars: Record<string, string> = {};
   for (const [name, text] of Object.entries(value.vars)) {
     if (typeof text !== "string" || text.length > 32_768 ||
-        !/^(?:TAKOSUMI_ACCOUNTS_[A-Z0-9_]+|TAKOSUMI_ENVIRONMENT|TAKOSUMI_AUTH_WORKER_NAME|TAKOSUMI_CONTROL_D1_SCHEMA_MODE|TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS)$/u.test(name) ||
+        !/^(?:TAKOSUMI_ACCOUNTS_[A-Z0-9_]+|TAKOSUMI_ENVIRONMENT|TAKOSUMI_AUTH_WORKER_NAME|TAKOSUMI_CONTROL_D1_SCHEMA_MODE|TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS|TAKOSUMI_APP_OWNERSHIP_MUTATIONS)$/u.test(name) ||
         (name === "TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS" && text !== "true" && text !== "false") ||
+        (name === APP_OWNERSHIP_MUTATIONS_ENV && !canonicalAppOwnershipMutationsSwitch(text)) ||
         /(?:SECRET|PRIVATE_JWK|TOKEN)$/u.test(name)) throw new Error("auth_staging_vars_invalid");
     vars[name] = text;
     if (text.startsWith("[") || text.startsWith("{")) {
@@ -96,6 +98,18 @@ export function parseAuthStagingTarget(value: unknown): AuthStagingTarget {
     secretsSha256: value.secretsSha256, jwksSha256: value.jwksSha256,
     vars, requiredSecrets: requiredSecrets.map((name: unknown) => { if (typeof name !== "string") throw new Error("auth_staging_secrets_invalid"); return name; }),
   };
+}
+
+/** The issuer binds the Control D1, so the ownership backfill's freeze proof
+ * (scripts/app-ownership-target-cloudflare-d1.ts) reads this Worker's
+ * `TAKOSUMI_APP_OWNERSHIP_MUTATIONS` back with the runtime parser. Only a
+ * value that parser accepts, spelled canonically (`frozen` | `enabled`), may
+ * be released; unset or empty is the runtime's `enabled` default and is left
+ * out of the target instead. */
+function canonicalAppOwnershipMutationsSwitch(text: string): boolean {
+  if (text === "" || text !== text.trim().toLowerCase()) return false;
+  try { parseAppOwnershipMutationsFrozen(text); return true; }
+  catch { return false; }
 }
 
 /** Derive resources from the already-qualified platform config, never caller substitutions. */
