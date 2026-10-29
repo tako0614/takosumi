@@ -147,10 +147,12 @@ export class UsageReportingService {
     const ownership = input.capsuleId
       ? await this.#billing.resolveAppBillingOwnership(input.capsuleId)
       : undefined;
-    const identity = ownership?.identity;
-    // Existing meter producers resolve the current payer when recording an
-    // independent measurement. A producer-supplied runId is not a reservation
-    // authority; Core runner usage settles from its durable Plan audit.
+    // Until the first recorded transfer, usage follows the initial app owner.
+    // After a transfer, the row has no acceptance timestamp or payer history:
+    // a delayed event's createdAt cannot establish either owner's liability.
+    // Keep it unattributed until authoritative event-time history is available.
+    // A producer runId is not Core reservation authority.
+    const identity = ownership?.ownershipEpoch === 0 ? ownership.identity : undefined;
     return { usageEvent: await this.#store.putUsageEvent({ ...usageEvent, ...identity }) };
   }
 }

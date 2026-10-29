@@ -21,20 +21,29 @@ provider, database, merge or deploy operation.
 - Legacy Plans without a Capsule and transferred Plans without a payer pin can
   finish terminal capture, release and runner metering without an invented
   payer, including with a required host. They remain unattributed and skip
-  payer-dependent host calls. Required enforcement still refuses new work
+  payer-dependent capture/rating calls. Release still reaches the host using
+  the stable Workspace/Run identity, even with missing or malformed payer
+  evidence; its compatibility subject is validation context, never a usage
+  payer. Destroy and refresh also proceed unattributed with an invalid owner
+  row. Required enforcement still refuses new work
   without an app or available reservation payer before provider mutation.
 - Raw Postgres payer history explicitly converts `quantity` and `usd_micros`
   from driver text to numbers, including the unrated zero case.
-- Contract 2.1.0 enforcement and quota contexts retain `workspaceId` for existing
-  host adapters, alongside `capsuleId` and `payerAccountId`. The compatibility
-  field does not replace the canonical payer. Remove it with the coordinated
+- Contract 2.1.0 enforcement and quota contexts retain `workspaceId` and
+  `billingSubjectId` for existing host adapters, alongside `capsuleId` and
+  `payerAccountId`. The subject equals the canonical payer when available.
+  Release alone permits absent app/payer identity and uses the legacy Workspace
+  owner as validation context. Remove compatibility fields with the coordinated
   Phase 9 contract change, after Hosted consumers update.
 - Existing independent meter producers need no new `ownerSnapshot` field.
-  Their payer is the current app owner when usage is recorded; a producer's
-  `runId` does not substitute for a Core reservation. Historical measurement
-  attribution across transfers requires a separately coordinated public meter
-  contract; this change does not claim that guarantee. Core runner settlement
-  continues using its durable Plan audit.
+  Epoch zero attributes usage to the initial app owner. Once an app has been
+  transferred, this store has no authoritative acceptance timestamp or payer
+  history, so independent events remain unattributed rather than billing the
+  recipient for delayed measurements. This includes later event timestamps:
+  the current epoch alone cannot establish the applicable transfer boundary.
+  A producer's `runId` does not substitute for a Core reservation. Historical
+  attribution requires authoritative transfer history in a later coordinated
+  change. Core runner settlement continues using its durable Plan audit.
 
 ## Operator ordering and deferred index migration
 
@@ -70,7 +79,8 @@ query plans and the schema owner's normal pre-mutation process.
 
 Focused tests cover PG-style numeric strings with an unrated row, unchanged
 missing payer in D1/PG, actual stored ownership/epoch transfers, old unpinned
-Plans, Capsule-less finalization and host compatibility contexts. Local checks
+Plans, Capsule-less finalization, delayed meters, broken-owner cleanup and all
+host compatibility contexts. Local checks
 are restricted to focused tests and static phases under the task's SSD limit;
 the PR CI owns complete portable qualification. Stop local work below 1.5 GB
 available; delete only outputs created by this run.

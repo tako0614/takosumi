@@ -180,7 +180,7 @@ export class BillingService {
     // usage is recorded independently by the Run engine.
     if (planSkipsBillingReservation(input.planRun)) {
       const identity = input.planRun.capsuleId
-        ? await this.resolveAppBillingIdentity(input.planRun.capsuleId)
+        ? await this.#withOptionalPayer(() => this.resolveAppBillingIdentity(input.planRun.capsuleId))
         : undefined;
       return {
         reasons: [],
@@ -221,6 +221,7 @@ export class BillingService {
     const quota = identity ? await this.#quota.evaluatePlanQuota({
       ...identity,
       workspaceId,
+      billingSubjectId: identity.payerAccountId,
       estimatedUsdMicros,
       ratingStatus: rating.ratingStatus,
       planResourceChanges,
@@ -228,6 +229,7 @@ export class BillingService {
     const enforcement = identity ? await this.#enforcement.reservePlanBilling({
       ...identity,
       workspaceId,
+      billingSubjectId: identity.payerAccountId,
       runId: input.planRun.id,
       mode: settings.mode,
       estimatedUsdMicros,
@@ -277,6 +279,7 @@ export class BillingService {
     await this.#enforcement.assertReservationSatisfied({
       ...identity,
       workspaceId,
+      billingSubjectId: identity.payerAccountId,
       runId: planRun.id,
       now: this.#now(),
     });
@@ -314,6 +317,7 @@ export class BillingService {
     await this.#enforcement.captureRunBilling({
       ...identity,
       workspaceId,
+      billingSubjectId: identity.payerAccountId,
       runId: input.planRun.id,
       applyRunId: input.applyRun.id,
       capturedUsdMicros: estimatedUsdMicros,
@@ -329,11 +333,13 @@ export class BillingService {
     if ((settings.mode === "disabled" && !this.#enforcementRequired) || planSkipsBillingReservation(planRun)) {
       return;
     }
-    const identity = await this.#billingIdentityForPlan(planRun);
-    if (!identity) return;
+    const identity = await this.#withOptionalPayer(() => this.#billingIdentityForPlan(planRun));
     await this.#enforcement.releaseReservation({
       ...identity,
       workspaceId,
+      // The host releases by stable Run identity. This legacy validation alias
+      // is never persisted or used to attribute usage when the payer is unknown.
+      billingSubjectId: identity?.payerAccountId ?? workspace.ownerUserId,
       runId: planRun.id,
       now: this.#now(),
     });
@@ -355,10 +361,22 @@ export class BillingService {
       }
       return { capsuleId: value.capsuleId, payerAccountId: value.payerAccountId };
     }
-    const ownership = await this.resolveAppBillingOwnership(planRun.capsuleId);
+    const ownership = planSkipsBillingReservation(planRun)
+      ? await this.#withOptionalPayer(() => this.resolveAppBillingOwnership(planRun.capsuleId))
+      : await this.resolveAppBillingOwnership(planRun.capsuleId);
     // Pre-change runs have no payer pin. After transfer their original owner
     // cannot be recovered from the current row; retain unattributed evidence.
-    return ownership.ownershipEpoch === 0 ? ownership.identity : undefined;
+    return ownership?.ownershipEpoch === 0 ? ownership.identity : undefined;
+  }
+
+  async #withOptionalPayer<T>(resolve: () => Promise<T>): Promise<T | undefined> {
+    try {
+      return await resolve();
+    } catch (error) {
+      if (error instanceof OpenTofuControllerError &&
+        (error.code === "failed_precondition" || error.code === "not_found")) return undefined;
+      throw error;
+    }
   }
 
   async #runBillingIdentity(input: Pick<UsageShowbackRatingContext, "capsuleId" | "runId">): Promise<AppBillingIdentity | null | undefined> {

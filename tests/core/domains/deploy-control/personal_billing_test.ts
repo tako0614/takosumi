@@ -104,7 +104,7 @@ test("payer usage crosses old Workspace boundaries and retains the original owne
   const current = await service.recordMeteredUsage(capsule.workspaceId, {
     ...measurement, capsuleId: capsule.id, idempotencyKey: "new",
   });
-  expect(current.usageEvent.payerAccountId).toBe("new_owner");
+  expect(current.usageEvent.payerAccountId).toBeUndefined();
   await service.recordMeteredUsage(otherCapsule.workspaceId, {
     ...measurement, capsuleId: otherCapsule.id, idempotencyKey: "other_workspace",
   });
@@ -116,11 +116,11 @@ test("payer usage crosses old Workspace boundaries and retains the original owne
   const second = await listPayerUsage(store, "old_owner", { limit: 1, cursor: first.nextCursor });
   expect(second.usageEvents.map((row) => row.id)).toEqual(["old"]);
   expect(second.nextCursor).toBeUndefined();
-  expect((await listPayerUsage(store, "new_owner")).usageEvents.map((row) => row.id)).toEqual(["new"]);
+  expect((await listPayerUsage(store, "new_owner")).usageEvents).toEqual([]);
   expect((await listPayerUsage(store, "member")).usageEvents).toEqual([]);
 });
 
-test("metered and runner ratings attribute to the app owner rather than the old Workspace owner", async () => {
+test("unknown meter history stays unattributed while Core runner ratings use the app owner", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { capsule } = await seedCapsuleModel(store);
   await initializeAppOwner(store, capsule, "user_test");
@@ -142,7 +142,7 @@ test("metered and runner ratings attribute to the app owner rather than the old 
     capsuleId: capsule.id, kind: "storage.gb_hour", quantity: 1, usdMicros: 0, ratingStatus: "unrated",
     source: "storage", idempotencyKey: "meter_app_one",
   });
-  expect(usageEvent.payerAccountId).toBe("transferred_owner");
+  expect(usageEvent.payerAccountId).toBeUndefined();
   const rating = await billing.rateUsageMeasurement({
     workspaceId: capsule.workspaceId, capsuleId: capsule.id, kind: "runner_minute", quantity: 1,
     source: "runner", createdAt: new Date(now).toISOString(),
@@ -151,7 +151,7 @@ test("metered and runner ratings attribute to the app owner rather than the old 
   expect(ratingSubjects).toEqual(["transferred_owner"]);
 });
 
-test("independent metering after transfer accepts existing producer inputs and uses the current owner", async () => {
+test("delayed independent meters never infer an event-time payer from the recipient or a producer runId", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { capsule } = await seedCapsuleModel(store);
   await initializeAppOwner(store, capsule, "user_test");
@@ -184,9 +184,10 @@ test("independent metering after transfer accepts existing producer inputs and u
     const { usageEvent } = await service.recordMeteredUsage(capsule.workspaceId, {
       ...measurement, ...(runId ? { runId } : {}), idempotencyKey: `delayed_meter_${runId ?? "without_run"}`,
     });
-    expect(usageEvent).toMatchObject({ capsuleId: capsule.id, payerAccountId: "recipient", createdAt: measurement.createdAt });
+    expect(usageEvent).toMatchObject({ capsuleId: capsule.id, createdAt: measurement.createdAt });
+    expect(usageEvent).not.toHaveProperty("payerAccountId");
     expect(usageEvent.runId).toBe(runId);
   }
-  expect((await listPayerUsage(store, "recipient")).usageEvents).toHaveLength(3);
+  expect((await listPayerUsage(store, "recipient")).usageEvents).toEqual([]);
   expect((await listPayerUsage(store, "user_test")).usageEvents).toEqual([]);
 });

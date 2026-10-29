@@ -259,6 +259,8 @@ export interface AppBillingIdentity {
 export interface BillingReservationContext extends AppBillingIdentity {
   /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
+  readonly billingSubjectId: string;
   readonly runId: string;
   /** The OSS-resolved billing mode (`disabled` | `showback`). */
   readonly mode: BillingMode;
@@ -286,6 +288,8 @@ export interface BillingEnforcementDecision {
 export interface BillingReservationCheckContext extends AppBillingIdentity {
   /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly now: number;
 }
@@ -293,6 +297,8 @@ export interface BillingReservationCheckContext extends AppBillingIdentity {
 export interface BillingCaptureContext extends AppBillingIdentity {
   /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly applyRunId: string;
   /** USD micros the OSS controller recorded as the captured usage estimate. */
@@ -301,9 +307,15 @@ export interface BillingCaptureContext extends AppBillingIdentity {
   readonly now: number;
 }
 
-export interface BillingReleaseContext extends AppBillingIdentity {
-  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
+export interface BillingReleaseContext extends Partial<AppBillingIdentity> {
+  /** Legacy host routing context. Retire in Phase 9. */
   readonly workspaceId: string;
+  /**
+   * payerAccountId when known, otherwise the legacy Workspace owner for host
+   * validation only. Release the hold by runId; never charge or attribute this
+   * routing alias when payerAccountId is absent. Retire in Phase 9.
+   */
+  readonly billingSubjectId: string;
   readonly runId: string;
   readonly now: number;
 }
@@ -340,13 +352,15 @@ export interface BillingEnforcement {
    * after process crashes or transient host failures.
    */
   captureRunBilling(ctx: BillingCaptureContext): Promise<void>;
-  /** Release a reservation on a failed/abandoned apply (Cloud restores balance). */
+  /** Release by stable Run identity even if payer evidence is unavailable. */
   releaseReservation(ctx: BillingReleaseContext): Promise<void>;
 }
 
 export interface QuotaEvaluationContext extends AppBillingIdentity {
   /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
   readonly workspaceId: string;
+  /** Hosted compatibility alias for payerAccountId; retire in Phase 9. */
+  readonly billingSubjectId: string;
   readonly estimatedUsdMicros: number;
   readonly ratingStatus: UsageRatingStatus;
   readonly planResourceChanges: readonly PlanResourceChange[];

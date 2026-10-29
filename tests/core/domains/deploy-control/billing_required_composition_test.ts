@@ -95,7 +95,7 @@ for (const settings of [{ mode: "disabled" } as const, undefined]) {
     expect(calls[0]!.context).toMatchObject({ workspaceId: "ws_required", billingSubjectId: "canonical_owner" });
     for (const call of calls.slice(1)) {
       expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "canonical_owner" });
-      expect(call.context).not.toHaveProperty("billingSubjectId");
+      expect(call.context).toHaveProperty("billingSubjectId", "canonical_owner");
     }
     expect(calls[2]!.context).toMatchObject({ runId: "plan_required", mode: "disabled", estimatedUsdMicros: 37 });
     const audited = planRun({ auditEvents: [{ id: "audit_required", type: "plan.policy_evaluated", at: now, data: { billing: evaluated.audit! } }] });
@@ -115,7 +115,7 @@ for (const settings of [{ mode: "disabled" } as const, undefined]) {
     expect(calls[4]!.context).toMatchObject({ runId: "plan_required", applyRunId: "apply_required", capturedUsdMicros: 37, ratingStatus: "rated" });
     for (const call of calls.filter((call) => call.method !== "ratePlan" && call.method !== "rateUsage")) {
       expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "canonical_owner" });
-      expect(call.context).not.toHaveProperty("billingSubjectId");
+      expect(call.context).toHaveProperty("billingSubjectId", "canonical_owner");
     }
   });
 }
@@ -148,6 +148,43 @@ test("destroy and refresh-only keep safe cleanup without reservation even with r
   }
 });
 
+test("destroy and refresh-only finish unattributed when the physical owner is broken", async () => {
+  for (const plan of [planRun({ operation: "destroy" }), planRun({ refreshOnly: true })]) {
+    const { billing, store, calls, result } = await fixture(true, { mode: "showback" });
+    store.getAppBillingOwnership = async () => ({ ownerAccountId: "", ownershipEpoch: 1 });
+    const evaluated = await billing.evaluatePlanBilling({ planRun: plan, result, now, policyPassedBeforeBilling: true });
+    expect(evaluated.reasons).toEqual([]);
+    expect(evaluated.audit).not.toHaveProperty("payerAccountId");
+    await billing.assertApplyBillingAllowed(plan);
+    await billing.captureApplyBillingUsage({ planRun: plan, applyRun: applyRun(), now });
+    await billing.releaseApplyBilling(plan);
+    await store.putPlanRun(plan);
+    expect(await billing.rateUsageMeasurement({
+      workspaceId: plan.workspaceId, capsuleId: plan.capsuleId, runId: plan.id,
+      kind: "runner_minute", quantity: 1, source: "runner", createdAt: new Date(now).toISOString(),
+    })).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
+    expect((await store.listUsageEvents(plan.workspaceId))[0]).not.toHaveProperty("payerAccountId");
+    expect(calls).toEqual([]);
+    await expect(billing.evaluatePlanBilling({ planRun: planRun(), result, now, policyPassedBeforeBilling: true }))
+      .rejects.toThrow("App billing owner is unavailable");
+  }
+});
+
+test("release uses the reservation run when payer evidence is unavailable or corrupt", async () => {
+  const { billing, store, calls } = await fixture(true, { mode: "showback" });
+  store.getAppBillingOwnership = async () => ({ ownerAccountId: "", ownershipEpoch: 1 });
+  for (const plan of [planRun(), planRun({ auditEvents: [{
+    id: "invalid_pin", type: "plan.policy_evaluated", at: now,
+    data: { billing: { identityVersion: 1, capsuleId: "cap_required" } },
+  }] })]) {
+    await billing.releaseApplyBilling(plan);
+    expect(calls.at(-1)).toEqual({ method: "releaseReservation", context: {
+      workspaceId: plan.workspaceId, billingSubjectId: "canonical_owner", runId: plan.id, now,
+    } });
+    await expect(billing.captureApplyBillingUsage({ planRun: plan, applyRun: applyRun(), now })).rejects.toThrow();
+  }
+});
+
 test("optional host ports preserve self-host disabled behavior", async () => {
   const { billing, calls, result } = await fixture(false);
   const plan = planRun();
@@ -170,7 +207,7 @@ test("every enforcement and quota port uses the current app owner after transfer
   expect(calls[0]!.context).toMatchObject({ billingSubjectId: "new_app_owner" });
   for (const call of calls.slice(1)) {
     expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "new_app_owner" });
-    expect(call.context).not.toHaveProperty("billingSubjectId");
+    expect(call.context).toHaveProperty("billingSubjectId", "new_app_owner");
   }
   expect((await store.listUsageEvents("ws_required"))[0]!.payerAccountId).toBe("new_app_owner");
 });
@@ -237,7 +274,9 @@ for (const required of [false, true]) {
         .rejects.toThrow("Billing requires an app");
       await expect(billing.assertApplyBillingAllowed(next)).rejects.toThrow("Plan billing payer is unavailable");
     }
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ method: "releaseReservation", context: {
+      workspaceId: "ws_required", billingSubjectId: "canonical_owner", runId: legacy.id, now,
+    } }]);
   });
 }
 
@@ -264,7 +303,9 @@ for (const required of [false, true]) {
       kind: "runner_minute", quantity: 1, source: "runner", createdAt: new Date(now).toISOString(),
     });
     expect(rating).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ method: "releaseReservation", context: {
+      workspaceId: "ws_required", billingSubjectId: "canonical_owner", runId: legacy.id, now,
+    } }]);
     const corrupt = planRun({ auditEvents: [{
       id: "audit_corrupt", type: "plan.policy_evaluated", at: now,
       data: { billing: { identityVersion: 1, capsuleId: "cap_required" } },
