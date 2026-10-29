@@ -144,7 +144,7 @@ import {
 import { handleCapsuleConfigurationPlans } from "./configuration-plans.ts";
 import { handleCapsuleInterfaceLinks } from "./interface-links.ts";
 import { handleCapsuleApp, handleCapsuleRuns } from "./capsule-app.ts";
-import { requireAppAccess } from "./app-authorization.ts";
+import { requireAppAccess, requireOwnerForDelegateCodeChange } from "./app-authorization.ts";
 import type { AppAction } from "takosumi-contract/app-access";
 import {
   WorkspaceManagementAdmissionConflictError,
@@ -200,6 +200,13 @@ export async function handleCapsules(
     // A refused caller must not append Activity to another Workspace by
     // repeatedly guessing a Capsule ID.
     if (!auth.ok) return auth.response;
+    if (method === "POST" && segments.length === 3 &&
+      (segments[2] === "revision-plans" || segments[2] === "install-config-re-adoptions")) {
+      const codeChange = await requireOwnerForDelegateCodeChange({
+        operations, store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleIds: [capsule.id],
+      });
+      if (!codeChange.ok) return codeChange.response;
+    }
     const requireCapturedManagement = (): WorkspaceManagementAuthority => {
       if (!capturedManagement) throw new Error("Capsule management authority was not captured");
       if (!capturedManagement.ok) throw capturedManagement.error;

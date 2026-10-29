@@ -68,7 +68,7 @@ Takosumi にサインインする製品の入口になります。
 | `TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS`                                                                  | 任意                                       | なし                                                  | 上流サインインで作るセッションの寿命 (ミリ秒)。上流 provider と一緒に設定します                                                                                    |
 | `TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID` / `TAKOSUMI_ACCOUNTS_PASSKEY_RP_NAME` / `TAKOSUMI_ACCOUNTS_PASSKEY_ORIGIN` | 任意                                       | なし                                                  | passkey を使う場合の relying party。3 つそろえないと起動しません。PostgreSQL 構成は origin を `TAKOSUMI_ACCOUNTS_PASSKEY_RP_ORIGIN` からも読みます                 |
 | `TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN`                                                                 | 任意・**秘密**                             | なし                                                  | プライバシー要求の完了を記録する operator token                                                                                                                    |
-| `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` | 任意 | なし (どのアプリも代理不可) | インストールされたアプリ自身のOAuth tokenをWorkspaceの代理として使えるアプリの元リポジトリ。`[{"url":"https://…","path":"."}]` 形式のJSON配列。不正な値では起動しません。Takosのように利用者の代わりにアプリをインストールするアプリだけを指定します |
+| `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` | 任意 | なし (どのアプリも代理不可) | インストールされたアプリ自身のOAuth tokenをWorkspaceの代理として使えるアプリの元リポジトリと許可するref。`[{"url":"https://…","path":".","refs":["refs/heads/main","refs/tags/v*"]}]` 形式のJSON配列で、`refs` は必須 (`refs/heads/…`・`refs/tags/…`、末尾 `*` で前方一致)。適用中のrevisionのrefで判定し、commit SHAや `refs/pull/*` は対象外。不正な値では起動しません。Takosのように利用者の代わりにアプリをインストールするアプリだけを指定します |
 
 client の登録は次の形です。
 

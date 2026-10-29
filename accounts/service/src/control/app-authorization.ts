@@ -28,6 +28,7 @@ import {
   controllerErrorCode,
   controlPlaneUnavailable,
   installedAppTokenDelegates,
+  isDesignatedDelegateApp,
   isInstalledAppToken,
   requireWorkspaceAccess,
   workspaceAccessForbidden,
@@ -483,6 +484,24 @@ export async function requireWorkspaceAppsAccess(
       action: input.action,
     }, fence.ownership);
     if (!result.ok) return result;
+  }
+  return { ok: true };
+}
+
+/**
+ * Changing what a designated delegate app deploys (its ref, path or adopted
+ * config) is owner-only: the app's own token carries Workspace delegation.
+ * Runs after the ordinary decision; the rollout fallback keeps its decision.
+ */
+export async function requireOwnerForDelegateCodeChange(
+  input: AuthorizationContext & { readonly workspaceId: string; readonly capsuleIds: readonly string[] },
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
+  if (!input.session.installedAppDelegationSources?.length) return { ok: true };
+  for (const capsuleId of input.capsuleIds) {
+    if (!(await isDesignatedDelegateApp(input.operations, input.session, capsuleId))) continue;
+    const decision = await requireAppAccess({ ...input, capsuleId, action: "change_settings" });
+    if (!decision.ok) return decision;
+    if (decision.authority === "app" && decision.access.role !== "owner") return { ok: false, response: appOwnerOnly() };
   }
   return { ok: true };
 }

@@ -100,6 +100,7 @@ import {
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
+  isInstalledAppToken,
   isRecord,
   jsonStatus,
   parseControlPageParams,
@@ -141,6 +142,7 @@ import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import {
   requireAppAccess,
+  requireOwnerForDelegateCodeChange,
   requireResourceAccess,
   sourceCapsuleIds,
   workspaceAppVisibility,
@@ -346,6 +348,15 @@ export async function handleSources(
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const capsuleId = stringValue(body.capsuleId);
+      if (isInstalledAppToken(ctx.session)) {
+        // An app's own token may check only against its own app's config; it
+        // never creates a Workspace-level InstallConfig or probes another one.
+        const own = await operations.capsules.getCapsule(ctx.session.appIds[0]!);
+        const requestedConfig = stringValue(body.installConfigId);
+        if (body.compileInstallUx === true || (requestedConfig !== undefined && requestedConfig !== own.installConfigId)) {
+          return errorJson("app_access_denied", "An installed app can only check its own app's configuration.", 403);
+        }
+      }
       if (capsuleId && !(await sourceCapsuleIds(operations, { id: source.id, workspaceId, ...(sourceOwnerCapsuleId(source) ? { ownerCapsuleId: sourceOwnerCapsuleId(source) } : {}) })).includes(capsuleId)) {
         // A check that targets an existing app also needs that app's update
         // permission, independently of the Source's own authority.
@@ -609,6 +620,19 @@ export async function handleSources(
         const body = await readOptionalJsonObject(request);
         if (body === null) {
           return errorJson("invalid_json", "invalid json body", 400);
+        }
+        // An installed app's own token keeps the Source's current connection
+        // (the same rule as configuration plans); it never chooses another.
+        if (isInstalledAppToken(ctx.session) && Object.prototype.hasOwnProperty.call(body, "authConnectionId") &&
+          (body.authConnectionId ?? null) !== ((source as { authConnectionId?: string }).authConnectionId ?? null)) {
+          return errorJson("app_access_denied", "An installed app cannot choose the Source's connection.", 403);
+        }
+        if (body.defaultRef !== undefined || body.defaultPath !== undefined) {
+          const codeChange = await requireOwnerForDelegateCodeChange({
+            operations, store, session: ctx.session, workspaceId,
+            capsuleIds: await sourceCapsuleIds(operations, source),
+          });
+          if (!codeChange.ok) return codeChange.response;
         }
         const response = await operations.patchSource(
           sourceId,

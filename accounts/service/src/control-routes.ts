@@ -649,9 +649,9 @@ export async function handleControlRoute(
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
           : {}),
-        // Only an installed app's own OAuth token can be a delegate.
-        ...(bearer.auth.credential === "oauth-access-token" && bearer.auth.appIds !== undefined &&
-          context.installedAppDelegationSources?.length
+        // Operator configuration: only an installed app's own token can be a
+        // delegate, and code changes of a designated app are owner-only.
+        ...(context.installedAppDelegationSources?.length
           ? { installedAppDelegationSources: context.installedAppDelegationSources }
           : {}),
         requiredAccess,

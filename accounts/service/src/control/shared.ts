@@ -94,7 +94,8 @@ import type { JsonValue } from "takosumi-contract";
 import { appActionAllowed, type AppAction } from "takosumi-contract/app-access";
 import type { AccountsStore } from "../store.ts";
 import {
-  installedAppSourceDelegates,
+  installedAppRevisionDelegates,
+  installedAppSourceIsDesignated,
   type InstalledAppDelegationSource,
 } from "../installed-app-delegation.ts";
 import type {
@@ -140,10 +141,11 @@ export interface ControlSession {
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
   /**
-   * Operator-designated repositories whose installed app may use its own
-   * OAuth token as a Workspace delegation. Set only by the authenticated
-   * Accounts bearer dispatcher from composition configuration, and only for
-   * installed-app OAuth tokens; never read from an HTTP field.
+   * Operator-designated repositories (with allowed refs) whose installed app
+   * may use its own OAuth token as a Workspace delegation. Operator
+   * configuration copied by the authenticated Accounts dispatcher onto every
+   * session (it also makes code changes of such apps owner-only); never read
+   * from an HTTP field.
    */
   readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   /**
@@ -726,9 +728,11 @@ const installedAppDelegationDecisions = new WeakMap<ControlSession, Promise<bool
 
 /**
  * Workspace delegation for an installed app's own token. Server-side only:
- * the token's single bound Capsule must still live in the token's Workspace,
- * and that Capsule's recorded Source (whose URL cannot be patched) must match
- * an operator-designated repository. Memoized per session object.
+ * the token's single bound Capsule must be live (active or stale, no scheduled
+ * uninstall) in the token's Workspace, and its currently adopted (applied)
+ * revision must come from that Capsule's own Source (whose URL cannot be
+ * patched) at a designated path and an allowed ref. Raw commits and
+ * `refs/pull/*` never qualify. Memoized per session object.
  */
 export function installedAppTokenDelegates(
   operations: ControlPlaneOperations,
@@ -743,23 +747,51 @@ export function installedAppTokenDelegates(
     const capsuleId = session.appIds[0]!;
     const workspaceId = session.workspaceId;
     decision = (async () => {
-      let capsule: Capsule;
-      let source: Source;
       try {
-        capsule = await operations.capsules.getCapsule(capsuleId);
-        if (capsule.id !== capsuleId || capsule.workspaceId !== workspaceId || capsule.status === "destroyed") return false;
-        source = (await operations.getSource(capsule.sourceId)).source;
+        const capsule = await operations.capsules.getCapsule(capsuleId);
+        if (capsule.id !== capsuleId || capsule.workspaceId !== workspaceId ||
+          (capsule.status !== "active" && capsule.status !== "stale") ||
+          (capsule.uninstall !== undefined && capsule.uninstall.phase !== "cancelled")) return false;
+        const adopted = await operations.getCapsuleAdoptedSourceRevision(capsule.id);
+        if (!adopted) return false;
+        const source = (await operations.getSource(capsule.sourceId)).source;
+        if (source.id !== capsule.sourceId || source.workspaceId !== capsule.workspaceId ||
+          (source.ownerCapsuleId !== undefined && source.ownerCapsuleId !== capsule.id)) return false;
+        const snapshot = await operations.getSourceSnapshot(adopted.sourceSnapshotId);
+        if (snapshot.id !== adopted.sourceSnapshotId || snapshot.sourceId !== source.id) return false;
+        return installedAppRevisionDelegates(sources, { url: source.url, path: adopted.path, ref: adopted.ref });
       } catch (error) {
         if (controllerErrorCode(error) === "not_found") return false;
         throw error;
       }
-      return source.id === capsule.sourceId && source.workspaceId === capsule.workspaceId &&
-        (source.ownerCapsuleId === undefined || source.ownerCapsuleId === capsule.id) &&
-        installedAppSourceDelegates(sources, source);
     })();
     installedAppDelegationDecisions.set(session, decision);
   }
   return decision;
+}
+
+/**
+ * A designated delegate app (by Source URL and path, any ref): changing what
+ * it deploys (ref, path, re-adopted config) is owner-only, because its own
+ * token carries Workspace delegation.
+ */
+export async function isDesignatedDelegateApp(
+  operations: ControlPlaneOperations,
+  session: ControlSession,
+  capsuleId: string,
+): Promise<boolean> {
+  const sources = session.installedAppDelegationSources;
+  if (!sources?.length) return false;
+  try {
+    const capsule = await operations.capsules.getCapsule(capsuleId);
+    const source = (await operations.getSource(capsule.sourceId)).source;
+    const adopted = await operations.getCapsuleAdoptedSourceRevision(capsule.id);
+    return installedAppSourceIsDesignated(sources, { url: source.url, path: source.defaultPath }) ||
+      (adopted !== undefined && installedAppSourceIsDesignated(sources, { url: source.url, path: adopted.path }));
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return false;
+    throw error;
+  }
 }
 
 export function jsonStatus(body: unknown, status: number): Response {

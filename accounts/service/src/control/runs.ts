@@ -103,6 +103,8 @@ import {
   publicCompatibilityReportResponse,
   publicCapsule,
   publicPlanActionResponse,
+  installedAppTokenDelegates,
+  isInstalledAppToken,
   publicRun,
   requireWorkspaceAccess,
   resolveProviderBindings,
@@ -207,6 +209,19 @@ export async function handleRuns(
       return json({ run: await publicRun(operations, run) });
     }
     const leaf = segments[2];
+    // Plan review stays with a person: an installed app's own token may
+    // create plans but not approve, apply or cancel another person's Run,
+    // unless the operator designated the app as a Workspace delegate.
+    if (operate && (leaf === "approve" || leaf === "apply" || leaf === "cancel") &&
+      isInstalledAppToken(ctx.session) &&
+      !(leaf === "cancel" && run.createdBy === ctx.session.subject) &&
+      !(await installedAppTokenDelegates(operations, ctx.session))) {
+      return errorJson(
+        "app_access_denied",
+        "Approving or applying a Run requires an account session, a personal access token or a designated delegate app.",
+        403,
+      );
+    }
     if (leaf === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
       return await approveRun(request, operations, runId, ctx.session);

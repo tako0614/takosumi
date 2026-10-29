@@ -166,9 +166,12 @@ both its app role and the Workspace decision). Only apps built from a
 repository listed in `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` keep Workspace
 delegation. On a target where Takos installs apps for its users, set that
 variable to the Takos repository coordinate, for example
-`[{"url":"https://github.com/<owner>/takos","path":"."}]` with the exact URL
-the Takos Capsule was installed from, before deploying this release;
-otherwise Takos's delegated install, approve and apply requests return 403.
+`[{"url":"https://github.com/<owner>/takos","path":".","refs":["refs/heads/main","refs/tags/v*"]}]`
+with the exact URL the Takos Capsule was installed from and the refs it is
+deployed from, before deploying this release; otherwise Takos's delegated
+install, approve and apply requests return 403. Delegation follows the applied
+revision: a Takos Capsule redeployed from a pull-request ref or a raw commit is
+not a delegate, and only its owner can change its ref or path.
 
 Failure recovery preserves the additive schema and existing storage roots.
 Use a reviewed forward repair for incorrect backfill data. Do not drop the new
