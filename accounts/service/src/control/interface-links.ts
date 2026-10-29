@@ -1,7 +1,8 @@
 import type { Capsule } from "takosumi-contract/install-configs";
 import { InterfaceServiceError, type InterfaceLinkWriteFence } from "../../../../core/domains/interfaces/service.ts";
 import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpers.ts";
-import { type ControlDispatchContext, canAccessWorkspace, controlPlaneUnavailable } from "./shared.ts";
+import { type ControlDispatchContext, controlPlaneUnavailable } from "./shared.ts";
+import { requireAppAccess } from "./app-authorization.ts";
 
 /** The caller supplies the canonical consumer Capsule; each side authorizes itself. */
 export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, capsule: Capsule, segments: readonly string[], method: string): Promise<Response> {
@@ -11,21 +12,30 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
   const candidates = segments.length === 5 && segments[4] === "candidates";
   if (!key || (segments.length !== 4 && !candidates)) return errorJson("not_found", "Interface link route not found", 404);
   if (candidates ? method !== "GET" : method !== "PUT" && method !== "DELETE") return methodNotAllowed(candidates ? "GET" : "PUT, DELETE");
-  let controllingWorkspaceId = capsule.workspaceId;
+  // Each side authorizes as its own app: the consumer for every action, the
+  // provider only to revoke a link that points at it.
+  let controlling: Capsule = capsule;
   let authorizedProvider: { linkId: string; providerInterfaceId: string; providerCapsuleId: string } | undefined;
-  let allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: capsule.workspaceId, capsuleId: capsule.id, appAction: candidates ? "view" : "change_interface_link" });
-  if (!allowed && method === "DELETE") {
+  const decide = (app: Capsule, action: "view" | "change_interface_link", session = ctx.session) => requireAppAccess({
+    operations: ctx.operations, store: ctx.store, session, workspaceId: app.workspaceId, capsuleId: app.id, capsule: app, action,
+    ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+    ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
+  });
+  let decision = await decide(capsule, candidates ? "view" : "change_interface_link");
+  if (!decision.ok && method === "DELETE") {
     const link = await service.getLatestCapsuleInterfaceLink(capsule.id, key);
     if (link) {
       const provider = await ctx.operations.capsules.getCapsule(link.providerCapsuleId);
-      allowed = await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: ctx.session, workspaceId: provider.workspaceId, capsuleId: provider.id, appAction: "change_interface_link" });
-      if (allowed) {
-        controllingWorkspaceId = provider.workspaceId;
+      const providerDecision = await decide(provider, "change_interface_link");
+      if (providerDecision.ok) {
+        decision = providerDecision;
+        controlling = provider;
         authorizedProvider = { linkId: link.id, providerInterfaceId: link.providerInterfaceId, providerCapsuleId: link.providerCapsuleId };
       }
     }
   }
-  if (!allowed) return errorJson("forbidden", "The authenticated session cannot manage this Interface link.", 403);
+  if (!decision.ok) return decision.response;
+  const controllingWorkspaceId = controlling.workspaceId;
   try {
     if (candidates) {
       const { requirement } = await service.getInterfaceLinkRequirement(capsule.id, key);
@@ -35,7 +45,7 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
     const writeFence: InterfaceLinkWriteFence = { assertCurrent: async () => {
       ctx.assertActive?.();
       if (ctx.session.reauthorizeBearer && !(await ctx.session.reauthorizeBearer())) throw new InterfaceServiceError("permission_denied", "Interface link caller authority changed");
-      if (!(await canAccessWorkspace({ operations: ctx.operations, store: ctx.store, session: { ...ctx.session, requiredAccess: "write" }, workspaceId: controllingWorkspaceId, capsuleId: capsule.id, appAction: "change_interface_link" }))) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
+      if (!(await decide(controlling, "change_interface_link", { ...ctx.session, requiredAccess: "write" })).ok) throw new InterfaceServiceError("permission_denied", "Interface link management access changed");
       const current = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
       if (current.managementEpoch !== initialAuthority.managementEpoch) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
       ctx.assertActive?.();

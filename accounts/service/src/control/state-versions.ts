@@ -130,6 +130,7 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
+import { requireResourceAccess } from "./app-authorization.ts";
 
 export async function handleStateVersions(
   ctx: ControlDispatchContext,
@@ -143,11 +144,17 @@ export async function handleStateVersions(
   if (segments[0] === "state-versions" && segments.length >= 2) {
     const stateVersionId = decodeURIComponent(segments[1] ?? "");
     const { stateVersion } = await operations.getStateVersion(stateVersionId);
-    const auth = await requireWorkspaceAccess({
+    // A StateVersion belongs to its Capsule: reading is view, planning a
+    // return to it is rollback.
+    const auth = await requireResourceAccess({
       operations,
       store,
       workspaceId: stateVersion.workspaceId,
+      capsuleId: stateVersion.capsuleId,
+      action: method === "GET" || method === "HEAD" ? "view" : "rollback",
       session: ctx.session,
+      ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
+      ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {

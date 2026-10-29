@@ -58,10 +58,10 @@ import {
 import { errorJson, json, methodNotAllowed } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessWorkspace,
   controlPlaneUnavailable,
   publicRun,
 } from "./shared.ts";
+import { requireAppAccess } from "./app-authorization.ts";
 import {
   CAPSULE_APP_INSTALL_STALL_AFTER_MS,
   CAPSULE_APP_LIFECYCLE_RUN_TYPES,
@@ -351,17 +351,21 @@ async function readAppLinks(
       writeBearer.auth.workspaceId === ctx.session.workspaceId &&
       JSON.stringify(writeBearer.auth.uninstallRequester.grant) ===
         JSON.stringify(ctx.session.uninstallRequester?.grant));
-  const mayManage = (workspaceId: string): Promise<boolean> => {
+  // Same per-app decision as the Interface link routes, one read per app.
+  const mayManage = (app: Capsule): Promise<boolean> => {
     if (!mayWrite) return Promise.resolve(false);
-    let result = management.get(workspaceId);
+    let result = management.get(app.id);
     if (!result) {
-      result = canAccessWorkspace({
+      result = requireAppAccess({
         operations: ctx.operations,
         store: ctx.store,
         session: { ...ctx.session, requiredAccess: "write" },
-        workspaceId,
-      });
-      management.set(workspaceId, result);
+        workspaceId: app.workspaceId,
+        capsuleId: app.id,
+        capsule: app,
+        action: "change_interface_link",
+      }).then((decision) => decision.ok);
+      management.set(app.id, result);
     }
     return result;
   };
@@ -405,8 +409,8 @@ async function readAppLinks(
       ? await providerInterface(link.providerInterfaceId)
       : undefined;
     const health = linkHealth(link, provider, iface, requirement);
-    const canManage = await mayManage(capsule.workspaceId) ||
-      (otherApp !== undefined && await mayManage(otherApp.workspaceId));
+    const canManage = await mayManage(capsule) ||
+      (otherApp !== undefined && await mayManage(otherApp));
     return {
       ...(link ? {
         linkId: link.id,
