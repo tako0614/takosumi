@@ -63,11 +63,15 @@ Apply re-reads the inventory and requires its digest to match the reviewed
 dry-run. Each invocation writes at most 100 rows serially. Re-run dry-run and
 review its new digest for the next batch; a completed run has no pending writes.
 If a write fails, previously committed rows remain, the tool stops, and a new
-dry-run identifies remaining work. Workspace creation and membership mutations
-must remain frozen throughout this operation. Keep app-owner/member writers
-stopped until backfill completes; the tool is an expand-phase operator operation,
+dry-run identifies remaining work. Organization Workspace creation and
+membership mutations must remain frozen throughout this operation. Keep
+app-owner/member writers stopped until backfill completes; the tool is an expand-phase operator operation,
 not a concurrent ownership-transfer transaction. Verify each new owner/member,
 connection owner and usage payer before authorization switches in Phase 6.
+
+The freeze permits only canonical, authenticated owner-bound personal Workspace
+singleton bootstrap for a fresh account. Organization creation and membership
+mutations stay frozen; the bootstrap cannot select an arbitrary owner.
 
 Failure recovery preserves the additive schema and existing storage roots.
 Use a reviewed forward repair for incorrect backfill data. Do not drop the new
