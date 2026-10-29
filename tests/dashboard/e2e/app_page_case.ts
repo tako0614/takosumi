@@ -1338,23 +1338,39 @@ export function registerAppPageCases(mode: DashboardE2EMode) {
         return route.fallback();
       });
       await page.goto("/", { waitUntil: "domcontentloaded" });
-      const cards = page.getByTestId("home-app");
-      await expect(cards).toHaveCount(6);
-      // What needs the person comes first.
-      await expect(cards.nth(0)).toHaveAttribute("data-app-state", "needs_attention");
-      await expect(cards.nth(1)).toHaveAttribute("data-app-state", "update_available");
-      await expect(cards.nth(2)).toHaveAttribute("data-app-state", "installing");
-      await expect(cards.nth(3)).toHaveAttribute("data-app-state", "uninstalling");
-      const card = (name: string) => cards.filter({ hasText: name });
-      await expect(card("Mail Relay")).toContainText("Needs attention");
-      await expect(card("Team Blog")).toContainText("Update available");
-      await expect(card("Chat")).toContainText("Installing");
-      await expect(card("Old Wiki")).toContainText("Uninstall scheduled");
-      // Only the app with an authorized screen opens; every app links to its page.
-      await expect(card(PORTABLE_EXPECTATIONS.appName).getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
-      await expect(card("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
-      await expect(card("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/apps/cap_storage");
-      await expect(card("Mail Relay").getByRole("link", { name: "Check", exact: true })).toHaveAttribute("href", "/apps/cap_mail");
+      const tiles = page.getByTestId("home-app");
+      await expect(tiles).toHaveCount(6);
+      // Usable apps first in name order; then the ones that cannot be used
+      // yet, what needs the person first. None is folded away.
+      await expect(tiles.nth(0)).toContainText(PORTABLE_EXPECTATIONS.appName);
+      await expect(tiles.nth(0)).toHaveAttribute("data-app-opens", "true");
+      await expect(tiles.nth(1)).toHaveAttribute("data-app-state", "update_available");
+      await expect(tiles.nth(2)).toHaveAttribute("data-app-state", "needs_attention");
+      await expect(tiles.nth(3)).toHaveAttribute("data-app-state", "installing");
+      await expect(tiles.nth(4)).toHaveAttribute("data-app-state", "uninstalling");
+      await expect(tiles.nth(5)).toHaveAttribute("data-app-state", "stopped");
+      await expect(page.locator(".av-section-head-count")).toHaveText("6");
+      const tile = (name: string) => tiles.filter({ hasText: name });
+      await expect(tile("Mail Relay")).toContainText("Needs attention");
+      await expect(tile("Team Blog")).toContainText("Update available");
+      await expect(tile("Chat")).toContainText("Installing");
+      await expect(tile("Old Wiki")).toContainText("Uninstall scheduled");
+      await expect(tile("Object Storage")).toContainText("Stopped");
+      // Only the app with an authorized screen opens; it keeps a link to its page.
+      const office = tile(PORTABLE_EXPECTATIONS.appName);
+      await expect(office.getByRole("link", { name: `Open ${PORTABLE_EXPECTATIONS.appName} in a new tab` })).toHaveAttribute("href", PORTABLE_EXPECTATIONS.appUrl);
+      await expect(office.getByRole("link", { name: `Manage ${PORTABLE_EXPECTATIONS.appName}` })).toHaveAttribute("href", "/apps/cap_repository_office");
+      await expect(office.locator(".av-tile-icon")).toHaveCSS("opacity", "1");
+      // Every other tile opens the app page; the state is its description.
+      await expect(tile("Object Storage").getByRole("link", { name: /^Open\b/u })).toHaveCount(0);
+      await expect(tile("Object Storage").getByRole("link", { name: "Object Storage", exact: true })).toHaveAttribute("href", "/apps/cap_storage");
+      const mail = tile("Mail Relay").getByRole("link", { name: "Mail Relay", exact: true });
+      await expect(mail).toHaveAttribute("href", "/apps/cap_mail");
+      await expect(mail).toHaveAccessibleDescription("Needs attention");
+      // A tile that cannot be used yet is muted; an installed one without a screen is not.
+      await expect(tile("Mail Relay").locator(".av-tile-icon")).toHaveCSS("opacity", "0.5");
+      await expect(tile("Team Blog").locator(".av-tile-icon")).toHaveCSS("opacity", "1");
+      await expect(page.getByTestId("home-apps").getByRole("link", { name: "Find apps", exact: true })).toHaveAttribute("href", "/new");
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       await capture(page, "home-mixed");
       expect(errors).toEqual([]);
