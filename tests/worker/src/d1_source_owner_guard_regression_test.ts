@@ -93,3 +93,18 @@ test("D1 keeps a raced Workspace admission failure distinct from a Source guard"
   expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
   expect(await store.getCapsule(input.capsule.id)).toBeUndefined();
 });
+
+test("D1 rolls back a claim when retirement wins after its eligibility read", async () => {
+  for (const status of ["active", "disabled"] as const) {
+    const { db, store } = await setup();
+    const input = authority();
+    db.beforeNextBatch = async () => {
+      const source = (await store.getSource(sourceId))!;
+      await store.putSource({ ...source, status, retiringAt: now, autoSync: false });
+    };
+    expect(await store.createCapsuleInitialAuthority(input)).toEqual({ status: "conflict" });
+    expect((await store.getSource(sourceId))?.ownerCapsuleId).toBeUndefined();
+    expect(await store.getCapsule(input.capsule.id)).toBeUndefined();
+    expect(await store.getInstallConfig(input.installConfig.id)).toBeUndefined();
+  }
+});

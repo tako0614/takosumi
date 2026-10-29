@@ -89,14 +89,14 @@ it is running, the export is recorded as `failed` and the deletion goes on.
 | `uninstall.blockedReason` | Reason |
 | --- | --- |
 | `pre_destroy_export_incomplete` | A data export started but has recorded no result after 15 minutes |
-| `dependency_retired` | The deletion Plan was refused because the Capsule still has retired Dependency configuration. Ask a database operator to maintain the remaining configuration, cancel the request, and schedule it again |
+| `dependency_retired` | The deletion Plan or Apply was refused because the Capsule still has retired Dependency configuration. Ask a database operator to maintain the remaining configuration, cancel the request, and schedule it again |
 | `destroy_plan_cancelled` | Someone cancelled the deletion Plan |
 | `destroy_plan_failed` | The deletion Plan did not complete within 3 attempts in total |
 | `destroy_plan_missing` | The recorded deletion Plan cannot be found (when the attempts run out, or when moving on to the deletion apply). A Plan creation refused for a temporary reason also counts as an attempt |
 | `destroy_plan_refused` | Creating the deletion Plan was refused for a reason that will not clear by waiting |
 | `destroy_plan_unverifiable` | The deletion Plan no longer matches the service it was made for (its state or execution authority changed, it did not pass policy, it has no list of changes, and so on) |
 | `destroy_plan_not_delete_only` | The deletion Plan contains changes other than deletes (including imports) |
-| `destroy_apply_refused` | The deletion apply or its approval was refused for a reason that will not clear by waiting. If the refusal is about authority, one of the three reasons above is recorded instead |
+| `destroy_apply_refused` | The deletion apply or its approval was refused for a reason that will not clear by waiting. If the refusal is about authority, `dependency_retired` or one of the three authority reasons above is recorded instead |
 | `destroy_apply_failed` | The deletion apply ended failed, cancelled, or expired |
 | `finalize_failed` | The deletion process has reached 6 unexpected failures in total |
 

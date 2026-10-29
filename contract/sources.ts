@@ -48,8 +48,9 @@ export type SourceStatus = "active" | "disabled" | "error";
 
 /**
  * Public Source record. NEVER carries the hook secret or any
- * credential value. `defaultRef` / `defaultPath` seed the {@link GitAddress}
- * used by source-sync when the request does not override them. `defaultPath`
+ * credential value. For an owned Source, `defaultRef` / `defaultPath` are the
+ * owning app's adopted tracking lane. For an unclaimed preflight Source they
+ * seed the {@link GitAddress} used by source-sync. `defaultPath`
  * scopes the captured archive and module scan; it never selects a module from
  * that scan for Capsule planning.
  */

@@ -272,6 +272,8 @@ export interface CapsulesServiceDependencies {
   readonly uninstallGraceDays?: number;
   /** Accounts-owned exact-grant check at a new reservation's deadline. */
   readonly validateUninstallRequesterAt?: UninstallRequesterAtValidator;
+  /** Best-effort post-commit cleanup for the Capsule's owned Source. */
+  readonly retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
 }
 
 interface PreparedCapsuleLifecycle {
@@ -292,6 +294,7 @@ export class CapsulesService {
   readonly #revokeCapsuleInterfaceLinks?: (workspaceId: string, capsuleId: string) => Promise<void>;
   readonly #uninstallGraceDays: number;
   readonly #validateUninstallRequesterAt?: UninstallRequesterAtValidator;
+  readonly #retireOwnedSource?: (sourceId: string, reason: string) => Promise<unknown>;
   #capsuleLifecycleAdmission?: CapsuleLifecycleAdmission;
   #uninstallCancellationCleanup?: (planRunId: string) => Promise<void>;
 
@@ -307,6 +310,7 @@ export class CapsulesService {
     this.#uninstallGraceDays =
       deps.uninstallGraceDays ?? DEFAULT_UNINSTALL_GRACE_DAYS;
     this.#validateUninstallRequesterAt = deps.validateUninstallRequesterAt;
+    this.#retireOwnedSource = deps.retireOwnedSource;
     // Fail at composition, not at the first uninstall request.
     uninstallGraceMs(this.#uninstallGraceDays);
   }
@@ -1187,6 +1191,7 @@ export class CapsulesService {
         );
       }
       await this.#revokeCapsuleInterfaceLinks?.(existing.workspaceId, existing.id);
+      await this.#retireAbandonedSource(existing);
       return existing;
     }
     const prepared = await this.#prepareCapsuleLifecycle(id, suppliedAuthority);
@@ -1242,7 +1247,10 @@ export class CapsulesService {
       }
       const updated = result.capsule;
       await this.#revokeCapsuleInterfaceLinks?.(updated.workspaceId, updated.id);
-      if (result.kind === "unchanged") return updated;
+      if (result.kind === "unchanged") {
+        await this.#retireAbandonedSource(updated);
+        return updated;
+      }
       await this.#activity.record({
         workspaceId: updated.workspaceId,
         action: "capsule.abandoned",
@@ -1254,6 +1262,7 @@ export class CapsulesService {
           reason,
         },
       });
+      await this.#retireAbandonedSource(updated);
       return updated;
     };
     const admission = this.#capsuleLifecycleAdmission;
@@ -1266,6 +1275,18 @@ export class CapsulesService {
           () => abandon(),
         )
       : await abandon();
+  }
+
+  async #retireAbandonedSource(capsule: Capsule): Promise<void> {
+    if (!this.#retireOwnedSource) return;
+    try {
+      await this.#retireOwnedSource(capsule.sourceId, "capsule abandoned before apply");
+    } catch (error) {
+      console.warn("capsule.abandon_source_retirement_failed", {
+        capsuleId: capsule.id,
+        errorName: error instanceof Error ? error.name : "unknown",
+      });
+    }
   }
 
   // --- InstallConfig (§11) --------------------------------------------------
