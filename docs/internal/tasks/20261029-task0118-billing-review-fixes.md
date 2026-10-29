@@ -75,6 +75,11 @@ are restricted to focused tests and static phases under the task's SSD limit;
 the PR CI owns complete portable qualification. Stop local work below 1.5 GB
 available; delete only outputs created by this run.
 
+The first full CI run found one retained Phase 3 parity expectation that still
+required write-time payer inference. Its billing assertions now check both an
+unattributed row with a known app owner and an explicitly pinned different payer
+on Memory/PG/D1. Owner and Connection assertions in that test remain intact.
+
 There are no data mutations to reverse. Before publication, fixes can be
 reverted as source changes without dropping the additive Phase 3 schema. The
 operator-local final report records the candidate commit, checks and CI result.
