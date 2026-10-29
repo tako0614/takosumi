@@ -244,6 +244,40 @@ async function retainedDestroyedAppAccess(
 }
 
 /**
+ * Whether a new Interface link from `consumerCapsuleId` to `provider` may be
+ * created already approved. Approval is the PROVIDER side's consent, so the
+ * caller must hold `change_interface_link` on the provider app under the same
+ * decision as every other app-scoped request: the per-app role once the
+ * provider has an ownership row, the Workspace decision only while it has
+ * none. An installed app's own OAuth token never approves another app's
+ * Interface. A false result makes the link `pending_approval`.
+ */
+export async function mayApproveInterfaceProvider(
+  input: AuthorizationContext & {
+    readonly consumerCapsuleId: string;
+    readonly provider: { readonly capsuleId: string; readonly workspaceId: string };
+  },
+): Promise<boolean> {
+  if (input.provider.capsuleId === input.consumerCapsuleId) return true;
+  if (input.session.credential === "oauth-access-token") return false;
+  const provider = await input.operations.capsules.getCapsule(input.provider.capsuleId);
+  input.assertActive?.();
+  if (provider.id !== input.provider.capsuleId || provider.workspaceId !== input.provider.workspaceId) return false;
+  const decision = await requireAppAccess({
+    operations: input.operations,
+    store: input.store,
+    session: { ...input.session, requiredAccess: "write" },
+    workspaceId: provider.workspaceId,
+    capsuleId: provider.id,
+    capsule: provider,
+    action: "change_interface_link",
+    ...(input.assertActive ? { assertActive: input.assertActive } : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+  });
+  return decision.ok;
+}
+
+/**
  * Capsule-bound resources decide per app; resources without a Capsule (for
  * example an unowned preflight Source or a Workspace-level Run) keep the
  * Workspace decision.

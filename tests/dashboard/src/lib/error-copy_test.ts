@@ -117,6 +117,7 @@ test("ownership errors explain app authority in the selected UI language", () =>
     ["connection_not_owned_by_app_owner", "controlError.connectionNotOwned"],
     ["ownership_transfer_pending", "controlError.ownershipTransferPending"],
     ["workspace_frozen", "controlError.retiredManagement"],
+    ["interface_link_approval_required", "controlError.interfaceLinkApprovalRequired"],
   ] as const;
   for (const [code, key] of cases) {
     const error = new ControlApiError(409, code, "Internal compatibility management policy");

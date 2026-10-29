@@ -459,6 +459,34 @@ describe("Interface links are approved only by someone who may change the provid
     expect(viaToken.body.link).toMatchObject({ state: "pending_approval" });
   }, 180_000);
 
+  test("a re-point that would only be pending is refused with 409 and the active link is kept", async () => {
+    const { h, interfaceId } = await managesBoth();
+    const active = await put(h, h.headers.session(PROVIDER_OWNER), interfaceId, 0);
+    expect(active.body.link).toMatchObject({ state: "active" });
+    // A second provider app the consumer's owner cannot manage.
+    const OTHER_PROVIDER = "cap_authz_provider_two";
+    const consumer = (await h.ledger.getCapsule(CAPSULE))!;
+    await h.ledger.putCapsule({ ...consumer, id: OTHER_PROVIDER, name: "provider-two", slug: "provider-two", updatedAt: NOW });
+    expect(await h.ownership.initializeOwnershipIfMissing({
+      capsuleId: OTHER_PROVIDER, ownerAccountId: "acct_other_provider_owner", ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${OTHER_PROVIDER}`,
+    })).toBe(true);
+    const other = await h.core.interfaces.create({
+      workspaceId: WORKSPACE, name: "provider-two-tools", ownerRef: { kind: "Capsule", id: OTHER_PROVIDER },
+      spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: "https://provider-two.example.test/mcp" } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } },
+    });
+    const url = new URL(`https://app.takosumi.test/api/v1/capsules/${CAPSULE}/interface-links/tools`);
+    const response = await handleControlRoute({
+      request: new Request(url, { method: "PUT", headers: { ...h.headers.session(APP_OWNER), "content-type": "application/json" }, body: JSON.stringify({ interfaceId: other.metadata.id, expectedGeneration: active.body.link!.generation }) }),
+      url, store: h.accounts, operations: h.operations,
+    });
+    expect(response!.status).toBe(409);
+    expect(((await response!.json()) as { error: { code: string } }).error.code).toBe("interface_link_approval_required");
+    expect(await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools")).toMatchObject({
+      state: "active", providerCapsuleId: PROVIDER, generation: active.body.link!.generation,
+    });
+  }, 180_000);
+
   test("an app token's candidate list omits apps it cannot view", async () => {
     const { h } = await linkFixture();
     const candidates = async (credential: Record<string, string>) => {
