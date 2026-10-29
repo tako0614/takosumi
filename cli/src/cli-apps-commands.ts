@@ -12,13 +12,22 @@ const APPS_PATH = "/api/v1/apps";
 const INSTALL_PLANS_PATH = "/api/v1/install-plans";
 
 function isMissingAppRoute(error: unknown): error is DeployControlApiError {
+  const bodyError = error instanceof DeployControlApiError && isRecord(error.body)
+    ? error.body.error
+    : undefined;
+  const hasOnlyRouteEnvelopeFields = isRecord(bodyError) &&
+    Object.keys(bodyError).every((key) => ["code", "message", "requestId"].includes(key));
+  const isDocumentedRouteNotFound = isRecord(bodyError) && bodyError.code === "not_found" &&
+    bodyError.message === "not found" && typeof bodyError.requestId === "string" &&
+    hasOnlyRouteEnvelopeFields;
+  const isCodeOnlyRouteNotFound = isRecord(bodyError) && bodyError.code === "not_found" &&
+    !stringValue(bodyError.message) && hasOnlyRouteEnvelopeFields;
+
   return error instanceof DeployControlApiError && error.status === 404 &&
     (error.code === undefined || ["route_not_found", "fixture_route_not_found"].includes(error.code) ||
       (error.code === "not_found" && isRecord(error.body) && (
         error.body.error === "not_found" ||
-        // A message identifies a business failure, not the code-only route fallback.
-        (isRecord(error.body.error) && error.body.error.code === "not_found" &&
-          !stringValue(error.body.error.message))
+        isCodeOnlyRouteNotFound || isDocumentedRouteNotFound
       )));
 }
 
