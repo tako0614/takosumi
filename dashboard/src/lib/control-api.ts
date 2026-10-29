@@ -1284,34 +1284,6 @@ export async function listCapsules(
   );
 }
 
-/**
- * Complete, runtime-validated Capsule inventory used to bind a Source-global
- * revision mutation to the Workloads it affects. The ordinary list helper is
- * intentionally forgiving for presentation; this seam must fail closed when
- * the membership projection is incomplete or malformed.
- */
-async function listCapsulesForSourceMembership(
-  workspaceId: string,
-): Promise<readonly Capsule[]> {
-  return await fetchAllPages<Capsule>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules?includeDestroyed=false`,
-    (body) => {
-      if (
-        !Array.isArray(body.capsules) ||
-        !body.capsules.every(isCapsuleResponse) ||
-        (body.nextCursor !== undefined && typeof body.nextCursor !== "string")
-      ) {
-        throw new ControlApiError(
-          502,
-          "invalid_capsule_list_response",
-          "Capsule membership returned an invalid response.",
-        );
-      }
-      return body.capsules;
-    },
-  );
-}
-
 export async function listWorkspaceCurrentStateVersions(
   workspaceId: string,
   options: { readonly includeDestroyed?: boolean } = {},

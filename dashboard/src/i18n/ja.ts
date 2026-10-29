@@ -486,6 +486,7 @@ export const ja = {
   "app.version.title": "版",
   "app.version.subtitle": "このアプリのGitの版です。変える前に、作られるものと料金の目安を確認します。",
   "app.version.current": "現在の版",
+  "app.version.uninstalled": "アンインストール済み",
   "app.version.unknown": "不明",
   "app.version.source": "取得元",
   "app.version.appliedAt": "適用",

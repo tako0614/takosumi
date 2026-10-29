@@ -54,17 +54,8 @@ const MAX_FACT_VARIABLES = 256;
 const MAX_NAME_SUFFIX = 99;
 const MAX_CAPSULE_NAME = 128;
 
-/** Deterministic initial Capsule id shared by creation, adoption and discard. */
-export function deterministicInitialCapsuleId(planId: string): string {
-  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
-  return `cap_${suffix.padStart(16, "0")}`;
-}
-
-/** Deterministic Source id reserved for one install plan. */
-export function deterministicInstallSourceId(planId: string): string {
-  const suffix = planId.replace(/[^A-Za-z0-9]/gu, "").slice(-16);
-  return `src_${suffix.padStart(16, "0")}`;
-}
+import { deterministicInitialCapsuleId, deterministicInstallSourceId } from "../../../../core/domains/install-plans/source-reservation.ts";
+export { deterministicInitialCapsuleId, deterministicInstallSourceId };
 
 /** `https://github.com/o/my_App.git` → `my-app`; never empty. */
 export function proposedAppName(url: string): string {

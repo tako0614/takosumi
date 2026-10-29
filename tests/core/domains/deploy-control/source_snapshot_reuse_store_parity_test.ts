@@ -253,10 +253,10 @@ test("in-memory concurrent same-lane settlements retry observation and reuse the
   expect(runs[0]?.snapshotId).toBe(runs[1]?.snapshotId);
 });
 
-test("in-memory lane retry also refreshes a changed Capsule census, while unrelated census drift fails", async () => {
+test("in-memory lane retry refreshes its owner and ignores unrelated app changes", async () => {
   const store = new SnapshotLaneRaceMemory();
   await store.putWorkspace(workspace());
-  await store.putSource(source());
+  await store.putSource({ ...source(), ownerCapsuleId: "cap_reuse_race" });
   const a = "a".repeat(40);
   const b = "b".repeat(40);
   await commit(store, 1, a);
@@ -280,10 +280,13 @@ test("in-memory lane retry also refreshes a changed Capsule census, while unrela
 
   const unrelated = await prepare(store, 4, a);
   store.onNextSourceRead = async () => {
-    await store.putCapsule(capsule);
+    await store.putCapsule({ ...capsule, id: "cap_unrelated", name: "unrelated", slug: "unrelated", sourceId: "src_unrelated" });
   };
-  await expect(store.commitSourceSyncSuccess(unrelated)).rejects.toThrow(
-    "SourceSync settlement observations changed",
-  );
-  expect((await store.getSourceSyncRun("ssr_reuse_4"))?.status).toBe("running");
+  expect((await store.commitSourceSyncSuccess(unrelated)).won).toBe(true);
+  expect((await store.getSourceSyncRun("ssr_reuse_4"))?.status).toBe("succeeded");
+
+  const changedOwner = await prepare(store, 5, a);
+  store.onNextSourceRead = async () => { await store.putCapsule(capsule); };
+  await expect(store.commitSourceSyncSuccess(changedOwner)).rejects.toThrow("SourceSync settlement observations changed");
+  expect((await store.getSourceSyncRun("ssr_reuse_5"))?.status).toBe("running");
 });

@@ -22,6 +22,8 @@ function declaredDurableGitInstallPlanStore(): GitInstallPlanStore {
     preparingCoordinatorForCapsule: (id, workspaceId, options) =>
       store.preparingCoordinatorForCapsule(id, workspaceId, options),
     hasWorkspaceManagementBlockers: (id) => store.hasWorkspaceManagementBlockers(id),
+    hasNonterminalPlanSourceReference: (workspaceId, sourceId, expiredBefore) =>
+      store.hasNonterminalPlanSourceReference(workspaceId, sourceId, expiredBefore),
     claimReconcile: (input) => store.claimReconcile(input),
     completeReconcile: (input) => store.completeReconcile(input),
     transitionUnleased: (input) => store.transitionUnleased(input),

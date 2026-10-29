@@ -656,6 +656,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     await this.archiveStore.delete(input.archiveRef);
   }
 
+  async deleteRetiredSourceArchives(input: {
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRefs: readonly string[];
+  }): Promise<void> {
+    if (!this.archiveStore.delete) throw new Error("source archive delete custody is unavailable");
+    const segment = /^[A-Za-z0-9._-]+$/u;
+    if (!segment.test(input.workspaceId) || !segment.test(input.sourceId)) throw new Error("invalid Source retirement identity");
+    const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
+    const refs = new Set(input.archiveRefs);
+    for (const ref of refs) {
+      const suffix = ref.startsWith(prefix) ? ref.slice(prefix.length) : "";
+      const snapshotId = suffix.split("/")[0];
+      if (!snapshotId || !segment.test(snapshotId) || suffix !== `${snapshotId}/source.tar.zst`) {
+        throw new Error("source archive retirement ref is outside the Source boundary");
+      }
+    }
+    for (const ref of refs) {
+      await this.archiveStore.delete(ref);
+    }
+  }
+
   async assertPrivateRunFileRefreshCapability(): Promise<void> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);

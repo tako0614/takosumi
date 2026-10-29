@@ -718,6 +718,8 @@ export interface CapsuleAppRunSummary {
 }
 
 export interface CapsuleAppVersion {
+  /** Terminal apps have no installed version, even after Source archives retire. */
+  readonly uninstalled?: boolean;
   /** The Git repository (credential-free URL) and the Source's default ref. */
   readonly repository?: {
     readonly url: string;

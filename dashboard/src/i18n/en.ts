@@ -474,6 +474,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.version.title": "Version",
   "app.version.subtitle": "The Git version of this app. Before any change you review what will be created and what it may cost.",
   "app.version.current": "Installed version",
+  "app.version.uninstalled": "Uninstalled",
   "app.version.unknown": "Unknown",
   "app.version.source": "From",
   "app.version.appliedAt": "Applied",
