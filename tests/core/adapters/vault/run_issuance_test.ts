@@ -48,7 +48,12 @@ describe("Vault run-issued credential recipe", () => {
     const connection = await verifiedConnection(store, vault);
     await seedRunningPlan(store);
     const capsule = (await store.getCapsule("capsule_1"))!;
-    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active", managementEpoch: 0 });
+    // Ordinary Capsule writes preserve ownership. Change the storage read
+    // boundary to exercise malformed and changed authority snapshots here.
+    const readCapsule = store.getCapsule.bind(store);
+    let currentCapsule = capsule;
+    store.getCapsule = async (id) => id === capsule.id ? structuredClone(currentCapsule) : readCapsule(id);
+    currentCapsule = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active", managementEpoch: 0 };
     const originalPlan = (await store.getPlanRun("plan_1"))!;
     await store.putPlanRun({ ...originalPlan, createdBy: "fixture-owner", ownershipEpoch: 1, appManagementEpoch: 0 });
     const request = () => vault.mintForCapsuleProviderBindings(
@@ -61,17 +66,17 @@ describe("Vault run-issued credential recipe", () => {
     accessAllowed = false;
     await expect(request()).rejects.toThrow(/no longer has app access/);
     accessAllowed = true;
-    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "draining", managementEpoch: 0 });
+    currentCapsule = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "draining", managementEpoch: 0 };
     await expect(request()).rejects.toThrow(/ownership authority changed/);
-    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active", managementEpoch: 0 });
+    currentCapsule = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active", managementEpoch: 0 };
     expect((await request()).env.RUN_CREDENTIAL_TOKEN).toBe("issued:plan_1");
-    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "frozen", managementEpoch: 0 });
+    currentCapsule = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "frozen", managementEpoch: 0 };
     await expect(request()).rejects.toThrow(/ownership authority changed/);
-    await store.putCapsule({ ...capsule, ownerAccountId: undefined, ownershipEpoch: 2, managementState: "active", managementEpoch: 0 });
+    currentCapsule = { ...capsule, ownerAccountId: undefined, ownershipEpoch: 2, managementState: "active", managementEpoch: 0 };
     await expect(request()).rejects.toThrow(/ownership metadata is incomplete/);
-    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: undefined, managementState: "active", managementEpoch: 0 });
+    currentCapsule = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: undefined, managementState: "active", managementEpoch: 0 };
     await expect(request()).rejects.toThrow(/ownership authority changed/);
-    await store.putCapsule({ ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active", managementEpoch: 0 });
+    currentCapsule = { ...capsule, ownerAccountId: "fixture-owner", ownershipEpoch: 2, managementState: "active", managementEpoch: 0 };
     await store.putConnection({ ...connection, status: "pending" });
     await expect(request()).rejects.toMatchObject({ reason: "connection_not_owned_by_app_owner" });
     await store.putConnection(connection);
@@ -152,7 +157,8 @@ describe("Vault run-issued credential recipe", () => {
       if (change === "settle") {
         await store.putPlanRun({ ...(await store.getPlanRun("plan_1"))!, status: "failed" });
       } else if (change === "drain") {
-        await store.putCapsule({ ...owned, managementState: "draining", managementEpoch: 1 });
+        store.setCapsuleOwnership({ capsuleId: owned.id, ownerAccountId: "fixture-owner", ownershipEpoch: 2,
+          managementState: "draining", managementEpoch: 1, storageRoot: owned.storageRoot ?? `apps/${owned.id}` });
       } else {
         await store.putConnection({ ...connection, status: "revoked" });
       }

@@ -799,7 +799,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(77);
+    expect(verification.latestMigrationVersion).toBe(78);
   } finally {
     database.close();
   }
@@ -2275,7 +2275,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 77 },
+      verification: { latestMigrationVersion: 78 },
     });
   } finally {
     database.close();
@@ -3883,7 +3883,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database, {
-      throughMigrationVersion: 76,
+      throughMigrationVersion: 77,
     });
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
@@ -3933,10 +3933,10 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
       string,
       unknown
     >;
-    expect(code).toBe(0);
+    expect(code, JSON.stringify(transcript)).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [77],
+      appliedMigrationVersions: [78],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -3967,7 +3967,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database, {
-      throughMigrationVersion: 76,
+      throughMigrationVersion: 77,
     });
     await database
       .prepare(
