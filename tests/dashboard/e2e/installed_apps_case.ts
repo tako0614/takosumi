@@ -252,33 +252,33 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       expect(h.errors).toEqual([]);
     });
 
-    test("uses the legacy install route only after a 404 and an explicit workspace", async ({ page }) => {
-      const h = await fixture(page, []);
+    test("uses the legacy install route only when apps are unavailable and a workspace is selected", async ({ page }) => {
+      const h = await fixture(page, [], true, { legacy: true });
       await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha"));
       await page.route("**/api/v1/install-plans", (route) => route.fulfill({ status: 404, json: { error: "not_found" } }));
       const query = new URLSearchParams({ git: repository, path: modulePath, ref: "main" });
       await page.goto(`/new?${query}`);
       await page.getByRole("button", { name: "インストール", exact: true }).click();
       await expect.poll(() => h.mutations).toContain("POST /api/v1/workspaces/ws_alpha/install-plans");
-      expect(h.mutations.slice(0, 2)).toEqual([
-        "POST /api/v1/install-plans",
-        "POST /api/v1/workspaces/ws_alpha/install-plans",
-      ]);
+      expect(h.reads).toContain("/api/v1/apps");
+      expect(h.mutations).toEqual(["POST /api/v1/workspaces/ws_alpha/install-plans"]);
       expect(h.mutations.some((entry) => /\/apply(?:$|\/)/u.test(entry))).toBe(false);
       expect(h.errors).toEqual([]);
     });
 
-    test("does not use the legacy install route when the new route fails with 403", async ({ page }) => {
-      const h = await fixture(page, []);
-      await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha"));
-      await page.route("**/api/v1/install-plans", (route) => route.fulfill({ status: 403, json: { error: "forbidden" } }));
-      const query = new URLSearchParams({ git: repository, path: modulePath, ref: "main" });
-      await page.goto(`/new?${query}`);
-      await page.getByRole("button", { name: "インストール", exact: true }).click();
-      await expect.poll(() => h.mutations.filter((entry) => entry.includes("install-plans"))).toEqual([
-        "POST /api/v1/install-plans",
-      ]);
-      expect(h.errors).toEqual([]);
-    });
+    for (const failure of [{ status: 403, code: "forbidden" }, { status: 404, code: "not_found" }]) {
+      test(`does not use the legacy install route after a business ${failure.status} response`, async ({ page }) => {
+        const h = await fixture(page, []);
+        await page.addInitScript(() => localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha"));
+        await page.route("**/api/v1/install-plans", (route) => route.fulfill({ status: failure.status, json: { error: { code: failure.code, message: "Requested install is unavailable." } } }));
+        const query = new URLSearchParams({ git: repository, path: modulePath, ref: "main" });
+        await page.goto(`/new?${query}`);
+        await page.getByRole("button", { name: "インストール", exact: true }).click();
+        await expect.poll(() => h.mutations.filter((entry) => entry.includes("install-plans"))).toEqual([
+          "POST /api/v1/install-plans",
+        ]);
+        expect(h.errors).toEqual([]);
+      });
+    }
   });
 }
