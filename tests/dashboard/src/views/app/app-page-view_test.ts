@@ -66,6 +66,16 @@ describe("installed app page", () => {
     expect(linked).toContain('t("app.links.unreadable")');
   });
 
+  test("the provider decides pending links in place and the consumer sees whose approval it waits for", () => {
+    expect(linked).toContain('row.canApprove === true');
+    expect(linked).toContain('decideInterfaceLink(props.app.capsuleId, row.linkId, decision, row.generation)');
+    expect(linked).toContain('t("app.links.approve")');
+    expect(linked).toContain('t("app.links.decline")');
+    expect(linked).toContain('t("app.links.waitingFor", { name: name(row) })');
+    expect(linked).toContain("interfacePermissionList(row.permissions)");
+    expect(linked).not.toContain('row.permissions.join(", ")');
+  });
+
   test("state, problems, screens and history come from the server's per-app reads", () => {
     expect(page).toContain("createResource(capsuleId, getCapsuleApp)");
     expect(page).toContain("listCapsuleRuns(id, { limit: APP_HISTORY_PAGE_SIZE, types: APP_HISTORY_RUN_TYPES })");

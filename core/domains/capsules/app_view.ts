@@ -73,6 +73,11 @@ export interface CapsuleAppFacts {
   readonly connectionIssues: readonly CapsuleAppConnectionIssue[];
   /** Current outgoing requirements; absent when the supporting read failed. */
   readonly interfaceLinks?: readonly CapsuleAppLink[];
+  /**
+   * Incoming links (`usedBy`) waiting for this provider app's consent that the
+   * caller may approve or decline; absent when the supporting read failed.
+   */
+  readonly interfaceLinkRequests?: readonly CapsuleAppLink[];
   /** A dead-lettered screen materialization of the current generation. */
   readonly screenFailure?: CapsuleAppScreenFailure;
   /** Launchable screens; `undefined` when the screen read failed. */
@@ -98,6 +103,7 @@ const PROBLEM_ACTION: Readonly<
   interface_link_unavailable: "fix_interface_link",
   interface_link_degraded: "fix_interface_link",
   interface_link_unset: "fix_interface_link",
+  interface_link_approval_pending: "review_interface_link",
   uninstall_failed: "retry",
   policy_blocked: "review",
   run_failed: "retry",
@@ -207,6 +213,23 @@ function interfaceLinkProblems(
         }]
       : [];
   });
+}
+
+/** Info only: a request never outranks run, install or repair problems. */
+function interfaceLinkRequestProblems(
+  requests: readonly CapsuleAppLink[] | undefined,
+): CapsuleAppProblem[] {
+  return (requests ?? []).flatMap((link): CapsuleAppProblem[] =>
+    link.state === "pending_approval" && link.canApprove === true
+      ? [{
+          code: "interface_link_approval_pending",
+          severity: "info",
+          requirementKey: link.requirementKey,
+          ...(link.linkId ? { interfaceLinkId: link.linkId } : {}),
+          consumerCapsuleId: link.consumerCapsuleId,
+        }]
+      : []
+  );
 }
 
 function ordered(problems: readonly CapsuleAppProblem[]): CapsuleAppProblem[] {
@@ -324,6 +347,7 @@ export function deriveCapsuleAppStatus(facts: CapsuleAppFacts): CapsuleAppStatus
   const problems: CapsuleAppProblem[] = [
     ...connectionProblems(facts.connectionIssues),
     ...interfaceLinkProblems(facts.interfaceLinks),
+    ...interfaceLinkRequestProblems(facts.interfaceLinkRequests),
   ];
   if (latestFailed) problems.push(runProblem(latestFailed));
   if (capsule.status === "error" && !latestFailed) {

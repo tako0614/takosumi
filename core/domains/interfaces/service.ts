@@ -813,11 +813,12 @@ export class InterfaceService {
     const now = this.#now();
     const liveCurrent = current && (current.state === "active" || current.state === "pending_approval");
     // A replacement revokes the current link. Without provider approval the
-    // replacement would only be pending (and nothing approves it yet), so the
-    // app would lose its Interface: refuse and keep the current link. Only a
-    // brand-new link (no live current one) may start as pending_approval.
+    // replacement would only be pending until the provider app approves it,
+    // so the app would lose its Interface meanwhile: refuse and keep the
+    // current link. Only a brand-new link (no live current one) may start as
+    // pending_approval; the provider app's owner or a member then approves it.
     if (liveCurrent && !approval) {
-      throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept");
+      throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept. Remove the current link and select the provider again to send an approval request to the provider app's owner and members");
     }
     const next: InterfaceLink = {
       id: `ifl_${crypto.randomUUID().replaceAll("-", "")}`,
@@ -898,6 +899,123 @@ export class InterfaceService {
     if (!(await this.#stores.links.compareAndSet(next, current.generation, await writeFence.assertCurrent()))) throw new InterfaceServiceError("conflict", "Interface link changed concurrently");
     await this.#revokeLinkBindings(current);
     return next;
+  }
+
+  /**
+   * Links waiting for this provider app's consent: pending and still the
+   * current selection of a consumer app that has not been uninstalled.
+   */
+  async listProviderInterfaceLinkRequests(providerCapsuleId: string): Promise<readonly InterfaceLink[]> {
+    const id = requireText(providerCapsuleId, "providerCapsuleId");
+    const requests: InterfaceLink[] = [];
+    for (const link of await this.listProviderCapsuleInterfaceLinks(id)) {
+      if (link.providerCapsuleId !== id || link.state !== "pending_approval") continue;
+      const current = await this.#stores.links.getCurrent({ consumerCapsuleId: link.consumerCapsuleId, requirementKey: link.requirementKey });
+      if (current?.id === link.id) requests.push(link);
+    }
+    return requests;
+  }
+
+  /**
+   * Provider consent for one pending link. The link becomes active with the
+   * approved subset of its requested permissions (all of them by default);
+   * the consumer's people get their grants on their next sign-in, exactly as
+   * for a link approved at creation.
+   */
+  approveInterfaceLink(input: {
+    readonly providerCapsuleId: string;
+    readonly linkId: string;
+    readonly expectedGeneration: number;
+    readonly approvedPermissions?: readonly string[];
+  }, actor?: ActorContext, writeFence?: InterfaceLinkWriteFence): Promise<InterfaceLink> {
+    return this.#decideInterfaceLink(input, "approve", actor, writeFence);
+  }
+
+  /** The provider app refuses one pending link; the consumer may select again. */
+  declineInterfaceLink(input: {
+    readonly providerCapsuleId: string;
+    readonly linkId: string;
+    readonly expectedGeneration: number;
+  }, actor?: ActorContext, writeFence?: InterfaceLinkWriteFence): Promise<InterfaceLink> {
+    return this.#decideInterfaceLink(input, "decline", actor, writeFence);
+  }
+
+  async #decideInterfaceLink(input: {
+    readonly providerCapsuleId: string;
+    readonly linkId: string;
+    readonly expectedGeneration: number;
+    readonly approvedPermissions?: readonly string[];
+  }, decision: "approve" | "decline", actor?: ActorContext, suppliedFence?: InterfaceLinkWriteFence): Promise<InterfaceLink> {
+    if (!this.#capsules) throw new InterfaceServiceError("failed_precondition", "Capsule Interface link authority is unavailable");
+    const providerCapsuleId = requireText(input.providerCapsuleId, "providerCapsuleId");
+    const linkId = requireText(input.linkId, "linkId");
+    if (!Number.isSafeInteger(input.expectedGeneration) || input.expectedGeneration < 0) throw new InterfaceServiceError("invalid_argument", "expectedGeneration must be a non-negative integer");
+    const provider = await this.#capsules.getCapsule(providerCapsuleId);
+    const writeFence = await this.#linkWriteFence(provider.workspaceId, suppliedFence);
+    await writeFence.assertCurrent();
+    const link = await this.#stores.links.get(linkId);
+    if (!link || link.providerCapsuleId !== provider.id) throw new InterfaceServiceError("not_found", "Interface link not found");
+    if (link.generation !== input.expectedGeneration) throw new InterfaceServiceError("conflict", "Interface link generation changed");
+    await this.#assertLinkAwaitsDecision(link);
+    const approvedPermissions = decision === "approve" ? approvedLinkPermissions(link, input.approvedPermissions) : [];
+    const decidedBy = actor?.actorAccountId ?? "system";
+    const now = this.#now();
+    const next: InterfaceLink = decision === "approve"
+      ? { ...link, state: "active", generation: link.generation + 1, approvedPermissions, approval: { kind: "provider_approved", approvedBy: decidedBy, approvedAt: now }, updatedAt: now }
+      : { ...link, state: "declined", generation: link.generation + 1, approvedPermissions: [], declined: { declinedBy: decidedBy, declinedAt: now }, updatedAt: now };
+    const authority = await writeFence.assertCurrent();
+    // The fences again after the caller's authority was re-checked: an
+    // uninstall scheduled meanwhile must not be approved into.
+    await this.#assertLinkAwaitsDecision(link);
+    if (!(await this.#stores.links.compareAndSet(next, link.generation, authority))) throw new InterfaceServiceError("conflict", "Interface link changed concurrently");
+    if ((await this.#capsules.getCapsule(link.consumerCapsuleId)).status === "destroyed") {
+      await this.revokeCapsuleInterfaceLinks(provider.workspaceId, link.consumerCapsuleId);
+      throw new InterfaceServiceError("failed_precondition", "consumer Capsule is destroyed");
+    }
+    await this.#recordActivity({
+      ...(actor ? { actor } : {}),
+      workspaceId: provider.workspaceId,
+      action: decision === "approve" ? "interface_link.approved" : "interface_link.declined",
+      targetType: "interface_link",
+      targetId: next.id,
+      metadata: {
+        interfaceLinkId: next.id,
+        generation: next.generation,
+        consumerCapsuleId: next.consumerCapsuleId,
+        providerCapsuleId: next.providerCapsuleId,
+        providerInterfaceId: next.providerInterfaceId,
+        requirementKey: next.requirementKey,
+        interfaceType: next.interface.type,
+        interfaceVersion: next.interface.version,
+        requestedPermissions: [...next.requestedPermissions],
+        ...(decision === "approve" ? { approvedPermissions: [...next.approvedPermissions] } : {}),
+      },
+    });
+    return next;
+  }
+
+  /**
+   * The creation fences for a provider decision: the link is still pending
+   * and current, the provider app is installed and not scheduled for
+   * uninstall, the consumer app still exists in the same Workspace, and the
+   * selected Interface is still the provider app's.
+   */
+  async #assertLinkAwaitsDecision(link: InterfaceLink): Promise<void> {
+    const current = await this.#stores.links.getCurrent({ consumerCapsuleId: link.consumerCapsuleId, requirementKey: link.requirementKey });
+    const latest = current?.id === link.id ? current : await this.#stores.links.get(link.id);
+    if (!latest || latest.generation !== link.generation) throw new InterfaceServiceError("conflict", "Interface link changed concurrently");
+    if (latest.state !== "pending_approval" || current?.id !== link.id) throw new InterfaceServiceError("conflict", "Interface link is not waiting for approval");
+    const read = async (id: string): Promise<Capsule | undefined> => {
+      try { return await this.#capsules!.getCapsule(id); }
+      catch (error) { if (isMissingInterfaceOwner(error)) return undefined; throw error; }
+    };
+    const [provider, consumer] = await Promise.all([read(link.providerCapsuleId), read(link.consumerCapsuleId)]);
+    if (!provider || !["active", "stale"].includes(provider.status) || (provider.uninstall && provider.uninstall.phase !== "cancelled")) throw new InterfaceServiceError("failed_precondition", "provider app is not accepting Interface links");
+    if (!consumer || consumer.status === "destroyed" || consumer.workspaceId !== provider.workspaceId) throw new InterfaceServiceError("failed_precondition", "consumer Capsule is destroyed");
+    const iface = await this.#stores.interfaces.get(link.providerInterfaceId);
+    if (!iface || iface.metadata.workspaceId !== provider.workspaceId || iface.metadata.ownerRef.kind !== "Capsule" || iface.metadata.ownerRef.id !== provider.id || iface.spec.type !== link.interface.type || iface.spec.version !== link.interface.version) {
+      throw new InterfaceServiceError("failed_precondition", "selected Interface provider is unavailable");
+    }
   }
 
   async revokeCapsuleInterfaceLinks(workspaceId: string, capsuleId: string, reason: "consumer_destroyed" | "install_discarded" = "consumer_destroyed"): Promise<void> {
@@ -3973,6 +4091,21 @@ function linkMatchesRequirement(link: InterfaceLink, requirement: CapsuleRequire
 
 function linkMatchesRequirementExactly(link: InterfaceLink, requirement: CapsuleRequiredInterface): boolean {
   return linkMatchesRequirement(link, requirement) && samePermissionSet(link.requestedPermissions, requirement.permissions);
+}
+
+/**
+ * The provider's approved subset, in the link's requested order. Omitted means
+ * every requested permission; an approval never widens the request and never
+ * approves nothing (that is a decline).
+ */
+function approvedLinkPermissions(link: InterfaceLink, approved: readonly string[] | undefined): string[] {
+  if (approved === undefined) return [...link.requestedPermissions];
+  if (!Array.isArray(approved) || approved.some((permission) => typeof permission !== "string" || !permission)) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must be an array of permission names");
+  const unique = new Set(approved);
+  if (unique.size !== approved.length) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must not repeat a permission");
+  if (approved.some((permission) => !link.requestedPermissions.includes(permission))) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must be a subset of the requested permissions");
+  if (unique.size === 0 && link.requestedPermissions.length > 0) throw new InterfaceServiceError("invalid_argument", "approvedPermissions must name at least one permission; decline the link instead");
+  return link.requestedPermissions.filter((permission) => unique.has(permission));
 }
 
 function samePermissionSet(left: readonly string[], right: readonly string[]): boolean {

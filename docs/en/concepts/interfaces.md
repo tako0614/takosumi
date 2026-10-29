@@ -123,9 +123,20 @@ candidate automatically.
 
 A link is `pending_approval`, `active`, `declined`, or `revoked`. It records requested and
 approved permissions separately. Only an active link can create ordinary InterfaceBindings.
-A replaceable policy decides approval; the current Workspace composition immediately
-approves same-Workspace links. An unset link does not prevent OIDC sign-in; it creates no
-Binding for that link.
+A link gives the consumer app's people the provider app's permissions, so it needs the
+provider app's consent. When the person creating the link is also the provider app's owner
+or a member, the link is approved at creation and becomes active. Otherwise it is created
+`pending_approval`; the provider app's owner or a member then approves it (active) or
+declines it (`declined`). An approval may grant only a subset of the requested permissions.
+Being the consumer app's owner or member is not enough to approve, and an installed app's
+own token never approves or declines (an app the operator designated to act for its user
+does so only when that user is the provider app's owner or a member).
+While a link waits, the consumer app gets no Bindings; after approval, people using the
+consumer app get them on their next sign-in. Either side can revoke a link, and after a
+decline the consumer may choose a provider again. Re-pointing a current link to a provider
+that would leave it pending is refused with `409` and keeps the current link; to ask for
+approval, revoke the current link and choose again.
+An unset link does not prevent OIDC sign-in; it creates no Binding for that link.
 Reordering or reducing an app's permissions preserves links within the approved scope.
 An increase reports `reapproval_required` health; choose the linked app again to approve
 the additional permissions before they can be granted.
@@ -149,10 +160,14 @@ module uses Cloudflare, AWS, Takoform, or another provider directly.
 The app page shows outgoing links in `links.uses` and incoming links in `links.usedBy`.
 Problems report `interface_link_unset` for an unset link, `interface_link_unavailable` for
 an unavailable provider, or `interface_link_degraded` for a provider scheduled for removal.
-The action to repair a link is `fix_interface_link`.
+The action to repair a link is `fix_interface_link`. On the provider app, pending links are
+listed in `links.usedBy` with `pending_approval` and `canApprove`, and people who can approve
+see `interface_link_approval_pending` (`info`, action `review_interface_link`). They choose
+Approve or Decline in the app page's Linked apps section; the approval confirmation lists the
+permissions being granted. The consumer app shows "Waiting for {provider} to approve".
 
 Use the [Interface link API](../reference/api.md#interface-links) with app management access to
-list candidates, select another provider, or unlink. Selecting a provider creates its
+list candidates, select another provider, unlink, or list, approve and decline pending links. Selecting a provider creates its
 Binding before revoking the old Binding, and needs no Plan. Send the `generation` you read
 as `expectedGeneration` when changing a link.
 

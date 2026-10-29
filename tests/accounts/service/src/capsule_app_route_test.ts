@@ -780,6 +780,51 @@ test("incoming current consumers are included in uninstall impact while revoked 
   expect(app.uninstall.impact.usedBy).toEqual(app.links.usedBy);
 });
 
+test("a pending incoming link offers approval to the provider as an info problem that never takes the primary action", async () => {
+  const h = await linkedFixture();
+  const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+  await h.ledger.putCapsule({ ...capsule, id: "cap_link_consumer", name: "consumer", slug: "consumer" });
+  const { approval: _approval, ...base } = h.link;
+  const incoming: InterfaceLink = {
+    ...base,
+    id: "ifl_pending_incoming",
+    consumerCapsuleId: "cap_link_consumer",
+    providerCapsuleId: CAPSULE,
+    providerInterfaceId: "if_pending_incoming",
+    state: "pending_approval",
+    approvedPermissions: [],
+  };
+  expect(await h.interfaceStores.interfaces.create({
+    ...h.iface,
+    metadata: { ...h.iface.metadata, id: incoming.providerInterfaceId, ownerRef: { kind: "Capsule", id: CAPSULE } },
+  })).toBe(true);
+  expect(await h.interfaceStores.links.create(incoming)).toBe(true);
+  const before = await linkedFixture();
+  const baseline = await before.app();
+  const app = await h.app();
+  expect(app.links.usedBy).toHaveLength(1);
+  expect(app.links.usedBy[0]).toMatchObject({ linkId: incoming.id, state: "pending_approval", canApprove: true, permissions: ["data.read"], otherApp: { capsuleId: "cap_link_consumer" } });
+  expect(app.links.uses[0]?.canApprove).toBeUndefined();
+  expect(app.problems).toEqual([{ code: "interface_link_approval_pending", severity: "info", requirementKey: incoming.requirementKey, interfaceLinkId: incoming.id, consumerCapsuleId: "cap_link_consumer" }]);
+  expect(app.state).toBe(baseline.state);
+  expect(app.primaryAction).toBe(baseline.primaryAction);
+
+  // A read-only credential sees the request without the decision.
+  h.accounts.savePersonalAccessToken("pat_pending_read", {
+    tokenId: "pat_pending_read_id", tokenPrefix: "read", subject: OWNER,
+    name: "read only", scopes: ["read"], workspaceId: WORKSPACE, createdAt: Date.now(),
+  });
+  const readOnly = ((await (await h.request("/app", "", "GET", undefined, "pat_pending_read")).json()) as { app: CapsuleAppView }).app;
+  expect(readOnly.links.usedBy[0]).toMatchObject({ state: "pending_approval", canApprove: false });
+  expect(readOnly.problems).toEqual([]);
+
+  // A provider scheduled for uninstall no longer accepts links.
+  await h.ledger.putCapsule({ ...capsule, status: "uninstalled" });
+  const scheduled = await h.app();
+  expect(scheduled.links.usedBy[0]).toMatchObject({ state: "pending_approval", canApprove: false });
+  expect(scheduled.problems.some((problem) => problem.code === "interface_link_approval_pending")).toBe(false);
+});
+
 test("an unset requirement is visible and a link read failure is explicitly incomplete", async () => {
   const h = await fixture({ requiredInterfaces: [LINK_REQUIREMENT] });
   const unset = await h.app();

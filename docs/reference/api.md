@@ -209,7 +209,7 @@ Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `
 health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本 (正とする情報) は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 104 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
+次の 107 件です。 Accountsを組み込んだ構成は同じ一覧を `/openapi.json` に含め、`x-takos-public-session-endpoint-count` に件数を示します。Coreだけのプロセスには未mountのAccounts routeを載せません。
 
 ### アプリの所有と個人の接続・使用量
 
@@ -247,7 +247,7 @@ PATには `appIds` を指定できます。実効権限はscopeと現在のア�
 | 更新 (`update`) | 可 | 可 | `plan`、`revision-plans`、`drift-check`、所有Sourceの `sync`・`compatibility-check`、通常のRunの承認・適用・取消 |
 | ロールバック (`rollback`) | 可 | 可 | `POST /state-versions/{id}/rollback-plan`、restore Runの承認 |
 | 接続の選択 (`choose_connection`) | 可 | 可 | `providerBindings` を含む `configuration-plans`。選べるのは所有者の接続とoperatorのbindable接続だけ |
-| Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}` |
+| Interface linkの変更 (`change_interface_link`) | 可 | 可 | `PUT`・`DELETE /capsules/{id}/interface-links/{key}`、提供側アプリとしての `interface-links/requests` の一覧と `approve`・`decline` |
 | アンインストール (`uninstall`) | 可 | 不可 | `DELETE /capsules/{id}`、`uninstall`・`cancel-uninstall`・`abandon`・`destroy-plan`、destroy Runの承認・適用・取消、所有Sourceの `DELETE` |
 | 所有者の譲渡 (`transfer_ownership`) | 可 | 不可 | `ownership-transfers` |
 | メンバー管理 (`manage_members`) | 可 | 不可 | `members` の追加・削除 (メンバー本人の離脱は可) |
@@ -258,9 +258,11 @@ Sourceは所有アプリ (`ownerCapsuleId`) のものです。所有アプリの
 
 Interface linkは、要求者が提供側アプリでも `change_interface_link` を持つとき (所有記録の無い提供側はWorkspace判定) だけ作成時に承認されます。それ以外は `pending_approval` で作られます。インストール時に作るlink (明示的な選択と、候補が1つだけのときの自動選択) も同じ規則です。さらに、インストールを進める人がインストール計画の作成者 (承認者として記録される人) であることも必要です。
 
-既存のlinkの付け替えで、新しいlinkが `pending_approval` になる場合は `409 interface_link_approval_required` で拒否し、今のlink (activeでもpendingでも) をそのまま残します。`pending_approval` のlinkを承認するAPIはまだ無いので、付け替えるとアプリがInterfaceを失うためです。今のlinkが無いときは、新しいlinkを `pending_approval` で作れます。`pending_approval` のlinkは、同じ提供側を指定して `PUT` しても今のlinkがそのまま返り、有効になりません。承認APIができるまでは、提供側アプリでも `change_interface_link` を持つ人がいったん `DELETE` してから `PUT` し直してください。作成時に承認され、activeのlinkになります。
+`pending_approval` のlinkは、提供側アプリの所有者かメンバー (所有記録の無い提供側はWorkspace判定) が `POST /capsules/{providerId}/interface-links/{linkId}/approve` で承認すると active になり、`decline` で断ると `declined` になります。判定は提供側アプリの `change_interface_link` で、利用側アプリの所有者・メンバーであることは何も与えません。承認・拒否のどちらも、linkがまだ承認待ちで今のlinkであること、`expectedGeneration` が一致すること、提供側アプリが稼働中でアンインストール予定でないこと、利用側アプリが残っていることを確かめ、書き込みの直前に呼び出し元の役割 (所有者の譲渡によるepochの変化を含む) をもう一度確かめます。承認では `approvedPermissions` で要求された権限の一部だけを渡せます (省略時は要求のすべて。要求に無い権限や空の一覧は `400`)。承認後、利用側アプリを使う人には、作成時に承認されたlinkと同じく次のサインインでBindingが作られます。どちらの側からも `DELETE` で取り消せます。断られた後や承認された後も、利用側は改めて提供元を選べます。
 
-資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリ自身のOAuthアクセストークン (アプリごとのOIDC clientに発行され、そのアプリに束縛されたtoken) は、そのアプリ自身だけに使えます。別のアプリのroute、別のアプリに属するRun・Source・インストール計画、Workspace単位のroute (一覧、`install-plans` の作成など) は `403` です。自分のアプリでも、アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通ります。アンインストール (`destroy-plan`、`DELETE /capsules/{id}`、destroy Runの承認・適用を含む)・譲渡・メンバー管理・新しい接続の選択には使えず、他のアプリのInterfaceを承認することもありません (下の代理指定のアプリを除く)。例外は、operatorが `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` で指定したリポジトリと許可したrefから現在適用されているアプリ (Takosのように利用者の代わりにアプリをインストールするアプリ) だけです。判定はサーバー側で、tokenに束縛されたアプリが同じWorkspaceで稼働中 (無効化・アンインストール予定でない) であり、そのアプリのSource (URLは変更できない) と適用中のrevisionのpathが指定と一致し、さらにrunnerがそのrevisionのsnapshotに記録した完全なref名 (`resolvedRef`) が許可した `refs/heads/…`・`refs/tags/…` に一致するかで行います。インストール時に指定したrefの名前 (`main`、`HEAD` など) は使いません (`git ls-remote` は名前の末尾で照合するため、`1/head` のような名前が `refs/pull/1/head` に解決されることがあるためです)。refを指定しないインストールの `HEAD` は、runnerが既定のbranch (`refs/heads/…`) として記録します。`resolvedRef` の無いsnapshot (commit SHAで取得したもの、この記録を始める前に取得したもの)、`refs/pull/*` など `refs/heads/`・`refs/tags/` 以外のrefは対象外で、clientの申告は使いません。代理に指定されたアプリの配備内容 (revision plan、`rollback-plan`、Sourceの `defaultRef`・`defaultPath`、InstallConfigの再採用) を変えられるのは所有者だけです (所有記録の無いアプリではWorkspaceの所有者だけ)。代理に指定されたアプリのtokenは、利用者が所有者である他のアプリ (所有記録の無いアプリではWorkspaceの所有者) をアンインストールできますが、自分自身のアプリのアンインストール・譲渡・メンバー管理はできません。Interface linkは、利用者が提供側アプリでも `change_interface_link` を持つときだけ作成時に承認します。代理でないアプリのtokenは自分のアプリのplanを作れますが、Runの承認・適用・取消はできません (人のセッションかPATが必要)。Runには作った人 (tokenの利用者と同じ) しか記録されず、どのclientが作ったかを区別できないため、取消も一律に拒否します。Sourceの接続 (`authConnectionId`) を変えることや、`compatibility-check` でWorkspaceのInstallConfigを作ること・他のアプリのInstallConfigを指定することもできません。指定されたアプリのtokenは、束縛されたWorkspaceの中で、アプリでの役割とWorkspace判定の両方を満たす範囲だけ使えます。operatorが登録するstatic client (アプリに束縛されないtoken) は従来どおりです。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も、アプリでの役割とWorkspace判定の両方を要求します。
+既存のlinkの付け替えで、新しいlinkが `pending_approval` になる場合は `409 interface_link_approval_required` で拒否し、今のlink (activeでもpendingでも) をそのまま残します。承認されるまでアプリがInterfaceを失わないようにするためです。承認を求めるときは、今のlinkを `DELETE` してから選び直すと、新しいlinkが `pending_approval` で作られ、提供側アプリの所有者かメンバーが承認できます。`pending_approval` のlinkは、同じ提供側を指定して `PUT` しても今のlinkがそのまま返り、有効になりません。
+
+資格情報の制限は役割より先に適用します。PATの `appIds` に含まれないアプリ、Workspaceに束縛したPATやOAuthトークンの別Workspaceのアプリは拒否します。インストールされたアプリ自身のOAuthアクセストークン (アプリごとのOIDC clientに発行され、そのアプリに束縛されたtoken) は、そのアプリ自身だけに使えます。別のアプリのroute、別のアプリに属するRun・Source・インストール計画、Workspace単位のroute (一覧、`install-plans` の作成など) は `403` です。自分のアプリでも、アプリでの役割と従来のWorkspace判定の両方を満たすときだけ通ります。アンインストール (`destroy-plan`、`DELETE /capsules/{id}`、destroy Runの承認・適用を含む)・譲渡・メンバー管理・新しい接続の選択には使えず、他のアプリのInterfaceを承認することもありません (下の代理指定のアプリを除く)。承認待ちのlinkの一覧・承認・拒否 (`interface-links/requests`・`approve`・`decline`) には、自分のアプリについても使えず `403 app_access_denied` です。例外は、operatorが `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` で指定したリポジトリと許可したrefから現在適用されているアプリ (Takosのように利用者の代わりにアプリをインストールするアプリ) だけです。判定はサーバー側で、tokenに束縛されたアプリが同じWorkspaceで稼働中 (無効化・アンインストール予定でない) であり、そのアプリのSource (URLは変更できない) と適用中のrevisionのpathが指定と一致し、さらにrunnerがそのrevisionのsnapshotに記録した完全なref名 (`resolvedRef`) が許可した `refs/heads/…`・`refs/tags/…` に一致するかで行います。インストール時に指定したrefの名前 (`main`、`HEAD` など) は使いません (`git ls-remote` は名前の末尾で照合するため、`1/head` のような名前が `refs/pull/1/head` に解決されることがあるためです)。refを指定しないインストールの `HEAD` は、runnerが既定のbranch (`refs/heads/…`) として記録します。`resolvedRef` の無いsnapshot (commit SHAで取得したもの、この記録を始める前に取得したもの)、`refs/pull/*` など `refs/heads/`・`refs/tags/` 以外のrefは対象外で、clientの申告は使いません。代理に指定されたアプリの配備内容 (revision plan、`rollback-plan`、Sourceの `defaultRef`・`defaultPath`、InstallConfigの再採用) を変えられるのは所有者だけです (所有記録の無いアプリではWorkspaceの所有者だけ)。代理に指定されたアプリのtokenは、利用者が所有者である他のアプリ (所有記録の無いアプリではWorkspaceの所有者) をアンインストールできますが、自分自身のアプリのアンインストール・譲渡・メンバー管理はできません。Interface linkは、利用者が提供側アプリでも `change_interface_link` を持つときだけ作成時に承認します。承認待ちのlinkの承認・拒否も、利用者が提供側アプリの所有者かメンバーであるときだけで、自分自身のアプリへのlinkは決められません。代理でないアプリのtokenは自分のアプリのplanを作れますが、Runの承認・適用・取消はできません (人のセッションかPATが必要)。Runには作った人 (tokenの利用者と同じ) しか記録されず、どのclientが作ったかを区別できないため、取消も一律に拒否します。Sourceの接続 (`authConnectionId`) を変えることや、`compatibility-check` でWorkspaceのInstallConfigを作ること・他のアプリのInstallConfigを指定することもできません。指定されたアプリのtokenは、束縛されたWorkspaceの中で、アプリでの役割とWorkspace判定の両方を満たす範囲だけ使えます。operatorが登録するstatic client (アプリに束縛されないtoken) は従来どおりです。現在のmembershipを要求する共有アカウント構成 (`requireCurrentMembership`) も、アプリでの役割とWorkspace判定の両方を要求します。
 
 Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者のいないpreflight Source、Workspaceの接続) はPhase 9まで従来のWorkspace判定で互換提供します。ただし一覧 (`/workspaces/{id}/capsules`・`runs`・`activity`・`current-state-versions`・`backups`・`usage`・`installed-apps`・`interface-materialization-failures`、`/dashboard/overview`、`/sources?workspaceId=`) は、所有記録のあるアプリのうち呼び出し元が表示できないアプリの行を含めません。表示できるのは、そのアプリの所有者とactiveなメンバーです (アンインストール後も、残っている所有記録の所有者・メンバーは表示できます)。PATの `appIds` に含まれない所有アプリは表示しません。`/workspaces/{id}/usage` も、表示できないアプリの利用量と費用を含めません。支払者としての自分の利用量は `GET /api/v1/usage` で読みます。所有記録のあるアプリへの操作はアプリでの判定を通ります。
 
@@ -403,11 +405,11 @@ provider に届いた破棄が失敗した場合は、通常の破棄失敗と�
   `uninstall_scheduled` / `uninstalling` / `uninstalled`
 - `primaryAction`: `open` / `view_resources` / `review` / `retry` / `retry_screen` /
   `fix_connection` / `fix_interface_link` / `continue_install` / `cancel_uninstall` /
-  `uninstall_now` / `reinstall` / `none`
+  `uninstall_now` / `reinstall` / `none`（`review_interface_link` は問題カード自身の操作で、`primaryAction` にはなりません）
 - `problems[].code`（優先順）: `connection_unavailable` / `interface_link_unavailable` / `uninstall_failed` /
   `uninstall_blocked` / `policy_blocked` / `run_failed` / `capsule_error` /
   `install_incomplete` / `screen_unavailable` / `interface_link_degraded` /
-  `interface_link_unset` / `uninstall_scheduled`（最後の3つは警告）
+  `interface_link_unset` / `interface_link_approval_pending` / `uninstall_scheduled`（`interface_link_degraded`・`interface_link_unset`・`uninstall_scheduled` は警告。`interface_link_approval_pending` は提供側アプリで呼び出し元が承認できる連携の依頼を知らせる `info` で、`review_interface_link` を示し、`primaryAction` を決めません）
 
 応答には、開ける画面のすべて (`screens`)、採用中の版と同じ ref の最新 snapshot
 (`version.current` / `version.latest` / `updateAvailable` / `stale` / `autoUpdate`)、
@@ -467,6 +469,9 @@ Run は必ず計画の作成から始まります。
 | GET | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}/candidates` | requirement に合う提供元と、現在の連携の generation を読む |
 | PUT | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | generation CAS で提供元を選び直す |
 | DELETE | `/api/v1/capsules/{capsuleId}/interface-links/{requirementKey}` | 利用側または提供側の管理者として連携を解除する |
+| GET | `/api/v1/capsules/{capsuleId}/interface-links/requests` | このアプリ (提供側) の承認を待つ連携を読む |
+| POST | `/api/v1/capsules/{capsuleId}/interface-links/{linkId}/approve` | 提供側の所有者・メンバーとして承認待ちの連携を承認する (generation CAS) |
+| POST | `/api/v1/capsules/{capsuleId}/interface-links/{linkId}/decline` | 提供側の所有者・メンバーとして承認待ちの連携を断る (generation CAS) |
 
 候補取得の応答は `{ candidates: [{interfaceId,providerCapsuleId,providerCapsuleName,interfaceName}], generation }`
 です。`generation` はその consumer と requirement key の最新記録の値で、履歴がなければ 0 です。
@@ -485,6 +490,15 @@ active な連携だけを実行時の認可に使い、連携の値や認証情�
 
 GET は利用側の read アクセス、PUT は利用側の write アクセス、DELETE は利用側または提供側の
 write アクセスを確かめます。
+
+承認待ちの一覧 `GET .../interface-links/requests` は提供側アプリの `change_interface_link` を求め、
+`{ requests: [{ linkId, generation, consumerApp: { capsuleId, name, displayName?, iconUrl? }, requirementKey,
+providerInterfaceId, interfaceType, interfaceVersion, requestedPermissions, requestedByDisplayName?, createdAt }] }`
+を返します。値を含みません (名前・権限名・時刻だけ)。`approve` の本文は `{ expectedGeneration, approvedPermissions? }`、
+`decline` は `{ expectedGeneration }` で、どちらも提供側アプリの write アクセスを求め、成功時は `{ link: InterfaceLink }` を返します。
+承認した link は `approval.kind: "provider_approved"`、断った link は `declined: { declinedBy, declinedAt }` を持ちます。
+承認待ちでない link や generation の不一致は 409、提供側がアンインストール予定・利用側が削除済みは 412 です。
+Activity には `interface_link.approved` / `interface_link.declined` を、id・権限名・type/version だけで記録します。
 権限不足は 403、不正な入力は 400、generation の競合は 409、利用不可の提供元は 412 です。
 承認判断は policy port が持ち、現在の Workspace 構成では同じ Workspace の連携を即時承認します。
 

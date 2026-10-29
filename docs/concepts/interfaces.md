@@ -120,8 +120,17 @@ permissions を宣言します。確認後に保存する InstallConfig では�
 
 連携の状態は `pending_approval`、`active`、`declined`、`revoked` のいずれかです。
 要求した権限と承認された権限を別に記録し、active な連携だけが通常の InterfaceBinding を作れます。
-承認は差し替え可能な policy が判断します。現在の Workspace 構成では、同じ Workspace の
-連携を即時承認します。連携が未設定でも OIDC のサインインは続き、その連携の Binding は作りません。
+連携は、利用側のアプリを使う人に提供側のアプリの権限を渡すので、提供側アプリの同意が要ります。
+連携を作る人が提供側アプリの所有者かメンバーでもあれば、作成時に承認されて active になります。
+それ以外は `pending_approval` で作られ、提供側アプリの所有者かメンバーが承認すると active に、
+断ると `declined` になります。承認では、要求された権限の一部だけを渡すこともできます。
+利用側アプリの所有者・メンバーであるだけでは承認できず、インストールされたアプリ自身のトークンも承認・拒否できません
+（利用者の代わりに操作するよう operator が指定したアプリは、利用者が提供側アプリの所有者かメンバーのときだけ）。
+承認待ちの間、利用側のアプリに Binding は作られません。承認後は、利用側アプリを使う人の次のサインインで Binding が作られます。
+連携はどちらの側からも取り消せます。断られた後も、利用側は提供元を選び直せます。
+今の連携を、承認待ちになる提供元へ付け替えることはできません（今の連携を残して `409` を返します）。
+承認を求めるときは、今の連携を取り消してから選び直します。
+連携が未設定でも OIDC のサインインは続き、その連携の Binding は作りません。
 アプリの更新で権限の順序が変わったり減ったりしても、承認済みの範囲で連携を続けます。
 権限が増えた場合は health が `reapproval_required` になり、連携先を選び直して承認するまで新しい権限を付与しません。
 
@@ -143,9 +152,13 @@ provider を直接使う経路を置き換えません。
 アプリページの連携には、使っている側の `links.uses` と、使われている側の `links.usedBy` が
 表示されます。未設定は `interface_link_unset`、利用不可は `interface_link_unavailable`、
 提供元が削除予約中の連携は `interface_link_degraded` として通知されます。連携先を直す操作は
-`fix_interface_link` です。
+`fix_interface_link` です。提供側のアプリでは、承認待ちの連携が `links.usedBy` に
+`pending_approval` と `canApprove` つきで並び、承認できる人には `interface_link_approval_pending`
+（`info`、操作は `review_interface_link`）が知らされます。アプリページの「連携」で
+「承認」か「断る」を選びます。承認の確認には、渡す権限の一覧が出ます。利用側のアプリでは
+「{提供側アプリ} の承認待ち」と表示されます。
 
-候補の取得・選び直し・解除は、アプリの管理権限で[連携 API](../reference/api.md#interface-links)を
+候補の取得・選び直し・解除・承認待ちの一覧・承認・拒否は、アプリの管理権限で[連携 API](../reference/api.md#interface-links)を
 使います。選び直しは Plan を作らず、新しい提供元への Binding を作ってから旧 Binding を取り消します。
 更新には、読んだ `generation` を `expectedGeneration` として渡します。
 

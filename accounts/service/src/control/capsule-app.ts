@@ -61,7 +61,7 @@ import {
   controlPlaneUnavailable,
   publicRun,
 } from "./shared.ts";
-import { requireAppAccess } from "./app-authorization.ts";
+import { mayDecideInterfaceLinkRequests, requireAppAccess } from "./app-authorization.ts";
 import {
   CAPSULE_APP_INSTALL_STALL_AFTER_MS,
   CAPSULE_APP_LIFECYCLE_RUN_TYPES,
@@ -246,7 +246,10 @@ export async function readCapsuleAppView(
     ...(latestRun ? { latestRun } : {}),
     revisionPreparing,
     connectionIssues,
-    ...(links.failed ? {} : { interfaceLinks: linkView.uses }),
+    ...(links.failed ? {} : {
+      interfaceLinks: linkView.uses,
+      interfaceLinkRequests: linkView.usedBy.filter((link) => link.state === "pending_approval" && link.canApprove === true),
+    }),
     ...(failure ? { screenFailure: failure } : {}),
     ...(screens.failed ? {} : { screenCount: screenList.length }),
     uninstallCancellable: admission.cancel,
@@ -300,6 +303,18 @@ export async function readCapsuleAppView(
 }
 
 // --- app links -----------------------------------------------------------------
+
+/** Value-free display metadata of the app at the other end of a link. */
+export async function linkedAppDisplay(ctx: ControlDispatchContext, app: Capsule): Promise<CapsuleAppLinkedApp> {
+  const config = await ctx.operations.capsules.getInstallConfig(app.installConfigId);
+  const iconUrl = safeImageUrl(config.store?.iconUrl);
+  return {
+    capsuleId: app.id,
+    name: app.name,
+    ...(config.store ? { displayName: { ja: config.store.name.ja, en: config.store.name.en } } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+  };
+}
 
 async function readAppLinks(
   ctx: ControlDispatchContext,
@@ -369,19 +384,19 @@ async function readAppLinks(
     }
     return result;
   };
+  let decisionCredential: Promise<boolean> | undefined;
+  const mayDecide = (): Promise<boolean> => decisionCredential ??= mayDecideInterfaceLinkRequests({
+    operations: ctx.operations,
+    session: ctx.session,
+    providerCapsuleId: capsule.id,
+  });
+  const acceptsLinks = (app: Capsule): boolean =>
+    (app.status === "active" || app.status === "stale") &&
+    (!app.uninstall || app.uninstall.phase === "cancelled");
   const display = (app: Capsule): Promise<CapsuleAppLinkedApp> => {
     let result = displays.get(app.id);
     if (!result) {
-      result = (async () => {
-        const config = await ctx.operations.capsules.getInstallConfig(app.installConfigId);
-        const iconUrl = safeImageUrl(config.store?.iconUrl);
-        return {
-          capsuleId: app.id,
-          name: app.name,
-          ...(config.store ? { displayName: { ja: config.store.name.ja, en: config.store.name.en } } : {}),
-          ...(iconUrl ? { iconUrl } : {}),
-        };
-      })();
+      result = linkedAppDisplay(ctx, app);
       displays.set(app.id, result);
     }
     return result;
@@ -411,6 +426,11 @@ async function readAppLinks(
     const health = linkHealth(link, provider, iface, requirement);
     const canManage = await mayManage(capsule) ||
       (otherApp !== undefined && await mayManage(otherApp));
+    // This app is the provider of a usedBy row: its owner or a member decides,
+    // never an installed app's own token, and only while it accepts links.
+    const canApprove = direction === "usedBy" && link?.state === "pending_approval"
+      ? acceptsLinks(capsule) && await mayDecide() && await mayManage(capsule)
+      : undefined;
     return {
       ...(link ? {
         linkId: link.id,
@@ -427,6 +447,7 @@ async function readAppLinks(
       health,
       ...(otherApp ? { otherApp: await display(otherApp) } : {}),
       canManage,
+      ...(canApprove !== undefined ? { canApprove } : {}),
     };
   };
   const [uses, usedBy] = await Promise.all([
