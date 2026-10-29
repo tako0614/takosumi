@@ -32,11 +32,6 @@ export async function listPayerUsage(
 export interface RecordMeteredUsageInput {
   readonly capsuleId?: string;
   readonly runId?: string;
-  /** Trusted producer's canonical owner snapshot captured with an independent measurement. */
-  readonly ownerSnapshot?: {
-    readonly payerAccountId: string;
-    readonly ownershipEpoch: number;
-  };
   readonly meterId?: string;
   readonly resourceFamily?: UsageResourceFamily;
   readonly resourceId?: string;
@@ -153,19 +148,9 @@ export class UsageReportingService {
       ? await this.#billing.resolveAppBillingOwnership(input.capsuleId)
       : undefined;
     const identity = ownership?.identity;
-    if (ownership) {
-      // A timestamp or producer-supplied runId is not historical ownership
-      // authority. After transfer, independent producers carry the canonical
-      // owner/epoch observed with the measurement; stale evidence is refused.
-      // Only Core-generated runner usage can use the plan's reserved payer.
-      const snapshot = input.ownerSnapshot;
-      if ((ownership.ownershipEpoch > 0 && !snapshot) || (snapshot && (
-        snapshot.payerAccountId !== identity?.payerAccountId ||
-        snapshot.ownershipEpoch !== ownership.ownershipEpoch
-      ))) {
-        throw new OpenTofuControllerError("failed_precondition", "Metered usage requires current ownership evidence.");
-      }
-    }
+    // Existing meter producers resolve the current payer when recording an
+    // independent measurement. A producer-supplied runId is not a reservation
+    // authority; Core runner usage settles from its durable Plan audit.
     return { usageEvent: await this.#store.putUsageEvent({ ...usageEvent, ...identity }) };
   }
 }

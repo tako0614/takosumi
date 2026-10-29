@@ -1,5 +1,4 @@
 /** Temporary pre-v77 adapter. Delete when every Capsule has a canonical owner. */
-import type { Capsule } from "takosumi-contract/capsules";
 import type { AppBillingIdentity } from "takosumi-contract/billing";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError } from "./errors.ts";
@@ -10,7 +9,7 @@ export interface AppBillingOwnership {
 }
 
 export async function appBillingOwnership(
-  store: Pick<OpenTofuControlStore, "getCapsule" | "getWorkspace">,
+  store: Pick<OpenTofuControlStore, "getCapsule" | "getWorkspace" | "getAppBillingOwnership">,
   capsuleId: string | undefined,
 ): Promise<AppBillingOwnership> {
   if (!capsuleId) {
@@ -20,9 +19,9 @@ export async function appBillingOwnership(
   if (!capsule) {
     throw new OpenTofuControllerError("not_found", `capsule ${capsuleId} not found`);
   }
-  // Read owner and epoch from the same canonical row, never separate reads
-  // across a transfer. The structural type retires with writer A's v77 merge.
-  const row = capsule as Capsule & { readonly ownerAccountId?: unknown; readonly ownershipEpoch?: unknown };
+  // Physical ownership columns are the authority. Capsule JSON can retain
+  // the original owner after an ownership-store transfer/backfill.
+  const row = await store.getAppBillingOwnership(capsuleId) ?? { ownershipEpoch: 0 };
   const epoch = row.ownershipEpoch ?? 0;
   if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0) {
     throw new OpenTofuControllerError("failed_precondition", "App billing owner is unavailable.");
@@ -45,7 +44,7 @@ export async function appBillingOwnership(
 }
 
 export async function appBillingIdentity(
-  store: Pick<OpenTofuControlStore, "getCapsule" | "getWorkspace">,
+  store: Pick<OpenTofuControlStore, "getCapsule" | "getWorkspace" | "getAppBillingOwnership">,
   capsuleId: string | undefined,
 ): Promise<AppBillingIdentity> {
   return (await appBillingOwnership(store, capsuleId)).identity;

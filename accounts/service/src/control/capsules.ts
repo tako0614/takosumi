@@ -189,6 +189,11 @@ export async function handleCapsules(
       operations,
       store,
       workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      ...((method === "DELETE" && segments.length === 2) ||
+        (method === "POST" && segments.length === 3 &&
+          ["abandon", "uninstall", "cancel-uninstall"].includes(segments[2] ?? "")
+        ) ? { appAction: "uninstall" as const } : {}),
       session: ctx.session,
     });
     // A refused caller must not append Activity to another Workspace by
@@ -522,7 +527,7 @@ async function publicCapsuleWithAdoptedSourceRevision(
   capsule: Capsule,
 ): Promise<PublicCapsule> {
   const projected = publicCapsule(capsule);
-  if (!capsule.currentStateVersionId) return projected;
+  if (capsule.status === "destroyed" || !capsule.currentStateVersionId) return projected;
   const adoptedSourceRevision =
     await operations.getCapsuleAdoptedSourceRevision(capsule.id);
   return adoptedSourceRevision

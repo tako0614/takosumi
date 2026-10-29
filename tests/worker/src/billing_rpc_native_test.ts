@@ -27,6 +27,7 @@ async function callerBundle(root: string): Promise<string> {
             planResourceChanges: [{ address: "test.one", type: "test", actions: ["create"] }],
           };
           const appCtx = {
+            workspaceId: ctx.workspaceId,
             capsuleId: ctx.capsuleId, payerAccountId: "canonical_native_owner", runId: ctx.runId, now: ctx.now,
             planResourceChanges: ctx.planResourceChanges,
           };
@@ -78,7 +79,7 @@ const HOST = `
     }
     assertReservationSatisfied(ctx) {
       if (ctx.runId === "host_error") throw new Error("synthetic-private-host-subject-secret");
-      if (ctx.payerAccountId !== "canonical_native_owner" || "workspaceId" in ctx || "billingSubjectId" in ctx) throw new Error("wrong subject");
+      if (ctx.payerAccountId !== "canonical_native_owner" || ctx.workspaceId !== "workspace_native_rpc" || "billingSubjectId" in ctx) throw new Error("wrong subject");
     }
     captureRunBilling(ctx) {
       if (ctx.runId !== "plan_native_rpc" || ctx.applyRunId !== "apply_native_rpc" || ctx.capturedUsdMicros !== 37)

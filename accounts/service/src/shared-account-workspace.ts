@@ -93,7 +93,7 @@ export type SharedWorkspaceBillingResolver = (input: {
 }) => Promise<SharedWorkspaceBillingOrganization | null>;
 
 export interface SharedAccountWorkspaceDirectory {
-  bootstrap(session: SharedAccountWorkspaceSession): Promise<Workspace>;
+  bootstrap(session: SharedAccountWorkspaceSession, allowCreate?: boolean): Promise<Workspace>;
   menu(session: SharedAccountWorkspaceSession, input?: {
     readonly selectedWorkspaceId?: string;
     readonly after?: string;
@@ -112,6 +112,8 @@ export interface SharedAccountWorkspaceDependencies {
   readonly store: AccountsStore;
   readonly operations: Pick<ControlPlaneOperations, "workspaces" | "members">;
   readonly resolveWorkspaceBilling?: SharedWorkspaceBillingResolver;
+  /** Defaults to true for Phase 3: implicit personal creation is stopped. */
+  readonly workspaceMutationsFrozen?: boolean;
 }
 
 export class SharedAccountWorkspaceError extends Error {
@@ -164,8 +166,34 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
     return choice(workspace, member);
   };
   const directory: SharedAccountWorkspaceDirectory = {
-    async bootstrap(session) {
+    async bootstrap(session, allowCreate = true) {
       const account = await canonicalAccount(session);
+      if (!allowCreate) {
+        let cursor: string | undefined;
+        let personal: Workspace | undefined;
+        do {
+          const page = await deps.operations.workspaces.listWorkspacesForAccountPage(account.subject, {
+            limit: 100,
+            includeArchived: false,
+            order: "created_asc",
+            ...(cursor ? { cursor } : {}),
+          });
+          personal = page.items.find((workspace) =>
+            workspace.type === "personal" && workspace.ownerUserId === account.subject,
+          );
+          cursor = page.nextCursor;
+        } while (!personal && cursor);
+        if (!personal) {
+          throw new SharedAccountWorkspaceError(
+            "workspace_frozen",
+            "Personal Workspace creation is temporarily frozen.",
+            409,
+          );
+        }
+        await authorized(account.subject, personal.id);
+        await canonicalAccount(session);
+        return personal;
+      }
       if (!deps.operations.workspaces.ensurePersonalWorkspaceForSharedAccount) {
         throw new SharedAccountWorkspaceError("capability_unavailable", "Personal Workspace bootstrap is unavailable.", 503);
       }
@@ -226,6 +254,13 @@ export function createSharedAccountWorkspaceDirectory(deps: SharedAccountWorkspa
     },
     async create(session, input) {
       const account = await canonicalAccount(session);
+      if (deps.workspaceMutationsFrozen !== false) {
+        throw new SharedAccountWorkspaceError(
+          "workspace_frozen",
+          "Workspace creation is temporarily frozen.",
+          409,
+        );
+      }
       // Personal is the durable singleton bootstrap. Explicit creation creates
       // additional purpose/team Workspaces, never another personal namespace.
       if (input.type !== "organization" || !WORKSPACE_HANDLE_PATTERN.test(input.handle) ||
@@ -294,6 +329,7 @@ export async function handleSharedAccountWorkspaceRoute(input: {
   readonly directory?: SharedAccountWorkspaceDirectory;
   readonly authenticate?: SharedAccountWorkspaceAuthenticator;
   readonly diagnostics?: RequestPhaseObserver;
+  readonly workspaceMutationsFrozen?: boolean;
 }): Promise<Response | undefined> {
   if (!isSharedAccountWorkspaceRoute(input.url.pathname)) return undefined;
   const respond = (response: Response) => withPrivateNoStoreHeaders(response);
@@ -322,6 +358,9 @@ export async function handleSharedAccountWorkspaceRoute(input: {
         })));
       }
       if (method === "POST") {
+        if (input.workspaceMutationsFrozen !== false) {
+          return respond(errorJson("workspace_frozen", "Workspace creation is temporarily frozen.", 409, input.request));
+        }
         const body = await readJsonObject(input.request);
         if (!body || Object.keys(body).some((key) => !["handle", "displayName", "type"].includes(key)) ||
           typeof body.handle !== "string" || typeof body.displayName !== "string" || body.type !== "organization") {
@@ -335,7 +374,7 @@ export async function handleSharedAccountWorkspaceRoute(input: {
       if (method !== "POST") return respond(methodNotAllowed("POST"));
       const body = await readJsonObject(input.request);
       if (!body || Object.keys(body).length) throw new SharedAccountWorkspaceError("invalid_request", "Body must be an empty object.", 400);
-      return respond(json({ workspace: await input.directory.bootstrap(session) }));
+      return respond(json({ workspace: await input.directory.bootstrap(session, true) }));
     }
     const match = /^\/([^/]+)\/(select|billing-organization)$/.exec(tail);
     if (match) {

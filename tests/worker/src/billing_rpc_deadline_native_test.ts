@@ -25,6 +25,7 @@ async function callerBundle(root: string): Promise<string> {
           billingSubjectId: "canonical_owner", runId: "plan_exact", now: 1700000000000,
         };
         const appCtx = {
+          workspaceId: common.workspaceId,
           capsuleId: action === "pending" ? "capsule_pending" : "capsule_late_capture",
           payerAccountId: "canonical_owner", runId: common.runId, now: common.now,
         };
@@ -155,7 +156,7 @@ test("workerd bounds every billing port and reconciles a late capture ACK with o
             ? JSON.parse(attempt.context).workspaceId === "workspace_pending"
             : JSON.parse(attempt.context).capsuleId === "capsule_pending" &&
               JSON.parse(attempt.context).payerAccountId === "canonical_owner" &&
-              !("workspaceId" in JSON.parse(attempt.context))
+              JSON.parse(attempt.context).workspaceId === "workspace_pending"
         ),
       )).toHaveLength(1);
     }

@@ -61,6 +61,8 @@ export interface CreateApiAppOptions {
   /** When set, mounts the v1 OpenTofu plan/apply/destroy internal seam. */
   readonly registerDeployControlInternalRoutes?: boolean;
   readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
+  /** Defaults on with the internal route option; explicit false is rollback-only. */
+  readonly workspaceMutationsFrozen?: boolean;
   /** Private Runner-to-Core file capability; never part of public discovery. */
   readonly privateRunFileRoutes?: PrivateRunFileRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
@@ -135,7 +137,11 @@ export async function createApiApp(
   if (deployControlInternalRoutesMounted) {
     mountDeployControlInternalRoutes(
       app,
-      options.deployControlInternalRouteOptions ?? {},
+      {
+        ...(options.deployControlInternalRouteOptions ?? {}),
+        workspaceMutationsFrozen: options.workspaceMutationsFrozen ??
+          options.deployControlInternalRouteOptions?.workspaceMutationsFrozen ?? true,
+      },
     );
   }
 

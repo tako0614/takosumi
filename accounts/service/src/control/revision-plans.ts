@@ -193,6 +193,7 @@ export async function handleCapsuleRevisionPlans(
       "The Capsule's applied StateVersion has no adopted SourceSnapshot.",
     );
   }
+  await ctx.operations.convergeOwnedSourceLane(source.id);
   const sourcePath = adoptedSourceRevision?.path ?? source.defaultPath;
   const installConfigDigest = await stableJsonDigest(installConfig);
   const capsuleExecutionAuthorityEpoch =
@@ -231,8 +232,6 @@ export async function handleCapsuleRevisionPlans(
           : {}),
         installConfigId: installConfig.id,
         installConfigDigest,
-        sourceDefaultRef: source.defaultRef,
-        sourceDefaultPath: source.defaultPath,
         ...(source.authConnectionId
           ? { sourceAuthConnectionId: source.authConnectionId }
           : {}),
@@ -717,8 +716,6 @@ async function assertRevisionIdentity(
     source.status !== "active" ||
     source.name !== plan.source.name ||
     normalizeInstallConfigSourceUrl(source.url) !== plan.source.url ||
-    source.defaultRef !== base.sourceDefaultRef ||
-    source.defaultPath !== base.sourceDefaultPath ||
     (adoptedSourceRevision?.path ?? source.defaultPath) !== plan.source.path ||
     (source.authConnectionId ?? undefined) !==
       (base.sourceAuthConnectionId ?? undefined) ||

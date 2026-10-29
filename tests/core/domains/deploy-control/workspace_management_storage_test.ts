@@ -604,6 +604,16 @@ function sourceSyncRun(
   };
 }
 
+async function seedSourceForSync(store: OpenTofuControlStore, run: SourceSyncRun): Promise<void> {
+  if (await store.getSource(run.sourceId)) return;
+  await store.putSource({
+    id: run.sourceId, workspaceId: run.workspaceId, name: run.sourceId,
+    url: run.url, defaultRef: run.ref, defaultPath: run.path,
+    status: "active", autoSync: false, hookSecretHash: "test-hash",
+    createdAt: run.createdAt, updatedAt: run.createdAt,
+  });
+}
+
 function capsule(id: string, workspaceId: string): Capsule {
   return {
     id,
@@ -2830,6 +2840,7 @@ test("SourceSync admission fences new rows and preserves exact retries across ad
     await store.putWorkspace(ws);
     const authority = (await store.getWorkspaceManagement(ws.id))!;
     const initial = sourceSyncRun(`source-run-${label}`, ws.id);
+    await seedSourceForSync(store, initial);
     expect(await store.beginSourceSyncRun(initial, authority), label).toEqual({
       status: "created",
       run: initial,
@@ -2951,6 +2962,7 @@ test("SourceSync drain settlement only converges an unstarted queued row", async
       managementEpoch: 1,
     };
     const activeCandidate = sourceSyncRun(`source-drain-active-${label}`, ws.id);
+    await seedSourceForSync(store, activeCandidate);
     const queued = sourceSyncRun(`source-drain-queued-${label}`, ws.id);
     const resultPresent: SourceSyncRun = {
       ...sourceSyncRun(`source-drain-result-${label}`, ws.id),
@@ -3182,6 +3194,7 @@ test("SourceSync retains its original authority through public rewrites and cann
     };
     const currentAuthority: WorkspaceManagementAuthority = { ...authority, managementEpoch: 3 };
     const queued = sourceSyncRun(`source-epoch-run-${label}`, ws.id);
+    await seedSourceForSync(store, queued);
     expect(await store.beginSourceSyncRun(queued, authority), label).toEqual({ status: "created", run: queued });
     // A public read/modify/write must preserve storage-owned original authority
     // even if the input attempts to replace it with the future active epoch.
@@ -3235,6 +3248,7 @@ test("SourceSync stale replacement requires the stored authority on durable adap
       managementEpoch: 1,
     };
     const queued = sourceSyncRun(`source-replace-run-${label}`, ws.id);
+    await seedSourceForSync(store, queued);
     expect(
       await store.beginSourceSyncRun(queued, originalAuthority),
       label,
@@ -3343,6 +3357,7 @@ test("SourceSync stale replacement requires the stored authority on durable adap
       `source-replace-same-run-${label}`,
       sameEpochWorkspace.id,
     );
+    await seedSourceForSync(store, sameEpochQueued);
     expect(
       await store.beginSourceSyncRun(sameEpochQueued, sameEpochAuthority),
       label,
@@ -3428,6 +3443,7 @@ test("SourceSync corrupt stored authority denies fresh leases while historical h
       workspaceId: ws.id, managementState: "active", managementEpoch: 1,
     };
     const queued = sourceSyncRun(`source-corrupt-run-${label}`, ws.id);
+    await seedSourceForSync(store, queued);
     await store.beginSourceSyncRun(queued, authority);
     for (const value of [undefined, null, [], { ...authority, managementEpoch: "1" },
       { ...authority, managementEpoch: 0 }, { ...authority, managementEpoch: 1.5 },
@@ -3472,6 +3488,7 @@ test("SourceSync held-lease and raw writers cannot change the stored Run owner o
       workspaceId: ws.id, managementState: "active", managementEpoch: 1,
     };
     const queued = sourceSyncRun(`source-owner-run-${label}`, ws.id);
+    await seedSourceForSync(store, queued);
     await store.beginSourceSyncRun(queued, authority);
     const running = { ...queued, status: "running" as const };
     expect(await store.transitionRun({
@@ -3506,6 +3523,7 @@ test("D1 historical double-encoded SourceSync JSON remains observable without ne
     workspaceId: ws.id, managementState: "active", managementEpoch: 1,
   };
   const queued = sourceSyncRun("source-double-encoded-run", ws.id);
+  await seedSourceForSync(store, queued);
   await store.beginSourceSyncRun(queued, authority);
   // Exact historical payload produced by the old jsonText-mode insert.
   const encoded = JSON.stringify(JSON.stringify(queued));
@@ -3535,6 +3553,7 @@ test("D1 historical double-encoded SourceSync held leases finish without authori
     managementEpoch: 1,
   };
   const queued = sourceSyncRun("source-double-held-run", ws.id);
+  await seedSourceForSync(store, queued);
   await store.beginSourceSyncRun(queued, authority);
   const running: SourceSyncRun = {
     ...queued,
@@ -3690,6 +3709,7 @@ test("D1 historical double-encoded SourceSync preserves its private authority on
     managementEpoch: 1,
   };
   const queued = sourceSyncRun("source-double-private-run", ws.id);
+  await seedSourceForSync(store, queued);
   await store.beginSourceSyncRun(queued, authority);
   const running: SourceSyncRun = {
     ...queued,

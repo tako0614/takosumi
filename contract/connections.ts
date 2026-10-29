@@ -278,6 +278,8 @@ export function isWorkspaceBindableOperatorConnection(
  */
 export interface ProviderConnection {
   readonly id: string;
+  /** Personal connection owner; absent for operator connections or pre-v77 rows. */
+  readonly ownerAccountId?: string;
   readonly workspaceId?: string;
   readonly provider: string;
   readonly providerSource: string;

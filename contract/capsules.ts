@@ -142,6 +142,12 @@ export interface CapsuleUninstall {
  */
 export interface Capsule {
   readonly id: string;
+  /** Materialized app owner; absent only on pre-v77 rows awaiting backfill. */
+  readonly ownerAccountId?: string;
+  readonly ownershipEpoch?: number;
+  readonly managementState?: "active" | "draining" | "frozen";
+  readonly managementEpoch?: number;
+  readonly storageRoot?: string;
   readonly workspaceId: string;
   /**
    * Owning Project. Capsules live under a Project; a default Project
@@ -718,6 +724,8 @@ export interface CapsuleAppRunSummary {
 }
 
 export interface CapsuleAppVersion {
+  /** Terminal apps have no installed version, even after Source archives retire. */
+  readonly uninstalled?: boolean;
   /** The Git repository (credential-free URL) and the Source's default ref. */
   readonly repository?: {
     readonly url: string;

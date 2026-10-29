@@ -1,10 +1,20 @@
 import { expect, test } from "bun:test";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { BillingRpcService, BillingSettings } from "takosumi-contract/billing";
+import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { BillingService } from "../../../../core/domains/deploy-control/billing_service.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 
 const now = 1_700_000_000_000;
+
+async function transferAppOwner(store: InMemoryOpenTofuControlStore, ownerAccountId: string) {
+  const ownership = new InMemoryAppOwnershipStore(store);
+  const previous = await ownership.getOwnership("cap_required");
+  expect(previous).toBeDefined();
+  const ownershipEpoch = previous!.ownershipEpoch + 1;
+  expect(await ownership.putOwnership({ ...previous!, ownerAccountId, ownershipEpoch }, previous!.ownershipEpoch)).toBe(true);
+  expect(await store.getCapsule("cap_required")).toMatchObject({ ownerAccountId, ownershipEpoch });
+}
 
 function planRun(overrides: Partial<PlanRun> = {}): PlanRun {
   return {
@@ -43,6 +53,8 @@ async function fixture(required: boolean, settings?: BillingSettings) {
     id: "cap_required", workspaceId: "ws_required", projectId: "project_required",
     name: "required", slug: "required", sourceId: "source_required", installConfigId: "config_required",
     environment: "production", currentStateGeneration: 0, status: "active",
+    ownerAccountId: "canonical_owner", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: "apps/cap_required",
     createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
   });
   await store.putPlanRun(planRun());
@@ -82,8 +94,7 @@ for (const settings of [{ mode: "disabled" } as const, undefined]) {
     expect(calls.map((call) => call.method)).toEqual(["ratePlan", "evaluatePlanQuota", "reservePlanBilling"]);
     expect(calls[0]!.context).toMatchObject({ workspaceId: "ws_required", billingSubjectId: "canonical_owner" });
     for (const call of calls.slice(1)) {
-      expect(call.context).toMatchObject({ capsuleId: "cap_required", payerAccountId: "canonical_owner" });
-      expect(call.context).not.toHaveProperty("workspaceId");
+      expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "canonical_owner" });
       expect(call.context).not.toHaveProperty("billingSubjectId");
     }
     expect(calls[2]!.context).toMatchObject({ runId: "plan_required", mode: "disabled", estimatedUsdMicros: 37 });
@@ -102,6 +113,10 @@ for (const settings of [{ mode: "disabled" } as const, undefined]) {
       "captureRunBilling", "releaseReservation", "rateUsage",
     ]);
     expect(calls[4]!.context).toMatchObject({ runId: "plan_required", applyRunId: "apply_required", capturedUsdMicros: 37, ratingStatus: "rated" });
+    for (const call of calls.filter((call) => call.method !== "ratePlan" && call.method !== "rateUsage")) {
+      expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "canonical_owner" });
+      expect(call.context).not.toHaveProperty("billingSubjectId");
+    }
   });
 }
 
@@ -146,11 +161,7 @@ test("optional host ports preserve self-host disabled behavior", async () => {
 
 test("every enforcement and quota port uses the current app owner after transfer", async () => {
   const { billing, store, calls, result } = await fixture(true, { mode: "showback" });
-  const getCapsule = store.getCapsule.bind(store);
-  store.getCapsule = async (id) => {
-    const capsule = await getCapsule(id);
-    return capsule ? { ...capsule, ownerAccountId: "new_app_owner" } : undefined;
-  };
+  await transferAppOwner(store, "new_app_owner");
   const evaluated = await billing.evaluatePlanBilling({ planRun: planRun(), result, now, policyPassedBeforeBilling: true });
   const plan = planRun({ auditEvents: [{ id: "audit_transferred", type: "plan.policy_evaluated", at: now, data: { billing: evaluated.audit! } }] });
   await billing.assertApplyBillingAllowed(plan);
@@ -158,8 +169,7 @@ test("every enforcement and quota port uses the current app owner after transfer
   await billing.releaseApplyBilling(plan);
   expect(calls[0]!.context).toMatchObject({ billingSubjectId: "new_app_owner" });
   for (const call of calls.slice(1)) {
-    expect(call.context).toMatchObject({ capsuleId: "cap_required", payerAccountId: "new_app_owner" });
-    expect(call.context).not.toHaveProperty("workspaceId");
+    expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "new_app_owner" });
     expect(call.context).not.toHaveProperty("billingSubjectId");
   }
   expect((await store.listUsageEvents("ws_required"))[0]!.payerAccountId).toBe("new_app_owner");
@@ -171,11 +181,7 @@ test("ownership transfer cannot redirect a pending reservation settlement or run
   const plan = planRun({ auditEvents: [{ id: "audit_reserved", type: "plan.policy_evaluated", at: now, data: { billing: evaluated.audit! } }] });
   await store.putPlanRun(plan);
   await store.putApplyRun(applyRun());
-  const getCapsule = store.getCapsule.bind(store);
-  store.getCapsule = async (id) => {
-    const capsule = await getCapsule(id);
-    return capsule ? { ...capsule, ownerAccountId: "owner_after_reservation" } : undefined;
-  };
+  await transferAppOwner(store, "owner_after_reservation");
   await expect(billing.assertApplyBillingAllowed(plan)).rejects.toThrow("App owner changed");
   // Provider work may have committed before transfer; exact old-payer capture
   // and release remain retryable without assigning a debt to the recipient.
@@ -183,7 +189,7 @@ test("ownership transfer cannot redirect a pending reservation settlement or run
   await billing.captureApplyBillingUsage({ planRun: plan, applyRun: applyRun(), now });
   await billing.releaseApplyBilling(plan);
   for (const call of calls.filter((call) => call.method === "captureRunBilling" || call.method === "releaseReservation")) {
-    expect(call.context).toMatchObject({ payerAccountId: "canonical_owner" });
+    expect(call.context).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "canonical_owner" });
   }
   expect(calls.filter((call) => call.method === "captureRunBilling")[0]!.context)
     .toEqual(calls.filter((call) => call.method === "captureRunBilling")[1]!.context);
@@ -197,43 +203,76 @@ test("ownership transfer cannot redirect a pending reservation settlement or run
     expect(rating?.payerAccountId).toBe("canonical_owner");
     expect(calls.at(-1)!.context).toMatchObject({ billingSubjectId: "canonical_owner" });
   }
-});
-
-test("legacy capsule-less showback finalization stays unattributed and can finish", async () => {
-  const { billing, store, calls } = await fixture(false, { mode: "showback" });
-  await billing.captureApplyBillingUsage({ planRun: planRun({ capsuleId: undefined }), applyRun: applyRun(), now });
-  const rows = await store.listUsageEvents("ws_required");
-  expect(rows).toHaveLength(1);
-  expect(rows[0]).not.toHaveProperty("payerAccountId");
-  expect(calls).toEqual([]);
-  expect(await store.listUsageEventsForPayerPage("canonical_owner", {})).toEqual({ items: [] });
-});
-
-test("pre-change plan after transfer remains unattributed and malformed new pins fail closed", async () => {
-  const { billing, store, calls } = await fixture(false, { mode: "showback" });
-  const legacy = planRun();
-  await store.putPlanRun(legacy);
-  const getCapsule = store.getCapsule.bind(store);
-  store.getCapsule = async (id) => {
-    const capsule = await getCapsule(id);
-    return capsule ? { ...capsule, ownerAccountId: "recipient", ownershipEpoch: 1 } : undefined;
-  };
-  await billing.captureApplyBillingUsage({ planRun: legacy, applyRun: applyRun(), now });
-  expect((await store.listUsageEvents("ws_required"))[0]).not.toHaveProperty("payerAccountId");
-  const rating = await billing.rateUsageMeasurement({
-    workspaceId: "ws_required", capsuleId: "cap_required", runId: legacy.id,
-    kind: "runner_minute", quantity: 1, source: "runner", createdAt: new Date(now).toISOString(),
+  const future = await billing.evaluatePlanBilling({
+    planRun: planRun({ id: "plan_after_transfer" }), result, now, policyPassedBeforeBilling: true,
   });
-  expect(rating).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
-  expect(calls.filter((call) => call.method === "rateUsage")).toEqual([]);
-  expect(calls.filter((call) => call.method === "captureRunBilling")).toEqual([]);
-  const corrupt = planRun({ auditEvents: [{
-    id: "audit_corrupt", type: "plan.policy_evaluated", at: now,
-    data: { billing: { identityVersion: 1, capsuleId: "cap_required" } },
-  }] });
-  await expect(billing.captureApplyBillingUsage({ planRun: corrupt, applyRun: applyRun(), now }))
-    .rejects.toThrow("Plan billing identity is invalid");
+  expect(future.audit).toMatchObject({ capsuleId: "cap_required", payerAccountId: "owner_after_reservation" });
+  expect(calls.at(-1)!.context).toMatchObject({
+    workspaceId: "ws_required", capsuleId: "cap_required", payerAccountId: "owner_after_reservation", runId: "plan_after_transfer",
+  });
+  expect((await store.listUsageEvents("ws_required"))[0]!.payerAccountId).toBe("canonical_owner");
 });
+
+for (const required of [false, true]) {
+  test(`${required ? "required" : "optional"} host legacy capsule-less finalization stays unattributed and can finish`, async () => {
+    const { billing, store, calls, result } = await fixture(required, { mode: "showback" });
+    const legacy = planRun({ capsuleId: undefined });
+    store.getCapsule = async () => { throw new Error("Capsule-less finalization must not resolve an owner"); };
+    store.getAppBillingOwnership = async () => { throw new Error("Capsule-less finalization must not read ownership"); };
+    if (!required) await billing.assertApplyBillingAllowed(legacy);
+    await billing.captureApplyBillingUsage({ planRun: legacy, applyRun: applyRun(), now });
+    await billing.releaseApplyBilling(legacy);
+    expect(await billing.rateUsageMeasurement({
+      workspaceId: "ws_required", runId: applyRun().id,
+      kind: "runner_minute", quantity: 1, source: "runner", createdAt: new Date(now).toISOString(),
+    })).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
+    const rows = await store.listUsageEvents("ws_required");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).not.toHaveProperty("capsuleId");
+    expect(rows[0]).not.toHaveProperty("payerAccountId");
+    expect(await store.listUsageEventsForPayerPage("canonical_owner", {})).toEqual({ items: [] });
+    if (required) {
+      const next = planRun({ id: "new_plan_without_app", capsuleId: undefined });
+      await expect(billing.evaluatePlanBilling({ planRun: next, result, now, policyPassedBeforeBilling: true }))
+        .rejects.toThrow("Billing requires an app");
+      await expect(billing.assertApplyBillingAllowed(next)).rejects.toThrow("Plan billing payer is unavailable");
+    }
+    expect(calls).toEqual([]);
+  });
+}
+
+for (const required of [false, true]) {
+  test(`${required ? "required" : "optional"} host pre-change plan after transfer remains unattributed and malformed new pins fail closed`, async () => {
+    const { billing, store, calls } = await fixture(required, { mode: "showback" });
+    const legacy = planRun();
+    await store.putPlanRun(legacy);
+    await transferAppOwner(store, "recipient");
+    if (required) {
+      await expect(billing.assertApplyBillingAllowed(legacy)).rejects.toThrow("Plan billing payer is unavailable");
+    } else {
+      await billing.assertApplyBillingAllowed(legacy);
+    }
+    await billing.captureApplyBillingUsage({ planRun: legacy, applyRun: applyRun(), now });
+    await billing.releaseApplyBilling(legacy);
+    const usage = (await store.listUsageEvents("ws_required"))[0];
+    expect(usage).toMatchObject({ workspaceId: "ws_required", capsuleId: "cap_required" });
+    expect(usage).not.toHaveProperty("payerAccountId");
+    expect(await store.listUsageEventsForPayerPage("canonical_owner", {})).toEqual({ items: [] });
+    expect(await store.listUsageEventsForPayerPage("recipient", {})).toEqual({ items: [] });
+    const rating = await billing.rateUsageMeasurement({
+      workspaceId: "ws_required", capsuleId: "cap_required", runId: legacy.id,
+      kind: "runner_minute", quantity: 1, source: "runner", createdAt: new Date(now).toISOString(),
+    });
+    expect(rating).toEqual({ ratingStatus: "unrated", usdMicros: 0 });
+    expect(calls).toEqual([]);
+    const corrupt = planRun({ auditEvents: [{
+      id: "audit_corrupt", type: "plan.policy_evaluated", at: now,
+      data: { billing: { identityVersion: 1, capsuleId: "cap_required" } },
+    }] });
+    await expect(billing.captureApplyBillingUsage({ planRun: corrupt, applyRun: applyRun(), now }))
+      .rejects.toThrow("Plan billing identity is invalid");
+  });
+}
 
 
 test("missing Core Run evidence never falls back to the current owner", async () => {

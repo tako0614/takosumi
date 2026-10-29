@@ -139,9 +139,9 @@ export interface CapsuleUsageSummary {
 }
 
 export interface UsageEvent {
-  /** Immutable recorded payer; absent on pre-v77 history. */
-  readonly payerAccountId?: string;
   readonly id: string;
+  /** Immutable reserved/resolved payer; absent when attribution is unavailable. */
+  readonly payerAccountId?: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly runId?: string;
@@ -257,6 +257,8 @@ export interface AppBillingIdentity {
 
 /** Context handed to {@link BillingEnforcement.reservePlanBilling} at plan time. */
 export interface BillingReservationContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
+  readonly workspaceId: string;
   readonly runId: string;
   /** The OSS-resolved billing mode (`disabled` | `showback`). */
   readonly mode: BillingMode;
@@ -282,11 +284,15 @@ export interface BillingEnforcementDecision {
 }
 
 export interface BillingReservationCheckContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
+  readonly workspaceId: string;
   readonly runId: string;
   readonly now: number;
 }
 
 export interface BillingCaptureContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
+  readonly workspaceId: string;
   readonly runId: string;
   readonly applyRunId: string;
   /** USD micros the OSS controller recorded as the captured usage estimate. */
@@ -296,6 +302,8 @@ export interface BillingCaptureContext extends AppBillingIdentity {
 }
 
 export interface BillingReleaseContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
+  readonly workspaceId: string;
   readonly runId: string;
   readonly now: number;
 }
@@ -337,6 +345,8 @@ export interface BillingEnforcement {
 }
 
 export interface QuotaEvaluationContext extends AppBillingIdentity {
+  /** Legacy host routing context; payer authority is payerAccountId. Retire in Phase 9. */
+  readonly workspaceId: string;
   readonly estimatedUsdMicros: number;
   readonly ratingStatus: UsageRatingStatus;
   readonly planResourceChanges: readonly PlanResourceChange[];
