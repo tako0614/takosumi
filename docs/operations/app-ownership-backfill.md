@@ -60,12 +60,14 @@ is never printed, logged, put in a URL or echoed in an error:
   value, a duplicate or a secret binding; see
   [App ownership kill switch](#app-ownership-kill-switch)); no unlisted Worker
   in the account may serve a Version bound to this database. List every
-  Worker that runs the Accounts handler on this Control D1 (for example the
-  platform Worker and a separate auth Worker) with the Version ids from their
-  release evidence. The Control store stays on the read-only client; only the
-  ownership store writes, and only the six exact statements the backfill
-  issues (Capsule owner initialization and its paired owner-member cleanup,
-  which must follow it in the same batch; the `capsule_members` and
+  Worker bound to this Control D1 (the platform Worker and any separate auth
+  Worker, such as `takosumi-auth-staging` on staging) with the Version ids
+  from their release evidence; each must have been released with the switch
+  frozen in [rollout step 1](#rollout-order). The Control store stays on the
+  read-only client; only the ownership store writes, and only the six exact
+  statements the backfill issues (Capsule owner initialization and its paired
+  owner-member cleanup, which must follow it in the same batch; the
+  `capsule_members` and
   `account_billing_bindings` upserts with their exact columns and conflict
   updates; the Connection owner and usage payer updates). Any other table,
   column, conflict update or predicate is refused. Writes are never retried;
@@ -181,12 +183,12 @@ own member rows. `TAKOSUMI_APP_OWNERSHIP_MUTATIONS` stops them:
 
 Any other value fails every Accounts request, so parse it before planning.
 Credential checks (app-bound OAuth grants, Workspace-scoped bearers) still
-answer first. Set it on every Worker that runs the Accounts handler on the
-Control D1 (the platform Worker, including its shared-auth and operator-control
-routes, and a separate auth Worker); Node/PostgreSQL hosts read the same
-variable. The Cloudflare adapter's apply proof requires `frozen` on every
-listed Worker. The dashboard shows a "paused for maintenance" message for this
-reason.
+answer first. Set it on every Worker bound to the Control D1 (the platform
+Worker, including its shared-auth and operator-control routes, and a separate
+auth Worker such as `takosumi-auth-staging`); Node/PostgreSQL hosts read the
+same variable. The Cloudflare adapter's apply proof requires `frozen` on every
+Worker that serves a Version bound to the Control D1, listed or not. The
+dashboard shows a "paused for maintenance" message for this reason.
 
 ## Phase 6b authorization cutover check
 
@@ -261,11 +263,32 @@ answer `503 feature_unavailable`, Interface link writes `failed_precondition`).
 Backfilling first and deploying afterwards is therefore impossible on a target
 that still serves an older Worker.
 
-1. **Deploy the release while Control D1 is still at v75.** On Cloudflare this
-   is the full platform lane (Worker, runner image and variables together), plus
-   every other Worker that serves the same Control D1 (for example a separate
-   auth Worker): all of them must accept v76-v79 before step 3. Put these
-   variables into the same release:
+1. **Deploy the release while Control D1 is still at v75.** Release **every
+   Worker bound to the Control D1** from this main, each with
+   `TAKOSUMI_APP_OWNERSHIP_MUTATIONS = "frozen"`, not only the platform Worker:
+   - the platform Worker, through the full platform lane (Worker, runner image
+     and variables together);
+   - every separate auth (issuer) Worker that binds the same Control D1. On
+     staging this is `takosumi-auth-staging`, released through
+     `takosumi-auth-staging-authority`: its target admits
+     `TAKOSUMI_APP_OWNERSHIP_MUTATIONS` only as `frozen` or `enabled`, and any
+     variable change moves its authority digest, so
+     `takosumi-auth-staging-code` refuses it with
+     `auth_staging_code_authority_drift`.
+
+   An auth Worker cannot be left on its old release. It verifies the
+   predeployed Control schema on every sign-in, issuer, `/readyz` and
+   scheduled request, so an auth Worker still running pre-v76 code (built
+   before the TASK-0118 schema changes) stops working, failing those requests
+   closed, as soon as step 3 moves the schema past v75. Releasing it later than
+   step 1 also leaves step 5 blocked: the adapter's apply proof refuses while
+   any Worker that serves a Version bound to the Control D1 lacks the frozen
+   switch (`ownership_app_mutations_not_frozen` for a listed Worker,
+   `ownership_freeze_unlisted_worker` for one left out of
+   `TAKOSUMI_OWNERSHIP_FREEZE_WORKERS`). All of them must accept v76-v79 before
+   step 3. Put these variables into the same release of each Worker (the auth
+   Worker does not run the Source retirement sweep, so the first one applies to
+   the platform Worker only):
    - `TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED = "0"` until step 4 and its
      inventory review are done.
    - `TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN = "true"`. Unset is also
@@ -341,8 +364,9 @@ that still serves an older Worker.
 7. **Re-enable app ownership writes and confirm delegation.** After step 6
    passes and its differences are reviewed, set
    `TAKOSUMI_APP_OWNERSHIP_MUTATIONS = "enabled"` (or remove it) on every
-   Worker on that Control D1 through the normal release path. From then on
-   every never-transferred app's usage already has its payer. Read back
+   Worker bound to that Control D1 through its normal release path (for
+   `takosumi-auth-staging`, `takosumi-auth-staging-authority` again). From
+   then on every never-transferred app's usage already has its payer. Read back
    `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` on the serving Version and
    confirm the Takos app's applied snapshot still records `resolvedRef`.
 

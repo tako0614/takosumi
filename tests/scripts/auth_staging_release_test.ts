@@ -20,6 +20,9 @@ import {
   type AuthStagingReleaseRuntime,
 } from "../../scripts/auth-staging-release.ts";
 import { AUTH_STAGING_CLIENTS, AUTH_STAGING_COMPATIBILITY_DATE, AUTH_STAGING_HOST, AUTH_STAGING_ISSUER, AUTH_STAGING_PLACEMENT, AUTH_STAGING_WORKER } from "../../deploy/accounts-cloudflare/src/staging-target.ts";
+import { parseAppOwnershipMutationsFrozen } from "../../accounts/service/src/app-ownership-mutations-freeze.ts";
+import { parseWorkspaceMutationsFrozen } from "../../accounts/service/src/workspace-mutations-freeze.ts";
+import { parseInstalledAppDelegationSources } from "../../accounts/service/src/installed-app-delegation.ts";
 
 const sha = (value: string) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const uuid = (character: string) => `${character.repeat(8)}-${character.repeat(4)}-${character.repeat(4)}-${character.repeat(4)}-${character.repeat(12)}`;
@@ -494,6 +497,47 @@ test("the staging descriptor admits only exact boolean request-phase opt-in", ()
   for (const name of ["TAKOSUMI_REQUEST_PHASE_DIAGNOSTICS_EXTRA", "TAKOSUMI_UNREVIEWED_FLAG"]) {
     expect(() => parseAuthStagingTarget({ ...original, vars: { ...original.vars, [name]: "true" } })).toThrow("auth_staging_vars_invalid");
   }
+});
+
+test("the staging descriptor admits the app ownership kill switch only as the runtime's canonical frozen or enabled", () => {
+  const original = fixtureTarget();
+  for (const [value, frozen] of [["frozen", true], ["enabled", false]] as const) {
+    const target = parseAuthStagingTarget({ ...original, vars: { ...original.vars, TAKOSUMI_APP_OWNERSHIP_MUTATIONS: value } });
+    expect(target.vars.TAKOSUMI_APP_OWNERSHIP_MUTATIONS).toBe(value);
+    // The D1 backfill adapter reads the served binding back with this parser.
+    expect(parseAppOwnershipMutationsFrozen(target.vars.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)).toBe(frozen);
+    expect(createAuthStagingPlan(target, config, bytes).authorityDigest).not.toBe(createAuthStagingPlan(original, config, bytes).authorityDigest);
+  }
+  for (const value of ["FROZEN", "Frozen", " frozen", "frozen ", "", "paused", "true", "0", "{}", true, null]) {
+    expect(() => parseAuthStagingTarget({ ...original, vars: { ...original.vars, TAKOSUMI_APP_OWNERSHIP_MUTATIONS: value } })).toThrow("auth_staging_vars_invalid");
+  }
+  // The issuer does not run the Source retirement sweep; only the platform Worker reads that switch.
+  for (const name of ["TAKOSUMI_APP_OWNERSHIP_MUTATIONS_EXTRA", "TAKOSUMI_SOURCE_RETIREMENT_SWEEP_ENABLED"]) {
+    expect(() => parseAuthStagingTarget({ ...original, vars: { ...original.vars, [name]: "frozen" } })).toThrow("auth_staging_vars_invalid");
+  }
+});
+
+test("the rollout's step 1 issuer target carries both freezes and the delegation sources the Accounts handler reads", () => {
+  const original = fixtureTarget();
+  const delegated = JSON.stringify([{ url: "https://github.com/tako0614/takos", path: ".", refs: ["refs/heads/main"] }]);
+  const target = parseAuthStagingTarget({ ...original, vars: { ...original.vars, TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN: "true", TAKOSUMI_APP_OWNERSHIP_MUTATIONS: "frozen", TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES: delegated } });
+  expect(parseWorkspaceMutationsFrozen(target.vars.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN)).toBe(true);
+  expect(parseAppOwnershipMutationsFrozen(target.vars.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)).toBe(true);
+  expect(parseInstalledAppDelegationSources(target.vars.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES)).toHaveLength(1);
+});
+
+test("freezing app ownership on the served issuer needs the authority lane and serves an exact frozen binding", async () => {
+  const h = harness({ active: true });
+  const target = parseAuthStagingTarget({ ...h.target, vars: { ...h.target.vars, TAKOSUMI_APP_OWNERSHIP_MUTATIONS: "frozen" } });
+  const plan = createAuthStagingPlan(target, config, bytes);
+  await expect(h.execute("code", { target, plan, confirmation: plan.confirmation })).rejects.toThrow("auth_staging_code_authority_drift");
+  expect(h.requests.filter((request) => request.method !== "GET")).toHaveLength(0);
+  expect(await h.execute("authority", { target, plan, confirmation: plan.confirmation })).toMatchObject({ status: "authority-ready-served", version: uploadedVersion });
+  const upload = h.requests.find((request) => request.method === "POST" && request.path.endsWith("/versions"));
+  const bindings = JSON.parse(String((upload!.body as FormData).get("metadata"))).bindings as Record<string, unknown>[];
+  // The shape the D1 backfill adapter's freeze proof requires: one plain_text binding that parses to frozen.
+  expect(bindings.filter((binding) => binding.name === "TAKOSUMI_APP_OWNERSHIP_MUTATIONS")).toEqual([{ name: "TAKOSUMI_APP_OWNERSHIP_MUTATIONS", type: "plain_text", text: "frozen" }]);
+  expect(bindings.some((binding) => binding.type === "d1" && binding.name === "TAKOSUMI_CONTROL_DB")).toBe(true);
 });
 
 test("diagnostic flag activation still requires the authority lane before any write", async () => {
