@@ -1810,10 +1810,6 @@ function Inner() {
                     </Show>
                   </div>
 
-                  <Show when={!appHandoff && r().status === "succeeded" && r().type === "apply" && completedRunLaunchUrl()}>
-                    {(url) => <AppPhoneSection url={url()} appName={appName() ?? ""} />}
-                  </Show>
-
                   {/* destructive double-confirmation */}
                   <Show
                     when={
@@ -1893,6 +1889,17 @@ function Inner() {
                     )}
                   </Show>
                 </Card>
+
+                {/* Its own card beside the summary, not nested in it. Not
+                    while an app that sent the person here takes them back. */}
+                <Show when={!appHandoff && r().status === "succeeded" && r().type === "apply" && completedRunLaunchUrl()}>
+                  {(url) => (
+                    <AppPhoneSection
+                      url={url()}
+                      appName={(completedRunUiSurfaces.error ? undefined : completedRunUiSurfaces()?.[0]?.name) ?? appName() ?? ""}
+                    />
+                  )}
+                </Show>
 
                 {/* ===== changes (counts always, lists folded). Read-only
                     preparation runs (確認 / 取得) never change resources —

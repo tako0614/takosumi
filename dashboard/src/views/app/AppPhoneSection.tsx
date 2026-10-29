@@ -39,6 +39,7 @@ const COPIED_NOTICE_MS = 4000;
 export default function AppPhoneSection(props: {
   /** The app's launch URL (its primary screen). */
   readonly url: string;
+  /** The app's display name; empty while it is unknown. */
   readonly appName: string;
 }): JSX.Element {
   return (
@@ -51,7 +52,10 @@ export default function AppPhoneSection(props: {
 function PhoneSection(props: { readonly url: string; readonly appName: string }): JSX.Element {
   const env = browserShareEnvironment();
   const qr = createMemo(() => qrCodeSvg(props.url));
-  const shareable = () => canShareUrl({ title: props.appName, url: props.url }, env);
+  const name = () => props.appName.trim();
+  /** The share sheet's title is the app's name when it is known. */
+  const shareData = () => ({ ...(name() ? { title: name() } : {}), url: props.url });
+  const shareable = () => canShareUrl(shareData(), env);
   const current = typeof navigator === "undefined"
     ? undefined
     : detectPhonePlatform({ userAgent: navigator.userAgent, maxTouchPoints: navigator.maxTouchPoints });
@@ -77,7 +81,13 @@ function PhoneSection(props: { readonly url: string; readonly appName: string })
   };
 
   return (
-    <AppSection id="phone" title={t("app.phone.title")} subtitle={t("app.phone.subtitle")} testId="app-phone">
+    <AppSection
+      id="phone"
+      class="ap-phone-section"
+      title={t("app.phone.title")}
+      subtitle={t("app.phone.subtitle")}
+      testId="app-phone"
+    >
       <div class="ap-phone">
         <Show when={qr()} fallback={<p class="ap-muted ap-phone-noqr">{t("app.phone.qrUnavailable")}</p>}>
           {(code) => (
@@ -87,7 +97,7 @@ function PhoneSection(props: { readonly url: string; readonly appName: string })
                 viewBox={`0 0 ${code().size} ${code().size}`}
                 shape-rendering="crispEdges"
                 role="img"
-                aria-label={t("app.phone.qrAria", { name: props.appName })}
+                aria-label={name() ? t("app.phone.qrAria", { name: name() }) : t("app.phone.qrAriaUnnamed")}
               >
                 <rect width={code().size} height={code().size} class="ap-phone-qr-bg" />
                 <path d={code().path} class="ap-phone-qr-fg" />
@@ -104,11 +114,11 @@ function PhoneSection(props: { readonly url: string; readonly appName: string })
             <div class="ap-row-actions">
               <Show when={shareable()}>
                 <Button
-                  variant="primary"
+                  variant="secondary"
                   type="button"
                   icon={<Share2 size={16} />}
                   disabled={busy()}
-                  onClick={() => void run(() => shareOrCopyUrl({ title: props.appName, url: props.url }, env))}
+                  onClick={() => void run(() => shareOrCopyUrl(shareData(), env))}
                 >
                   {t("app.phone.share")}
                 </Button>

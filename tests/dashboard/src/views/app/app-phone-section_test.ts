@@ -28,14 +28,34 @@ describe("use on your phone", () => {
     expect(page).toContain('view().primaryAction === "open" || secondaryScreens(view()) ? screens()[0] : undefined');
   });
 
-  test("the end of an install and of an applied run show it with the screen they open", () => {
+  test("the end of an install shows it with the screen it opens, outside the completion's live region", () => {
+    // An App Handoff return goes back to the app that sent the person here.
     expect(install).toContain("<Show when={!handoff() && done().url}>");
     expect(install).toContain("<AppPhoneSection url={url()}");
     // Outside the completion's live region, so it is not read out whole.
     expect(install.indexOf("<AppPhoneSection")).toBeGreaterThan(install.indexOf('data-testid="install-complete"'));
     expect(install.slice(install.indexOf('data-testid="install-complete"'), install.indexOf("<AppPhoneSection"))).toContain("</section>");
-    expect(run).toContain('r().status === "succeeded" && r().type === "apply" && completedRunLaunchUrl()');
-    expect(run).toContain("<AppPhoneSection url={url()}");
+  });
+
+  test("the end of an applied run shows it beside the summary card, never during an App Handoff return", () => {
+    const mount = run.indexOf("<AppPhoneSection");
+    expect(mount).toBeGreaterThan(0);
+    expect(run.indexOf("<AppPhoneSection", mount + 1)).toBe(-1);
+    // The exact condition, App Handoff exclusion first.
+    const condition = '<Show when={!appHandoff && r().status === "succeeded" && r().type === "apply" && completedRunLaunchUrl()}>';
+    expect(run).toContain(condition);
+    expect(run.lastIndexOf("<Show when=", mount)).toBe(run.indexOf(condition));
+    // Its own card: the nearest Card before it is already closed.
+    const before = run.slice(0, mount);
+    expect(before.lastIndexOf("</Card>")).toBeGreaterThan(before.lastIndexOf("<Card>"));
+    // The screen's display name, then the app's name; the section has its own fallback.
+    expect(run.slice(mount, mount + 300)).toContain("completedRunUiSurfaces()?.[0]?.name) ?? appName()");
+    expect(section).toContain('t("app.phone.qrAriaUnnamed")');
+  });
+
+  test("next to Open, the section's actions stay secondary", () => {
+    expect(section).not.toContain('variant="primary"');
+    expect(section.match(/variant="secondary"/gu)?.length).toBe(2);
   });
 
   test("everything is on screen: QR code, URL, share, both phones and the users-only sentence", () => {
@@ -64,6 +84,13 @@ describe("use on your phone", () => {
     expect(section).toContain('role="status"');
     expect(section).toContain('"app.phone.copied"');
     expect(section).toContain('"app.phone.copyFailed"');
+  });
+
+  test("at the end of an install it takes the install card's width with a gap", () => {
+    const installCss = read("views/new/install-view.css");
+    expect(installCss).toContain(".iv-workbench { width: min(100%, 46rem);");
+    expect(css).toContain(".iv-page > .ap-phone-section { width: min(100%, 46rem); margin: var(--tg-s-5) auto 0; }");
+    expect(section).toContain('class="ap-phone-section"');
   });
 
   test("the code stays dark on light in both themes and stacks on a phone", () => {

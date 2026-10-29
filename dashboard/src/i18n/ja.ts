@@ -476,6 +476,7 @@ export const ja = {
   "app.phone.title": "スマホで使う",
   "app.phone.subtitle": "スマホのカメラでQRコードを読み取ると、このアプリが開きます。",
   "app.phone.qrAria": "{name} を開くQRコード",
+  "app.phone.qrAriaUnnamed": "このアプリを開くQRコード",
   "app.phone.qrUnavailable": "このURLは長すぎてQRコードにできません。URLを共有するかコピーしてください。",
   "app.phone.urlLabel": "アプリのURL",
   "app.phone.share": "URLを共有",

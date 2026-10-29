@@ -464,6 +464,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.phone.title": "Use on your phone",
   "app.phone.subtitle": "Scan the QR code with your phone's camera to open this app.",
   "app.phone.qrAria": "QR code that opens {name}",
+  "app.phone.qrAriaUnnamed": "QR code that opens this app",
   "app.phone.qrUnavailable": "This URL is too long for a QR code. Share or copy it instead.",
   "app.phone.urlLabel": "App URL",
   "app.phone.share": "Share URL",

@@ -24,6 +24,10 @@
 .ap-phone-step strong { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-2); }
 .ap-phone-step p { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); line-height: 1.6; overflow-wrap: anywhere; }
 
+/* At the end of an install it follows the centered install card, so it takes
+   that card's width (install-view.css .iv-workbench) and keeps a gap to it. */
+.iv-page > .ap-phone-section { width: min(100%, 46rem); margin: var(--tg-s-5) auto 0; }
+
 @media (max-width: 39.99rem) {
   .ap-phone { grid-template-columns: minmax(0, 1fr); }
   .ap-phone-qr { justify-self: center; width: min(12rem, 100%); }

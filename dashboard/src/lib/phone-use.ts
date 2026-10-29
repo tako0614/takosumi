@@ -8,19 +8,32 @@
  * members). Everything here is local: the QR code is encoded in the browser
  * and nothing is sent anywhere.
  */
-import { isSafeLinkHref } from "takosumi-contract";
+import { hasCredentialQueryParams, isSafeLinkHref } from "takosumi-contract";
 import { encode } from "uqr";
 
 /** Light modules around the code, as the QR specification asks for. */
 export const QR_QUIET_ZONE = 4;
 
 /**
- * The URL a phone can open: an absolute http(s) address, the same rule the
- * app page's Open uses. Anything else gets no QR code and no share action.
+ * The URL a phone can open and a person can hand on: an absolute http(s)
+ * address (the rule the app page's Open uses) that carries no credential.
+ * Sharing sends the URL off the device, so user info, a fragment (where
+ * implicit-flow tokens travel) or a credential-named query parameter keep
+ * it out of the QR code and the share sheet, as Interface launch URLs
+ * already are (lib/ui-surface-interfaces.ts).
  */
 export function phoneLaunchUrl(url: string | undefined): string | undefined {
   const value = url?.trim();
-  return value && /^https?:\/\//iu.test(value) && isSafeLinkHref(value) ? value : undefined;
+  if (!value || !/^https?:\/\//iu.test(value) || !isSafeLinkHref(value)) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (parsed.username || parsed.password || parsed.hash) return undefined;
+  if (hasCredentialQueryParams(parsed.searchParams)) return undefined;
+  return value;
 }
 
 /** A QR code as one SVG path over a square `0 0 size size` view box. */

@@ -59,6 +59,24 @@ describe("the URL a phone opens", () => {
     expect(phoneLaunchUrl(" http://127.0.0.1:8787/app ")).toBe("http://127.0.0.1:8787/app");
   });
 
+  test("a URL carrying a credential is never encoded or shared", () => {
+    for (const value of [
+      "https://u:p@yurucommu.example.com/",
+      "https://user@yurucommu.example.com/",
+      "https://yurucommu.example.com/?token=abc",
+      "https://yurucommu.example.com/home?lang=ja&Access_Token=abc",
+      "https://yurucommu.example.com/#access_token=x",
+      "https://yurucommu.example.com/#/home",
+    ]) {
+      expect({ value, url: phoneLaunchUrl(value) }).toEqual({ value, url: undefined });
+    }
+    // Ordinary query parameters and an empty credential-named one stay.
+    expect(phoneLaunchUrl("https://yurucommu.example.com/home?lang=ja&ref=qr")).toBe(
+      "https://yurucommu.example.com/home?lang=ja&ref=qr",
+    );
+    expect(phoneLaunchUrl("https://yurucommu.example.com/?token=")).toBe("https://yurucommu.example.com/?token=");
+  });
+
   test("anything else gets no QR code and no share action", () => {
     for (const value of [undefined, "", "/apps/cap_1", "javascript:alert(1)", "data:text/html,x", "ftp://example.test/"]) {
       expect({ value, url: phoneLaunchUrl(value) }).toEqual({ value, url: undefined });
