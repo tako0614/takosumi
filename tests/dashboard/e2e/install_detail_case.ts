@@ -46,7 +46,8 @@ async function detailFixture(
   let retryCount = 0;
   let retryFailed = false;
   let screensUnreadable = false;
-  const connection = { ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), scope: "personal", ownerAccountId: "sub_portable_e2e", workspaceId: undefined, id: "conn_inline_fixture", displayName: "My Cloudflare" };
+  let removalAnswerLost = false;
+  const connection ={ ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1], ...(oauth ? { credentialRecipe: { id: "cloudflare", authMode: "oauth", secretPartition: "provider-credentials" } } : {}), scope: "personal", ownerAccountId: "sub_portable_e2e", workspaceId: undefined, id: "conn_inline_fixture", displayName: "My Cloudflare" };
   const attempts: InstallAttemptFixture = createInstallAttemptFixture({
     capsuleId: capId,
     planRunId: planId,
@@ -149,7 +150,16 @@ async function detailFixture(
       sourceSelector: { url: "https://github.com/example/cloudflare-service.git", path: "." }, modulePath: ".",
       outputAllowlist: {}, createdAt: now, updatedAt: now,
     } } });
+    // A removed app is no longer one of the person's apps.
+    if (path === "/api/v1/apps" && capsuleStatus === "destroyed") return route.fulfill({ json: { apps: [] } });
     if (path === `/api/v1/capsules/${capId}`) {
+      if (request.method() === "DELETE" && capsuleStatus === "pending") {
+        // A never-applied app is abandoned at once, exactly as the control
+        // plane answers it: 202 with the destroyed Capsule and `abandoned`.
+        capsuleStatus = "destroyed";
+        if (removalAnswerLost) return route.fulfill({ status: 503, json: { error: "fixture_answer_lost" } });
+        return route.fulfill({ status: 202, json: { capsule: capsule(), abandoned: true } });
+      }
       if (request.method() === "DELETE") capsuleStatus = "uninstalled";
       // A capsule read always carries the configuration authority guard.
       return route.fulfill({ json: { capsule: capsule(), graceDays: 7, installConfigReAdoption: { authorityGuard: `sha256:${"c".repeat(64)}` } } });
@@ -199,6 +209,8 @@ async function detailFixture(
     problem: (status: string) => { capsuleStatus = status; },
     failRetry: (failed: boolean) => { retryFailed = failed; },
     screensUnreadable: (value: boolean) => { screensUnreadable = value; },
+    /** The removal commits, but its answer fails on the way back. */
+    loseRemovalAnswer: () => { removalAnswerLost = true; },
     /** The confirming answer (`continue: true`) the page sent, if any. */
     continued: () => attempts.log.answers.find((answer) => (answer as { continue?: boolean } | undefined)?.continue === true) as
       { readonly variables?: Readonly<Record<string, unknown>>; readonly capsuleName?: string } | undefined,
@@ -954,6 +966,41 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       // A stopped app cannot be scheduled for uninstall; it is removed by a
       // reviewed plan instead.
       await expect(page.getByTestId("app-uninstall").getByRole("button", { name: "Uninstall now", exact: true })).toBeVisible();
+    });
+    /** Uninstall a never-applied app from its page; the dialog promises an immediate removal. */
+    async function uninstallNeverApplied(page: Page): Promise<void> {
+      await page.goto(`/apps/${capId}`);
+      await expect(page.getByTestId("app-page")).toHaveAttribute("data-app-state", "installing");
+      const section = page.getByTestId("app-uninstall");
+      await expect(section).toContainText("hasn't created anything in your cloud yet");
+      await section.getByRole("button", { name: "Uninstall", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("so it is removed right away");
+      await dialog.getByRole("button", { name: "Uninstall", exact: true }).click();
+    }
+    /** Home, loaded, without the removed app (the account's app list was re-read). */
+    async function expectHomeWithoutRemovedApp(page: Page): Promise<void> {
+      await expect(page).toHaveURL(/\/$/u);
+      await expect(page.getByTestId("app-page")).toHaveCount(0);
+      await expect(page.locator("section.av-start")).toBeVisible();
+      await expect(page.locator(`[data-testid="home-app"][data-capsule-id="${capId}"]`)).toHaveCount(0);
+    }
+    test("uninstalling a never-applied app removes it at once and returns home", async ({ page }) => {
+      const f = await detailFixture(page, base);
+      await uninstallNeverApplied(page);
+      // The removal is immediate, so the page must not stay on the removed app
+      // with its old content and an enabled Uninstall button, and Home must
+      // not list it from the app list the page had just read.
+      await expectHomeWithoutRemovedApp(page);
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
+    });
+    test("a removal whose answer is lost re-reads the app and still returns home", async ({ page }) => {
+      const f = await detailFixture(page, base); f.loseRemovalAnswer();
+      await uninstallNeverApplied(page);
+      // The server committed the removal; the page re-reads the app instead of
+      // keeping the removed app's old content on screen.
+      await expectHomeWithoutRemovedApp(page);
+      expect(f.mutations.filter((m) => m === `DELETE /api/v1/capsules/${capId}`)).toHaveLength(1);
     });
     test("uninstall confirmation does not claim retired app dependencies", async ({ page }) => {
       const f = await detailFixture(page, base); f.finish();

@@ -791,6 +791,24 @@ export default function AppManagePage(props: {
     const terms = app()?.uninstall;
     return terms?.mode === "scheduled" ? terms.graceDays : undefined;
   };
+  // A removed app has nothing left to manage here. Drop every cached list
+  // that still names it — including the account's app list, which this page's
+  // role check had just read and Home lists from — and go Home.
+  const leaveRemovedApp = () => {
+    resetAppOwnershipCache();
+    clearCaches();
+    navigate("/", { replace: true });
+  };
+  /** Re-reads the app after an uninstall whose answer did not say it is gone. */
+  const removedOnReread = async (): Promise<boolean> => {
+    clearCaches();
+    const [, reread] = await Promise.allSettled([refetchContext(), refetchApp()]);
+    return (
+      reread.status === "fulfilled" &&
+      reread.value?.capsuleId === capsuleId() &&
+      reread.value.state === "uninstalled"
+    );
+  };
   const uninstall = async () => {
     const inst = capsule();
     if (!inst || !isOwner() || uninstallBusy()) return;
@@ -820,13 +838,18 @@ export default function AppManagePage(props: {
     setUninstallError(undefined);
     try {
       const result = await deleteCapsule(inst.id);
-      clearCaches();
       if (result.capsule?.status === "destroyed" || result.abandoned) {
-        navigate("/", { replace: true });
+        leaveRemovedApp();
         return;
       }
-      await Promise.allSettled([refetchContext(), refetchApp()]);
+      if (await removedOnReread()) leaveRemovedApp();
     } catch (cause) {
+      // The server may have committed the removal even though its answer
+      // failed on the way back: re-read the app before showing it again.
+      if (await removedOnReread()) {
+        leaveRemovedApp();
+        return;
+      }
       setUninstallError(friendlyError(cause, t).message);
     } finally {
       setUninstallBusy(false);
