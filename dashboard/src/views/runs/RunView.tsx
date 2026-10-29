@@ -133,6 +133,7 @@ import CostSummary from "../../components/run/CostSummary.tsx";
 import PlanResourceList from "../../components/run/PlanResourceList.tsx";
 import PolicyReasonList from "../../components/run/PolicyReasonList.tsx";
 import { appPageHref } from "../../lib/app-links.ts";
+import AppPhoneSection from "../app/AppPhoneSection.tsx";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 import {
   createLastGoodValue,
@@ -1888,6 +1889,17 @@ function Inner() {
                     )}
                   </Show>
                 </Card>
+
+                {/* Its own card beside the summary, not nested in it. Not
+                    while an app that sent the person here takes them back. */}
+                <Show when={!appHandoff && r().status === "succeeded" && r().type === "apply" && completedRunLaunchUrl()}>
+                  {(url) => (
+                    <AppPhoneSection
+                      url={url()}
+                      appName={(completedRunUiSurfaces.error ? undefined : completedRunUiSurfaces()?.[0]?.name) ?? appName() ?? ""}
+                    />
+                  )}
+                </Show>
 
                 {/* ===== changes (counts always, lists folded). Read-only
                     preparation runs (確認 / 取得) never change resources —

@@ -576,6 +576,10 @@ export function registerInstallDetailCases(mode: string, base: (page: Page, prov
       const open = complete.getByRole("link", { name: "Open", exact: true });
       await expect(open).toHaveAttribute("href", "https://apps.example.test/inline-app");
       await expect(complete.getByRole("link", { name: "Manage app", exact: true })).toHaveAttribute("href", `/apps/${capId}`);
+      // The same screen can go to a phone, outside the completion's live region.
+      const phone = page.getByTestId("app-phone");
+      await expect(phone.getByTestId("app-phone-url")).toHaveText("https://apps.example.test/inline-app");
+      await expect(complete.getByTestId("app-phone")).toHaveCount(0);
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
       await captureInstallState(page, "app-installed");
       const popupPromise = context.waitForEvent("page"); await open.click(); const popup = await popupPromise;
