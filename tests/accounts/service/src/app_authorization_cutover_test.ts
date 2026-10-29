@@ -57,7 +57,7 @@ function runFixture(id: string, overrides: Partial<Run> = {}): Run {
   } as unknown as Run;
 }
 
-async function fixture(options: { readonly owned?: boolean } = {}) {
+async function fixture(options: { readonly owned?: boolean; readonly legacy?: boolean } = {}) {
   const ledger = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(ledger, {
     workspaceId: WORKSPACE,
@@ -65,6 +65,8 @@ async function fixture(options: { readonly owned?: boolean } = {}) {
     sourceId: "src_authz",
     snapshotId: "snap_authz",
     installConfigId: "cfg_authz",
+    // Production Sources predate owner claims: the app references an ownerless Source.
+    ...(options.legacy ? { legacySharedSource: true } : {}),
   });
   await ledger.putCapsule({ ...seeded.capsule, status: "active", currentStateGeneration: 1, updatedAt: NOW });
   for (const [accountId, role] of [
@@ -105,6 +107,8 @@ async function fixture(options: { readonly owned?: boolean } = {}) {
     ["run_restore", runFixture("run_restore", { type: "restore" })],
     ["run_sync", runFixture("run_sync", { type: "source_sync", capsuleId: undefined, sourceId: "src_owned", status: "running" })],
     ["run_workspace", runFixture("run_workspace", { type: "source_sync", capsuleId: undefined, sourceId: "src_unowned", status: "running" })],
+    ["run_legacy_sync", runFixture("run_legacy_sync", { type: "source_sync", capsuleId: undefined, sourceId: "src_authz", status: "running" })],
+    ["run_gone", runFixture("run_gone", { type: "source_sync", capsuleId: undefined, sourceId: "src_retired", status: "succeeded" })],
   ]);
   const sourceRecord = (id: string, ownerCapsuleId?: string) => ({
     id, workspaceId: WORKSPACE, name: id, url: "https://git.example.test/app.git", defaultRef: "main",
@@ -154,6 +158,8 @@ async function fixture(options: { readonly owned?: boolean } = {}) {
     approveRun: async () => reached(),
     cancelRun: async () => reached(),
     patchSource: async () => reached(),
+    createSourceSync: async () => reached(),
+    listRunsPage: async () => ({ runs: [...runs.values()] }),
     deleteSource: async () => reached(),
     getStateVersion: async (id: string) => {
       if (id !== stateVersion.id) throw new OpenTofuControllerError("not_found", "missing");
@@ -520,5 +526,76 @@ describe("Interface links are approved only by someone who may change the provid
     };
     expect(await candidates(h.headers.session(DUAL))).toEqual([PROVIDER]);
     expect(await candidates(h.headers.oauth(DUAL))).toEqual([]);
+  }, 180_000);
+});
+
+describe("ownerless (pre-claim) Sources belong to the apps built from them", () => {
+  test("a Workspace admin without an app role cannot read or change the app's Source", async () => {
+    const h = await fixture({ legacy: true });
+    const capsule = (await h.ledger.getCapsule(CAPSULE))!;
+    expect((await h.ledger.getSource(capsule.sourceId) as { ownerCapsuleId?: string } | undefined)?.ownerCapsuleId).toBeUndefined();
+    const source = capsule.sourceId;
+    const admin = h.headers.session(WORKSPACE_ADMIN);
+    for (const [method, path, body] of [
+      ["GET", `/sources/${source}`, undefined], ["GET", `/sources/${source}/snapshots`, undefined],
+      ["PATCH", `/sources/${source}`, { defaultRef: "evil" }], ["POST", `/sources/${source}/sync`, {}],
+    ] as const) {
+      expect(await h.call(method, path, admin, body), `${method} ${path}`).toMatchObject({ status: 403, code: "app_access_denied" });
+    }
+    expect((await h.call("GET", `/sources/${source}`, h.headers.session(APP_MEMBER))).status).toBe(200);
+    expect(await h.call("POST", `/sources/${source}/sync`, h.headers.session(APP_MEMBER), {})).toMatchObject({ status: 409, message: "reached" });
+    expect((await h.call("GET", `/sources/${source}`, h.headers.session(APP_OWNER))).status).toBe(200);
+    expect(await h.call("DELETE", `/sources/${source}`, h.headers.session(APP_MEMBER))).toMatchObject({ status: 403, code: "app_owner_only" });
+  }, 180_000);
+
+  test("source_sync Runs of such a Source follow the app; a retired Source falls back to the Workspace", async () => {
+    const h = await fixture({ legacy: true });
+    expect(await h.call("GET", "/runs/run_legacy_sync", h.headers.session(WORKSPACE_ADMIN))).toMatchObject({ status: 403, code: "app_access_denied" });
+    expect((await h.call("GET", "/runs/run_legacy_sync", h.headers.session(APP_MEMBER))).status).toBe(200);
+    expect((await h.call("GET", "/runs/run_gone", h.headers.session(WORKSPACE_OWNER))).status).toBe(200);
+    expect(await h.call("GET", "/runs/run_gone", h.headers.session(APP_MEMBER))).toMatchObject({ status: 403, code: "forbidden" });
+  }, 180_000);
+});
+
+describe("Workspace compatibility lists omit apps the caller cannot view", () => {
+  async function list(h: Harness, path: string, credential: Record<string, string>) {
+    const url = new URL(`https://app.takosumi.test/api/v1${path}`);
+    const response = await handleControlRoute({ request: new Request(url, { headers: credential }), url, store: h.accounts, operations: h.operations });
+    expect(response!.status, path).toBe(200);
+    return await response!.json() as Record<string, unknown>;
+  }
+  const ids = (rows: unknown, key = "id") => (rows as Record<string, unknown>[]).map((row) => row[key]);
+
+  test("Workspace roles without an app role see no rows of the owned app", async () => {
+    const h = await fixture({ legacy: true });
+    for (const subject of [WORKSPACE_OWNER, WORKSPACE_ADMIN, WORKSPACE_MEMBER]) {
+      const credential = h.headers.session(subject);
+      expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules), subject).not.toContain(CAPSULE);
+      expect(ids((await list(h, `/workspaces/${WORKSPACE}/current-state-versions`, credential)).stateVersions, "capsuleId"), subject).not.toContain(CAPSULE);
+      const runs = ids((await list(h, `/workspaces/${WORKSPACE}/runs`, credential)).runs);
+      expect(runs, subject).not.toContain("run_plan");
+      expect(runs, subject).not.toContain("run_legacy_sync");
+      expect(runs, subject).toContain("run_workspace");
+      expect(ids((await list(h, `/sources?workspaceId=${WORKSPACE}`, credential)).sources), subject).not.toContain("src_authz");
+      expect(ids((await list(h, `/dashboard/overview?workspaceId=${WORKSPACE}`, credential)).capsules), subject).not.toContain(CAPSULE);
+    }
+  }, 180_000);
+
+  test("an app member who is also in the Workspace sees the app's rows", async () => {
+    const h = await fixture({ legacy: true });
+    const credential = h.headers.session(DUAL);
+    expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules)).toContain(CAPSULE);
+    const runs = ids((await list(h, `/workspaces/${WORKSPACE}/runs`, credential)).runs);
+    expect(runs).toContain("run_plan");
+    expect(runs).toContain("run_legacy_sync");
+    expect(ids((await list(h, `/sources?workspaceId=${WORKSPACE}`, credential)).sources)).toContain("src_authz");
+    expect(ids((await list(h, `/dashboard/overview?workspaceId=${WORKSPACE}`, credential)).capsules)).toContain(CAPSULE);
+  }, 180_000);
+
+  test("apps without an ownership row keep the Workspace decision", async () => {
+    const h = await fixture({ owned: false, legacy: true });
+    const credential = h.headers.session(WORKSPACE_MEMBER);
+    expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules)).toContain(CAPSULE);
+    expect(ids((await list(h, `/workspaces/${WORKSPACE}/runs`, credential)).runs)).toContain("run_plan");
   }, 180_000);
 });

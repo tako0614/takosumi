@@ -10,6 +10,8 @@
 import { appActionAllowed, type AppAccess, type AppAction } from "takosumi-contract/app-access";
 import type { Capsule } from "takosumi-contract/install-configs";
 import type { Run } from "takosumi-contract/runs";
+import type { Source } from "takosumi-contract/sources";
+import type { ActivityEvent } from "takosumi-contract/activity";
 import type { PublicPlanRun } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleOwnership } from "../../../../core/domains/app-ownership/store.ts";
 import { isMissingOwnershipSchemaError } from "../../../../core/domains/app-ownership/store.ts";
@@ -23,6 +25,7 @@ import type {
 import type { AccountsStore } from "../store.ts";
 import {
   canAccessWorkspace,
+  controllerErrorCode,
   controlPlaneUnavailable,
   requireWorkspaceAccess,
   workspaceAccessForbidden,
@@ -246,20 +249,37 @@ async function retainedDestroyedAppAccess(
 }
 
 /**
- * Capsule-bound resources decide per app; resources without a Capsule (for
- * example an unowned preflight Source or a Workspace-level Run) keep the
- * Workspace decision.
+ * Resources that belong to apps decide per app: when any of `capsuleIds` has
+ * an ownership row, every such app must allow `action`; when none has one, the
+ * legacy decision for each (or the Workspace decision when the resource has no
+ * app at all, such as an unowned preflight Source or a Workspace-level Run).
  */
 export async function requireResourceAccess(
   input: AuthorizationContext & {
     readonly workspaceId: string;
-    readonly capsuleId: string | undefined;
+    readonly capsuleId?: string | undefined;
+    readonly capsuleIds?: readonly string[];
     readonly capsule?: Pick<Capsule, "id" | "workspaceId" | "status">;
     readonly action: AppAction;
   },
 ): Promise<AppAuthorizationResult> {
-  if (input.capsuleId) {
-    return await requireAppAccess({ ...input, capsuleId: input.capsuleId });
+  const ids = [...new Set([...(input.capsuleIds ?? []), ...(input.capsuleId ? [input.capsuleId] : [])])];
+  if (ids.length === 1) {
+    return await requireAppAccess({ ...input, capsuleId: ids[0]! });
+  }
+  if (ids.length > 1) {
+    const owned: string[] = [];
+    for (const capsuleId of ids) {
+      if ((await readOwnershipFence(input.operations, capsuleId)).kind === "owned") owned.push(capsuleId);
+      input.assertActive?.();
+    }
+    let last: AppAuthorizationResult | undefined;
+    for (const capsuleId of owned.length ? owned : ids) {
+      const { capsule: _capsule, ...rest } = input;
+      last = await requireAppAccess({ ...rest, capsuleId });
+      if (!last.ok) return last;
+    }
+    return last!;
   }
   const result = await requireWorkspaceAccess({
     operations: input.operations,
@@ -270,6 +290,150 @@ export async function requireResourceAccess(
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
   return result.ok ? { ok: true, authority: "workspace" } : result;
+}
+
+/**
+ * The apps a Source belongs to: its exclusive owner, or, for an ownerless
+ * (pre-claim) Source, every live Capsule built from it (`capsules.source_id`).
+ */
+export async function sourceCapsuleIds(
+  operations: ControlPlaneOperations,
+  source: { readonly id: string; readonly workspaceId?: string; readonly ownerCapsuleId?: string },
+): Promise<readonly string[]> {
+  if (typeof source.ownerCapsuleId === "string" && source.ownerCapsuleId) return [source.ownerCapsuleId];
+  // Without an ownership port no app can be owned: keep the legacy decision.
+  if (!source.workspaceId || !operations.appOwnership) return [];
+  return [...new Set((await operations.capsules.listCapsules(source.workspaceId))
+    .filter((capsule) => capsule.sourceId === source.id && capsule.workspaceId === source.workspaceId &&
+      capsule.status !== "destroyed")
+    .map((capsule) => capsule.id))];
+}
+
+/**
+ * The apps a Run belongs to, including Source-scoped Runs of an app's Source.
+ * A retired Source means the Run has no app; the Workspace decision applies.
+ */
+export async function runCapsuleIds(
+  operations: ControlPlaneOperations,
+  run: Pick<Run, "capsuleId" | "sourceId" | "subject">,
+): Promise<readonly string[]> {
+  if (run.capsuleId) return [run.capsuleId];
+  if (run.subject?.kind === "capsule") return [run.subject.id];
+  const sourceId = run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : undefined);
+  if (!sourceId) return [];
+  let source: Source;
+  try {
+    source = (await operations.getSource(sourceId)).source;
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return [];
+    throw error;
+  }
+  return await sourceCapsuleIds(operations, source);
+}
+
+/**
+ * List filtering for Workspace compatibility reads: an item that belongs to
+ * an app with an ownership row is visible only if the caller may view that
+ * app. Items of apps without an ownership row keep the Workspace decision the
+ * route already applied. One batch ownership read and the resolver's
+ * accessible-app pages per request; no per-item authorization lookups.
+ */
+export interface AppVisibility {
+  allows(capsuleIds: readonly string[]): boolean;
+}
+
+const ALLOW_ALL: AppVisibility = { allows: () => true };
+const ACCESSIBLE_APP_PAGE_LIMIT = 20;
+
+export async function workspaceAppVisibility(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly session: ControlSession;
+  readonly capsuleIds: Iterable<string>;
+}): Promise<AppVisibility> {
+  const ids = [...new Set([...input.capsuleIds].filter((id) => typeof id === "string" && id.length > 0))];
+  const store = input.operations.appOwnership;
+  if (!ids.length || !store) return ALLOW_ALL;
+  const owned = store.listOwnedCapsuleIds
+    ? await store.listOwnedCapsuleIds(ids)
+    : new Set((await Promise.all(ids.map(async (id) =>
+      (await readOwnershipFence(input.operations, id)).kind === "owned" ? id : undefined)))
+      .filter((id): id is string => id !== undefined));
+  if (!owned.size) return ALLOW_ALL;
+  const accessible = new Set<string>();
+  const resolver = input.operations.appAccess;
+  if (resolver) {
+    let cursor: string | undefined;
+    for (let page = 0; page < ACCESSIBLE_APP_PAGE_LIMIT; page++) {
+      const result = await resolver.listAccessibleApps(input.session.subject, { limit: 100, ...(cursor ? { cursor } : {}) });
+      for (const app of result.apps) {
+        if (owned.has(app.capsuleId) && (app.role === "owner" || app.role === "member")) accessible.add(app.capsuleId);
+      }
+      if (!result.nextCursor || [...owned].every((id) => accessible.has(id))) break;
+      cursor = result.nextCursor;
+    }
+  }
+  const appIds = input.session.appIds;
+  return {
+    allows: (capsuleIds) => capsuleIds.every((id) =>
+      !owned.has(id) || (accessible.has(id) && (appIds === undefined || appIds.includes(id)))),
+  };
+}
+
+const ACTIVITY_CAPSULE_KEYS = ["capsuleId", "consumerCapsuleId", "providerCapsuleId", "ownerCapsuleId"] as const;
+const ACTIVITY_SOURCE_KEYS = ["sourceId", "fromSourceId", "toSourceId"] as const;
+
+/**
+ * Activity of apps the caller cannot view is omitted. Events are attributed by
+ * their Capsule target, Capsule ids in metadata, Source targets (via the
+ * Capsules built from them), and, only for Run events that carry no Capsule
+ * id, the Run itself.
+ */
+export async function visibleActivityEvents<T extends ActivityEvent>(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly session: ControlSession;
+  readonly workspaceId: string;
+  readonly events: readonly T[];
+}): Promise<readonly T[]> {
+  if (!input.events.length || !input.operations.appOwnership) return input.events;
+  const sourceApps = await workspaceSourceApps(input.operations, input.workspaceId);
+  const attributed = new Map<T, readonly string[]>();
+  for (const event of input.events) {
+    const ids = new Set<string>();
+    const metadata = (event.metadata ?? {}) as Record<string, unknown>;
+    if (event.targetType === "capsule") ids.add(event.targetId);
+    for (const key of ACTIVITY_CAPSULE_KEYS) if (typeof metadata[key] === "string" && metadata[key]) ids.add(metadata[key] as string);
+    const sourceIds = [
+      ...(event.targetType === "source" ? [event.targetId] : []),
+      ...ACTIVITY_SOURCE_KEYS.map((key) => metadata[key]).filter((value): value is string => typeof value === "string" && value.length > 0),
+    ];
+    for (const sourceId of sourceIds) for (const id of sourceApps.get(sourceId) ?? []) ids.add(id);
+    const runId = event.runId ?? (event.targetType === "run" ? event.targetId : undefined);
+    if (!ids.size && runId) {
+      try {
+        for (const id of await runCapsuleIds(input.operations, await input.operations.getRun(runId))) ids.add(id);
+      } catch (error) {
+        if (controllerErrorCode(error) !== "not_found") throw error;
+      }
+    }
+    attributed.set(event, [...ids]);
+  }
+  const visibility = await workspaceAppVisibility({
+    operations: input.operations, session: input.session, capsuleIds: [...attributed.values()].flat(),
+  });
+  return input.events.filter((event) => visibility.allows(attributed.get(event) ?? []));
+}
+
+/** sourceId → live Capsules built from it, for mapping list items without a capsuleId. */
+export async function workspaceSourceApps(
+  operations: ControlPlaneOperations,
+  workspaceId: string,
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const map = new Map<string, string[]>();
+  for (const capsule of await operations.capsules.listCapsules(workspaceId)) {
+    if (capsule.workspaceId !== workspaceId || capsule.status === "destroyed" || !capsule.sourceId) continue;
+    map.set(capsule.sourceId, [...(map.get(capsule.sourceId) ?? []), capsule.id]);
+  }
+  return map;
 }
 
 /**
@@ -310,19 +474,6 @@ export async function requireWorkspaceAppsAccess(
     if (!result.ok) return result;
   }
   return { ok: true };
-}
-
-/** The Capsule a Run belongs to, including Source-scoped Runs of an owned Source. */
-export async function runCapsuleId(
-  operations: ControlPlaneOperations,
-  run: Pick<Run, "capsuleId" | "sourceId" | "subject">,
-): Promise<string | undefined> {
-  if (run.capsuleId) return run.capsuleId;
-  if (run.subject?.kind === "capsule") return run.subject.id;
-  const sourceId = run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : undefined);
-  if (!sourceId) return undefined;
-  const { source } = await operations.getSource(sourceId);
-  return typeof source.ownerCapsuleId === "string" && source.ownerCapsuleId ? source.ownerCapsuleId : undefined;
 }
 
 /** Destroy work is uninstall (owner only); restore is a rollback. */

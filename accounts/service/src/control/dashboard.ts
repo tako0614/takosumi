@@ -33,6 +33,7 @@ import {
   canAccessWorkspace,
   requireWorkspaceAccess,
 } from "./shared.ts";
+import { visibleActivityEvents, workspaceAppVisibility } from "./app-authorization.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -310,12 +311,22 @@ async function dashboardOverview(
       remainingDashboardProjectionMs(projectionDeadline),
     ),
   ]);
-  const capsules = capsulePage.items.map(publicCapsule);
+  // Apps the caller cannot view (and their Activity) are omitted.
+  const visibility = await workspaceAppVisibility({
+    operations, session, capsuleIds: capsulePage.items.map((capsule) => capsule.id),
+  });
+  const visibleCapsules = capsulePage.items.filter((capsule) => visibility.allows([capsule.id]));
+  const visibleActivity = await optionalDashboardProjection(
+    visibleActivityEvents({ operations, session, workspaceId: selectedWorkspace.id, events: activity }),
+    [],
+    remainingDashboardProjectionMs(projectionDeadline),
+  );
+  const capsules = visibleCapsules.map(publicCapsule);
   const currentStateVersions = await optionalDashboardProjection(
     listCurrentStateVersions(
       operations,
       selectedWorkspace.id,
-      capsulePage.items,
+      visibleCapsules,
     ),
     [],
     remainingDashboardProjectionMs(projectionDeadline),
@@ -324,7 +335,7 @@ async function dashboardOverview(
     listDashboardInstallConfigs(
       operations,
       installConfigs,
-      capsulePage.items,
+      visibleCapsules,
       installConfigLimit,
     ),
     [],
@@ -337,7 +348,7 @@ async function dashboardOverview(
     workspace: selectedWorkspace,
     capsules,
     currentStateVersions,
-    activity: activity.map((event) => compactDashboardActivityEvent(event)),
+    activity: visibleActivity.map((event) => compactDashboardActivityEvent(event)),
     installConfigs: visibleInstallConfigs,
     ...(capsulePage.nextCursor !== undefined
       ? { nextCapsuleCursor: capsulePage.nextCursor }
