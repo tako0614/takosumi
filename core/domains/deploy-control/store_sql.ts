@@ -48,19 +48,6 @@ import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 
-// Drizzle enumerates every modeled column in INSERT, including omitted fields.
-// Keep the insert shape independent of the v77 owner column while old PG
-// databases are still served during the schema rollout.
-const pgLegacyConnectionsTable = pgTable("takosumi_connections", {
-  id: text("id").primaryKey(),
-  workspaceId: text("space_id"),
-  provider: text("provider").notNull(),
-  status: text("status").notNull(),
-  connectionJson: jsonb("connection_json").notNull(),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
-
 const pgLegacyUsageSelect = {
   id: pgSchema.usageEvents.id,
   workspaceId: pgSchema.usageEvents.workspaceId,
@@ -80,12 +67,14 @@ const pgLegacyUsageSelect = {
   createdAt: pgSchema.usageEvents.createdAt,
 };
 
-function pgConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumnAvailable: boolean): SQL {
-  if (!ownerColumnAvailable) return sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`;
+function pgConnectionSnapshotJsonWhere(expected: ProviderConnection): SQL {
   if (!expected.ownerAccountId) return and(
     sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`,
     expected.workspaceId
-      ? sql`${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId})`
+      ? or(
+          isNull(pgSchema.connections.ownerAccountId),
+          sql`${pgSchema.connections.ownerAccountId} = (select owner_user_id from takosumi_workspaces where id = ${expected.workspaceId})`,
+        )
       : isNull(pgSchema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;
@@ -1902,67 +1891,48 @@ async function assertWorkspaceFinancialPostgresTriggers(client:SqlClient):Promis
 }
 
 export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwnershipMigrationStore {
-  async #v77Column(table: string, column: string, client: SqlClient = this.#client): Promise<boolean> {
-    const rows = await client.query<{ available: boolean }>(
-      `select exists(select 1 from information_schema.columns where table_schema=current_schema() and table_name=$1 and column_name=$2) as available`,
-      [table, column]);
-    return rows.rows[0]?.available === true;
-  }
-
   async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {
-    if (!rows.length || !await this.#v77Column("takosumi_connections", "owner_account_id")) return rows;
-    return await Promise.all(rows.map(async (connection) => {
-      const result = await this.#client.query<{ owner_account_id: string | null }>(
-        `select owner_account_id from takosumi_connections where id=$1`, [connection.id]);
+    if (!rows.length) return rows;
+    const owners = new Map<string, string>();
+    const ids = [...new Set(rows.map((row) => row.id))];
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const chunk = ids.slice(offset, offset + 100);
+      const found = await this.#db.select({ id: pgSchema.connections.id, ownerAccountId: pgSchema.connections.ownerAccountId })
+        .from(pgSchema.connections).where(inArray(pgSchema.connections.id, chunk));
+      for (const row of found) if (row.ownerAccountId) owners.set(row.id, row.ownerAccountId);
+    }
+    return rows.map((connection) => {
       const { ownerAccountId: _ignored, ...record } = connection;
       void _ignored;
-      return result.rows[0]?.owner_account_id
-        ? { ...record, ownerAccountId: result.rows[0].owner_account_id }
-        : record;
-    }));
+      const ownerAccountId = owners.get(connection.id);
+      return ownerAccountId ? { ...record, ownerAccountId } : record;
+    });
   }
 
   async #withUsagePayers(rows: readonly UsageEvent[]): Promise<readonly UsageEvent[]> {
-    if (!rows.length || !await this.#v77Column("takosumi_usage_events", "payer_account_id")) return rows;
-    return await Promise.all(rows.map(async (event) => {
-      const result = await this.#client.query<{ payer_account_id: string | null }>(
-        `select payer_account_id from takosumi_usage_events where id=$1`, [event.id]);
-      return result.rows[0]?.payer_account_id
-        ? { ...event, payerAccountId: result.rows[0].payer_account_id }
-        : event;
-    }));
-  }
-
-  async #withCapsuleOwnership(capsule: Capsule | undefined): Promise<Capsule | undefined> {
-    if (!capsule) return undefined;
-    const legacyRoot = `workspaces/${capsule.workspaceId}/capsules/${capsule.id}`;
-    if (!await this.#v77Column("takosumi_capsules", "owner_account_id")) {
-      return capsule.storageRoot && capsule.storageRoot !== legacyRoot
-        ? { ...capsule, storageRoot: legacyRoot } : capsule;
+    if (!rows.length) return rows;
+    const payers = new Map<string, string>();
+    const ids = [...new Set(rows.map((row) => row.id))];
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const chunk = ids.slice(offset, offset + 100);
+      const found = await this.#db.select({ id: pgSchema.usageEvents.id, payerAccountId: pgSchema.usageEvents.payerAccountId })
+        .from(pgSchema.usageEvents).where(inArray(pgSchema.usageEvents.id, chunk));
+      for (const row of found) if (row.payerAccountId) payers.set(row.id, row.payerAccountId);
     }
-    const result = await this.#client.query<{
-      owner_account_id: string | null; ownership_epoch: number; management_state: "active" | "draining" | "frozen";
-      management_epoch: number; storage_root: string | null;
-    }>(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from takosumi_capsules where id=$1`, [capsule.id]);
-    const row = result.rows[0];
-    if (!row) return undefined;
-    const { ownerAccountId: _owner, ownershipEpoch: _epoch, managementState: _state,
-      managementEpoch: _managementEpoch, storageRoot: _root, ...record } = capsule;
-    void _owner; void _epoch; void _state; void _managementEpoch; void _root;
-    const root = row.storage_root ?? (capsule.storageRoot && capsule.storageRoot !== legacyRoot ? legacyRoot : capsule.storageRoot);
-    return row.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id,
-      ownershipEpoch: row.ownership_epoch, managementState: row.management_state,
-      managementEpoch: row.management_epoch, ...(root ? { storageRoot: root } : {}) }
-      : { ...record, ...(root ? { storageRoot: root } : {}) };
+    return rows.map((event) => {
+      const payerAccountId = payers.get(event.id);
+      return payerAccountId ? { ...event, payerAccountId } : event;
+    });
   }
 
-  async #withCapsuleOwnershipRows(rows: readonly Capsule[]): Promise<readonly Capsule[]> {
-    const projected = await Promise.all(rows.map((row) => this.#withCapsuleOwnership(row)));
-    return projected.filter((row): row is Capsule => row !== undefined);
+  async #capsuleOwnerAccountId(capsuleId: string): Promise<string | undefined> {
+    const result = await this.#client.query<{ readonly owner_account_id: string | null }>(
+      `select owner_account_id from takosumi_capsules where id=$1`, [capsuleId]);
+    return result.rows[0]?.owner_account_id ?? undefined;
   }
 
   async #initializeCapsulePhysicalOwner(capsule: Capsule, client: SqlClient = this.#client): Promise<void> {
-    if (!capsule.ownerAccountId || !await this.#v77Column("takosumi_capsules", "owner_account_id", client)) return;
+    if (!capsule.ownerAccountId) return;
     await client.query(`update takosumi_capsules set owner_account_id=coalesce(owner_account_id,$2),
       ownership_epoch=case when owner_account_id is null then $3 else ownership_epoch end,
       management_state=case when owner_account_id is null then $4 else management_state end,
@@ -1976,13 +1946,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     connection: ProviderConnection, client: SqlClient = this.#client,
     ownerAccountId?: string,
   ): Promise<void> {
-    if (connection.scope === "operator" || !connection.workspaceId ||
-      !await this.#v77Column("takosumi_connections", "owner_account_id", client)) return;
     const owner = ownerAccountId ?? connection.ownerAccountId ??
-      (client === this.#client
-        ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
-        : (await client.query<{ owner_user_id: string | null }>(
-          `select owner_user_id from takosumi_workspaces where id=$1`, [connection.workspaceId])).rows[0]?.owner_user_id);
+      (connection.workspaceId
+        ? client === this.#client
+          ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
+          : (await client.query<{ owner_user_id: string | null }>(
+            `select owner_user_id from takosumi_workspaces where id=$1`, [connection.workspaceId])).rows[0]?.owner_user_id
+        : undefined);
     if (!owner) return;
     await client.query(`update takosumi_connections set owner_account_id=$2 where id=$1 and owner_account_id is null`,
       [connection.id, owner]);
@@ -7852,9 +7822,17 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       .from(pgSchema.capsules)
       .where(eq(pgSchema.capsules.id, id))
       .limit(1);
-    return await this.#withCapsuleOwnership(normalizeOptionalCapsuleRecord(
-      parseRow(rows[0]) as Capsule | undefined,
-    ));
+    return normalizeOptionalCapsuleRecord(parseRow(rows[0]) as Capsule | undefined);
+  }
+
+  async getCapsuleStorageRoot(capsuleId: string): Promise<string | undefined> {
+    const result = await this.#client.query<{
+      readonly workspace_id: string;
+      readonly storage_root: string | null;
+    }>(`select space_id as workspace_id, storage_root from takosumi_capsules where id=$1`, [capsuleId]);
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return row.storage_root ?? `workspaces/${row.workspace_id}/capsules/${capsuleId}`;
   }
 
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
@@ -7863,10 +7841,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       .select({ json: pgSchema.capsules.capsuleJson })
       .from(pgSchema.capsules)
       .where(inArray(pgSchema.capsules.id, [...new Set(ids)]));
-    const projected = await this.#withCapsuleOwnershipRows(rows.map((row) => normalizeCapsuleRecord(parseRow(row) as Capsule)));
     const byId = new Map(
-      projected.map((row) => {
-        const value = row;
+      rows.map((row) => {
+        const value = normalizeCapsuleRecord(parseRow(row) as Capsule);
         return [value.id, value] as const;
       }),
     );
@@ -7892,9 +7869,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         ),
       )
       .limit(1);
-    return await this.#withCapsuleOwnership(normalizeOptionalCapsuleRecord(
-      parseRow(rows[0]) as Capsule | undefined,
-    ));
+    return normalizeOptionalCapsuleRecord(parseRow(rows[0]) as Capsule | undefined);
   }
 
   async listDueCapsuleUninstalls(input: {
@@ -7928,7 +7903,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         limit: Math.max(0, input.limit),
       },
     );
-    return await this.#withCapsuleOwnershipRows(rows.map(normalizeCapsuleRecord));
+    return rows.map(normalizeCapsuleRecord);
   }
 
   async listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
@@ -7949,7 +7924,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         ? query
         : query.where(eq(pgSchema.capsules.workspaceId, workspaceId))
     ).orderBy(asc(pgSchema.capsules.createdAt), asc(pgSchema.capsules.id));
-    return await this.#withCapsuleOwnershipRows(rows.map((row) => normalizeCapsuleRecord(parseRow(row) as Capsule)));
+    return rows.map((row) => normalizeCapsuleRecord(parseRow(row) as Capsule));
   }
 
   async listCapsulesPage(
@@ -7978,7 +7953,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         limit: limit + 1,
       },
     );
-    return pageFromProbe(await this.#withCapsuleOwnershipRows(rows.map(normalizeCapsuleRecord)), limit);
+    return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
   async getPublicHostReservation(
@@ -9080,9 +9055,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async putConnection(
     connection: ProviderConnection,
   ): Promise<ProviderConnection> {
-    await this.#pgUpsert(pgLegacyConnectionsTable, {
+    await this.#pgUpsert(pgSchema.connections, {
       id: connection.id,
       workspaceId: connection.workspaceId ?? null,
+      ownerAccountId: connection.ownerAccountId ?? null,
       provider: connection.provider,
       status: connection.status,
       connectionJson: connection,
@@ -9104,8 +9080,8 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       expectedWorkspaceManagementAuthority,
       actorAuthority,
     } = prepareConnectionRegistration(input);
-    const connectionOwnerAccountId = connection.workspaceId
-      ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId : undefined;
+    const connectionOwnerAccountId = connection.ownerAccountId ?? (connection.workspaceId
+      ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId : undefined);
 
     try {
       return await this.#client.transaction(async (transaction) => {
@@ -9160,9 +9136,10 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         if (collisions.rows.length > 0) return false;
 
         const db = this.#drizzleForClient(transaction);
-        await db.insert(pgLegacyConnectionsTable).values({
+        await db.insert(pgSchema.connections).values({
           id: connection.id,
           workspaceId: connection.workspaceId ?? null,
+          ownerAccountId: connectionOwnerAccountId ?? null,
           provider: connection.provider,
           status: connection.status,
           connectionJson: connection,
@@ -9201,18 +9178,19 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     connection: ProviderConnection,
   ): Promise<boolean> {
     const inserted = await this.#db
-      .insert(pgLegacyConnectionsTable)
+      .insert(pgSchema.connections)
       .values({
         id: connection.id,
         workspaceId: connection.workspaceId ?? null,
+        ownerAccountId: connection.ownerAccountId ?? null,
         provider: connection.provider,
         status: connection.status,
         connectionJson: connection,
         createdAt: connection.createdAt,
         updatedAt: connection.updatedAt,
       })
-      .onConflictDoNothing({ target: pgLegacyConnectionsTable.id })
-      .returning({ id: pgLegacyConnectionsTable.id });
+      .onConflictDoNothing({ target: pgSchema.connections.id })
+      .returning({ id: pgSchema.connections.id });
     if (inserted.length === 1) await this.#initializeConnectionPhysicalOwner(connection);
     return inserted.length === 1;
   }
@@ -9222,11 +9200,13 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     replacement: ProviderConnection,
   ): Promise<boolean> {
     if (replacement.id !== expected.id) return false;
-    const ownerColumnAvailable = await this.#v77Column("takosumi_connections", "owner_account_id");
     const updated = await this.#db
       .update(pgSchema.connections)
       .set({
         workspaceId: replacement.workspaceId ?? null,
+        ...(replacement.ownerAccountId !== undefined
+          ? { ownerAccountId: replacement.ownerAccountId }
+          : {}),
         provider: replacement.provider,
         status: replacement.status,
         connectionJson: replacement,
@@ -9236,7 +9216,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       .where(
         and(
           eq(pgSchema.connections.id, expected.id),
-          pgConnectionSnapshotJsonWhere(expected, ownerColumnAvailable),
+          pgConnectionSnapshotJsonWhere(expected),
         ),
       )
       .returning({ id: pgSchema.connections.id });
@@ -9313,7 +9293,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       }
 
       const db = this.#drizzleForClient(transaction);
-      const ownerColumnAvailable = await this.#v77Column("takosumi_connections", "owner_account_id", transaction);
       const deleted = await db
         .delete(pgSchema.connections)
         .where(
@@ -9327,7 +9306,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                 ),
             eq(pgSchema.connections.provider, expectedConnection.provider),
             eq(pgSchema.connections.status, expectedConnection.status),
-            pgConnectionSnapshotJsonWhere(expectedConnection, ownerColumnAvailable),
+            pgConnectionSnapshotJsonWhere(expectedConnection),
             eq(pgSchema.connections.createdAt, expectedConnection.createdAt),
             eq(pgSchema.connections.updatedAt, expectedConnection.updatedAt),
           ),
@@ -9426,7 +9405,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       );
 
       const db = this.#drizzleForClient(transaction);
-      const ownerColumnAvailable = await this.#v77Column("takosumi_connections", "owner_account_id", transaction);
       const connectionFence = and(
         eq(pgSchema.connections.id, expectedConnection.id),
         expectedConnection.workspaceId === undefined
@@ -9437,7 +9415,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             ),
         eq(pgSchema.connections.provider, expectedConnection.provider),
         eq(pgSchema.connections.status, expectedConnection.status),
-        pgConnectionSnapshotJsonWhere(expectedConnection, ownerColumnAvailable),
+        pgConnectionSnapshotJsonWhere(expectedConnection),
         eq(pgSchema.connections.createdAt, expectedConnection.createdAt),
         eq(pgSchema.connections.updatedAt, expectedConnection.updatedAt),
       )!;
@@ -9505,6 +9483,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         .update(pgSchema.connections)
         .set({
           workspaceId: replacement.workspaceId ?? null,
+          ...(replacement.ownerAccountId !== undefined
+            ? { ownerAccountId: replacement.ownerAccountId }
+            : {}),
           provider: replacement.provider,
           status: replacement.status,
           connectionJson: replacement,
@@ -9576,7 +9557,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   }
 
   async listOperatorConnections(): Promise<readonly ProviderConnection[]> {
-    return await this.#pgManyJson<ProviderConnection>(
+    const rows = await this.#pgManyJson<ProviderConnection>(
       pgSchema.connections,
       pgSchema.connections.connectionJson,
       {
@@ -9587,6 +9568,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         ],
       },
     );
+    return await this.#withConnectionOwners(rows);
   }
 
   async deleteConnection(id: string): Promise<boolean> {
@@ -11247,7 +11229,6 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
   async putCredentialMintEvent(
     event: CredentialMintEvent,
   ): Promise<CredentialMintEvent> {
-    const ownershipColumns = await this.#v77Column("takosumi_credential_mint_events", "actor_account_id");
     await this.#pgUpsert(pgSchema.credentialMintEvents, {
       id: event.id,
       runId: event.runId,
@@ -11260,11 +11241,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
       phase: event.phase,
       eventJson: event,
       createdAt: event.createdAt,
-      ...(ownershipColumns ? {
-        actorAccountId: event.actorAccountId ?? null,
-        connectionOwnerAccountId: event.connectionOwnerAccountId ?? null,
-        ownershipEpoch: event.ownershipEpoch ?? null,
-      } : {}),
+      actorAccountId: event.actorAccountId ?? null,
+      connectionOwnerAccountId: event.connectionOwnerAccountId ?? null,
+      ownershipEpoch: event.ownershipEpoch ?? null,
     });
     return event;
   }
@@ -11334,10 +11313,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     );
     if (existing) return existing;
     const payerAccountId = event.payerAccountId ??
-      (event.capsuleId ? (await this.getCapsule(event.capsuleId))?.ownerAccountId : undefined) ??
+      (event.capsuleId ? await this.#capsuleOwnerAccountId(event.capsuleId) : undefined) ??
       (await this.getWorkspace(event.workspaceId))?.ownerUserId;
     const normalized = normalizeUsageEvent(payerAccountId ? { ...event, payerAccountId } : event);
-    const payerColumn = await this.#v77Column("takosumi_usage_events", "payer_account_id");
     // A missing pre-read is only an optimization, never insertion authority.
     // Recovery callers can race: the unique key chooses one immutable winner.
     await this.#db
@@ -11359,7 +11337,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         source: normalized.source,
         idempotencyKey: normalized.idempotencyKey,
         createdAt: normalized.createdAt,
-        ...(payerColumn ? { payerAccountId: normalized.payerAccountId ?? null } : {}),
+        payerAccountId: normalized.payerAccountId ?? null,
       })
       .onConflictDoNothing({ target: pgSchema.usageEvents.idempotencyKey });
     // A separate statement sees the committed winner after a conflicting

@@ -81,6 +81,23 @@ const legacyConnectionGuardTable = sqliteTable("connections", {
   updatedAt: text("updated_at"),
 });
 
+function capsuleWithoutPhysicalOwnership(capsule: Capsule): Capsule {
+  const {
+    ownerAccountId: _ownerAccountId,
+    ownershipEpoch: _ownershipEpoch,
+    managementState: _managementState,
+    managementEpoch: _managementEpoch,
+    storageRoot: _storageRoot,
+    ...record
+  } = capsule;
+  void _ownerAccountId;
+  void _ownershipEpoch;
+  void _managementState;
+  void _managementEpoch;
+  void _storageRoot;
+  return record as Capsule;
+}
+
 const legacyUsageEventsTable = sqliteTable("usage_events", {
   id: text("id").primaryKey(), workspaceId: text("workspace_id"), capsuleId: text("capsule_id"),
   runId: text("run_id"), meterId: text("meter_id"), resourceFamily: text("resource_family"),
@@ -2628,20 +2645,31 @@ class D1RequestMaintenanceScope {
 }
 
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
+  #presentV77Columns = new Set<string>();
+
   async #v77Column(table: "capsules" | "connections" | "usage_events" | "credential_mint_events", column: string): Promise<boolean> {
+    const key = `${table}.${column}`;
+    if (this.#presentV77Columns.has(key)) return true;
     const rows = await this.db.prepare(`pragma table_info(${table})`).all<{ name: string }>();
-    return (rows.results ?? []).some((row) => row.name === column);
+    const present = (rows.results ?? []).some((row) => row.name === column);
+    if (present) this.#presentV77Columns.add(key);
+    return present;
   }
 
   async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {
     if (!rows.length || !await this.#v77Column("connections", "owner_account_id")) return rows;
-    return await Promise.all(rows.map(async (connection) => {
-      const row = await this.db.prepare(`select owner_account_id from connections where id=?`).bind(connection.id)
-        .first<{ owner_account_id: string | null }>();
+    const owners = new Map<string, string>();
+    for (const ids of chunkD1InQueryValues([...new Set(rows.map((row) => row.id))])) {
+      const ownerRows = await this.#orm.select({ id: schema.connections.id, ownerAccountId: schema.connections.ownerAccountId })
+        .from(schema.connections).where(inArray(schema.connections.id, [...ids])).all();
+      for (const row of ownerRows) if (row.ownerAccountId) owners.set(row.id, row.ownerAccountId);
+    }
+    return rows.map((connection) => {
       const { ownerAccountId: _ignored, ...record } = connection;
       void _ignored;
-      return row?.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id } : record;
-    }));
+      const ownerAccountId = owners.get(connection.id);
+      return ownerAccountId ? { ...record, ownerAccountId } : record;
+    });
   }
 
   async #connectionSnapshotMatches(current: ProviderConnection | undefined, expected: ProviderConnection): Promise<boolean> {
@@ -2660,9 +2688,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async #initializeConnectionPhysicalOwner(connection: ProviderConnection): Promise<void> {
-    if (connection.scope === "operator" || !connection.workspaceId ||
-      !await this.#v77Column("connections", "owner_account_id")) return;
-    const owner = connection.ownerAccountId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId;
+    if (!await this.#v77Column("connections", "owner_account_id")) return;
+    const owner = connection.ownerAccountId ?? (connection.workspaceId
+      ? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
+      : undefined);
     if (!owner) return;
     await this.db.prepare(`update connections set owner_account_id=? where id=? and owner_account_id is null`)
       .bind(owner, connection.id).run();
@@ -2670,37 +2699,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async #withUsagePayers(rows: readonly UsageEvent[]): Promise<readonly UsageEvent[]> {
     if (!rows.length || !await this.#v77Column("usage_events", "payer_account_id")) return rows;
-    return await Promise.all(rows.map(async (event) => {
-      const row = await this.db.prepare(`select payer_account_id from usage_events where id=?`).bind(event.id)
-        .first<{ payer_account_id: string | null }>();
-      return row?.payer_account_id ? { ...event, payerAccountId: row.payer_account_id } : event;
-    }));
-  }
-
-  async #withCapsuleOwnership(capsule: Capsule | undefined): Promise<Capsule | undefined> {
-    if (!capsule) return undefined;
-    const legacyRoot = `workspaces/${capsule.workspaceId}/capsules/${capsule.id}`;
-    if (!await this.#v77Column("capsules", "owner_account_id")) {
-      return capsule.storageRoot && capsule.storageRoot !== legacyRoot
-        ? { ...capsule, storageRoot: legacyRoot } : capsule;
+    const payers = new Map<string, string>();
+    for (const ids of chunkD1InQueryValues([...new Set(rows.map((row) => row.id))])) {
+      const payerRows = await this.#orm.select({ id: schema.usageEvents.id, payerAccountId: schema.usageEvents.payerAccountId })
+        .from(schema.usageEvents).where(inArray(schema.usageEvents.id, [...ids])).all();
+      for (const row of payerRows) if (row.payerAccountId) payers.set(row.id, row.payerAccountId);
     }
-    const row = await this.db.prepare(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from capsules where id=?`)
-      .bind(capsule.id).first<{ owner_account_id: string | null; ownership_epoch: number;
-        management_state: "active" | "draining" | "frozen"; management_epoch: number; storage_root: string | null }>();
-    if (!row) return undefined;
-    const { ownerAccountId: _owner, ownershipEpoch: _epoch, managementState: _state,
-      managementEpoch: _managementEpoch, storageRoot: _root, ...record } = capsule;
-    void _owner; void _epoch; void _state; void _managementEpoch; void _root;
-    const root = row.storage_root ?? (capsule.storageRoot && capsule.storageRoot !== legacyRoot ? legacyRoot : capsule.storageRoot);
-    return row.owner_account_id ? { ...record, ownerAccountId: row.owner_account_id,
-      ownershipEpoch: row.ownership_epoch, managementState: row.management_state,
-      managementEpoch: row.management_epoch, ...(root ? { storageRoot: root } : {}) }
-      : { ...record, ...(root ? { storageRoot: root } : {}) };
+    return rows.map((event) => {
+      const payerAccountId = payers.get(event.id);
+      return payerAccountId ? { ...event, payerAccountId } : event;
+    });
   }
 
-  async #withCapsuleOwnershipRows(rows: readonly Capsule[]): Promise<readonly Capsule[]> {
-    const projected = await Promise.all(rows.map((row) => this.#withCapsuleOwnership(row)));
-    return projected.filter((row): row is Capsule => row !== undefined);
+  async #capsuleOwnerAccountId(capsuleId: string): Promise<string | undefined> {
+    if (!await this.#v77Column("capsules", "owner_account_id")) return undefined;
+    const row = await this.db.prepare(`select owner_account_id from capsules where id=?`)
+      .bind(capsuleId).first<{ owner_account_id: string | null }>();
+    return row?.owner_account_id ?? undefined;
   }
   #financialSourceStore():SqlWorkspaceFinancialSource {
     const db=this.db;
@@ -6926,7 +6941,16 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: normalized.updatedAt,
     };
     if (ownershipColumnAvailable) await this.#drizzleUpsert(schema.capsules, values);
-    else await this.#drizzleUpsert(legacyCapsuleGuardTable, { ...values, recordJson: JSON.stringify(normalized), executionAuthorityEpoch: 1 });
+    else {
+      const legacyValues = {
+        ...values,
+        recordJson: JSON.stringify(capsuleWithoutPhysicalOwnership(normalized)),
+        executionAuthorityEpoch: 1,
+      };
+      const { executionAuthorityEpoch: _insertOnlyEpoch, ...legacyUpdate } = legacyValues;
+      void _insertOnlyEpoch;
+      await this.#drizzleUpsert(legacyCapsuleGuardTable, legacyValues, legacyUpdate);
+    }
     if (normalized.ownerAccountId && ownershipColumnAvailable) {
       await this.db.prepare(`update capsules set owner_account_id=coalesce(owner_account_id,?),
         ownership_epoch=case when owner_account_id is null then ? else ownership_epoch end,
@@ -6936,7 +6960,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           normalized.ownershipEpoch ?? 0,normalized.managementState ?? "active",normalized.managementEpoch ?? 0,
           normalized.storageRoot ?? `apps/${normalized.id}`,normalized.id).run();
     }
-    return normalized;
+    return ownershipColumnAvailable
+      ? normalized
+      : capsuleWithoutPhysicalOwnership(normalized);
   }
 
   async createCapsuleInitialAuthority(
@@ -6952,6 +6978,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     }
     await this.#ensureSchema();
     const ownershipColumnAvailable = await this.#v77Column("capsules", "owner_account_id");
+    const storedCapsule = ownershipColumnAvailable
+      ? capsule
+      : capsuleWithoutPhysicalOwnership(capsule);
     const binding = input.providerBindingSet;
     if (
       input.installConfig.id !== capsule.installConfigId ||
@@ -6968,7 +6997,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const [expectedConfig, expectedCapsule, expectedBinding] =
       await Promise.all([
         stableJsonDigest(initialInstallConfig),
-        stableJsonDigest(capsule),
+        stableJsonDigest(storedCapsule),
         stableJsonDigest(binding),
       ]);
     const classifyExisting = async (): Promise<
@@ -7121,7 +7150,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           currentStateGeneration: capsule.currentStateGeneration,
           currentOutputId: null,
           status: capsule.status,
-          recordJson: JSON.stringify(capsule),
+          recordJson: JSON.stringify(storedCapsule),
           createdAt: capsule.createdAt,
           updatedAt: capsule.updatedAt,
           executionAuthorityEpoch: 1,
@@ -7166,7 +7195,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       }
       throw error;
     }
-    return { status: "created", capsule };
+    return { status: "created", capsule: storedCapsule };
   }
 
   async resolveCapsuleExecutionAuthority(
@@ -7855,13 +7884,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
-    return await this.#withCapsuleOwnership(normalizeOptionalCapsuleRecord(
-      await this.#drizzleFirstJson<Capsule>(
-        schema.capsules,
-        schema.capsules.recordJson,
-        eq(schema.capsules.id, id),
-      ),
+    return normalizeOptionalCapsuleRecord(await this.#drizzleFirstJson<Capsule>(
+      schema.capsules,
+      schema.capsules.recordJson,
+      eq(schema.capsules.id, id),
     ));
+  }
+
+  async getCapsuleStorageRoot(capsuleId: string): Promise<string | undefined> {
+    const capsule = await this.#drizzleFirstJson<Capsule>(
+      schema.capsules,
+      schema.capsules.recordJson,
+      eq(schema.capsules.id, capsuleId),
+    );
+    if (!capsule) return undefined;
+    if (await this.#v77Column("capsules", "storage_root")) {
+      const row = await this.db.prepare(`select storage_root from capsules where id=?`)
+        .bind(capsuleId).first<{ storage_root: string | null }>();
+      if (row && row.storage_root !== null) return row.storage_root;
+    }
+    return `workspaces/${capsule.workspaceId}/capsules/${capsule.id}`;
   }
 
   async getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
@@ -7876,12 +7918,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         )),
       );
     }
-    const projected = await this.#withCapsuleOwnershipRows(rows);
     const byId = new Map(
-      projected.map((row) => {
-        const value = normalizeCapsuleRecord(row);
-        return [value.id, value] as const;
-      }),
+      rows.map((row) => [row.id, normalizeCapsuleRecord(row)] as const),
     );
     return ids
       .map((id) => byId.get(id))
@@ -7893,8 +7931,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     name: string,
     environment: string,
   ): Promise<Capsule | undefined> {
-    return await this.#withCapsuleOwnership(normalizeOptionalCapsuleRecord(
-      await this.#drizzleFirstJson<Capsule>(
+    return normalizeOptionalCapsuleRecord(await this.#drizzleFirstJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
         and(
@@ -7903,8 +7940,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           eq(schema.capsules.environment, environment),
           ne(schema.capsules.status, "destroyed"),
         ),
-      ),
-    ));
+      ));
   }
 
   async listDueCapsuleUninstalls(input: {
@@ -7914,7 +7950,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const scheduledDestroyAt =
       sql`json_extract(${schema.capsules.recordJson}, '$.uninstall.scheduledDestroyAt')`;
     const nextAttemptAt = sql`coalesce(json_extract(${schema.capsules.recordJson}, '$.uninstall.lastFinalizeAttemptAt'), ${scheduledDestroyAt})`;
-    return await this.#withCapsuleOwnershipRows((
+    return (
       await this.#drizzleManyJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
@@ -7939,7 +7975,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           limit: Math.max(0, input.limit),
         },
       )
-    ).map(normalizeCapsuleRecord));
+    ).map(normalizeCapsuleRecord);
   }
 
   async listCapsulesForSource(workspaceId: string, sourceId: string): Promise<readonly Capsule[]> {
@@ -7950,7 +7986,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async listCapsules(workspaceId?: string): Promise<readonly Capsule[]> {
-    return await this.#withCapsuleOwnershipRows((
+    return (
       await this.#drizzleManyJson<Capsule>(
         schema.capsules,
         schema.capsules.recordJson,
@@ -7962,7 +7998,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           orderBy: [asc(schema.capsules.createdAt), asc(schema.capsules.id)],
         },
       )
-    ).map(normalizeCapsuleRecord));
+    ).map(normalizeCapsuleRecord);
   }
 
   async listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
@@ -8015,7 +8051,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         jsonRecordFromD1Value(row.json) as unknown as Capsule,
       ),
     });
-    return await this.#withCapsuleOwnershipRows(capsules);
+    return capsules;
   }
 
   async listCapsulesPage(
@@ -8044,7 +8080,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         limit: limit + 1,
       },
     );
-    return pageFromProbe(await this.#withCapsuleOwnershipRows(rows.map(normalizeCapsuleRecord)), limit);
+    return pageFromProbe(rows.map(normalizeCapsuleRecord), limit);
   }
 
   async getPublicHostReservation(
@@ -8956,9 +8992,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     assertD1AtomicCommitBatch(this.db, "createConnectionRegistration");
     await this.#ensureSchema();
     const ownershipColumnAvailable = await this.#v77Column("connections", "owner_account_id");
-    const connectionOwnerAccountId = connection.scope === "workspace" && connection.workspaceId
-      ? actorAuthority?.expectedWorkspace.ownerUserId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
-      : undefined;
+    const connectionOwnerAccountId = connection.ownerAccountId ??
+      (connection.scope === "workspace" && connection.workspaceId
+        ? actorAuthority?.expectedWorkspace.ownerUserId ?? (await this.getWorkspace(connection.workspaceId))?.ownerUserId
+        : undefined);
 
     // Match the other durable adapters' classification order: an occupied
     // identity is only a create-only false result when the captured Workspace
@@ -9113,6 +9150,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         workspaceId: replacement.workspaceId ?? null,
         provider: replacement.provider,
         status: replacement.status,
+        ...(ownerColumnAvailable && replacement.ownerAccountId !== undefined
+          ? { ownerAccountId: replacement.ownerAccountId }
+          : {}),
         connectionJson: replacement,
         createdAt: replacement.createdAt,
         updatedAt: replacement.updatedAt,
@@ -9310,6 +9350,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           workspaceId: replacement.workspaceId ?? null,
           provider: replacement.provider,
           status: replacement.status,
+          ...(ownerColumnAvailable && replacement.ownerAccountId !== undefined
+            ? { ownerAccountId: replacement.ownerAccountId }
+            : {}),
           connectionJson: replacement,
           createdAt: replacement.createdAt,
           updatedAt: replacement.updatedAt,
@@ -9401,7 +9444,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         ],
       },
     );
-    return rows.filter((row) => row.scope === "operator");
+    return await this.#withConnectionOwners(rows.filter((row) => row.scope === "operator"));
   }
 
   async deleteConnection(id: string): Promise<boolean> {
@@ -11260,7 +11303,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (existing) return existing;
     await this.#ensureSchema();
     const payerAccountId = event.payerAccountId ??
-      (event.capsuleId ? (await this.getCapsule(event.capsuleId))?.ownerAccountId : undefined) ??
+      (event.capsuleId ? await this.#capsuleOwnerAccountId(event.capsuleId) : undefined) ??
       (await this.getWorkspace(event.workspaceId))?.ownerUserId;
     const storedEvent = payerAccountId ? { ...event, payerAccountId } : event;
     const payerColumn = await this.#v77Column("usage_events", "payer_account_id");
@@ -13789,7 +13832,10 @@ function d1ConnectionSnapshotJsonWhere(expected: ProviderConnection, ownerColumn
   if (!expected.ownerAccountId) return and(
     eq(schema.connections.connectionJson, expected),
     expected.workspaceId
-      ? sql`${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId})`
+      ? or(
+          isNull(schema.connections.ownerAccountId),
+          sql`${schema.connections.ownerAccountId} = (select owner_user_id from workspaces where id = ${expected.workspaceId})`,
+        )
       : isNull(schema.connections.ownerAccountId),
   )!;
   const { ownerAccountId, ...legacy } = expected;

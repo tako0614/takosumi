@@ -3899,7 +3899,10 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   resolveCapsuleExecutionAuthorities(
     inputs: readonly CapsuleExecutionAuthorityInput[],
   ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
+  /** Exact persisted JSON snapshot; physical ownership metadata is read separately. */
   getCapsule(id: string): Promise<Capsule | undefined>;
+  /** Persisted artifact allocation root, with the legacy root before ownership expansion. */
+  getCapsuleStorageRoot(id: string): Promise<string | undefined>;
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
   getCapsuleByName(
     projectId: string,
@@ -6446,6 +6449,11 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getCapsule(id: string): Promise<Capsule | undefined> {
     return Promise.resolve(this.#capsules.get(id));
+  }
+
+  getCapsuleStorageRoot(id: string): Promise<string | undefined> {
+    const capsule = this.#capsules.get(id);
+    return Promise.resolve(capsule ? capsule.storageRoot ?? `workspaces/${capsule.workspaceId}/capsules/${capsule.id}` : undefined);
   }
 
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]> {
