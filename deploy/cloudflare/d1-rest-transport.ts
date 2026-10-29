@@ -29,9 +29,16 @@ export class D1RestTransportError extends Error {
   }
 }
 
-/** Generic Cloudflare D1 REST query/batch transport. It owns no schema policy. */
+/**
+ * Generic Cloudflare D1 REST query/batch transport. It owns no schema policy.
+ *
+ * Statements also implement `raw()` through the `/raw` endpoint: Drizzle's D1
+ * session reads every mapped SELECT as positional rows (`stmt.raw()`), so a
+ * store driven through Drizzle (for example the Control store) needs it.
+ */
 export class CloudflareD1RestTransport implements D1Database {
   readonly #url: URL;
+  readonly #rawUrl: URL;
   readonly #bookmarkUrl: URL;
   readonly #apiToken: string;
   readonly #fetch: typeof fetch;
@@ -46,6 +53,10 @@ export class CloudflareD1RestTransport implements D1Database {
       options.errorFactory ?? ((code) => new D1RestTransportError(code));
     this.#url = new URL(
       `/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/query`,
+      "https://api.cloudflare.com",
+    );
+    this.#rawUrl = new URL(
+      `/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/raw`,
       "https://api.cloudflare.com",
     );
     this.#bookmarkUrl = new URL(
@@ -70,6 +81,31 @@ export class CloudflareD1RestTransport implements D1Database {
 
   async run<T = unknown>(query: D1RestQuery): Promise<D1Result<T>> {
     return (await this.request(query))[0] as D1Result<T>;
+  }
+
+  /** One statement through `/raw`: column names and positional rows. */
+  async runRaw(query: D1RestQuery): Promise<{
+    readonly columns: readonly string[];
+    readonly rows: readonly (readonly unknown[])[];
+  }> {
+    const envelope = await this.#post(this.#rawUrl, query);
+    const result = Array.isArray(envelope.result) && envelope.result.length === 1
+      ? envelope.result[0] : undefined;
+    const raw = isRecord(result) && result.success === true ? result.results : undefined;
+    const columns = isRecord(raw) ? raw.columns : undefined;
+    const rows = isRecord(raw) ? raw.rows : undefined;
+    if (
+      !Array.isArray(columns) ||
+      columns.some((column) => typeof column !== "string") ||
+      !Array.isArray(rows) ||
+      rows.some((row) => !Array.isArray(row) || row.length !== columns.length)
+    ) {
+      this.fail("cloudflare_d1_response_invalid");
+    }
+    return {
+      columns: columns as readonly string[],
+      rows: rows as readonly (readonly unknown[])[],
+    };
   }
 
   /** Read the current Time Travel bookmark. This method never restores D1. */
@@ -121,9 +157,29 @@ export class CloudflareD1RestTransport implements D1Database {
   protected async request(
     body: D1RestQuery | { readonly batch: readonly D1RestQuery[] },
   ): Promise<readonly D1Result[]> {
+    const envelope = await this.#post(this.#url, body);
+    const results = envelope.result;
+    const expectedResultCount = "batch" in body ? body.batch.length : 1;
+    if (
+      !Array.isArray(results) ||
+      results.length === 0 ||
+      results.length !== expectedResultCount ||
+      results.some(
+        (result) =>
+          !isRecord(result) ||
+          result.success !== true ||
+          !Array.isArray(result.results),
+      )
+    ) {
+      this.fail("cloudflare_d1_response_invalid");
+    }
+    return results as unknown as readonly D1Result[];
+  }
+
+  async #post(url: URL, body: unknown): Promise<Record<string, unknown>> {
     let response: Response;
     try {
-      response = await this.#fetch(this.#url, {
+      response = await this.#fetch(url, {
         method: "POST",
         headers: {
           authorization: `Bearer ${this.#apiToken}`,
@@ -144,22 +200,7 @@ export class CloudflareD1RestTransport implements D1Database {
     if (!response.ok || !isRecord(envelope) || envelope.success !== true) {
       this.fail("cloudflare_d1_query_failed");
     }
-    const results = envelope.result;
-    const expectedResultCount = "batch" in body ? body.batch.length : 1;
-    if (
-      !Array.isArray(results) ||
-      results.length === 0 ||
-      results.length !== expectedResultCount ||
-      results.some(
-        (result) =>
-          !isRecord(result) ||
-          result.success !== true ||
-          !Array.isArray(result.results),
-      )
-    ) {
-      this.fail("cloudflare_d1_response_invalid");
-    }
-    return results as unknown as readonly D1Result[];
+    return envelope;
   }
 
   protected fail(code: string): never {
@@ -168,13 +209,16 @@ export class CloudflareD1RestTransport implements D1Database {
 }
 
 class CloudflareD1RestStatement implements D1PreparedStatement {
-  #values: readonly unknown[] = [];
+  readonly #values: readonly unknown[];
 
   constructor(
     readonly database: CloudflareD1RestTransport,
     readonly sql: string,
     readonly reject: (code: string) => never,
-  ) {}
+    values: readonly unknown[] = [],
+  ) {
+    this.#values = values;
+  }
 
   get query(): D1RestQuery {
     return {
@@ -185,9 +229,9 @@ class CloudflareD1RestStatement implements D1PreparedStatement {
     };
   }
 
+  /** Like the D1 binding, binding returns a new statement; the prepared one is reusable. */
   bind(...values: readonly unknown[]): D1PreparedStatement {
-    this.#values = values;
-    return this;
+    return new CloudflareD1RestStatement(this.database, this.sql, this.reject, values);
   }
 
   async first<T = unknown>(): Promise<T | null> {
@@ -201,6 +245,12 @@ class CloudflareD1RestStatement implements D1PreparedStatement {
 
   async run<T = unknown>(): Promise<D1Result<T>> {
     return await this.database.run<T>(this.query);
+  }
+
+  /** D1 `raw()`: positional rows, optionally preceded by the column names. */
+  async raw<T = unknown[]>(options?: { readonly columnNames?: boolean }): Promise<T[]> {
+    const { columns, rows } = await this.database.runRaw(this.query);
+    return (options?.columnNames ? [columns, ...rows] : [...rows]) as T[];
   }
 }
 

@@ -157,3 +157,45 @@ test("neutral D1 REST transport reads the current Time Travel bookmark without a
     },
   ]);
 });
+
+test("neutral D1 REST transport implements raw() through /raw for Drizzle positional reads", async () => {
+  const requests: { url: string; body: unknown }[] = [];
+  let envelope: unknown = {
+    success: true,
+    result: [{ success: true, results: { columns: ["id", "id"], rows: [["a", "b"], ["c", "d"]] } }],
+  };
+  const database = new CloudflareD1RestTransport({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "must-not-appear",
+    fetch: async (input, init) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body ?? "{}")) });
+      return Response.json(envelope);
+    },
+  });
+  const prepared = database.prepare("select a.id, b.id from a join b on b.a_id = a.id where a.id = ?");
+  // Binding returns a new statement; the prepared statement keeps no parameters.
+  const first = prepared.bind("one") as unknown as { raw<T>(options?: { columnNames?: boolean }): Promise<T[]> };
+  const second = prepared.bind("two") as unknown as { raw<T>(options?: { columnNames?: boolean }): Promise<T[]> };
+  expect(await first.raw()).toEqual([["a", "b"], ["c", "d"]]);
+  expect(await second.raw({ columnNames: true })).toEqual([["id", "id"], ["a", "b"], ["c", "d"]]);
+  expect(requests).toEqual([
+    { url: "https://api.cloudflare.com/client/v4/accounts/account_123/d1/database/database_456/raw",
+      body: { sql: "select a.id, b.id from a join b on b.a_id = a.id where a.id = ?", params: ["one"] } },
+    { url: "https://api.cloudflare.com/client/v4/accounts/account_123/d1/database/database_456/raw",
+      body: { sql: "select a.id, b.id from a join b on b.a_id = a.id where a.id = ?", params: ["two"] } },
+  ]);
+  expect(JSON.stringify(requests)).not.toContain("must-not-appear");
+
+  for (const malformed of [
+    { success: true, result: [] },
+    { success: true, result: [{ success: false, results: { columns: [], rows: [] } }] },
+    { success: true, result: [{ success: true, results: [{ id: "object-row" }] }] },
+    { success: true, result: [{ success: true, results: { columns: ["id"], rows: [["a", "extra"]] } }] },
+  ]) {
+    envelope = malformed;
+    await expect(first.raw()).rejects.toMatchObject({ code: "cloudflare_d1_response_invalid" });
+  }
+  envelope = { success: false, errors: [{ message: "secret-looking provider text" }] };
+  await expect(first.raw()).rejects.toThrow(new D1RestTransportError("cloudflare_d1_query_failed"));
+});
