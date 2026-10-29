@@ -43,6 +43,8 @@ export interface AppOwnershipStore extends AppAccessResolver {
   getOwnership(capsuleId: string): Promise<CapsuleOwnership | undefined>;
   /** Same single read as getOwnership, also reporting whether the schema exists. */
   readOwnershipFence?(capsuleId: string): Promise<CapsuleOwnershipFence>;
+  /** Which of these Capsules have an ownership row; bounded batch read for list filtering. */
+  listOwnedCapsuleIds?(capsuleIds: readonly string[]): Promise<ReadonlySet<string>>;
   /** Returns false if the Capsule or ownership schema does not yet exist. */
   putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch?: number): Promise<boolean>;
   /** Backfill CAS: never replaces an app owner established by creation or transfer. */
@@ -193,6 +195,12 @@ abstract class BaseAppOwnershipStore implements AppOwnershipStore {
   async readOwnershipFence(capsuleId: string): Promise<CapsuleOwnershipFence> {
     const ownership = await this.getOwnership(capsuleId);
     return ownership ? { schemaAvailable: true, ownership } : { schemaAvailable: true };
+  }
+
+  async listOwnedCapsuleIds(capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const owned = new Set<string>();
+    for (const id of new Set(capsuleIds)) if ((await this.readOwnershipFence(id)).ownership) owned.add(id);
+    return owned;
   }
 
   async resolveAppAccess(accountId: string, capsuleId: string): Promise<AppAccess | undefined> {
@@ -381,6 +389,18 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
       throw error;
     }
   }
+  override async listOwnedCapsuleIds(capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const ids = [...new Set(capsuleIds)];
+    if (!ids.length) return new Set();
+    try {
+      const rows = await this.client.query<{ id: string }>(
+        `select id from takosumi_capsules where owner_account_id is not null and id = any($1::text[])`, [ids]);
+      return new Set(rows.rows.map((row) => row.id));
+    } catch (error) {
+      if (isMissingOwnershipSchemaError(error)) return new Set();
+      throw error;
+    }
+  }
   async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);
     if (!validOwnershipEpochCas(record, expectedOwnershipEpoch)) return false;
@@ -452,9 +472,14 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
   }
 }
 
+/** How long the authorization fence trusts "no ownership schema" on D1. */
+export const D1_OWNERSHIP_FENCE_ABSENT_TTL_MS = 60_000;
+
 export class D1AppOwnershipStore extends BaseAppOwnershipStore {
   #presentColumns = new Set<string>();
-  constructor(readonly db: D1Like, control: OpenTofuControlStore) { super(control); }
+  /** Fence-only negative cache; writes keep the uncached probe. */
+  #fenceSchemaAbsentUntil = 0;
+  constructor(readonly db: D1Like, control: OpenTofuControlStore, private readonly now: () => number = Date.now) { super(control); }
   async #column(table: string, column: string): Promise<boolean> {
     const key = `${table}.${column}`;
     if (this.#presentColumns.has(key)) return true;
@@ -525,11 +550,35 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
     return ownerRow(id, row ?? undefined);
   }
   override async readOwnershipFence(id: string): Promise<CapsuleOwnershipFence> {
-    // Reuses the cached v77 column probe; absence stays uncached by design.
-    if (!await this.#column("capsules", "owner_account_id")) return { schemaAvailable: false };
+    // Reuses the cached v77 column probe. On a pre-v77 schema the absence is
+    // trusted for a short TTL so request paths (Run streams, link views) do
+    // not probe on every decision; the additive migration is seen within it.
+    if (this.now() < this.#fenceSchemaAbsentUntil) return { schemaAvailable: false };
+    if (!await this.#column("capsules", "owner_account_id")) {
+      this.#fenceSchemaAbsentUntil = this.now() + D1_OWNERSHIP_FENCE_ABSENT_TTL_MS;
+      return { schemaAvailable: false };
+    }
     const row = await this.db.prepare(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from capsules where id=?`).bind(id).first<OwnershipRow>();
     const ownership = ownerRow(id, row ?? undefined);
     return ownership ? { schemaAvailable: true, ownership } : { schemaAvailable: true };
+  }
+  override async listOwnedCapsuleIds(capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+    const ids = [...new Set(capsuleIds)];
+    if (!ids.length || this.now() < this.#fenceSchemaAbsentUntil) return new Set();
+    if (!await this.#column("capsules", "owner_account_id")) {
+      this.#fenceSchemaAbsentUntil = this.now() + D1_OWNERSHIP_FENCE_ABSENT_TTL_MS;
+      return new Set();
+    }
+    const owned = new Set<string>();
+    // D1 binds at most 100 parameters per statement.
+    for (let index = 0; index < ids.length; index += 90) {
+      const chunk = ids.slice(index, index + 90);
+      const rows = await this.db.prepare(
+        `select id from capsules where owner_account_id is not null and id in (${chunk.map(() => "?").join(",")})`,
+      ).bind(...chunk).all<{ id: string }>();
+      for (const row of rows.results ?? []) owned.add(row.id);
+    }
+    return owned;
   }
   async putOwnership(record: CapsuleOwnership, expectedOwnershipEpoch = record.ownershipEpoch): Promise<boolean> {
     validOwnership(record);

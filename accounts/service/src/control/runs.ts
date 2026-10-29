@@ -112,7 +112,7 @@ import {
   requireAppAccess,
   requireResourceAccess,
   runAppAction,
-  runCapsuleId,
+  runCapsuleIds,
 } from "./app-authorization.ts";
 import type { AppAction } from "takosumi-contract/app-access";
 import {
@@ -169,7 +169,7 @@ export async function handleRuns(
             operations,
             store,
             workspaceId: run.workspaceId,
-            capsuleId: await runCapsuleId(operations, run),
+            capsuleIds: await runCapsuleIds(operations, run),
             action: "view",
             session: ctx.session,
             assertActive,
@@ -190,12 +190,12 @@ export async function handleRuns(
     // Approve, apply and cancel act on the Run's app: destroy work is
     // uninstall (owner only), restore is rollback, other plans are updates.
     const operate = method !== "GET" && method !== "HEAD";
-    const runCapsule = await runCapsuleId(operations, run);
+    const runCapsules = await runCapsuleIds(operations, run);
     const auth = await requireResourceAccess({
       operations,
       store,
       workspaceId: run.workspaceId,
-      capsuleId: runCapsule,
+      capsuleIds: runCapsules,
       action: runAppAction(run, operate ? "operate" : "view"),
       session: ctx.session,
       ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
@@ -247,7 +247,7 @@ export async function handleRuns(
       // that pushes the run on every status/heartbeat/summary change and closes
       // at a terminal status — so the dashboard subscribes instead of polling.
       // The stream repeats Workspace access checks while the request is open.
-      return runStatusStream(ctx, runId, run, ctx.runStreamTiming, runCapsule);
+      return runStatusStream(ctx, runId, run, ctx.runStreamTiming, runCapsules);
     }
   }
   return undefined;
@@ -309,8 +309,8 @@ export function runStatusStream(
     readonly now: () => number;
     readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
   } = { now: Date.now, wait: waitForRunPoll },
-  /** The Run's app, resolved once by the caller; absent for Workspace-level Runs. */
-  capsuleId: string | undefined = initialRun.capsuleId,
+  /** The Run's apps, resolved once by the caller; empty for Workspace-level Runs. */
+  capsuleIds: readonly string[] = initialRun.capsuleId ? [initialRun.capsuleId] : [],
 ): Response {
   const { operations, request, store, session } = ctx;
   const workspaceId = initialRun.workspaceId;
@@ -361,7 +361,7 @@ export function runStatusStream(
             operations,
             store,
             workspaceId,
-            capsuleId,
+            capsuleIds,
             action: "view",
             session,
           });
@@ -489,15 +489,17 @@ async function requireRunGroupAccess(
   const actions = new Map<string, AppAction>();
   let workspaceLevel = runs.length === 0;
   for (const run of runs) {
-    const capsuleId = await runCapsuleId(ctx.operations, run);
-    if (!capsuleId) {
+    const capsuleIds = await runCapsuleIds(ctx.operations, run);
+    if (!capsuleIds.length) {
       workspaceLevel = true;
       continue;
     }
     const action = runAppAction(run, intent);
-    const current = actions.get(capsuleId);
-    // Keep the strictest action per app (uninstall is owner only).
-    if (current === undefined || (action === "uninstall" && current !== "uninstall")) actions.set(capsuleId, action);
+    for (const capsuleId of capsuleIds) {
+      const current = actions.get(capsuleId);
+      // Keep the strictest action per app (uninstall is owner only).
+      if (current === undefined || (action === "uninstall" && current !== "uninstall")) actions.set(capsuleId, action);
+    }
   }
   for (const [capsuleId, action] of actions) {
     const auth = await requireAppAccess({

@@ -39,7 +39,16 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
   try {
     if (candidates) {
       const { requirement } = await service.getInterfaceLinkRequirement(capsule.id, key);
-      return json(await service.listInterfaceLinkCandidateView({ workspaceId: capsule.workspaceId, capsuleId: capsule.id, requirement }), 200, { "cache-control": "no-store" });
+      const view = await service.listInterfaceLinkCandidateView({ workspaceId: capsule.workspaceId, capsuleId: capsule.id, requirement });
+      if (ctx.session.credential !== "oauth-access-token") return json(view, 200, { "cache-control": "no-store" });
+      // An app's own token sees only providers its own grant could already
+      // view; it never enumerates other apps' Interfaces.
+      const visible = [];
+      for (const candidate of view.candidates) {
+        const provider = await ctx.operations.capsules.getCapsule(candidate.providerCapsuleId);
+        if ((await decide(provider, "view")).ok) visible.push(candidate);
+      }
+      return json({ ...view, candidates: visible }, 200, { "cache-control": "no-store" });
     }
     const initialAuthority = await ctx.operations.workspaces.captureManagementAuthority(controllingWorkspaceId);
     const writeFence: InterfaceLinkWriteFence = { assertCurrent: async () => {
@@ -50,6 +59,15 @@ export async function handleCapsuleInterfaceLinks(ctx: ControlDispatchContext, c
       if (current.managementEpoch !== initialAuthority.managementEpoch) throw new InterfaceServiceError("conflict", "Workspace management authority changed");
       ctx.assertActive?.();
       return initialAuthority;
+    }, mayApproveProvider: async (provider) => {
+      // A link is approved at creation only when the requester may change
+      // links on the PROVIDER app too; an app's own token never approves
+      // another app's Interface. Otherwise it waits as pending_approval.
+      if (provider.capsuleId === capsule.id) return true;
+      if (ctx.session.credential === "oauth-access-token") return false;
+      const providerCapsule = await ctx.operations.capsules.getCapsule(provider.capsuleId);
+      if (providerCapsule.id !== provider.capsuleId || providerCapsule.workspaceId !== provider.workspaceId) return false;
+      return (await decide(providerCapsule, "change_interface_link", { ...ctx.session, requiredAccess: "write" })).ok;
     } };
     const body = await readJsonObject(ctx.request);
     if (!body) return errorJson("invalid_request", "JSON object is required", 400);

@@ -49,8 +49,9 @@ for (const credential of ["oauth", "session", "pat"] as const) {
     expect(JSON.stringify(body)).not.toContain(secret);
     if (credential === "oauth") {
       expect(response!.status).toBe(403);
+      // Refused by the per-app decision before the route's own requester check.
       expect(body).toMatchObject({ error: {
-        code: "forbidden",
+        code: "app_access_denied",
       } });
       expect(body.error.message).toContain("session");
       expect(body.error.message).toContain("personal access token");

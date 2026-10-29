@@ -139,7 +139,13 @@ import {
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { requireAppAccess, requireResourceAccess } from "./app-authorization.ts";
+import {
+  requireAppAccess,
+  requireResourceAccess,
+  sourceCapsuleIds,
+  workspaceAppVisibility,
+  workspaceSourceApps,
+} from "./app-authorization.ts";
 import type { AppAction } from "takosumi-contract/app-access";
 
 function sourceWorkspaceId(
@@ -156,14 +162,17 @@ function sourceWorkspaceIdentityMissing(): Response {
   );
 }
 
-/** An app's Source decides per app; an unowned preflight Source per Workspace. */
+/**
+ * An app's Source decides per app (its owner, or every live Capsule built
+ * from an ownerless Source); a Source no app uses stays Workspace-scoped.
+ */
 function sourceOwnerCapsuleId(source: Readonly<{ ownerCapsuleId?: string }>): string | undefined {
   return stringValue(source.ownerCapsuleId);
 }
 
 async function requireSourceAccess(
   ctx: ControlDispatchContext,
-  source: Readonly<{ ownerCapsuleId?: string }>,
+  source: Readonly<{ id: string; ownerCapsuleId?: string }>,
   workspaceId: string,
   action: AppAction,
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly response: Response }> {
@@ -172,7 +181,7 @@ async function requireSourceAccess(
     store: ctx.store,
     session: ctx.session,
     workspaceId,
-    capsuleId: sourceOwnerCapsuleId(source),
+    capsuleIds: await sourceCapsuleIds(ctx.operations, { id: source.id, workspaceId, ...(sourceOwnerCapsuleId(source) ? { ownerCapsuleId: sourceOwnerCapsuleId(source) } : {}) }),
     action,
     ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
     ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
@@ -337,7 +346,7 @@ export async function handleSources(
       }
       const sourceSnapshotId = stringValue(body.sourceSnapshotId);
       const capsuleId = stringValue(body.capsuleId);
-      if (capsuleId && capsuleId !== sourceOwnerCapsuleId(source)) {
+      if (capsuleId && !(await sourceCapsuleIds(operations, { id: source.id, workspaceId, ...(sourceOwnerCapsuleId(source) ? { ownerCapsuleId: sourceOwnerCapsuleId(source) } : {}) })).includes(capsuleId)) {
         // A check that targets an existing app also needs that app's update
         // permission, independently of the Source's own authority.
         const target = await operations.capsules.getCapsule(capsuleId);
@@ -711,7 +720,8 @@ export async function handleCompatibilityReports(
       store,
       session: ctx.session,
       workspaceId: reportWorkspaceId,
-      capsuleId: report.capsuleId ?? (reportSource ? sourceOwnerCapsuleId(reportSource) : undefined),
+      capsuleIds: report.capsuleId ? [report.capsuleId]
+        : reportSource ? await sourceCapsuleIds(operations, reportSource) : [],
       action: "view",
       ...(ctx.assertActive ? { assertActive: ctx.assertActive } : {}),
       ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
@@ -748,9 +758,18 @@ async function listSources(
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const response = await operations.listSources(workspaceId, page.params);
+  // Sources of apps the caller cannot view are omitted (Workspace compat list).
+  const sourceApps = operations.appOwnership
+    ? await workspaceSourceApps(operations, workspaceId)
+    : new Map<string, readonly string[]>();
+  const appsOf = (source: Source): readonly string[] => {
+    const owner = sourceOwnerCapsuleId(source);
+    return owner ? [owner] : sourceApps.get(source.id) ?? [];
+  };
+  const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: response.sources.flatMap(appsOf) });
   return json({
     ...response,
-    sources: response.sources.map(publicSource),
+    sources: response.sources.filter((source) => visibility.allows(appsOf(source))).map(publicSource),
   });
 }
 
