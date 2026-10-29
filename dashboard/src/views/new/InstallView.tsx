@@ -214,7 +214,7 @@ function OpenAttempts(props: { readonly principalId: string }) {
   const [busy, setBusy] = createSignal<string>();
   const [rowError, setRowError] = createSignal<{ readonly id: string; readonly message: string }>();
   const mine = () =>
-    (readyOrUndefined(attempts) ?? []).filter(
+    (attempts.state === "ready" ? attempts.latest ?? [] : []).filter(
       (entry) => entry.installPlan.createdBy === props.principalId,
     );
   const discard = async (entry: GitInstallPlanResponse) => {

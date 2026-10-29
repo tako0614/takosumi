@@ -214,6 +214,5 @@ describe("attempt-driven install page", () => {
     expect(view).toContain('if (installedApps.state !== "ready") return;');
     expect(candidate).toContain('disabled={!gitUrl() || installedApps.state !== "ready"');
     expect(view).toContain('readyOrUndefined(connections)');
-    expect(view).toContain('readyOrUndefined(attempts)');
   });
 });

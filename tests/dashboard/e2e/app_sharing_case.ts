@@ -19,7 +19,10 @@ async function captureSharing(page: Page, name: string): Promise<void> {
   ] as const) {
     await page.setViewportSize(viewport);
     await page.screenshot({ path: join(shotsDir, `${name}-${size}.png`), fullPage: true });
-    await page.getByTestId("app-sharing").screenshot({ path: join(shotsDir, `${name}-section-${size}.png`) });
+    await page.getByTestId("app-sharing").screenshot({
+      path: join(shotsDir, `${name}-section-${size}.png`),
+      style: size === "mobile" ? ".mobile-tabs { visibility: hidden !important; }" : undefined,
+    });
   }
   if (original) await page.setViewportSize(original);
 }

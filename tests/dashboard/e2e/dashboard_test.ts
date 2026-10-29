@@ -458,6 +458,8 @@ async function stubProviderDestinationFixture(
           installConfig: {
             id: "cfg-default-opentofu-capsule",
             name: "default-opentofu-capsule",
+            sourceSelector: { url: "https://github.com/example/cloudflare-service.git", path: "." },
+            modulePath: ".",
             policy: {},
             variableMapping: {},
             variablePresentation: [],

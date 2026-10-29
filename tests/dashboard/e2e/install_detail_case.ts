@@ -146,6 +146,7 @@ async function detailFixture(
     if (path === "/api/v1/connections/conn_inline_fixture/test") { connected = true; return route.fulfill({ json: { status: "verified" } }); }
     if (path === "/api/v1/capsule-configs/cfg-default-opentofu-capsule") return route.fulfill({ json: { installConfig: {
       id: "cfg-default-opentofu-capsule", name: "Example", policy: {}, variableMapping: {}, variablePresentation: [],
+      sourceSelector: { url: "https://github.com/example/cloudflare-service.git", path: "." }, modulePath: ".",
       outputAllowlist: {}, createdAt: now, updatedAt: now,
     } } });
     if (path === `/api/v1/capsules/${capId}`) {
