@@ -5,6 +5,7 @@ import { sha256HexOfStringAsync } from "../../core/shared/runtime/hash.ts";
 import { migrateSourceOwnership, prepareSourceOwnershipMigration, sourceOwnershipMigrationPlanDigest, type SourceOwnershipMigrationArchiveCopier,
   type SourceOwnershipMigrationResult, type SourceOwnershipMigrationStore } from "../../core/domains/sources/ownership-migration.ts";
 import { CloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
+import { assertControlD1MaintenanceInactive, ControlD1MaintenanceError } from "./d1_schema_maintenance.ts";
 import type { CloudflareWorkerEnv, R2Bucket, R2ObjectBody } from "./bindings.ts";
 import { storedServiceCompositionFromEnv } from "./stored-service-usage.ts";
 
@@ -18,6 +19,20 @@ export interface SourceOwnershipMigrationOperatorDependencies {
   readonly store?: SourceOwnershipMigrationStore;
   readonly copier?: SourceOwnershipMigrationArchiveCopier;
   readonly now?: () => Date;
+}
+
+/**
+ * The schema owner's maintenance fence blocks every Control write, and its
+ * guard triggers reject these group commits. The migration's own safety is the
+ * per-group CAS, so it runs only while that fence is released: refuse with a
+ * stable 503 before any dry-run read, archive copy or commit.
+ */
+function maintenanceRefusal(error: unknown): Response | undefined {
+  if (!(error instanceof ControlD1MaintenanceError)) return undefined;
+  return Response.json({
+    error: error.code === "maintenance_fence_active"
+      ? "control_schema_maintenance_active" : "control_schema_maintenance_unverified",
+  }, { status: 503, headers: { "cache-control": "no-store" } });
 }
 
 export async function handleSourceOwnershipMigrationOperatorRequest(
@@ -38,6 +53,13 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
   if (!env.TAKOSUMI_CONTROL_DB) return Response.json({ error: "control_db_unavailable" }, { status: 503 });
+  try {
+    await assertControlD1MaintenanceInactive(env.TAKOSUMI_CONTROL_DB);
+  } catch (error) {
+    const refusal = maintenanceRefusal(error);
+    if (refusal) return refusal;
+    throw error;
+  }
   const store = dependencies.store ?? new CloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
     // Operator migration is DDL-free even in an OSS bootstrap composition.
     schemaMode: "predeployed",
@@ -153,6 +175,10 @@ export async function handleSourceOwnershipMigrationOperatorRequest(
       results: [{ ...observed, status: commit }] },
       { status: commit === "conflict" ? 409 : 200, headers: { "cache-control": "no-store" } });
   } catch (error) {
+    // A fence acquired after the admission check above surfaces from the
+    // store's own per-operation check; report it as the same refusal.
+    const refusal = maintenanceRefusal(error);
+    if (refusal) return refusal;
     // Raw diagnostics are intentionally not returned over HTTP. The operator
     // sees a stable failure code and can inspect the Worker log for the error.
     console.error("source ownership migration failed", {
