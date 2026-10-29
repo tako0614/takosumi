@@ -55,7 +55,9 @@ export type InterfaceServiceErrorCode =
   | "not_found"
   | "already_exists"
   | "conflict"
-  | "failed_precondition";
+  | "failed_precondition"
+  /** A re-point would leave only a pending link; the current link is kept (409). */
+  | "interface_link_approval_required";
 
 export class InterfaceServiceError extends Error {
   constructor(
@@ -810,6 +812,13 @@ export class InterfaceService {
     }
     const now = this.#now();
     const liveCurrent = current && (current.state === "active" || current.state === "pending_approval");
+    // A replacement revokes the current link. Without provider approval the
+    // replacement would only be pending (and nothing approves it yet), so the
+    // app would lose its Interface: refuse and keep the current link. Only a
+    // brand-new link (no live current one) may start as pending_approval.
+    if (liveCurrent && !approval) {
+      throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept");
+    }
     const next: InterfaceLink = {
       id: `ifl_${crypto.randomUUID().replaceAll("-", "")}`,
       ...scope,

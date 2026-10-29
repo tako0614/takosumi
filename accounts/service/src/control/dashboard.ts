@@ -17,6 +17,7 @@ import type {
 } from "takosumi-contract/install-configs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { PublicStateVersion } from "takosumi-contract/state-versions";
+import { clampPageLimit } from "takosumi-contract/pagination";
 import type { AccountsStore } from "../store.ts";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
@@ -33,7 +34,7 @@ import {
   canAccessWorkspace,
   requireWorkspaceAccess,
 } from "./shared.ts";
-import { visibleActivityEvents, workspaceAppVisibility } from "./app-authorization.ts";
+import { visibleActivityEvents, visibleKeysetPage, workspaceAppVisibility } from "./app-authorization.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -136,6 +137,7 @@ async function dashboardBootstrap(
     includeNotifications && workspaceList
       ? await listDashboardNotifications(
           operations,
+          session,
           workspaceList.workspaces,
           selectedWorkspaceId,
         )
@@ -292,9 +294,18 @@ async function dashboardOverview(
   const projectionDeadline =
     Date.now() + DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS;
   const [capsulePage, activity, installConfigs] = await Promise.all([
-    operations.capsules.listCapsulesPage(selectedWorkspace.id, {
-      limit: capsuleLimit,
-      includeDestroyed: false,
+    // Apps the caller cannot view are omitted and never anchor the cursor.
+    visibleKeysetPage({
+      limit: clampPageLimit(capsuleLimit),
+      read: ({ cursor, limit }) => operations.capsules.listCapsulesPage(selectedWorkspace.id, {
+        ...(cursor !== undefined ? { cursor } : {}),
+        limit,
+        includeDestroyed: false,
+      }),
+      visibility: async (items) => {
+        const visibility = await workspaceAppVisibility({ operations, session, capsuleIds: items.map((capsule) => capsule.id) });
+        return (capsule) => visibility.allows([capsule.id]);
+      },
     }),
     optionalDashboardProjection(
       operations.activity.list(selectedWorkspace.id, activityLimit),
@@ -311,11 +322,8 @@ async function dashboardOverview(
       remainingDashboardProjectionMs(projectionDeadline),
     ),
   ]);
-  // Apps the caller cannot view (and their Activity) are omitted.
-  const visibility = await workspaceAppVisibility({
-    operations, session, capsuleIds: capsulePage.items.map((capsule) => capsule.id),
-  });
-  const visibleCapsules = capsulePage.items.filter((capsule) => visibility.allows([capsule.id]));
+  // Activity of apps the caller cannot view is omitted too.
+  const visibleCapsules = capsulePage.items;
   const visibleActivity = await optionalDashboardProjection(
     visibleActivityEvents({ operations, session, workspaceId: selectedWorkspace.id, events: activity }),
     [],
@@ -406,6 +414,7 @@ interface DashboardNotificationFeedEntry {
 
 async function listDashboardNotifications(
   operations: ControlPlaneOperations,
+  session: ControlSession,
   workspaces: readonly Workspace[],
   selectedWorkspaceId: string | undefined,
 ): Promise<readonly DashboardNotificationFeedEntry[]> {
@@ -433,9 +442,21 @@ async function listDashboardNotifications(
     remainingDashboardProjectionMs(deadline),
   );
   if (events.length === 0) return [];
+  // Same rule as the Workspace Activity list: activity of apps the caller
+  // cannot view is omitted, per Workspace (fail closed on a timeout).
+  const byWorkspace = new Map<string, ActivityEvent[]>();
+  for (const event of events) byWorkspace.set(event.workspaceId, [...(byWorkspace.get(event.workspaceId) ?? []), event]);
+  const visible = new Set<ActivityEvent>((await optionalDashboardProjection(
+    Promise.all([...byWorkspace].map(([workspaceId, workspaceEvents]) =>
+      visibleActivityEvents({ operations, session, workspaceId, events: workspaceEvents }))),
+    [],
+    remainingDashboardProjectionMs(deadline),
+  )).flat());
+  const shown = events.filter((event) => visible.has(event));
+  if (shown.length === 0) return [];
   const capsuleIds = [
     ...new Set(
-      events
+      shown
         .map(dashboardActivityCapsuleId)
         .filter((id): id is string => id !== undefined),
     ),
@@ -452,7 +473,7 @@ async function listDashboardNotifications(
   const capsulesById = new Map(
     capsules.map((capsule) => [capsule.id, capsule] as const),
   );
-  return events.map((event) => ({
+  return shown.map((event) => ({
     event: compactDashboardActivityEvent(
       event,
       dashboardActivityCapsuleName(event, capsulesById),

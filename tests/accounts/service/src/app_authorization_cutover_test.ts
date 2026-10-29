@@ -517,6 +517,34 @@ describe("Interface links are approved only by someone who may change the provid
     expect(viaToken.body.link).toMatchObject({ state: "pending_approval" });
   }, 180_000);
 
+  test("a re-point that would only be pending is refused with 409 and the active link is kept", async () => {
+    const { h, interfaceId } = await managesBoth();
+    const active = await put(h, h.headers.session(PROVIDER_OWNER), interfaceId, 0);
+    expect(active.body.link).toMatchObject({ state: "active" });
+    // A second provider app the consumer's owner cannot manage.
+    const OTHER_PROVIDER = "cap_authz_provider_two";
+    const consumer = (await h.ledger.getCapsule(CAPSULE))!;
+    await h.ledger.putCapsule({ ...consumer, id: OTHER_PROVIDER, name: "provider-two", slug: "provider-two", updatedAt: NOW });
+    expect(await h.ownership.initializeOwnershipIfMissing({
+      capsuleId: OTHER_PROVIDER, ownerAccountId: "acct_other_provider_owner", ownershipEpoch: 0,
+      managementState: "active", managementEpoch: 0, storageRoot: `apps/${OTHER_PROVIDER}`,
+    })).toBe(true);
+    const other = await h.core.interfaces.create({
+      workspaceId: WORKSPACE, name: "provider-two-tools", ownerRef: { kind: "Capsule", id: OTHER_PROVIDER },
+      spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: "https://provider-two.example.test/mcp" } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } },
+    });
+    const url = new URL(`https://app.takosumi.test/api/v1/capsules/${CAPSULE}/interface-links/tools`);
+    const response = await handleControlRoute({
+      request: new Request(url, { method: "PUT", headers: { ...h.headers.session(APP_OWNER), "content-type": "application/json" }, body: JSON.stringify({ interfaceId: other.metadata.id, expectedGeneration: active.body.link!.generation }) }),
+      url, store: h.accounts, operations: h.operations,
+    });
+    expect(response!.status).toBe(409);
+    expect(((await response!.json()) as { error: { code: string } }).error.code).toBe("interface_link_approval_required");
+    expect(await h.core.interfaces.getLatestCapsuleInterfaceLink(CAPSULE, "tools")).toMatchObject({
+      state: "active", providerCapsuleId: PROVIDER, generation: active.body.link!.generation,
+    });
+  }, 180_000);
+
   test("an app token's candidate list omits apps it cannot view", async () => {
     const { h } = await linkFixture();
     const candidates = async (credential: Record<string, string>) => {
@@ -597,5 +625,187 @@ describe("Workspace compatibility lists omit apps the caller cannot view", () =>
     const credential = h.headers.session(WORKSPACE_MEMBER);
     expect(ids((await list(h, `/workspaces/${WORKSPACE}/capsules`, credential)).capsules)).toContain(CAPSULE);
     expect(ids((await list(h, `/workspaces/${WORKSPACE}/runs`, credential)).runs)).toContain("run_plan");
+  }, 180_000);
+});
+
+describe("review round 3: shared Sources, cursors and Activity", () => {
+  async function get(h: Harness, path: string, credential: Record<string, string>) {
+    const url = new URL(`https://app.takosumi.test/api/v1${path}`);
+    const response = await handleControlRoute({ request: new Request(url, { headers: credential }), url, store: h.accounts, operations: h.operations });
+    expect(response!.status, path).toBe(200);
+    return await response!.json() as Record<string, unknown>;
+  }
+
+  test("a Source shared by an owned and an unowned app needs every app's own decision", async () => {
+    const h = await fixture({ legacy: true });
+    await seedCapsuleModel(h.ledger, {
+      workspaceId: WORKSPACE, capsuleId: OTHER_CAPSULE, sourceId: "src_authz", snapshotId: "snap_other",
+      installConfigId: "cfg_other", legacySharedSource: true, name: "other-app",
+    });
+    expect(await h.ownership.getOwnership(OTHER_CAPSULE)).toBeUndefined();
+    for (const [method, path, body] of [["PATCH", "/sources/src_authz", {}], ["POST", "/sources/src_authz/sync", {}]] as const) {
+      // App member without a Workspace role: the unowned app's legacy rule refuses.
+      expect((await h.call(method, path, h.headers.session(APP_MEMBER), body)).status, `member ${method}`).toBe(403);
+      // Workspace admin without an app role: the owned app refuses.
+      expect(await h.call(method, path, h.headers.session(WORKSPACE_ADMIN), body), `admin ${method}`).toMatchObject({ status: 403, code: "app_access_denied" });
+      // Both rules satisfied.
+      expect(await h.call(method, path, h.headers.session(DUAL), body), `dual ${method}`).toMatchObject({ status: 409, message: "reached" });
+    }
+  }, 180_000);
+
+  async function hiddenAndVisibleApps() {
+    const h = await fixture();
+    const visible = ["cap_b_visible", "cap_d_visible", "cap_f_visible", "cap_h_visible"];
+    const hidden = [CAPSULE, "cap_a_hidden", "cap_c_hidden", "cap_e_hidden", "cap_g_hidden"];
+    for (const capsuleId of [...visible, ...hidden.slice(1)]) {
+      await seedCapsuleModel(h.ledger, {
+        workspaceId: WORKSPACE, capsuleId, sourceId: `src_${capsuleId}`, snapshotId: `snap_${capsuleId}`,
+        installConfigId: `cfg_${capsuleId}`, name: capsuleId.replaceAll("_", "-"),
+      });
+    }
+    for (const capsuleId of hidden.slice(1)) {
+      expect(await h.ownership.initializeOwnershipIfMissing({
+        capsuleId, ownerAccountId: APP_OWNER, ownershipEpoch: 0,
+        managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsuleId}`,
+      })).toBe(true);
+    }
+    return { h, visible, hidden };
+  }
+
+  const decoded = (cursor: string) => Buffer.from(cursor, "base64url").toString("utf8");
+
+  test("filtered list cursors never point at a hidden app and paging visits each visible row once", async () => {
+    const { h, visible, hidden } = await hiddenAndVisibleApps();
+    const admin = h.headers.session(WORKSPACE_ADMIN);
+    const hiddenTimes = new Set<string>();
+    for (const id of hidden) hiddenTimes.add((await h.ledger.getCapsule(id))!.createdAt);
+    const visibleTimes = new Set<string>();
+    for (const id of visible) visibleTimes.add((await h.ledger.getCapsule(id))!.createdAt);
+    for (const [path, key, idOf] of [
+      [`/workspaces/${WORKSPACE}/capsules`, "capsules", (row: Record<string, unknown>) => row.id as string],
+      [`/workspaces/${WORKSPACE}/current-state-versions`, "stateVersions", (row: Record<string, unknown>) => row.capsuleId as string],
+    ] as const) {
+      for (const limit of [1, 2, 3]) {
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < 20; page++) {
+          const body = await get(h, `${path}?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, admin);
+          seen.push(...(body[key] as Record<string, unknown>[]).map(idOf));
+          cursor = body.nextCursor as string | undefined;
+          if (!cursor) break;
+          const position = JSON.parse(decoded(cursor)) as { c: string; i: string };
+          expect(hidden, `${path} limit=${limit}`).not.toContain(position.i);
+          expect(visible).toContain(position.i);
+          // Every capsule here shares one timestamp source; the cursor's is a visible row's.
+          expect(visibleTimes.has(position.c)).toBe(true);
+          for (const id of hidden) expect(decoded(cursor)).not.toContain(id);
+        }
+        if (key === "capsules") expect([...seen].sort(), `${path} limit=${limit}`).toEqual([...visible].sort());
+        else expect(seen.every((id) => visible.includes(id))).toBe(true);
+        expect(new Set(seen).size).toBe(seen.length);
+      }
+    }
+    expect(hiddenTimes.size).toBeGreaterThan(0);
+    // Sources of hidden apps are omitted and never anchor the Source cursor.
+    const sourceIds: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 30; page++) {
+      const body = await get(h, `/sources?workspaceId=${WORKSPACE}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, admin);
+      sourceIds.push(...(body.sources as { id: string }[]).map((source) => source.id));
+      cursor = body.nextCursor as string | undefined;
+      if (!cursor) break;
+      for (const id of hidden) expect(decoded(cursor)).not.toContain(`src_${id}`);
+    }
+    for (const id of hidden.slice(1)) expect(sourceIds).not.toContain(`src_${id}`);
+    for (const id of visible) expect(sourceIds.filter((source) => source === `src_${id}`)).toHaveLength(1);
+  }, 180_000);
+
+  test("the Workspace Run list cursor only points at Runs the caller may view", async () => {
+    const { h, visible, hidden } = await hiddenAndVisibleApps();
+    const all = [...visible, ...hidden].sort().map((capsuleId, index) => runFixture(`run_${String(index).padStart(2, "0")}_${capsuleId}`, { capsuleId }));
+    const cursorOf = (run: Run) => Buffer.from(JSON.stringify({ i: run.id })).toString("base64url");
+    (h.operations as unknown as { listRunsPage: unknown }).listRunsPage = async (_workspaceId: string, page: { cursor?: string; limit?: number }) => {
+      const after = page.cursor ? (JSON.parse(decoded(page.cursor)) as { i: string }).i : undefined;
+      const start = after ? all.findIndex((run) => run.id === after) + 1 : 0;
+      const runs = all.slice(start, start + (page.limit ?? 50));
+      return { runs, ...(start + runs.length < all.length ? { nextCursor: cursorOf(runs.at(-1)!) } : {}) };
+    };
+    const admin = h.headers.session(WORKSPACE_ADMIN);
+    for (const limit of [1, 2]) {
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 20; page++) {
+        const body = await get(h, `/workspaces/${WORKSPACE}/runs?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, admin);
+        seen.push(...(body.runs as { capsuleId: string }[]).map((run) => run.capsuleId));
+        cursor = body.nextCursor as string | undefined;
+        if (!cursor) break;
+        for (const id of hidden) expect(decoded(cursor)).not.toContain(id);
+      }
+      expect([...seen].sort()).toEqual([...visible].sort());
+    }
+  }, 180_000);
+
+  test("Activity and bootstrap notifications attribute every app-scoped event and fail closed", async () => {
+    const h = await fixture();
+    const record = (event: Record<string, unknown>) => (h.operations as unknown as {
+      activity: { record(input: Record<string, unknown>): Promise<unknown> };
+    }).activity.record({ workspaceId: WORKSPACE, actorId: APP_OWNER, metadata: {}, ...event });
+    await record({ action: "interface.created", targetType: "interface", targetId: "iface_x", metadata: { name: "storage", ownerKind: "Capsule", ownerId: CAPSULE } });
+    const provided = await h.core.interfaces.create({
+      workspaceId: WORKSPACE, name: "app-tools", ownerRef: { kind: "Capsule", id: CAPSULE },
+      spec: { type: "mcp.server", version: "1", document: {}, inputs: { endpoint: { source: "literal", value: "https://app.example.test/mcp" } }, access: { visibility: "workspace", resourceUriInput: "endpoint" } },
+    });
+    // Attributed through the Interface's provider app (the subject is a principal).
+    await record({ action: "interface_binding.created", targetType: "interface_binding", targetId: "ifb_x", metadata: { interfaceId: provided.metadata.id, subjectKind: "Principal", subjectId: "pairwise_x" } });
+    await record({ action: "run_group.created", targetType: "run_group", targetId: "rg_x", metadata: { memberCapsuleIds: [CAPSULE] } });
+    await record({ action: "backup.created", targetType: "backup", targetId: "bk_run", metadata: { ref: "r", runId: "run_plan" } });
+    await record({ action: "backup.created", targetType: "backup", targetId: "bk_wide", metadata: { ref: "r" } });
+    await record({ action: "capsule.updated", targetType: "capsule", targetId: CAPSULE });
+    // Cannot be attributed: a missing Run and a missing Interface.
+    await record({ action: "run.failed", targetType: "run", targetId: "run_missing", metadata: {} });
+    await record({ action: "interface.retired", targetType: "interface", targetId: "iface_missing", metadata: { name: "gone" } });
+    // Workspace-level, and a Run of a Source no app uses.
+    await record({ action: "workspace.updated", targetType: "workspace", targetId: WORKSPACE, metadata: { fields: ["name"] } });
+    await record({ action: "connection.created", targetType: "connection", targetId: "conn_x", metadata: { provider: "x" } });
+    await record({ action: "run.applied", targetType: "run", targetId: "run_workspace", metadata: {} });
+    const workspaceLevel = ["connection.created", "run.applied", "workspace.updated"];
+    // interface.created is recorded twice: by the probe and by the Interface create above.
+    const appScoped = ["backup.created", "backup.created", "capsule.updated", "interface.created", "interface.created", "interface_binding.created", "run_group.created"];
+    const actions = async (credential: Record<string, string>) => [
+      ((await get(h, `/workspaces/${WORKSPACE}/activity`, credential)).events as { action: string }[]).map((event) => event.action).sort(),
+      ((await get(h, `/dashboard/bootstrap?includeNotifications=true&workspaceId=${WORKSPACE}`, credential)).notifications as { event: { action: string } }[] ?? [])
+        .map((entry) => entry.event.action).sort(),
+    ];
+    for (const list of await actions(h.headers.session(WORKSPACE_ADMIN))) expect(list).toEqual(workspaceLevel);
+    for (const list of await actions(h.headers.session(DUAL))) expect(list).toEqual([...appScoped, ...workspaceLevel].sort());
+  }, 180_000);
+
+  test("Activity reads nothing more without owned apps and caps Run lookups with them", async () => {
+    for (const owned of [false, true]) {
+      const h = await fixture({ owned });
+      const counts = { runs: 0, sources: 0 };
+      const operations = h.operations as unknown as {
+        getRun(id: string): Promise<Run>; getSource(id: string): Promise<unknown>;
+        activity: { record(input: Record<string, unknown>): Promise<unknown> };
+      };
+      const getRun = operations.getRun.bind(operations);
+      const getSource = operations.getSource.bind(operations);
+      operations.getRun = async (id) => { counts.runs++; return await getRun(id); };
+      operations.getSource = async (id) => { counts.sources++; return await getSource(id); };
+      for (let index = 0; index < 80; index++) {
+        // 80 events naming 70 distinct unattributed Runs (duplicates read once).
+        await operations.activity.record({ workspaceId: WORKSPACE, actorId: APP_OWNER, action: "run.failed", targetType: "run", targetId: `run_unknown_${index % 70}`, metadata: {} });
+      }
+      const events = (await get(h, `/workspaces/${WORKSPACE}/activity?limit=100`, h.headers.session(WORKSPACE_OWNER))).events as unknown[];
+      if (!owned) {
+        expect(counts).toEqual({ runs: 0, sources: 0 });
+        expect(events).toHaveLength(80);
+      } else {
+        expect(counts.runs).toBeLessThanOrEqual(50);
+        expect(counts.runs + counts.sources).toBeLessThanOrEqual(50);
+        // Their app cannot be determined while the Workspace has an owned app.
+        expect(events).toHaveLength(0);
+      }
+    }
   }, 180_000);
 });

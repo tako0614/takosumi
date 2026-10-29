@@ -114,6 +114,7 @@ import { locale, setDocumentTitle, t, type MessageKey } from "../../i18n/index.t
 import InstallExecution, { type ReviewPurpose } from "../new/InstallExecution.tsx";
 import { AppSection, OpenAppButton } from "./app-ui.tsx";
 import AppAttentionSection from "./AppAttentionSection.tsx";
+import AppPhoneSection from "./AppPhoneSection.tsx";
 import AppVersionSection from "./AppVersionSection.tsx";
 import AppSettingsSection from "./AppSettingsSection.tsx";
 import AppCreatedSection from "./AppCreatedSection.tsx";
@@ -1129,6 +1130,11 @@ export default function AppManagePage(props: {
                   continueRevision,
                 }}
               />
+
+              {/* Wherever Open is offered, the same screen can go to a phone. */}
+              <Show when={view().primaryAction === "open" || secondaryScreens(view()) ? screens()[0] : undefined}>
+                {(screen) => <AppPhoneSection url={screen().url} appName={displayName()} />}
+              </Show>
 
               <Show when={managed()}>
                 <AppVersionSection

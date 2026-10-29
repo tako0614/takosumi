@@ -249,10 +249,45 @@ async function retainedDestroyedAppAccess(
 }
 
 /**
- * Resources that belong to apps decide per app: when any of `capsuleIds` has
- * an ownership row, every such app must allow `action`; when none has one, the
- * legacy decision for each (or the Workspace decision when the resource has no
- * app at all, such as an unowned preflight Source or a Workspace-level Run).
+ * Whether a new Interface link from `consumerCapsuleId` to `provider` may be
+ * created already approved. Approval is the PROVIDER side's consent, so the
+ * caller must hold `change_interface_link` on the provider app under the same
+ * decision as every other app-scoped request: the per-app role once the
+ * provider has an ownership row, the Workspace decision only while it has
+ * none. An installed app's own OAuth token never approves another app's
+ * Interface. A false result makes the link `pending_approval`.
+ */
+export async function mayApproveInterfaceProvider(
+  input: AuthorizationContext & {
+    readonly consumerCapsuleId: string;
+    readonly provider: { readonly capsuleId: string; readonly workspaceId: string };
+  },
+): Promise<boolean> {
+  if (input.provider.capsuleId === input.consumerCapsuleId) return true;
+  if (input.session.credential === "oauth-access-token") return false;
+  const provider = await input.operations.capsules.getCapsule(input.provider.capsuleId);
+  input.assertActive?.();
+  if (provider.id !== input.provider.capsuleId || provider.workspaceId !== input.provider.workspaceId) return false;
+  const decision = await requireAppAccess({
+    operations: input.operations,
+    store: input.store,
+    session: { ...input.session, requiredAccess: "write" },
+    workspaceId: provider.workspaceId,
+    capsuleId: provider.id,
+    capsule: provider,
+    action: "change_interface_link",
+    ...(input.assertActive ? { assertActive: input.assertActive } : {}),
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+  });
+  return decision.ok;
+}
+
+/**
+ * Resources that belong to apps decide per app: every app in `capsuleIds` must
+ * allow `action` under its own rule (the per-app decision when it has an
+ * ownership row, the legacy Workspace decision when it has none). A resource
+ * with no app at all (an unowned preflight Source, a Workspace-level Run)
+ * keeps the Workspace decision.
  */
 export async function requireResourceAccess(
   input: AuthorizationContext & {
@@ -268,18 +303,19 @@ export async function requireResourceAccess(
     return await requireAppAccess({ ...input, capsuleId: ids[0]! });
   }
   if (ids.length > 1) {
-    const owned: string[] = [];
+    // A resource shared by several apps (an ownerless Source used by more than
+    // one app) changes every one of them, so EVERY app must allow the action
+    // under its own rule: the per-app decision for an app with an ownership
+    // row, the legacy Workspace decision for an app without one. An owned app
+    // never stands in for an unowned one, nor the reverse.
+    const { capsule: _capsule, ...rest } = input;
+    let decided: AppAuthorizationResult | undefined;
     for (const capsuleId of ids) {
-      if ((await readOwnershipFence(input.operations, capsuleId)).kind === "owned") owned.push(capsuleId);
-      input.assertActive?.();
+      const result = await requireAppAccess({ ...rest, capsuleId });
+      if (!result.ok) return result;
+      if (!decided || (decided.ok && decided.authority === "workspace" && result.authority === "app")) decided = result;
     }
-    let last: AppAuthorizationResult | undefined;
-    for (const capsuleId of owned.length ? owned : ids) {
-      const { capsule: _capsule, ...rest } = input;
-      last = await requireAppAccess({ ...rest, capsuleId });
-      if (!last.ok) return last;
-    }
-    return last!;
+    return decided!;
   }
   const result = await requireWorkspaceAccess({
     operations: input.operations,
@@ -379,14 +415,119 @@ export async function workspaceAppVisibility(input: {
   };
 }
 
-const ACTIVITY_CAPSULE_KEYS = ["capsuleId", "consumerCapsuleId", "providerCapsuleId", "ownerCapsuleId"] as const;
-const ACTIVITY_SOURCE_KEYS = ["sourceId", "fromSourceId", "toSourceId"] as const;
+/** Underlying pages read per filtered request after the first. */
+const FILTERED_LIST_SCAN_PAGES = 10;
+const FILTERED_LIST_SCAN_PAGE_SIZE = 100;
+
+export interface KeysetPage<T> {
+  readonly items: readonly T[];
+  readonly nextCursor?: string;
+}
 
 /**
- * Activity of apps the caller cannot view is omitted. Events are attributed by
- * their Capsule target, Capsule ids in metadata, Source targets (via the
- * Capsules built from them), and, only for Run events that carry no Capsule
- * id, the Run itself.
+ * Pages a keyset list with rows the caller cannot view omitted, without letting
+ * a hidden row reach the client through the cursor. A store cursor encodes the
+ * last row it scanned, so a filtered page may only end on a VISIBLE row: the
+ * returned cursor is always the store's own cursor for the last returned row.
+ * When that row sits mid-page, the store is asked again, from the same start,
+ * for exactly the rows up to it, so the cursor format stays the store's.
+ *
+ * The first read is the request's own page; a page without hidden rows is
+ * returned unchanged. Otherwise up to FILTERED_LIST_SCAN_PAGES further pages are
+ * scanned to fill the page; paging visits every visible row exactly once. If
+ * the budget ends without any visible row the page is empty and has no cursor
+ * (a run of hidden rows longer than the budget ends the listing there; nothing
+ * about the hidden rows is revealed either way).
+ */
+export async function visibleKeysetPage<T extends { readonly id: string }>(input: {
+  /** The effective page size (already clamped like the store clamps it). */
+  readonly limit: number;
+  readonly cursor?: string;
+  readonly read: (page: { readonly cursor?: string; readonly limit: number }) => Promise<KeysetPage<T>>;
+  readonly visibility: (items: readonly T[]) => Promise<(item: T) => boolean>;
+}): Promise<KeysetPage<T>> {
+  type Origin = { readonly from: string | undefined; readonly page: KeysetPage<T>; readonly index: number };
+  const endAfter = async (origin: Origin): Promise<KeysetPage<T>["nextCursor"]> => {
+    if (origin.index === origin.page.items.length - 1) return origin.page.nextCursor;
+    const again = await input.read({ ...(origin.from !== undefined ? { cursor: origin.from } : {}), limit: origin.index + 1 });
+    // A concurrent change moved the window: end here rather than emit a
+    // cursor that might point at a row this caller cannot view.
+    return again.items.at(-1)?.id === origin.page.items[origin.index]!.id ? again.nextCursor : undefined;
+  };
+  const items: T[] = [];
+  let last: Origin | undefined;
+  let from = input.cursor;
+  for (let read = 0; read <= FILTERED_LIST_SCAN_PAGES; read++) {
+    const page = await input.read({
+      ...(from !== undefined ? { cursor: from } : {}),
+      limit: read === 0 ? input.limit : Math.max(input.limit, FILTERED_LIST_SCAN_PAGE_SIZE),
+    });
+    const allows = await input.visibility(page.items);
+    if (read === 0 && page.items.every(allows)) return page;
+    for (let index = 0; index < page.items.length; index++) {
+      const item = page.items[index]!;
+      if (!allows(item)) continue;
+      items.push(item);
+      last = { from, page, index };
+      if (items.length === input.limit) {
+        const nextCursor = await endAfter(last);
+        return { items, ...(nextCursor !== undefined ? { nextCursor } : {}) };
+      }
+    }
+    if (page.nextCursor === undefined) return { items };
+    from = page.nextCursor;
+  }
+  if (!last) {
+    try {
+      console.info(JSON.stringify({ event: "filtered_list_scan_budget_exhausted" }));
+    } catch {
+      // Logging is best-effort only.
+    }
+    return { items };
+  }
+  const nextCursor = await endAfter(last);
+  return { items, ...(nextCursor !== undefined ? { nextCursor } : {}) };
+}
+
+const ACTIVITY_CAPSULE_KEYS = ["capsuleId", "consumerCapsuleId", "providerCapsuleId", "ownerCapsuleId"] as const;
+const ACTIVITY_CAPSULE_LIST_KEYS = ["memberCapsuleIds"] as const;
+const ACTIVITY_SOURCE_KEYS = ["sourceId", "fromSourceId", "toSourceId"] as const;
+const ACTIVITY_RUN_KEYS = ["runId", "planRunId", "applyRunId"] as const;
+/** Activity that never belongs to an app. */
+const WORKSPACE_ACTIVITY_TARGETS: ReadonlySet<string> = new Set(["workspace", "connection"]);
+/** Distinct Run/Source/Interface reads one Activity request may spend. */
+const ACTIVITY_LOOKUP_LIMIT = 50;
+
+async function ownedCapsuleIds(operations: ControlPlaneOperations, capsuleIds: readonly string[]): Promise<ReadonlySet<string>> {
+  const store = operations.appOwnership;
+  if (!store || !capsuleIds.length) return new Set();
+  if (store.listOwnedCapsuleIds) return await store.listOwnedCapsuleIds(capsuleIds);
+  const owned = new Set<string>();
+  for (const id of capsuleIds) if ((await readOwnershipFence(operations, id)).kind === "owned") owned.add(id);
+  return owned;
+}
+
+/**
+ * Activity of apps the caller cannot view is omitted.
+ *
+ * Reads: the Workspace's Capsules and one batch ownership read first; when no
+ * app in the Workspace has an ownership row (every app on a v75 target), the
+ * events are returned unchanged with no further reads. Otherwise an event is
+ * attributed to apps by its Capsule target, Capsule ids in metadata
+ * (`memberCapsuleIds` of a run group: every member must be visible), an
+ * Interface's Capsule owner (`ownerId`) or a binding's Capsule subject
+ * (`subjectId`), its Source (the apps built from it, or its owner app), the
+ * Interface it concerns (the provider app), and, when nothing else names an
+ * app, its Run (`runId`, a Run target, `metadata.runId`/`planRunId`/
+ * `applyRunId`). A backup that names no app is Workspace-wide and belongs to
+ * every live app. Run/Source/Interface reads are deduplicated, run in
+ * parallel and capped at ACTIVITY_LOOKUP_LIMIT per request.
+ *
+ * Fail closed: while the Workspace has owned apps, an event whose app cannot
+ * be determined (a read past the cap, a missing Run or Interface, or no
+ * attribution at all) is omitted, except Workspace-level events (`workspace`,
+ * `connection`) and events that resolve to no app (a Run or Source used by no
+ * app, a retired Source), which keep the Workspace decision.
  */
 export async function visibleActivityEvents<T extends ActivityEvent>(input: {
   readonly operations: ControlPlaneOperations;
@@ -394,33 +535,133 @@ export async function visibleActivityEvents<T extends ActivityEvent>(input: {
   readonly workspaceId: string;
   readonly events: readonly T[];
 }): Promise<readonly T[]> {
-  if (!input.events.length || !input.operations.appOwnership) return input.events;
-  const sourceApps = await workspaceSourceApps(input.operations, input.workspaceId);
-  const attributed = new Map<T, readonly string[]>();
-  for (const event of input.events) {
-    const ids = new Set<string>();
+  const { operations } = input;
+  if (!input.events.length || !operations.appOwnership) return input.events;
+  const capsules = (await operations.capsules.listCapsules(input.workspaceId))
+    .filter((capsule) => capsule.workspaceId === input.workspaceId);
+  const known = new Set(capsules.map((capsule) => capsule.id));
+  if (!(await ownedCapsuleIds(operations, [...known])).size) return input.events;
+  const live = capsules.filter((capsule) => capsule.status !== "destroyed");
+  const sourceApps = sourceAppsOf(live);
+  let budget = ACTIVITY_LOOKUP_LIMIT;
+  /** undefined: the app could not be determined. */
+  type Resolved = readonly string[] | undefined;
+  const cached = (cache: Map<string, Promise<Resolved>>, id: string, read: () => Promise<Resolved>): Promise<Resolved> => {
+    const pending = cache.get(id);
+    if (pending) return pending;
+    if (budget <= 0) return Promise.resolve(undefined);
+    budget--;
+    const started = read();
+    cache.set(id, started);
+    return started;
+  };
+  const sources = new Map<string, Promise<Resolved>>();
+  const runs = new Map<string, Promise<Resolved>>();
+  const interfaces = new Map<string, Promise<Resolved>>();
+  const sourceAppIds = (sourceId: string): Promise<Resolved> => {
+    const apps = sourceApps.get(sourceId);
+    if (apps) return Promise.resolve(apps);
+    // No live app is built from it: only its owner app (if any) can claim it.
+    return cached(sources, sourceId, async () => {
+      try {
+        const owner = sourceOwner((await operations.getSource(sourceId)).source);
+        return owner ? [owner] : [];
+      } catch (error) {
+        if (controllerErrorCode(error) === "not_found") return [];
+        throw error;
+      }
+    });
+  };
+  const runAppIds = (runId: string): Promise<Resolved> => cached(runs, runId, async () => {
+    let run: Run;
+    try {
+      run = await operations.getRun(runId);
+    } catch (error) {
+      if (controllerErrorCode(error) === "not_found") return undefined;
+      throw error;
+    }
+    if (run.capsuleId) return [run.capsuleId];
+    if (run.subject?.kind === "capsule") return [run.subject.id];
+    const sourceId = run.sourceId ?? (run.subject?.kind === "source" ? run.subject.id : undefined);
+    return sourceId ? await sourceAppIds(sourceId) : [];
+  });
+  const interfaceAppIds = (interfaceId: string): Promise<Resolved> => cached(interfaces, interfaceId, async () => {
+    const service = operations.interfaces;
+    if (!service?.get) return undefined;
+    try {
+      const iface = await service.get(interfaceId);
+      return iface.metadata.ownerRef.kind === "Capsule" ? [iface.metadata.ownerRef.id] : [];
+    } catch (error) {
+      if (controllerErrorCode(error) === "not_found" || (error as { code?: unknown } | undefined)?.code === "not_found") return undefined;
+      throw error;
+    }
+  });
+  const text = (value: unknown): string | undefined => typeof value === "string" && value.length > 0 ? value : undefined;
+  const attribute = async (event: T): Promise<Resolved> => {
     const metadata = (event.metadata ?? {}) as Record<string, unknown>;
-    if (event.targetType === "capsule") ids.add(event.targetId);
-    for (const key of ACTIVITY_CAPSULE_KEYS) if (typeof metadata[key] === "string" && metadata[key]) ids.add(metadata[key] as string);
+    const ids = new Set<string>();
+    let undetermined = false;
+    let resolvedNoApp = false;
+    const add = (id: string | undefined) => {
+      if (id && known.has(id)) ids.add(id);
+    };
+    const include = (resolved: Resolved) => {
+      if (resolved === undefined) undetermined = true;
+      else if (!resolved.length) resolvedNoApp = true;
+      else resolved.forEach(add);
+    };
+    if (event.targetType === "capsule") add(event.targetId);
+    for (const key of ACTIVITY_CAPSULE_KEYS) add(text(metadata[key]));
+    for (const key of ACTIVITY_CAPSULE_LIST_KEYS) {
+      const list = metadata[key];
+      if (Array.isArray(list)) for (const value of list) add(text(value));
+    }
+    if (metadata.ownerKind === "Capsule") add(text(metadata.ownerId));
+    if (metadata.subjectKind === "Capsule") add(text(metadata.subjectId));
     const sourceIds = [
       ...(event.targetType === "source" ? [event.targetId] : []),
-      ...ACTIVITY_SOURCE_KEYS.map((key) => metadata[key]).filter((value): value is string => typeof value === "string" && value.length > 0),
+      ...ACTIVITY_SOURCE_KEYS.map((key) => text(metadata[key])),
+    ].filter((id): id is string => id !== undefined);
+    const interfaceIds = [
+      ...(event.targetType === "interface" && metadata.ownerKind === undefined ? [event.targetId] : []),
+      ...(text(metadata.interfaceId) ? [text(metadata.interfaceId)!] : []),
     ];
-    for (const sourceId of sourceIds) for (const id of sourceApps.get(sourceId) ?? []) ids.add(id);
-    const runId = event.runId ?? (event.targetType === "run" ? event.targetId : undefined);
-    if (!ids.size && runId) {
-      try {
-        for (const id of await runCapsuleIds(input.operations, await input.operations.getRun(runId))) ids.add(id);
-      } catch (error) {
-        if (controllerErrorCode(error) !== "not_found") throw error;
-      }
+    for (const resolved of await Promise.all([...sourceIds.map(sourceAppIds), ...interfaceIds.map(interfaceAppIds)])) include(resolved);
+    if (!ids.size) {
+      const runIds = new Set([
+        ...(event.runId ? [event.runId] : []),
+        ...(event.targetType === "run" ? [event.targetId] : []),
+        ...ACTIVITY_RUN_KEYS.map((key) => text(metadata[key])).filter((id): id is string => id !== undefined),
+      ]);
+      for (const resolved of await Promise.all([...runIds].map(runAppIds))) include(resolved);
     }
-    attributed.set(event, [...ids]);
-  }
+    // A backup that names no app is Workspace-wide: it carries every live app.
+    if (event.targetType === "backup" && !ids.size) return live.map((capsule) => capsule.id);
+    if (undetermined) return undefined;
+    if (ids.size) return [...ids];
+    return WORKSPACE_ACTIVITY_TARGETS.has(event.targetType) || resolvedNoApp ? [] : undefined;
+  };
+  const attributed = await Promise.all(input.events.map(attribute));
   const visibility = await workspaceAppVisibility({
-    operations: input.operations, session: input.session, capsuleIds: [...attributed.values()].flat(),
+    operations, session: input.session, capsuleIds: attributed.flatMap((ids) => ids ?? []),
   });
-  return input.events.filter((event) => visibility.allows(attributed.get(event) ?? []));
+  return input.events.filter((_, index) => {
+    const ids = attributed[index];
+    return ids !== undefined && visibility.allows(ids);
+  });
+}
+
+function sourceOwner(source: { readonly ownerCapsuleId?: string }): string | undefined {
+  return typeof source.ownerCapsuleId === "string" && source.ownerCapsuleId ? source.ownerCapsuleId : undefined;
+}
+
+function sourceAppsOf(capsules: readonly Pick<Capsule, "id" | "sourceId" | "status">[]): ReadonlyMap<string, readonly string[]> {
+  const map = new Map<string, string[]>();
+  for (const capsule of capsules) {
+    if (capsule.status === "destroyed" || !capsule.sourceId) continue;
+    map.set(capsule.sourceId, [...(map.get(capsule.sourceId) ?? []), capsule.id]);
+  }
+  return map;
 }
 
 /** sourceId → live Capsules built from it, for mapping list items without a capsuleId. */
@@ -428,12 +669,8 @@ export async function workspaceSourceApps(
   operations: ControlPlaneOperations,
   workspaceId: string,
 ): Promise<ReadonlyMap<string, readonly string[]>> {
-  const map = new Map<string, string[]>();
-  for (const capsule of await operations.capsules.listCapsules(workspaceId)) {
-    if (capsule.workspaceId !== workspaceId || capsule.status === "destroyed" || !capsule.sourceId) continue;
-    map.set(capsule.sourceId, [...(map.get(capsule.sourceId) ?? []), capsule.id]);
-  }
-  return map;
+  return sourceAppsOf((await operations.capsules.listCapsules(workspaceId))
+    .filter((capsule) => capsule.workspaceId === workspaceId));
 }
 
 /**
