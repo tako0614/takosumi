@@ -16,24 +16,29 @@
  *   TAKOSUMI_OWNERSHIP_FREEZE_WORKERS[_FILE]   apply only, JSON:
  *     [{"script":"<Worker name>","versionId":"<expected serving Version id>"}]
  *
- * read-only: every statement must be a SELECT/WITH read or a read-only schema
- * PRAGMA; anything else is refused before it is sent. Reads are retried on
- * 429/5xx. `workspaceMutationsFrozen` is never set, so backfill apply refuses.
+ * read-only: every statement must be a single SELECT/WITH read or a read-only
+ * schema PRAGMA under a SQLite-aware tokenizer (bracket, backtick and double
+ * quoted identifiers, comments, `?` parameters only); anything else is
+ * refused before it is sent. Reads are retried on 429/5xx.
+ * `workspaceMutationsFrozen` is never set, so backfill apply refuses.
  *
  * apply: before returning `workspaceMutationsFrozen: true` the adapter proves
- * the Workspace mutation freeze from Cloudflare itself. Every listed Worker
- * must serve exactly its expected Version at 100 percent, bind this database,
- * and resolve `TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN` to frozen; no
- * unlisted Worker in the account may serve a Version bound to this database.
- * The proof is repeated before a write once it is older than 30 seconds. The
- * Control store stays on the read-only client; only the ownership store
- * writes, limited to the backfill's column-scoped updates and inserts on
- * `capsules`, `capsule_members`, `connections`, `usage_events` and
- * `account_billing_bindings`. Writes are never retried.
+ * the freeze from Cloudflare itself. Every listed Worker must serve exactly
+ * its expected Version at 100 percent, bind this database, resolve
+ * `TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN` to frozen and set
+ * `TAKOSUMI_APP_OWNERSHIP_MUTATIONS` to `frozen` (no app member or ownership
+ * transfer writes); no unlisted Worker in the account may serve a Version
+ * bound to this database. Only Workers the API lists are checked; direct
+ * REST/D1 clients are outside the proof. The proof is repeated before a write
+ * once it is older than 30 seconds. The Control store stays on the read-only
+ * client; only the ownership store writes, limited to the exact statements
+ * the backfill issues (`BACKFILL_WRITE_STATEMENTS`). Writes are never
+ * retried.
  */
 import { isAbsolute } from "node:path";
 import { readFileSync } from "node:fs";
 
+import { APP_OWNERSHIP_MUTATIONS_ENV, parseAppOwnershipMutationsFrozen } from "../accounts/service/src/app-ownership-mutations-freeze.ts";
 import { WORKSPACE_MUTATIONS_FROZEN_ENV, parseWorkspaceMutationsFrozen } from "../accounts/service/src/workspace-mutations-freeze.ts";
 import { D1AppOwnershipStore } from "../core/domains/app-ownership/store.ts";
 import type { OwnershipBackfillContext } from "../core/domains/app-ownership/backfill.ts";
@@ -54,67 +59,123 @@ function refuse(code: string): never {
 
 // --- statement policy ------------------------------------------------------
 
-/** Lowercased SQL with comments removed and quoted text/identifiers blanked. */
-export function ownershipTargetSqlShape(sql: string): string {
-  let out = "";
+const SQL_WHITESPACE = new Set([" ", "\t", "\n", "\r", "\f"]);
+const SQL_WORD = /[A-Za-z0-9_]/u;
+const SQL_PUNCTUATION = new Set(["(", ")", ",", ".", ";", "=", "<", ">", "!", "|", "*", "+", "-", "/", "%", "&", "~"]);
+
+/**
+ * SQLite-aware tokens: comments dropped, words lowercased, string literals
+ * kept verbatim, quoted identifiers (`"x"`, `` `x` ``, `[x]`) normalized to
+ * `"x"`. Anything SQLite could read differently from this tokenizer is
+ * refused (`undefined`): unterminated quotes or comments, named or TCL
+ * parameters (`:x`, `@x`, `$x`, `#x`), non-ASCII text outside quotes and
+ * any other character. Only `?` and `?NNN` parameters pass.
+ */
+function ownershipTargetSqlTokens(sql: string): readonly string[] | undefined {
+  const tokens: string[] = [];
   for (let i = 0; i < sql.length;) {
     const character = sql[i]!;
-    if (character === "'" || character === '"' || character === "`") {
+    if (SQL_WHITESPACE.has(character)) {
       i++;
-      while (i < sql.length) {
-        if (sql[i] === character) {
-          if (sql[i + 1] === character) { i += 2; continue; }
-          break;
-        }
-        i++;
-      }
-      if (i >= sql.length) return ";unterminated";
-      i++;
-      out += character === "'" ? "''" : '""';
     } else if (character === "-" && sql[i + 1] === "-") {
       while (i < sql.length && sql[i] !== "\n") i++;
-      out += " ";
     } else if (character === "/" && sql[i + 1] === "*") {
       const end = sql.indexOf("*/", i + 2);
-      if (end < 0) return ";unterminated";
+      if (end < 0) return undefined;
       i = end + 2;
-      out += " ";
-    } else {
-      out += character;
+    } else if (character === "'" || character === '"' || character === "`") {
+      let text = "";
+      let j = i + 1;
+      for (;;) {
+        if (j >= sql.length) return undefined;
+        if (sql[j] === character) {
+          if (sql[j + 1] !== character) break;
+          j++;
+        }
+        text += sql[j];
+        j++;
+      }
+      i = j + 1;
+      tokens.push(character === "'" ? `'${text.replaceAll("'", "''")}'` : `"${text.toLowerCase().replaceAll('"', '""')}"`);
+    } else if (character === "[") {
+      // SQLite: a bracketed identifier ends at the first `]`; there is no escape.
+      const end = sql.indexOf("]", i + 1);
+      if (end < 0) return undefined;
+      tokens.push(`"${sql.slice(i + 1, end).toLowerCase().replaceAll('"', '""')}"`);
+      i = end + 1;
+    } else if (SQL_WORD.test(character)) {
+      let j = i + 1;
+      while (j < sql.length && SQL_WORD.test(sql[j]!)) j++;
+      tokens.push(sql.slice(i, j).toLowerCase());
+      i = j;
+    } else if (character === "?") {
+      let j = i + 1;
+      while (j < sql.length && sql[j]! >= "0" && sql[j]! <= "9") j++;
+      tokens.push(sql.slice(i, j));
+      i = j;
+    } else if (SQL_PUNCTUATION.has(character)) {
+      tokens.push(character);
       i++;
+    } else {
+      return undefined;
     }
   }
-  return out.replace(/\s+/gu, " ").trim().toLowerCase().replace(/;$/u, "").trim();
+  if (tokens.at(-1) === ";") tokens.pop();
+  return tokens.includes(";") ? undefined : tokens;
 }
 
-const READ_START = /^(?:select|with)\b/u;
-const READ_PRAGMA = /^pragma (?:table_info|table_xinfo|index_list|index_xinfo|index_info|foreign_key_list) ?\( ?(?:[a-z0-9_]+|""|'') ?\)$/u;
-const WRITE_OR_CONTROL = /\b(?:insert|update|delete|drop|alter|create|attach|detach|vacuum|reindex|analyze|begin|commit|rollback|savepoint|release|upsert|pragma)\b|\breplace into\b/u;
-const SCHEMA_OR_CONTROL = /\b(?:drop|alter|create|attach|detach|vacuum|reindex|analyze|begin|commit|rollback|savepoint|release|pragma)\b|\breplace into\b/u;
-const UPDATE_COLUMNS: Readonly<Record<string, ReadonlySet<string>>> = {
-  capsules: new Set(["owner_account_id", "ownership_epoch", "management_state", "management_epoch", "storage_root"]),
-  connections: new Set(["owner_account_id"]),
-  usage_events: new Set(["payer_account_id"]),
-};
+const READ_PRAGMAS = new Set(["table_info", "table_xinfo", "index_list", "index_xinfo", "index_info", "foreign_key_list"]);
+const WRITE_OR_CONTROL_WORDS = new Set([
+  "insert", "update", "delete", "drop", "alter", "create", "attach", "detach", "vacuum", "reindex", "analyze",
+  "begin", "commit", "rollback", "savepoint", "release", "upsert", "pragma",
+]);
 
-export function isOwnershipTargetRead(shape: string): boolean {
-  if (shape.includes(";")) return false;
-  if (READ_PRAGMA.test(shape)) return true;
-  return READ_START.test(shape) && !WRITE_OR_CONTROL.test(shape);
-}
-
-/** The backfill's ownership writes only: column-scoped, table-allowlisted. */
-export function isOwnershipTargetWrite(shape: string): boolean {
-  if (shape.includes(";") || SCHEMA_OR_CONTROL.test(shape)) return false;
-  const update = /^update ([a-z_]+) set (.+?) where /u.exec(shape);
-  if (update) {
-    const allowed = UPDATE_COLUMNS[update[1]!];
-    if (!allowed) return false;
-    const columns = update[2]!.split(",").map((assignment) => /^ ?([a-z_]+) ?= ?\? ?$/u.exec(assignment)?.[1]);
-    return columns.length > 0 && columns.every((column) => column !== undefined && allowed.has(column));
+function isReadTokens(tokens: readonly string[]): boolean {
+  if (tokens[0] === "pragma") {
+    const argument = tokens[3];
+    return tokens.length === 5 && READ_PRAGMAS.has(tokens[1]!) && tokens[2] === "(" && tokens[4] === ")" &&
+      argument !== undefined && (/^[a-z0-9_]+$/u.test(argument) || argument.startsWith('"') || argument.startsWith("'"));
   }
-  return /^insert into (?:capsule_members|account_billing_bindings) ?\(/u.test(shape) ||
-    /^delete from capsule_members where /u.test(shape);
+  if (tokens[0] !== "select" && tokens[0] !== "with") return false;
+  return tokens.every((token, index) =>
+    !WRITE_OR_CONTROL_WORDS.has(token) && !(token === "replace" && tokens[index + 1] === "into"));
+}
+
+/**
+ * Exactly the statements `D1AppOwnershipStore` issues for the backfill
+ * (`initializeOwnershipIfMissing`, `putMember`, `putAccountBillingBinding`,
+ * `setConnectionOwnerIfMissing`, `setUsagePayerIfMissing`), compared as
+ * canonical tokens: no other table, column, upsert target or predicate.
+ * Bound values are not inspected. A store change must update this list.
+ */
+const BACKFILL_WRITE_STATEMENTS = {
+  capsule_owner_init: `update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=?
+    where id=? and owner_account_id is null`,
+  // Only right after capsule_owner_init in one batch: changes() is that UPDATE's.
+  capsule_owner_member_cleanup: `delete from capsule_members where capsule_id=? and account_id=? and changes()=1`,
+  member_upsert: `insert into capsule_members (capsule_id,account_id,status,added_by,created_at,updated_at)
+    select ?,?,?,?,?,? where exists(select 1 from capsules where id=? and owner_account_id is not null and owner_account_id<>?)
+    on conflict (capsule_id,account_id) do update set status=excluded.status,added_by=excluded.added_by,updated_at=excluded.updated_at`,
+  billing_binding_upsert: `insert into account_billing_bindings (account_id,billing_authority,billing_ref,organization_ref,created_at,updated_at)
+    values (?,?,?,?,?,?) on conflict (account_id) do update set billing_authority=excluded.billing_authority,billing_ref=excluded.billing_ref,organization_ref=excluded.organization_ref,updated_at=excluded.updated_at`,
+  connection_owner: `update connections set owner_account_id=? where id=? and owner_account_id is null
+    and json_extract(connection_json, '$.scope')='workspace'`,
+  usage_payer: `update usage_events set payer_account_id=? where id=? and payer_account_id is null`,
+} as const;
+
+type OwnershipTargetWrite = keyof typeof BACKFILL_WRITE_STATEMENTS;
+
+const BACKFILL_WRITE_BY_TOKENS = new Map<string, OwnershipTargetWrite>(
+  (Object.entries(BACKFILL_WRITE_STATEMENTS) as [OwnershipTargetWrite, string][])
+    .map(([kind, sql]) => [ownershipTargetSqlTokens(sql)!.join(" "), kind]),
+);
+
+/** `read`, one of the backfill's exact write statements, or `undefined` (refused). */
+export function classifyOwnershipTargetSql(sql: string): "read" | OwnershipTargetWrite | undefined {
+  const tokens = ownershipTargetSqlTokens(sql);
+  if (!tokens || tokens.length === 0) return undefined;
+  if (isReadTokens(tokens)) return "read";
+  return BACKFILL_WRITE_BY_TOKENS.get(tokens.join(" "));
 }
 
 type Policy = "read-only" | "ownership-write";
@@ -141,10 +202,14 @@ class GuardedD1 implements D1Database {
   async batch<T = unknown>(statements: readonly D1PreparedStatement[]): Promise<readonly D1Result<T>[]> {
     const inner: D1PreparedStatement[] = [];
     let writes = 0;
+    let previous: "read" | OwnershipTargetWrite | undefined;
     for (const statement of statements) {
       if (!(statement instanceof GuardedStatement) || statement.database !== this) refuse("ownership_target_batch_statement_invalid");
       const guarded = statement as GuardedStatement;
-      if (this.classify(guarded.sql) === "write") writes++;
+      const kind = this.classify(guarded.sql);
+      if (kind === "capsule_owner_member_cleanup" && previous !== "capsule_owner_init") this.refuseStatement();
+      if (kind !== "read") writes++;
+      previous = kind;
       inner.push(guarded.inner);
     }
     if (writes > 0) await this.beforeWrite();
@@ -153,19 +218,25 @@ class GuardedD1 implements D1Database {
     return await this.inner.batch<T>(inner);
   }
 
-  classify(sql: string): "read" | "write" {
-    const shape = ownershipTargetSqlShape(sql);
-    if (isOwnershipTargetRead(shape)) return "read";
-    if (this.policy === "ownership-write" && isOwnershipTargetWrite(shape)) return "write";
+  classify(sql: string): "read" | OwnershipTargetWrite {
+    const kind = classifyOwnershipTargetSql(sql);
+    if (kind === "read") return "read";
+    if (this.policy === "ownership-write" && kind !== undefined) return kind;
+    return this.refuseStatement();
+  }
+
+  refuseStatement(): never {
     this.stats.refused++;
     return refuse(this.policy === "read-only" ? "ownership_target_read_only_refused" : "ownership_target_statement_refused");
   }
 
   async admit(sql: string): Promise<void> {
     const kind = this.classify(sql);
-    if (kind === "write") await this.beforeWrite();
+    // changes() outside its batch would read an unrelated statement's count.
+    if (kind === "capsule_owner_member_cleanup") this.refuseStatement();
+    if (kind !== "read") await this.beforeWrite();
     this.stats.statements++;
-    if (kind === "write") this.stats.writes++;
+    if (kind !== "read") this.stats.writes++;
   }
 }
 
@@ -304,9 +375,10 @@ const bindsDatabase = (bindings: readonly Record<string, unknown>[], databaseId:
   bindings.some((binding) => binding.type === "d1" && (binding.id === databaseId || binding.database_id === databaseId));
 
 /**
- * Prove the Workspace mutation freeze from Cloudflare: exact serving Versions
- * of the listed Workers, their bindings to this database and their freeze
- * variable, plus no unlisted Worker serving a Version bound to it.
+ * Prove the freeze from Cloudflare: exact serving Versions of the listed
+ * Workers, their bindings to this database, their Workspace freeze variable
+ * and an explicit `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`, plus no unlisted
+ * Worker serving a Version bound to it.
  */
 async function verifyWorkspaceMutationFreeze(
   api: CloudflareApi,
@@ -334,6 +406,20 @@ async function verifyWorkspaceMutationFreeze(
       if (!frozen) refuse(`ownership_freeze_not_frozen:${worker.script}`);
     }
     // An absent variable is the code default: frozen.
+    // The app ownership kill switch defaults to enabled, so it must be explicit.
+    const appMutations = bindings.filter((binding) => binding.name === APP_OWNERSHIP_MUTATIONS_ENV);
+    if (appMutations.length === 0) refuse(`ownership_app_mutations_not_frozen:${worker.script}`);
+    const [appBinding] = appMutations;
+    if (appMutations.length > 1 || appBinding!.type !== "plain_text" || typeof appBinding!.text !== "string") {
+      refuse(`ownership_app_mutations_variable_invalid:${worker.script}`);
+    }
+    let appMutationsFrozen: boolean;
+    try {
+      appMutationsFrozen = parseAppOwnershipMutationsFrozen(appBinding!.text as string);
+    } catch {
+      return refuse(`ownership_app_mutations_variable_invalid:${worker.script}`);
+    }
+    if (!appMutationsFrozen) refuse(`ownership_app_mutations_not_frozen:${worker.script}`);
   }
   const listed = new Set(workers.map((worker) => worker.script));
   const scripts = await api.get("/workers/scripts");

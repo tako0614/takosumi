@@ -9,8 +9,7 @@ import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "
 import type { D1PreparedStatement } from "../../worker/src/bindings.ts";
 import { SqliteFakeD1 } from "../helpers/deploy-control/sqlite_fake_d1.ts";
 import {
-  isOwnershipTargetRead, isOwnershipTargetWrite, openCloudflareD1OwnershipTarget,
-  OwnershipTargetRefusal, ownershipTargetSqlShape,
+  classifyOwnershipTargetSql, openCloudflareD1OwnershipTarget, OwnershipTargetRefusal,
 } from "../../scripts/app-ownership-target-cloudflare-d1.ts";
 import { runAppOwnershipBackfill } from "../../scripts/backfill-app-ownership.ts";
 import { runAppAccessCutoverVerification } from "../../scripts/verify-app-access-cutover.ts";
@@ -110,6 +109,7 @@ const rejection = (promise: Promise<unknown>) => promise.then(() => undefined, (
 const ok = (result: unknown) => Response.json({ success: true, errors: [], messages: [], result });
 const notFound = () => Response.json({ success: false, errors: [{ code: 10007, message: "not found" }] }, { status: 404 });
 const controlBinding = { type: "d1", name: "TAKOSUMI_CONTROL_DB", id: DATABASE, database_id: DATABASE };
+const appMutationsFrozen = { type: "plain_text", name: "TAKOSUMI_APP_OWNERSHIP_MUTATIONS", text: "frozen" };
 
 async function seeded(): Promise<FakeCloudflare> {
   const cloudflare = new FakeCloudflare();
@@ -140,8 +140,9 @@ async function seeded(): Promise<FakeCloudflare> {
   // Retained pre-expand rows: no owner/payer columns yet.
   await cloudflare.d1.prepare("update usage_events set payer_account_id=null").run();
   await cloudflare.d1.prepare("update connections set owner_account_id=null, connection_json=json_remove(connection_json, '$.ownerAccountId')").run();
-  cloudflare.setWorker("takosumi-fixture", VERSION, [controlBinding, { type: "plain_text", name: "TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN", text: "true" }]);
-  cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION, [controlBinding]);
+  cloudflare.setWorker("takosumi-fixture", VERSION, [controlBinding, appMutationsFrozen,
+    { type: "plain_text", name: "TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN", text: "true" }]);
+  cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION, [controlBinding, appMutationsFrozen]);
   cloudflare.setWorker("unrelated-fixture", "99999999-8888-4777-8666-555555555555", [{ type: "d1", name: "OTHER", id: "db_other" }]);
   return cloudflare;
 }
@@ -165,50 +166,107 @@ const freezeWorkers = JSON.stringify([
   { script: "takosumi-auth-fixture", versionId: AUTH_VERSION },
 ]);
 
-test("statement policy admits reads and the backfill's column-scoped ownership writes only", () => {
-  const read = (sql: string) => isOwnershipTargetRead(ownershipTargetSqlShape(sql));
-  const write = (sql: string) => isOwnershipTargetWrite(ownershipTargetSqlShape(sql));
+test("statement policy admits single reads and exactly the backfill's write statements", () => {
+  const read = (sql: string) => classifyOwnershipTargetSql(sql) === "read";
   for (const sql of [
     "select * from capsules where id = ?",
+    "SELECT * FROM capsules WHERE id = ?1;",
     "WITH x AS (select 1) SELECT * FROM x",
     "select 'delete from capsules; drop table x' as text",
+    "select 'it''s; delete from capsules' as text",
     "select \"release\" from t",
+    "select `delete` from t",
+    "select [update] from t",
+    "select [a\"b] from t",
+    "select replace(name, 'a', 'b') from capsules",
+    "select 1 -- trailing comment; delete from capsules",
+    "select 1 /* comment; drop table capsules */",
     "pragma table_info(capsules)",
     `pragma index_list("capsules")`,
     "pragma table_xinfo('capsules')",
+    "pragma foreign_key_list([capsules])",
     "select json_group_array(name) from pragma_table_xinfo('capsules')",
-  ]) expect(read(sql), sql).toBe(true);
+  ]) expect(classifyOwnershipTargetSql(sql), sql).toBe("read");
   for (const sql of [
-    "update capsules set owner_account_id=? where id=?",
-    "with x as (select 1) delete from capsules",
+    // Bracket identifiers: SQLite ends `[...]` at the first `]`, so the quote inside is not a string.
+    "select [a'b] ; delete from capsules --'",
+    "select [a'b]; delete from capsules; select 'x'",
+    "select `a'b`; delete from capsules --'",
+    "select \"a'b\"; delete from capsules --'",
+    "select [unterminated from capsules",
     "select 1; delete from capsules",
+    "select 1;; ",
     "select 1 -- comment\n; drop table capsules",
     "select 1 /* hidden */; drop table capsules",
+    "select 1 /* unterminated; drop table capsules",
+    "select 'unterminated",
+    "select \"unterminated",
+    "with x as (select 1) delete from capsules",
+    "with x as (select 1) insert into capsules select * from x",
+    "with x as (select 1) update capsules set status = 'x'",
+    "with x as (select 1) replace into capsules select * from x",
+    "replace into capsules values (1)",
+    "insert into capsules values (1)",
     "pragma writable_schema = 1",
     "pragma foreign_keys = off",
-    "insert into capsules values (1)",
-    "select 'unterminated",
+    "pragma table_info(capsules); drop table capsules",
+    "pragma table_info(capsules, x)",
+    "pragma main.table_info(capsules)",
+    "select $a(') ; delete from capsules ; select ')",
+    "select :name, @name, #name from t",
+    "select 1\u00a0from t",
+    "select 1 \\ 2",
     "begin",
-  ]) expect(read(sql), sql).toBe(false);
+    "commit",
+    "savepoint s",
+    "attach database 'x' as y",
+    "vacuum",
+    "",
+    "  ;",
+  ]) expect(read(sql), JSON.stringify(sql)).toBe(false);
+
+  const writes = {
+    capsule_owner_init: "update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=?\n where id=? and owner_account_id is null",
+    capsule_owner_member_cleanup: "DELETE FROM capsule_members WHERE capsule_id = ? AND account_id = ? AND changes() = 1",
+    member_upsert: `insert into capsule_members (capsule_id,account_id,status,added_by,created_at,updated_at)
+      select ?,?,?,?,?,? where exists(select 1 from capsules where id=? and owner_account_id is not null and owner_account_id<>?)
+      on conflict (capsule_id,account_id) do update set status=excluded.status,added_by=excluded.added_by,updated_at=excluded.updated_at`,
+    billing_binding_upsert: `insert into account_billing_bindings (account_id,billing_authority,billing_ref,organization_ref,created_at,updated_at)
+      values (?,?,?,?,?,?) on conflict (account_id) do update set billing_authority=excluded.billing_authority,billing_ref=excluded.billing_ref,organization_ref=excluded.organization_ref,updated_at=excluded.updated_at`,
+    connection_owner: "update connections set owner_account_id=? where id=? and owner_account_id is null and json_extract(connection_json, '$.scope')='workspace'",
+    usage_payer: "update usage_events set payer_account_id=? where id=? and payer_account_id is null",
+  } as const;
+  for (const [kind, sql] of Object.entries(writes)) expect(classifyOwnershipTargetSql(sql), kind).toBe(kind as keyof typeof writes);
   for (const sql of [
-    "update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=?\n where id=? and owner_account_id is null",
-    "update connections set owner_account_id=? where id=? and owner_account_id is null and json_extract(connection_json, '$.scope')='workspace'",
-    "update usage_events set payer_account_id=? where id=? and payer_account_id is null",
-    "insert into capsule_members (capsule_id,account_id,status,added_by,created_at,updated_at) select ?,?,?,?,?,? where exists(select 1 from capsules where id=?) on conflict (capsule_id,account_id) do update set status=excluded.status",
-    "insert into account_billing_bindings (account_id,billing_authority,billing_ref,organization_ref,created_at,updated_at) values (?,?,?,?,?,?)",
-    "delete from capsule_members where capsule_id=? and account_id=? and changes()=1",
-  ]) expect(write(sql), sql).toBe(true);
-  for (const sql of [
+    // Column- and predicate-level near misses of the allowed statements.
     "update capsules set status=? where id=?",
     "update capsules set owner_account_id=?, record_json=? where id=?",
     "update capsules set owner_account_id=?",
-    "update workspaces set handle=? where id=?",
+    "update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=? where id=?",
+    "update capsules set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=? where id=? and owner_account_id is null or 1=1",
+    "update connections set owner_account_id=? where id=? and owner_account_id is null and json_extract(connection_json, '$.scope')='operator'",
+    "update usage_events set payer_account_id=? where 1=1",
+    "update usage_events set payer_account_id=? where id=? and payer_account_id is null; drop table usage_events",
+    // DELETE must be the exact paired cleanup.
+    "delete from capsule_members where 1=1",
+    "delete from capsule_members where capsule_id=?",
+    "delete from capsule_members where capsule_id=? and account_id=?",
     "delete from capsules where id=?",
+    // INSERT / UPSERT must name exactly the backfill's columns and conflict update set.
+    "insert into capsule_members (capsule_id,account_id,status,added_by,created_at,updated_at) values (?,?,?,?,?,?)",
+    "insert into capsule_members (capsule_id) values (?); pragma foreign_keys=off",
+    `insert into capsule_members (capsule_id,account_id,status,added_by,created_at,updated_at)
+      select ?,?,?,?,?,? where exists(select 1 from capsules where id=? and owner_account_id is not null and owner_account_id<>?)
+      on conflict (capsule_id,account_id) do update set status=excluded.status,added_by=excluded.added_by,updated_at=excluded.updated_at,capsule_id=excluded.account_id`,
+    `insert into account_billing_bindings (account_id,billing_authority,billing_ref,organization_ref,created_at,updated_at)
+      values (?,?,?,?,?,?)`,
+    `insert into account_billing_bindings (account_id,billing_authority,billing_ref,organization_ref,created_at,updated_at)
+      values (?,?,?,?,?,?) on conflict (account_id) do update set account_id=excluded.billing_ref`,
+    "insert or replace into account_billing_bindings (account_id) values (?)",
     "insert into workspaces (id) values (?)",
     "drop table capsule_members",
-    "update usage_events set payer_account_id=? where id=?; drop table usage_events",
-    "insert into capsule_members (capsule_id) values (?); pragma foreign_keys=off",
-  ]) expect(write(sql), sql).toBe(false);
+    "update [capsules] set owner_account_id=?,ownership_epoch=?,management_state=?,management_epoch=?,storage_root=? where id=? and owner_account_id is null",
+  ]) expect(classifyOwnershipTargetSql(sql), sql).toBeUndefined();
 });
 
 test("read-only adapter runs the cutover verifier and backfill dry-run over the D1 REST API with no write", async () => {
@@ -259,7 +317,7 @@ test("apply adapter proves the freeze from Cloudflare, writes only ownership row
   expect(applied).toMatchObject({ mode: "apply", applied: dryRun.writes.length });
   const writes = cloudflare.d1Writes();
   expect(writes.length).toBeGreaterThan(0);
-  expect(writes.every((sql) => isOwnershipTargetWrite(ownershipTargetSqlShape(sql)))).toBe(true);
+  expect(writes.every((sql) => !["read", undefined].includes(classifyOwnershipTargetSql(sql)))).toBe(true);
   expect((await runAppOwnershipBackfill(context, {})).writes).toEqual([]);
   expect(await cloudflare.d1.prepare("select id,owner_account_id from capsules order by id").all()).toMatchObject({
     results: [{ id: "cap-organization", owner_account_id: "owner" }, { id: "cap-personal", owner_account_id: "owner" }],
@@ -294,6 +352,40 @@ test("apply adapter re-proves a stale freeze before writing and stops when the f
   expect(await cloudflare.d1.prepare("select count(*) as count from capsules where owner_account_id is not null").first()).toEqual({ count: 0 });
 });
 
+test("apply adapter admits the changes() member cleanup only right after its owner UPDATE in one batch", async () => {
+  const cloudflare = await seeded();
+  const context = await openCloudflareD1OwnershipTarget({
+    env: env({ TAKOSUMI_OWNERSHIP_TARGET_MODE: "apply", TAKOSUMI_OWNERSHIP_FREEZE_WORKERS: freezeWorkers }),
+    fetch: cloudflare.fetch, readFile, log: () => {},
+  });
+  const db = (context.ownership as D1AppOwnershipStore).db as unknown as {
+    prepare(sql: string): D1PreparedStatement;
+    batch(statements: readonly D1PreparedStatement[]): Promise<unknown>;
+  };
+  const cleanup = () => db.prepare("delete from capsule_members where capsule_id=? and account_id=? and changes()=1").bind("cap-organization", "admin");
+  const payer = () => db.prepare("update usage_events set payer_account_id=? where id=? and payer_account_id is null").bind("owner", "usage");
+  expect(refusalCode(await rejection(cleanup().run()))).toBe("ownership_target_statement_refused");
+  expect(refusalCode(await rejection(db.batch([cleanup()])))).toBe("ownership_target_statement_refused");
+  expect(refusalCode(await rejection(db.batch([payer(), cleanup()])))).toBe("ownership_target_statement_refused");
+  expect(refusalCode(await rejection(db.prepare("delete from capsule_members where 1=1").run()))).toBe("ownership_target_statement_refused");
+  expect(cloudflare.d1Writes()).toEqual([]);
+});
+
+test("apply adapter stops before writing when app ownership writes were re-enabled after the proof", async () => {
+  const cloudflare = await seeded();
+  let clock = 0;
+  const context = await openCloudflareD1OwnershipTarget({
+    env: env({ TAKOSUMI_OWNERSHIP_TARGET_MODE: "apply", TAKOSUMI_OWNERSHIP_FREEZE_WORKERS: freezeWorkers }),
+    fetch: cloudflare.fetch, readFile, now: () => clock, log: () => {},
+  });
+  const plan = await runAppOwnershipBackfill(context, {});
+  cloudflare.setWorker("takosumi-fixture", VERSION, [controlBinding, { ...appMutationsFrozen, text: "enabled" }]);
+  clock = 30_000;
+  expect(refusalCode(await rejection(runAppOwnershipBackfill(context, { apply: true, expectedDigest: plan.digest }))))
+    .toBe("ownership_app_mutations_not_frozen:takosumi-fixture");
+  expect(cloudflare.d1Writes()).toEqual([]);
+});
+
 for (const [label, mutate, code] of [
   ["a split deployment", (cloudflare: FakeCloudflare) => cloudflare.setWorker("takosumi-fixture", VERSION, [controlBinding],
     [{ version_id: VERSION, percentage: 90 }, { version_id: AUTH_VERSION, percentage: 10 }]), "ownership_freeze_version_mismatch:takosumi-fixture"],
@@ -309,6 +401,16 @@ for (const [label, mutate, code] of [
     [{ type: "d1", name: "TAKOSUMI_CONTROL_DB", id: "db_other" }]), "ownership_freeze_worker_not_bound:takosumi-auth-fixture"],
   ["an unlisted Worker bound to this database", (cloudflare: FakeCloudflare) => cloudflare.setWorker("forgotten-fixture",
     "12121212-3434-4565-8787-989898989898", [controlBinding]), "ownership_freeze_unlisted_worker:forgotten-fixture"],
+  ["a Worker without the app ownership kill switch (default enabled)", (cloudflare: FakeCloudflare) =>
+    cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION, [controlBinding]), "ownership_app_mutations_not_frozen:takosumi-auth-fixture"],
+  ["enabled app ownership writes", (cloudflare: FakeCloudflare) => cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION,
+    [controlBinding, { ...appMutationsFrozen, text: "enabled" }]), "ownership_app_mutations_not_frozen:takosumi-auth-fixture"],
+  ["an invalid app ownership kill switch", (cloudflare: FakeCloudflare) => cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION,
+    [controlBinding, { ...appMutationsFrozen, text: "true" }]), "ownership_app_mutations_variable_invalid:takosumi-auth-fixture"],
+  ["a secret app ownership kill switch", (cloudflare: FakeCloudflare) => cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION,
+    [controlBinding, { type: "secret_text", name: "TAKOSUMI_APP_OWNERSHIP_MUTATIONS" }]), "ownership_app_mutations_variable_invalid:takosumi-auth-fixture"],
+  ["a duplicated app ownership kill switch", (cloudflare: FakeCloudflare) => cloudflare.setWorker("takosumi-auth-fixture", AUTH_VERSION,
+    [controlBinding, appMutationsFrozen, appMutationsFrozen]), "ownership_app_mutations_variable_invalid:takosumi-auth-fixture"],
 ] as const) {
   test(`apply adapter refuses ${label} before any D1 request`, async () => {
     const cloudflare = await seeded();
