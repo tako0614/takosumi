@@ -69,6 +69,30 @@ async function appFixture(page: Page, initialUses: readonly CapsuleAppLink[] = [
         primaryAction: "open",
       }] } });
     }
+    // The provider's consent: this app decides links other apps ask it for.
+    const decisionMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)\/interface-links\/([^/]+)\/(approve|decline)$/u);
+    if (decisionMatch && method === "POST") {
+      const linkId = decodeURIComponent(decisionMatch[2]!);
+      const current = usedBy.find((row) => row.linkId === linkId);
+      if (decodeURIComponent(decisionMatch[1]!) !== ID || !current) return route.fulfill({ status: 404, json: { error: { code: "not_found", message: "Interface link not found" } } });
+      const body = request.postDataJSON() as { expectedGeneration: number };
+      if (body.expectedGeneration !== current.generation || current.state !== "pending_approval") return route.fulfill({ status: 409, json: { error: { code: "conflict", message: "Link changed." } } });
+      const approve = decisionMatch[3] === "approve";
+      const { canApprove: _decided, ...rest } = current;
+      // A declined link is no longer current, so it leaves usedBy.
+      usedBy = approve
+        ? usedBy.map((row) => row === current ? { ...rest, state: "active", generation: current.generation + 1 } : row)
+        : usedBy.filter((row) => row !== current);
+      const receipt: InterfaceLink = {
+        id: linkId, generation: current.generation + 1, consumerCapsuleId: current.consumerCapsuleId, requirementKey: current.requirementKey,
+        interface: { type: current.interfaceType, version: current.interfaceVersion }, requestedPermissions: current.permissions,
+        approvedPermissions: approve ? current.permissions : [], deliveryType: "http", providerInterfaceId: current.providerInterfaceId!,
+        providerCapsuleId: ID, state: approve ? "active" : "declined", selection: "explicit", requestedBy: "sub_requester",
+        ...(approve ? { approval: { kind: "provider_approved" as const, approvedBy: "sub_portable_e2e", approvedAt: NOW } } : { declined: { declinedBy: "sub_portable_e2e", declinedAt: NOW } }),
+        createdAt: NOW, updatedAt: NOW,
+      };
+      return route.fulfill({ json: { link: receipt } });
+    }
     const linkMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)\/interface-links\/([^/]+)(\/candidates)?$/u);
     if (linkMatch) {
       const consumerId = decodeURIComponent(linkMatch[1]!);
@@ -99,7 +123,11 @@ async function appFixture(page: Page, initialUses: readonly CapsuleAppLink[] = [
     if (path === `${base}/app`) return route.fulfill({ json: { app: {
       kind: "takosumi.capsule-app@v1", capsuleId: ID, workspaceId: "ws_alpha", projectId: "prj_alpha", name: capsule.name,
       environment: "production", status: "active", applied: true, state: "installed", primaryAction: "view_resources",
-      problems: [], screens: [], links: { uses, usedBy },
+      problems: usedBy.filter((row) => row.state === "pending_approval" && row.canApprove === true).map((row) => ({
+        code: "interface_link_approval_pending", severity: "info", requirementKey: row.requirementKey,
+        interfaceLinkId: row.linkId, consumerCapsuleId: row.consumerCapsuleId,
+      })),
+      screens: [], links: { uses, usedBy },
       version: { updateAvailable: false, stale: false, autoUpdate: false }, progress: { revisionPreparing: false },
       uninstall: { mode: "scheduled", graceDays: 7, impact: { usedBy } }, observedAt: NOW,
     } } });
@@ -183,6 +211,63 @@ export function registerInterfaceLinksCases(mode: DashboardE2EMode): void {
       // prepare the Plan after the explicit later answer has been accepted.
       await page.clock.runFor(1_000);
       await expect.poll(() => attempts.log.answers.some((body) => (body as { continue?: boolean }).continue === true)).toBe(true);
+      expect(errors).toEqual([]);
+      traffic.assertNoFailures();
+    });
+
+    test("the provider approves and declines link requests and the consumer sees whose approval it waits for", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("tg_lang", "ja"));
+      const errors = watchErrors(page);
+      const traffic = monitorDashboardTraffic(page, mode);
+      const request = (linkId: string, consumerCapsuleId: string, name: string, generation: number) => link("files", {
+        linkId, consumerCapsuleId, providerCapsuleId: ID, providerInterfaceId: "if_app_files", state: "pending_approval",
+        generation, permissions: ["files.read", "files.write"], canApprove: true, otherApp: { capsuleId: consumerCapsuleId, name },
+      });
+      const fixture = await appFixture(page, [
+        link("calendar", { linkId: "il_calendar", state: "pending_approval", generation: 1, providerCapsuleId: "cap_calendar", providerInterfaceId: "if_calendar", otherApp: { capsuleId: "cap_calendar", name: "予定表" } }),
+      ], [request("il_req_wiki", "cap_wiki", "チームWiki", 1), request("il_req_blog", "cap_blog", "ブログ", 2)]);
+      await page.goto(`/apps/${ID}#links`);
+      const section = page.getByTestId("app-linked");
+      const use = section.locator('[data-testid="app-link-use"][data-requirement="calendar"]');
+      const requestRow = (name: string) => section.getByTestId("app-link-used-by").filter({ hasText: name });
+      // The consumer side names the app whose approval it waits for.
+      await expect(use.getByTestId("app-link-state")).toHaveText("予定表 の承認待ち");
+      // The provider side: an info card per request and the decision in place.
+      const card = page.locator('[data-problem="interface_link_approval_pending"]');
+      await expect(card).toHaveCount(2);
+      await expect(card.first()).toHaveClass(/ap-problem-info/u);
+      await expect(page.getByTestId("app-problems")).toContainText("お知らせ");
+      await expect(card.first()).toContainText("チームWiki が、このアプリとの連携の承認を待っています。");
+      await expect(card.first().getByRole("button", { name: "連携の依頼を確認する", exact: true })).toBeVisible();
+      for (const name of ["チームWiki", "ブログ"]) {
+        await expect(requestRow(name)).toContainText("権限: Files · Read, Files · Write");
+        await expect(requestRow(name)).not.toContainText("files.read");
+        await expect(requestRow(name).getByRole("button", { name: /との連携を承認/u })).toHaveText("承認");
+        await expect(requestRow(name).getByRole("button", { name: /との連携を断る/u })).toHaveText("断る");
+        await expect(requestRow(name).getByRole("button", { name: /取り消す/u })).toHaveCount(0);
+      }
+      await expect(requestRow("チームWiki").getByRole("button", { name: /との連携を承認/u })).toHaveAttribute("aria-label", /チームWiki.*との連携を承認（Files · Read, Files · Write）/u);
+      await capture(page, "interface-link-requests");
+
+      await requestRow("チームWiki").getByRole("button", { name: /との連携を承認/u }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("チームWiki を使う人が、このアプリの次の権限を使えるようになります: Files · Read, Files · Write。");
+      await capture(page, "interface-link-approve-confirm");
+      await dialog.getByRole("button", { name: "承認", exact: true }).click();
+      await expect(requestRow("チームWiki")).toContainText("連携中");
+      await expect(requestRow("チームWiki").getByRole("button", { name: /との連携を取り消す/u })).toBeVisible();
+      await expect(card).toHaveCount(1);
+
+      await requestRow("ブログ").getByRole("button", { name: /との連携を断る/u }).click();
+      await expect(dialog).toContainText("ブログ はこのアプリの機能を使えません。");
+      await dialog.getByRole("button", { name: "断る", exact: true }).click();
+      await expect(requestRow("ブログ")).toHaveCount(0);
+      await expect(card).toHaveCount(0);
+      await capture(page, "interface-link-requests-decided");
+      expect(fixture.mutations).toEqual([
+        { method: "POST", path: `/api/v1/capsules/${ID}/interface-links/il_req_wiki/approve`, body: { expectedGeneration: 1 } },
+        { method: "POST", path: `/api/v1/capsules/${ID}/interface-links/il_req_blog/decline`, body: { expectedGeneration: 2 } },
+      ]);
       expect(errors).toEqual([]);
       traffic.assertNoFailures();
     });

@@ -212,6 +212,12 @@ export function describeActivityEvent(
     case "output_share.revoked": {
       return { title: t("notif.event.shareRevoked") };
     }
+    case "interface_link.approved": {
+      return { title: t("notif.event.interfaceLinkApproved") };
+    }
+    case "interface_link.declined": {
+      return { title: t("notif.event.interfaceLinkDeclined") };
+    }
     case "run_group.created": {
       return { title: t("notif.event.groupCreated") };
     }

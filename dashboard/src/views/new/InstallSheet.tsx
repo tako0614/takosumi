@@ -36,6 +36,7 @@ import {
 import { locale, t, type MessageKey } from "../../i18n/index.ts";
 import { getCapsuleApp, testConnection } from "../../lib/control-api.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { interfaceLabel } from "../../lib/interface-labels.ts";
 import { providerConnectionStatusLabel } from "../../lib/labels.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import ConnectionCreateForm from "../workspace/connections/ConnectionCreateForm.tsx";
@@ -72,13 +73,6 @@ const PROGRESS_TEXT: Readonly<Record<WorkingProgress, MessageKey>> = {
 
 /** The id that ties 「許可してインストール」 to why it waits. */
 const APPLY_REASON_ID = "iv-apply-reason";
-
-/** Display opaque Interface identifiers as readable words while retaining each segment. */
-function interfaceLabel(value: string): string {
-  return value.split(/[./:_-]+/u).filter(Boolean).map((part) =>
-    part.charAt(0).toLocaleUpperCase() + part.slice(1)
-  ).join(" · ");
-}
 
 const APPLY_WAIT_TEXT: Readonly<Record<ApplyBlock, MessageKey>> = {
   reading: "installStore.applyWait.reading",
