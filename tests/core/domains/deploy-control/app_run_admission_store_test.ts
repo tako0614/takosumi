@@ -14,7 +14,8 @@ import {
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema,
   verifyD1OpenTofuLedgerSchemaPredeployed } from "../../../../worker/src/d1_opentofu_store.ts";
-import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import { PGliteSqlClient, splitSqlStatements } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import { postgresStorageMigrationStatements } from "../../../../core/adapters/storage/migrations.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { D1AppAuthorizationStore, SqlAppAuthorizationStore } from "../../../../core/domains/app-authorization/store.ts";
@@ -236,8 +237,11 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
       expectLeaseToken: `lease-${terminal.id}-3`, clearLeaseToken: true, run: terminal })).won, label).toBe(true);
     expect((await ownership.acceptTransfer({ transferId: transfer.transferId,
       actorAccountId: "recipient" })).state, label).toBe("accepted");
-    // A repair can leave the old JSON projection behind; the v77 physical
-    // owner/epochs remain the authority for both reads and atomic admission.
+    const transferred = (await store.getCapsule(capsule.id))!;
+    expect(transferred.ownerAccountId, label).toBe("recipient");
+    expect(transferred.ownershipEpoch, label).toBe(1);
+    // The stored JSON remains an opaque concurrency snapshot. A repair can
+    // leave it stale, while atomic admission must use physical owner/epochs.
     if (label === "postgres") {
       await pg.query(`update takosumi_capsules set installation_json=$2::jsonb where id=$1`,
         [capsule.id, JSON.stringify(capsule)]);
@@ -245,9 +249,6 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
       await d1.prepare(`update capsules set record_json=? where id=?`)
         .bind(JSON.stringify(capsule), capsule.id).run();
     }
-    const transferred = (await store.getCapsule(capsule.id))!;
-    expect(transferred.ownerAccountId, label).toBe("recipient");
-    expect(transferred.ownershipEpoch, label).toBe(1);
     await expect(store.beginApplyRun(apply(runningPlan, transferred, `apply_transfer_old_${label}`),
       authority, capsuleApplyRunAdmissionFence(transferred, 1)), label)
       .rejects.toBeInstanceOf(CapsuleApplyRunAdmissionConflictError);
@@ -256,9 +257,12 @@ test("actual v78 transfer drains running work and refuses old Plan admission wit
   }
 });
 
-test("pre-v77 durable stores retain legacy Capsule Plan and Apply admission", async () => {
+test("upgraded PostgreSQL and pre-v77 D1 retain legacy Capsule Plan and Apply admission", async () => {
   const pg = await PGliteSqlClient.createThroughMigrationVersion(122);
   clients.push(pg);
+  for (const migration of postgresStorageMigrationStatements.filter((entry) => entry.version > 122)) {
+    for (const statement of splitSqlStatements(migration.sql)) await pg.query(statement);
+  }
   const d1 = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(d1, { throughMigrationVersion: 75 });
   await verifyD1OpenTofuLedgerSchemaPredeployed(d1);
@@ -279,11 +283,17 @@ test("pre-v77 durable stores retain legacy Capsule Plan and Apply admission", as
   }
 });
 
-test("postgres current and pre-v77 SourceSync settlement lock Capsule before held Run", async () => {
+test("postgres current and upgraded v122 SourceSync settlement lock Capsule before held Run", async () => {
   for (const version of ["current", "pre-v77"] as const) {
     const backing = version === "current" ? await PGliteSqlClient.create()
       : await PGliteSqlClient.createThroughMigrationVersion(122);
     clients.push(backing);
+    // PostgreSQL hosts migrate before constructing the current runtime.
+    if (version === "pre-v77") {
+      for (const migration of postgresStorageMigrationStatements.filter((entry) => entry.version > 122)) {
+        for (const statement of splitSqlStatements(migration.sql)) await backing.query(statement);
+      }
+    }
     const locks: string[] = [];
     const client: SqlClient = {
       query: (statement, parameters) => backing.query(statement, parameters),

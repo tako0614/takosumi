@@ -50,6 +50,13 @@ import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/p
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 
 
+// Admission reads physical authority in the same locked Capsule statement.
+// Ordinary projections use the owner-preserving JSON mirror maintained by writes.
+const PG_CAPSULE_ADMISSION_JSON = `(installation_json - 'ownerAccountId' - 'ownershipEpoch' - 'managementState' - 'managementEpoch')
+  || case when owner_account_id is null then '{}'::jsonb else jsonb_build_object(
+    'ownerAccountId', owner_account_id, 'ownershipEpoch', ownership_epoch,
+    'managementState', management_state, 'managementEpoch', management_epoch) end`;
+
 const pgLegacyUsageSelect = {
   id: pgSchema.usageEvents.id,
   workspaceId: pgSchema.usageEvents.workspaceId,
@@ -2118,7 +2125,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                install_config_id as "installConfigId",
                current_state_version_id as "currentStateVersionId",
                execution_authority_epoch as "executionAuthorityEpoch",
-               installation_json as "capsuleJson"
+               ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson"
              from takosumi_capsules
              where id = $1
              for update`,
@@ -2133,7 +2140,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
           } catch {
             persistedCapsule = undefined;
           }
-          const capsule = await this.#withCapsuleOwnership(persistedCapsule
+          const capsule = persistedCapsule
             ? {
                 ...persistedCapsule,
                 ...(row?.installConfigId
@@ -2142,7 +2149,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
                 currentStateVersionId:
                   row?.currentStateVersionId ?? undefined,
               }
-            : undefined, transaction);
+            : undefined;
           if (input.expectedCapsulePlanAuthority !== undefined) {
             assertCapsulePlanCreationFence(
               capsule,
@@ -2439,7 +2446,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
              current_state_version_id as "currentStateVersionId",
              status,
              execution_authority_epoch as "executionAuthorityEpoch",
-             installation_json as "capsuleJson"
+             ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson"
            from takosumi_capsules
           where id = $1
           for update`,
@@ -2448,11 +2455,11 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         const capsuleRow = capsuleRows.rows[0];
         let persistedCapsule: Capsule | undefined;
         try {
-          persistedCapsule = await this.#withCapsuleOwnership(capsuleRow
+          persistedCapsule = capsuleRow
             ? normalizeOptionalCapsuleRecord(
                 parseJson(capsuleRow.capsuleJson) as Capsule,
               )
-            : undefined, transaction);
+            : undefined;
         } catch {
           persistedCapsule = undefined;
         }
@@ -3039,7 +3046,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             (input.kind === "plan" || input.kind === "apply")) {
             const observedCapsuleId = current.capsuleId;
             const capsuleRows = await transaction.query<{ readonly capsuleJson: unknown }>(
-              `select installation_json as "capsuleJson" from takosumi_capsules where id = $1 for update`,
+              `select ${PG_CAPSULE_ADMISSION_JSON} as "capsuleJson" from takosumi_capsules where id = $1 for update`,
               [observedCapsuleId],
             );
             // Lock the Run after the Capsule, matching transfer's lock order.
@@ -3066,9 +3073,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
             current = lockedRun;
             let capsule: Capsule | undefined;
             try {
-              capsule = await this.#withCapsuleOwnership(capsuleRows.rows[0]
+              capsule = capsuleRows.rows[0]
                 ? normalizeOptionalCapsuleRecord(parseJson(capsuleRows.rows[0].capsuleJson) as Capsule)
-                : undefined, transaction);
+                : undefined;
             } catch {
               capsule = undefined;
             }

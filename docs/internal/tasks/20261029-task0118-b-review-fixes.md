@@ -45,8 +45,8 @@ an incoming list for the caller. The connection labels projection exposes only
 binding IDs, providers and display names to app managers. Personal provider
 OAuth starts without a Workspace and signs its owner and scope into state.
 Account callers can resolve a public source's stable SemVer tag without a
-Workspace. A frozen Workspace namespace cannot be created as an install side
-effect. Route inventory, composed OpenAPI and both API references describe
+Workspace. A frozen Workspace surface permits only the canonical owner-bound personal
+bootstrap shared with writer A; general creation and roster mutations stay frozen. Route inventory, composed OpenAPI and both API references describe
 these endpoints.
 
 ## Validation and delivery

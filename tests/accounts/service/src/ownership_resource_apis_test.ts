@@ -77,15 +77,22 @@ test("workspace-less source ref GET requires account scope and delegates resolut
   expect((await handleSourceRefResolutions({ ...ctx, session: { subject: "member", appIds: ["cap_1"] } }, ["source-ref-resolutions"], "GET"))?.status).toBe(403);
 });
 
-test("workspace-less install cannot create a hidden personal Workspace during freeze", async () => {
+test("workspace-less install uses only canonical personal bootstrap during the freeze", async () => {
   let creates = 0;
-  const operations = { workspaces: { listWorkspacesByOwner: async () => [], ensurePersonalWorkspace: async () => { creates++; return {}; } } } as unknown as ControlPlaneOperations;
+  const personal = { id: "ws_bootstrap", type: "personal", ownerUserId: "owner", createdAt: "2026-01-01" };
+  const operations = { workspaces: {
+    listWorkspacesByOwner: async () => [],
+    ensurePersonalWorkspace: async (subject: string) => { expect(subject).toBe("owner"); creates++; return personal; },
+    createWorkspace: async () => { throw new Error("General Workspace creation stays frozen"); },
+  } } as unknown as ControlPlaneOperations;
   const ctx = context("install-plans", operations, "owner", "POST", { mode: "attempt" });
-  expect((await handleInstallPlans({ ...ctx, workspaceMutationsFrozen: true }, ["install-plans"], "POST"))?.status).toBe(409);
-  expect(creates).toBe(0);
+  const response = await handleInstallPlans({ ...ctx, workspaceMutationsFrozen: true }, ["install-plans"], "POST");
+  expect(response?.status).toBe(400);
+  expect(await response?.json()).toMatchObject({ error: { code: "idempotency_key_required" } });
+  expect(creates).toBe(1);
 });
 
-test("frozen namespace lookup still reuses an existing owner-owned personal Workspace", async () => {
+test("read-only namespace lookup still reuses an existing owner-owned personal Workspace", async () => {
   let creates = 0;
   const existing = { id: "ws_existing", type: "personal", ownerUserId: "owner", createdAt: "2026-01-01" };
   const operations = { workspaces: { listWorkspacesByOwner: async () => [existing], ensurePersonalWorkspace: async () => { creates++; return {}; } } } as unknown as ControlPlaneOperations;

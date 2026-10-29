@@ -383,10 +383,10 @@ export async function handleInstallPlans(
     if (!body || body.mode !== "attempt" || body.workspaceId !== undefined) {
       return errorJson("invalid_request", "A workspace-less install attempt is required.", 400, ctx.request);
     }
-    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session, ctx.workspaceMutationsFrozen === false);
-    if (!namespace) return ctx.workspaceMutationsFrozen !== false
-      ? errorJson("workspace_frozen", "Workspace creation and membership changes are temporarily frozen.", 409, ctx.request)
-      : errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
+    // The freeze permits only A's canonical owner-bound personal bootstrap.
+    // Never use the general Workspace creation or membership mutation ports.
+    const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
+    if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
     return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
   }
   if (segments[0] !== "install-plans" || segments.length < 2) {

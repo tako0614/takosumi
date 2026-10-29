@@ -18,7 +18,9 @@ export async function personalResourceNamespace(
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0];
   if (existing) return existing;
   if (!createIfMissing) return undefined;
-  const ensure = operations.workspaces.ensurePersonalWorkspace;
+  const ensure = session.requireCurrentMembership
+    ? operations.workspaces.ensurePersonalWorkspaceForSharedAccount
+    : operations.workspaces.ensurePersonalWorkspace;
   if (!ensure) return undefined;
   const account = await store.findAccount(session.subject as TakosumiSubject);
   if (!account) return undefined;
