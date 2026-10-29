@@ -1,3 +1,4 @@
+import { sourceCreatorPlanAllowsRetirement } from "../sources/retirement_policy.ts";
 import { POSTGRES_FOREIGN_SOURCE_ARCHIVE_REFERENCE_QUERY, POSTGRES_SOURCE_RETIREMENT_ARCHIVE_BLOCKER_QUERY, POSTGRES_SOURCE_RETIREMENT_ARCHIVE_REFS_PAGE_QUERY } from "../../adapters/storage/source-archive-reference-query.ts";
 import { SqlWorkspaceFinancialSource, type FinancialSourceSqlPort, type WorkspaceFinancialSourceStore } from "../workspaces/financial-source.ts";
 import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
@@ -11995,7 +11996,8 @@ async function pgReadSourceOwnershipGroup(
       throw new Error(`source_ownership_migration_git_plan_row_drift:${row.id}`);
     }
     if ((plan.phase !== "reviewable" && plan.phase !== "failed" &&
-      plan.phase !== "discarded") || row.reconcileLeaseToken !== null) {
+      plan.phase !== "discarded" && !sourceCreatorPlanAllowsRetirement(plan, Date.now())) ||
+      row.reconcileLeaseToken !== null) {
       inFlightRunIds.push(`git_install_plan:${row.id}`);
     }
     return plan;

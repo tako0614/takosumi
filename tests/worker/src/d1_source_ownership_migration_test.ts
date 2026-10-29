@@ -489,6 +489,13 @@ test("D1 inventory hydrates and fences a lost-ack creator by its immutable Sourc
   let group = (await store.readGroup(reservedId))!;
   expect(group.gitPlans.map((plan) => plan.id)).toEqual([planId]);
   expect(inventorySourceOwnershipGroup(group, now).action).toBe("blocked");
+  const expired = { ...creator, expiresAt: "2026-10-26T00:00:00.000Z" };
+  await db.prepare("update git_install_plans set record_json = ? where id = ?").bind(JSON.stringify(expired), planId).run();
+  expect(inventorySourceOwnershipGroup((await store.readGroup(reservedId))!, now).action).toBe("retire");
+  await db.prepare("update git_install_plans set reconcile_lease_token = 'fixture_lease' where id = ?").bind(planId).run();
+  expect(inventorySourceOwnershipGroup((await store.readGroup(reservedId))!, now))
+    .toMatchObject({ action: "blocked", reason: "work_in_flight" });
+  await db.prepare("update git_install_plans set reconcile_lease_token = null where id = ?").bind(planId).run();
   const recent = { ...creator, phase: "discarded" as const, completedAt: now };
   await db.prepare("update git_install_plans set phase = ?, record_json = ? where id = ?")
     .bind(recent.phase, JSON.stringify(recent), planId).run();

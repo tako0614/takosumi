@@ -1,3 +1,4 @@
+import { sourceCreatorPlanAllowsRetirement } from "../../core/domains/sources/retirement_policy.ts";
 import { inventorySourceOwnershipGroup } from "../../core/domains/sources/ownership-migration.ts";
 /**
  * Operator-only Source ownership repair against the existing D1 schema.
@@ -258,7 +259,8 @@ export async function readD1SourceOwnershipGroup(
     // copy, so refuse the group before any archive or ledger mutation.
     ...runs.filter((row) => (row.type === "source_sync" || row.type === "compatibility_check") &&
       row.run_group_id !== null).map((row) => `run_group:${row.id}`),
-    ...gitPlans.filter((plan) => !["failed", "reviewable", "discarded"].includes(plan.phase))
+    ...gitPlans.filter((plan) => !["failed", "reviewable", "discarded"].includes(plan.phase) &&
+      !sourceCreatorPlanAllowsRetirement(plan, Date.now()))
       .map((plan) => `git_install_plan:${plan.id}`),
     ...table("git_install_plans").filter((row) => row.reconcile_lease_token !== null)
       .map((row) => `git_install_plan:${row.id}`),

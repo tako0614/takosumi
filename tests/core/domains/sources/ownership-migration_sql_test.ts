@@ -412,6 +412,13 @@ test("Postgres inventory hydrates a lost-ack creator and blocks active or recent
   let group = (await store.readGroup(reservedId))!;
   expect(group.gitPlans.map((plan) => plan.id)).toEqual([planId]);
   expect(inventorySourceOwnershipGroup(group, now).action).toBe("blocked");
+  const expired = { ...creator, expiresAt: "2026-10-28T00:00:00.000Z" };
+  await client.query("update takosumi_git_install_plans set record_json = $1::jsonb where id = $2", [JSON.stringify(expired), planId]);
+  expect(inventorySourceOwnershipGroup((await store.readGroup(reservedId))!, now).action).toBe("retire");
+  await client.query("update takosumi_git_install_plans set reconcile_lease_token = 'fixture_lease' where id = $1", [planId]);
+  expect(inventorySourceOwnershipGroup((await store.readGroup(reservedId))!, now))
+    .toMatchObject({ action: "blocked", reason: "work_in_flight" });
+  await client.query("update takosumi_git_install_plans set reconcile_lease_token = null where id = $1", [planId]);
   const recent = { ...creator, phase: "discarded", completedAt: now };
   await client.query("update takosumi_git_install_plans set phase = $1, record_json = $2::jsonb where id = $3",
     [recent.phase, JSON.stringify(recent), planId]);
