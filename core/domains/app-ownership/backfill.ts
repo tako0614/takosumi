@@ -5,6 +5,8 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
 export interface OwnershipBackfillContext {
   readonly control: OpenTofuControlStore;
   readonly ownership: AppOwnershipStore;
+  /** Set only after the operator adapter verifies the target's mutation freeze. */
+  readonly workspaceMutationsFrozen?: true;
 }
 
 export type OwnershipBackfillWrite =
@@ -19,6 +21,8 @@ export interface OwnershipBackfillPlan {
   readonly confirmationRequired: readonly { readonly workspaceId: string; readonly accountId: string; readonly roles: readonly string[]; readonly status: string }[];
   readonly collisions: readonly { readonly ownerAccountId: string; readonly slug: string; readonly environment: string; readonly capsuleIds: readonly string[] }[];
   readonly billingConflicts: readonly { readonly accountId: string; readonly workspaceIds: readonly string[] }[];
+  readonly orphanCapsules: readonly { readonly capsuleId: string; readonly workspaceId: string }[];
+  readonly unresolvedUsagePayers: readonly { readonly eventId: string; readonly workspaceId: string; readonly capsuleId: string; readonly reason: "capsule_missing" | "workspace_mismatch" }[];
   readonly digest: string;
 }
 
@@ -28,9 +32,25 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
   const confirmationRequired: OwnershipBackfillPlan["confirmationRequired"][number][] = [];
   const collisions: OwnershipBackfillPlan["collisions"][number][] = [];
   const billingConflicts: OwnershipBackfillPlan["billingConflicts"][number][] = [];
+  const orphanCapsules: OwnershipBackfillPlan["orphanCapsules"][number][] = [];
+  const unresolvedUsagePayers: OwnershipBackfillPlan["unresolvedUsagePayers"][number][] = [];
   const names = new Map<string, { ownerAccountId: string; slug: string; environment: string; capsuleIds: string[] }>();
   const billings = new Map<string, { workspaceId: string; record: AccountBillingBinding }[]>();
   const workspaces = [...await context.control.listWorkspaces()].sort((a, b) => a.id.localeCompare(b.id));
+  const workspaceIds = new Set(workspaces.map((row) => row.id));
+  const allCapsules = [...await context.control.listCapsules()].sort((a, b) => a.id.localeCompare(b.id));
+  const capsulesByWorkspace = new Map<string, typeof allCapsules>();
+  const capsuleById = new Map(allCapsules.map((row) => [row.id, row]));
+  const ownerByCapsuleId = new Map<string, string>();
+  for (const capsule of allCapsules) {
+    if (!workspaceIds.has(capsule.workspaceId)) {
+      orphanCapsules.push({ capsuleId: capsule.id, workspaceId: capsule.workspaceId });
+      continue;
+    }
+    const rows = capsulesByWorkspace.get(capsule.workspaceId) ?? [];
+    rows.push(capsule);
+    capsulesByWorkspace.set(capsule.workspaceId, rows);
+  }
   for (const workspace of workspaces) {
     if (!workspace.ownerUserId) throw new Error("Backfill requires a Workspace owner");
     const members = [...await context.control.listWorkspaceMembers(workspace.id)].sort((a, b) => a.accountId.localeCompare(b.accountId));
@@ -39,11 +59,12 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
         confirmationRequired.push({ workspaceId: workspace.id, accountId: member.accountId, roles: member.roles, status: member.status });
       }
     }
-    const capsules = [...await context.control.listCapsules(workspace.id)].sort((a, b) => a.id.localeCompare(b.id));
+    const capsules = capsulesByWorkspace.get(workspace.id) ?? [];
     for (const capsule of capsules) {
       const existing = await context.ownership.getOwnership(capsule.id);
       const legacyRoot = `workspaces/${workspace.id}/capsules/${capsule.id}`;
       const ownerAccountId = existing?.ownerAccountId ?? workspace.ownerUserId;
+      ownerByCapsuleId.set(capsule.id, ownerAccountId);
       if (!existing) writes.push({ kind: "ownership", record: {
         capsuleId: capsule.id, ownerAccountId, ownershipEpoch: 0,
         managementState: "active", managementEpoch: 0, storageRoot: legacyRoot,
@@ -72,7 +93,19 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
       }
     }
     for (const event of [...await context.control.listUsageEvents(workspace.id)].sort((a, b) => a.id.localeCompare(b.id))) {
-      if (!(event as typeof event & { payerAccountId?: string }).payerAccountId) writes.push({ kind: "usage", id: event.id, payerAccountId: workspace.ownerUserId });
+      // An existing payer is retained audit authority, even if its old app was removed.
+      if (event.payerAccountId) continue;
+      let payerAccountId = workspace.ownerUserId;
+      if (event.capsuleId) {
+        const capsule = capsuleById.get(event.capsuleId);
+        if (!capsule || capsule.workspaceId !== workspace.id) {
+          unresolvedUsagePayers.push({ eventId: event.id, workspaceId: workspace.id,
+            capsuleId: event.capsuleId, reason: capsule ? "workspace_mismatch" : "capsule_missing" });
+          continue;
+        }
+        payerAccountId = ownerByCapsuleId.get(event.capsuleId)!;
+      }
+      writes.push({ kind: "usage", id: event.id, payerAccountId });
     }
     const binding = await context.control.getWorkspaceBillingBinding(workspace.id);
     if (binding) {
@@ -92,15 +125,20 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
     if (keys.size > 1) billingConflicts.push({ accountId, workspaceIds: rows.map((row) => row.workspaceId) });
     else if (!existing) writes.push({ kind: "billing", record: rows[0]!.record });
   }
-  const result = { writes, confirmationRequired, collisions, billingConflicts };
+  const result = { writes, confirmationRequired, collisions, billingConflicts,
+    orphanCapsules, unresolvedUsagePayers };
   return { ...result, digest: await stableJsonDigest(result) };
 }
 
 /** Idempotent resume: re-plan each invocation; existing owners/rosters are never replaced. */
 export async function applyAppOwnershipBackfill(context: OwnershipBackfillContext, expectedDigest: string, batchSize = 100): Promise<{ applied: number }> {
+  if (context.workspaceMutationsFrozen !== true) throw new Error("Backfill apply requires verified workspaceMutationsFrozen: true in the operator context");
   if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) throw new Error("Backfill batch size must be 1..100");
   const plan = await planAppOwnershipBackfill(context);
   if (plan.digest !== expectedDigest) throw new Error("Backfill inventory changed; review a new dry-run");
+  if (plan.unresolvedUsagePayers.length) {
+    throw new Error("Backfill inventory has unresolved usage payers; repair and review a new dry-run");
+  }
   let applied = 0;
   for (const write of plan.writes.slice(0, batchSize)) {
     let written = false;

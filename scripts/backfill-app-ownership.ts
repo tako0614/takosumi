@@ -3,7 +3,9 @@ import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyAppOwnershipBackfill, planAppOwnershipBackfill, type OwnershipBackfillContext } from "../core/domains/app-ownership/backfill.ts";
 
-/** The operator owns connection composition; this tool never discovers credentials or runs DDL. */
+/** The operator owns connection composition and verifies its Workspace mutation
+ * freeze before returning workspaceMutationsFrozen: true for apply. This tool
+ * never discovers credentials, assumes a freeze, or runs DDL. */
 export async function runAppOwnershipBackfill(context: OwnershipBackfillContext, options: { readonly apply?: boolean; readonly expectedDigest?: string; readonly batchSize?: number }) {
   if (!options.apply) return { mode: "dry-run", ...await planAppOwnershipBackfill(context) };
   if (!options.expectedDigest) throw new Error("--apply requires --plan-digest from a reviewed dry-run");

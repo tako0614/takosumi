@@ -12,7 +12,7 @@ until the schema and owner rows are available. This is a code change and local
 fixture verification; it does not authorize a staging or production operation.
 
 The operator composes a local module exporting `openOwnershipBackfill()`, which
-returns `{ control, ownership, close? }`. `control` is the target's existing
+returns `{ control, ownership, workspaceMutationsFrozen?, close? }`. `control` is the target's existing
 `OpenTofuControlStore`; `ownership` is `SqlAppOwnershipStore(client, control)` or
 `D1AppOwnershipStore(db, control)`. Use read-only credentials for dry-run where
 available. The module owns connection setup and private credential loading;
@@ -24,12 +24,18 @@ bun scripts/backfill-app-ownership.ts --adapter=/absolute/operator/ownership-tar
 bun scripts/backfill-app-ownership.ts --adapter=/absolute/operator/ownership-target.ts --apply --plan-digest=sha256:<reviewed-digest> --batch-size=100
 ```
 
-Dry-run reads all Workspace rows, including archived ones, and emits a private
+Dry-run reads all Workspace rows, including archived ones, and all Capsules. It
+reports Capsules whose Workspace is missing and usage events whose Capsule is
+missing or belongs to another Workspace. These reports are included in the plan
+digest. Orphan Capsules are skipped without owner inference, so valid rows can
+still progress. Unresolved usage payer records stop apply until repaired and a
+new dry-run is reviewed. No payer is guessed for unresolved app usage. The dry-run emits a private
 inventory and digest. Owners come from `ownerUserId`. Active owner/admin members
 other than the owner become app members; member/viewer, invited and suspended
 rows are reported for confirmation and never migrated automatically. Connections
-and existing usage take the Workspace owner, while operator connections retain
-no personal owner. Legacy storage roots remain
+take the Workspace owner, while operator connections retain no personal owner.
+Usage tied to a Capsule takes that app's existing owner, including a transferred
+owner; only usage without a Capsule falls back to the Workspace owner. Legacy storage roots remain
 `workspaces/{workspaceId}/capsules/{capsuleId}`; no R2 object moves. New apps use
 `apps/{capsuleId}`. Existing explicit ownership, epochs and app rosters survive.
 
@@ -46,6 +52,12 @@ Account billing bindings reuse the existing `workspaceRef` as `billingRef`.
 Multiple incompatible retained bindings for one account are reported and left
 for operator resolution. The backfill does not call a billing authority or
 change its immutable rows. Billing launch remains stopped under TASK-0109.
+
+Apply requires the operator adapter to set `workspaceMutationsFrozen: true` only
+after it has verified the target's live Workspace mutation freeze. A missing or
+false value is rejected; dry-run needs no freeze. The adapter must keep that
+freeze in force across every batch. There is no CLI switch that substitutes for
+this target-specific verification.
 
 Apply re-reads the inventory and requires its digest to match the reviewed
 dry-run. Each invocation writes at most 100 rows serially. Re-run dry-run and
