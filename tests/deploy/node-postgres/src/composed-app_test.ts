@@ -1280,6 +1280,7 @@ output "launch_url" {
 }
 
 async function buildRuntimeInputPlanFixture(options: {
+  readonly ownerSession?: boolean;
   readonly oidcSource?: RuntimeInputOidcClientSource;
   readonly onFactoryInput?: (
     input: RuntimeInputOidcClientSourceFactoryInput,
@@ -1294,11 +1295,23 @@ async function buildRuntimeInputPlanFixture(options: {
   const planJobs: unknown[] = [];
   const { buildComposedApp } =
     await import("../../../../deploy/node-postgres/src/composed-app.ts");
-  const store = new PostgresAccountsStore(stubQueryClient());
+  const ownerSubject = "tsub_runtime_input_owner";
+  const ownerSessionId = "sess_runtime_input_owner";
+  const accountStore = options.ownerSession ? new InMemoryAccountsStore() : undefined;
+  if (accountStore) {
+    const now = Date.now();
+    accountStore.saveAccount({ subject: ownerSubject, createdAt: now, updatedAt: now });
+    accountStore.saveAccountSession({ sessionId: ownerSessionId, subject: ownerSubject,
+      createdAt: now, expiresAt: now + 60_000 });
+  }
+  const store = accountStore ?? new PostgresAccountsStore(stubQueryClient());
   const created = await buildComposedApp({
     config: testConfig(),
-    store,
-    accountsHandler: accountsHandlerSpy().handler,
+    store: store as PostgresAccountsStore,
+    ...(accountStore
+      ? { createAccountsHandler: (controlPlaneOperations: Parameters<NonNullable<ComposedAppInput["createAccountsHandler"]>>[0]) =>
+          createAccountsHandler({ issuer: testConfig().issuer, store: accountStore, controlPlaneOperations }) }
+      : { accountsHandler: accountsHandlerSpy().handler }),
     runtimeEnv: {
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
     },
@@ -1339,7 +1352,7 @@ async function buildRuntimeInputPlanFixture(options: {
     handle: `runtime-input-${crypto.randomUUID().slice(0, 8)}`,
     displayName: "Runtime Input Composition",
     type: "personal",
-    ownerUserId: "tsub_runtime_input_owner",
+    ownerUserId: ownerSubject,
   });
   const sourceResponse = await created.operations.createSource({
     workspaceId: workspace.id,
@@ -1385,7 +1398,7 @@ async function buildRuntimeInputPlanFixture(options: {
     name: "runtime-input",
     environment: "preview",
     sourceId: sourceResponse.source.id,
-    installingPrincipalId: "tsub_runtime_input_owner",
+    installingPrincipalId: ownerSubject,
     installConfig,
     providerBindings: [
       {
@@ -1404,6 +1417,8 @@ async function buildRuntimeInputPlanFixture(options: {
     workspace,
     store,
     connectionId,
+    ownerSessionId,
+    ownerSubject,
   };
 }
 
@@ -1429,8 +1444,9 @@ test("composed app supplies its injected OIDC authority to a binding-delivered C
       };
     },
   };
-  const { created, capsule, installConfig, planJobs } =
+  const { created, capsule, installConfig, planJobs, ownerSessionId, ownerSubject } =
     await buildRuntimeInputPlanFixture({
+      ownerSession: true,
       oidcSource,
       onFactoryInput: (input) => {
         factoryInput = input;
@@ -1474,9 +1490,10 @@ test("composed app supplies its injected OIDC authority to a binding-delivered C
     1,
   );
   const response = await created.app.fetch(
-    new Request(`http://localhost/internal/v1/capsules/${capsule.id}/plan`, {
+    new Request(`http://localhost/api/v1/capsules/${capsule.id}/plan`, {
       method: "POST",
-      headers: { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}` },
+      headers: { authorization: `Bearer ${ownerSessionId}`, "content-type": "application/json" },
+      body: JSON.stringify({ actor: "attacker-supplied-subject" }),
     }),
   );
   if (response.status !== 201) {
@@ -1490,6 +1507,7 @@ test("composed app supplies its injected OIDC authority to a binding-delivered C
       JSON.stringify(await created.operations.getPlanRun(body.run.id)),
     );
   }
+  assert.equal((await created.operations.getPlanRun(body.run.id)).planRun.createdBy, ownerSubject);
   assert.equal(body.run.planDigest, `sha256:${"c".repeat(64)}`);
   assert.equal(requests.length > 0, true);
   assert.deepEqual(requests[0], {
@@ -1547,6 +1565,7 @@ test("composed app forwards operator recipe and Run issuer into Capsule material
     readonly scopes: readonly string[];
   }> = [];
   const fixture = await buildRuntimeInputPlanFixture({
+    ownerSession: true,
     oidcSource: {
       generation: async () => "sha256:composed-app-oidc-generation",
       materialize: async () => ({
@@ -1586,10 +1605,10 @@ test("composed app forwards operator recipe and Run issuer into Capsule material
   });
   const response = await fixture.created.app.fetch(
     new Request(
-      `http://localhost/internal/v1/capsules/${fixture.capsule.id}/plan`,
+      `http://localhost/api/v1/capsules/${fixture.capsule.id}/plan`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}` },
+        headers: { authorization: `Bearer ${fixture.ownerSessionId}` },
       },
     ),
   );

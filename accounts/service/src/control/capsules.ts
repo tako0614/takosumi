@@ -339,12 +339,11 @@ export async function handleCapsules(
             : undefined;
       const response = await operations.createCapsulePlan(
         capsuleId,
-        compatibilityReportId || runnerProfileId
-          ? {
-              ...(compatibilityReportId ? { compatibilityReportId } : {}),
-              ...(runnerProfileId ? { runnerProfileId } : {}),
-            }
-          : undefined,
+        {
+          actor: ctx.session.subject,
+          ...(compatibilityReportId ? { compatibilityReportId } : {}),
+          ...(runnerProfileId ? { runnerProfileId } : {}),
+        },
       );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
