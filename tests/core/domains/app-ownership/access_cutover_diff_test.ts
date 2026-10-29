@@ -174,3 +174,36 @@ test("an ownerless Source needs every app built from it", async () => {
   // only_a manages cap_a but not cap_b, so the shared Source is not theirs.
   expect(report.differences.some((row) => row.sourceId === "src_shared" && row.accountId === "only_a")).toBe(false);
 });
+
+test("a Source shared by an owned and an unowned app needs each app under its own rule", async () => {
+  const control = new InMemoryOpenTofuControlStore();
+  const ownership = new InMemoryAppOwnershipStore(control);
+  await control.putWorkspace(workspace("ws_mixed", "ws_owner"));
+  await control.putWorkspaceMember(member("ws_mixed", "ws_admin", "admin"));
+  await control.putSource({
+    id: "src_mixed", workspaceId: "ws_mixed", name: "mixed", url: "https://git.example.test/app.git",
+    defaultRef: "main", defaultPath: ".", status: "active", createdAt: NOW, updatedAt: NOW,
+    hookSecretHash: "hash", autoSync: false,
+  } as never);
+  for (const id of ["cap_owned", "cap_unowned"]) {
+    await control.putCapsule({ ...capsule(id, "ws_mixed"), sourceId: "src_mixed" });
+  }
+  // Only cap_owned has an ownership row; cap_unowned keeps the legacy rule
+  // until the backfill writes its row (the projection: owner + owner/admins).
+  await ownership.initializeOwnershipIfMissing({
+    capsuleId: "cap_owned", ownerAccountId: "ws_owner", ownershipEpoch: 0, managementState: "active",
+    managementEpoch: 0, storageRoot: "apps/cap_owned",
+  });
+  expect(await ownership.putMember({ capsuleId: "cap_owned", accountId: "app_only", status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+  const report = await planAppAccessCutoverDiff({ control, ownership });
+  const sourceRows = report.differences.filter((row) => row.sourceId === "src_mixed")
+    .map((row) => `${row.accountId} ${row.accessClass} ${row.workspaceDecision}->${row.appDecision} ${row.ownershipSource}`);
+  // The owned app refuses the Workspace admin, so the shared Source does too.
+  expect(sourceRows).toEqual([
+    "ws_admin view true->false mixed",
+    "ws_admin manage true->false mixed",
+    "ws_admin owner_only true->false mixed",
+  ]);
+  // The owned app's member has no rule on the unowned app: the Source stays closed, as before.
+  expect(report.differences.some((row) => row.sourceId === "src_mixed" && row.accountId === "app_only")).toBe(false);
+});

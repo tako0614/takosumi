@@ -13,7 +13,12 @@ import type { OwnershipBackfillContext } from "./backfill.ts";
  * only Capsules without a row are projected with the backfill's inference
  * (Workspace owner becomes the owner, active owner/admin members become
  * members). A Source belongs to its `ownerCapsuleId`, or to every live Capsule
- * built from it, and needs every such app to allow. Nothing is written.
+ * built from it, and needs EVERY such app to allow under that app's own rule,
+ * as the live code decides: an app with a row by its roster; an app without a
+ * row by the backfill projection, which is what its row will say once the
+ * backfill reaches it (until then the live code uses the legacy Workspace
+ * decision for that app; the runbook runs this check after the backfill).
+ * Such a Source is reported with `ownershipSource: "mixed"`. Nothing is written.
  */
 export type AccessClass = "view" | "manage" | "owner_only";
 
