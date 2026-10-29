@@ -4135,8 +4135,11 @@ export class RunEngine {
    * Resolves the Plan-time wiring for run-scoped sensitive provider inputs.
    *
    * Value-free throughout: it derives the plan-stable nonce and pins the exact
-   * deliverable name set, but never opens the sealed material. The values are
-   * minted only at Apply, by the credential broker.
+   * deliverable name set, and no value leaves the materializer. The nonce
+   * digests the sealed generation, so this is where the materializer first
+   * seals a Capsule's generated values and where it re-seals them (opening the
+   * previous generation to carry its values forward) after a profile change.
+   * The values are delivered only at Apply, by the credential broker.
    *
    * Destroy uses separate nonce-only wiring derived from the already-captured
    * StateVersion cursor. It never asks the materializer for a profile, nonce,

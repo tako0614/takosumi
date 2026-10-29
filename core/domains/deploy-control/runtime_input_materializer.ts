@@ -34,14 +34,22 @@
  *
  * A profile change (the Capsule's manifest adds, removes or renames a generated
  * secret, or changes its OIDC grant) seals a new generation that CARRIES every
- * value the previous one holds for a binding whose name and shape are
- * unchanged: only a new or reshaped binding is minted, and a removed one is
- * dropped. A workload has usually encrypted data under those values, so minting
- * over them would be silent data loss. The previous generation is opened under
- * its own stored AAD, only after the same owner fence, and the new one is
- * sealed under the current AAD and swapped in by an atomic compare-and-replace:
- * there is no moment with neither generation stored, and a concurrent writer is
- * never overwritten. A later AAD-shape change reuses the same path.
+ * value the previous one holds: a binding whose name and shape are unchanged
+ * keeps its value, and only a binding the row has never held in that shape is
+ * minted. A removed binding is RETAINED — kept sealed, never delivered — and
+ * declaring it again in the same shape restores the same value, so a profile
+ * that moves and moves back (at Plan alone, or between Plan and Apply) never
+ * leaves the workload holding a value the row has lost. Renaming a binding is
+ * therefore the one way to get a new value for it. Retained values leave the row
+ * with the Capsule, or oldest first past {@link RUNTIME_INPUT_MAX_RETAINED}. A
+ * workload has usually encrypted data under these values, so minting over them
+ * would be silent data loss. The previous generation is opened under its own
+ * stored AAD, only after the same owner fence, and the new one is sealed under
+ * the current AAD and swapped in by an atomic compare-and-replace: there is no
+ * moment with neither generation stored, and a concurrent writer is never
+ * overwritten. A later AAD-shape change reuses the same path. A profile that
+ * declares no generated secret at all leaves the row untouched, which retains
+ * every value it holds in the same way.
  *
  * A previous generation that cannot be opened or parsed is refused with
  * {@link RuntimeInputPreviousGenerationError} instead of being replaced. That
@@ -77,6 +85,7 @@ import {
   stableJsonDigest,
   stableStringify,
 } from "../../adapters/source/digest.ts";
+import { log, type TakosumiLogger } from "../../shared/log.ts";
 import type { OpenTofuControlStore, StoredSecretBlob } from "./store.ts";
 
 export const RUNTIME_INPUT_BUNDLE_MARKER = "[runtime-input-bundle]" as const;
@@ -122,8 +131,17 @@ export const RUNTIME_INPUT_MAX_TOTAL_BYTES = 1024 * 1024;
 export const RUNTIME_INPUT_MIN_VALUE_LENGTH = 8;
 
 const GENERATED_SECRET_BYTES = 32;
-/** Exactly the form `bytesToHex` gives one {@link GENERATED_SECRET_BYTES}-byte secret. */
-const SEALED_GENERATED_SECRET_PATTERN = /^[0-9a-f]{64}$/u;
+/** Versioned sealed-document envelope; see `sealedGenerationDocument`. */
+const GENERATION_DOCUMENT_CONTRACT = "takosumi.runtime-input-generation/v2";
+/**
+ * Most values one sealed generation keeps for bindings its profile no longer
+ * declares. Past it the oldest retained value is evicted, so a Capsule whose
+ * profile keeps renaming bindings cannot grow its row without limit.
+ */
+export const RUNTIME_INPUT_MAX_RETAINED = 16;
+
+/** The two operator-event levels this lane emits. */
+export type RuntimeInputLogger = Pick<TakosumiLogger, "info" | "warn">;
 
 /** Capsule authority every runtime-input operation is scoped to. */
 export interface RuntimeInputAuthority {
@@ -383,8 +401,11 @@ export function createRuntimeInputMaterializer(input: {
    */
   readonly oidcClient?: RuntimeInputOidcClientSource;
   readonly clock?: () => Date;
+  /** Value-free operator events; defaults to the shared service logger. */
+  readonly logger?: RuntimeInputLogger;
 }): RuntimeInputMaterializer {
   const clock = input.clock ?? (() => new Date());
+  const logger = input.logger ?? log;
 
   const oidcSource = (): RuntimeInputOidcClientSource => {
     if (!input.oidcClient) {
@@ -484,13 +505,16 @@ export function createRuntimeInputMaterializer(input: {
       capsuleId: next.authority.capsuleId,
       partition: next.partition,
       crypto: input.crypto,
+      logger,
     });
+    const rotatedAt = exactClock(clock());
     const carried = carryGeneratedSecretValues({
       previous,
       generatedSecrets: next.declaration.generatedSecrets,
+      retainedAt: rotatedAt,
     });
     const sealed = await input.crypto.seal(
-      stableStringify(carried.values),
+      sealedGenerationDocument(carried.generation),
       next.partition,
       new TextEncoder().encode(next.aad),
     );
@@ -501,15 +525,25 @@ export function createRuntimeInputMaterializer(input: {
       aad: next.aad,
       sealed,
       createdAt: next.previous.createdAt,
-      rotatedAt: exactClock(clock()),
+      rotatedAt,
       crypto: input.crypto,
     });
-    return (await input.store.replaceSecretBlobIfCurrent(
-      next.previous,
-      replacement,
-    ))
-      ? replacement
-      : await input.store.getSecretBlob(next.ownerRef);
+    if (!(await input.store.replaceSecretBlobIfCurrent(next.previous, replacement))) {
+      // A concurrent re-seal won; it reports its own carry-over.
+      return await input.store.getSecretBlob(next.ownerRef);
+    }
+    // Binding NAMES only: which values moved is operator evidence, the values
+    // themselves never leave this function except into the sealed row.
+    logger.info("deploy_control.runtime_input_generation_resealed", {
+      capsuleId: next.authority.capsuleId,
+      carried: carried.carried,
+      restored: carried.restored,
+      minted: carried.minted,
+      retained: carried.retained,
+      evicted: carried.evicted,
+      retainedTotal: carried.generation.retained.length,
+    });
+    return replacement;
   };
 
   const sealedMaterial = async (
@@ -688,7 +722,7 @@ export function createRuntimeInputMaterializer(input: {
           } catch {
             invalid("sealed runtime inputs could not be opened");
           }
-          generatedSecrets = exactGeneratedSecretValues(
+          generatedSecrets = deliveredGeneratedSecretValues(
             content,
             material.declaration,
           );
@@ -1117,59 +1151,285 @@ export interface SealedGeneratedSecret {
   readonly encoding: string;
 }
 
-/** Value-free account of one carry-over, plus the values to seal. */
-export interface RuntimeInputCarryOver {
-  /** The next generation's `binding -> value` document. Seal it; never log it. */
-  readonly values: Readonly<Record<string, string>>;
-  /** Bindings whose previous value was kept, sorted. */
-  readonly carried: readonly string[];
-  /** Bindings that received fresh randomness (new or reshaped), sorted. */
-  readonly minted: readonly string[];
-  /** Previous bindings the current declaration no longer has, sorted. */
-  readonly dropped: readonly string[];
+/** A value the profile no longer declares. It is kept sealed and never delivered. */
+export interface RetainedGeneratedSecret extends SealedGeneratedSecret {
+  readonly binding: string;
+  /** When the profile stopped declaring it (the re-seal that retained it). */
+  readonly retainedAt: string;
 }
 
 /**
- * The next generation's values, carried from the previous one.
+ * One sealed generation, as this lane reads it.
  *
- * A binding keeps its value exactly when the previous generation holds that
- * binding minted for the same shape (`bytes` and `encoding`, the declaration's
- * only value-shaping fields). Every other declared binding — new, or reshaped,
- * which a consumer could not read in its old shape anyway — is minted fresh,
- * and a previous binding the declaration no longer has is dropped. No other
- * binding's value moves.
+ * `delivered` is exactly what the generation's own profile declared. `retained`
+ * is every value a profile change stopped declaring, oldest first: it is never
+ * delivered, but a later profile that declares the same binding in the same
+ * shape gets that exact value back. Values leave the row only when the Capsule
+ * retires it, or when more than {@link RUNTIME_INPUT_MAX_RETAINED} are retained.
+ */
+export interface SealedGeneration {
+  readonly delivered: ReadonlyMap<string, SealedGeneratedSecret>;
+  readonly retained: readonly RetainedGeneratedSecret[];
+}
+
+/** Value-free account of one carry-over, plus the generation to seal. */
+export interface RuntimeInputCarryOver {
+  /** The next generation. Seal it; never log it. */
+  readonly generation: SealedGeneration;
+  /** Bindings whose delivered value was kept, sorted. */
+  readonly carried: readonly string[];
+  /** Bindings whose retained value was delivered again, sorted. */
+  readonly restored: readonly string[];
+  /** Bindings that received fresh randomness, sorted. */
+  readonly minted: readonly string[];
+  /** Bindings this carry-over newly retained (undeclared or reshaped), sorted. */
+  readonly retained: readonly string[];
+  /** Retained bindings dropped, oldest first, to stay within the bound. */
+  readonly evicted: readonly string[];
+}
+
+/**
+ * The next generation, carried from the previous one.
+ *
+ * A declared binding keeps its exact value when the previous generation
+ * delivered it in the same shape (`bytes` and `encoding`, the declaration's only
+ * value-shaping fields), or gets back the value it retained for that binding and
+ * shape. Only a binding with neither is minted. Nothing the previous generation
+ * held is discarded: a delivered value the declaration no longer asks for, in
+ * that shape, moves to the retained list. The retained list keeps the newest
+ * {@link RUNTIME_INPUT_MAX_RETAINED} entries; older ones are evicted.
+ *
+ * Renaming a binding therefore yields a NEW value under the new name, while the
+ * old name's value stays retained. It is the only way to rotate one value until
+ * an explicit operator rotation exists.
  */
 export function carryGeneratedSecretValues(input: {
-  readonly previous: ReadonlyMap<string, SealedGeneratedSecret>;
+  readonly previous: SealedGeneration;
   readonly generatedSecrets: readonly RuntimeGeneratedSecretBinding[];
+  readonly retainedAt: string;
+  readonly maxRetained?: number;
 }): RuntimeInputCarryOver {
-  const values: Record<string, string> = {};
+  const sameShape = (
+    left: { readonly bytes: number; readonly encoding: string },
+    right: { readonly bytes: number; readonly encoding: string },
+  ) => left.bytes === right.bytes && left.encoding === right.encoding;
+  const delivered = new Map<string, SealedGeneratedSecret>();
   const carried: string[] = [];
+  const restored: string[] = [];
   const minted: string[] = [];
-  const declared = new Set<string>();
+  let stillRetained = [...input.previous.retained];
   for (const entry of input.generatedSecrets) {
-    declared.add(entry.binding);
-    const previous = input.previous.get(entry.binding);
-    if (
-      previous &&
-      previous.bytes === entry.bytes &&
-      previous.encoding === entry.encoding
-    ) {
-      values[entry.binding] = previous.value;
+    const shape = { bytes: entry.bytes, encoding: entry.encoding };
+    const previous = input.previous.delivered.get(entry.binding);
+    if (previous && sameShape(previous, shape)) {
+      delivered.set(entry.binding, previous);
       carried.push(entry.binding);
       continue;
     }
-    values[entry.binding] = freshGeneratedSecret(entry);
+    const kept = stillRetained.find(
+      (retained) => retained.binding === entry.binding && sameShape(retained, shape),
+    );
+    if (kept) {
+      stillRetained = stillRetained.filter((retained) => retained !== kept);
+      delivered.set(entry.binding, {
+        value: kept.value,
+        bytes: kept.bytes,
+        encoding: kept.encoding,
+      });
+      restored.push(entry.binding);
+      continue;
+    }
+    delivered.set(entry.binding, {
+      value: freshGeneratedSecret(entry),
+      ...shape,
+    });
     minted.push(entry.binding);
   }
+  const newlyRetained = [...input.previous.delivered.entries()]
+    .filter(([binding, secret]) => {
+      const next = delivered.get(binding);
+      return !next || !sameShape(next, secret);
+    })
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([binding, secret]): RetainedGeneratedSecret => ({
+      binding,
+      value: secret.value,
+      bytes: secret.bytes,
+      encoding: secret.encoding,
+      retainedAt: input.retainedAt,
+    }));
+  // One value per binding and shape: a newly retained value supersedes an
+  // older retained one for the same binding and shape.
+  const retained = [
+    ...stillRetained.filter(
+      (older) =>
+        !newlyRetained.some(
+          (newer) => newer.binding === older.binding && sameShape(newer, older),
+        ),
+    ),
+    ...newlyRetained,
+  ];
+  const bound = input.maxRetained ?? RUNTIME_INPUT_MAX_RETAINED;
+  const evictedEntries = retained.length > bound
+    ? retained.slice(0, retained.length - bound)
+    : [];
   return {
-    values,
+    generation: {
+      delivered,
+      retained: retained.slice(evictedEntries.length),
+    },
     carried: carried.sort(),
+    restored: restored.sort(),
     minted: minted.sort(),
-    dropped: [...input.previous.keys()]
-      .filter((binding) => !declared.has(binding))
-      .sort(),
+    retained: newlyRetained.map((entry) => entry.binding),
+    evicted: evictedEntries.map((entry) => entry.binding),
   };
+}
+
+/**
+ * The sealed document for one generation.
+ *
+ * A generation that retains nothing and delivers only
+ * {@link GENERATED_SECRET_BYTES}-byte hex is written as the original bare
+ * `binding -> value` map, byte-compatible with every earlier release. Anything
+ * the bare map cannot say — a retained value, or another shape — uses the
+ * versioned envelope, which records each value's shape and keeps the retained
+ * list in order. An earlier release cannot read the envelope and fails Apply
+ * closed for that Capsule instead of mis-delivering it.
+ */
+function sealedGenerationDocument(generation: SealedGeneration): string {
+  const bare =
+    generation.retained.length === 0 &&
+    [...generation.delivered.values()].every(
+      (secret) =>
+        secret.bytes === GENERATED_SECRET_BYTES && secret.encoding === "hex",
+    );
+  if (bare) {
+    return stableStringify(
+      Object.fromEntries(
+        [...generation.delivered].map(([binding, secret]) => [
+          binding,
+          secret.value,
+        ]),
+      ),
+    );
+  }
+  return stableStringify({
+    contract: GENERATION_DOCUMENT_CONTRACT,
+    delivered: Object.fromEntries(
+      [...generation.delivered].map(([binding, secret]) => [
+        binding,
+        { value: secret.value, bytes: secret.bytes, encoding: secret.encoding },
+      ]),
+    ),
+    retained: generation.retained.map((entry) => ({
+      binding: entry.binding,
+      value: entry.value,
+      bytes: entry.bytes,
+      encoding: entry.encoding,
+      retainedAt: entry.retainedAt,
+    })),
+  });
+}
+
+/**
+ * Reads either form of {@link sealedGenerationDocument}.
+ *
+ * Every value this lane has ever sealed was minted as hex, so a value of any
+ * other form means the document is not one this lane wrote and the whole
+ * generation is refused rather than partially trusted. The answer is a fixed,
+ * value-free problem string: parser text is never surfaced, because it would
+ * quote the plaintext.
+ */
+function parseSealedGeneration(
+  content: string,
+): SealedGeneration | { readonly problem: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch {
+    parsed = undefined;
+  }
+  if (!isRecord(parsed)) {
+    return { problem: "its sealed document is not a binding map" };
+  }
+  const hexSecret = (value: unknown, bytes: number): value is string =>
+    typeof value === "string" &&
+    value.length === bytes * 2 &&
+    /^[0-9a-f]+$/u.test(value);
+  if (!("contract" in parsed)) {
+    const delivered = new Map<string, SealedGeneratedSecret>();
+    for (const [binding, value] of Object.entries(parsed)) {
+      if (!RUNTIME_INPUT_NAME_PATTERN.test(binding)) {
+        return { problem: "its sealed document holds an invalid binding name" };
+      }
+      if (!hexSecret(value, GENERATED_SECRET_BYTES)) {
+        return {
+          problem:
+            `its sealed value for ${binding} is not a ${GENERATED_SECRET_BYTES}-byte hex secret`,
+        };
+      }
+      delivered.set(binding, {
+        value,
+        bytes: GENERATED_SECRET_BYTES,
+        encoding: "hex",
+      });
+    }
+    return { delivered, retained: [] };
+  }
+  if (
+    parsed.contract !== GENERATION_DOCUMENT_CONTRACT ||
+    Object.keys(parsed).length !== 3 ||
+    !isRecord(parsed.delivered) ||
+    !Array.isArray(parsed.retained) ||
+    parsed.retained.length > RUNTIME_INPUT_MAX_RETAINED
+  ) {
+    return { problem: "its sealed document is not a generation this lane wrote" };
+  }
+  const shaped = (
+    value: unknown,
+  ): SealedGeneratedSecret | undefined => {
+    if (
+      !isRecord(value) ||
+      typeof value.bytes !== "number" ||
+      !Number.isInteger(value.bytes) ||
+      value.bytes < 1 ||
+      value.bytes > 1024 ||
+      value.encoding !== "hex" ||
+      !hexSecret(value.value, value.bytes)
+    ) {
+      return undefined;
+    }
+    return { value: value.value, bytes: value.bytes, encoding: value.encoding };
+  };
+  const delivered = new Map<string, SealedGeneratedSecret>();
+  for (const [binding, value] of Object.entries(parsed.delivered)) {
+    const secret = shaped(value);
+    if (!RUNTIME_INPUT_NAME_PATTERN.test(binding) || !secret) {
+      return { problem: "its sealed document holds an invalid delivered value" };
+    }
+    delivered.set(binding, secret);
+  }
+  const retained: RetainedGeneratedSecret[] = [];
+  for (const entry of parsed.retained as readonly unknown[]) {
+    const secret = shaped(entry);
+    if (
+      !secret ||
+      !isRecord(entry) ||
+      typeof entry.binding !== "string" ||
+      !RUNTIME_INPUT_NAME_PATTERN.test(entry.binding) ||
+      typeof entry.retainedAt !== "string" ||
+      !Number.isFinite(Date.parse(entry.retainedAt))
+    ) {
+      return { problem: "its sealed document holds an invalid retained value" };
+    }
+    retained.push({
+      ...secret,
+      binding: entry.binding,
+      retainedAt: entry.retainedAt,
+    });
+  }
+  return { delivered, retained };
 }
 
 /**
@@ -1179,9 +1439,8 @@ export function carryGeneratedSecretValues(input: {
  * the workload already encrypted data under, so Plan and Apply refuse instead.
  * Destroy is unaffected: a destroy plan wires no runtime-input material, and
  * retirement deletes the row without opening it. The message names the Capsule
- * and the failure class, never a value; for an open failure it also says
- * whether the row was sealed under the active key version, which separates a
- * changed key from a damaged row without exposing either key's fingerprint.
+ * and the failure class, never a value or anything about the key; whether the
+ * row was sealed under the active key version goes to the operator log only.
  */
 export class RuntimeInputPreviousGenerationError extends TypeError {
   readonly capsuleId: string;
@@ -1200,14 +1459,13 @@ export class RuntimeInputPreviousGenerationError extends TypeError {
 /**
  * Opens the previous generation under its own stored AAD.
  *
- * The caller has already passed the owner fence on the row. The stored AAD is
- * then read as the identity the row was sealed under and must name that same
- * owner, Capsule and Workspace before it is used to open anything; AES-GCM
- * authenticates it, so opening succeeds only with the exact bytes it was
- * sealed under. Only the AAD shape this module has ever written is recognised.
- * A later AAD-shape change (for example one that retires the Workspace from it)
- * adds its predecessor here and seals under the new shape, without touching
- * the carry-over itself.
+ * The caller has already passed the owner fence on the row. The stored AAD must
+ * then be byte-for-byte the canonical AAD this module writes for this owner and
+ * Capsule (see {@link previousGenerationAadNamesOwner}) before it is used to
+ * open anything; AES-GCM authenticates it, so opening succeeds only with the
+ * exact bytes it was sealed under. A later AAD-shape change (for example one
+ * that retires the Workspace from it) adds its predecessor's canonical form
+ * there and seals under the new shape, without touching the carry-over itself.
  */
 async function openPreviousGeneration(input: {
   readonly blob: StoredSecretBlob;
@@ -1215,14 +1473,32 @@ async function openPreviousGeneration(input: {
   readonly capsuleId: string;
   readonly partition: SecretPartition;
   readonly crypto: SecretBoundaryCrypto;
-}): Promise<ReadonlyMap<string, SealedGeneratedSecret>> {
-  if (!previousGenerationAadNamesOwner(input)) {
+  readonly logger: RuntimeInputLogger;
+}): Promise<SealedGeneration> {
+  const refuse = (
+    failure: string,
+    problem: string,
+    detail: Readonly<Record<string, unknown>> = {},
+    cause?: unknown,
+  ): never => {
+    input.logger.warn("deploy_control.runtime_input_previous_generation_unreadable", {
+      capsuleId: input.capsuleId,
+      failure,
+      ...detail,
+    });
     throw new RuntimeInputPreviousGenerationError(
       input.capsuleId,
+      problem,
+      cause === undefined ? undefined : { cause },
+    );
+  };
+  if (!previousGenerationAadNamesOwner(input)) {
+    refuse(
+      "foreign_aad",
       "its authenticated data does not name this Capsule's runtime inputs",
     );
   }
-  let content: string;
+  let content: string | undefined;
   try {
     content = await input.crypto.open(
       base64ToBytes(input.blob.ciphertext),
@@ -1231,16 +1507,26 @@ async function openPreviousGeneration(input: {
     );
   } catch (error) {
     const activeKeyVersion = input.crypto.keyVersion?.(input.partition) ?? 1;
-    throw new RuntimeInputPreviousGenerationError(
-      input.capsuleId,
-      `it could not be opened (${error instanceof Error ? error.name : typeof error}; ` +
-        `sealed under ${input.blob.keyVersion === activeKeyVersion ? "the active" : "a different"} key version)`,
-      { cause: error },
+    refuse(
+      "unopenable",
+      `it could not be opened (${error instanceof Error ? error.name : typeof error})`,
+      { sealedUnderActiveKeyVersion: input.blob.keyVersion === activeKeyVersion },
+      error,
     );
   }
-  return sealedGeneratedSecrets(content, input.capsuleId);
+  const generation = parseSealedGeneration(content as string);
+  if ("problem" in generation) {
+    return refuse("malformed_document", generation.problem);
+  }
+  return generation;
 }
 
+/**
+ * The stored AAD must be exactly what {@link runtimeInputAad} writes for this
+ * owner reference and Capsule, under the row's own Workspace. Re-serializing
+ * and comparing bytes, rather than checking parsed fields, rejects duplicated
+ * or extra keys, another contract, and any non-canonical spelling.
+ */
 function previousGenerationAadNamesOwner(input: {
   readonly blob: StoredSecretBlob;
   readonly ownerRef: string;
@@ -1252,71 +1538,62 @@ function previousGenerationAadNamesOwner(input: {
   } catch {
     return false;
   }
+  if (
+    !isRecord(parsed) ||
+    typeof input.blob.workspaceId !== "string" ||
+    typeof parsed.profileDigest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(parsed.profileDigest)
+  ) {
+    return false;
+  }
   return (
-    isRecord(parsed) &&
-    Object.keys(parsed).length === 5 &&
-    parsed.contract === BLOB_CONTRACT &&
-    parsed.ownerRef === input.ownerRef &&
-    parsed.capsuleId === input.capsuleId &&
-    typeof parsed.workspaceId === "string" &&
-    parsed.workspaceId === input.blob.workspaceId &&
-    typeof parsed.profileDigest === "string" &&
-    /^sha256:[0-9a-f]{64}$/u.test(parsed.profileDigest)
+    runtimeInputAad({
+      ownerRef: input.ownerRef,
+      workspaceId: input.blob.workspaceId,
+      capsuleId: input.capsuleId,
+      profileDigest: parsed.profileDigest,
+    }) === input.blob.aad
   );
 }
 
 /**
- * The previous generation's sealed document.
- *
- * It is a bare `binding -> value` map and records no shape: every value this
- * lane has ever sealed was minted as {@link GENERATED_SECRET_BYTES}-byte hex,
- * the only shape the runtime binding profile has ever admitted. A value of any
- * other form means the document is not one this lane wrote, so the whole
- * generation is refused rather than partially trusted. A profile grammar that
- * admits a second shape must first make this document record each value's
- * shape. Parser text is never surfaced: it would quote the plaintext.
+ * The current sealed generation's delivered half, checked against exactly the
+ * declared `generatedSecrets` bindings and shapes. Retained values are never
+ * delivered.
  */
-function sealedGeneratedSecrets(
+function deliveredGeneratedSecretValues(
   content: string,
-  capsuleId: string,
-): ReadonlyMap<string, SealedGeneratedSecret> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content) as unknown;
-  } catch {
-    parsed = undefined;
+  declaration: RuntimeInputDeclaration,
+): Readonly<Record<string, string>> {
+  const generation = parseSealedGeneration(content);
+  if ("problem" in generation) invalid("sealed runtime inputs are invalid");
+  const declared = declaration.generatedSecrets
+    .map((entry) => entry.binding)
+    .sort();
+  const actual = [...generation.delivered.keys()].sort();
+  if (
+    actual.length !== declared.length ||
+    actual.some((name, index) => name !== declared[index])
+  ) {
+    invalid("sealed runtime inputs differ from their profile");
   }
-  if (!isRecord(parsed)) {
-    throw new RuntimeInputPreviousGenerationError(
-      capsuleId,
-      "its sealed document is not a binding map",
-    );
-  }
-  const values = new Map<string, SealedGeneratedSecret>();
-  for (const [binding, value] of Object.entries(parsed)) {
-    if (!RUNTIME_INPUT_NAME_PATTERN.test(binding)) {
-      throw new RuntimeInputPreviousGenerationError(
-        capsuleId,
-        "its sealed document holds an invalid binding name",
-      );
+  const values: Record<string, string> = {};
+  for (const entry of declaration.generatedSecrets) {
+    const secret = generation.delivered.get(entry.binding);
+    if (
+      !secret ||
+      secret.bytes !== entry.bytes ||
+      secret.encoding !== entry.encoding
+    ) {
+      invalid("sealed runtime inputs differ from their profile");
     }
-    if (typeof value !== "string" || !SEALED_GENERATED_SECRET_PATTERN.test(value)) {
-      throw new RuntimeInputPreviousGenerationError(
-        capsuleId,
-        `its sealed value for ${binding} is not a ${GENERATED_SECRET_BYTES}-byte hex secret`,
-      );
-    }
-    values.set(binding, {
-      value,
-      bytes: GENERATED_SECRET_BYTES,
-      encoding: "hex",
-    });
+    values[entry.binding] = secret.value;
   }
   return values;
 }
 
 /**
- * The sealed (or derived) generated-secret half, checked against exactly the
+ * The derived generated-secret half, checked against exactly the
  * `generatedSecrets` names. The OIDC values are not in this document: they are
  * one Accounts registration, never sealed material, and merging them before
  * this check would let a drifted blob pass by borrowing an OIDC name.

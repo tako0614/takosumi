@@ -146,29 +146,64 @@ credential.
 A repository manifest's binding-delivered `secret.generated` slots are minted
 by Takosumi and, on a host without a key derivation, sealed as one generation
 per Capsule: the one sealed-material row whose `connection_id` is
-`runtime_input_<capsuleId>`, in secret partition `runtime-input:<capsuleId>`.
+`runtime_input_<capsuleId>`, in secret partition `runtime-input:<capsuleId>`
+(table `takosumi_connection_secret_blobs` on PostgreSQL, `secret_blobs` on D1).
 This runbook never records the values.
 
-A manifest change that adds, removes or renames a slot, or changes the OIDC
-grant, re-seals the generation and carries every unchanged slot's value
-forward; only a new slot is minted. No operator action is needed, and the Run
-that re-seals is an ordinary Plan.
+A manifest change re-seals the generation at the next Plan; no operator action
+is needed. What happens to each slot:
+
+- **Unchanged slot** (same binding name and shape): keeps its exact value.
+- **Removed slot**: its value is retained in the row, never delivered, and
+  restored unchanged if the same binding name is declared again.
+- **Renamed slot**: the new name is a new slot and gets a **new value**; the old
+  name's value is retained. Renaming `ENCRYPTION_KEY` therefore rotates the
+  app's encryption key, and data encrypted under the old key is unreadable to
+  the app until the old name is declared again. Until an explicit operator
+  rotation exists, renaming is the only way to rotate one value.
+- **New slot**: a fresh value.
+
+Retained values leave the row only when the Capsule's runtime-input material is
+retired after destroy (including the destroy an uninstall schedules), or oldest
+first once more than 16 are retained. A revision with no generated secret at all
+leaves the row untouched. Every committed re-seal logs
+`deploy_control.runtime_input_generation_resealed` with the binding names that
+were carried, restored, minted, newly retained and evicted, never values.
 
 When the previous generation cannot be carried forward, Plan and Apply of that
 Capsule fail with `runtime_inputs_previous_generation_unreadable` and the row is
-left exactly as it was. The message says whether the row was sealed under the
-active key version:
+left exactly as it was. The tenant-facing message says nothing about keys; the
+operator log event `deploy_control.runtime_input_previous_generation_unreadable`
+records the failure class and, when the row did not open,
+`sealedUnderActiveKeyVersion`:
 
-- **A different key version.** The secret-boundary passphrase (global or the
-  `runtime-input:<capsuleId>` override) changed after the row was sealed.
-  Restore the passphrase that sealed it and re-plan.
-- **The active key version.** The row itself is damaged or was replaced. Restore
-  the row from the most recent backup that holds it and re-plan.
+- **`sealedUnderActiveKeyVersion: false`.** The secret-boundary passphrase
+  changed after the row was sealed. `PartitionedSecretBoundaryCrypto` holds one
+  passphrase per partition and no keyring, so do **not** restore the old global
+  `TAKOSUMI_SECRET_STORE_PASSPHRASE`: every row sealed since the rotation
+  (Connections and every other Capsule) would stop opening. Recover the one
+  Capsule with a partition override instead. Add an entry to
+  `TAKOSUMI_SECRET_STORE_PARTITION_PASSPHRASES` (a JSON object), keyed
+  `runtime-input:<capsuleId>`, whose value is the exact string the old global
+  passphrase derived for that partition:
+  `<old global passphrase>|takos.cloud.partition=runtime-input:<capsuleId>`.
+  Then re-plan. The re-sealed row is sealed under that override and stays bound
+  to it permanently, so keep the override for as long as the Capsule exists.
+  Keep the override value in the operator vault like any other passphrase.
+- **`sealedUnderActiveKeyVersion: true`.** The row itself is damaged or was
+  replaced. Restore the row from the most recent backup that holds it and
+  re-plan.
 - **Neither is possible.** The previous values are lost, and data the workload
   encrypted under them stays unreadable. Accept fresh values deliberately: after
   a backup, delete that one row and re-plan, which seals a fresh generation, or
   destroy and reinstall the Capsule. Record the decision; Takosumi never makes
   it for you.
+
+Rotating the global passphrase needs the same care even without a manifest
+change. There is no re-wrap for runtime-input rows. Plan does not open a row
+whose profile is unchanged, so it still succeeds, but every such row then fails
+Apply with `runtime_inputs_material_unusable`. Before rotating, add a partition
+override as above for every Capsule whose values must survive.
 
 Destroy needs no recovery. A destroy plan opens no runtime-input material, and
 retirement after destroy deletes the row without opening it.

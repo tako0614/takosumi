@@ -9,14 +9,21 @@ package for the v1 GA line.
 ## Unreleased
 
 - **Generated secrets survive app updates:** when an installed app's repository
-  manifest adds, removes or renames a binding-delivered `secret.generated` slot
-  (or changes its OIDC grant), Takosumi now re-seals the app's generated values
-  and keeps every unchanged slot's value; only a new slot gets a fresh value.
-  Previously every value was regenerated, silently rotating keys such as an
-  app's `ENCRYPTION_KEY`. If the previous sealed values cannot be opened, Plan
-  and Apply now fail with `runtime_inputs_previous_generation_unreadable`
-  instead of minting replacements; destroy is unaffected. See the operator
-  runbook in `docs/operations/secret-rotation.md` for recovery.
+  manifest adds or removes a binding-delivered `secret.generated` slot (or
+  changes its OIDC grant), Takosumi now re-seals the app's generated values and
+  keeps every value it already holds. An unchanged slot keeps its value. A
+  removed slot's value is kept, sealed and undelivered, and comes back if the
+  slot returns; only the newest 16 removed values are kept. A new slot gets a
+  fresh value. **Renaming a slot counts as a new slot**: the new name gets a new
+  value (renaming `ENCRYPTION_KEY` rotates that key), while the old name's value
+  is kept. Previously every value was regenerated on any of these changes,
+  silently rotating keys such as an app's `ENCRYPTION_KEY`. If the previous
+  sealed values cannot be opened, Plan and Apply now fail with
+  `runtime_inputs_previous_generation_unreadable` instead of minting
+  replacements; destroy is unaffected. A row that holds kept values cannot be
+  read by an earlier release, whose Apply then fails closed for that app. See
+  "Run-scoped generated secrets" in `docs/operations/secret-rotation.md` for
+  recovery, including a key change.
 - **Breaking API change — automatic destruction:** for an applied Capsule,
   `DELETE /api/v1/capsules/{id}` now schedules uninstall with an OSS default
   **seven-day grace period**, followed by automatic destroy if the reservation

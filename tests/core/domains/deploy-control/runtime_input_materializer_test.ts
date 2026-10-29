@@ -18,7 +18,9 @@ import {
   runtimeInputProviderInstanceForStorage,
   runtimeInputProviderInstanceFromStorage,
   RUNTIME_INPUT_BUNDLE_MARKER,
+  RUNTIME_INPUT_MAX_RETAINED,
   RuntimeInputPreviousGenerationError,
+  type RuntimeInputOidcClientSource,
 } from "../../../../core/domains/deploy-control/runtime_input_materializer.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -35,6 +37,34 @@ const DEFAULT_INSTANCE = runtimeInputProviderInstance({
   moduleLocalName: "takoform",
 });
 
+/** One operator event the materializer emitted. */
+interface LoggedEvent {
+  readonly level: "info" | "warn";
+  readonly event: string;
+  readonly fields: Readonly<Record<string, unknown>>;
+}
+
+/** Answers for the one OIDC grant a fixture profile may declare. */
+const FIXTURE_OIDC_CLIENT = {
+  issuerBinding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+  clientIdBinding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+  ownerSubjectBinding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+  redirectUriBinding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+  callbackPath: "/auth/callback",
+} as const;
+const fixtureOidcSource: RuntimeInputOidcClientSource = {
+  generation: async () => "sha256:fixture-oidc-generation",
+  materialize: async () => ({
+    generation: "sha256:fixture-oidc-generation",
+    values: {
+      TAKOSUMI_ACCOUNTS_ISSUER_URL: "https://accounts.example.test",
+      TAKOSUMI_ACCOUNTS_CLIENT_ID: "fixture-client-identifier",
+      TAKOSUMI_ACCOUNTS_OWNER_SUB: "fixture-owner-subject",
+      TAKOSUMI_ACCOUNTS_REDIRECT_URI: "https://app.example.test/auth/callback",
+    },
+  }),
+};
+
 async function fixture(
   overrides: {
     readonly runtimeBindingMaterialization?: unknown;
@@ -50,10 +80,18 @@ async function fixture(
         profile) as never,
     },
   });
+  const events: LoggedEvent[] = [];
+  let tick = 0;
   const materializer = createRuntimeInputMaterializer({
     store,
     crypto,
-    clock: () => new Date("2026-09-01T12:00:00.000Z"),
+    oidcClient: fixtureOidcSource,
+    // Each re-seal sees a later instant, so retention order is observable.
+    clock: () => new Date(Date.parse("2026-09-01T12:00:00.000Z") + 1000 * tick++),
+    logger: {
+      info: (event, fields = {}) => events.push({ level: "info", event, fields }),
+      warn: (event, fields = {}) => events.push({ level: "warn", event, fields }),
+    },
   });
   const authority = {
     workspaceId: seeded.workspace.id,
@@ -67,10 +105,12 @@ async function fixture(
     materializer,
     authority,
     request: { ...authority, providerInstance: DEFAULT_INSTANCE },
+    events,
     /** Replaces the Capsule's generated-secret declaration in place. */
     async declare(
       generatedSecrets: readonly string[],
       contract = "takosumi.runtime-binding-profile/v1",
+      options: { readonly oidc?: boolean } = {},
     ) {
       await store.putInstallConfig({
         ...seeded.installConfig,
@@ -81,8 +121,22 @@ async function fixture(
             bytes: 32,
             encoding: "hex",
           })),
+          ...(options.oidc ? { oidcClient: FIXTURE_OIDC_CLIENT } : {}),
         } as never,
       });
+    },
+    /** The stored generation's sealed document, opened under its own AAD. */
+    async sealedDocument(): Promise<Record<string, unknown>> {
+      const row = await store.getSecretBlob(`runtime_input_${seeded.capsule.id}`);
+      if (!row) throw new Error("no sealed row");
+      const bytes = Uint8Array.from(atob(row.ciphertext), (c) => c.charCodeAt(0));
+      return JSON.parse(
+        await crypto.open(
+          bytes,
+          `runtime-input:${seeded.capsule.id}`,
+          new TextEncoder().encode(row.aad),
+        ),
+      ) as Record<string, unknown>;
     },
     ownerRef: `runtime_input_${seeded.capsule.id}`,
   };
@@ -267,7 +321,9 @@ test("a drifted runtime binding profile re-seals the material and keeps its valu
   // The row keeps its lineage: same id and creation time, a rotation stamp.
   expect(sealedAfterDrift?.id).toBe(sealedBeforeDrift?.id);
   expect(sealedAfterDrift?.createdAt).toBe(sealedBeforeDrift?.createdAt);
-  expect(sealedAfterDrift?.rotatedAt).toBe("2026-09-01T12:00:00.000Z");
+  expect(
+    Date.parse(sealedAfterDrift?.rotatedAt ?? ""),
+  ).toBeGreaterThan(Date.parse(sealedBeforeDrift?.createdAt ?? ""));
   for (const value of Object.values(afterValues)) {
     expect(JSON.stringify(sealedAfterDrift)).not.toContain(value);
   }
@@ -484,21 +540,143 @@ test("adding a generated secret keeps every existing value and mints only the ne
   expect(Object.values(before)).not.toContain(after.WEB_PUSH_KEY);
 });
 
-test("removing a generated secret keeps the rest and really drops the removed one", async () => {
-  const { materializer, request, declare } = await fixture();
+test("removing a generated secret retains it, and declaring it again restores the same value", async () => {
+  const { materializer, request, declare, sealedDocument, events } = await fixture();
   const before = await appliedValues(materializer, request);
 
   await declare(["ENCRYPTION_KEY"]);
   const removed = await appliedValues(materializer, request);
+  // Only the declared binding is delivered; the removed one is kept sealed.
   expect(removed).toEqual({ ENCRYPTION_KEY: before.ENCRYPTION_KEY! });
+  const envelope = await sealedDocument();
+  expect(envelope.contract).toBe("takosumi.runtime-input-generation/v2");
+  expect(
+    (envelope.retained as { binding: string }[]).map((entry) => entry.binding),
+  ).toEqual(["SIGNING_KEY"]);
 
-  // The dropped value is gone from the sealed document: declaring the binding
-  // again mints a fresh one rather than resurrecting it.
   await declare(["ENCRYPTION_KEY", "SIGNING_KEY"]);
-  const readded = await appliedValues(materializer, request);
-  expect(readded.ENCRYPTION_KEY).toBe(before.ENCRYPTION_KEY!);
-  expect(readded.SIGNING_KEY).toMatch(/^[0-9a-f]{64}$/u);
-  expect(readded.SIGNING_KEY).not.toBe(before.SIGNING_KEY!);
+  expect(await appliedValues(materializer, request)).toEqual(before);
+  // Nothing is retained any more, so the row is the original bare map again:
+  // byte-compatible with every earlier release.
+  expect(Object.keys(await sealedDocument()).sort()).toEqual([
+    "ENCRYPTION_KEY",
+    "SIGNING_KEY",
+  ]);
+  const reseals = events.filter(
+    (entry) => entry.event === "deploy_control.runtime_input_generation_resealed",
+  );
+  expect(reseals.map((entry) => entry.fields)).toEqual([
+    {
+      capsuleId: request.capsuleId,
+      carried: ["ENCRYPTION_KEY"],
+      restored: [],
+      minted: [],
+      retained: ["SIGNING_KEY"],
+      evicted: [],
+      retainedTotal: 1,
+    },
+    {
+      capsuleId: request.capsuleId,
+      carried: ["ENCRYPTION_KEY"],
+      restored: ["SIGNING_KEY"],
+      minted: [],
+      retained: [],
+      evicted: [],
+      retainedTotal: 0,
+    },
+  ]);
+  for (const entry of events) {
+    for (const value of Object.values(before)) {
+      expect(JSON.stringify(entry)).not.toContain(value);
+    }
+  }
+});
+
+test("a removal seen only by Plan, then reverted, keeps the value the workload uses", async () => {
+  const { materializer, request, declare } = await fixture();
+  const applied = await appliedValues(materializer, request);
+
+  // A Plan of a revision that drops SIGNING_KEY re-seals the row, but is never
+  // applied; the next revision declares it again.
+  await declare(["ENCRYPTION_KEY"]);
+  await materializer.nonce(request);
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY"]);
+  const planned = await materializer.nonce(request);
+  const reapplied = await materializer.materialize({ ...request, phase: "apply" });
+  expect(reapplied.nonce).toBe(planned);
+  expect(reapplied.toRunnerDispatch().values).toEqual(applied);
+});
+
+test("a profile without generated secrets leaves their values retained", async () => {
+  const { store, materializer, request, declare, ownerRef } = await fixture();
+  const before = await appliedValues(materializer, request);
+  const sealed = await store.getSecretBlob(ownerRef);
+
+  // An OIDC-only revision delivers no generated secret and never touches the row.
+  await declare([], "takosumi.runtime-binding-profile/v1", { oidc: true });
+  const oidcOnly = await appliedValues(materializer, request);
+  expect(Object.keys(oidcOnly).sort()).toEqual([
+    "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+    "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+    "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+    "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+  ]);
+  expect(await store.getSecretBlob(ownerRef)).toEqual(sealed);
+
+  // Declaring a generated secret again restores its value; the other stays retained.
+  await declare(["ENCRYPTION_KEY"], "takosumi.runtime-binding-profile/v1", {
+    oidc: true,
+  });
+  const after = await appliedValues(materializer, request);
+  expect(after.ENCRYPTION_KEY).toBe(before.ENCRYPTION_KEY!);
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY"]);
+  expect(await appliedValues(materializer, request)).toEqual(before);
+});
+
+test("renaming a generated secret gives the new name a new value and retains the old one", async () => {
+  const { materializer, request, declare } = await fixture();
+  const before = await appliedValues(materializer, request);
+
+  await declare(["APP_ENCRYPTION_KEY", "SIGNING_KEY"]);
+  const renamed = await appliedValues(materializer, request);
+  expect(renamed.SIGNING_KEY).toBe(before.SIGNING_KEY!);
+  expect(renamed.APP_ENCRYPTION_KEY).toMatch(/^[0-9a-f]{64}$/u);
+  expect(renamed.APP_ENCRYPTION_KEY).not.toBe(before.ENCRYPTION_KEY!);
+
+  // Renaming back restores the original value.
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY"]);
+  expect(await appliedValues(materializer, request)).toEqual(before);
+});
+
+test("the retained set is bounded and evicts its oldest values first", async () => {
+  const names = (prefix: string) =>
+    Array.from({ length: RUNTIME_INPUT_MAX_RETAINED }, (_unused, index) =>
+      `${prefix}_${String(index).padStart(2, "0")}`,
+    );
+  const { materializer, request, declare, sealedDocument, events } =
+    await fixture();
+  await declare(names("FIRST"));
+  const first = await appliedValues(materializer, request);
+  await declare(names("SECOND"));
+  const second = await appliedValues(materializer, request);
+  // Both full sets are now retained; the bound keeps only the newer one.
+  await declare(["THIRD"]);
+  await appliedValues(materializer, request);
+  const envelope = await sealedDocument();
+  expect(
+    (envelope.retained as { binding: string }[]).map((entry) => entry.binding),
+  ).toEqual(names("SECOND"));
+  const last = events.at(-1);
+  expect(last?.fields.retained).toEqual(names("SECOND"));
+  expect(last?.fields.evicted).toEqual(names("FIRST"));
+  expect(last?.fields.retainedTotal).toBe(RUNTIME_INPUT_MAX_RETAINED);
+
+  await declare(["FIRST_00", "SECOND_00"]);
+  const back = await appliedValues(materializer, request);
+  expect(back.SECOND_00).toBe(second.SECOND_00!);
+  // The evicted value is gone; the binding gets a fresh one.
+  expect(back.FIRST_00).toMatch(/^[0-9a-f]{64}$/u);
+  expect(back.FIRST_00).not.toBe(first.FIRST_00!);
 });
 
 test("a profile contract change re-seals without moving any value", async () => {
@@ -518,34 +696,93 @@ test("a profile contract change re-seals without moving any value", async () => 
   );
 });
 
-test("reshaping one generated secret mints only that binding", () => {
+test("reshaping one generated secret mints only that binding and retains its old value", () => {
   // The declaration grammar admits only 32-byte hex today, so a reshape cannot
   // reach the materializer yet; the carry rule is pinned here directly so the
   // day a second shape is admitted, only the reshaped binding moves.
-  const previous = new Map([
-    ["KEEP_KEY", { value: "a".repeat(64), bytes: 32, encoding: "hex" }],
-    ["RESHAPED_KEY", { value: "b".repeat(64), bytes: 32, encoding: "hex" }],
-    ["REMOVED_KEY", { value: "c".repeat(64), bytes: 32, encoding: "hex" }],
-  ]);
+  const hex = (character: string) => character.repeat(64);
   const carried = carryGeneratedSecretValues({
-    previous,
+    previous: {
+      delivered: new Map([
+        ["KEEP_KEY", { value: hex("a"), bytes: 32, encoding: "hex" }],
+        ["RESHAPED_KEY", { value: hex("b"), bytes: 32, encoding: "hex" }],
+        ["REMOVED_KEY", { value: hex("c"), bytes: 32, encoding: "hex" }],
+      ]),
+      retained: [
+        {
+          binding: "EARLIER_KEY",
+          value: hex("d"),
+          bytes: 32,
+          encoding: "hex",
+          retainedAt: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+    },
     generatedSecrets: [
       { binding: "KEEP_KEY", bytes: 32, encoding: "hex" },
       { binding: "RESHAPED_KEY", bytes: 64 as 32, encoding: "hex" },
       { binding: "NEW_KEY", bytes: 32, encoding: "hex" },
+      { binding: "EARLIER_KEY", bytes: 32, encoding: "hex" },
     ],
+    retainedAt: "2026-09-02T00:00:00.000Z",
   });
   expect(carried.carried).toEqual(["KEEP_KEY"]);
+  expect(carried.restored).toEqual(["EARLIER_KEY"]);
   expect(carried.minted).toEqual(["NEW_KEY", "RESHAPED_KEY"]);
-  expect(carried.dropped).toEqual(["REMOVED_KEY"]);
-  expect(Object.keys(carried.values).sort()).toEqual([
+  expect(carried.retained).toEqual(["REMOVED_KEY", "RESHAPED_KEY"]);
+  expect(carried.evicted).toEqual([]);
+  const delivered = carried.generation.delivered;
+  expect([...delivered.keys()].sort()).toEqual([
+    "EARLIER_KEY",
     "KEEP_KEY",
     "NEW_KEY",
     "RESHAPED_KEY",
   ]);
-  expect(carried.values.KEEP_KEY).toBe("a".repeat(64));
-  expect(carried.values.RESHAPED_KEY).toMatch(/^[0-9a-f]{128}$/u);
-  expect(carried.values.NEW_KEY).toMatch(/^[0-9a-f]{64}$/u);
+  expect(delivered.get("KEEP_KEY")?.value).toBe(hex("a"));
+  expect(delivered.get("EARLIER_KEY")?.value).toBe(hex("d"));
+  expect(delivered.get("RESHAPED_KEY")?.value).toMatch(/^[0-9a-f]{128}$/u);
+  expect(delivered.get("NEW_KEY")?.value).toMatch(/^[0-9a-f]{64}$/u);
+  // The old-shape value is retained in its own shape, not discarded.
+  expect(carried.generation.retained).toEqual([
+    {
+      binding: "REMOVED_KEY",
+      value: hex("c"),
+      bytes: 32,
+      encoding: "hex",
+      retainedAt: "2026-09-02T00:00:00.000Z",
+    },
+    {
+      binding: "RESHAPED_KEY",
+      value: hex("b"),
+      bytes: 32,
+      encoding: "hex",
+      retainedAt: "2026-09-02T00:00:00.000Z",
+    },
+  ]);
+
+  // Past the bound the oldest retained values go first.
+  const bounded = carryGeneratedSecretValues({
+    previous: carried.generation,
+    generatedSecrets: [{ binding: "ONLY_KEY", bytes: 32, encoding: "hex" }],
+    retainedAt: "2026-09-03T00:00:00.000Z",
+    maxRetained: 3,
+  });
+  // Four delivered values become retained behind the two already there; a
+  // bound of three keeps the newest three.
+  expect(bounded.retained).toEqual([
+    "EARLIER_KEY",
+    "KEEP_KEY",
+    "NEW_KEY",
+    "RESHAPED_KEY",
+  ]);
+  expect(bounded.evicted).toEqual(["REMOVED_KEY", "RESHAPED_KEY", "EARLIER_KEY"]);
+  expect(
+    bounded.generation.retained.map((entry) => [entry.binding, entry.bytes]),
+  ).toEqual([
+    ["KEEP_KEY", 32],
+    ["NEW_KEY", 32],
+    ["RESHAPED_KEY", 64],
+  ]);
 });
 
 test("a failure between sealing and storing leaves the previous generation intact", async () => {
@@ -688,7 +925,7 @@ test("an owner mismatch still refuses before the previous generation is opened",
 });
 
 test("an unreadable previous generation fences Plan and Apply but never retirement", async () => {
-  const { store, seeded, materializer, authority, request, declare, ownerRef } =
+  const { store, seeded, materializer, authority, request, declare, ownerRef, events } =
     await fixture();
   const before = await appliedValues(materializer, request);
   const sealed = await store.getSecretBlob(ownerRef);
@@ -705,7 +942,8 @@ test("an unreadable previous generation fences Plan and Apply but never retireme
     expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
     expect(refusal.message).toContain(seeded.capsule.id);
     expect(refusal.message).toContain("could not be opened");
-    expect(refusal.message).toContain("the active key version");
+    // Key detail is operator evidence, not tenant-facing text.
+    expect(refusal.message).not.toContain("key version");
     expect(refusal.message).toContain("not re-minted");
     for (const value of Object.values(before)) {
       expect(refusal.message).not.toContain(value);
@@ -713,6 +951,20 @@ test("an unreadable previous generation fences Plan and Apply but never retireme
     // Refused, not replaced: the damaged row is still the stored one.
     expect(await store.getSecretBlob(ownerRef)).toEqual(corrupt);
   }
+  expect(
+    events.filter((entry) => entry.level === "warn").map((entry) => entry.fields),
+  ).toEqual([
+    {
+      capsuleId: request.capsuleId,
+      failure: "unopenable",
+      sealedUnderActiveKeyVersion: true,
+    },
+    {
+      capsuleId: request.capsuleId,
+      failure: "unopenable",
+      sealedUnderActiveKeyVersion: true,
+    },
+  ]);
 
   // Teardown never opens the material, so the destroyed Capsule still retires.
   await store.putCapsule({ ...seeded.capsule, status: "destroyed" });
@@ -720,7 +972,7 @@ test("an unreadable previous generation fences Plan and Apply but never retireme
   expect(await store.getSecretBlob(ownerRef)).toBeUndefined();
 });
 
-test("a previous generation sealed under another key says so", async () => {
+test("a previous generation sealed under another key tells the operator, not the tenant", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const sealing = await fixture({
     store,
@@ -732,17 +984,94 @@ test("a previous generation sealed under another key says so", async () => {
   const sealed = await store.getSecretBlob(sealing.ownerRef);
   await sealing.declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
 
+  const events: LoggedEvent[] = [];
   const rotated = createRuntimeInputMaterializer({
     store,
     crypto: new PartitionedSecretBoundaryCrypto({
       globalPassphrase: "runtime-input-replaced-key-0123456789abcdef",
     }),
+    logger: {
+      info: (event, fields = {}) => events.push({ level: "info", event, fields }),
+      warn: (event, fields = {}) => events.push({ level: "warn", event, fields }),
+    },
   });
   const refusal = await rotated.nonce(sealing.request).catch((error) => error);
   expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
-  expect(refusal.message).toContain("a different key version");
+  expect(refusal.message).toContain("could not be opened");
+  expect(refusal.message).not.toContain("key version");
   expect(refusal.cause).toBeDefined();
+  expect(events).toEqual([
+    {
+      level: "warn",
+      event: "deploy_control.runtime_input_previous_generation_unreadable",
+      fields: {
+        capsuleId: sealing.request.capsuleId,
+        failure: "unopenable",
+        sealedUnderActiveKeyVersion: false,
+      },
+    },
+  ]);
   expect(await store.getSecretBlob(sealing.ownerRef)).toEqual(sealed);
+
+  // The runbook's per-Capsule recovery: an override for this Capsule's
+  // partition that reproduces the key the old global passphrase derived.
+  const partition = `runtime-input:${sealing.request.capsuleId}`;
+  const recovered = createRuntimeInputMaterializer({
+    store,
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "runtime-input-replaced-key-0123456789abcdef",
+      perPartitionPassphrases: {
+        [partition]:
+          `runtime-input-previous-key-0123456789abcdef|takos.cloud.partition=${partition}`,
+      },
+    }),
+  });
+  const nonce = await recovered.nonce(sealing.request);
+  const applied = await recovered.materialize({
+    ...sealing.request,
+    phase: "apply",
+  });
+  expect(applied.nonce).toBe(nonce);
+  expect(Object.keys(applied.toRunnerDispatch().values).sort()).toEqual([
+    "ENCRYPTION_KEY",
+    "SESSION_KEY",
+    "SIGNING_KEY",
+  ]);
+});
+
+test("a stored AAD in non-canonical form is refused before anything is opened", async () => {
+  const crypto = new CountingCrypto();
+  const { store, materializer, request, declare, ownerRef } = await fixture({
+    crypto,
+  });
+  await appliedValues(materializer, request);
+  const sealed = await store.getSecretBlob(ownerRef);
+  if (!sealed) throw new Error("fixture sealed blob is missing");
+  await declare(["ENCRYPTION_KEY", "SIGNING_KEY", "SESSION_KEY"]);
+  const opensBefore = crypto.opens;
+
+  // JSON.parse keeps the last duplicate, so a structure check alone would
+  // accept a capsuleId that first names another Capsule.
+  const duplicated = sealed.aad.replace(
+    "{",
+    '{"capsuleId":"cap_someone_else",',
+  );
+  expect((JSON.parse(duplicated) as { capsuleId: string }).capsuleId).toBe(
+    request.capsuleId,
+  );
+  for (const aad of [
+    duplicated,
+    ` ${sealed.aad}`,
+    sealed.aad.replace("}", ',"extra":true}'),
+  ]) {
+    const planted = { ...sealed, aad };
+    await store.putSecretBlob(planted);
+    const refusal = await materializer.nonce(request).catch((error) => error);
+    expect(refusal).toBeInstanceOf(RuntimeInputPreviousGenerationError);
+    expect(String(refusal)).toContain("does not name this Capsule");
+    expect(await store.getSecretBlob(ownerRef)).toEqual(planted);
+  }
+  expect(crypto.opens).toBe(opensBefore);
 });
 
 test("a previous generation whose document is not ours is refused without echoing it", async () => {
@@ -771,6 +1100,20 @@ test("a previous generation whose document is not ours is refused without echoin
     ['["ENCRYPTION_KEY"]', "not a binding map"],
     ['{"ENCRYPTION_KEY":"not-a-hex-secret-value"}', "not a 32-byte hex secret"],
     ['{"lower_case":"' + "a".repeat(64) + '"}', "invalid binding name"],
+    [
+      '{"contract":"takosumi.runtime-input-generation/v2","delivered":{},"retained":"not-a-hex-secret-value"}',
+      "not a generation this lane wrote",
+    ],
+    [
+      '{"contract":"takosumi.runtime-input-generation/v2","delivered":{"ENCRYPTION_KEY":{"value":"not-a-hex-secret-value","bytes":32,"encoding":"hex"}},"retained":[]}',
+      "invalid delivered value",
+    ],
+    [
+      '{"contract":"takosumi.runtime-input-generation/v2","delivered":{},"retained":[{"binding":"lower_case","value":"' +
+        "a".repeat(64) +
+        '","bytes":32,"encoding":"hex","retainedAt":"2026-09-01T00:00:00.000Z"}]}',
+      "invalid retained value",
+    ],
   ] as const) {
     const planted = await reseal(document);
     await store.putSecretBlob(planted);
