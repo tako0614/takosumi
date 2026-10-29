@@ -46,6 +46,13 @@ function connection(
   };
 }
 
+function storedConnection(
+  row: ProviderConnection,
+  ownerAccountId: string,
+): ProviderConnection {
+  return { ...row, ownerAccountId };
+}
+
 function secretBlob(connectionId: string): StoredSecretBlob {
   return {
     id: `secret_${connectionId}`,
@@ -88,7 +95,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const blob = secretBlob(row.id);
       const input = { connection: row, secretBlob: blob, expectedWorkspaceManagementAuthority: authority, actorAuthority: null };
       expect(await store.createConnectionRegistration(input)).toBe(true);
-      expect(await store.getConnection(row.id)).toEqual(row);
+      expect(await store.getConnection(row.id)).toEqual(
+        storedConnection(row, "registration_owner"),
+      );
       expect(await store.getSecretBlob(row.id)).toEqual(blob);
       expect(await store.createConnectionRegistration({ ...input,
         secretBlob: { ...blob, ciphertext: "cmVwbGFjZW1lbnQ=" } })).toBe(false);
@@ -222,7 +231,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         expectedConnection: original,
         observedAt: "2026-06-04T00:10:00.000Z",
       })).toBe(false);
-      expect(await store.getConnection(original.id)).toEqual(newer);
+      expect(await store.getConnection(original.id)).toEqual(
+        storedConnection(newer, workspace.ownerUserId),
+      );
       expect(await store.getSecretBlob(original.id)).toEqual(blob);
 
       expect(await store.markConnectionExpiredIfUnchanged({
@@ -234,13 +245,17 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         status: "expired" as const,
         updatedAt: "2026-06-04T00:10:00.000Z",
       };
-      expect(await store.getConnection(original.id)).toEqual(expired);
+      expect(await store.getConnection(original.id)).toEqual(
+        storedConnection(expired, workspace.ownerUserId),
+      );
       expect(await store.getSecretBlob(original.id)).toEqual(blob);
       expect(await store.markConnectionExpiredIfUnchanged({
         expectedConnection: expired,
         observedAt: "2026-06-04T00:11:00.000Z",
       })).toBe(false);
-      expect(await store.getConnection(original.id)).toEqual(expired);
+      expect(await store.getConnection(original.id)).toEqual(
+        storedConnection(expired, workspace.ownerUserId),
+      );
 
       const revoked = {
         ...expired,
@@ -252,7 +267,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         expectedConnection: revoked,
         observedAt: "2026-06-04T00:13:00.000Z",
       })).toBe(false);
-      expect(await store.getConnection(original.id)).toEqual(revoked);
+      expect(await store.getConnection(original.id)).toEqual(
+        storedConnection(revoked, workspace.ownerUserId),
+      );
 
       const future = connection({
         id: `conn_expiry_future_${name.toLowerCase()}`,
@@ -266,7 +283,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         expectedConnection: future,
         observedAt: "2026-06-04T00:10:00.000Z",
       })).toBe(false);
-      expect(await store.getConnection(future.id)).toEqual(future);
+      expect(await store.getConnection(future.id)).toEqual(
+        storedConnection(future, workspace.ownerUserId),
+      );
 
       const malformed = {
         ...future,
@@ -278,12 +297,16 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         expectedConnection: malformed,
         observedAt: "2026-06-04T00:30:00.000Z",
       })).toBe(false);
-      expect(await store.getConnection(malformed.id)).toEqual(malformed);
+      expect(await store.getConnection(malformed.id)).toEqual(
+        storedConnection(malformed, workspace.ownerUserId),
+      );
       expect(await store.markConnectionExpiredIfUnchanged({
         expectedConnection: future,
         observedAt: "not-a-timestamp",
       })).toBe(false);
-      expect(await store.getConnection(future.id)).toEqual(future);
+      expect(await store.getConnection(future.id)).toEqual(
+        storedConnection(future, workspace.ownerUserId),
+      );
 
       const whileDraining = connection({
         id: `conn_expiry_draining_${name.toLowerCase()}`,
@@ -304,6 +327,7 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         ...whileDraining,
         status: "expired",
         updatedAt: "2026-06-04T00:10:00.000Z",
+        ownerAccountId: workspace.ownerUserId,
       });
     } finally {
       await pg?.close();
@@ -329,7 +353,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       const revoke = (expectedConnection = row, expectedWorkspaceManagementAuthority = authority) =>
         store.revokeConnectionIfUnchanged({ expectedConnection, expectedWorkspaceManagementAuthority, actorAuthority: null });
       expect(await revoke({ ...row, displayName: "stale name" })).toBe(false);
-      expect(await store.getConnection(row.id)).toEqual(row);
+      expect(await store.getConnection(row.id)).toEqual(
+        storedConnection(row, "owner"),
+      );
       expect(await store.getSecretBlob(row.id)).toEqual(blob);
       if (pg) {
         // Keep the canonical JSON untouched while drifting a searchable
@@ -339,7 +365,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
           [row.id],
         );
         expect(await revoke()).toBe(false);
-        expect(await store.getConnection(row.id)).toEqual(row);
+        expect(await store.getConnection(row.id)).toEqual(
+          storedConnection(row, "owner"),
+        );
         expect(await store.getSecretBlob(row.id)).toEqual(blob);
         await pg.query(
           "update takosumi_connections set status = 'pending' where id = $1",
@@ -348,7 +376,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
       }
       await store.beginWorkspaceDraining("workspace_1", authority);
       await expect(revoke()).rejects.toBeInstanceOf(WorkspaceManagementAdmissionConflictError);
-      expect(await store.getConnection(row.id)).toEqual(row);
+      expect(await store.getConnection(row.id)).toEqual(
+        storedConnection(row, "owner"),
+      );
       expect(await store.getSecretBlob(row.id)).toEqual(blob);
       let fresh = authority;
       if (pg || d1) {
@@ -361,7 +391,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
         if (d1) {
           await d1.prepare("CREATE TRIGGER reject_connection_revoke BEFORE DELETE ON connections BEGIN SELECT RAISE(ABORT, 'fixture revoke failure'); END").run();
           await expect(revoke(row, fresh)).rejects.toThrow("fixture revoke failure");
-          expect(await store.getConnection(row.id)).toEqual(row);
+          expect(await store.getConnection(row.id)).toEqual(
+            storedConnection(row, "owner"),
+          );
           expect(await store.getSecretBlob(row.id)).toEqual(rotated);
           await d1.prepare("DROP TRIGGER reject_connection_revoke").run();
         }
@@ -384,7 +416,9 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
           // "Failed query" message, so assert the transaction fails rather
           // than depending on the driver's inner error formatting.
           await expect(revoke(row, fresh)).rejects.toThrow();
-          expect(await store.getConnection(row.id)).toEqual(row);
+          expect(await store.getConnection(row.id)).toEqual(
+            storedConnection(row, "owner"),
+          );
           expect(await store.getSecretBlob(row.id)).toEqual(rotated);
           await pg.query("drop trigger reject_connection_revoke_blob on takosumi_connection_secret_blobs");
           await pg.query("drop function reject_connection_revoke_blob()");

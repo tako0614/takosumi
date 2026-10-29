@@ -62,6 +62,7 @@ import {
   D1AccountsStore,
   issueInterfaceOAuthAccessToken,
   resolveD1AccountsSchemaMode,
+  parseWorkspaceMutationsFrozen,
   validateUninstallRequester,
 } from "@takosjp/takosumi-accounts-service";
 import {
@@ -422,6 +423,9 @@ export async function createWorkerServiceApp(
     artifactReferenceAllocator: backupStorage.allocator,
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
     appOwnershipStore: new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB, opentofuControlStore),
+    workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
+      env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+    ),
     ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK
       ? { interfaceProjectionSink: env.TAKOSUMI_INTERFACE_PROJECTION_SINK }
       : {}),

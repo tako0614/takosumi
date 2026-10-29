@@ -43,6 +43,7 @@ import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { RunReadWaiter } from "./run-read-deadline.ts";
 import {
   measureRequestPhaseOperation,
+  type AppAccessShadowDiagnostic,
   type RequestPhaseObserver,
 } from "../request-phase-diagnostics.ts";
 import { WorkspaceManagementAdmissionConflictError } from "../../../../core/domains/deploy-control/store.ts";
@@ -91,6 +92,7 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
+import { appActionAllowed, type AppAccess, type AppAction } from "takosumi-contract/app-access";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
@@ -156,6 +158,8 @@ export interface ControlDispatchContext {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly session: ControlSession;
+  /** True when the legacy Workspace create/member compatibility surfaces are frozen. */
+  readonly workspaceMutationsFrozen?: boolean;
   /** Injectable request-local clock for deterministic stream tests. */
   readonly runStreamTiming?: RunStreamTiming;
   /** Stops new work after the enclosing ordinary Run GET read budget expires. */
@@ -561,6 +565,8 @@ export async function requireWorkspaceAccess(input: {
   readonly session: ControlSession;
   readonly workspaceId: string;
   readonly workspace?: Workspace;
+  readonly capsuleId?: string;
+  readonly appAction?: AppAction;
   readonly assertActive?: () => void;
   readonly diagnostics?: RequestPhaseObserver;
 }): Promise<WorkspaceAccessResult> {
@@ -571,6 +577,8 @@ export async function requireWorkspaceAccess(input: {
     session: input.session,
     workspaceId: input.workspaceId,
     ...(input.workspace ? { workspace: input.workspace } : {}),
+    ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
+    ...(input.appAction ? { appAction: input.appAction } : {}),
     ...(input.assertActive ? { assertActive: input.assertActive } : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
@@ -594,6 +602,8 @@ export async function canAccessWorkspace(input: {
   readonly session: ControlSession;
   readonly workspaceId: string;
   readonly workspace?: Workspace;
+  readonly capsuleId?: string;
+  readonly appAction?: AppAction;
   readonly assertActive?: () => void;
   readonly diagnostics?: RequestPhaseObserver;
 }): Promise<boolean> {
@@ -603,10 +613,30 @@ export async function canAccessWorkspace(input: {
   // workspace A, or an OAuth token issued for a Capsule in A, would otherwise
   // read B's Capsules, Runs, and Outputs through every id-addressed route.
   // The restriction is applied before membership, never instead of it.
-  if (!bearerWorkspaceAllows(input.session, input.workspaceId)) return false;
-  // App-bound credentials cannot authorize a Workspace-wide legacy read. The
-  // app routes intersect appIds with live AppAccess at the resource boundary.
-  if (input.session.appIds !== undefined) return false;
+  const bearerAllowed = bearerWorkspaceAllows(input.session, input.workspaceId);
+  const finish = async (workspaceAllowed: boolean): Promise<boolean> => {
+    if (input.capsuleId) {
+      try {
+        if (!input.operations.appAccess && !input.diagnostics?.observeAppAccessShadow) return workspaceAllowed;
+        await observeAppAccessShadow({
+          operations: input.operations,
+          session: input.session,
+          workspaceId: input.workspaceId,
+          capsuleId: input.capsuleId,
+          appAction: input.appAction,
+          bearerAllowed,
+          workspaceAllowed,
+          workspace: input.workspace,
+          diagnostics: input.diagnostics,
+        });
+      } catch {
+        // The shadow port cannot replace or fail the legacy authorization result.
+      }
+    }
+    return workspaceAllowed;
+  };
+  if (!bearerAllowed) return await finish(false);
+
 
   const workspace =
     input.workspace ??
@@ -616,9 +646,9 @@ export async function canAccessWorkspace(input: {
       () => input.operations.workspaces.getWorkspace(input.workspaceId),
     ));
   input.assertActive?.();
-  if (workspace.id !== input.workspaceId) return false;
+  if (workspace.id !== input.workspaceId) return await finish(false);
   if (!input.session.requireCurrentMembership &&
-    workspace.ownerUserId === input.session.subject) return true;
+    workspace.ownerUserId === input.session.subject) return await finish(true);
 
   const mayUseMember = (member: PublicWorkspaceMember | undefined): boolean =>
     member?.status === "active" &&
@@ -639,7 +669,7 @@ export async function canAccessWorkspace(input: {
       ),
     );
     input.assertActive?.();
-    return mayUseMember(member);
+    return await finish(mayUseMember(member));
   }
   const members = await measureRequestPhaseOperation(
     input.diagnostics,
@@ -647,9 +677,96 @@ export async function canAccessWorkspace(input: {
     () => input.operations.members.listMembers(input.workspaceId),
   );
   input.assertActive?.();
-  return mayUseMember(
+  return await finish(mayUseMember(
     members.find((member) => member.accountId === input.session.subject),
-  );
+  ));
+}
+
+/**
+ * Best-effort Phase 3 comparison only. It deliberately runs after the legacy
+ * answer is computed, does not delay or replace that answer, and only reports
+ * booleans and coarse roles through the opt-in diagnostic observer.
+ */
+async function observeAppAccessShadow(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly session: ControlSession;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly appAction?: AppAction;
+  readonly bearerAllowed: boolean;
+  readonly workspaceAllowed: boolean;
+  readonly workspace?: Workspace;
+  readonly diagnostics?: RequestPhaseObserver;
+}): Promise<void> {
+  const resolver = input.operations.appAccess;
+  const diagnostic = input.diagnostics?.observeAppAccessShadow;
+  if (!resolver && !diagnostic) return;
+  let appAccess: AppAccess | undefined;
+  let resolverSucceeded = false;
+  let workspaceRole: "owner" | "member" | null = null;
+  const action = input.appAction ?? (input.session.requiredAccess === "write" ? "change_settings" : "view");
+  const [appResult, workspaceRoleResult] = await Promise.allSettled([
+    resolver?.resolveAppAccess(input.session.subject, input.capsuleId) ?? Promise.resolve(undefined),
+    resolveWorkspaceRole(input),
+  ]);
+  if (appResult.status === "fulfilled" &&
+    (!appResult.value || appResult.value.capsuleId === input.capsuleId)) {
+    appAccess = appResult.value;
+    resolverSucceeded = resolver !== undefined;
+  }
+  if (workspaceRoleResult.status === "fulfilled") workspaceRole = workspaceRoleResult.value;
+  const appRole = appAccess?.role ?? null;
+  const appAllowed = input.bearerAllowed && appAccess !== undefined &&
+    appActionAllowed(appAccess.role, action);
+  let roleDiff: "same" | "workspace_only" | "app_only" | "role_mismatch" | "unavailable";
+  if (!resolverSucceeded || workspaceRoleResult.status !== "fulfilled") roleDiff = "unavailable";
+  else if (workspaceRole === appRole) roleDiff = "same";
+  else if (workspaceRole === null) roleDiff = "app_only";
+  else if (appRole === null) roleDiff = "workspace_only";
+  else roleDiff = "role_mismatch";
+  const observation: AppAccessShadowDiagnostic = {
+      resolverAvailable: resolver !== undefined,
+      resolverSucceeded,
+      bearerWorkspaceAllowed: input.bearerAllowed,
+      workspaceAllowed: input.workspaceAllowed,
+      appAllowed,
+      workspaceRole,
+      appRole,
+      roleDiff,
+  };
+  try {
+    await diagnostic?.call(input.diagnostics, observation);
+  } catch {
+    // Diagnostics have no authority and must not affect the route response.
+  }
+  if (resolverSucceeded && (input.workspaceAllowed !== appAllowed || roleDiff !== "same")) {
+    try {
+      console.warn(JSON.stringify({ event: "app_access_shadow_mismatch", ...observation }));
+    } catch {
+      // Value-free warning output is still best-effort only.
+    }
+  }
+}
+
+async function resolveWorkspaceRole(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly session: ControlSession;
+  readonly workspaceId: string;
+  readonly workspace?: Workspace;
+}): Promise<"owner" | "member" | null> {
+  const workspace = input.workspace ?? await input.operations.workspaces.getWorkspace(input.workspaceId);
+  if (workspace.id !== input.workspaceId) return null;
+  if (!input.session.requireCurrentMembership && workspace.ownerUserId === input.session.subject) return "owner";
+  const member = input.operations.members.getMember
+    ? await input.operations.members.getMember(input.workspaceId, input.session.subject)
+    : (await input.operations.members.listMembers(input.workspaceId)).find((row) => row.accountId === input.session.subject);
+  if (member?.status !== "active" ||
+    (input.session.requireCurrentMembership &&
+      (member.workspaceId !== input.workspaceId || member.accountId !== input.session.subject ||
+        !member.roles.some((role) => ["owner", "admin", "member", "viewer"].includes(role))))) return null;
+  if (workspace.ownerUserId === input.session.subject &&
+    (member.roles.includes("owner") || member.roles.includes("admin"))) return "owner";
+  return member.roles.includes("member") || member.roles.includes("viewer") ? "member" : null;
 }
 
 export function jsonStatus(body: unknown, status: number): Response {

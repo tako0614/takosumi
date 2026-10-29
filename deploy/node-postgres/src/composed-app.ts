@@ -23,6 +23,7 @@ import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "../../../accounts/service/src/
 import {
   issueInterfaceOAuthAccessToken,
   requireAccountsBearer,
+  parseWorkspaceMutationsFrozen,
 } from "@takosjp/takosumi-accounts-service";
 import {
   createTakosumiService,
@@ -98,7 +99,10 @@ export interface ComposedAppInput {
    */
   readonly createAccountsHandler?: (
     controlPlaneOperations: CreatedTakosumiService["operations"],
+    options: { readonly workspaceMutationsFrozen: boolean },
   ) => AccountsHandler | Promise<AccountsHandler>;
+  /** Defaults to true; mirrors the Accounts workspace mutation rollback flag. */
+  readonly workspaceMutationsFrozen?: boolean;
   /**
    * Optional runtime env forwarded into the embedded Takosumi service. The
    * composer ensures an internal deploy-control bearer exists for the service's
@@ -209,6 +213,10 @@ export async function buildComposedApp(
   input: ComposedAppInput,
 ): Promise<CreatedTakosumiService> {
   const { runtimeEnv } = embeddedServiceRuntimeEnv(input.runtimeEnv);
+  const workspaceMutationsFrozen = input.workspaceMutationsFrozen ??
+    parseWorkspaceMutationsFrozen(
+      runtimeEnv.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+    );
   const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
   const backupRoot = runtimeEnv.TAKOSUMI_BACKUP_ARTIFACTS_DIR;
   const backupArtifactStore = backupRoot
@@ -254,6 +262,7 @@ export async function buildComposedApp(
   const created = await createTakosumiService({
     runtimeEnv,
     publicSessionControlEndpoints: PUBLIC_SESSION_CONTROL_ENDPOINTS,
+    workspaceMutationsFrozen,
     validateUninstallRequester: (requester, workspaceId) =>
       validateUninstallRequester(input.store, requester, workspaceId),
     validateUninstallRequesterAt: (requester, workspaceId, validAtMs) =>
@@ -436,7 +445,9 @@ export async function buildComposedApp(
   });
 
   accountsHandler ??= input.createAccountsHandler
-    ? await input.createAccountsHandler(created.operations)
+    ? await input.createAccountsHandler(created.operations, {
+        workspaceMutationsFrozen,
+      })
     : undefined;
   if (!accountsHandler) {
     throw new TypeError(

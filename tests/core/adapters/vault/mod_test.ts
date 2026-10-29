@@ -251,7 +251,7 @@ for (const kind of ["provider", "git"] as const) {
     }
     expect(sealed).toBe(0);
     const connection = await vault.register(input, authority, null);
-    expect(await store.getConnection(connection.id)).toEqual(connection);
+    expect(await store.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: "fixture-owner" });
     expect(await store.getSecretBlob(connection.id)).toBeDefined();
     expect(sealed).toBe(1);
   });
@@ -980,7 +980,7 @@ test("test() retains the blob snapshot from before asynchronous crypto opening",
   const before = (await store.getSecretBlob(connection.id))!;
   await expect(vault.test(connection.id, undefined, null)).rejects.toMatchObject({ code: "failed_precondition", reason: "credential_service_unavailable" });
   expect(opened).toBe(true);
-  expect(await store.getConnection(connection.id)).toEqual(connection);
+  expect(await store.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: "fixture-owner" });
   expect(await store.getSecretBlob(connection.id)).toEqual({ ...before, ciphertext: "cm90YXRlZA==" });
 });
 
@@ -1737,7 +1737,7 @@ test("revoke preserves the connection and sealed blob while Workspace management
   await expect(vault.revoke(connection.id, undefined, null)).rejects.toMatchObject({
     code: "failed_precondition", reason: "workspace_management_admission_conflict",
   });
-  expect(await store.getConnection(connection.id)).toEqual(connection);
+  expect(await store.getConnection(connection.id)).toEqual({ ...connection, ownerAccountId: "fixture-owner" });
   expect(await store.getSecretBlob(connection.id)).toEqual(blob);
 });
 

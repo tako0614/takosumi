@@ -97,6 +97,13 @@ function connection(id: string, workspaceId: string): ProviderConnection {
   };
 }
 
+function storedConnection(
+  row: ProviderConnection,
+  ownerAccountId: string,
+): ProviderConnection {
+  return { ...row, ownerAccountId };
+}
+
 function secretBlob(row: ProviderConnection): StoredSecretBlob {
   return {
     id: `blob_${row.id}`,
@@ -167,7 +174,9 @@ for (const backend of BACKENDS) {
           actorAuthority: actor,
         }),
       ).toBe(true);
-      expect(await fixture.store.getConnection(row.id)).toEqual(row);
+      expect(await fixture.store.getConnection(row.id)).toEqual(
+        storedConnection(row, ws.ownerUserId),
+      );
       expect(await fixture.store.getSecretBlob(row.id)).toEqual(blob);
     } finally {
       await fixture.close();
@@ -204,7 +213,7 @@ for (const backend of BACKENDS) {
         ).toBe(true);
         const beforeRow = structuredClone(await fixture.store.getConnection(row.id));
         const beforeBlob = structuredClone(await fixture.store.getSecretBlob(row.id));
-        expect(beforeRow).toEqual(row);
+        expect(beforeRow).toEqual(storedConnection(row, ws.ownerUserId));
         expect(beforeBlob).toEqual(blob);
 
         const changedAdmin = mutation === "suspend"
@@ -316,7 +325,9 @@ for (const backend of BACKENDS) {
       ).rejects.toThrow(
         "Connection mutation requires explicit internal or Workspace account authority",
       );
-      expect(await fixture.store.getConnection(ownerRow.id)).toEqual(ownerRow);
+      expect(await fixture.store.getConnection(ownerRow.id)).toEqual(
+        storedConnection(ownerRow, ownerWorkspace.ownerUserId),
+      );
       expect(await fixture.store.getSecretBlob(ownerRow.id)).toEqual(ownerBlob);
       expect(
         await fixture.store.commitConnectionTestResult({
@@ -327,7 +338,9 @@ for (const backend of BACKENDS) {
           actorAuthority: owner,
         }),
       ).toBe(true);
-      expect(await fixture.store.getConnection(ownerRow.id)).toEqual(ownerReplacement);
+      expect(await fixture.store.getConnection(ownerRow.id)).toEqual(
+        storedConnection(ownerReplacement, ownerWorkspace.ownerUserId),
+      );
       expect(await fixture.store.getSecretBlob(ownerRow.id)).toEqual(ownerBlob);
       await expect(
         fixture.store.revokeConnectionIfUnchanged({
@@ -337,7 +350,9 @@ for (const backend of BACKENDS) {
       ).rejects.toThrow(
         "Connection mutation requires explicit internal or Workspace account authority",
       );
-      expect(await fixture.store.getConnection(ownerRow.id)).toEqual(ownerReplacement);
+      expect(await fixture.store.getConnection(ownerRow.id)).toEqual(
+        storedConnection(ownerReplacement, ownerWorkspace.ownerUserId),
+      );
       expect(await fixture.store.getSecretBlob(ownerRow.id)).toEqual(ownerBlob);
       expect(
         await fixture.store.revokeConnectionIfUnchanged({
@@ -394,7 +409,9 @@ for (const backend of BACKENDS) {
           actorAuthority: null,
         }),
       ).toBe(true);
-      expect(await fixture.store.getConnection(internalRow.id)).toEqual(internalReplacement);
+      expect(await fixture.store.getConnection(internalRow.id)).toEqual(
+        storedConnection(internalReplacement, ownerWorkspace.ownerUserId),
+      );
       expect(await fixture.store.getSecretBlob(internalRow.id)).toEqual(internalBlob);
       expect(
         await fixture.store.revokeConnectionIfUnchanged({

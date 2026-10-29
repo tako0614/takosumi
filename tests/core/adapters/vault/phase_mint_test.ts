@@ -1082,9 +1082,9 @@ for (const race of [false, true]) {
       provider: connection.provider, connectionId: connection.id,
     }])).rejects.toThrow("expired at 2026-06-04T00:30:00.000Z");
     expect(store.blobReads).toBe(0);
-    expect(await store.getConnection(connection.id)).toEqual(race ? replacement : {
+    expect(await store.getConnection(connection.id)).toEqual({ ...(race ? replacement : {
       ...connection, status: "expired", updatedAt: "2026-06-04T00:31:00.000Z",
-    });
+    }), ownerAccountId: "fixture-owner" });
     expect(await store.getSecretBlob(connection.id)).toEqual(blob);
     expect(await store.getWorkspaceManagement("space_1")).toMatchObject({ managementState: "draining", managementEpoch: 2 });
   });

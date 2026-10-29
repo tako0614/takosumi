@@ -34,6 +34,7 @@ import {
   type WorkspaceBillingEnrollmentPort,
   resolveD1AccountsSchemaMode,
   resolveTakosumiMobileOidcClientId,
+  parseWorkspaceMutationsFrozen,
 } from "@takosjp/takosumi-accounts-service";
 import {
   isAccountsApiPath,
@@ -87,6 +88,8 @@ export interface CloudflareWorkerEnv {
   /** Explicit opt-in; protected D1 must be migrated and verified before use. */
   readonly TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY?: string;
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY?: string;
+  /** Defaults to frozen; set false/off/0 only for an explicit rollback. */
+  readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
@@ -1279,6 +1282,9 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     clients,
     store,
     ...(hostedSessionPolicy ? { hostedSessionPolicy: true } : {}),
+    workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
+      env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+    ),
     ...(hostedSessionPolicy && options.identityMergeReconciler
       ? { identityMergeReconciler: options.identityMergeReconciler(env) }
       : {}),
@@ -1355,6 +1361,9 @@ function lazySharedAccountWorkspaceDirectory<TEnv extends CloudflareWorkerEnv>(
       return createSharedAccountWorkspaceDirectory({
         store,
         operations,
+        workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
+          env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
+        ),
         resolveWorkspaceBilling: optionalString(env.TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY)
           ? createWorkspaceBillingBootstrapResolver({operations,billingAuthority:optionalString(env.TAKOSUMI_ACCOUNTS_WORKSPACE_BILLING_AUTHORITY)!,enrollment:options.workspaceBillingEnrollment?.(env)})
           : options.sharedWorkspaceBillingResolver?.(env),
