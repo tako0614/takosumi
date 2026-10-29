@@ -21,8 +21,8 @@ import { startRunnerHttpServer } from "../../runner/entrypoint.ts";
 import { FIXTURE_EXECUTION_EVIDENCE_AUTHORITY } from "../helpers/deploy-control/model_fixture.ts";
 import { boundedRunnerFetch } from "./local-core-http-lifecycle.ts";
 
-const BUN_VERSION = "1.4.0";
-const BUN_SHA256 = "33d56b070be6a9e3da0ab013038b43d1645d0534ca811ecdba4472599117eb4b";
+const BUN_VERSION = "1.4.3";
+const BUN_SHA256 = "7ce7d6b654eddeec20afddf2396317fba6dc19ab52788a27e894e1806bf8f24b";
 const TOFU_PATH = "/usr/bin/tofu";
 const TOFU_VERSION = "OpenTofu v1.12.3";
 const TOFU_SHA256 = "d5e3276d613fdc070178ad6b0eb545f79a05e9aeae51f3c20024d21362fe25c6";
@@ -436,7 +436,7 @@ async function runnerFetch(baseUrl: string, path: string, init?: RequestInit): P
 }
 
 async function prove(): Promise<void> {
-  assert.equal(Bun.version, BUN_VERSION, "proof requires pinned Bun 1.4.0");
+  assert.equal(Bun.version, BUN_VERSION, "proof requires pinned Bun 1.4.3");
   const bunPath = await realpath(process.execPath);
   assert.equal(
     digest(new Uint8Array(await readFile(bunPath))),
