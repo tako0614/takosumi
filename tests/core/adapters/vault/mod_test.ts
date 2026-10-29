@@ -820,13 +820,28 @@ test("vault opens legacy v2 then dry-runs and CAS rewraps to v3 without changing
     renewalLease: { owner: "fixture-renewal", expiresAt: "2026-06-04T01:00:00.000Z" },
   });
   expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("conflict");
-  await store.putSecretBlob(legacy);
+  await store.putSecretBlob({ ...legacy, renewalLease: {
+    owner: "expired-renewal", expiresAt: "2026-06-03T23:00:00.000Z" } });
   expect((await vault.rewrapConnectionSecret(connection.id, { dryRun: true })).status).toBe("dry_run");
   expect((await store.getSecretBlob(connection.id))!.aad).not.toContain('"v":3');
   expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("rewrapped");
   expect((await store.getSecretBlob(connection.id))!.aad).toContain('"v":3');
   expect((await vault.mint("space_1", [connection.provider])).env.CLOUDFLARE_API_TOKEN).toBe("fixture-secret");
   expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("already_v3");
+});
+
+test("legacy rewrap reports a missing row owner per item without selecting Workspace owner", async () => {
+  const { store, vault } = makeVault();
+  const connection = await markVerified(store, await vault.register({
+    workspaceId: "space_1", provider: "registry.opentofu.org/cloudflare/cloudflare",
+    values: { CLOUDFLARE_API_TOKEN: "fixture-secret" },
+  }, undefined, null));
+  const blob = (await store.getSecretBlob(connection.id))!;
+  await store.putSecretBlob({ ...blob, aad: JSON.stringify({ v: 2, secretPartition: connection.secretPartition }) });
+  await store.deleteConnection(connection.id);
+  await store.putWorkspace({ ...(await store.getWorkspace("space_1"))!, ownerUserId: undefined } as never);
+  await store.putConnection({ ...connection, ownerAccountId: undefined });
+  expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("missing_owner");
 });
 
 test("operator rewrap batch deduplicates IDs and returns value-free status", async () => {

@@ -304,7 +304,7 @@ export interface ConnectionVault {
 
 export interface SecretRewrapResult {
   readonly connectionId: string;
-  readonly status: "rewrapped" | "dry_run" | "already_v3" | "no_secret" | "conflict";
+  readonly status: "rewrapped" | "dry_run" | "already_v3" | "no_secret" | "missing_owner" | "conflict";
   readonly fromVersion?: 1 | 2;
 }
 
@@ -1000,9 +1000,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (!blob) return { connectionId, status: "no_secret" };
     const fromVersion = secretEnvelopeVersionForBlob(blob);
     if (fromVersion === 3) return { connectionId, status: "already_v3" };
-    if (blob.renewalLease) return { connectionId, status: "conflict", fromVersion };
+    if (blob.renewalLease && Date.parse(blob.renewalLease.expiresAt) > this.#now().getTime()) {
+      return { connectionId, status: "conflict", fromVersion };
+    }
     // Rewrap requires a durable owner on personal rows. The migration must
     // backfill it first; a mutable Workspace lookup must never select AAD.
+    if (connection.scope !== "operator" && !connection.ownerAccountId?.trim()) {
+      return { connectionId, status: "missing_owner", fromVersion };
+    }
     const ownerAccountId = ownerAccountIdForConnection(connection);
     const plaintext = await openConnectionSecret(this.#crypto, connection, blob);
     if (options.dryRun) return { connectionId, status: "dry_run", fromVersion };
@@ -1813,6 +1818,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (this.#operatorProviderConnections.has(connection.id) || !observed.secretBlob) {
       throw new ConnectionVaultError("failed_precondition", "Release-owned credentials cannot be renewed at runtime");
     }
+    // Choose the target AAD before the external driver rotates a refresh token.
+    // An ownerless legacy Workspace row cannot select v3's owner AAD; keep its
+    // observed legacy envelope until ownership is durably backfilled.
+    const sourceVersion = secretEnvelopeVersionForBlob(observed.secretBlob);
+    const targetVersion = connection.scope === "operator" || connection.ownerAccountId
+      ? 3 : sourceVersion;
+    const targetPartition = secretPartitionForConnection(connection);
+    const targetAad = connectionEnvelopeAad(connection, targetVersion);
+    const targetOwnerAccountId = targetVersion === 3
+      ? ownerAccountIdForConnection(connection) : undefined;
     const capturedAuthority = await this.#captureManagementAuthority(connection.workspaceId, authority);
     const lease = observed.secretBlob.renewalLease;
     if (lease) {
@@ -1877,12 +1892,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       if (!released) throw connectionVerificationRaceError();
       return { ...observed, secretBlob: originalBlob, connection };
     }
-    const partition = secretPartitionForConnection(connection);
     const sealed = await this.#crypto.seal(JSON.stringify({ env: values, files: observed.material.files }),
-      partition, connectionEnvelopeAad(connection, 3));
+      targetPartition, targetAad);
     const replacementSecretBlob = { ...makeStoredSecretBlob({ connectionId: connection.id,
-      workspaceId: connection.workspaceId, ownerAccountId: ownerAccountIdForConnection(connection), provider: connection.provider, sealed,
-      secretPartition: partition, createdAt: originalBlob.createdAt, crypto: this.#crypto }),
+      workspaceId: connection.workspaceId, ownerAccountId: targetOwnerAccountId, provider: connection.provider, sealed,
+      secretPartition: targetPartition, createdAt: originalBlob.createdAt, crypto: this.#crypto,
+      envelopeVersion: targetVersion }),
       id: originalBlob.id, rotatedAt: this.#now().toISOString() };
     const replacement = { ...connection, updatedAt: this.#now().toISOString() };
     const replaced = await this.#store.commitConnectionTestResult({ expectedConnection: connection,
@@ -3651,19 +3666,24 @@ function isSecretPartitionToken(value: unknown): value is string {
 function makeStoredSecretBlob(input: {
   readonly connectionId: string;
   readonly workspaceId?: string;
-  readonly ownerAccountId: string;
+  readonly ownerAccountId?: string;
+  readonly envelopeVersion?: 1 | 2 | 3;
   readonly provider: string;
   readonly sealed: Uint8Array;
   readonly secretPartition: SecretPartition;
   readonly createdAt: string;
   readonly crypto: SecretBoundaryCrypto;
 }): StoredSecretBlob {
-  const aad = {
-    v: 3,
-    secretPartition: input.secretPartition,
-    ownerAccountId: input.ownerAccountId,
-    provider: input.provider,
-  };
+  const version = input.envelopeVersion ?? 3;
+  if (version === 3 && !input.ownerAccountId) {
+    throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+  }
+  const aad = version === 3
+    ? { v: 3, secretPartition: input.secretPartition, ownerAccountId: input.ownerAccountId,
+      provider: input.provider }
+    : version === 2
+      ? { v: 2, secretPartition: input.secretPartition, provider: input.provider }
+      : { v: 1, provider: input.provider };
   return {
     id: `secret_${input.connectionId}`,
     connectionId: input.connectionId,
