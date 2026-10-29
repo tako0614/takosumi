@@ -29,7 +29,7 @@ function stateBytes(overrides: Record<string, unknown> = {}): Uint8Array {
   }));
 }
 
-async function fixture(plaintext = stateBytes()) {
+async function fixture(plaintext = stateBytes(), storageRoot?: string) {
   const bucket = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: PASSPHRASE,
@@ -38,6 +38,7 @@ async function fixture(plaintext = stateBytes()) {
     bucket,
     crypto,
     allocator: new ObjectKeyArtifactReferenceAllocator(),
+    ...(storageRoot === undefined ? {} : { resolveStorageRoot: async () => storageRoot }),
   });
   const input: StageRecoveryStateInput = {
     workspaceId: "workspace_recovery_test",
@@ -52,6 +53,19 @@ async function fixture(plaintext = stateBytes()) {
   };
   return { bucket, crypto, store, input };
 }
+
+test("recovery stages and verifies under a trusted persisted apps root", async () => {
+  const { bucket, store, input } = await fixture(stateBytes(), "apps/capsule_recovery_test");
+  const staged = await store.stage(input);
+  assert.equal(staged.artifact.stateRef,
+    "apps/capsule_recovery_test/environments/production/state-versions/00000001.tfstate.enc");
+  assert.equal(bucket.putCount, 1);
+  assert.deepEqual(await store.verify({
+    workspaceId: input.workspaceId, capsuleId: input.capsuleId,
+    failedApplyRunId: input.failedApplyRunId, recoveryRunId: input.recoveryRunId,
+    artifactHandle: staged.handle,
+  }), staged.artifact);
+});
 
 test("stages encrypted generation-one state and verifies exact bounded readback", async () => {
   const { bucket, store, input } = await fixture();

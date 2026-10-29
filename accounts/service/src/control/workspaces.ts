@@ -153,7 +153,13 @@ export async function handleWorkspaces(
   // GET/POST /api/v1/workspaces.
   if (segments.length === 1 && segments[0] === "workspaces") {
     if (method === "GET") {
-      return await listWorkspaces(operations, store, ctx.session, url);
+      return await listWorkspaces(
+        operations,
+        store,
+        ctx.session,
+        url,
+        ctx.workspaceMutationsFrozen === true,
+      );
     }
     if (method === "POST") {
       if (ctx.session.workspaceId !== undefined) {
@@ -551,8 +557,9 @@ async function listWorkspaces(
   store: AccountsStore,
   session: ControlSession,
   url: URL,
+  workspaceMutationsFrozen: boolean,
 ): Promise<Response> {
-  return await listWorkspacePage(operations, store, session, url);
+  return await listWorkspacePage(operations, store, session, url, workspaceMutationsFrozen);
 }
 
 async function listWorkspacePage(
@@ -560,6 +567,7 @@ async function listWorkspacePage(
   store: AccountsStore,
   session: ControlSession,
   url: URL,
+  workspaceMutationsFrozen: boolean,
 ): Promise<Response> {
   const parsedPage = parseControlPageParams(url);
   if (!parsedPage.ok) return parsedPage.response;
@@ -646,7 +654,7 @@ async function listWorkspacePage(
         workspace.ownerUserId === session.subject,
     );
   let personalWorkspace: Workspace | undefined;
-  if (subject !== undefined && !session.requireCurrentMembership) {
+  if (subject !== undefined && !session.requireCurrentMembership && !workspaceMutationsFrozen) {
     // The bounded membership page is the only route preflight. Always invoke
     // the canonical ensure so an already-visible personal Workspace still gets
     // its owner membership and default Project repaired. The helper keeps that
@@ -1321,7 +1329,7 @@ async function listWorkspaceCapsules(
   const capsules = await Promise.all(
     items.map(async (capsule): Promise<PublicCapsule> => {
       const projected = publicCapsule(capsule);
-      if (!capsule.currentStateVersionId) return projected;
+      if (capsule.status === "destroyed" || !capsule.currentStateVersionId) return projected;
       const adoptedSourceRevision =
         await operations.getCapsuleAdoptedSourceRevision(capsule.id);
       return adoptedSourceRevision

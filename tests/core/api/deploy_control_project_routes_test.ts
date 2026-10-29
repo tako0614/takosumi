@@ -11,6 +11,7 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
 async function service() {
   return await createTakosumiService({
     role: "takosumi-api",
+    workspaceMutationsFrozen: false,
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,

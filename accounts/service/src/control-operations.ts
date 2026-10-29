@@ -61,6 +61,8 @@ import type {
   WorkspaceRole,
   WorkspaceType,
 } from "takosumi-contract/workspaces";
+import type { AppAccessResolver } from "takosumi-contract/app-access";
+import type { AppOwnershipStore } from "../../../core/domains/app-ownership/store.ts";
 import type { Project } from "takosumi-contract/projects";
 import type { WorkspaceBillingBindingsService } from "../../../core/domains/workspace-billing-bindings/mod.ts";
 import type {
@@ -158,7 +160,10 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
-  readonly appAccess?: import("../../../contract/app-access.ts").AppAccessResolver;
+  readonly appOwnership?: AppOwnershipStore;
+  /** Read-only Phase 3 AppAccess shadow resolver; never the request authority yet. */
+  readonly appAccess?: AppAccessResolver;
+
   /** Optional private owner-to-owner identity custody; no public caller admission. */
   readonly identityReconciliation?:import("../../../contract/identity-reconciliation.ts").ControlIdentityReconciliationPort;
   /** Durable, actor-scoped Git install/revision coordinator ledger. */
@@ -771,6 +776,7 @@ export interface ControlPlaneOperations {
     request: EnsureOwnedSourceRequest,
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
   ): Promise<SourceResponse>;
+  retireOwnedSource(sourceId: string, reason: string): Promise<"retired" | "already_retired" | "deferred">;
   listSources(
     workspaceId: string,
     params?: PageParams,
@@ -790,8 +796,10 @@ export interface ControlPlaneOperations {
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
     actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
+  convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(
     sourceId: string,
+    options?: { readonly scheduled?: boolean },
   ): Promise<readonly CreateSourceSyncResponse[]>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   listSourceSnapshots(

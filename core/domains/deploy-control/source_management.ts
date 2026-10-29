@@ -104,10 +104,15 @@ export class SourceManagement {
     );
   }
 
+  async convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse> {
+    return await this.#require().convergeOwnedSourceLane(sourceId);
+  }
+
   async createSourceReconciliationSyncs(
     sourceId: string,
+    options: { readonly scheduled?: boolean } = {},
   ): Promise<readonly CreateSourceSyncResponse[]> {
-    return await this.#require().createReconciliationSyncs(sourceId);
+    return await this.#require().createReconciliationSyncs(sourceId, options);
   }
 
   async listSourceSnapshots(

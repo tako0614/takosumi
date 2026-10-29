@@ -425,7 +425,12 @@ export class SourceLifecycleService {
           ? await this.#store.getSourceSnapshot(terminalRun.snapshotId)
           : undefined);
     if (!canonicalSnapshot) return terminalRun;
-    await this.#cleanupUnusedSourceArchive(terminalRun);
+    // The verified Runner result selected the prior immutable archive, so
+    // this Run's allocated archive was never uploaded. A later redelivery has
+    // no persisted upload observation and still takes the conservative path.
+    if (archiveRef === running.archiveRef) {
+      await this.#cleanupUnusedSourceArchive(terminalRun);
+    }
     await this.#notifySourceCapsulesStaleForNewSnapshot({
       running,
       snapshot: canonicalSnapshot,
@@ -553,7 +558,8 @@ export class SourceLifecycleService {
       // A historical/sibling snapshot may retain this exact key. The local
       // archive adapter cannot consult the ledger itself, so Core fences the
       // deletion before invoking either host's custody path.
-      if (await this.#store.hasSourceSnapshotArchiveReference(run.archiveRef)) return;
+      if (await this.#store.hasSourceSnapshotArchiveReference(run.archiveRef, run.sourceId)) return;
+      if (await this.#store.hasForeignSourceArchiveReference(run.archiveRef, run.sourceId)) return;
       const cleanup = this.#runner?.cleanupUnusedSourceArchive;
       if (!cleanup) throw new Error("runner source archive cleanup capability is unavailable");
       await cleanup.call(this.#runner, {

@@ -84,6 +84,8 @@ async function authenticatedControlRequest(input: {
   readonly method?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string;
+  /** Legacy route characterization opts out; separate tests exercise default freeze. */
+  readonly workspaceMutationsFrozen?: boolean;
 }): Promise<Response> {
   const url = new URL(`https://app.example.test${input.path}`);
   const response = await handleControlRoute({
@@ -98,6 +100,7 @@ async function authenticatedControlRequest(input: {
     url,
     store: input.store,
     operations: input.operations,
+    workspaceMutationsFrozen: input.workspaceMutationsFrozen ?? false,
   });
   expect(response).toBeDefined();
   return response!;
@@ -2710,6 +2713,39 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
   expect(fixture.workspacePageCalls).toHaveLength(2);
 });
 
+test("frozen Workspace list preserves the real WorkspacesService and skips implicit bootstrap", async () => {
+  const controlStore = new InMemoryOpenTofuControlStore();
+  const workspacesService = new WorkspacesService({ store: controlStore });
+  const existing = await workspacesService.createWorkspace({
+    handle: "frozen-list-owner",
+    displayName: "Frozen list owner",
+    type: "personal",
+    ownerUserId: "tsub_frozen_list_owner",
+  });
+  let ensureCalls = 0;
+  const ensure = workspacesService.ensurePersonalWorkspace.bind(workspacesService);
+  workspacesService.ensurePersonalWorkspace = async (ownerUserId, handle) => {
+    ensureCalls += 1;
+    return await ensure(ownerUserId, handle);
+  };
+  const operations = {
+    ...operationsFixture().operations,
+    workspaces: workspacesService,
+  } as unknown as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    store: new InMemoryAccountsStore(),
+    operations,
+    subject: "tsub_frozen_list_owner",
+  });
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({ workspaces: [existing] });
+  expect(ensureCalls).toBe(0);
+});
+
 test("Workspace list adopts and repairs an existing personal Workspace missing from membership", async () => {
   const fixture = operationsFixture();
   const controlStore = new InMemoryOpenTofuControlStore();
@@ -4179,3 +4215,51 @@ test("browser-bound provider callbacks reject copied authorization URLs before t
   expect(response?.headers.get("set-cookie")).toContain("Max-Age=0");
   expect(exchanges).toBe(1);
 });
+
+test("appIds without a Workspace binding cannot use legacy Workspace authorization", async () => {
+  const operations = workspaceAuthorizationOperations();
+  expect(await canAccessWorkspace({
+    operations,
+    store: new InMemoryAccountsStore(),
+    session: { subject: "tsub_owner", appIds: ["cap1"] },
+    workspaceId: workspace.id,
+    capsuleId: "cap1",
+  })).toBe(false);
+  expect(await canAccessWorkspace({
+    operations,
+    store: new InMemoryAccountsStore(),
+    session: { subject: "tsub_owner", appIds: ["cap1"], workspaceId: workspace.id },
+    workspaceId: workspace.id,
+    capsuleId: "cap1",
+  })).toBe(true);
+});
+
+test("Workspace-bound appIds reach the three legacy delegated Workspace routes", async () => {
+  for (const bound of [true, false]) {
+    const store = new InMemoryAccountsStore();
+    const token = `fixture-delegated-${bound}`;
+    store.savePersonalAccessToken(token, {
+      tokenId: `pat_delegated_${bound}`, tokenPrefix: "fixture", subject: "tsub_owner",
+      name: "delegated", scopes: ["read", "write"],
+      ...(bound ? { workspaceId: workspace.id } : {}),
+      appIds: ["cap1"], createdAt: Date.now(),
+    });
+    for (const [path, method] of [
+      [`/api/v1/workspaces/${workspace.id}/capsules`, "GET"],
+      [`/api/v1/workspaces/${workspace.id}/install-plans`, "GET"],
+      [`/api/v1/workspaces/${workspace.id}/install-plans`, "POST"],
+      [`/api/v1/workspaces/${workspace.id}/ui-surfaces`, "GET"],
+    ] as const) {
+      let initializations = 0;
+      const url = new URL(`https://app.example.test${path}`);
+      const response = await handleControlRoute({
+        request: new Request(url, { method, headers: { authorization: `Bearer ${token}` } }),
+        url, store,
+        resolveOperations: async () => { initializations++; return undefined; },
+      });
+      expect(response?.status).toBe(bound ? 503 : 403);
+      expect(initializations).toBe(bound ? 1 : 0);
+    }
+  }
+});
+

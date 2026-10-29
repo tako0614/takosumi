@@ -5276,4 +5276,40 @@ create index if not exists takosumi_interface_links_provider_interface_idx
 create index if not exists takosumi_interface_links_provider_capsule_idx
   on takosumi_interface_links (provider_capsule_id);`,
     },
+    {
+      id: "deploy.app_ownership.expand",
+      version: 123,
+      domain: "deploy",
+      description: "TASK-0118 Phase 3: expand per-Capsule owner, members, Connection owner, usage payer and account billing; backfill and owner slug uniqueness follow separately.",
+      sql: `-- expand only. Keep legacy Workspace rows and indexes for the bridge.
+alter table takosumi_capsules add column owner_account_id text;
+alter table takosumi_capsules add column slug text;
+alter table takosumi_capsules add column ownership_epoch integer not null default 0;
+alter table takosumi_capsules add column management_state text not null default 'active';
+alter table takosumi_capsules add column management_epoch integer not null default 0;
+alter table takosumi_capsules add column storage_root text;
+create table takosumi_capsule_members (
+  capsule_id text not null,
+  account_id text not null,
+  status text not null check (status in ('active', 'invited')),
+  added_by text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (capsule_id, account_id)
+);
+create index takosumi_capsule_members_account_status_idx on takosumi_capsule_members (account_id, status);
+alter table takosumi_connections add column owner_account_id text;
+alter table takosumi_usage_events add column payer_account_id text;
+alter table takosumi_credential_mint_events add column actor_account_id text;
+alter table takosumi_credential_mint_events add column connection_owner_account_id text;
+alter table takosumi_credential_mint_events add column ownership_epoch integer;
+create table takosumi_account_billing_bindings (
+  account_id text primary key,
+  billing_authority text not null,
+  billing_ref text not null,
+  organization_ref text,
+  created_at text not null,
+  updated_at text not null
+);`,
+    },
   ]);
