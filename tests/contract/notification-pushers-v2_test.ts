@@ -5,13 +5,23 @@ import { resolve } from "node:path";
 import {
   classifyNotificationWebPushResponse,
   createNotificationPusherId,
+  createNotificationPushGatewayRequest,
+  createNotificationWebPushPayload,
   MAX_NOTIFICATION_PUSHER_DATA_BYTES,
-  normalizeNotificationWebPushEndpoint,
+  MAX_NOTIFICATION_WEB_PUSH_PLAINTEXT_BYTES,
+  normalizeNotificationWebPushUrl,
+  notificationWebPushPusherNeedsActivation,
+  NOTIFICATION_PUSHER_ACK_ERROR_STATUS,
+  NOTIFICATION_PUSHER_ACK_PATH,
+  NOTIFICATION_PUSHER_ACK_TOKEN_LIFETIME_SECONDS,
   NOTIFICATION_PUSHER_CAPABILITIES_PATH,
   NOTIFICATION_PUSHER_CAPABILITIES_VERSION,
   NOTIFICATION_PUSHER_REGISTRATION_PATH,
   NOTIFICATION_PUSHER_V1_HOST_CAPABILITIES,
   NOTIFICATION_WEB_PUSH_CONTENT_ENCODING,
+  NOTIFICATION_WEB_PUSH_DEFAULT_TTL_SECONDS,
+  parseNotificationPushGatewayRequest,
+  parseNotificationPusherAckRequest,
   parseNotificationPusherCapabilities,
   parseNotificationPusherCapabilitiesResponse,
   parseNotificationPusherDeleteRequest,
@@ -19,14 +29,20 @@ import {
   parseNotificationPusherSetRequestV2,
   toNotificationWebPushPusherPublicData,
   type NotificationHttpPusherListEntry,
+  type NotificationPushDeliveryOutcome,
   type NotificationPusher,
+  type NotificationPusherAckError,
+  type NotificationPusherAckResponse,
   type NotificationPusherCapabilities,
   type NotificationPusherKind,
   type NotificationPusherKindCapabilities,
-  type NotificationPushDeliveryOutcome,
   type NotificationPusherListResponse,
   type NotificationPusherRegistration,
   type NotificationPusherSetRequestV2,
+  type NotificationPusherSetRequestV2Options,
+  type NotificationPusherSetResponseV2,
+  type NotificationWebPushActivationMessage,
+  type NotificationWebPushPusher,
   type NotificationWebPushPusherListEntry,
   type NotificationWebPushPusherPublicData,
 } from "../../contract/notification-pushers.ts";
@@ -39,7 +55,8 @@ const AUTH = "BTBZMqHH6r4Tts7J_aSIgg";
 const VAPID_PUBLIC_KEY =
   "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8";
 const VAPID_KEY_ID = "vapid-2026-10";
-const ENDPOINT = "https://fcm.googleapis.com/fcm/send/example-subscription-id";
+const PUSH_URL = "https://fcm.googleapis.com/fcm/send/example-subscription-id";
+const ACK_TOKEN = "6fc76b70-5fad-4eb7-93ea-a1af7a03258b";
 
 const HOST_KINDS = {
   http: {},
@@ -61,10 +78,11 @@ function webPushPusher(
   return {
     kind: "webpush",
     app_id: "jp.yurucommu.web",
-    pushkey: ENDPOINT,
+    pushkey: P256DH,
     data: {
+      url: PUSH_URL,
+      auth: AUTH,
       format: "event_id_only",
-      keys: { p256dh: P256DH, auth: AUTH },
       vapid_key_id: VAPID_KEY_ID,
       ...data,
     },
@@ -72,12 +90,29 @@ function webPushPusher(
   };
 }
 
+function parseWebPush(
+  body: unknown,
+  options: Partial<NotificationPusherSetRequestV2Options> = {},
+): NotificationWebPushPusher {
+  const parsed = parseNotificationPusherSetRequestV2(body, {
+    kinds: HOST_KINDS,
+    ...options,
+  });
+  if (!parsed.ok || parsed.value.kind !== "webpush") {
+    throw new Error(`expected a webpush pusher: ${JSON.stringify(parsed)}`);
+  }
+  return parsed.value.pusher;
+}
+
 function expectSetError(
   body: unknown,
   field: string | undefined,
-  kinds: NotificationPusherKindCapabilities = HOST_KINDS,
+  options: Partial<NotificationPusherSetRequestV2Options> = {},
 ): string {
-  const parsed = parseNotificationPusherSetRequestV2(body, { kinds });
+  const parsed = parseNotificationPusherSetRequestV2(body, {
+    kinds: HOST_KINDS,
+    ...options,
+  });
   expect(parsed.ok, JSON.stringify(body)).toBe(false);
   if (parsed.ok) return "";
   expect(parsed.error.code).toBe("BAD_REQUEST");
@@ -117,7 +152,7 @@ test("pushers v2 type assertions are checked by the compiler", () => {
   expect(compiled.status, `${compiled.stdout}\n${compiled.stderr}`).toBe(0);
 }, 65_000);
 
-test("pushers v2 registers a webpush pusher from a browser PushSubscription", () => {
+test("pushers v2 registers a webpush pusher in the MSC4174 layout", () => {
   const parsed = parseNotificationPusherSetRequestV2(
     {
       product: "yurucommu",
@@ -137,98 +172,93 @@ test("pushers v2 registers a webpush pusher from a browser PushSubscription", ()
       pusher: {
         kind: "webpush",
         app_id: "jp.yurucommu.web",
-        pushkey: ENDPOINT,
+        pushkey: P256DH,
         device_display_name: "iPhone",
         lang: "ja-JP",
         data: {
+          url: PUSH_URL,
+          auth: AUTH,
           format: "event_id_only",
-          keys: { p256dh: P256DH, auth: AUTH },
           vapid_key_id: VAPID_KEY_ID,
         },
       },
       product: "yurucommu",
       scope: "account:user-1",
-      endpoint: ENDPOINT,
+      pushResourceUrl: PUSH_URL,
       append: false,
     },
   });
 });
 
-test("webpush registration canonicalizes format and keys but never the endpoint", () => {
+test("webpush data normalizes the push URL like v1 and preserves extra JSON safely", () => {
   const extra = JSON.parse(`{
     "subscribed_from": "home-screen",
     "__proto__": { "polluted": true }
   }`) as Record<string, unknown>;
-  const parsed = parseNotificationPusherSetRequestV2(
-    {
-      pusher: webPushPusher(
-        {},
-        {
-          format: null,
-          // Correct `=` padding, and a final character whose unused bits are
-          // set, decode to the same bytes as the canonical spelling.
-          keys: { p256dh: `${P256DH}=`, auth: "BTBZMqHH6r4Tts7J_aSIgh==" },
-          ...extra,
-        },
-      ),
-    },
-    { kinds: HOST_KINDS },
-  );
-
-  expect(parsed.ok).toBe(true);
-  if (!parsed.ok || parsed.value.kind !== "webpush") return;
-  const data = parsed.value.pusher.data;
-  expect(data.format).toBe("event_id_only");
-  expect(data.keys).toEqual({ p256dh: P256DH, auth: AUTH });
-  expect(data.subscribed_from).toBe("home-screen");
-  expect(Object.getOwnPropertyDescriptor(data, "__proto__")?.value).toEqual({
-    polluted: true,
+  const pusher = parseWebPush({
+    pusher: webPushPusher(
+      {},
+      {
+        url: " https://FCM.googleapis.com:443/fcm/send/id ",
+        format: null,
+        ...extra,
+      },
+    ),
   });
-  expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
+
+  expect(pusher.data.url).toBe("https://fcm.googleapis.com/fcm/send/id");
+  expect(pusher.data.format).toBe("event_id_only");
+  expect(pusher.data.subscribed_from).toBe("home-screen");
+  expect(
+    Object.getOwnPropertyDescriptor(pusher.data, "__proto__")?.value,
+  ).toEqual({ polluted: true });
+  expect(Object.getPrototypeOf(pusher.data)).toBe(Object.prototype);
   expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
-  expect(parsed.value.pusher.pushkey).toBe(ENDPOINT);
-  expect(parsed.value.endpoint).toBe(ENDPOINT);
 });
 
-test("webpush pushers accept only public HTTPS push service endpoints", () => {
-  const accepted = [
-    ENDPOINT,
-    "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABexample",
-    "https://web.push.apple.com/QGexampleSubscriptionToken",
-    "https://wns2-par02p.notify.windows.com/w/?token=BQYAAAexample%3d",
-    "https://ntfy.sh/upExampleTopic?up=1",
-    `https://fcm.googleapis.com/fcm/send/${"a".repeat(512 - "https://fcm.googleapis.com/fcm/send/".length)}`,
+test("webpush push URLs must be public HTTPS push service URLs", () => {
+  const long = `https://wns2-par02p.notify.windows.com/w/?token=${"A".repeat(2048 - "https://wns2-par02p.notify.windows.com/w/?token=".length)}`;
+  const accepted: readonly (readonly [string, string])[] = [
+    [PUSH_URL, PUSH_URL],
+    [
+      "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABexample",
+      "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABexample",
+    ],
+    [
+      "https://web.push.apple.com/QGexampleSubscriptionToken",
+      "https://web.push.apple.com/QGexampleSubscriptionToken",
+    ],
+    [
+      "https://ntfy.sh/upExampleTopic?up=1",
+      "https://ntfy.sh/upExampleTopic?up=1",
+    ],
+    [
+      "https://FCM.googleapis.com:443/fcm/send/id",
+      "https://fcm.googleapis.com/fcm/send/id",
+    ],
+    // Push endpoints are not bounded by browsers; the data budget excludes
+    // `url`, as v1 does for gateway URLs.
+    [long, long],
   ];
-  for (const endpoint of accepted) {
-    expect(normalizeNotificationWebPushEndpoint(endpoint), endpoint).toBe(
-      endpoint,
-    );
-    const parsed = parseNotificationPusherSetRequestV2(
-      { pusher: webPushPusher({ pushkey: endpoint }) },
-      { kinds: HOST_KINDS },
-    );
-    expect(parsed.ok, endpoint).toBe(true);
+  for (const [input, normalized] of accepted) {
+    expect(normalizeNotificationWebPushUrl(input), input).toBe(normalized);
+    const pusher = parseWebPush({ pusher: webPushPusher({}, { url: input }) });
+    expect(pusher.data.url).toBe(normalized);
   }
-  expect(normalizeNotificationWebPushEndpoint(`  ${ENDPOINT}  `)).toBe(
-    ENDPOINT,
-  );
 
   const rejected: readonly unknown[] = [
     "http://fcm.googleapis.com/fcm/send/id",
+    // Unlike v1 gateways, there is no loopback exception.
     "http://127.0.0.1:8787/push",
+    "http://localhost:8787/push",
     "wss://fcm.googleapis.com/fcm/send/id",
     "file:///tmp/push",
     "https://user:secret@fcm.googleapis.com/fcm/send/id",
     "https://fcm.googleapis.com:8443/fcm/send/id",
     "https://fcm.googleapis.com/fcm/send/id#fragment",
     "https://fcm.googleapis.com/fcm/send/id#",
-    // Not the canonical serialization, so the pushkey would differ from the
-    // URL the host fetches.
-    "https://FCM.googleapis.com/fcm/send/id",
-    "https://fcm.googleapis.com:443/fcm/send/id",
     "https://0x7f.1/push",
     "https://2130706433/push",
-    // IP literals, loopback, link-local, private and reverse-DNS names.
     "https://127.0.0.1/push",
     "https://10.0.0.8/push",
     "https://169.254.169.254/latest/meta-data",
@@ -244,93 +274,83 @@ test("webpush pushers accept only public HTTPS push service endpoints", () => {
     "https://nas.lan/push",
     "https://fcm.googleapis.com./fcm/send/id",
     "https://push_service.example.com/push",
-    `https://fcm.googleapis.com/fcm/send/${"a".repeat(513 - "https://fcm.googleapis.com/fcm/send/".length)}`,
+    `${long}A`,
     "",
     42,
     null,
+    undefined,
   ];
-  for (const endpoint of rejected) {
-    expect(
-      normalizeNotificationWebPushEndpoint(endpoint),
-      String(endpoint),
-    ).toBeNull();
-    expectSetError(
-      { pusher: webPushPusher({ pushkey: endpoint }) },
-      "pusher.pushkey",
-    );
+  for (const url of rejected) {
+    expect(normalizeNotificationWebPushUrl(url), String(url)).toBeNull();
+    expectSetError({ pusher: webPushPusher({}, { url }) }, "pusher.data.url");
   }
 });
 
-test("webpush subscription keys must decode to a P-256 point and a 16-byte secret", () => {
+test("webpush pushkey is the canonical p256dh key", () => {
   const point = [...Buffer.from(P256DH, "base64url")];
-  const cases: readonly (readonly [string, unknown, string])[] = [
-    ["missing keys", undefined, "pusher.data.keys"],
-    ["array keys", [P256DH, AUTH], "pusher.data.keys"],
-    [
-      "extra key field",
-      { p256dh: P256DH, auth: AUTH, expirationTime: null },
-      "pusher.data.keys",
-    ],
-    ["missing p256dh", { auth: AUTH }, "pusher.data.keys.p256dh"],
-    [
-      "64-byte p256dh",
-      { p256dh: base64Url(point.slice(0, 64)), auth: AUTH },
-      "pusher.data.keys.p256dh",
-    ],
-    [
-      "compressed p256dh",
-      { p256dh: base64Url([0x02, ...point.slice(1, 33)]), auth: AUTH },
-      "pusher.data.keys.p256dh",
-    ],
-    [
-      "p256dh without the uncompressed prefix",
-      { p256dh: base64Url([0x05, ...point.slice(1)]), auth: AUTH },
-      "pusher.data.keys.p256dh",
-    ],
+  const cases: readonly (readonly [string, unknown])[] = [
+    ["padded", `${P256DH}=`],
+    // The last of 87 characters carries 2 unused bits: "4" and "5" decode to
+    // the same bytes, but only "4" is canonical.
+    ["unused bits set", `${P256DH.slice(0, -1)}5`],
+    ["64 bytes", base64Url(point.slice(0, 64))],
+    ["compressed", base64Url([0x02, ...point.slice(1, 33)])],
+    ["no uncompressed prefix", base64Url([0x05, ...point.slice(1)])],
     [
       "standard base64 alphabet",
-      { p256dh: P256DH.replace(/-/gu, "+").replace(/_/gu, "/"), auth: AUTH },
-      "pusher.data.keys.p256dh",
+      P256DH.replace(/-/gu, "+").replace(/_/gu, "/"),
     ],
-    [
-      "whitespace",
-      { p256dh: `${P256DH.slice(0, 40)}\n${P256DH.slice(40)}`, auth: AUTH },
-      "pusher.data.keys.p256dh",
-    ],
-    [
-      "wrong padding",
-      { p256dh: `${P256DH}==`, auth: AUTH },
-      "pusher.data.keys.p256dh",
-    ],
-    [
-      "15-byte auth",
-      { p256dh: P256DH, auth: base64Url(Array(15).fill(7)) },
-      "pusher.data.keys.auth",
-    ],
-    [
-      "17-byte auth",
-      { p256dh: P256DH, auth: base64Url(Array(17).fill(7)) },
-      "pusher.data.keys.auth",
-    ],
-    ["numeric auth", { p256dh: P256DH, auth: 16 }, "pusher.data.keys.auth"],
+    ["surrounding whitespace", ` ${P256DH}`],
+    // The earlier draft of ADR 0026 used the endpoint here.
+    ["endpoint", PUSH_URL],
+    ["auth secret", AUTH],
+    ["number", 65],
+    ["missing", undefined],
   ];
+  for (const [label, pushkey] of cases) {
+    const error = expectSetError(
+      { pusher: webPushPusher({ pushkey }) },
+      "pusher.pushkey",
+    );
+    expect(error, label).toContain("p256dh");
+  }
+});
 
-  for (const [label, keys, field] of cases) {
-    const data: Record<string, unknown> = {
-      format: "event_id_only",
-      vapid_key_id: VAPID_KEY_ID,
-    };
-    if (keys !== undefined) data.keys = keys;
+test("webpush data.auth is a canonical 16-byte secret", () => {
+  const cases: readonly (readonly [string, unknown])[] = [
+    ["15 bytes", base64Url(Array(15).fill(7))],
+    ["17 bytes", base64Url(Array(17).fill(7))],
+    ["padded", `${AUTH}==`],
+    ["unused bits set", `${AUTH.slice(0, -1)}h`],
+    [
+      "standard base64 alphabet",
+      base64Url(Array(16).fill(0xfb)).replace(/_/gu, "/"),
+    ],
+    ["number", 16],
+    ["missing", undefined],
+  ];
+  for (const [label, auth] of cases) {
     const parsed = parseNotificationPusherSetRequestV2(
-      { pusher: { ...webPushPusher(), data } },
+      { pusher: webPushPusher({}, { auth }) },
       { kinds: HOST_KINDS },
     );
     expect(parsed.ok, label).toBe(false);
-    if (!parsed.ok) expect(parsed.error.field, label).toBe(field);
+    if (!parsed.ok) expect(parsed.error.field, label).toBe("pusher.data.auth");
   }
 });
 
-test("webpush data names this host's VAPID key and only the event_id_only format", () => {
+test("webpush data refuses PushSubscription.toJSON keys and checks format, key id and size", () => {
+  const keysError = expectSetError(
+    {
+      pusher: webPushPusher(
+        {},
+        { auth: undefined, keys: { p256dh: P256DH, auth: AUTH } },
+      ),
+    },
+    "pusher.data.keys",
+  );
+  expect(keysError).toContain("data.auth");
+
   expectSetError(
     { pusher: webPushPusher({}, { vapid_key_id: undefined }) },
     "pusher.data.vapid_key_id",
@@ -349,16 +369,8 @@ test("webpush data names this host's VAPID key and only the event_id_only format
     { pusher: webPushPusher({}, { format: "full" }) },
     "pusher.data.format",
   );
-  expectSetError(
-    {
-      pusher: webPushPusher(
-        {},
-        { url: "https://push.example/_matrix/push/v1/notify" },
-      ),
-    },
-    "pusher.data.url",
-  );
-  expectSetError({ pusher: webPushPusher({ data: "keys" }) }, "pusher.data");
+  expectSetError({ pusher: webPushPusher({ data: "url" }) }, "pusher.data");
+  expectSetError({ pusher: webPushPusher({ data: [] }) }, "pusher.data");
   expectSetError(
     {
       pusher: webPushPusher(
@@ -382,7 +394,7 @@ test("pushers v2 registers only the kinds this host advertises", () => {
   const webPushOnHttpHost = expectSetError(
     { pusher: webPushPusher() },
     "pusher.kind",
-    { http: {} },
+    { kinds: { http: {} } },
   );
   expect(webPushOnHttpHost).toBe(
     "pusher.kind webpush is not available on this host",
@@ -397,15 +409,53 @@ test("pushers v2 registers only the kinds this host advertises", () => {
       },
     },
     "pusher.kind",
-    { webpush: HOST_KINDS.webpush },
+    { kinds: { webpush: HOST_KINDS.webpush } },
   );
   expect(
     expectSetError({ pusher: webPushPusher({ kind: "email" }) }, "pusher.kind"),
   ).toBe("pusher.kind must be http or webpush");
   expectSetError({ pusher: webPushPusher({ kind: undefined }) }, "pusher.kind");
-  expectSetError({ pusher: webPushPusher() }, "pusher.kind", {});
+  expectSetError({ pusher: webPushPusher() }, "pusher.kind", { kinds: {} });
   expectSetError({ pusher: "webpush" }, undefined);
   expectSetError("pusher", undefined);
+});
+
+test("webpush push URLs honour the operator allowlist but never gateway_hosts", () => {
+  const options = {
+    kinds: {
+      http: { gateway_hosts: ["push.example"] },
+      webpush: HOST_KINDS.webpush,
+    },
+    pushResourceHosts: ["FCM.googleapis.com", "*.notify.windows.com"],
+  };
+  for (const url of [
+    PUSH_URL,
+    "https://wns2-par02p.notify.windows.com/w/?token=abc",
+  ]) {
+    const parsed = parseNotificationPusherSetRequestV2(
+      { pusher: webPushPusher({}, { url }) },
+      options,
+    );
+    expect(parsed.ok, url).toBe(true);
+  }
+  for (const url of [
+    "https://notify.windows.com/w/?token=abc",
+    "https://updates.push.services.mozilla.com/wpush/v2/x",
+    "https://push.example/_matrix/push/v1/notify",
+  ]) {
+    expectSetError(
+      { pusher: webPushPusher({}, { url }) },
+      "pusher.data.url",
+      options,
+    );
+  }
+
+  // Without an allowlist, http's gateway_hosts does not narrow webpush.
+  const parsed = parseNotificationPusherSetRequestV2(
+    { pusher: webPushPusher() },
+    { kinds: options.kinds },
+  );
+  expect(parsed.ok).toBe(true);
 });
 
 test("pushers v2 http registrations normalize exactly like v1 and honour gateway_hosts", () => {
@@ -435,7 +485,9 @@ test("pushers v2 http registrations normalize exactly like v1 and honour gateway
   expect(v2.value).toEqual({ ...v1.value, kind: "http", append: false });
 
   const listedHosts = {
-    http: { gateway_hosts: ["PUSH.example", "*.gateway.example"] },
+    kinds: { http: { gateway_hosts: ["PUSH.example", "*.gateway.example"] } },
+    // The webpush allowlist does not apply to http.
+    pushResourceHosts: ["fcm.googleapis.com"],
   };
   for (const url of [
     "https://push.example/_matrix/push/v1/notify",
@@ -443,7 +495,7 @@ test("pushers v2 http registrations normalize exactly like v1 and honour gateway
   ]) {
     const parsed = parseNotificationPusherSetRequestV2(
       { pusher: { ...body.pusher, data: { url } } },
-      { kinds: listedHosts },
+      listedHosts,
     );
     expect(parsed.ok, url).toBe(true);
   }
@@ -512,60 +564,278 @@ test("the v1 parser still accepts only http pushers", () => {
   });
 });
 
-test("webpush pushers delete by app id and endpoint with the unchanged delete parser", () => {
+test("webpush pushers delete by app id and p256dh with the unchanged delete parser", () => {
   expect(
     parseNotificationPusherDeleteRequest({
       app_id: "jp.yurucommu.web",
-      pushkey: ENDPOINT,
+      pushkey: P256DH,
     }),
   ).toEqual({
     ok: true,
     value: {
       appId: "jp.yurucommu.web",
-      pushkey: ENDPOINT,
+      pushkey: P256DH,
       product: null,
       scope: null,
     },
   });
   expect(
-    createNotificationPusherId({
-      app_id: "jp.yurucommu.web",
-      pushkey: ENDPOINT,
-    }),
-  ).toBe(`jp.yurucommu.web\0${ENDPOINT}`);
+    createNotificationPusherId({ app_id: "jp.yurucommu.web", pushkey: P256DH }),
+  ).toBe(`jp.yurucommu.web\0${P256DH}`);
 });
 
-test("webpush pushers leave the host without their subscription keys", () => {
-  const parsed = parseNotificationPusherSetRequestV2(
-    { pusher: webPushPusher({}, { subscribed_from: "home-screen" }) },
-    { kinds: HOST_KINDS },
-  );
-  expect(parsed.ok).toBe(true);
-  if (!parsed.ok || parsed.value.kind !== "webpush") return;
-
-  const publicData = toNotificationWebPushPusherPublicData(
-    parsed.value.pusher.data,
-  );
+test("webpush pushers leave the host without data.auth and say whether they are activated", () => {
+  const pusher = parseWebPush({
+    pusher: webPushPusher({}, { subscribed_from: "home-screen" }),
+  });
+  const publicData = toNotificationWebPushPusherPublicData(pusher.data);
   expect(publicData).toEqual({
     subscribed_from: "home-screen",
+    url: PUSH_URL,
     format: "event_id_only",
     vapid_key_id: VAPID_KEY_ID,
   });
-  expect(Object.prototype.hasOwnProperty.call(publicData, "keys")).toBe(false);
-  expect(parsed.value.pusher.data.keys).toEqual({ p256dh: P256DH, auth: AUTH });
+  expect(Object.prototype.hasOwnProperty.call(publicData, "auth")).toBe(false);
+  expect(pusher.data.auth).toBe(AUTH);
 
-  const entry: NotificationWebPushPusherListEntry = {
-    id: createNotificationPusherId(parsed.value.pusher),
+  const registration = {
+    id: createNotificationPusherId(pusher),
     kind: "webpush",
-    app_id: parsed.value.pusher.app_id,
-    pushkey: parsed.value.pusher.pushkey,
+    app_id: pusher.app_id,
     data: publicData,
+    activated: false,
     registered_at: "2026-10-29T00:00:00.000Z",
     last_seen_at: "2026-10-29T00:00:00.000Z",
+  } as const;
+  const setResponse: NotificationPusherSetResponseV2 = {
+    pusher: registration,
   };
-  const response: NotificationPusherListResponse = { pushers: [entry] };
-  expect(JSON.stringify(response)).not.toContain(AUTH);
-  expect(JSON.stringify(response)).not.toContain(P256DH);
+  const entry: NotificationWebPushPusherListEntry = {
+    ...registration,
+    pushkey: pusher.pushkey,
+    activated: true,
+  };
+  const listResponse: NotificationPusherListResponse = { pushers: [entry] };
+  for (const body of [setResponse, listResponse]) {
+    expect(JSON.stringify(body)).not.toContain(AUTH);
+  }
+  expect(JSON.stringify(listResponse)).toContain(P256DH);
+});
+
+test("webpush activation is needed for a new pusher, a changed url or auth, or one never activated", () => {
+  const next = parseWebPush({ pusher: webPushPusher() });
+  const otherAuth = base64Url(Array(16).fill(9));
+  const cases: readonly (readonly [
+    string,
+    Parameters<typeof notificationWebPushPusherNeedsActivation>[0],
+    boolean,
+  ])[] = [
+    ["new pusher", undefined, true],
+    ["new pusher (null)", null, true],
+    [
+      "activated and unchanged",
+      { activated: true, data: { url: PUSH_URL, auth: AUTH } },
+      false,
+    ],
+    [
+      "url changed",
+      {
+        activated: true,
+        data: { url: `${PUSH_URL}-old`, auth: AUTH },
+      },
+      true,
+    ],
+    [
+      "auth changed",
+      { activated: true, data: { url: PUSH_URL, auth: otherAuth } },
+      true,
+    ],
+    [
+      "never activated",
+      { activated: false, data: { url: PUSH_URL, auth: AUTH } },
+      true,
+    ],
+  ];
+  for (const [label, previous, expected] of cases) {
+    expect(
+      notificationWebPushPusherNeedsActivation(previous, next),
+      label,
+    ).toBe(expected);
+  }
+
+  // A display-name change on an activated pusher keeps it activated, even
+  // when the URL was sent in another spelling of the same address.
+  const renamed = parseWebPush({
+    pusher: webPushPusher(
+      { device_display_name: "iPad" },
+      {
+        url: "https://FCM.googleapis.com:443/fcm/send/example-subscription-id",
+      },
+    ),
+  });
+  expect(
+    notificationWebPushPusherNeedsActivation(
+      { activated: true, data: next.data },
+      renamed,
+    ),
+  ).toBe(false);
+});
+
+test("activation acks carry app_id and an opaque ack_token", () => {
+  const message: NotificationWebPushActivationMessage = {
+    app_id: "jp.yurucommu.web",
+    ack_token: ACK_TOKEN,
+  };
+  // The service worker posts the activation plaintext unchanged.
+  expect(
+    parseNotificationPusherAckRequest(JSON.parse(JSON.stringify(message))),
+  ).toEqual({
+    ok: true,
+    value: { appId: "jp.yurucommu.web", ackToken: ACK_TOKEN },
+  });
+  for (const token of [
+    "0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ._~abcdefghijklmnopqrstuvwxyz",
+    "a",
+    "x".repeat(255),
+    crypto.randomUUID(),
+  ]) {
+    const parsed = parseNotificationPusherAckRequest({
+      app_id: "jp.yurucommu.web",
+      ack_token: token,
+    });
+    expect(parsed.ok, token).toBe(true);
+  }
+
+  const invalidTokens: readonly unknown[] = [
+    "",
+    " ",
+    ` ${ACK_TOKEN}`,
+    "token/with/slash",
+    "token+plus",
+    "token=",
+    "トークン",
+    "x".repeat(256),
+    42,
+    null,
+    undefined,
+  ];
+  for (const ackToken of invalidTokens) {
+    expect(
+      parseNotificationPusherAckRequest({
+        app_id: "jp.yurucommu.web",
+        ack_token: ackToken,
+      }),
+      String(ackToken),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: "BAD_REQUEST",
+        error: "ack_token is invalid",
+        field: "ack_token",
+      },
+    });
+  }
+  expect(
+    parseNotificationPusherAckRequest({
+      app_id: "bad id",
+      ack_token: ACK_TOKEN,
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: "BAD_REQUEST", error: "app_id is invalid", field: "app_id" },
+  });
+  expect(parseNotificationPusherAckRequest([ACK_TOKEN])).toEqual({
+    ok: false,
+    error: { code: "BAD_REQUEST", error: "body must be an object" },
+  });
+});
+
+test("ack failures use MSC4174 statuses and the v1 error-code style", () => {
+  expect(NOTIFICATION_PUSHER_ACK_ERROR_STATUS).toEqual({
+    NOT_FOUND: 404,
+    EXPIRED_ACTIVATION_TOKEN: 400,
+    UNKNOWN_ACTIVATION_TOKEN: 400,
+  });
+  expect(Object.isFrozen(NOTIFICATION_PUSHER_ACK_ERROR_STATUS)).toBe(true);
+  const expired: NotificationPusherAckError = {
+    code: "EXPIRED_ACTIVATION_TOKEN",
+    error: "ack_token has expired",
+  };
+  expect(NOTIFICATION_PUSHER_ACK_ERROR_STATUS[expired.code]).toBe(400);
+  expect(NOTIFICATION_PUSHER_ACK_TOKEN_LIFETIME_SECONDS).toBe(5 * 60);
+  expect(NOTIFICATION_PUSHER_ACK_PATH).toBe("/api/notifications/pushers/ack");
+});
+
+test("the webpush plaintext is the v1 gateway body for that one pusher", () => {
+  const pusher = parseWebPush({
+    pusher: webPushPusher({}, { subscribed_from: "home-screen" }),
+  });
+  const event = {
+    id: "notif_1",
+    scopeId: "room_1",
+    type: "jp.yurucommu.mention",
+    sender: "user_2",
+    senderDisplayName: "Bob",
+    priority: "high",
+    content: { body: "never sent in event_id_only" },
+    counts: { unread: 3, missed_calls: 0 },
+  } as const;
+  const now = new Date("2026-07-01T00:00:00.000Z");
+  const payload = createNotificationWebPushPayload({
+    event,
+    pusher,
+    now,
+    tweaks: { sound: "default" },
+  });
+
+  expect(payload).toEqual({
+    notification: {
+      event_id: "notif_1",
+      room_id: "room_1",
+      counts: { unread: 3 },
+      devices: [
+        {
+          app_id: "jp.yurucommu.web",
+          pushkey: P256DH,
+          pushkey_ts: 1782864000,
+          data: {
+            subscribed_from: "home-screen",
+            format: "event_id_only",
+            vapid_key_id: VAPID_KEY_ID,
+          },
+          tweaks: { sound: "default" },
+        },
+      ],
+    },
+  });
+  const serialized = JSON.stringify(payload);
+  expect(serialized).not.toContain(AUTH);
+  expect(serialized).not.toContain(PUSH_URL);
+  expect(serialized).not.toContain("never sent");
+  expect(new TextEncoder().encode(serialized).byteLength).toBeLessThan(
+    MAX_NOTIFICATION_WEB_PUSH_PLAINTEXT_BYTES,
+  );
+
+  // It is exactly what the v1 builder produces for the equivalent gateway
+  // pusher, and a service worker can read it with the v1 gateway parser.
+  const gatewayPusher: NotificationPusher = {
+    kind: "http",
+    app_id: pusher.app_id,
+    pushkey: pusher.pushkey,
+    data: { ...toNotificationWebPushPusherPublicData(pusher.data) },
+  };
+  expect(payload).toEqual(
+    createNotificationPushGatewayRequest({
+      event,
+      pushers: [gatewayPusher],
+      now,
+      tweaks: { sound: "default" },
+    }),
+  );
+  expect(parseNotificationPushGatewayRequest(JSON.parse(serialized))).toEqual({
+    ok: true,
+    value: { request: JSON.parse(serialized) },
+  });
 });
 
 test("capabilities parse the advertised kinds into canonical values", () => {
@@ -757,11 +1027,9 @@ test("a 404 from the capabilities path means a v1 host that accepts only http", 
   ).toBe(true);
 
   // A client choosing a kind from those capabilities finds no webpush.
-  expectSetError(
-    { pusher: webPushPusher() },
-    "pusher.kind",
-    v1Host.value.kinds,
-  );
+  expectSetError({ pusher: webPushPusher() }, "pusher.kind", {
+    kinds: v1Host.value.kinds,
+  });
 
   expect(
     parseNotificationPusherCapabilitiesResponse(200, {
@@ -798,6 +1066,7 @@ test("Web Push service responses map onto the v1 outcome channels", () => {
       [201, "delivered"],
       [202, "delivered"],
       [200, "delivered"],
+      [204, "delivered"],
       [404, "rejected"],
       [410, "rejected"],
       [408, "retryable"],
@@ -808,6 +1077,7 @@ test("Web Push service responses map onto the v1 outcome channels", () => {
       [504, "retryable"],
       [400, "failed"],
       [401, "failed"],
+      // Deliberately not MSC4174's delete; see the function's comment.
       [403, "failed"],
       [413, "failed"],
       [301, "failed"],
@@ -888,16 +1158,21 @@ test("retryable Web Push outcomes honour Retry-After seconds and IMF-fixdate", (
 });
 
 test("pushers v2 constants extend the v1 registration path", () => {
+  for (const path of [
+    NOTIFICATION_PUSHER_CAPABILITIES_PATH,
+    NOTIFICATION_PUSHER_ACK_PATH,
+  ]) {
+    expect(path.startsWith(`${NOTIFICATION_PUSHER_REGISTRATION_PATH}/`)).toBe(
+      true,
+    );
+  }
   expect(NOTIFICATION_PUSHER_CAPABILITIES_PATH).toBe(
     "/api/notifications/pushers/capabilities",
   );
-  expect(
-    NOTIFICATION_PUSHER_CAPABILITIES_PATH.startsWith(
-      `${NOTIFICATION_PUSHER_REGISTRATION_PATH}/`,
-    ),
-  ).toBe(true);
   expect(NOTIFICATION_PUSHER_CAPABILITIES_VERSION).toBe(2);
   expect(NOTIFICATION_WEB_PUSH_CONTENT_ENCODING).toBe("aes128gcm");
+  expect(NOTIFICATION_WEB_PUSH_DEFAULT_TTL_SECONDS).toBe(2 * 24 * 60 * 60);
+  expect(MAX_NOTIFICATION_WEB_PUSH_PLAINTEXT_BYTES).toBe(4096 - 86 - 16 - 1);
 });
 
 // Compile-time assertions, enforced by the first test in this file.
@@ -910,11 +1185,23 @@ const v1RegistrationKind: NotificationPusherRegistration["kind"] = "http";
 const v1RegistrationWebPush: NotificationPusherRegistration["kind"] = "webpush";
 const kinds: readonly NotificationPusherKind[] = ["http", "webpush"];
 
-const leakedKeys: NotificationWebPushPusherPublicData = {
+const leakedAuth: NotificationWebPushPusherPublicData = {
+  url: PUSH_URL,
   format: "event_id_only",
   vapid_key_id: VAPID_KEY_ID,
-  // @ts-expect-error data returned to clients never carries subscription keys.
-  keys: { p256dh: P256DH, auth: AUTH },
+  // @ts-expect-error data returned to clients never carries the auth secret.
+  auth: AUTH,
+};
+
+// @ts-expect-error webpush list entries always say whether they are activated.
+const missingActivated: NotificationWebPushPusherListEntry = {
+  id: `jp.yurucommu.web\0${P256DH}`,
+  kind: "webpush",
+  app_id: "jp.yurucommu.web",
+  pushkey: P256DH,
+  data: { url: PUSH_URL, format: "event_id_only", vapid_key_id: VAPID_KEY_ID },
+  registered_at: "2026-10-29T00:00:00.000Z",
+  last_seen_at: "2026-10-29T00:00:00.000Z",
 };
 
 const futureVersion: NotificationPusherCapabilities = {
@@ -924,15 +1211,22 @@ const futureVersion: NotificationPusherCapabilities = {
   kinds: {},
 };
 
+const ackResponse: NotificationPusherAckResponse = {};
+const ackResponseWithBody: NotificationPusherAckResponse = {
+  // @ts-expect-error a successful ack answers an empty object.
+  ok: true,
+};
+
 const v2Request = {
   append: true,
   pusher: {
     kind: "webpush",
     app_id: "jp.yurucommu.web",
-    pushkey: ENDPOINT,
+    pushkey: P256DH,
     data: {
+      url: PUSH_URL,
+      auth: AUTH,
       format: "event_id_only",
-      keys: { p256dh: P256DH, auth: AUTH },
       vapid_key_id: VAPID_KEY_ID,
     },
   },
@@ -955,8 +1249,11 @@ void [
   v1RegistrationKind,
   v1RegistrationWebPush,
   kinds,
-  leakedKeys,
+  leakedAuth,
+  missingActivated,
   futureVersion,
+  ackResponse,
+  ackResponseWithBody,
   v2Request,
   httpListEntry,
 ];

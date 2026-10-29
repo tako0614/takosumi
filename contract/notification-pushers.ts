@@ -17,8 +17,34 @@ export const NOTIFICATION_PUSHER_CAPABILITIES_PATH =
 /** The capabilities document version a pushers v2 host serves. */
 export const NOTIFICATION_PUSHER_CAPABILITIES_VERSION = 2 as const;
 
-/** The Web Push content coding (RFC 8291). The legacy `aesgcm` draft is not used. */
+/** The Web Push content coding (RFC 8291); never the legacy `aesgcm` draft. */
 export const NOTIFICATION_WEB_PUSH_CONTENT_ENCODING = "aes128gcm" as const;
+
+/** The `TTL` a host sends unless the product sets another (MSC4174). */
+export const NOTIFICATION_WEB_PUSH_DEFAULT_TTL_SECONDS = 172_800;
+
+/**
+ * The largest plaintext that fits one aes128gcm record within the 4096 bytes a
+ * push service must accept: 4096 minus the 86-byte header, the 16-byte tag
+ * and one padding delimiter (RFC 8291 §4).
+ */
+export const MAX_NOTIFICATION_WEB_PUSH_PLAINTEXT_BYTES = 3993;
+
+/** Activation acknowledgement for `webpush` pushers (MSC4174 `pushers/ack`). */
+export const NOTIFICATION_PUSHER_ACK_PATH =
+  "/api/notifications/pushers/ack" as const;
+
+/** How long an activation `ack_token` stays valid after the host issues it. */
+export const NOTIFICATION_PUSHER_ACK_TOKEN_LIFETIME_SECONDS = 5 * 60;
+
+/** HTTP status for each ack failure, following MSC4174. */
+export const NOTIFICATION_PUSHER_ACK_ERROR_STATUS: Readonly<
+  Record<NotificationPusherAckErrorCode, 400 | 404>
+> = Object.freeze({
+  NOT_FOUND: 404,
+  EXPIRED_ACTIVATION_TOKEN: 400,
+  UNKNOWN_ACTIVATION_TOKEN: 400,
+});
 
 /** Maximum UTF-8 JSON size persisted for `pusher.data` after removing `url`. */
 export const MAX_NOTIFICATION_PUSHER_DATA_BYTES = 2 * 1024;
@@ -28,7 +54,8 @@ const MAX_NOTIFICATION_PUSHER_DATA_ENTRIES = 64;
 const MAX_NOTIFICATION_PUSHER_DATA_ARRAY_LENGTH = 64;
 const MAX_NOTIFICATION_PUSHER_DATA_KEY_BYTES = 128;
 const MAX_NOTIFICATION_PUSHER_DATA_STRING_BYTES = 1024;
-const MAX_NOTIFICATION_PUSHKEY_BYTES = 512;
+const MAX_NOTIFICATION_PUSH_URL_LENGTH = 2048;
+const MAX_NOTIFICATION_PUSHER_ACK_TOKEN_LENGTH = 255;
 const MAX_NOTIFICATION_CAPABILITY_GATEWAY_HOSTS = 64;
 const MAX_NOTIFICATION_CAPABILITY_FORMATS = 16;
 const WEB_PUSH_P256DH_BYTES = 65;
@@ -56,9 +83,10 @@ const UTF8_ENCODER = new TextEncoder();
 
 /**
  * `http` (v1): the host posts the Matrix envelope to the gateway at
- * `data.url`, and the gateway holds the provider credentials. `webpush`: the
- * host delivers to the Web Push endpoint in `pushkey` itself, signing with its
- * own VAPID key (RFC 8292) and encrypting with aes128gcm (RFC 8291).
+ * `data.url`, and the gateway holds the provider credentials. `webpush`
+ * (MSC4174): the host delivers to the push resource in `data.url` itself,
+ * signing with its own VAPID key (RFC 8292) and encrypting to the `pushkey`
+ * (p256dh) and `data.auth` with aes128gcm (RFC 8291).
  */
 export type NotificationPusherKind = "http" | "webpush";
 export type NotificationPushFormat = "event_id_only" | "full";
@@ -265,27 +293,30 @@ export type NotificationPushGatewayParseResult =
       readonly error: NotificationPusherParseError;
     };
 
-/** `PushSubscription.toJSON().keys`, base64url without padding. */
-export type NotificationWebPushSubscriptionKeys = {
-  /** The user agent's ECDH public key: an uncompressed P-256 point. */
-  readonly p256dh: string;
-  /** The 16-byte authentication secret. Never list or log it. */
-  readonly auth: string;
-};
-
+/** `webpush` pusher data, laid out as in MSC4174. */
 export type NotificationWebPushPusherData = JsonObject & {
+  /** The RFC 8030 push resource (`PushSubscription.endpoint`) to POST to. */
+  readonly url: string;
+  /**
+   * The RFC 8291 authentication secret: unpadded base64url of 16 bytes.
+   * Never list or log it.
+   */
+  readonly auth: string;
   /** A Web Push body carries ids and counts only. */
   readonly format: "event_id_only";
-  readonly keys: NotificationWebPushSubscriptionKeys;
-  /** The capabilities `vapid_key_id` the subscription was created with. */
+  /**
+   * Takos extension for key rotation: the capabilities `vapid_key_id` the
+   * subscription was created with.
+   */
   readonly vapid_key_id: string;
 };
 
-/** `webpush` pusher data as returned to clients: never the subscription keys. */
+/** `webpush` pusher data as returned to clients: everything except `auth`. */
 export type NotificationWebPushPusherPublicData = JsonObject & {
+  readonly url: string;
   readonly format: "event_id_only";
   readonly vapid_key_id: string;
-  readonly keys?: never;
+  readonly auth?: never;
 };
 
 /** A `webpush` pusher, delivered by the host itself. */
@@ -293,8 +324,9 @@ export interface NotificationWebPushPusher {
   readonly kind: "webpush";
   readonly app_id: string;
   /**
-   * `PushSubscription.endpoint`, exactly as the browser serializes it, within
-   * the 512-byte pushkey limit that v1 and Matrix share.
+   * The user agent's ECDH public key (`PushSubscription.getKey("p256dh")`):
+   * unpadded base64url of a 65-byte uncompressed P-256 point. Public, and
+   * stable for the life of the subscription.
    */
   readonly pushkey: string;
   readonly app_display_name?: string;
@@ -331,8 +363,8 @@ export interface ParsedNotificationWebPushPusherSetRequest {
   readonly pusher: NotificationWebPushPusher;
   readonly product: string | null;
   readonly scope: string | null;
-  /** The push resource the host POSTs to; always equal to `pusher.pushkey`. */
-  readonly endpoint: string;
+  /** The push resource the host POSTs to; always equal to `pusher.data.url`. */
+  readonly pushResourceUrl: string;
   readonly append: boolean;
 }
 
@@ -348,6 +380,12 @@ export interface NotificationPusherSetRequestV2Options {
    * and `webpush` pushers must name the listed `vapid_key_id`.
    */
   readonly kinds: NotificationPusherKindCapabilities;
+  /**
+   * Optional operator allowlist for `webpush` push resource hosts, as
+   * `push.example.com` or `*.example.com`. Omitted: any public host.
+   * `gateway_hosts` never applies to `webpush`.
+   */
+  readonly pushResourceHosts?: readonly string[];
 }
 
 export type NotificationPusherSetV2ParseResult =
@@ -369,12 +407,23 @@ export interface NotificationWebPushPusherRegistration {
   readonly profile_tag?: string;
   readonly lang?: string;
   readonly data: NotificationWebPushPusherPublicData;
+  /**
+   * False until the client acknowledges the activation push (MSC4174). The
+   * host sends nothing else to the pusher meanwhile.
+   */
+  readonly activated: boolean;
   readonly product?: string | null;
   readonly scope?: string | null;
   readonly registered_at: IsoTimestamp;
   readonly last_seen_at: IsoTimestamp;
 }
 
+/**
+ * The body of a successful `POST /api/notifications/pushers`. A `webpush`
+ * registration with `activated: false` means "set, but needs activation": the
+ * host answers 201, as MSC4174 does, and has sent the activation push. Clients
+ * read `activated` rather than relying on the status code.
+ */
 export interface NotificationPusherSetResponseV2 {
   readonly pusher:
     NotificationPusherRegistration | NotificationWebPushPusherRegistration;
@@ -382,7 +431,7 @@ export interface NotificationPusherSetResponseV2 {
 
 /**
  * Entries of `GET /api/notifications/pushers`: the caller's own pushers. They
- * carry `pushkey` so a client can delete a stale device, and never `keys`.
+ * carry `pushkey` so a client can delete a stale device, and never `data.auth`.
  */
 export interface NotificationHttpPusherListEntry extends NotificationPusherRegistration {
   readonly pushkey: string;
@@ -397,6 +446,71 @@ export type NotificationPusherListEntry =
 
 export interface NotificationPusherListResponse {
   readonly pushers: readonly NotificationPusherListEntry[];
+}
+
+/** What decides whether a `webpush` registration needs (re)activation. */
+export interface NotificationWebPushPusherActivationState {
+  readonly data: Pick<NotificationWebPushPusherData, "url" | "auth">;
+  readonly activated: boolean;
+}
+
+/**
+ * The body of `POST /api/notifications/pushers/ack`, with the same
+ * authentication as registration. The service worker posts the activation
+ * push's plaintext unchanged. The host looks the token up among the caller's
+ * pushers with this `app_id`.
+ */
+export interface NotificationPusherAckRequest {
+  readonly app_id: string;
+  /** Opaque: 1-255 of `[0-9A-Za-z._~-]`, so a hyphenated UUIDv4 fits. */
+  readonly ack_token: string;
+}
+
+/** The plaintext of the activation push: what the client acknowledges. */
+export type NotificationWebPushActivationMessage = NotificationPusherAckRequest;
+
+export interface ParsedNotificationPusherAckRequest {
+  readonly appId: string;
+  readonly ackToken: string;
+}
+
+export type NotificationPusherAckParseResult =
+  | {
+      readonly ok: true;
+      readonly value: ParsedNotificationPusherAckRequest;
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    };
+
+/** A 200 ack answer is an empty object. */
+export type NotificationPusherAckResponse = { readonly [key: string]: never };
+
+/**
+ * Ack failures, in the v1 error-code style (`{code, error}`). The status for
+ * each is `NOTIFICATION_PUSHER_ACK_ERROR_STATUS[code]`.
+ */
+export type NotificationPusherAckErrorCode =
+  "NOT_FOUND" | "EXPIRED_ACTIVATION_TOKEN" | "UNKNOWN_ACTIVATION_TOKEN";
+
+export interface NotificationPusherAckError {
+  readonly code: NotificationPusherAckErrorCode;
+  readonly error: string;
+}
+
+/**
+ * The plaintext a host encrypts for one activated `webpush` pusher: the same
+ * body it would post to a gateway for that pusher alone. A service worker can
+ * read it with `parseNotificationPushGatewayRequest`.
+ */
+export type NotificationWebPushPayload = NotificationPushGatewayRequest;
+
+export interface CreateNotificationWebPushPayloadInput {
+  readonly event?: NotificationPushEventInput;
+  readonly pusher: NotificationWebPushPusher;
+  readonly now?: Date;
+  readonly tweaks?: NotificationPushTweaks;
 }
 
 export interface NotificationHttpPusherCapability {
@@ -616,23 +730,22 @@ export function parseNotificationPushGatewayRequest(
 }
 
 /**
- * Accept a Web Push endpoint only as a public HTTPS push service URL. The
- * endpoint is also the pushkey, so it must already be in the canonical form a
- * browser serializes (`PushSubscription.endpoint`); this function never
- * rewrites it. IP literals, single-label names, and loopback, mDNS,
- * private-use and reverse-DNS names are refused.
+ * Accept a Web Push push resource (`data.url`) like a v1 gateway URL, but
+ * stricter: HTTPS on the default port, no credentials or fragment, at most
+ * 2048 characters, and a public DNS name. IP literals in any spelling,
+ * single-label names, and loopback, mDNS, private-use and reverse-DNS names
+ * are refused, and there is no loopback exception. Returns the WHATWG
+ * serialization, as the v1 gateway normalizer does.
  *
  * This is a lexical check. A host that can reach private networks must still
  * refuse private addresses when it connects (Cloudflare Workers cannot reach
- * them), and may apply an operator allowlist on top.
+ * them), must not follow redirects, and may apply an operator allowlist on top.
  */
-export function normalizeNotificationWebPushEndpoint(
-  value: unknown,
-): string | null {
+export function normalizeNotificationWebPushUrl(value: unknown): string | null {
   const text = parseNonEmptyString(value);
   if (
     !text ||
-    UTF8_ENCODER.encode(text).byteLength > MAX_NOTIFICATION_PUSHKEY_BYTES ||
+    text.length > MAX_NOTIFICATION_PUSH_URL_LENGTH ||
     text.includes("#")
   ) {
     return null;
@@ -644,11 +757,12 @@ export function normalizeNotificationWebPushEndpoint(
       url.username ||
       url.password ||
       url.port ||
-      url.href !== text
+      url.href.length > MAX_NOTIFICATION_PUSH_URL_LENGTH ||
+      !isPublicDnsHostname(url.hostname)
     ) {
       return null;
     }
-    return isPublicDnsHostname(url.hostname) ? text : null;
+    return url.href;
   } catch {
     return null;
   }
@@ -694,6 +808,19 @@ export function parseNotificationPusherSetRequestV2(
       capability.vapid_key_id,
     );
     if (!pusher.ok) return pusher;
+    const pushResourceUrl = pusher.value.data.url;
+    if (
+      options.pushResourceHosts !== undefined &&
+      !gatewayHostListed(
+        new URL(pushResourceUrl).hostname,
+        options.pushResourceHosts,
+      )
+    ) {
+      return badSetRequest(
+        "pusher.data.url is not an allowed push service host",
+        "pusher.data.url",
+      );
+    }
     return {
       ok: true,
       value: {
@@ -701,7 +828,7 @@ export function parseNotificationPusherSetRequestV2(
         pusher: pusher.value,
         product,
         scope,
-        endpoint: pusher.value.pushkey,
+        pushResourceUrl,
         append: append ?? false,
       },
     };
@@ -734,15 +861,75 @@ export function parseNotificationPusherSetRequestV2(
   };
 }
 
-/** Drop the subscription keys before a `webpush` pusher leaves the host. */
+/** Drop `auth` before a `webpush` pusher's data leaves the host. */
 export function toNotificationWebPushPusherPublicData(
   data: NotificationWebPushPusherData,
 ): NotificationWebPushPusherPublicData {
   const publicData: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(data)) {
-    if (key !== "keys") defineJsonProperty(publicData, key, value);
+    if (key !== "auth") defineJsonProperty(publicData, key, value);
   }
   return publicData as NotificationWebPushPusherPublicData;
+}
+
+/**
+ * MSC4174: a registration needs activation when it creates the pusher, changes
+ * `data.url` or `data.auth`, or repeats one that was never activated (the host
+ * then issues a fresh `ack_token`). `previous` is the stored pusher with the
+ * same (`app_id`, `pushkey`) for this account, if any. Both sides must come
+ * from the parser, which canonicalizes `url` and requires canonical `auth`.
+ */
+export function notificationWebPushPusherNeedsActivation(
+  previous: NotificationWebPushPusherActivationState | null | undefined,
+  next: Pick<NotificationWebPushPusher, "data">,
+): boolean {
+  return (
+    !previous ||
+    !previous.activated ||
+    previous.data.url !== next.data.url ||
+    previous.data.auth !== next.data.auth
+  );
+}
+
+/**
+ * Parse an activation acknowledgement, which is also the plaintext of the
+ * activation push. The host answers `{}` on success, or an
+ * `NotificationPusherAckError` with `NOTIFICATION_PUSHER_ACK_ERROR_STATUS`.
+ */
+export function parseNotificationPusherAckRequest(
+  body: unknown,
+): NotificationPusherAckParseResult {
+  if (!isRecord(body)) return badAckRequest("body must be an object");
+  const appId = parseAppId(body.app_id);
+  if (!appId) return badAckRequest("app_id is invalid", "app_id");
+  const ackToken = parseAckToken(body.ack_token);
+  if (!ackToken) return badAckRequest("ack_token is invalid", "ack_token");
+  return { ok: true, value: { appId, ackToken } };
+}
+
+/**
+ * Build the plaintext for one activated `webpush` pusher by reusing the v1
+ * gateway envelope: `webpush` is always `event_id_only`, so only `event_id`,
+ * `room_id`, `counts` and the one device are filled, and the device's `data`
+ * carries the public fields without `url` (as on the v1 wire) or `auth`. The
+ * sender encrypts the JSON and must keep it within
+ * `MAX_NOTIFICATION_WEB_PUSH_PLAINTEXT_BYTES`.
+ */
+export function createNotificationWebPushPayload(
+  input: CreateNotificationWebPushPayloadInput,
+): NotificationWebPushPayload {
+  const gatewayPusher: NotificationPusher = {
+    kind: "http",
+    app_id: input.pusher.app_id,
+    pushkey: input.pusher.pushkey,
+    data: toNotificationWebPushPusherPublicData(input.pusher.data),
+  };
+  return createNotificationPushGatewayRequest({
+    event: input.event,
+    pushers: [gatewayPusher],
+    now: input.now,
+    tweaks: input.tweaks,
+  });
 }
 
 /**
@@ -823,9 +1010,13 @@ export function parseNotificationPusherCapabilitiesResponse(
  * 2xx is delivered (RFC 8030 answers 201, or 202 when a receipt was
  * requested). 404 and 410 mean the subscription is gone: rejected. A timeout,
  * a failed connection, 408, 429 and 5xx are retryable, honouring
- * `Retry-After`. Everything else is failed, including 403 (usually a VAPID key
- * that does not match the subscription, a host fault rather than a dead
- * device), 413 and redirects, which the host must not follow.
+ * `Retry-After`. Everything else is failed (kept, not retried), including
+ * redirects, which the host must not follow, and 413.
+ *
+ * 403 is failed on purpose, unlike MSC4174, which deletes the pusher. A 403
+ * usually means the VAPID signature does not match the subscription, so a
+ * host-side signing bug would delete every pusher at once. Activation already
+ * catches a real key mismatch when the pusher is registered.
  */
 export function classifyNotificationWebPushResponse(
   response: NotificationWebPushServiceResponse,
@@ -908,10 +1099,12 @@ function parseNotificationWebPushPusher(
     } {
   const appId = parseAppId(value.app_id);
   if (!appId) return badSetRequest("pusher.app_id is invalid", "pusher.app_id");
-  const endpoint = normalizeNotificationWebPushEndpoint(value.pushkey);
-  if (!endpoint) {
+  // The pushkey is also the registration's identity, so only the canonical
+  // spelling is accepted: a padded copy would be a second pusher.
+  const pushkey = parseCanonicalBase64UrlBytes(value.pushkey, isP256PublicKey);
+  if (!pushkey) {
     return badSetRequest(
-      "pusher.pushkey must be a public HTTPS Web Push endpoint",
+      "pusher.pushkey must be the p256dh key: unpadded base64url of an uncompressed P-256 point",
       "pusher.pushkey",
     );
   }
@@ -925,7 +1118,7 @@ function parseNotificationWebPushPusher(
     value: {
       kind: "webpush",
       app_id: appId,
-      pushkey: endpoint,
+      pushkey,
       ...optionalPusherFields.value,
       data: data.value,
     },
@@ -1054,41 +1247,58 @@ function parseWebPushPusherData(
   const entries = readStrictJsonObjectEntries(value);
   if (!entries) return badSetRequest("pusher.data is invalid", "pusher.data");
 
+  let rawUrl: unknown;
+  let rawAuth: unknown;
   let rawFormat: unknown;
-  let rawKeys: unknown;
   let rawVapidKeyId: unknown;
   const extraData: Record<string, unknown> = {};
   for (const [key, nested] of entries) {
     if (key === "url") {
-      // The endpoint is the pushkey. A `url` here would be a gateway.
-      return badSetRequest(
-        "pusher.data.url is not used by webpush pushers",
-        "pusher.data.url",
-      );
+      rawUrl = nested;
+      continue;
+    }
+    if (key === "auth") {
+      rawAuth = nested;
+      continue;
     }
     if (key === "format") {
       rawFormat = nested;
-      continue;
-    }
-    if (key === "keys") {
-      rawKeys = nested;
       continue;
     }
     if (key === "vapid_key_id") {
       rawVapidKeyId = nested;
       continue;
     }
+    if (key === "keys") {
+      // `PushSubscription.toJSON()` nests both keys here; MSC4174 does not.
+      return badSetRequest(
+        "pusher.data.keys is not used: send p256dh as pushkey and auth as data.auth",
+        "pusher.data.keys",
+      );
+    }
     defineJsonProperty(extraData, key, nested);
   }
 
+  const url = normalizeNotificationWebPushUrl(rawUrl);
+  if (!url) {
+    return badSetRequest(
+      "pusher.data.url must be a public HTTPS push service URL",
+      "pusher.data.url",
+    );
+  }
+  const auth = parseCanonicalBase64UrlBytes(rawAuth, isWebPushAuthSecret);
+  if (!auth) {
+    return badSetRequest(
+      "pusher.data.auth must be unpadded base64url of 16 bytes",
+      "pusher.data.auth",
+    );
+  }
   if (rawFormat != null && rawFormat !== "event_id_only") {
     return badSetRequest(
       "pusher.data.format must be event_id_only for webpush pushers",
       "pusher.data.format",
     );
   }
-  const keys = parseWebPushSubscriptionKeys(rawKeys);
-  if (!keys.ok) return keys;
   const parsedVapidKeyId = parseVapidKeyId(rawVapidKeyId);
   if (!parsedVapidKeyId) {
     return badSetRequest(
@@ -1105,78 +1315,56 @@ function parseWebPushPusherData(
     );
   }
 
+  // As in v1, the size budget covers the data without `url`.
+  defineJsonProperty(extraData, "auth", auth);
   defineJsonProperty(extraData, "format", "event_id_only");
-  defineJsonProperty(extraData, "keys", keys.value);
   defineJsonProperty(extraData, "vapid_key_id", parsedVapidKeyId);
   const data = parseBoundedPusherDataObject(extraData);
   if (!data) return badSetRequest("pusher.data is invalid", "pusher.data");
+  defineJsonProperty(data, "url", url);
   return { ok: true, value: data as NotificationWebPushPusherData };
 }
 
-function parseWebPushSubscriptionKeys(value: unknown):
-  | {
-      readonly ok: true;
-      readonly value: NotificationWebPushSubscriptionKeys;
-    }
-  | {
-      readonly ok: false;
-      readonly error: NotificationPusherParseError;
-    } {
-  const entries = readStrictJsonObjectEntries(value);
-  if (!entries) {
-    return badSetRequest(
-      "pusher.data.keys must be an object",
-      "pusher.data.keys",
-    );
-  }
-  let rawP256dh: unknown;
-  let rawAuth: unknown;
-  for (const [key, nested] of entries) {
-    if (key === "p256dh") {
-      rawP256dh = nested;
-    } else if (key === "auth") {
-      rawAuth = nested;
-    } else {
-      return badSetRequest(
-        "pusher.data.keys allows only p256dh and auth",
-        "pusher.data.keys",
-      );
-    }
-  }
-  const p256dh = parseUncompressedP256PublicKey(rawP256dh);
-  if (!p256dh) {
-    return badSetRequest(
-      "pusher.data.keys.p256dh must be a base64url uncompressed P-256 public key",
-      "pusher.data.keys.p256dh",
-    );
-  }
-  const auth = parseBase64UrlBytes(rawAuth, WEB_PUSH_AUTH_SECRET_BYTES);
-  if (!auth) {
-    return badSetRequest(
-      "pusher.data.keys.auth must be a base64url 16-byte secret",
-      "pusher.data.keys.auth",
-    );
-  }
-  return { ok: true, value: { p256dh, auth } };
-}
-
-/** Canonical base64url of a 65-byte uncompressed P-256 point, or null. */
+/** Base64url of a 65-byte uncompressed P-256 point, canonicalized, or null. */
 function parseUncompressedP256PublicKey(value: unknown): string | null {
   const bytes = decodeBase64Url(value);
-  if (!bytes || bytes.length !== WEB_PUSH_P256DH_BYTES || bytes[0] !== 0x04) {
-    return null;
-  }
-  return encodeBase64Url(bytes);
+  return bytes && isP256PublicKey(bytes) ? encodeBase64Url(bytes) : null;
 }
 
-/** Canonical base64url of exactly `length` decoded bytes, or null. */
-function parseBase64UrlBytes(value: unknown, length: number): string | null {
+/**
+ * `value` itself when it is the canonical spelling (unpadded, unused bits
+ * zero) of bytes that `accept` allows, else null.
+ */
+function parseCanonicalBase64UrlBytes(
+  value: unknown,
+  accept: (bytes: Uint8Array) => boolean,
+): string | null {
+  if (typeof value !== "string") return null;
   const bytes = decodeBase64Url(value);
-  return bytes && bytes.length === length ? encodeBase64Url(bytes) : null;
+  return bytes && accept(bytes) && encodeBase64Url(bytes) === value
+    ? value
+    : null;
+}
+
+function isP256PublicKey(bytes: Uint8Array): boolean {
+  return bytes.length === WEB_PUSH_P256DH_BYTES && bytes[0] === 0x04;
+}
+
+function isWebPushAuthSecret(bytes: Uint8Array): boolean {
+  return bytes.length === WEB_PUSH_AUTH_SECRET_BYTES;
 }
 
 function parseVapidKeyId(value: unknown): string | null {
   return parseOptionalShortIdentifier(value) ?? null;
+}
+
+/** The Matrix opaque identifier grammar, bounded to 255 characters. */
+function parseAckToken(value: unknown): string | null {
+  return typeof value === "string" &&
+    value.length <= MAX_NOTIFICATION_PUSHER_ACK_TOKEN_LENGTH &&
+    /^[0-9A-Za-z._~-]+$/u.test(value)
+    ? value
+    : null;
 }
 
 const BASE64URL_ALPHABET =
@@ -1978,6 +2166,13 @@ function unavailablePusherKind(kind: NotificationPusherKind): {
     `pusher.kind ${kind} is not available on this host`,
     "pusher.kind",
   );
+}
+
+function badAckRequest(
+  error: string,
+  field?: string,
+): { readonly ok: false; readonly error: NotificationPusherParseError } {
+  return { ok: false, error: { code: "BAD_REQUEST", error, field } };
 }
 
 function badCapabilities(
