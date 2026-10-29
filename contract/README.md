@@ -21,7 +21,7 @@ Takosumi release commit.
 | `@takosjp/takosumi-contract/discovery` | Public API, well-known, and capability paths plus discovery DTOs and builders. |
 | `@takosjp/takosumi-contract/interface-types` | Dependency-free Interface protocol type, version, and permission tokens. |
 | `@takosjp/takosumi-contract/runtime-interfaces` | App-facing `Interface` and `InterfaceBinding` wire views, constituent types, and lexical validators. |
-| `@takosjp/takosumi-contract/notification-pushers` | Generic notification pusher registration and gateway wire contract. |
+| `@takosjp/takosumi-contract/notification-pushers` | Generic notification pusher registration and gateway wire contract: v1 `http` pushers, and the pushers v2 `webpush` kind, capabilities discovery, listing and Web Push outcome mapping. |
 | `@takosjp/takosumi-contract/identity-oidc` | Standard same-origin Takosumi Accounts OIDC paths for installed clients. |
 
 The package uses an exact export map. There is no wildcard subpath.

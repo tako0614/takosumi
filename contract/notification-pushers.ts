@@ -6,6 +6,20 @@ export const NOTIFICATION_PUSHER_REGISTRATION_PATH =
 export const MATRIX_PUSH_GATEWAY_NOTIFY_PATH =
   "/_matrix/push/v1/notify" as const;
 
+/**
+ * Pushers v2 discovery, with the same authentication as registration. A 404
+ * means a v1 host that accepts only `http` pushers; see
+ * `parseNotificationPusherCapabilitiesResponse`.
+ */
+export const NOTIFICATION_PUSHER_CAPABILITIES_PATH =
+  "/api/notifications/pushers/capabilities" as const;
+
+/** The capabilities document version a pushers v2 host serves. */
+export const NOTIFICATION_PUSHER_CAPABILITIES_VERSION = 2 as const;
+
+/** The Web Push content coding (RFC 8291). The legacy `aesgcm` draft is not used. */
+export const NOTIFICATION_WEB_PUSH_CONTENT_ENCODING = "aes128gcm" as const;
+
 /** Maximum UTF-8 JSON size persisted for `pusher.data` after removing `url`. */
 export const MAX_NOTIFICATION_PUSHER_DATA_BYTES = 2 * 1024;
 
@@ -14,9 +28,39 @@ const MAX_NOTIFICATION_PUSHER_DATA_ENTRIES = 64;
 const MAX_NOTIFICATION_PUSHER_DATA_ARRAY_LENGTH = 64;
 const MAX_NOTIFICATION_PUSHER_DATA_KEY_BYTES = 128;
 const MAX_NOTIFICATION_PUSHER_DATA_STRING_BYTES = 1024;
+const MAX_NOTIFICATION_PUSHKEY_BYTES = 512;
+const MAX_NOTIFICATION_CAPABILITY_GATEWAY_HOSTS = 64;
+const MAX_NOTIFICATION_CAPABILITY_FORMATS = 16;
+const WEB_PUSH_P256DH_BYTES = 65;
+const WEB_PUSH_AUTH_SECRET_BYTES = 16;
+/**
+ * Top-level labels that never name a public push service: loopback and mDNS
+ * names, private-use and home-network suffixes, reverse-DNS, and names that
+ * cannot resolve on the public Internet.
+ */
+const NON_PUBLIC_TOP_LEVEL_LABELS: ReadonlySet<string> = new Set([
+  "arpa",
+  "corp",
+  "home",
+  "internal",
+  "intranet",
+  "invalid",
+  "lan",
+  "local",
+  "localdomain",
+  "localhost",
+  "onion",
+  "private",
+]);
 const UTF8_ENCODER = new TextEncoder();
 
-export type NotificationPusherKind = "http";
+/**
+ * `http` (v1): the host posts the Matrix envelope to the gateway at
+ * `data.url`, and the gateway holds the provider credentials. `webpush`: the
+ * host delivers to the Web Push endpoint in `pushkey` itself, signing with its
+ * own VAPID key (RFC 8292) and encrypting with aes128gcm (RFC 8291).
+ */
+export type NotificationPusherKind = "http" | "webpush";
 export type NotificationPushFormat = "event_id_only" | "full";
 export type NotificationPushPriority = "high" | "low";
 
@@ -25,8 +69,9 @@ export type NotificationPusherData = JsonObject & {
   readonly format?: NotificationPushFormat;
 };
 
+/** An `http` pusher: the v1 shape, delivered through a gateway. */
 export interface NotificationPusher {
-  readonly kind: NotificationPusherKind;
+  readonly kind: "http";
   readonly app_id: string;
   readonly pushkey: string;
   readonly app_display_name?: string;
@@ -65,7 +110,7 @@ export interface ParsedNotificationPusherDeleteRequest {
 
 export interface NotificationPusherRegistration {
   readonly id: string;
-  readonly kind: NotificationPusherKind;
+  readonly kind: "http";
   readonly app_id: string;
   readonly app_display_name?: string;
   readonly device_display_name?: string;
@@ -220,6 +265,233 @@ export type NotificationPushGatewayParseResult =
       readonly error: NotificationPusherParseError;
     };
 
+/** `PushSubscription.toJSON().keys`, base64url without padding. */
+export type NotificationWebPushSubscriptionKeys = {
+  /** The user agent's ECDH public key: an uncompressed P-256 point. */
+  readonly p256dh: string;
+  /** The 16-byte authentication secret. Never list or log it. */
+  readonly auth: string;
+};
+
+export type NotificationWebPushPusherData = JsonObject & {
+  /** A Web Push body carries ids and counts only. */
+  readonly format: "event_id_only";
+  readonly keys: NotificationWebPushSubscriptionKeys;
+  /** The capabilities `vapid_key_id` the subscription was created with. */
+  readonly vapid_key_id: string;
+};
+
+/** `webpush` pusher data as returned to clients: never the subscription keys. */
+export type NotificationWebPushPusherPublicData = JsonObject & {
+  readonly format: "event_id_only";
+  readonly vapid_key_id: string;
+  readonly keys?: never;
+};
+
+/** A `webpush` pusher, delivered by the host itself. */
+export interface NotificationWebPushPusher {
+  readonly kind: "webpush";
+  readonly app_id: string;
+  /**
+   * `PushSubscription.endpoint`, exactly as the browser serializes it, within
+   * the 512-byte pushkey limit that v1 and Matrix share.
+   */
+  readonly pushkey: string;
+  readonly app_display_name?: string;
+  readonly device_display_name?: string;
+  readonly profile_tag?: string;
+  readonly lang?: string;
+  readonly data: NotificationWebPushPusherData;
+}
+
+/** Any pusher a v2 host registers. */
+export type NotificationPusherV2 =
+  NotificationPusher | NotificationWebPushPusher;
+
+export interface NotificationPusherSetRequestV2 {
+  readonly pusher: NotificationPusherV2;
+  readonly product?: string;
+  readonly scope?: string;
+  /**
+   * Matrix `append`. Omitted or false: registering also removes the same
+   * (`app_id`, `pushkey`) registered by any other account on this host, so a
+   * device that switched accounts stops receiving the previous account's
+   * notifications. True keeps those other registrations.
+   */
+  readonly append?: boolean;
+}
+
+export interface ParsedNotificationHttpPusherSetRequest extends ParsedNotificationPusherSetRequest {
+  readonly kind: "http";
+  readonly append: boolean;
+}
+
+export interface ParsedNotificationWebPushPusherSetRequest {
+  readonly kind: "webpush";
+  readonly pusher: NotificationWebPushPusher;
+  readonly product: string | null;
+  readonly scope: string | null;
+  /** The push resource the host POSTs to; always equal to `pusher.pushkey`. */
+  readonly endpoint: string;
+  readonly append: boolean;
+}
+
+export type ParsedNotificationPusherSetRequestV2 =
+  | ParsedNotificationHttpPusherSetRequest
+  | ParsedNotificationWebPushPusherSetRequest;
+
+export interface NotificationPusherSetRequestV2Options {
+  readonly product?: string;
+  /**
+   * The `kinds` of the capabilities document this host serves. Only listed
+   * kinds register, `http` gateways must match a listed `gateway_hosts` entry,
+   * and `webpush` pushers must name the listed `vapid_key_id`.
+   */
+  readonly kinds: NotificationPusherKindCapabilities;
+}
+
+export type NotificationPusherSetV2ParseResult =
+  | {
+      readonly ok: true;
+      readonly value: ParsedNotificationPusherSetRequestV2;
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    };
+
+export interface NotificationWebPushPusherRegistration {
+  readonly id: string;
+  readonly kind: "webpush";
+  readonly app_id: string;
+  readonly app_display_name?: string;
+  readonly device_display_name?: string;
+  readonly profile_tag?: string;
+  readonly lang?: string;
+  readonly data: NotificationWebPushPusherPublicData;
+  readonly product?: string | null;
+  readonly scope?: string | null;
+  readonly registered_at: IsoTimestamp;
+  readonly last_seen_at: IsoTimestamp;
+}
+
+export interface NotificationPusherSetResponseV2 {
+  readonly pusher:
+    NotificationPusherRegistration | NotificationWebPushPusherRegistration;
+}
+
+/**
+ * Entries of `GET /api/notifications/pushers`: the caller's own pushers. They
+ * carry `pushkey` so a client can delete a stale device, and never `keys`.
+ */
+export interface NotificationHttpPusherListEntry extends NotificationPusherRegistration {
+  readonly pushkey: string;
+}
+
+export interface NotificationWebPushPusherListEntry extends NotificationWebPushPusherRegistration {
+  readonly pushkey: string;
+}
+
+export type NotificationPusherListEntry =
+  NotificationHttpPusherListEntry | NotificationWebPushPusherListEntry;
+
+export interface NotificationPusherListResponse {
+  readonly pushers: readonly NotificationPusherListEntry[];
+}
+
+export interface NotificationHttpPusherCapability {
+  /**
+   * Gateway hosts the host delivers to, as `push.example.com` or
+   * `*.example.com` (subdomains only). Omitted: any gateway host that passes
+   * the host's egress checks.
+   */
+  readonly gateway_hosts?: readonly string[];
+}
+
+export interface NotificationWebPushPusherCapability {
+  /**
+   * The host's VAPID public key, a base64url uncompressed P-256 point. Clients
+   * subscribe with it as `applicationServerKey`.
+   */
+  readonly vapid_public_key: string;
+  /** Stable id of that key. It changes when the key changes. */
+  readonly vapid_key_id: string;
+  readonly content_encoding: typeof NOTIFICATION_WEB_PUSH_CONTENT_ENCODING;
+}
+
+/** A kind is listed only while the host can deliver it. */
+export interface NotificationPusherKindCapabilities {
+  readonly http?: NotificationHttpPusherCapability;
+  readonly webpush?: NotificationWebPushPusherCapability;
+}
+
+/** The body of `GET /api/notifications/pushers/capabilities`. */
+export interface NotificationPusherCapabilities {
+  readonly version: typeof NOTIFICATION_PUSHER_CAPABILITIES_VERSION;
+  readonly formats: readonly NotificationPushFormat[];
+  readonly kinds: NotificationPusherKindCapabilities;
+}
+
+export interface ParsedNotificationPusherCapabilities {
+  /** 2 or later from a v2 host; 1 when a 404 identified a v1 host. */
+  readonly version: number;
+  /** The advertised formats this contract knows; unknown ones are dropped. */
+  readonly formats: readonly NotificationPushFormat[];
+  /** The kinds this contract knows and the client can use; see the parser. */
+  readonly kinds: NotificationPusherKindCapabilities;
+}
+
+export type NotificationPusherCapabilitiesParseResult =
+  | {
+      readonly ok: true;
+      readonly value: ParsedNotificationPusherCapabilities;
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    };
+
+/**
+ * What a host does with one pusher after one delivery attempt. The last three
+ * are the v1 gateway response channels (`NotificationPushGatewayResponse`):
+ * `rejected` deletes the registration, `retryable` retries it, and `failed`
+ * keeps it without retrying.
+ */
+export type NotificationPushDeliveryOutcome =
+  "delivered" | "rejected" | "retryable" | "failed";
+
+export type NotificationWebPushServiceResponse =
+  | {
+      readonly status: number;
+      /** The raw `Retry-After` response header, if any. */
+      readonly retryAfter?: string | null;
+    }
+  | {
+      /** No HTTP response: the request timed out or the connection failed. */
+      readonly transportError: "timeout" | "network";
+    };
+
+export interface NotificationWebPushDeliveryClassification {
+  readonly outcome: NotificationPushDeliveryOutcome;
+  /**
+   * Seconds to wait before the retry, from a valid `Retry-After`. Present only
+   * on `retryable`. The host still applies its own ceiling and the message TTL.
+   */
+  readonly retryAfterSeconds?: number;
+}
+
+/**
+ * The capabilities to assume when the capabilities path answers 404: a v1
+ * host that accepts `http` pushers in either format, through any gateway that
+ * passes its egress checks.
+ */
+export const NOTIFICATION_PUSHER_V1_HOST_CAPABILITIES: ParsedNotificationPusherCapabilities =
+  Object.freeze({
+    version: 1,
+    formats: Object.freeze(["event_id_only", "full"] as const),
+    kinds: Object.freeze({ http: Object.freeze({}) }),
+  });
+
 export function createNotificationPusherId(
   pusher: Pick<NotificationPusher, "app_id" | "pushkey">,
 ): string {
@@ -343,6 +615,241 @@ export function parseNotificationPushGatewayRequest(
   };
 }
 
+/**
+ * Accept a Web Push endpoint only as a public HTTPS push service URL. The
+ * endpoint is also the pushkey, so it must already be in the canonical form a
+ * browser serializes (`PushSubscription.endpoint`); this function never
+ * rewrites it. IP literals, single-label names, and loopback, mDNS,
+ * private-use and reverse-DNS names are refused.
+ *
+ * This is a lexical check. A host that can reach private networks must still
+ * refuse private addresses when it connects (Cloudflare Workers cannot reach
+ * them), and may apply an operator allowlist on top.
+ */
+export function normalizeNotificationWebPushEndpoint(
+  value: unknown,
+): string | null {
+  const text = parseNonEmptyString(value);
+  if (
+    !text ||
+    UTF8_ENCODER.encode(text).byteLength > MAX_NOTIFICATION_PUSHKEY_BYTES ||
+    text.includes("#")
+  ) {
+    return null;
+  }
+  try {
+    const url = new URL(text);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.href !== text
+    ) {
+      return null;
+    }
+    return isPublicDnsHostname(url.hostname) ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a pushers v2 registration of any kind this host advertises. The `http`
+ * branch normalizes exactly as `parseNotificationPusherSetRequest` does. That
+ * v1 parser is unchanged and still accepts only `http`.
+ */
+export function parseNotificationPusherSetRequestV2(
+  body: unknown,
+  options: NotificationPusherSetRequestV2Options,
+): NotificationPusherSetV2ParseResult {
+  if (!isRecord(body)) return badSetRequest("body must be an object");
+  const product = parseOptionalShortIdentifier(body.product);
+  if (product === undefined) {
+    return badSetRequest("product is invalid", "product");
+  }
+  if (options.product && product !== options.product) {
+    return badSetRequest(`product must be ${options.product}`, "product");
+  }
+
+  const scope = parseOptionalShortIdentifier(body.scope);
+  if (scope === undefined) return badSetRequest("scope is invalid", "scope");
+
+  const append = parseOptionalBoolean(body.append);
+  if (append === undefined) {
+    return badSetRequest("append must be a boolean", "append");
+  }
+
+  if (!isRecord(body.pusher)) return badSetRequest("pusher must be an object");
+  const kind = body.pusher.kind;
+  if (kind !== "http" && kind !== "webpush") {
+    return badSetRequest("pusher.kind must be http or webpush", "pusher.kind");
+  }
+
+  if (kind === "webpush") {
+    const capability = options.kinds.webpush;
+    if (!capability) return unavailablePusherKind(kind);
+    const pusher = parseNotificationWebPushPusher(
+      body.pusher,
+      capability.vapid_key_id,
+    );
+    if (!pusher.ok) return pusher;
+    return {
+      ok: true,
+      value: {
+        kind,
+        pusher: pusher.value,
+        product,
+        scope,
+        endpoint: pusher.value.pushkey,
+        append: append ?? false,
+      },
+    };
+  }
+
+  const capability = options.kinds.http;
+  if (!capability) return unavailablePusherKind(kind);
+  const pusher = parseNotificationPusher(body.pusher);
+  if (!pusher.ok) return pusher;
+  const gatewayHosts = capability.gateway_hosts;
+  if (
+    gatewayHosts !== undefined &&
+    !gatewayHostListed(new URL(pusher.value.gatewayUrl).hostname, gatewayHosts)
+  ) {
+    return badSetRequest(
+      "pusher.data.url is not an allowed gateway host",
+      "pusher.data.url",
+    );
+  }
+  return {
+    ok: true,
+    value: {
+      kind,
+      pusher: pusher.value.pusher,
+      product,
+      scope,
+      gatewayUrl: pusher.value.gatewayUrl,
+      append: append ?? false,
+    },
+  };
+}
+
+/** Drop the subscription keys before a `webpush` pusher leaves the host. */
+export function toNotificationWebPushPusherPublicData(
+  data: NotificationWebPushPusherData,
+): NotificationWebPushPusherPublicData {
+  const publicData: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key !== "keys") defineJsonProperty(publicData, key, value);
+  }
+  return publicData as NotificationWebPushPusherPublicData;
+}
+
+/**
+ * Parse a capabilities document. It must be a version 2 or later object with
+ * `formats` and `kinds`. To stay forward compatible, unknown formats and kinds
+ * are ignored, and so is a known kind this contract cannot use (malformed, or
+ * a content encoding other than aes128gcm): the client then treats that kind
+ * as unavailable instead of failing the whole document.
+ */
+export function parseNotificationPusherCapabilities(
+  body: unknown,
+): NotificationPusherCapabilitiesParseResult {
+  if (!isRecord(body)) return badCapabilities("capabilities must be an object");
+  const version = body.version;
+  if (
+    typeof version !== "number" ||
+    !Number.isSafeInteger(version) ||
+    version < NOTIFICATION_PUSHER_CAPABILITIES_VERSION
+  ) {
+    return badCapabilities("capabilities.version is invalid", "version");
+  }
+
+  const rawFormats = body.formats;
+  if (
+    !Array.isArray(rawFormats) ||
+    rawFormats.length > MAX_NOTIFICATION_CAPABILITY_FORMATS ||
+    !rawFormats.every((format) => typeof format === "string")
+  ) {
+    return badCapabilities("capabilities.formats is invalid", "formats");
+  }
+  const formats: NotificationPushFormat[] = [];
+  for (const format of ["event_id_only", "full"] as const) {
+    if (rawFormats.includes(format)) formats.push(format);
+  }
+
+  const rawKinds = body.kinds;
+  if (!isRecord(rawKinds)) {
+    return badCapabilities("capabilities.kinds is invalid", "kinds");
+  }
+  const kinds: {
+    http?: NotificationHttpPusherCapability;
+    webpush?: NotificationWebPushPusherCapability;
+  } = {};
+  const http = parseHttpPusherCapability(readOwnProperty(rawKinds, "http"));
+  if (http) kinds.http = http;
+  const webpush = parseWebPushPusherCapability(
+    readOwnProperty(rawKinds, "webpush"),
+  );
+  if (webpush) kinds.webpush = webpush;
+
+  return { ok: true, value: { version, formats, kinds } };
+}
+
+/**
+ * Interpret the response to `GET /api/notifications/pushers/capabilities`:
+ * 200 parses the body, and 404 identifies a v1 host
+ * (`NOTIFICATION_PUSHER_V1_HOST_CAPABILITIES`). Any other status is an error,
+ * not a v1 host.
+ */
+export function parseNotificationPusherCapabilitiesResponse(
+  status: number,
+  body?: unknown,
+): NotificationPusherCapabilitiesParseResult {
+  if (status === 404) {
+    return { ok: true, value: NOTIFICATION_PUSHER_V1_HOST_CAPABILITIES };
+  }
+  if (status !== 200) {
+    return badCapabilities(
+      `capabilities request returned status ${status}`,
+      "status",
+    );
+  }
+  return parseNotificationPusherCapabilities(body);
+}
+
+/**
+ * Map one Web Push service response (RFC 8030) onto the v1 outcome channels.
+ * 2xx is delivered (RFC 8030 answers 201, or 202 when a receipt was
+ * requested). 404 and 410 mean the subscription is gone: rejected. A timeout,
+ * a failed connection, 408, 429 and 5xx are retryable, honouring
+ * `Retry-After`. Everything else is failed, including 403 (usually a VAPID key
+ * that does not match the subscription, a host fault rather than a dead
+ * device), 413 and redirects, which the host must not follow.
+ */
+export function classifyNotificationWebPushResponse(
+  response: NotificationWebPushServiceResponse,
+  options: { readonly now?: Date } = {},
+): NotificationWebPushDeliveryClassification {
+  if ("transportError" in response) return { outcome: "retryable" };
+  const status = response.status;
+  if (!Number.isInteger(status) || status < 100 || status > 599) {
+    return { outcome: "failed" };
+  }
+  if (status >= 200 && status < 300) return { outcome: "delivered" };
+  if (status === 404 || status === 410) return { outcome: "rejected" };
+  if (status === 408 || status === 429 || status >= 500) {
+    const retryAfterSeconds = parseRetryAfterSeconds(
+      response.retryAfter,
+      options.now ?? new Date(),
+    );
+    return retryAfterSeconds === undefined
+      ? { outcome: "retryable" }
+      : { outcome: "retryable", retryAfterSeconds };
+  }
+  return { outcome: "failed" };
+}
+
 function parseNotificationPusher(value: unknown):
   | {
       readonly ok: true;
@@ -367,6 +874,78 @@ function parseNotificationPusher(value: unknown):
   }
   const data = parsePusherData(value.data);
   if (!data) return badSetRequest("pusher.data is invalid", "pusher.data");
+  const optionalPusherFields = parseOptionalPusherFields(value);
+  if (!optionalPusherFields.ok) return optionalPusherFields;
+
+  const parsedPusher: NotificationPusher = {
+    kind: "http",
+    app_id: appId,
+    pushkey,
+    ...optionalPusherFields.value,
+    data,
+  };
+
+  return {
+    ok: true,
+    value: {
+      pusher: parsedPusher,
+      gatewayUrl: data.url,
+    },
+  };
+}
+
+function parseNotificationWebPushPusher(
+  value: Record<string, unknown>,
+  vapidKeyId: string,
+):
+  | {
+      readonly ok: true;
+      readonly value: NotificationWebPushPusher;
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    } {
+  const appId = parseAppId(value.app_id);
+  if (!appId) return badSetRequest("pusher.app_id is invalid", "pusher.app_id");
+  const endpoint = normalizeNotificationWebPushEndpoint(value.pushkey);
+  if (!endpoint) {
+    return badSetRequest(
+      "pusher.pushkey must be a public HTTPS Web Push endpoint",
+      "pusher.pushkey",
+    );
+  }
+  const data = parseWebPushPusherData(value.data, vapidKeyId);
+  if (!data.ok) return data;
+  const optionalPusherFields = parseOptionalPusherFields(value);
+  if (!optionalPusherFields.ok) return optionalPusherFields;
+
+  return {
+    ok: true,
+    value: {
+      kind: "webpush",
+      app_id: appId,
+      pushkey: endpoint,
+      ...optionalPusherFields.value,
+      data: data.value,
+    },
+  };
+}
+
+function parseOptionalPusherFields(value: Record<string, unknown>):
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly app_display_name?: string;
+        readonly device_display_name?: string;
+        readonly profile_tag?: string;
+        readonly lang?: string;
+      };
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    } {
   const appDisplayName = parseOptionalDisplayText(value.app_display_name);
   if (appDisplayName === undefined) {
     return badSetRequest(
@@ -408,22 +987,7 @@ function parseNotificationPusher(value: unknown):
   if (typeof lang === "string") {
     optionalPusherFields.lang = lang;
   }
-
-  const parsedPusher: NotificationPusher = {
-    kind: "http",
-    app_id: appId,
-    pushkey,
-    ...optionalPusherFields,
-    data,
-  };
-
-  return {
-    ok: true,
-    value: {
-      pusher: parsedPusher,
-      gatewayUrl: data.url,
-    },
-  };
+  return { ok: true, value: optionalPusherFields };
 }
 
 function parsePusherData(value: unknown): NotificationPusherData | null {
@@ -473,6 +1037,196 @@ function withoutUrl(
 ): Omit<NotificationPusherData, "url"> {
   const { url: _url, ...rest } = data;
   return rest;
+}
+
+function parseWebPushPusherData(
+  value: unknown,
+  vapidKeyId: string,
+):
+  | {
+      readonly ok: true;
+      readonly value: NotificationWebPushPusherData;
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    } {
+  const entries = readStrictJsonObjectEntries(value);
+  if (!entries) return badSetRequest("pusher.data is invalid", "pusher.data");
+
+  let rawFormat: unknown;
+  let rawKeys: unknown;
+  let rawVapidKeyId: unknown;
+  const extraData: Record<string, unknown> = {};
+  for (const [key, nested] of entries) {
+    if (key === "url") {
+      // The endpoint is the pushkey. A `url` here would be a gateway.
+      return badSetRequest(
+        "pusher.data.url is not used by webpush pushers",
+        "pusher.data.url",
+      );
+    }
+    if (key === "format") {
+      rawFormat = nested;
+      continue;
+    }
+    if (key === "keys") {
+      rawKeys = nested;
+      continue;
+    }
+    if (key === "vapid_key_id") {
+      rawVapidKeyId = nested;
+      continue;
+    }
+    defineJsonProperty(extraData, key, nested);
+  }
+
+  if (rawFormat != null && rawFormat !== "event_id_only") {
+    return badSetRequest(
+      "pusher.data.format must be event_id_only for webpush pushers",
+      "pusher.data.format",
+    );
+  }
+  const keys = parseWebPushSubscriptionKeys(rawKeys);
+  if (!keys.ok) return keys;
+  const parsedVapidKeyId = parseVapidKeyId(rawVapidKeyId);
+  if (!parsedVapidKeyId) {
+    return badSetRequest(
+      "pusher.data.vapid_key_id is invalid",
+      "pusher.data.vapid_key_id",
+    );
+  }
+  if (parsedVapidKeyId !== vapidKeyId) {
+    // The subscription was made with another VAPID key, so this host's
+    // signature would not match it. The client re-subscribes instead.
+    return badSetRequest(
+      "pusher.data.vapid_key_id is not this host's current VAPID key",
+      "pusher.data.vapid_key_id",
+    );
+  }
+
+  defineJsonProperty(extraData, "format", "event_id_only");
+  defineJsonProperty(extraData, "keys", keys.value);
+  defineJsonProperty(extraData, "vapid_key_id", parsedVapidKeyId);
+  const data = parseBoundedPusherDataObject(extraData);
+  if (!data) return badSetRequest("pusher.data is invalid", "pusher.data");
+  return { ok: true, value: data as NotificationWebPushPusherData };
+}
+
+function parseWebPushSubscriptionKeys(value: unknown):
+  | {
+      readonly ok: true;
+      readonly value: NotificationWebPushSubscriptionKeys;
+    }
+  | {
+      readonly ok: false;
+      readonly error: NotificationPusherParseError;
+    } {
+  const entries = readStrictJsonObjectEntries(value);
+  if (!entries) {
+    return badSetRequest(
+      "pusher.data.keys must be an object",
+      "pusher.data.keys",
+    );
+  }
+  let rawP256dh: unknown;
+  let rawAuth: unknown;
+  for (const [key, nested] of entries) {
+    if (key === "p256dh") {
+      rawP256dh = nested;
+    } else if (key === "auth") {
+      rawAuth = nested;
+    } else {
+      return badSetRequest(
+        "pusher.data.keys allows only p256dh and auth",
+        "pusher.data.keys",
+      );
+    }
+  }
+  const p256dh = parseUncompressedP256PublicKey(rawP256dh);
+  if (!p256dh) {
+    return badSetRequest(
+      "pusher.data.keys.p256dh must be a base64url uncompressed P-256 public key",
+      "pusher.data.keys.p256dh",
+    );
+  }
+  const auth = parseBase64UrlBytes(rawAuth, WEB_PUSH_AUTH_SECRET_BYTES);
+  if (!auth) {
+    return badSetRequest(
+      "pusher.data.keys.auth must be a base64url 16-byte secret",
+      "pusher.data.keys.auth",
+    );
+  }
+  return { ok: true, value: { p256dh, auth } };
+}
+
+/** Canonical base64url of a 65-byte uncompressed P-256 point, or null. */
+function parseUncompressedP256PublicKey(value: unknown): string | null {
+  const bytes = decodeBase64Url(value);
+  if (!bytes || bytes.length !== WEB_PUSH_P256DH_BYTES || bytes[0] !== 0x04) {
+    return null;
+  }
+  return encodeBase64Url(bytes);
+}
+
+/** Canonical base64url of exactly `length` decoded bytes, or null. */
+function parseBase64UrlBytes(value: unknown, length: number): string | null {
+  const bytes = decodeBase64Url(value);
+  return bytes && bytes.length === length ? encodeBase64Url(bytes) : null;
+}
+
+function parseVapidKeyId(value: unknown): string | null {
+  return parseOptionalShortIdentifier(value) ?? null;
+}
+
+const BASE64URL_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const MAX_BASE64URL_TEXT_LENGTH = 256;
+
+/**
+ * Decode base64url (RFC 4648 §5), with or without correct `=` padding. The
+ * standard alphabet's `+` and `/`, whitespace and misplaced padding are
+ * refused. Parsing does not depend on the runtime's `atob`.
+ */
+function decodeBase64Url(value: unknown): Uint8Array | null {
+  if (typeof value !== "string" || value.length > MAX_BASE64URL_TEXT_LENGTH) {
+    return null;
+  }
+  const unpadded = value.replace(/={1,2}$/u, "");
+  if (unpadded !== value && value.length % 4 !== 0) return null;
+  if (unpadded.length % 4 === 1) return null;
+
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const character of unpadded) {
+    const index = BASE64URL_ALPHABET.indexOf(character);
+    if (index < 0) return null;
+    buffer = (buffer << 6) | index;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+      buffer &= (1 << bits) - 1;
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let text = "";
+  for (let index = 0; index < bytes.length; index += 3) {
+    const remaining = bytes.length - index;
+    const chunk =
+      (bytes[index] << 16) |
+      ((remaining > 1 ? bytes[index + 1] : 0) << 8) |
+      (remaining > 2 ? bytes[index + 2] : 0);
+    text += BASE64URL_ALPHABET[(chunk >> 18) & 0x3f];
+    text += BASE64URL_ALPHABET[(chunk >> 12) & 0x3f];
+    if (remaining > 1) text += BASE64URL_ALPHABET[(chunk >> 6) & 0x3f];
+    if (remaining > 2) text += BASE64URL_ALPHABET[chunk & 0x3f];
+  }
+  return text;
 }
 
 function normalizeCounts(
@@ -826,6 +1580,162 @@ function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
+/**
+ * A multi-label DNS name with a public top-level label. Expects a WHATWG URL
+ * hostname, which is already lowercase and punycode, writes IPv6 in brackets,
+ * and rewrites every IPv4 spelling (`0x7f.1`, `2130706433`) as dotted decimal.
+ * An all-numeric last label is therefore always an IPv4 literal.
+ */
+function isPublicDnsHostname(hostname: string): boolean {
+  if (!hostname || hostname.length > 253) return false;
+  const labels = hostname.split(".");
+  if (labels.length < 2) return false;
+  if (
+    !labels.every((label) =>
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label),
+    )
+  ) {
+    return false;
+  }
+  const topLevel = labels[labels.length - 1];
+  return !/^\d+$/u.test(topLevel) && !NON_PUBLIC_TOP_LEVEL_LABELS.has(topLevel);
+}
+
+/** `push.example.com` or `*.example.com`, lowercased; null when malformed. */
+function parseGatewayHostPattern(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const pattern = value.trim().toLowerCase();
+  const hostname = pattern.startsWith("*.") ? pattern.slice(2) : pattern;
+  if (!hostname || hostname.length > 253) return null;
+  return hostname
+    .split(".")
+    .every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label))
+    ? pattern
+    : null;
+}
+
+function gatewayHostListed(
+  hostname: string,
+  gatewayHosts: readonly string[],
+): boolean {
+  const normalized = hostname.toLowerCase();
+  return gatewayHosts.some((entry) => {
+    const pattern = entry.toLowerCase();
+    return pattern.startsWith("*.")
+      ? normalized.endsWith(pattern.slice(1))
+      : normalized === pattern;
+  });
+}
+
+function parseHttpPusherCapability(
+  value: unknown,
+): NotificationHttpPusherCapability | null {
+  if (!isRecord(value)) return null;
+  const rawGatewayHosts = readOwnProperty(value, "gateway_hosts");
+  if (rawGatewayHosts == null) return {};
+  if (
+    !Array.isArray(rawGatewayHosts) ||
+    rawGatewayHosts.length > MAX_NOTIFICATION_CAPABILITY_GATEWAY_HOSTS
+  ) {
+    return null;
+  }
+  const gatewayHosts: string[] = [];
+  for (const entry of rawGatewayHosts) {
+    const pattern = parseGatewayHostPattern(entry);
+    if (!pattern) return null;
+    if (!gatewayHosts.includes(pattern)) gatewayHosts.push(pattern);
+  }
+  return { gateway_hosts: gatewayHosts };
+}
+
+function parseWebPushPusherCapability(
+  value: unknown,
+): NotificationWebPushPusherCapability | null {
+  if (!isRecord(value)) return null;
+  const vapidPublicKey = parseUncompressedP256PublicKey(
+    readOwnProperty(value, "vapid_public_key"),
+  );
+  const vapidKeyId = parseVapidKeyId(readOwnProperty(value, "vapid_key_id"));
+  if (
+    !vapidPublicKey ||
+    !vapidKeyId ||
+    readOwnProperty(value, "content_encoding") !==
+      NOTIFICATION_WEB_PUSH_CONTENT_ENCODING
+  ) {
+    return null;
+  }
+  return {
+    vapid_public_key: vapidPublicKey,
+    vapid_key_id: vapidKeyId,
+    content_encoding: NOTIFICATION_WEB_PUSH_CONTENT_ENCODING,
+  };
+}
+
+/**
+ * `Retry-After` as delay-seconds or an IMF-fixdate (RFC 9110 §10.2.3), in
+ * whole seconds from `now`. A date in the past is 0; anything else is
+ * undefined. The date is parsed here because `Date.parse` accepts different
+ * strings on different runtimes.
+ */
+function parseRetryAfterSeconds(
+  value: string | null | undefined,
+  now: Date,
+): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (/^\d{1,10}$/u.test(text)) return Number(text);
+  const match =
+    /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/u.exec(
+      text,
+    );
+  if (!match) return undefined;
+  const [, day, monthName, year, hour, minute, second] = match;
+  const month = IMF_FIXDATE_MONTHS.indexOf(monthName);
+  const time = Date.UTC(
+    Number(year),
+    month,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+  const date = new Date(time);
+  if (
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() !== month ||
+    date.getUTCDate() !== Number(day) ||
+    date.getUTCHours() !== Number(hour) ||
+    date.getUTCMinutes() !== Number(minute) ||
+    date.getUTCSeconds() !== Number(second)
+  ) {
+    return undefined;
+  }
+  const nowTime = now.getTime();
+  if (!Number.isFinite(nowTime)) return undefined;
+  return Math.max(0, Math.ceil((time - nowTime) / 1000));
+}
+
+const IMF_FIXDATE_MONTHS: readonly string[] = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+function readOwnProperty(value: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(value, key)
+    ? value[key]
+    : undefined;
+}
+
 function parseNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -1054,6 +1964,23 @@ function badDeleteRequest(
 }
 
 function badGatewayRequest(
+  error: string,
+  field?: string,
+): { readonly ok: false; readonly error: NotificationPusherParseError } {
+  return { ok: false, error: { code: "BAD_REQUEST", error, field } };
+}
+
+function unavailablePusherKind(kind: NotificationPusherKind): {
+  readonly ok: false;
+  readonly error: NotificationPusherParseError;
+} {
+  return badSetRequest(
+    `pusher.kind ${kind} is not available on this host`,
+    "pusher.kind",
+  );
+}
+
+function badCapabilities(
   error: string,
   field?: string,
 ): { readonly ok: false; readonly error: NotificationPusherParseError } {
