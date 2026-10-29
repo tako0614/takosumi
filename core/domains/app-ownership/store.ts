@@ -452,9 +452,14 @@ export class SqlAppOwnershipStore extends BaseAppOwnershipStore {
   }
 }
 
+/** How long the authorization fence trusts "no ownership schema" on D1. */
+export const D1_OWNERSHIP_FENCE_ABSENT_TTL_MS = 60_000;
+
 export class D1AppOwnershipStore extends BaseAppOwnershipStore {
   #presentColumns = new Set<string>();
-  constructor(readonly db: D1Like, control: OpenTofuControlStore) { super(control); }
+  /** Fence-only negative cache; writes keep the uncached probe. */
+  #fenceSchemaAbsentUntil = 0;
+  constructor(readonly db: D1Like, control: OpenTofuControlStore, private readonly now: () => number = Date.now) { super(control); }
   async #column(table: string, column: string): Promise<boolean> {
     const key = `${table}.${column}`;
     if (this.#presentColumns.has(key)) return true;
@@ -525,8 +530,14 @@ export class D1AppOwnershipStore extends BaseAppOwnershipStore {
     return ownerRow(id, row ?? undefined);
   }
   override async readOwnershipFence(id: string): Promise<CapsuleOwnershipFence> {
-    // Reuses the cached v77 column probe; absence stays uncached by design.
-    if (!await this.#column("capsules", "owner_account_id")) return { schemaAvailable: false };
+    // Reuses the cached v77 column probe. On a pre-v77 schema the absence is
+    // trusted for a short TTL so request paths (Run streams, link views) do
+    // not probe on every decision; the additive migration is seen within it.
+    if (this.now() < this.#fenceSchemaAbsentUntil) return { schemaAvailable: false };
+    if (!await this.#column("capsules", "owner_account_id")) {
+      this.#fenceSchemaAbsentUntil = this.now() + D1_OWNERSHIP_FENCE_ABSENT_TTL_MS;
+      return { schemaAvailable: false };
+    }
     const row = await this.db.prepare(`select owner_account_id,ownership_epoch,management_state,management_epoch,storage_root from capsules where id=?`).bind(id).first<OwnershipRow>();
     const ownership = ownerRow(id, row ?? undefined);
     return ownership ? { schemaAvailable: true, ownership } : { schemaAvailable: true };

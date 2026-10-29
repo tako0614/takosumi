@@ -623,3 +623,26 @@ test("late link insertion after discard observes destroyed consumer and revokes 
   await expect(f.link()).rejects.toThrow("consumer Capsule is destroyed");
   expect((await f.service.listCapsuleInterfaceLinks("consumer")).every((link) => link.state === "revoked")).toBe(true);
 });
+
+test("a caller's per-request provider approval decides whether a new link is active", async () => {
+  const f = await fixture();
+  const providers: string[] = [];
+  const refused = await f.service.ensureCapsuleInterfaceLinks({
+    workspaceId: "ws", capsuleId: "consumer", requirements: [requirement],
+    selections: [{ requirementKey: "tools", interfaceId: f.providers[0]!.metadata.id, selection: "explicit" }],
+  }, { actorAccountId: "member", roles: [], requestId: "r1" }, {
+    assertCurrent: async () => undefined,
+    mayApproveProvider: async (provider) => { providers.push(`${provider.workspaceId}/${provider.capsuleId}`); return false; },
+  });
+  expect(refused[0]).toMatchObject({ state: "pending_approval", approvedPermissions: [] });
+  expect(refused[0]!.approval).toBeUndefined();
+  expect(providers).toEqual(["ws/provider_a"]);
+  const approved = await f.service.putCapsuleInterfaceLink({
+    capsuleId: "consumer", requirementKey: "tools", interfaceId: f.providers[1]!.metadata.id,
+    expectedGeneration: refused[0]!.generation,
+  }, { actorAccountId: "provider_manager", roles: [], requestId: "r2" }, {
+    assertCurrent: async () => undefined,
+    mayApproveProvider: async () => true,
+  });
+  expect(approved).toMatchObject({ state: "active", approval: { kind: "requester_manages_provider", approvedBy: "provider_manager" } });
+});

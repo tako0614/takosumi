@@ -111,6 +111,8 @@ async function reportFallback(
   }
 }
 
+const OWNER_ONLY_ACTIONS: ReadonlySet<AppAction> = new Set(["uninstall", "transfer_ownership", "manage_members"]);
+
 function appAccessDenied(): Response {
   return errorJson("app_access_denied", "App access is required.", 403);
 }
@@ -130,6 +132,19 @@ function appOwnershipChanged(): Response {
  */
 export async function requireAppAccess(input: AppAccessRequest): Promise<AppAuthorizationResult> {
   input.assertActive?.();
+  // An installed app's OAuth token acts for the app, never as its owner:
+  // uninstall (including destroy plans and destroy Runs), ownership transfer
+  // and member management are refused on every path, fallback included.
+  if (input.session.credential === "oauth-access-token" && OWNER_ONLY_ACTIONS.has(input.action)) {
+    return {
+      ok: false,
+      response: errorJson(
+        "app_access_denied",
+        "Uninstall, ownership transfer and member management require an account session or personal access token.",
+        403,
+      ),
+    };
+  }
   const fence = await readOwnershipFence(input.operations, input.capsuleId);
   input.assertActive?.();
   if (fence.kind === "fallback") {
