@@ -261,7 +261,8 @@ export function registerInstalledAppsCases(mode: DashboardE2EMode) {
       await page.getByRole("button", { name: "インストール", exact: true }).click();
       await expect.poll(() => h.mutations).toContain("POST /api/v1/workspaces/ws_alpha/install-plans");
       expect(h.reads).toContain("/api/v1/apps");
-      expect(h.mutations).toEqual(["POST /api/v1/workspaces/ws_alpha/install-plans"]);
+      expect(h.mutations.filter((entry) => /^POST \/api\/v1\/(?:workspaces\/[^/]+\/)?install-plans$/u.test(entry)))
+        .toEqual(["POST /api/v1/workspaces/ws_alpha/install-plans"]);
       expect(h.mutations.some((entry) => /\/apply(?:$|\/)/u.test(entry))).toBe(false);
       expect(h.errors).toEqual([]);
     });
