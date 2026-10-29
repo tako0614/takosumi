@@ -198,9 +198,10 @@ What can rotate:
   sessions do not change.
 - `session-salt` (`TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`): **every issuer account
   session ends at activation and every user must sign in again.** Session rows
-  are found by a salted hash, so existing session cookies stop resolving. RP
-  refresh grants (keyed by `sid`), access tokens and personal access tokens are
-  not keyed by the salt. They stay valid until they expire or are revoked. The
+  are found by a salted hash, so existing session cookies stop resolving. Work
+  that needs the current issuer session, such as an identity merge leg, also
+  needs the new sign-in. RP refresh grants (keyed by `sid`), access tokens and
+  personal access tokens are not keyed by the salt. They stay valid until they expire or are revoked. The
   apply step requires `--acknowledge-session-invalidation`.
 - Both in one reviewed change: `--rotate-identity signing-key,session-salt`.
 
