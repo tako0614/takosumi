@@ -31,6 +31,7 @@ import { evaluateCompatibilityReportAgainstPolicy } from "../../../../core/domai
 import { activeGitRevisionPreparation } from "../../../../core/domains/install-plans/store.ts";
 import {
   providerBindingSetAuthorityDigest,
+  providerBindingSetTargetsCapsule,
   type WorkspaceManagementAuthority,
 } from "../../../../core/domains/deploy-control/store.ts";
 import type { InstallPlanCompatibilityCheckRequest } from "../../../../core/domains/sources/mod.ts";
@@ -191,6 +192,17 @@ export async function handleCapsuleConfigurationPlans(
       ctx.request,
       {},
       { reason: "capsule_install_config_rebind_busy" },
+    );
+  }
+  // An installed app's OAuth token acts for the app, not as its owner or a
+  // member: it may keep the app's current connections but never choose others.
+  if (ctx.session.credential === "oauth-access-token" &&
+    !(await bindingsKeepCurrentConnections(ctx.operations, authority.capsule, request.providerBindings))) {
+    return errorJson(
+      "app_access_denied",
+      "An installed app cannot choose the app's connections.",
+      403,
+      ctx.request,
     );
   }
   // A configuration Plan miss creates a new Workspace-owned successor. Capture
@@ -1591,6 +1603,18 @@ function hasOnlyKeys(
 ): boolean {
   return Object.keys(value).length === keys.length &&
     keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+/** Every requested binding names a provider/connection pair already bound to the app. */
+async function bindingsKeepCurrentConnections(
+  operations: ControlDispatchContext["operations"],
+  capsule: Capsule,
+  bindings: ProviderBindings,
+): Promise<boolean> {
+  const current = await operations.capsules.getProviderBindingSetByCapsule(capsule.id, capsule.environment);
+  if (current && !providerBindingSetTargetsCapsule(current, capsule)) return false;
+  const bound = new Set((current?.bindings ?? []).map((binding) => `${binding.provider}\u0000${binding.connectionId}`));
+  return bindings.every((binding) => bound.has(`${binding.provider}\u0000${binding.connectionId}`));
 }
 
 async function configurationProviderBindingSet(input: {
