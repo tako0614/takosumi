@@ -8,6 +8,7 @@ import {
   type ControlPlaneOperations,
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import { D1AppOwnershipStore, type AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { createConnectionOAuthHelpers } from "../../../../core/api/connection_oauth_helpers.ts";
@@ -8087,4 +8088,69 @@ test("busy old Apply cannot carry an orphan target OIDC grant across re-adoption
     }),
   ).toEqual({ ok: false, reason: "install_grant_missing" });
   expect(fixture.accountStore.findOidcClient(clientId)).toBeUndefined();
+});
+
+async function installedAppConnectionFixture(suffix: string) {
+  const { fixture, path, body } = await configurationPlanRouteFixture(suffix, { owned: true });
+  const now = "2026-06-06T00:00:00.000Z";
+  // A second connection the owner could bind, held personally (no Workspace).
+  await fixture.deployStore.putConnection({
+    id: `conn_owner_alt_${suffix}`, ownerAccountId: "user_test", scope: "personal",
+    provider: "registry.opentofu.org/cloudflare/cloudflare", providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+    credentialRecipe: { id: "generic-env", authMode: "env", secretPartition: "provider-credentials", declaredEnv: true },
+    secretPartition: "provider-credentials", status: "verified", materialization: "secret", envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: now, updatedAt: now, verifiedAt: now,
+  });
+  const token = `installed-app-token-${suffix}`;
+  // An installed app's OAuth access token for the owner, with capsules:write.
+  fixture.accountStore.saveAccessToken(token, {
+    clientId: `client_${suffix}`, scope: "openid capsules:read capsules:write", subject: "pairwise_owner",
+    takosumiSubject: "user_test" as TakosumiSubject, capsuleId: fixture.seeded.capsule.id, workspaceId: fixture.seeded.workspace.id,
+    expiresAt: Date.now() + 600_000,
+  });
+  const call = async (method: string, target: string, auth: { readonly bearer?: string; readonly cookie?: string }, payload?: unknown, key?: string) => {
+    const url = new URL(`${ORIGIN}${target}`);
+    const headers: Record<string, string> = {
+      ...(auth.bearer ? { authorization: `Bearer ${auth.bearer}` } : {}),
+      ...(auth.cookie ? { cookie: auth.cookie } : {}),
+      ...(payload !== undefined ? { "content-type": "application/json" } : {}),
+      ...(key ? { "idempotency-key": key } : {}),
+    };
+    return (await handleControlRoute({
+      request: new Request(url, { method, headers, ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}) }),
+      url, store: fixture.accountStore, operations: fixture.operations,
+    }))!;
+  };
+  return { fixture, path, body, token, alternate: `conn_owner_alt_${suffix}`, call };
+}
+
+test("an installed app's OAuth token sees only the app's bound connection labels", async () => {
+  const { fixture, body, token, alternate, call } = await installedAppConnectionFixture("installed-app-labels");
+  const labelsPath = `/api/v1/connections?capsuleId=${fixture.seeded.capsule.id}&projection=labels`;
+  const bound = body.providerBindings.map((binding) => binding.connectionId);
+  const app = await call("GET", labelsPath, { bearer: token });
+  expect(app.status).toBe(200);
+  expect(app.headers.get("cache-control")).toBe("no-store");
+  expect(((await app.json()) as { connections: { id: string }[] }).connections.map((row) => row.id)).toEqual(bound);
+  // The owner's own session sees the owner's other bindable connection too,
+  // including a personal one without a Workspace in this in-memory store.
+  const owner = await call("GET", labelsPath, { cookie: fixture.cookie });
+  expect(owner.status).toBe(200);
+  expect(((await owner.json()) as { connections: { id: string }[] }).connections.map((row) => row.id).sort()).toEqual([...bound, alternate].sort());
+});
+
+test("an installed app's OAuth token cannot switch the app to another owner connection", async () => {
+  const { fixture, path, body, token, alternate, call } = await installedAppConnectionFixture("installed-app-rebind");
+  const before = await fixture.operations.capsules.getProviderBindingSetByCapsule(fixture.seeded.capsule.id, fixture.seeded.capsule.environment);
+  const switched = { ...body, providerBindings: body.providerBindings.map((binding) => ({ ...binding, connectionId: alternate })) };
+  const refused = await call("POST", path, { bearer: token }, switched, "installed-app-switch");
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ error: { code: "app_access_denied" } });
+  expect(await fixture.operations.capsules.getProviderBindingSetByCapsule(fixture.seeded.capsule.id, fixture.seeded.capsule.environment)).toEqual(before);
+  // Keeping the current connections is still a settings change the app may plan.
+  expect((await call("POST", path, { bearer: token }, body, "installed-app-keep")).status).toBe(201);
+  // The owner's own session chooses among the owner's connections.
+  const owner = await installedAppConnectionFixture("owner-session-rebind");
+  const ownerSwitched = { ...owner.body, providerBindings: owner.body.providerBindings.map((binding) => ({ ...binding, connectionId: owner.alternate })) };
+  expect((await owner.call("POST", owner.path, { cookie: owner.fixture.cookie }, ownerSwitched, "owner-switch")).status).toBe(201);
 });

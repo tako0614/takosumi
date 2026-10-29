@@ -312,6 +312,16 @@ export class ConnectionsService {
       : [];
   }
 
+  /**
+   * The account's own non-operator Connections when the store can list them
+   * by owner (in-memory); `undefined` when it cannot.
+   */
+  async listOwnedConnections(
+    ownerAccountId: string,
+  ): Promise<readonly ProviderConnection[] | undefined> {
+    return await this.#store.listOwnedConnections?.(ownerAccountId);
+  }
+
   async getProviderConnection(id: string): Promise<ProviderConnection> {
     const connectionId = nonEmptyField(id, "id");
     const connection =

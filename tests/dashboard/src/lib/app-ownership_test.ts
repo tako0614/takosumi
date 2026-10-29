@@ -79,6 +79,17 @@ test("member choices read B label-only pages and normalize generic provider addr
   ]);
   expect(JSON.stringify(choices)).not.toMatch(/scope|ownerAccountId|credentialRecipe|envNames/u);
 });
+test("member choices follow nextCursor through empty and short label pages until it is absent", async () => {
+  const pages: Record<string, unknown> = {
+    "": { connections: [], nextCursor: "after-skipped" },
+    "after-skipped": { connections: [{ id: "first", provider: "namespace/cloud" }], nextCursor: "after-first" },
+    "after-first": { connections: [], nextCursor: "after-more-skipped" },
+    "after-more-skipped": { connections: [{ id: "last", provider: "namespace/cloud" }] },
+  };
+  stub((path) => Response.json(pages[new URL(path, "https://dashboard.test").searchParams.get("cursor") ?? ""]));
+  expect((await getAppConnectionChoices("a"))?.map((row) => row.id)).toEqual(["first", "last"]);
+  expect(calls.map((call) => new URL(call.path, "https://dashboard.test").searchParams.get("cursor"))).toEqual([null, "after-skipped", "after-first", "after-more-skipped"]);
+});
 test("member label choices reject full connection metadata and old marker projections", async () => {
   for (const extra of [
     { scope: "personal" }, { ownerAccountId: "owner" }, { workspaceId: "old" },

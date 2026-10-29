@@ -4087,6 +4087,12 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
    * bearer when `?workspaceId` is omitted.
    */
   listOperatorConnections(): Promise<readonly ProviderConnection[]>;
+  /**
+   * Non-operator Connections owned by one account, including personal ones
+   * without a Workspace. Optional: only the in-memory store implements it;
+   * durable compositions read owners through the account resource reader.
+   */
+  listOwnedConnections?(ownerAccountId: string): Promise<readonly ProviderConnection[]>;
   deleteConnection(id: string): Promise<boolean>;
 
   putSecretBlob(blob: StoredSecretBlob): Promise<StoredSecretBlob>;
@@ -7954,6 +7960,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
         ),
+    );
+  }
+
+  listOwnedConnections(ownerAccountId: string): Promise<readonly ProviderConnection[]> {
+    return Promise.resolve(
+      Array.from(this.#connections.values())
+        .filter((row) => row.scope !== "operator" && row.ownerAccountId === ownerAccountId)
+        .sort((a, b) => a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
     );
   }
 

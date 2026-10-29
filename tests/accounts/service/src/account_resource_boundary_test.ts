@@ -243,7 +243,7 @@ test("installed-app OAuth bearer cannot use account resources or another app", a
   expect(accountReads).toBe(0);
 });
 
-test("app members page the owner's bindable connection labels through the D1 owner index", async () => {
+test("app members page the owner's bindable connection labels through the D1 owner reader", async () => {
   const db = new SqliteFakeD1();
   await db.exec("create table connections (id text primary key, owner_account_id text, connection_json text not null, created_at text not null)");
   const rows = [
@@ -270,7 +270,7 @@ test("app members page the owner's bindable connection labels through the D1 own
   } as unknown as ControlPlaneOperations;
   const read = async (subject: string, query: string) => {
     const request = new Request(`https://app.example.test/api/v1/connections?capsuleId=cap_shared&projection=labels${query}`);
-    return await handleConnections({ request, url: new URL(request.url), operations, store: new InMemoryAccountsStore(), session: { subject } }, ["connections"], "GET");
+    return await handleConnections({ request, url: new URL(request.url), operations, store: new InMemoryAccountsStore(), session: { subject, credential: "session" } }, ["connections"], "GET");
   };
   const seen: unknown[] = [];
   let cursor: string | undefined;
