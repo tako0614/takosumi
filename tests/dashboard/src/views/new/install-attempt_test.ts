@@ -30,6 +30,7 @@ import {
   retainedInterfaceLinks,
   withInterfaceOverrides,
   openAttemptStatusKey,
+  openEntryIsContinuable,
   progressSignature,
   replanRequest,
   reviewSummarySheet,
@@ -471,6 +472,18 @@ describe("words", () => {
     expect(openAttemptStatusKey(respond(inputs()))).toBe("installStore.open.statusInputs");
     expect(openAttemptStatusKey(respond({ kind: "review_run", planRunId: "r", capsuleId: "c" }))).toBe("installStore.open.statusReview");
     expect(openAttemptStatusKey(respond({ kind: "retry", code: "install_attempt_expired", restart: true }, {}, "install_attempt_expired"))).toBe("installStore.open.statusExpired");
+    expect(attemptProblemKey("capsule_name_conflict")).toBe("installStore.problem.nameTaken");
+  });
+
+  test("an install plan that is not an attempt is listed only to be stopped", () => {
+    const attempt = respond({ kind: "wait", phase: "syncing_source" });
+    expect(openEntryIsContinuable(attempt)).toBe(true);
+    const stuck = respond(
+      { kind: "retry", code: "install_plan_reconcile_retryable", restart: false },
+      { mode: undefined, phase: "creating_capsule" },
+    );
+    expect(openEntryIsContinuable(stuck)).toBe(false);
+    expect(openAttemptStatusKey(stuck)).toBe("installStore.open.statusNotContinuable");
   });
 
   test("provenance reads as a person writes it", () => {

@@ -11,6 +11,11 @@
  * needs the user, including once before it creates the Capsule. Clients follow
  * `userAction`, answer with `PATCH /api/v1/install-plans/:id`, and may discard
  * the attempt with `DELETE /api/v1/install-plans/:id`.
+ *
+ * An install plan created without `mode` can also be discarded by its creator
+ * while it has not recorded its Capsule (syncing the Source through creating
+ * the Capsule, or `failed` there). A name already used by another live app
+ * ends such a plan `failed` with `capsule_name_conflict`.
  */
 
 import type { JsonValue } from "./types.ts";
@@ -210,7 +215,10 @@ export interface PatchGitInstallPlanRequest {
   readonly continue?: boolean;
 }
 
-/** Discard an attempt. The expected generation fences concurrent advances. */
+/**
+ * Discard an attempt, or an install plan that has not recorded its Capsule.
+ * The expected generation fences concurrent advances.
+ */
 export interface DiscardGitInstallPlanRequest {
   readonly expectedGeneration: number;
 }
@@ -514,7 +522,9 @@ export interface GitInstallPlanResponse {
  * `GET /api/v1/workspaces/:id/install-plans?open=1`, newest first: the
  * caller's attempts that are not failed or discarded and whose Capsule, if
  * any, was never applied. Invalidated attempts are listed (flagged) so their
- * creator can discard them; the listing itself never writes.
+ * creator can discard them. The caller's install plans that are not attempts
+ * (`mode` absent) are listed while they have not recorded a Capsule, so a plan
+ * that stopped there can be discarded. The listing itself never writes.
  */
 export interface ListOpenGitInstallPlansResponse {
   readonly installPlans: readonly GitInstallPlanResponse[];

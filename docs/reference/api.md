@@ -542,10 +542,10 @@ value-free の `source.retired` を Activity に 1 件記録します。失敗�
 | メソッド | パス                                              | 説明                                           |
 | -------- | ------------------------------------------------- | ---------------------------------------------- |
 | POST     | `/api/v1/workspaces/{workspaceId}/install-plans`  | Git から reviewable Plan Run まで準備する      |
-| GET      | `/api/v1/workspaces/{workspaceId}/install-plans`  | 自分の未完了のインストール試行を読む（`open=1`） |
+| GET      | `/api/v1/workspaces/{workspaceId}/install-plans`  | 自分の未完了のインストールを読む（`open=1`）   |
 | GET      | `/api/v1/install-plans/{installPlanId}`           | coordinator の現在状態を読む                   |
 | PATCH    | `/api/v1/install-plans/{installPlanId}`           | 入力待ちの試行に回答する（generation CAS）     |
-| DELETE   | `/api/v1/install-plans/{installPlanId}`           | 試行と、試行が作った未適用の Capsule を捨てる  |
+| DELETE   | `/api/v1/install-plans/{installPlanId}`           | 試行、または Capsule 記録前の plan を捨てる    |
 | POST     | `/api/v1/install-plans/{installPlanId}/reconcile` | 明示的に一段だけ進める                         |
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
@@ -581,9 +581,25 @@ repository install UX が非機密と宣言した値だけに限ります。gene
 作成済みの Capsule を先に採用します。`DELETE` は、lease を持つ処理がないことを確かめてから
 試行が作った未適用の Capsule を abandon し、終端の `discarded` にします。abandon が途中で
 止まると試行は `failed`（`install_attempt_discard_incomplete`）になり、もう一度 `DELETE`
-すると片付けが終わります。適用中・適用済みの試行と、試行ではない install plan は拒否します。
+すると片付けが終わります。適用中・適用済みの試行と、Capsule を記録した後の試行ではない install plan は
+拒否します（409 `install_plan_not_attempt`）。
 試行専用の Source を退役させ、同期・polling を止めて archive と snapshot 行を削除します。
 途中失敗した退役は、同じ DELETE または日次の回収で再開します。
+
+`mode` を付けずに作った install plan（試行ではない plan）も、Capsule を作る直前に同じ
+Workspace・environment で名前が使われていないかを確かめます。稼働中のアプリが名前を使って
+いれば、再試行せずに `failed`（`capsule_name_conflict`）で終わります。確認の後に同じ名前の
+アプリが commit された場合などに Capsule の初回作成が `failed_precondition`
+（`capsule_initial_authority_conflict`）で拒否されたときも、再試行には回しません。この plan の
+決定的な ID の Capsule が既にあれば（commit の応答が失われた場合）それを採用して先へ進み、
+名前の衝突なら `capsule_name_conflict`、それ以外は `failed`（code と reason は
+`capsule_initial_authority_conflict`）にします。試行は従来どおり入力に戻ります。
+試行ではない plan も、Capsule を記録する前（`syncing_source` から `creating_capsule` まで、または
+そこで `failed`）なら、始めた本人が `expectedGeneration` を付けた `DELETE` で捨てられます。
+lease を持つ処理がないことを確かめ、応答が失われて残った未適用の Capsule があれば試行と同じく
+abandon し、`discarded`（`install_plan_discarded`）にします。このような plan は open 一覧
+（`open=1`）にも載ります。試行と違って期限がなく、drain が決着させるのは一度も claim されて
+いない plan だけなので、止まった plan を Workspace 管理の blocker から外す出口はこの `DELETE` です。
 
 `userAction.kind: "provide_inputs"` の `interfaces` は、`requirementKey`、type/version、
 permissions、値を含まない候補、`choice`、`autoSelected` を返します。候補が 0 件なら「あとで」、

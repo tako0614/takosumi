@@ -8,6 +8,28 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **A name collision no longer leaves an install retrying forever:** an install
+  plan created without `mode` (the legacy Workspace route) whose app name is
+  already used by a live app in the same Workspace and environment now ends
+  `failed` with `capsule_name_conflict`, like an install attempt returns to its
+  input sheet. Previously only attempts checked the name; the initial Capsule
+  creation then failed with `failed_precondition` /
+  `capsule_initial_authority_conflict`, reconcile treated it as retryable and
+  the plan stayed in `creating_capsule` indefinitely, blocking Workspace drain
+  and freeze. That store conflict is now terminal for every mode: the plan's
+  own deterministic Capsule is adopted first (a lost commit acknowledgement),
+  then a name collision ends it with `capsule_name_conflict`, and any other
+  conflict ends it `failed` with code and reason
+  `capsule_initial_authority_conflict`. An already stuck plan settles on its
+  next explicit reconcile.
+- **Install plans that are not attempts can be stopped:** their creator can now
+  `DELETE /api/v1/install-plans/{id}` (with `expectedGeneration`) while the plan
+  has not recorded its app (`syncing_source` through `creating_capsule`, or
+  `failed` there), with the same lease and never-applied safety as discarding an
+  attempt; it ends `discarded` (`install_plan_discarded`). Such plans are also
+  listed by `GET /api/v1/workspaces/{id}/install-plans?open=1`, and the Store's
+  **Unfinished installs** shows them with only **Stop installing**.
+
 - **Generated secrets survive app updates:** when an installed app's repository
   manifest adds or removes a binding-delivered `secret.generated` slot (or
   changes its OIDC grant), Takosumi now re-seals the app's generated values and

@@ -37,6 +37,8 @@ apply, state, outputs, audit, usage, and prepaid credit together.
    **Stop installing** throws the whole install attempt away, including the unapplied app it created.
    An install you leave without stopping is listed under **Unfinished installs** in the Store, where
    you can continue or stop it; reopening it moves nothing forward until you press **Continue**.
+   An install started without this screen that stopped before creating its app is listed there as
+   **Can't be continued here**, and can only be stopped.
    Secret settings are never saved: they are sent only to check what will be created.
 6. When the install finishes, the same screen offers **Open** (when the app has an authorized screen)
    and **Manage app** (the app's own page). Failures show the reason and the next step, and can be

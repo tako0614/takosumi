@@ -429,6 +429,92 @@ test("an unleased expired install attempt in a coordinator phase is not a manage
   }
 });
 
+test("open listing includes install plans that are not attempts only before their Capsule, with parity", async () => {
+  const postgres = await PGliteSqlClient.create();
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const memoryControl = new InMemoryOpenTofuControlStore();
+  const postgresControl = new SqlOpenTofuControlStore({ client: postgres });
+  const d1Control = new CloudflareD1OpenTofuControlStore(d1);
+  const adapters: readonly {
+    readonly label: string;
+    readonly control: Pick<OpenTofuControlStore, "putWorkspace">;
+    readonly store: GitInstallPlanStore;
+  }[] = [
+    { label: "memory", control: memoryControl, store: new InMemoryGitInstallPlanStore(memoryControl) },
+    { label: "postgres", control: postgresControl, store: new SqlGitInstallPlanStore(postgres) },
+    { label: "d1", control: d1Control, store: new D1GitInstallPlanStore(d1) },
+  ];
+  try {
+    for (const { label, control, store } of adapters) {
+      const workspaceId = `normal_open_${label}`;
+      await control.putWorkspace(workspace(workspaceId));
+      const authority: WorkspaceManagementAuthority = {
+        workspaceId,
+        managementState: "active",
+        managementEpoch: 1,
+      };
+      const cases: readonly {
+        readonly name: string;
+        readonly patch: Partial<StoredGitInstallPlan>;
+        readonly listed: boolean;
+      }[] = [
+        { name: "syncing", patch: { phase: "syncing_source" }, listed: true },
+        { name: "compiling", patch: { phase: "compiling_install" }, listed: true },
+        { name: "analyzing", patch: { phase: "analyzing_compatibility" }, listed: true },
+        {
+          name: "stuck_creating",
+          patch: {
+            phase: "creating_capsule",
+            diagnostic: { code: "install_plan_reconcile_retryable", message: "retry" },
+          },
+          listed: true,
+        },
+        {
+          name: "creating_recorded",
+          patch: { phase: "creating_capsule", capsuleId: `cap_recorded_${label}` },
+          listed: false,
+        },
+        { name: "planning", patch: { phase: "planning", capsuleId: `cap_planning_${label}` }, listed: false },
+        { name: "reviewable", patch: { phase: "reviewable", capsuleId: `cap_reviewable_${label}` }, listed: false },
+        { name: "failed", patch: { phase: "failed" }, listed: false },
+        { name: "discarded", patch: { phase: "discarded" }, listed: false },
+        { name: "other_actor", patch: { actorSubject: "user_two", createdBy: "user_two" }, listed: false },
+      ];
+      for (const [index, item] of cases.entries()) {
+        const at = new Date(Date.parse("2026-08-21T00:00:00.000Z") + index * 1000).toISOString();
+        const row: StoredGitInstallPlan = {
+          ...plan(`normal_${item.name}_${label}`, `normal_digest_${item.name}_${label}`),
+          workspaceId,
+          workspaceManagementAuthority: authority,
+          idempotencyKeyHash: `normal_key_${item.name}_${label}`,
+          operation: "install",
+          createdAt: at,
+          updatedAt: at,
+          ...item.patch,
+        };
+        expect((await store.create(row, authority)).status, `${label} ${item.name}`).toBe("created");
+      }
+      const expected = cases
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => item.listed)
+        .sort((left, right) => right.index - left.index)
+        .map(({ item }) => `normal_${item.name}_${label}`);
+      expect(
+        (await store.listOpenAttempts({ workspaceId, actorSubject: "user_one", limit: 20 }))
+          .map((item) => item.id),
+        label,
+      ).toEqual(expected);
+      expect(
+        (await store.listOpenAttempts({ workspaceId, limit: 20 })).map((item) => item.id),
+        label,
+      ).toEqual([`normal_other_actor_${label}`, ...expected]);
+    }
+  } finally {
+    await postgres.close();
+  }
+});
+
 test("Git unclaimed plans settle during a Workspace drain", async () => {
   const postgres = await PGliteSqlClient.create();
   const d1 = new SqliteFakeD1();

@@ -544,16 +544,26 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
             ${input.actorSubject === undefined ? "" : "and actor_subject = ?"}
             and phase not in ('failed', 'discarded')
             and json_valid(record_json) = 1
-            and json_extract(record_json, '$.mode') = 'attempt'
             and coalesce(json_extract(record_json, '$.operation'), 'install') = 'install'
             and (
-              phase <> 'reviewable'
-              or exists (
-                select 1 from capsules as capsule
-                 where capsule.id = json_extract(git_install_plans.record_json, '$.capsuleId')
-                   and capsule.status <> 'destroyed'
-                   and capsule.current_state_generation = 0
-                   and capsule.current_state_version_id is null
+              (
+                json_extract(record_json, '$.mode') = 'attempt'
+                and (
+                  phase <> 'reviewable'
+                  or exists (
+                    select 1 from capsules as capsule
+                     where capsule.id = json_extract(git_install_plans.record_json, '$.capsuleId')
+                       and capsule.status <> 'destroyed'
+                       and capsule.current_state_generation = 0
+                       and capsule.current_state_version_id is null
+                  )
+                )
+              )
+              or (
+                json_extract(record_json, '$.mode') is not 'attempt'
+                and phase in ('syncing_source', 'compiling_install',
+                  'analyzing_compatibility', 'creating_capsule')
+                and json_extract(record_json, '$.capsuleId') is null
               )
             )
           order by updated_at desc, id asc
