@@ -3380,7 +3380,7 @@ test("discarding an attempt abandons its never-applied Capsule and retires its S
   expect((await again.json()).installPlan.phase).toBe("discarded");
 });
 
-test("refused discards write nothing, legacy plans cannot be discarded here, and applied attempts leave the open list", async () => {
+test("refused discards write nothing, legacy plans are discarded only before their app, and applied attempts leave the open list", async () => {
   const fixture = attemptFixture();
   const planId = await startAttempt(fixture);
   const reviewable = await reachReviewable(fixture, planId);
@@ -3405,15 +3405,60 @@ test("refused discards write nothing, legacy plans cannot be discarded here, and
     { "idempotency-key": "legacy-not-discardable" },
   );
   const legacyPlan = (await legacy.json()).installPlan;
-  const legacyDiscard = await discard(fixture, legacyPlan.id, legacyPlan.generation);
-  expect(legacyDiscard.status).toBe(409);
-  expect((await legacyDiscard.json()).error.code).toBe("install_plan_not_attempt");
   const legacyAnswer = await answer(fixture, legacyPlan.id, {
     expectedGeneration: legacyPlan.generation,
     capsuleName: "renamed",
   });
   expect(legacyAnswer.status).toBe(409);
   expect((await legacyAnswer.json()).error.code).toBe("install_plan_not_attempt");
+  // Before its app exists the legacy plan is listed and only its creator
+  // discards it.
+  const listedLegacy = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans?open=1",
+  );
+  expect((await listedLegacy.json()).installPlans.map(
+    (entry: { installPlan: { id: string } }) => entry.installPlan.id,
+  )).toEqual([legacyPlan.id]);
+  const foreignDiscard = await discard(fixture, legacyPlan.id, legacyPlan.generation, ADMIN_SUBJECT);
+  expect(foreignDiscard.status).toBe(403);
+  const legacyDiscard = await discard(fixture, legacyPlan.id, legacyPlan.generation);
+  expect(legacyDiscard.status).toBe(200);
+  expect((await legacyDiscard.json()).installPlan).toMatchObject({
+    phase: "discarded",
+    generation: legacyPlan.generation + 1,
+    diagnostic: { code: "install_plan_discarded" },
+  });
+  expect(fixture.abandonedCapsules).toEqual([]);
+  const repeated = await discard(fixture, legacyPlan.id, legacyPlan.generation + 1);
+  expect(repeated.status).toBe(200);
+  expect((await repeated.json()).installPlan.phase).toBe("discarded");
+
+  // Once a legacy plan recorded its app, the app page owns it.
+  const withApp = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    createBody({ capsuleName: "with-app", providerBindings: [] }),
+    { "idempotency-key": "legacy-with-app" },
+  );
+  const withAppPlan = (await fixture.planStore.get((await withApp.json()).installPlan.id))!;
+  const recordedAt = new Date().toISOString();
+  expect((await fixture.planStore.transitionUnleased({
+    id: withAppPlan.id,
+    expectedGeneration: withAppPlan.generation,
+    expectedPhase: withAppPlan.phase,
+    plan: {
+      ...withAppPlan,
+      generation: withAppPlan.generation + 1,
+      phase: "planning",
+      capsuleId: deterministicCapsuleIdForPlan(withAppPlan.id),
+      updatedAt: recordedAt,
+    },
+    at: recordedAt,
+  })).status).toBe("updated");
+  const refusedWithApp = await discard(fixture, withAppPlan.id, withAppPlan.generation + 1);
+  expect(refusedWithApp.status).toBe(409);
+  expect((await refusedWithApp.json()).error.code).toBe("install_plan_not_attempt");
+  expect((await fixture.planStore.get(withAppPlan.id))?.phase).toBe("planning");
 });
 
 test("installing the same Git address creates a distinct Source per app", async () => {
@@ -3745,6 +3790,80 @@ test("legacy reviewed-preflight rows keep their previous lifecycle across a lost
   expect(fixture.getInstallConfig(fixture.capsules[0]!.installConfigId)).toMatchObject({
     variableMapping: { region: SECRET_VALUE },
   });
+});
+
+test("a reviewed-preflight install left retrying a name conflict ends failed on its next reconcile", async () => {
+  const fixture = installFixture();
+  const preflight = fixture.seedPreflight({
+    variableDeclarations: [{ name: "region", type: "string", hasDefault: false }],
+  });
+  const created = await fixture.request(
+    "/api/v1/workspaces/ws_install/install-plans",
+    "POST",
+    {
+      ...createBody({ modulePath: ".", providerBindings: [] }),
+      preflight,
+      variables: { region: SECRET_VALUE },
+    },
+    { "idempotency-key": "preflight-name-conflict" },
+  );
+  expect(created.status).toBe(201);
+  const planId = (await created.json()).installPlan.id as string;
+  // Another live app already uses the name in this Workspace and environment.
+  fixture.addCapsule({
+    id: "cap_live_example",
+    workspaceId: WORKSPACE.id,
+    projectId: `prj_default_${WORKSPACE.id}`,
+    name: "example",
+    slug: "example",
+    environment: "production",
+    sourceId: "src_live_example",
+    installConfigId: "icfg_live_example",
+    installingPrincipalId: WORKSPACE.ownerUserId,
+    currentStateGeneration: 1,
+    status: "active",
+    createdAt: WORKSPACE.createdAt,
+    updatedAt: WORKSPACE.createdAt,
+  });
+  // The row as an earlier release left it: lease-free in `creating_capsule`,
+  // with the store's conflict recorded as retryable.
+  const stored = (await fixture.planStore.get(planId))!;
+  const retriedAt = new Date().toISOString();
+  expect((await fixture.planStore.transitionUnleased({
+    id: planId,
+    expectedGeneration: stored.generation,
+    expectedPhase: "creating_capsule",
+    plan: {
+      ...stored,
+      generation: stored.generation + 1,
+      diagnostic: {
+        code: "install_plan_reconcile_retryable",
+        message: "Takosumi could not confirm the last coordinator step. Reconcile again to recover canonical state.",
+        planCreationStage: "preparation",
+        controllerCode: "failed_precondition",
+        reason: "capsule_initial_authority_conflict",
+      },
+      updatedAt: retriedAt,
+    },
+    at: retriedAt,
+  })).status).toBe("updated");
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(true);
+
+  const settled = await fixture.reconcile(planId);
+  expect(settled.status).toBe(200);
+  const payload = await settled.json();
+  expect(payload).toMatchObject({
+    installPlan: {
+      phase: "failed",
+      diagnostic: { code: "capsule_name_conflict" },
+    },
+    nextAction: "none",
+    userAction: { kind: "retry", code: "capsule_name_conflict", restart: true },
+  });
+  expect(payload.installPlan.diagnostic.reason).toBeUndefined();
+  expect(fixture.counts.capsule).toBe(0);
+  expect((await fixture.planStore.get(planId))?.initialVariables).toBeUndefined();
+  expect(await fixture.planStore.hasWorkspaceManagementBlockers(WORKSPACE.id)).toBe(false);
 });
 
 test("a legacy row written with the value-bearing digest still replays and keeps its reviewed values", async () => {
