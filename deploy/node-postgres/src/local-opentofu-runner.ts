@@ -9,7 +9,7 @@ import {
 import { Buffer } from "node:buffer";
 import { constants as fsConstants } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import { capsuleArtifactRoot, ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -654,6 +654,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       throw new Error("source archive cleanup requires a noncanonical allocated key and delete custody");
     }
     await this.archiveStore.delete(input.archiveRef);
+  }
+
+  async deleteRetiredSourceArchives(input: {
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly archiveRefs: readonly string[];
+  }): Promise<void> {
+    if (!this.archiveStore.delete) throw new Error("source archive delete custody is unavailable");
+    const segment = /^[A-Za-z0-9._-]+$/u;
+    if (!segment.test(input.workspaceId) || !segment.test(input.sourceId)) throw new Error("invalid Source retirement identity");
+    const prefix = `workspaces/${input.workspaceId}/sources/${input.sourceId}/snapshots/`;
+    const refs = new Set(input.archiveRefs);
+    for (const ref of refs) {
+      const suffix = ref.startsWith(prefix) ? ref.slice(prefix.length) : "";
+      const snapshotId = suffix.split("/")[0];
+      if (!snapshotId || !segment.test(snapshotId) || suffix !== `${snapshotId}/source.tar.zst`) {
+        throw new Error("source archive retirement ref is outside the Source boundary");
+      }
+    }
+    for (const ref of refs) {
+      await this.archiveStore.delete(ref);
+    }
   }
 
   async assertPrivateRunFileRefreshCapability(): Promise<void> {
@@ -3503,6 +3525,17 @@ async function assertLocalRecoveryStateArtifact(
 ): Promise<void> {
   const safeSegment = (value: unknown): value is string =>
     typeof value === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(value) && !value.includes("..");
+  const allocator = new ObjectKeyArtifactReferenceAllocator();
+  const allocation = {
+    kind: "state" as const,
+    workspaceId: artifact.workspaceId,
+    subject: artifact.subject,
+    environment: artifact.environment,
+    generation: 1,
+  };
+  const legacyRef = allocator.allocate(allocation);
+  const appRoot = capsuleArtifactRoot(artifact.workspaceId, artifact.subject?.id ?? "", `apps/${artifact.subject?.id ?? ""}`);
+  const appRef = allocator.allocate({ ...allocation, storageRoot: appRoot });
   if (artifact.action !== "state_recovery" || Object.hasOwn(artifact, "result") ||
     artifact.subject?.kind !== "capsule" || artifact.generation !== 1 ||
     !safeSegment(artifact.workspaceId) || !safeSegment(artifact.subject.id) ||
@@ -3516,11 +3549,7 @@ async function assertLocalRecoveryStateArtifact(
     artifact.stateBytes.byteLength === 0 ||
     artifact.stateBytes.byteLength > 16 * 1024 * 1024 ||
     !validLocalRecoveryStateBytes(artifact.stateBytes) ||
-    artifact.stateRef !== new ObjectKeyArtifactReferenceAllocator().allocate({
-      kind: "state", workspaceId: artifact.workspaceId,
-      subject: artifact.subject, environment: artifact.environment,
-      generation: 1,
-    })) {
+    (artifact.stateRef !== legacyRef && artifact.stateRef !== appRef)) {
     throw new Error("local OpenTofu recovery artifact scope or custody is invalid");
   }
   await assertDigest(artifact.stateBytes, artifact.stateDigest,
