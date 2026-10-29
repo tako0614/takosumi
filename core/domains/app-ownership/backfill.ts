@@ -23,6 +23,12 @@ export interface OwnershipBackfillPlan {
   readonly billingConflicts: readonly { readonly accountId: string; readonly workspaceIds: readonly string[] }[];
   readonly orphanCapsules: readonly { readonly capsuleId: string; readonly workspaceId: string }[];
   readonly unresolvedUsagePayers: readonly { readonly eventId: string; readonly workspaceId: string; readonly capsuleId: string; readonly reason: "capsule_missing" | "workspace_mismatch" }[];
+  /**
+   * Payer-less events of apps whose ownership has been transferred. The
+   * current owner is not the historical payer, so they stay unattributed. This
+   * is a report only and does not block apply.
+   */
+  readonly transferredAppUsage: readonly { readonly eventId: string; readonly capsuleId: string }[];
   readonly digest: string;
 }
 
@@ -34,6 +40,8 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
   const billingConflicts: OwnershipBackfillPlan["billingConflicts"][number][] = [];
   const orphanCapsules: OwnershipBackfillPlan["orphanCapsules"][number][] = [];
   const unresolvedUsagePayers: OwnershipBackfillPlan["unresolvedUsagePayers"][number][] = [];
+  const transferredAppUsage: OwnershipBackfillPlan["transferredAppUsage"][number][] = [];
+  const transferredCapsuleIds = new Set<string>();
   const names = new Map<string, { ownerAccountId: string; slug: string; environment: string; capsuleIds: string[] }>();
   const billings = new Map<string, { workspaceId: string; record: AccountBillingBinding }[]>();
   const workspaces = [...await context.control.listWorkspaces()].sort((a, b) => a.id.localeCompare(b.id));
@@ -65,6 +73,7 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
       const legacyRoot = `workspaces/${workspace.id}/capsules/${capsule.id}`;
       const ownerAccountId = existing?.ownerAccountId ?? workspace.ownerUserId;
       ownerByCapsuleId.set(capsule.id, ownerAccountId);
+      if ((existing?.ownershipEpoch ?? 0) !== 0) transferredCapsuleIds.add(capsule.id);
       if (!existing) writes.push({ kind: "ownership", record: {
         capsuleId: capsule.id, ownerAccountId, ownershipEpoch: 0,
         managementState: "active", managementEpoch: 0, storageRoot: legacyRoot,
@@ -103,6 +112,14 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
             capsuleId: event.capsuleId, reason: capsule ? "workspace_mismatch" : "capsule_missing" });
           continue;
         }
+        // Only an app that was never transferred has one owner for all its
+        // history. After a transfer, the current owner is not the payer of an
+        // earlier or intentionally unattributed event. Re-running the backfill
+        // must never convert those events into charges.
+        if (transferredCapsuleIds.has(event.capsuleId)) {
+          transferredAppUsage.push({ eventId: event.id, capsuleId: event.capsuleId });
+          continue;
+        }
         payerAccountId = ownerByCapsuleId.get(event.capsuleId)!;
       }
       writes.push({ kind: "usage", id: event.id, payerAccountId });
@@ -126,7 +143,7 @@ export async function planAppOwnershipBackfill(context: OwnershipBackfillContext
     else if (!existing) writes.push({ kind: "billing", record: rows[0]!.record });
   }
   const result = { writes, confirmationRequired, collisions, billingConflicts,
-    orphanCapsules, unresolvedUsagePayers };
+    orphanCapsules, unresolvedUsagePayers, transferredAppUsage };
   return { ...result, digest: await stableJsonDigest(result) };
 }
 

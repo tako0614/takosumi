@@ -245,7 +245,7 @@ lightly edited for readers.
 | POST | `/api/v1/connections/oauth/{helperId}/start` | Account credential; omit workspaceId to create a personal connection owned by caller |
 | GET | `/api/v1/source-ref-resolutions?url=…` | Account credential with write scope; starts a runner to resolve a public Git source's stable SemVer tag |
 | POST | `/api/v1/install-plans` | Account credential; `mode: "attempt"`, no workspace field; caller owns app |
-| GET | `/api/v1/usage` | Account credential; caller's payer usage only |
+| GET | `/api/v1/usage` | Account credential; caller's payer usage only. An independent meter event is attributed only when its usage span (event time ±2 hours, never before the app's creation or after it was recorded) lies inside one ownership interval delimited by accepted transfers; otherwise, or with incomplete transfer history, it stays unattributed |
 
 Member addition returns `202 { accepted: true }` for both unknown emails and verified accounts. The owner consent `connections_and_code` is retained in the audit ledger. Accepting a transfer removes all existing members and records notification recipients in the audit ledger. Member management, transfers, acceptance, cancellation and uninstall require the person's own session or a PAT with explicit scopes; installed-app OAuth access tokens are refused.
 

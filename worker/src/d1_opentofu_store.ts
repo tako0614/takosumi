@@ -46,6 +46,14 @@ import {
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { alias, integer, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
 import { D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA, D1_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../core/domains/app-authorization/schema.ts";
+import {
+  APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
+  appOwnershipHistoryFromRows,
+  appOwnershipHistorySchemaMissing,
+  appOwnershipHistorySql,
+  type AppOwnershipHistory,
+  type AppOwnershipHistoryRow,
+} from "../../core/domains/deploy-control/app_payer_history.ts";
 
 // Admission guard inserts deliberately target the pre-v77 column set. A
 // predeployed v75/v76 database must be able to reject an unsafe write without
@@ -11330,6 +11338,22 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const row = await this.db.prepare(`select owner_account_id, ownership_epoch from capsules where id=?`)
       .bind(capsuleId).first<{ readonly owner_account_id: string | null; readonly ownership_epoch: number }>();
     return row ? { ownerAccountId: row.owner_account_id ?? undefined, ownershipEpoch: row.ownership_epoch } : undefined;
+  }
+
+  async getAppOwnershipHistory(capsuleId: string, at: string): Promise<AppOwnershipHistory | undefined> {
+    await this.#ensureSchema();
+    // D1 has no row locks. Its acceptance commits `management_state =
+    // 'draining'` before stamping the acceptance time, so this one-statement
+    // snapshot reports that window with the draining transfer's creation time.
+    try {
+      const result = await this.db.prepare(appOwnershipHistorySql({
+        capsules: "capsules", transfers: "capsule_ownership_transfers", placeholder: "?",
+      })).bind(capsuleId, at, APP_OWNERSHIP_HISTORY_MAX_TRANSFERS).all<AppOwnershipHistoryRow>();
+      return appOwnershipHistoryFromRows(result.results ?? []);
+    } catch (error) {
+      if (appOwnershipHistorySchemaMissing(error)) return undefined;
+      throw error;
+    }
   }
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {

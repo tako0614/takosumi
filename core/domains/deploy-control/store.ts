@@ -105,6 +105,12 @@ import type {
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
 import type { CapsuleMember, CapsuleOwnership } from "../app-ownership/store.ts";
+import {
+  APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
+  type AppOwnershipHistory,
+  type AppOwnershipTransferRecord,
+  type CapsuleOwnershipTransferRow,
+} from "./app_payer_history.ts";
 import { parseWorkspaceMemberRecord } from "./store_row_mappers.ts";
 import type { Project } from "takosumi-contract/projects";
 import type { ProviderBindingSet } from "takosumi-contract/connections";
@@ -4312,6 +4318,17 @@ export interface OpenTofuControlStore extends ControlIdentityReconciliationStore
   // the host extension and never enter this store.
   /** Canonical physical owner/epoch for billing; undefined on legacy schemas. */
   getAppBillingOwnership(capsuleId: string): Promise<Pick<Capsule, "ownerAccountId" | "ownershipEpoch"> | undefined>;
+  /**
+   * Independent-meter payer history: the physical owner tuple, the creation
+   * time of a pending transfer that is draining the app (if any), and the
+   * accepted transfers walked back from
+   * the current owner to one row past the first acceptance at or before `at`
+   * (at most APP_OWNERSHIP_HISTORY_MAX_TRANSFERS rows), read as one
+   * consistent snapshot. Undefined when the owner is not yet backfilled or
+   * the v77 columns / transfer ledger are unavailable. Callers validate it
+   * with `appPayerAtEventTime`.
+   */
+  getAppOwnershipHistory(capsuleId: string, at: string): Promise<AppOwnershipHistory | undefined>;
   putUsageEvent(event: UsageEvent): Promise<UsageEvent>;
   listUsageEvents(workspaceId: string): Promise<readonly UsageEvent[]>;
   getCapsuleUsageTotals(capsuleId: string): Promise<CapsuleUsageTotals>;
@@ -4445,6 +4462,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #capsules = new Map<string, Capsule>();
   readonly #capsuleOwnership = new Map<string, CapsuleOwnership>();
+  readonly #capsuleOwnershipTransfers = new Map<string, CapsuleOwnershipTransferRow>();
   readonly #capsuleExecutionAuthorityEpochs = new Map<string, number>();
   readonly #publicHostReservations = new Map<string, PublicHostReservation>();
   readonly #connections = new Map<string, ProviderConnection>();
@@ -8695,6 +8713,54 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return ownership
       ? { ownerAccountId: ownership.ownerAccountId, ownershipEpoch: ownership.ownershipEpoch }
       : { ownerAccountId: capsule.ownerAccountId, ownershipEpoch: capsule.ownershipEpoch ?? 0 };
+  }
+
+  /**
+   * In-memory equivalent of a `capsule_ownership_transfers` row write. The
+   * transfer mutations run on the SQL/D1 authorization stores; this mirror
+   * lets memory-backed compositions and parity tests hold the same ledger.
+   */
+  putCapsuleOwnershipTransfer(row: CapsuleOwnershipTransferRow): void {
+    this.#capsuleOwnershipTransfers.set(row.id, structuredClone(row));
+  }
+
+  async getAppOwnershipHistory(capsuleId: string, at: string): Promise<AppOwnershipHistory | undefined> {
+    const capsule = this.#capsules.get(capsuleId);
+    if (!capsule) return undefined;
+    const tuple = this.#capsuleOwnership.get(capsuleId);
+    const owner = tuple ?? {
+      ownerAccountId: capsule.ownerAccountId, ownershipEpoch: capsule.ownershipEpoch ?? 0,
+      managementState: "active", managementEpoch: 0,
+    };
+    if (!owner.ownerAccountId) return undefined;
+    const rows = [...this.#capsuleOwnershipTransfers.values()]
+      .filter((row) => row.capsuleId === capsuleId)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const draining = owner.managementState === "draining"
+      ? rows.find((row) => row.state === "pending" && row.drainManagementEpoch === owner.managementEpoch)
+      : undefined;
+    // Same breadth-first walk as the SQL/D1 recursive read, including its
+    // lexical stop condition and the duplicates it would reach.
+    const transfers: AppOwnershipTransferRecord[] = [];
+    let frontier = [{ depth: 0, epoch: owner.ownershipEpoch, prior: owner.ownerAccountId, settled: 0 }];
+    while (frontier.length > 0) {
+      const next: typeof frontier = [];
+      for (const step of frontier) {
+        if (step.settled >= 2 || step.depth >= APP_OWNERSHIP_HISTORY_MAX_TRANSFERS) continue;
+        for (const row of rows) {
+          if (row.state !== "accepted" || row.toAccountId !== step.prior || row.ownershipEpoch !== step.epoch - 1) continue;
+          transfers.push({ ownershipEpoch: row.ownershipEpoch, fromAccountId: row.fromAccountId,
+            toAccountId: row.toAccountId, acceptedAt: row.updatedAt });
+          next.push({ depth: step.depth + 1, epoch: row.ownershipEpoch, prior: row.fromAccountId,
+            settled: step.settled + (row.updatedAt <= at ? 1 : 0) });
+        }
+      }
+      frontier = next;
+    }
+    return {
+      ownerAccountId: owner.ownerAccountId, ownershipEpoch: owner.ownershipEpoch,
+      ...(draining ? { drainingTransferCreatedAt: draining.createdAt } : {}), transfers,
+    };
   }
 
   async putUsageEvent(event: UsageEvent): Promise<UsageEvent> {
