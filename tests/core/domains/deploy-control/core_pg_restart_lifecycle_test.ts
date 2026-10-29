@@ -131,6 +131,7 @@ async function readLifecycle(
   };
 }
 
+// WASM database boot and snapshot reopen can exceed Bun's 5s default under CI load.
 test("Core Apply lineage survives closing and reopening the exact PostgreSQL data snapshot", async () => {
   const originalClient = await PGliteSqlClient.create();
   let reopenedClient: PGliteSqlClient | undefined;
@@ -268,7 +269,7 @@ test("Core Apply lineage survives closing and reopening the exact PostgreSQL dat
       await rm(snapshotDirectory, { recursive: true, force: true });
     }
   }
-});
+}, 30_000);
 
 test("Core recovered-state readers survive reopening the exact PGlite data snapshot", async () => {
   const originalClient = await PGliteSqlClient.create();
@@ -557,4 +558,4 @@ test("Core recovered-state readers survive reopening the exact PGlite data snaps
       await rm(snapshotDirectory, { recursive: true, force: true });
     }
   }
-});
+}, 30_000);

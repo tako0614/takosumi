@@ -573,7 +573,7 @@ test("account connection item test and revoke succeed for an active Workspace", 
   }
 });
 
-test("account Connection writes reject a member suspended after authorization before the final D1 batch", async () => {
+test("account Connection writes reject Workspace admins before any D1 mutation batch", async () => {
   for (const operation of ["register", "test", "revoke"] as const) {
     const fixture = await createConnectionItemFixture(`actor-revocation-${operation}`);
     if (operation === "register") await fixture.operations.revokeConnection(fixture.connectionId, undefined, null);
@@ -589,14 +589,12 @@ test("account Connection writes reject a member suspended after authorization be
     };
     await fixture.deployStore.putWorkspaceMember(member);
     const originalBatch = fixture.database.batch.bind(fixture.database);
-    let interleaved = false;
+    let batchCalls = 0;
     fixture.database.batch = async <T>(statements: Parameters<SqliteFakeD1["batch"]>[0]) => {
-      if (!interleaved) {
-        interleaved = true;
-        await fixture.deployStore.putWorkspaceMember({ ...member, status: "suspended" });
-      }
+      batchCalls += 1;
       return await originalBatch<T>(statements);
     };
+    let response: Response | undefined;
     try {
       const built = request("POST", operation === "register" ? "/api/v1/connections"
         : `/api/v1/connections/${fixture.connectionId}/${operation}`, {
@@ -607,19 +605,24 @@ test("account Connection writes reject a member suspended after authorization be
           values: { VERCEL_API_TOKEN: "must-not-survive-actor-revocation" },
         },
       });
-      const response = await handleControlRoute({
+      response = await handleControlRoute({
         request: built.request, url: built.url, store: fixture.accountStore, operations: fixture.operations,
-      });
-      expect(interleaved).toBe(true);
-      expect(response?.status).toBe(409);
-      expect(await fixture.deployStore.getConnection(fixture.connectionId)).toEqual(originalConnection);
-      expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toEqual(originalBlob);
-      expect(await fixture.deployStore.getWorkspaceManagement(fixture.workspaceId)).toEqual({
-        workspaceId: fixture.workspaceId, managementState: "active", managementEpoch: 1,
       });
     } finally {
       fixture.database.batch = originalBatch;
     }
+    expect(batchCalls).toBe(0);
+    expect(response?.status).toBe(operation === "register" ? 403 : 404);
+    expect(await response?.json()).toMatchObject({ error: {
+      code: operation === "register" ? "app_owner_only" : "connection_not_found",
+    } });
+    expect(await fixture.deployStore.getWorkspaceMember(fixture.workspaceId, member.accountId))
+      .toMatchObject({ status: "active", roles: ["admin"] });
+    expect(await fixture.deployStore.getConnection(fixture.connectionId)).toEqual(originalConnection);
+    expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toEqual(originalBlob);
+    expect(await fixture.deployStore.getWorkspaceManagement(fixture.workspaceId)).toEqual({
+      workspaceId: fixture.workspaceId, managementState: "active", managementEpoch: 1,
+    });
   }
 });
 
