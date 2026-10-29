@@ -222,9 +222,34 @@ well-known, health/metrics, and operator-only `/internal/v1` remain separate
 protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 92
-public route descriptors, listed below. The descriptions follow the inventory's summaries,
+`accounts/service/src/control-route-inventory.ts`; it currently contains 104
+public route descriptors, listed below. Accounts compositions include the same routes in `/openapi.json` and publish their count as `x-takos-public-session-endpoint-count`. Core-only processes omit the unmounted Accounts routes. The descriptions follow the inventory's summaries,
 lightly edited for readers.
+
+### App ownership and personal resources
+
+`GET /api/v1/apps?cursor&limit` lists the caller's owned and shared apps, with a live `role`, owner display name, app state and primary action. Using an app does not grant management access.
+
+| Method | Path | Permission |
+| --- | --- | --- |
+| GET | `/api/v1/capsules/{capsuleId}/members` | Owner/member; only owner sees email |
+| POST | `/api/v1/capsules/{capsuleId}/members` | Owner; `{ email, consent: "connections_and_code" }`; verified account |
+| DELETE | `/api/v1/capsules/{capsuleId}/members/{accountId}` | Owner or the departing member; cancels their queued/pending approval runs atomically |
+| GET | `/api/v1/capsules/{capsuleId}/ownership-transfers?state=pending` | Owner or recipient; `{ ownershipTransfers: [...] }` with app and sender display names |
+| GET | `/api/v1/ownership-transfers?state=pending` | Up to 50 pending transfers addressed to caller, with app and sender display names |
+| POST | `/api/v1/capsules/{capsuleId}/ownership-transfers` | Owner; `{ toAccountId }`; at most 50 pending per recipient and 10 creations per sender per hour |
+| POST | `/api/v1/ownership-transfers/{transferId}/accept` | Recipient; drains runs, increments ownership epoch, resets provider bindings |
+| DELETE | `/api/v1/ownership-transfers/{transferId}` | Owner; cancels pending transfer |
+| GET, POST | `/api/v1/connections` | Account's own personal connections and bindable operator connections; new connections belong to caller |
+| GET | `/api/v1/connections?capsuleId=…&projection=labels` | Owner/member; only this app's bound connections as `{ id, provider, displayName }`, limited to verified owner connections or bindable operator connections; does not list the owner's connection catalog |
+| POST | `/api/v1/connections/oauth/{helperId}/start` | Account credential; omit workspaceId to create a personal connection owned by caller |
+| GET | `/api/v1/source-ref-resolutions?url=…` | Account credential with write scope; starts a runner to resolve a public Git source's stable SemVer tag |
+| POST | `/api/v1/install-plans` | Account credential; `mode: "attempt"`, no workspace field; caller owns app |
+| GET | `/api/v1/usage` | Account credential; caller's payer usage only |
+
+Member addition returns `202 { accepted: true }` for both unknown emails and verified accounts. The owner consent `connections_and_code` is retained in the audit ledger. Accepting a transfer removes all existing members and records notification recipients in the audit ledger. Member management, transfers, acceptance, cancellation and uninstall require the person's own session or a PAT with explicit scopes; installed-app OAuth access tokens are refused.
+
+PATs may set `appIds`; effective permission is token scopes intersected with the caller's current app role. App-bound credentials cannot read account-wide personal resources. Workspace routes and claims remain compatibility surfaces. Installed-app OIDC accepts any account and always identifies the app with `takosumi.capsule_id`; only current managers receive `takosumi.app_role`. Nonmembers receive no management role.
 
 ### Account views
 

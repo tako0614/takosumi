@@ -20,6 +20,7 @@ const authority = { workspaceId: "workspace_test", managementState: "active" as 
 function connection(): ProviderConnection {
   return {
     id: "conn_test_result", workspaceId: authority.workspaceId, scope: "workspace",
+    ownerAccountId: "owner",
     provider: "registry.opentofu.org/example/service", providerSource: "registry.opentofu.org/example/service",
     secretPartition: "provider-credentials", status: "pending", materialization: "secret",
     envNames: ["EXAMPLE_TOKEN"], createdAt: now, updatedAt: now,
@@ -87,7 +88,8 @@ for (const name of ["Memory", "Postgres", "D1"] as const) {
 
       // Operator rows have no Workspace fence. Explicit absence still fences a
       // blob inserted after a run-issued/metadata-only credential was tested.
-      const operator: ProviderConnection = { ...row, id: "conn_operator_test", scope: "operator", workspaceId: undefined, secretPartition: undefined };
+      const operator: ProviderConnection = { ...row, id: "conn_operator_test", scope: "operator", workspaceId: undefined,
+        ownerAccountId: undefined, secretPartition: undefined };
       await store.createConnectionRegistration({ connection: operator, actorAuthority: null });
       const operatorInput: CommitConnectionTestResultInput = {
         expectedConnection: operator, expectedSecretBlob: null,

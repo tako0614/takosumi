@@ -25,7 +25,7 @@ async function transferAppOwner(store: InMemoryOpenTofuControlStore, capsuleId: 
   expect(previous).toBeDefined();
   const ownershipEpoch = previous!.ownershipEpoch + 1;
   expect(await ownership.putOwnership({ ...previous!, ownerAccountId, ownershipEpoch }, previous!.ownershipEpoch)).toBe(true);
-  expect(await store.getCapsule(capsuleId)).toMatchObject({ ownerAccountId, ownershipEpoch });
+  expect(await store.getAppBillingOwnership(capsuleId)).toEqual({ ownerAccountId, ownershipEpoch });
 }
 
 function app(ownerAccountId?: unknown): Capsule {

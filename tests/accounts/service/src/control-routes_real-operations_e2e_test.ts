@@ -9,6 +9,7 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import { D1AppOwnershipStore, type AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import { createConnectionOAuthHelpers } from "../../../../core/api/connection_oauth_helpers.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
@@ -429,6 +430,7 @@ async function createConnectionItemFixture(suffix: string) {
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
   });
@@ -573,7 +575,7 @@ test("account connection item test and revoke succeed for an active Workspace", 
   }
 });
 
-test("account Connection writes reject a member suspended after authorization before the final D1 batch", async () => {
+test("account Connection writes reject Workspace admins before any D1 mutation batch", async () => {
   for (const operation of ["register", "test", "revoke"] as const) {
     const fixture = await createConnectionItemFixture(`actor-revocation-${operation}`);
     if (operation === "register") await fixture.operations.revokeConnection(fixture.connectionId, undefined, null);
@@ -589,14 +591,12 @@ test("account Connection writes reject a member suspended after authorization be
     };
     await fixture.deployStore.putWorkspaceMember(member);
     const originalBatch = fixture.database.batch.bind(fixture.database);
-    let interleaved = false;
+    let batchCalls = 0;
     fixture.database.batch = async <T>(statements: Parameters<SqliteFakeD1["batch"]>[0]) => {
-      if (!interleaved) {
-        interleaved = true;
-        await fixture.deployStore.putWorkspaceMember({ ...member, status: "suspended" });
-      }
+      batchCalls += 1;
       return await originalBatch<T>(statements);
     };
+    let response: Response | undefined;
     try {
       const built = request("POST", operation === "register" ? "/api/v1/connections"
         : `/api/v1/connections/${fixture.connectionId}/${operation}`, {
@@ -607,19 +607,24 @@ test("account Connection writes reject a member suspended after authorization be
           values: { VERCEL_API_TOKEN: "must-not-survive-actor-revocation" },
         },
       });
-      const response = await handleControlRoute({
+      response = await handleControlRoute({
         request: built.request, url: built.url, store: fixture.accountStore, operations: fixture.operations,
-      });
-      expect(interleaved).toBe(true);
-      expect(response?.status).toBe(409);
-      expect(await fixture.deployStore.getConnection(fixture.connectionId)).toEqual(originalConnection);
-      expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toEqual(originalBlob);
-      expect(await fixture.deployStore.getWorkspaceManagement(fixture.workspaceId)).toEqual({
-        workspaceId: fixture.workspaceId, managementState: "active", managementEpoch: 1,
       });
     } finally {
       fixture.database.batch = originalBatch;
     }
+    expect(batchCalls).toBe(0);
+    expect(response?.status).toBe(operation === "register" ? 403 : 404);
+    expect(await response?.json()).toMatchObject({ error: {
+      code: operation === "register" ? "app_owner_only" : "connection_not_found",
+    } });
+    expect(await fixture.deployStore.getWorkspaceMember(fixture.workspaceId, member.accountId))
+      .toMatchObject({ status: "active", roles: ["admin"] });
+    expect(await fixture.deployStore.getConnection(fixture.connectionId)).toEqual(originalConnection);
+    expect(await fixture.deployStore.getSecretBlob(fixture.connectionId)).toEqual(originalBlob);
+    expect(await fixture.deployStore.getWorkspaceManagement(fixture.workspaceId)).toEqual({
+      workspaceId: fixture.workspaceId, managementState: "active", managementEpoch: 1,
+    });
   }
 });
 
@@ -692,6 +697,7 @@ test("account public generic-env registration retains the original Workspace aut
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
   });
@@ -850,6 +856,7 @@ test("account OAuth registration retains the original Workspace authority across
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     connectionOAuthHelpers: oauthHelpers,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
@@ -961,6 +968,7 @@ test(pauseBeforeVerification
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
     opentofuConnectionVault: vault,
     connectionOAuthHelpers: oauthHelpers,
     ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
@@ -2334,6 +2342,46 @@ test("concurrent identical configuration Plan requests share one durable PlanRun
       (run) => run.type === "plan",
     ),
   ).toHaveLength(1);
+});
+
+test("owned Capsule configuration Plan records its authenticated creator and replays exact evidence", async () => {
+  const { fixture, path, body } = await configurationPlanRouteFixture(
+    "configuration-plan-owned-actor",
+    { owned: true },
+  );
+  const first = await controlJson<CapsuleConfigurationPlanResponse>({
+    operations: fixture.operations,
+    store: fixture.accountStore,
+    cookie: fixture.cookie,
+    method: "POST",
+    path,
+    headers: { "idempotency-key": "owned-configuration-plan" },
+    body,
+  }, 201);
+  const plan = await fixture.operations.getRun(first.configurationPlan.planRunId);
+  expect(plan).toMatchObject({
+    capsuleId: fixture.seeded.capsule.id,
+    createdBy: "user_test",
+  });
+  expect(await fixture.deployStore.getPlanRun(plan.id)).toMatchObject({
+    ownershipEpoch: 0,
+    createdBy: "user_test",
+  });
+  const compatibilityRun = (await fixture.operations.listRuns(fixture.seeded.workspace.id))
+    .find((run) => run.id.startsWith("ccr_"));
+  expect(compatibilityRun?.createdBy).toMatch(/^capsule-configuration-plan:/u);
+
+  const replay = await controlJson<CapsuleConfigurationPlanResponse>({
+    operations: fixture.operations,
+    store: fixture.accountStore,
+    cookie: fixture.cookie,
+    method: "POST",
+    path,
+    headers: { "idempotency-key": "owned-configuration-plan" },
+    body,
+  }, 200);
+  expect(replay.configurationPlan.planRunId).toBe(plan.id);
+  expect(replay.configurationPlan.replayed).toBe(true);
 });
 
 test("configuration Plan authority fence aborts a target-current interleaving before Run persistence", async () => {
@@ -5279,6 +5327,7 @@ test("account session control routes execute plan and apply through the real Ope
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(controlDatabase, deployStore),
     opentofuRunner: runner,
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     opentofuConnectionVault: fakeProviderVault() as never,
@@ -5874,6 +5923,7 @@ type ReAdoptionRouteFixtureOptions = {
   readonly currentInstallConfig?: Partial<InstallConfig>;
   readonly repositoryInputs?: readonly RepositoryInstallUxInput[];
   readonly deployStore?: OpenTofuControlStore;
+  readonly appOwnershipStore?: AppOwnershipStore;
 };
 
 type ReAdoptionRouteFixture = Awaited<
@@ -6017,6 +6067,7 @@ output "launch_url" { value = var.public_url }
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     executionEvidenceAuthority: FIXTURE_EXECUTION_EVIDENCE_AUTHORITY,
     operatorInstallConfigs: options.genericDefault ? [] : [baseInstallConfig],
+    ...(options.appOwnershipStore ? { appOwnershipStore: options.appOwnershipStore } : {}),
   });
   const snapshotId = `snap_re_adoption_${suffix}`;
   const workspaceId = `ws_re_adoption_${suffix}`;
@@ -6102,7 +6153,11 @@ async function readReAdoptionGuard(
 
 async function configurationPlanRouteFixture(
   suffix: string,
-  options: { readonly deployStore?: OpenTofuControlStore } = {},
+  options: {
+    readonly deployStore?: OpenTofuControlStore;
+    readonly appOwnershipStore?: AppOwnershipStore;
+    readonly owned?: boolean;
+  } = {},
 ) {
   const genericInputs: readonly RepositoryInstallUxInput[] = [
     {
@@ -6117,6 +6172,7 @@ async function configurationPlanRouteFixture(
     genericDefault: true,
     repositoryInputs: genericInputs,
     ...(options.deployStore ? { deployStore: options.deployStore } : {}),
+    ...(options.appOwnershipStore ? { appOwnershipStore: options.appOwnershipStore } : {}),
     currentInstallConfig: {
       modulePath: "deploy/opentofu/cloudflare",
       internal: {
@@ -6138,6 +6194,23 @@ async function configurationPlanRouteFixture(
     repositoryManifest: { status: "absent" },
   });
   await seedProviderConnections(fixture.deployStore, fixture.seeded.capsule);
+  if (options.owned) {
+    if (!(fixture.deployStore instanceof InMemoryOpenTofuControlStore)) {
+      throw new Error("Owned fixture requires the in-memory authority store");
+    }
+    expect(fixture.deployStore.setCapsuleOwnership({
+      capsuleId: fixture.seeded.capsule.id,
+      ownerAccountId: "user_test",
+      ownershipEpoch: 0,
+      managementState: "active",
+      managementEpoch: 0,
+      storageRoot: `apps/${fixture.seeded.capsule.id}`,
+    })).toBe(true);
+    expect(await fixture.operations.appAccess?.resolveAppAccess(
+      "user_test",
+      fixture.seeded.capsule.id,
+    )).toMatchObject({ role: "owner" });
+  }
   const bindingSet = await fixture.operations.capsules.getProviderBindingSetByCapsule(
     fixture.seeded.capsule.id,
     fixture.seeded.capsule.environment,
@@ -6162,7 +6235,7 @@ async function configurationPlanRouteFixture(
 
 async function d1ReAdoptionRouteFixture(
   suffix: string,
-  options: Omit<ReAdoptionRouteFixtureOptions, "deployStore"> = {},
+  options: Omit<ReAdoptionRouteFixtureOptions, "deployStore" | "appOwnershipStore"> = {},
 ): Promise<{
   readonly database: SqliteFakeD1;
   readonly fixture: ReAdoptionRouteFixture;
@@ -6172,6 +6245,7 @@ async function d1ReAdoptionRouteFixture(
   const fixture = await reAdoptionRouteFixture(suffix, {
     ...options,
     deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
   });
   return { database, fixture };
 }
@@ -6182,7 +6256,10 @@ async function d1ConfigurationPlanRouteFixture(suffix: string): Promise<{
 }> {
   const database = new SqliteFakeD1();
   const deployStore = createCloudflareD1OpenTofuControlStore(database);
-  const fixture = await configurationPlanRouteFixture(suffix, { deployStore });
+  const fixture = await configurationPlanRouteFixture(suffix, {
+    deployStore,
+    appOwnershipStore: new D1AppOwnershipStore(database, deployStore),
+  });
   return { database, fixture };
 }
 

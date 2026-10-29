@@ -1,4 +1,5 @@
 import {
+  check,
   index,
   integer,
   primaryKey,
@@ -100,6 +101,35 @@ export const accountBillingBindings = sqliteTable(names.accountBillingBindings, 
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const capsuleOwnershipTransfers = sqliteTable(names.capsuleOwnershipTransfers, {
+  id: text("id").primaryKey(),
+  capsuleId: text("capsule_id").notNull(),
+  fromAccountId: text("from_account_id").notNull(),
+  toAccountId: text("to_account_id").notNull(),
+  ownershipEpoch: integer("ownership_epoch").notNull(),
+  drainManagementEpoch: integer("drain_management_epoch"),
+  state: text("state").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  check("capsule_ownership_transfers_epoch_check", sql`${table.ownershipEpoch} >= 0`),
+  check("capsule_ownership_transfers_state_check", sql`${table.state} in ('pending','accepted','cancelled')`),
+  uniqueIndex("capsule_ownership_transfers_one_pending").on(table.capsuleId).where(sql`${table.state} = 'pending'`),
+  index("capsule_ownership_transfers_recipient").on(table.toAccountId, table.state),
+]);
+
+export const appCredentialMintLeases = sqliteTable(names.appCredentialMintLeases, {
+  id: text("id").primaryKey(),
+  capsuleId: text("capsule_id").notNull(),
+  runId: text("run_id").notNull(),
+  ownerAccountId: text("owner_account_id").notNull(),
+  ownershipEpoch: integer("ownership_epoch").notNull(),
+  managementEpoch: integer("management_epoch").notNull(),
+  actorAccountIdsJson: text("actor_account_ids_json").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [index("app_credential_mint_leases_capsule_expiry").on(table.capsuleId, table.expiresAt)]);
 
 // Retained independently of Workspace/Account deletion; no cascade FK.
 export const workspaceBillingIntents = sqliteTable(names.workspaceBillingIntents, {

@@ -193,6 +193,12 @@ async function listProviderConnections(
     session,
   });
   if (!auth.ok) return auth.response;
+  // A Workspace member may use an explicitly selected connection for app
+  // work, but the full inventory belongs to the Workspace owner.
+  const workspace = await operations.workspaces.getWorkspace(workspaceId);
+  if (session.appIds !== undefined || workspace.ownerUserId !== session.subject) {
+    return errorJson("app_owner_only", "Only the Workspace owner can list provider connections.", 403);
+  }
   const projection = url.searchParams.get("projection");
   if (projection !== null && projection !== "release-owned") {
     return errorJson(

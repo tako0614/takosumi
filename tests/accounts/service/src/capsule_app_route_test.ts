@@ -17,7 +17,9 @@ import { createInMemoryInterfaceStores } from "../../../../core/domains/interfac
 import {
   FIXTURE_CLOUDFLARE_PROVIDER,
   seedCapsuleModel,
+  transitionProviderBindingSetForFixture,
 } from "../../../helpers/deploy-control/model_fixture.ts";
+import type { ProviderBindingSet } from "takosumi-contract/connections";
 
 const ORIGIN = "https://app.takosumi.test";
 const OWNER = "user_test";
@@ -346,6 +348,52 @@ test("a binding without a usable connection asks the person to fix it", async ()
     connectionId,
     connectionStatus: "revoked",
   });
+});
+
+test("app connection issues include the canonical owner's personal connections", async () => {
+  const connectionId = "personal_cf_owner_connection";
+  const personal = {
+    id: connectionId,
+    scope: "personal",
+    ownerAccountId: "canonical_owner",
+    provider: FIXTURE_CLOUDFLARE_PROVIDER,
+    providerSource: FIXTURE_CLOUDFLARE_PROVIDER,
+    status: "verified",
+    materialization: "secret",
+    envNames: ["CLOUDFLARE_API_TOKEN"],
+    createdAt: "2026-10-27T00:00:00.000Z",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+  };
+  const h = await fixture({
+    requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
+    overrides: {
+      appOwnership: {
+        getOwnership: async () => ({
+          capsuleId: CAPSULE,
+          ownerAccountId: "canonical_owner",
+          ownershipEpoch: 1,
+          managementState: "active",
+          managementEpoch: 1,
+          storageRoot: "app://canonical_owner",
+        }),
+      } as NonNullable<ControlPlaneOperations["appOwnership"]>,
+      accountResources: {
+        listConnections: async (accountId: string) => ({
+          items: accountId === "canonical_owner" ? [personal] : [],
+        }),
+      } as NonNullable<ControlPlaneOperations["accountResources"]>,
+    },
+  });
+  const environment = h.seeded.capsule.environment;
+  const current = await h.ledger.getProviderBindingSetByCapsule(CAPSULE, environment);
+  expect(current).toBeDefined();
+  await transitionProviderBindingSetForFixture(h.ledger, {
+    ...current!,
+    bindings: [{ provider: FIXTURE_CLOUDFLARE_PROVIDER, connectionId }],
+    updatedAt: new Date().toISOString(),
+  } satisfies ProviderBindingSet);
+  const app = await h.app();
+  expect(app.problems).not.toContainEqual(expect.objectContaining({ code: "connection_unavailable" }));
 });
 
 test("every authorized screen is listed in display order with only display data and a safe URL", async () => {

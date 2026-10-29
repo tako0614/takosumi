@@ -1,3 +1,4 @@
+import { InMemoryAppOwnershipStore, type AppOwnershipStore } from "../../domains/app-ownership/store.ts";
 import { CredentialRecipeRefreshFailure } from "./driver_ports.ts";
 /**
  * In-process credential Vault broker (Phase 1A credential core).
@@ -80,6 +81,7 @@ import {
 } from "../../shared/provider_config_urls.ts";
 import {
   assertWorkspaceManagementAdmission,
+  InMemoryOpenTofuControlStore,
   WorkspaceManagementAdmissionConflictError,
   type OpenTofuControlStore,
   type StoredSecretBlob,
@@ -92,6 +94,9 @@ import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
 import { resolveCanonicalCapsuleRunCredentialContext } from "../../domains/deploy-control/run_credential_context.ts";
 import { connectionCredentialIssuanceAttemptRef } from "../../domains/deploy-control/credential_issuance_attempt.ts";
+import type { AppAccessResolver } from "../../../contract/app-access.ts";
+import type { Capsule } from "takosumi-contract/capsules";
+import { InMemoryAppMintLeaseStore, type AppMintConnectionBinding, type AppMintLease, type AppMintLeaseStore } from "../../domains/app-authorization/mint-leases.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
 const CREDENTIAL_VERIFICATION_KIND =
@@ -106,6 +111,7 @@ const MAX_CREDENTIAL_VERIFICATION_CAPABILITIES = 64;
  * owning Workspace, so their sealed blobs bind to this fixed partition label.
  */
 const OPERATOR_SCOPE_AAD = "__operator__";
+const OPERATOR_OWNER_AAD = "__operator__";
 const SECRET_BLOB_KEY_SCHEME = "secret-boundary-aes-gcm/v1";
 
 /**
@@ -220,6 +226,9 @@ export interface MintRequest {
    * must reject a URL outside the connection's declared host scope.
    */
   readonly sourceUrl?: string;
+  /** Canonical Source id for app-owned source credential admission. */
+  readonly sourceId?: string;
+  readonly runId?: string;
   /**
    * Provider-binding connection pool for the tofu phases (spec §9). When
    * present, provider selection draws ONLY from these connections (each must
@@ -294,6 +303,17 @@ export interface ConnectionVault {
     entries: readonly CapsuleProviderBindingMintEntry[],
     options?: CapsuleProviderBindingMintOptions,
   ): Promise<PhaseMintBundle>;
+  /** Rewraps one legacy sealed blob using the connection row's current owner. */
+  rewrapConnectionSecret(
+    connectionId: string,
+    options?: { readonly dryRun?: boolean },
+  ): Promise<SecretRewrapResult>;
+}
+
+export interface SecretRewrapResult {
+  readonly connectionId: string;
+  readonly status: "rewrapped" | "dry_run" | "already_v3" | "no_secret" | "missing_owner" | "conflict";
+  readonly fromVersion?: 1 | 2;
 }
 
 /**
@@ -387,6 +407,9 @@ export type VaultFetch = CredentialDriverFetch;
 export interface StaticSecretConnectionVaultDependencies {
   readonly store: OpenTofuControlStore;
   readonly crypto: SecretBoundaryCrypto;
+  readonly appAccessResolver?: AppAccessResolver;
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
+  readonly appMintLeases?: AppMintLeaseStore;
   /** Immutable, release-owned credentialless connections; never persisted here. */
   readonly operatorProviderConnections?: readonly ProviderConnection[];
   readonly fetch?: VaultFetch;
@@ -423,6 +446,9 @@ export interface StaticSecretConnectionVaultDependencies {
 export class StaticSecretConnectionVault implements ConnectionVault {
   readonly #store: OpenTofuControlStore;
   readonly #crypto: SecretBoundaryCrypto;
+  readonly #appAccessResolver?: AppAccessResolver;
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
+  readonly #appMintLeases?: AppMintLeaseStore;
   readonly #fetch: VaultFetch;
   readonly #now: () => Date;
   readonly #newId: () => string;
@@ -441,8 +467,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
     this.#crypto = deps.crypto;
+    this.#appAccessResolver = deps.appAccessResolver;
+    this.#appOwnership = deps.appOwnership ?? (deps.store instanceof InMemoryOpenTofuControlStore
+      ? new InMemoryAppOwnershipStore(deps.store) : undefined);
     this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
+    this.#appMintLeases = deps.appMintLeases ?? (deps.store instanceof InMemoryOpenTofuControlStore
+      ? new InMemoryAppMintLeaseStore(deps.store, { now: () => this.#now().getTime() }) : undefined);
     this.#newId = deps.newId ?? defaultConnectionId;
     this.#operatorProviderConnections = fixedOperatorConnectionMap(
       deps.operatorProviderConnections ?? [],
@@ -492,9 +523,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "operator-scoped connections must not have an owning Workspace (omit workspaceId for scope: operator)",
       );
     }
-    const actorAuthority = await this.#captureConnectionActorAuthority(workspaceId, actorAccountId);
+    if (workspaceId !== undefined && input.scope === "personal") {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "personal connections must not carry a Workspace",
+      );
+    }
+    const actorAuthority = input.scope === "personal"
+      ? this.#requirePersonalActor(actorAccountId, actorAccountId)
+      : await this.#captureConnectionActorAuthority(workspaceId, actorAccountId);
     if (isSourceGitKind(input.kind)) {
-      return await this.#registerGitConnection(input, input.kind, originalAuthority, actorAuthority);
+      return await this.#registerGitConnection(input, input.kind, originalAuthority, actorAuthority, actorAccountId);
     }
     requireNonEmpty(input.provider, "provider");
     if (
@@ -731,6 +770,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ),
     );
     const registrationAuthority = await this.#captureManagementAuthority(workspaceId, originalAuthority);
+    const ownerAccountId = await this.#ownerForRegistration(workspaceId, connectionScope, actorAccountId);
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -751,14 +791,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         secretPartition,
         secretEnvelopeAad({
           secretPartition,
-          ...(workspaceId ? { workspaceId: workspaceId } : {}),
+          ownerAccountId,
           connectionId: id,
           provider: input.provider,
-        }),
+        }, 3),
       );
       blob = makeStoredSecretBlob({
         connectionId: id,
         ...(workspaceId ? { workspaceId: workspaceId } : {}),
+        ownerAccountId,
         provider: input.provider,
         sealed,
         secretPartition,
@@ -770,6 +811,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const connection: ProviderConnection = {
       id,
       ...(workspaceId ? { workspaceId } : {}),
+      ...(connectionScope !== "operator" ? { ownerAccountId } : {}),
       provider: input.provider,
       providerSource: canonicalProviderSource(input.provider),
       credentialRecipe,
@@ -802,6 +844,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     kind: SourceGitConnectionKind,
     originalAuthority: WorkspaceManagementAuthority | undefined,
     actorAuthority: ConnectionActorAuthority | null,
+    actorAccountId: string | null,
   ): Promise<ProviderConnection> {
     const workspaceId = workspaceIdForConnectionInput(input);
     const values = input.values;
@@ -843,6 +886,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       throw new ConnectionVaultError("invalid_argument", validation.detail);
     }
     const registrationAuthority = await this.#captureManagementAuthority(workspaceId, originalAuthority);
+    const ownerAccountId = await this.#ownerForRegistration(workspaceId, connectionScope, actorAccountId);
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -854,15 +898,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       secretPartition,
       secretEnvelopeAad({
         secretPartition,
-        ...(workspaceId ? { workspaceId: workspaceId } : {}),
+        ownerAccountId,
         connectionId: id,
         provider: kind,
-      }),
+      }, 3),
     );
     const nowIso = now.toISOString();
     const blob = makeStoredSecretBlob({
       connectionId: id,
       ...(workspaceId ? { workspaceId: workspaceId } : {}),
+      ownerAccountId,
       provider: kind,
       sealed,
       secretPartition,
@@ -873,6 +918,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const connection: ProviderConnection = {
       id,
       ...(workspaceId ? { workspaceId } : {}),
+      ...(connectionScope !== "operator" ? { ownerAccountId } : {}),
       provider: kind,
       providerSource: canonicalProviderSource(kind),
       secretPartition,
@@ -917,6 +963,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     return authority;
   }
 
+  #requirePersonalActor(
+    actorAccountId: string | null,
+    ownerAccountId: string | null,
+  ): null {
+    if (!actorAccountId?.trim() || actorAccountId !== ownerAccountId) {
+      throw new ConnectionVaultError("failed_precondition", "Personal connection account authority is unavailable");
+    }
+    return null;
+  }
+
   async #captureManagementAuthority(
     workspaceId: string | undefined,
     originalAuthority?: WorkspaceManagementAuthority,
@@ -935,6 +991,96 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     } catch (error) {
       throw connectionManagementAdmissionError(error);
     }
+  }
+
+  async #ownerForRegistration(
+    workspaceId: string | undefined,
+    scope: ProviderConnection["scope"],
+    actorAccountId: string | null,
+  ): Promise<string> {
+    if (scope === "operator") return OPERATOR_OWNER_AAD;
+    if (workspaceId) {
+      const workspace = await this.#store.getWorkspace(workspaceId);
+      if (workspace?.ownerUserId) return workspace.ownerUserId;
+    } else if (actorAccountId?.trim()) {
+      return actorAccountId;
+    }
+    throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable");
+  }
+
+  async #requireCurrentAppAccess(
+    accountId: string | undefined,
+    capsuleId: string,
+    ownerAccountId: string,
+    ownershipEpoch: number,
+  ): Promise<void> {
+    if (!accountId?.trim() || !this.#appAccessResolver) {
+      throw new ConnectionVaultError("failed_precondition", "Current app access is unavailable");
+    }
+    const access = await this.#appAccessResolver.resolveAppAccess(accountId, capsuleId);
+    if (!access || access.ownerAccountId !== ownerAccountId || access.ownershipEpoch !== ownershipEpoch ||
+      (access.role !== "owner" && access.role !== "member")) {
+      throw new ConnectionVaultError("failed_precondition", "Run actor no longer has app access",
+        undefined, "app_access_denied");
+    }
+  }
+
+  async rewrapConnectionSecret(
+    connectionId: string,
+    options: { readonly dryRun?: boolean } = {},
+  ): Promise<SecretRewrapResult> {
+    requireNonEmpty(connectionId, "connectionId");
+    const connection = structuredClone(await this.#store.getConnection(connectionId));
+    if (!connection) throw new ConnectionVaultError("not_found", "Connection was not found");
+    const blob = structuredClone(await this.#store.getSecretBlob(connectionId));
+    if (!blob) return { connectionId, status: "no_secret" };
+    const fromVersion = secretEnvelopeVersionForBlob(blob);
+    if (fromVersion === 3) return { connectionId, status: "already_v3" };
+    if (blob.renewalLease && Date.parse(blob.renewalLease.expiresAt) > this.#now().getTime()) {
+      return { connectionId, status: "conflict", fromVersion };
+    }
+    // Rewrap requires a durable owner on personal rows. The migration must
+    // backfill it first; a mutable Workspace lookup must never select AAD.
+    if (connection.scope !== "operator" && !connection.ownerAccountId?.trim()) {
+      return { connectionId, status: "missing_owner", fromVersion };
+    }
+    const ownerAccountId = ownerAccountIdForConnection(connection);
+    const plaintext = await openConnectionSecret(this.#crypto, connection, blob);
+    if (options.dryRun) return { connectionId, status: "dry_run", fromVersion };
+    const partition = secretPartitionForConnection(connection);
+    const sealed = await this.#crypto.seal(
+      plaintext,
+      partition,
+      connectionEnvelopeAad(connection, 3),
+    );
+    const replacementSecretBlob: StoredSecretBlob = {
+      ...makeStoredSecretBlob({
+        connectionId,
+        ...(connection.workspaceId ? { workspaceId: connection.workspaceId } : {}),
+        ownerAccountId,
+        provider: connection.provider,
+        sealed,
+        secretPartition: partition,
+        createdAt: blob.createdAt,
+        crypto: this.#crypto,
+      }),
+      id: blob.id,
+      rotatedAt: this.#now().toISOString(),
+    };
+    const authority = await this.#captureManagementAuthority(connection.workspaceId);
+    const replaced = await this.#store.commitConnectionTestResult({
+      expectedConnection: connection,
+      expectedSecretBlob: blob,
+      replacement: connection,
+      replacementSecretBlob,
+      expectedWorkspaceManagementAuthority: authority,
+      actorAuthority: null,
+    });
+    return {
+      connectionId,
+      status: replaced ? "rewrapped" : "conflict",
+      fromVersion,
+    };
   }
 
   async #persistRegistration(
@@ -964,7 +1110,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const authority = await this.#captureManagementAuthority(connection.workspaceId, originalAuthority);
-    const actorAuthority = await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
+    const actorAuthority = connection.scope === "personal"
+      ? this.#requirePersonalActor(actorAccountId, ownerAccountIdForConnection(connection))
+      : await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
     if (connectionIsExpired(connection, this.#now())) {
       if (this.#operatorProviderConnections.has(connection.id)) {
         await this.#markConnectionExpired(connection);
@@ -1167,7 +1315,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // owning Connection. Repeated revocation remains an observation only.
     if (!connection) return false;
     const authority = await this.#captureManagementAuthority(connection.workspaceId, originalAuthority);
-    const actorAuthority = await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
+    const actorAuthority = connection.scope === "personal"
+      ? this.#requirePersonalActor(actorAccountId, ownerAccountIdForConnection(connection))
+      : await this.#captureConnectionActorAuthority(connection.workspaceId, actorAccountId);
     const revoked = await this.#store.revokeConnectionIfUnchanged({
       expectedConnection: connection, expectedWorkspaceManagementAuthority: authority, actorAuthority,
     }).catch((error: unknown) => { throw connectionManagementAdmissionError(error); });
@@ -1251,126 +1401,258 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const env: Record<string, string> = {};
     const applyForBudget = options?.runId ? await this.#store.getApplyRun(options.runId) : undefined;
     const planForBudget = options?.runId ? await this.#store.getPlanRun(applyForBudget?.planRunId ?? options.runId) : undefined;
+    const capsuleForMint = options?.capsuleId ? await this.#capsuleWithOwnership(options.capsuleId) : undefined;
+    if (options?.capsuleId && !capsuleForMint) {
+      throw new ConnectionVaultError("failed_precondition", "Capsule is unavailable for credential mint");
+    }
+    if (capsuleForMint?.ownerAccountId !== undefined) {
+      if (
+        !planForBudget ||
+        !Number.isSafeInteger(capsuleForMint.ownershipEpoch) ||
+        capsuleForMint.ownershipEpoch! < 0 ||
+        planForBudget.ownershipEpoch !== capsuleForMint.ownershipEpoch ||
+        capsuleForMint.managementState !== "active" ||
+        planForBudget.capsuleId !== capsuleForMint.id ||
+        (phase === "plan" && planForBudget.status !== "running") ||
+        (phase !== "plan" && (!applyForBudget || applyForBudget.status !== "running")) ||
+        (applyForBudget && applyForBudget.planRunId !== planForBudget.id)
+      ) {
+        throw new ConnectionVaultError("failed_precondition", "App ownership authority changed before credential mint");
+      }
+      await this.#requireCurrentAppAccess(planForBudget.createdBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      if (applyForBudget?.createdBy) {
+        await this.#requireCurrentAppAccess(applyForBudget.createdBy, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      }
+      const approver = applyForBudget?.approval?.approvedBy ?? planForBudget.approval?.approvedBy;
+      if (approver) {
+        await this.#requireCurrentAppAccess(approver, capsuleForMint.id, capsuleForMint.ownerAccountId, capsuleForMint.ownershipEpoch!);
+      } else if (applyForBudget && (
+        applyForBudget.approval ||
+        planForBudget.approval ||
+        planForBudget.requiresApproval === true ||
+        planForBudget.operation === "destroy"
+      )) {
+        throw new ConnectionVaultError("failed_precondition", "Apply approver is unavailable");
+      }
+    } else if (capsuleForMint && (
+      capsuleForMint.ownershipEpoch !== undefined ||
+      capsuleForMint.managementState !== undefined
+    )) {
+      throw new ConnectionVaultError("failed_precondition", "App ownership metadata is incomplete");
+    }
     const profileForBudget = planForBudget ? await this.#store.getRunnerProfile(planForBudget.runnerProfileId) : undefined;
     if (planForBudget && planForBudget.workspaceId !== workspaceId) throw connectionVerificationRaceError();
     const requiredRunLifetimeSeconds = (profileForBudget?.resourceLimits?.maxRunSeconds ?? 900) + 120;
     const minimumLifetimeSeconds = Math.max(1800, requiredRunLifetimeSeconds);
     const files: MintedFileInternal[] = [];
     const evidence: ProviderCredentialMintEvidence[] = [];
-    for (const entry of entries) {
-      requireNonEmpty(entry.provider, "provider");
-      requireNonEmpty(entry.connectionId, "connectionId");
-      // Re-validate the id like #connectionPool: existence + Workspace ownership.
-      const connection = await this.#connectionById(entry.connectionId);
-      if (!connection) {
-        throw new ConnectionVaultError(
-          "not_found",
-          `connection ${entry.connectionId} not found`,
-          undefined,
-          "provider_connection_setup_required",
-        );
-      }
-      if (
-        connection.scope === "workspace" &&
-        connection.workspaceId !== workspaceId
-      ) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${entry.connectionId} belongs to another Workspace`,
-          undefined,
-          "provider_connection_setup_required",
-        );
-      }
-      if (
-        connection.scope === "operator" &&
-        !isWorkspaceBindableOperatorConnection(connection)
-      ) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${entry.connectionId} is an operator credential and cannot be materialized into a generic runner`,
-          undefined,
-          "provider_connection_setup_required",
-        );
-      }
-      if (isSourceGitKind(connection.kind)) {
-        // A git connection is never a provider alias credential (invariants 4/5).
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${entry.connectionId} is a git source connection and cannot back a provider env binding`,
-          undefined,
-          "provider_connection_setup_required",
-        );
-      }
-      if (!sameProviderSource(entry.provider, connection.providerSource)) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${entry.connectionId} provider ${connection.provider} does not match CapsuleProviderEnvBinding provider ${entry.provider}`,
-          undefined,
-          "provider_connection_setup_required",
-        );
-      }
-      assertConnectionVerified(connection);
-      this.#assertPinnedRuntimeInputsStillInstalled(connection);
-      const runIssuance = isCapsuleRunCredentialIssuance(
-        connection.credentialRecipe?.runIssuance,
-      );
-      let runCredentialSettings: CapsuleProviderBindingMintEntry["runCredentialSettings"];
-      try {
-        runCredentialSettings = canonicalRunCredentialSettings(
-          entry.runCredentialSettings,
-          "runCredentialSettings",
-        );
-      } catch (error) {
-        throw new ConnectionVaultError(
-          "invalid_argument",
-          error instanceof Error
-            ? error.message
-            : "runCredentialSettings is invalid",
-        );
-      }
-      if (runCredentialSettings !== undefined && !runIssuance) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${connection.id} does not accept run credential settings`,
-          undefined,
-          "credential_service_unavailable",
-        );
-      }
-      const run = runIssuance
-        ? await this.#canonicalRunIssuanceContext(
-            workspaceId,
-            connection,
-            phase,
-            options,
-          )
-        : undefined;
-      const minted = await this.#mintProviderValues(
-        connection,
-        run,
-        runCredentialSettings,
-        run && options?.issuanceGenerationRef
-          ? await connectionCredentialIssuanceAttemptRef(
-              options.issuanceGenerationRef,
-              connection.id,
-            )
-          : undefined,
-        minimumLifetimeSeconds,
-      );
-      if (minted.evidence.expiresAt && this.#credentialDriver(connection)?.refresh) {
-        if (Date.parse(minted.evidence.expiresAt) < this.#now().getTime() + requiredRunLifetimeSeconds * 1000) {
-          throw new ConnectionVaultError("failed_precondition", "Provider token cannot cover this RunnerProfile execution budget",
-            undefined, "provider_credential_lifetime_insufficient");
+    // Renewal may replace the Connection row. Complete that private rotation
+    // before pinning the mint lease, then use exactly the observed material.
+    // Lease admission rechecks the app/Run after any renewal driver await.
+    const prepared = new Map<string, ObservedProviderSecretMaterial & { readonly connection: ProviderConnection }>();
+    if (capsuleForMint?.ownerAccountId !== undefined) {
+      for (const entry of entries) {
+        requireNonEmpty(entry.provider, "provider");
+        requireNonEmpty(entry.connectionId, "connectionId");
+        const connection = await this.#connectionById(entry.connectionId);
+        if (!connection) throw new ConnectionVaultError("not_found", `connection ${entry.connectionId} not found`);
+        if (connection.ownerAccountId !== capsuleForMint.ownerAccountId &&
+          !isWorkspaceBindableOperatorConnection(connection)) {
+          throw new ConnectionVaultError("failed_precondition", "Connection is not owned by the app owner",
+            undefined, "connection_not_owned_by_app_owner");
+        }
+        if (connection.scope === "operator" && !isWorkspaceBindableOperatorConnection(connection)) {
+          throw new ConnectionVaultError("failed_precondition", "Operator connection cannot be materialized into a generic runner");
+        }
+        if (isSourceGitKind(connection.kind) || !sameProviderSource(entry.provider, connection.providerSource)) {
+          throw new ConnectionVaultError("failed_precondition", "Provider binding connection mismatch");
+        }
+        assertConnectionVerified(connection);
+        this.#assertPinnedRuntimeInputsStillInstalled(connection);
+        if (!prepared.has(connection.id)) {
+          prepared.set(connection.id, await this.#renewProviderMaterial(connection, undefined, null, minimumLifetimeSeconds));
         }
       }
-      evidence.push(minted.evidence);
-      mergeCredentialEnv(env, minted.values, entry);
-      if (minted.files) files.push(...minted.files);
     }
-    return new PhaseMintBundle(
-      { env, ...(files.length > 0 ? { files } : {}) },
-      [],
-      evidence,
-    );
+    const mintLease = capsuleForMint?.ownerAccountId !== undefined && entries.length > 0
+      ? await this.#beginAppMintLease(capsuleForMint, options?.runId,
+        [planForBudget?.createdBy, ...(applyForBudget?.createdBy ? [applyForBudget.createdBy] : []),
+          ...(applyForBudget?.approval?.approvedBy ?? planForBudget?.approval?.approvedBy
+            ? [applyForBudget?.approval?.approvedBy ?? planForBudget?.approval?.approvedBy] : [])],
+        [...prepared.values()].map(({ connection }) => ({ id: connection.id,
+          authority: this.#operatorProviderConnections.has(connection.id) ? "release-owned" as const : "stored" as const,
+          expectedConnection: connection })))
+      : undefined;
+    let leaseFinalized = false;
+    try {
+      for (const entry of entries) {
+        requireNonEmpty(entry.provider, "provider");
+        requireNonEmpty(entry.connectionId, "connectionId");
+        // Re-validate the id like #connectionPool: existence + Workspace ownership.
+        const connection = prepared.get(entry.connectionId)?.connection ?? await this.#connectionById(entry.connectionId);
+        if (!connection) {
+          throw new ConnectionVaultError(
+            "not_found",
+            `connection ${entry.connectionId} not found`,
+            undefined,
+            "provider_connection_setup_required",
+          );
+        }
+        if (capsuleForMint?.ownerAccountId !== undefined &&
+          connection.ownerAccountId !== capsuleForMint.ownerAccountId &&
+          !isWorkspaceBindableOperatorConnection(connection)) {
+          throw new ConnectionVaultError("failed_precondition", "Connection is not owned by the app owner",
+            undefined, "connection_not_owned_by_app_owner");
+        }
+        if (
+          connection.scope === "workspace" &&
+          connection.workspaceId !== workspaceId &&
+          capsuleForMint?.ownerAccountId === undefined
+        ) {
+          throw new ConnectionVaultError(
+            "failed_precondition",
+            `connection ${entry.connectionId} belongs to another Workspace`,
+            undefined,
+            "provider_connection_setup_required",
+          );
+        }
+        if (
+          connection.scope === "operator" &&
+          !isWorkspaceBindableOperatorConnection(connection)
+        ) {
+          throw new ConnectionVaultError(
+            "failed_precondition",
+            `connection ${entry.connectionId} is an operator credential and cannot be materialized into a generic runner`,
+            undefined,
+            "provider_connection_setup_required",
+          );
+        }
+        if (isSourceGitKind(connection.kind)) {
+          // A git connection is never a provider alias credential (invariants 4/5).
+          throw new ConnectionVaultError(
+            "failed_precondition",
+            `connection ${entry.connectionId} is a git source connection and cannot back a provider env binding`,
+            undefined,
+            "provider_connection_setup_required",
+          );
+        }
+        if (!sameProviderSource(entry.provider, connection.providerSource)) {
+          throw new ConnectionVaultError(
+            "failed_precondition",
+            `connection ${entry.connectionId} provider ${connection.provider} does not match CapsuleProviderEnvBinding provider ${entry.provider}`,
+            undefined,
+            "provider_connection_setup_required",
+          );
+        }
+        assertConnectionVerified(connection);
+        this.#assertPinnedRuntimeInputsStillInstalled(connection);
+        const runIssuance = isCapsuleRunCredentialIssuance(
+          connection.credentialRecipe?.runIssuance,
+        );
+        let runCredentialSettings: CapsuleProviderBindingMintEntry["runCredentialSettings"];
+        try {
+          runCredentialSettings = canonicalRunCredentialSettings(
+            entry.runCredentialSettings,
+            "runCredentialSettings",
+          );
+        } catch (error) {
+          throw new ConnectionVaultError(
+            "invalid_argument",
+            error instanceof Error
+              ? error.message
+              : "runCredentialSettings is invalid",
+          );
+        }
+        if (runCredentialSettings !== undefined && !runIssuance) {
+          throw new ConnectionVaultError(
+            "failed_precondition",
+            `connection ${connection.id} does not accept run credential settings`,
+            undefined,
+            "credential_service_unavailable",
+          );
+        }
+        const run = runIssuance
+          ? await this.#canonicalRunIssuanceContext(
+              workspaceId,
+              connection,
+              phase,
+              options,
+            )
+          : undefined;
+        const minted = await this.#mintProviderValues(
+          connection,
+          run,
+          runCredentialSettings,
+          run && options?.issuanceGenerationRef
+            ? await connectionCredentialIssuanceAttemptRef(
+                options.issuanceGenerationRef,
+                connection.id,
+              )
+            : undefined,
+          minimumLifetimeSeconds,
+          prepared.get(entry.connectionId),
+        );
+        if (minted.evidence.expiresAt && this.#credentialDriver(connection)?.refresh) {
+          if (Date.parse(minted.evidence.expiresAt) < this.#now().getTime() + requiredRunLifetimeSeconds * 1000) {
+            throw new ConnectionVaultError("failed_precondition", "Provider token cannot cover this RunnerProfile execution budget",
+              undefined, "provider_credential_lifetime_insufficient");
+          }
+        }
+        evidence.push(minted.evidence);
+        mergeCredentialEnv(env, minted.values, entry);
+        if (minted.files) files.push(...minted.files);
+      }
+      if (mintLease) {
+        const current = await this.#finishAppMintLease(mintLease, "issued");
+        leaseFinalized = true;
+        if (!current) throw new ConnectionVaultError("failed_precondition", "App authority changed during credential mint");
+      }
+      return new PhaseMintBundle(
+        { env, ...(files.length > 0 ? { files } : {}) },
+        [],
+        evidence,
+      );
+    } finally {
+      if (mintLease && !leaseFinalized) await this.#finishAppMintLease(mintLease, "discarded");
+    }
+  }
+
+  async #capsuleWithOwnership(capsuleId: string): Promise<Capsule | undefined> {
+    const capsule = await this.#store.getCapsule(capsuleId);
+    if (!capsule) return undefined;
+    const ownership = await this.#appOwnership?.getOwnership(capsuleId);
+    // Legacy JSON can survive a transfer; only the ownership port is authority.
+    return { ...capsule, ownerAccountId: ownership?.ownerAccountId,
+      ownershipEpoch: ownership?.ownershipEpoch, managementState: ownership?.managementState,
+      managementEpoch: ownership?.managementEpoch };
+  }
+
+  async #beginAppMintLease(capsule: Capsule, runId: string | undefined,
+    actorIds: readonly (string | undefined)[], connections: readonly AppMintConnectionBinding[]): Promise<AppMintLease> {
+    if (!this.#appMintLeases || !runId || !capsule.ownerAccountId ||
+      !Number.isSafeInteger(capsule.ownershipEpoch) || !Number.isSafeInteger(capsule.managementEpoch) ||
+      actorIds.some((actor) => typeof actor !== "string" || !actor.trim())) {
+      throw new ConnectionVaultError("failed_precondition", "App credential issuance authority is unavailable");
+    }
+    let lease;
+    try {
+      lease = await this.#appMintLeases.begin({ capsuleId: capsule.id, runId,
+        expectedOwnerAccountId: capsule.ownerAccountId, expectedOwnershipEpoch: capsule.ownershipEpoch!,
+        expectedManagementEpoch: capsule.managementEpoch!, expectedActorAccountIds: actorIds as readonly string[],
+        connections });
+    } catch {
+      throw new ConnectionVaultError("failed_precondition", "App credential issuance storage is unavailable", undefined, "credential_service_unavailable");
+    }
+    if (!lease) throw new ConnectionVaultError("failed_precondition", "App authority changed before credential mint");
+    return lease;
+  }
+
+  async #finishAppMintLease(lease: AppMintLease, disposition: "issued" | "discarded"): Promise<boolean> {
+    try {
+      return await this.#appMintLeases!.finish(lease, disposition);
+    } catch {
+      throw new ConnectionVaultError("failed_precondition", "App credential issuance storage is unavailable", undefined, "credential_service_unavailable");
+    }
   }
 
   async #canonicalRunIssuanceContext(
@@ -1506,6 +1788,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         request.workspaceId,
         request.sourceConnectionId,
         request.sourceUrl,
+        request.sourceId,
+        request.runId,
       );
     }
 
@@ -1540,11 +1824,57 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     workspaceId: string,
     connectionId: string,
     sourceUrl: string | undefined,
+    sourceId: string | undefined,
+    runId: string | undefined,
   ): Promise<PhaseMintBundle> {
     const connection = await this.#requireConnection(connectionId);
+    let sourceOwnerAccountId: string | undefined;
+    let sourceCapsule: Capsule | undefined;
+    if (sourceId) {
+      const source = await this.#store.getSource(sourceId);
+      if (!source || source.workspaceId !== workspaceId ||
+        source.authConnectionId !== connectionId || source.url !== sourceUrl) {
+        throw new ConnectionVaultError("failed_precondition", "Source credential authority changed");
+      }
+      if (source.ownerCapsuleId) {
+        const capsule = await this.#capsuleWithOwnership(source.ownerCapsuleId);
+        sourceCapsule = capsule;
+        sourceOwnerAccountId = capsule?.ownerAccountId ?? (capsule === undefined
+          ? (await this.#store.getWorkspace(workspaceId))?.ownerUserId : undefined);
+        const run = runId ? await this.#store.getSourceSyncRun(runId) : undefined;
+        const appAuthorityRequired = capsule !== undefined && (
+          capsule.ownerAccountId !== undefined || capsule.ownershipEpoch !== undefined ||
+          capsule.managementState !== undefined);
+        if (capsule?.status === "destroyed") throw new ConnectionVaultError("failed_precondition", "Source app is unavailable");
+        if (appAuthorityRequired) {
+          if (capsule.ownerAccountId === undefined ||
+            capsule.managementState !== "active" ||
+            !Number.isSafeInteger(capsule.ownershipEpoch) ||
+            connection.ownerAccountId !== capsule.ownerAccountId ||
+            !run || run.status !== "running" ||
+            run.sourceId !== source.id || run.workspaceId !== workspaceId ||
+            run.url !== source.url ||
+            run.ownershipEpoch !== capsule.ownershipEpoch) {
+            throw new ConnectionVaultError("failed_precondition", "Source app ownership authority changed");
+          }
+          await this.#requireCurrentAppAccess(
+            run.actorAccountId, capsule.id, capsule.ownerAccountId, capsule.ownershipEpoch!,
+          );
+        }
+      }
+    }
+    if (connection.scope === "personal") {
+      const source = sourceId ? await this.#store.getSource(sourceId) : undefined;
+      const capsule = source?.ownerCapsuleId ? await this.#capsuleWithOwnership(source.ownerCapsuleId) : undefined;
+      const expectedOwner = capsule?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
+      if (!expectedOwner || connection.ownerAccountId !== expectedOwner) {
+        throw new ConnectionVaultError("failed_precondition", "Source connection is not owned by the app owner", undefined, "connection_not_owned_by_app_owner");
+      }
+    }
     if (
       connection.scope === "workspace" &&
-      connection.workspaceId !== workspaceId
+      connection.workspaceId !== workspaceId &&
+      (!sourceOwnerAccountId || connection.ownerAccountId !== sourceOwnerAccountId)
     ) {
       throw new ConnectionVaultError(
         "not_found",
@@ -1571,31 +1901,47 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     assertConnectionVerified(connection);
-    const values = await this.#openValues(connection);
-
-    const driver = sourceCredentialDriverForConnection(
-      connection,
-      this.#sourceCredentialDrivers,
-    );
-    if (!driver) {
-      throw new ConnectionVaultError(
-        "not_implemented",
-        `source credential driver ${connection.kind} is not installed`,
-      );
-    }
-    // Crypto and connection-state validation stay in Core. The injected
-    // transport driver turns already-opened values into runner-only material.
+    const sourceRun = sourceCapsule?.ownerAccountId && runId ? await this.#store.getSourceSyncRun(runId) : undefined;
+    const mintLease = sourceCapsule?.ownerAccountId !== undefined
+      ? await this.#beginAppMintLease(sourceCapsule, runId, [sourceRun?.actorAccountId],
+        [{ id: connectionId, authority: this.#operatorProviderConnections.has(connectionId)
+          ? "release-owned" : "stored", expectedConnection: connection }]) : undefined;
+    let leaseFinalized = false;
     try {
-      const response = await driver.mint({
+      const values = await this.#openValues(connection);
+
+      const driver = sourceCredentialDriverForConnection(
         connection,
-        values,
-        ...(sourceUrl === undefined ? {} : { sourceUrl }),
-        fetch: this.#fetch,
-        now: this.#now,
-      });
+        this.#sourceCredentialDrivers,
+      );
+      if (!driver) {
+        throw new ConnectionVaultError(
+          "not_implemented",
+          `source credential driver ${connection.kind} is not installed`,
+        );
+      }
+      // Crypto and connection-state validation stay in Core. The injected
+      // transport driver turns already-opened values into runner-only material.
+      let response: Awaited<ReturnType<typeof driver.mint>>;
+      try {
+        response = await driver.mint({
+          connection,
+          values,
+          ...(sourceUrl === undefined ? {} : { sourceUrl }),
+          fetch: this.#fetch,
+          now: this.#now,
+        });
+      } catch (error) {
+        throw wrapDriverError(error);
+      }
+      if (mintLease) {
+        const current = await this.#finishAppMintLease(mintLease, "issued");
+        leaseFinalized = true;
+        if (!current) throw new ConnectionVaultError("failed_precondition", "App authority changed during credential mint");
+      }
       return new PhaseMintBundle(response, []);
-    } catch (error) {
-      throw wrapDriverError(error);
+    } finally {
+      if (mintLease && !leaseFinalized) await this.#finishAppMintLease(mintLease, "discarded");
     }
   }
 
@@ -1704,6 +2050,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (this.#operatorProviderConnections.has(connection.id) || !observed.secretBlob) {
       throw new ConnectionVaultError("failed_precondition", "Release-owned credentials cannot be renewed at runtime");
     }
+    // Choose the target AAD before the external driver rotates a refresh token.
+    // An ownerless legacy Workspace row cannot select v3's owner AAD; keep its
+    // observed legacy envelope until ownership is durably backfilled.
+    const sourceVersion = secretEnvelopeVersionForBlob(observed.secretBlob);
+    const targetVersion = connection.scope === "operator" || connection.ownerAccountId
+      ? 3 : sourceVersion;
+    const targetPartition = secretPartitionForConnection(connection);
+    const targetAad = connectionEnvelopeAad(connection, targetVersion);
+    const targetOwnerAccountId = targetVersion === 3
+      ? ownerAccountIdForConnection(connection) : undefined;
     const capturedAuthority = await this.#captureManagementAuthority(connection.workspaceId, authority);
     const lease = observed.secretBlob.renewalLease;
     if (lease) {
@@ -1768,12 +2124,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       if (!released) throw connectionVerificationRaceError();
       return { ...observed, secretBlob: originalBlob, connection };
     }
-    const partition = secretPartitionForConnection(connection);
     const sealed = await this.#crypto.seal(JSON.stringify({ env: values, files: observed.material.files }),
-      partition, connectionEnvelopeAad(connection, 2));
+      targetPartition, targetAad);
     const replacementSecretBlob = { ...makeStoredSecretBlob({ connectionId: connection.id,
-      workspaceId: connection.workspaceId, provider: connection.provider, sealed,
-      secretPartition: partition, createdAt: originalBlob.createdAt, crypto: this.#crypto }),
+      workspaceId: connection.workspaceId, ownerAccountId: targetOwnerAccountId, provider: connection.provider, sealed,
+      secretPartition: targetPartition, createdAt: originalBlob.createdAt, crypto: this.#crypto,
+      envelopeVersion: targetVersion }),
       id: originalBlob.id, rotatedAt: this.#now().toISOString() };
     const replacement = { ...connection, updatedAt: this.#now().toISOString() };
     const replaced = await this.#store.commitConnectionTestResult({ expectedConnection: connection,
@@ -1797,11 +2153,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // Partition and AAD are derived from the CONNECTION ROW — never from the
     // blob's self-described AAD partition — so a swapped or tampered blob
     // cannot select its provider env/AAD and fails the AES-GCM auth tag.
-    const plaintext = await this.#crypto.open(
-      base64ToBytes(blob.ciphertext),
-      secretPartitionForConnection(connection),
-      connectionEnvelopeAad(connection, secretEnvelopeVersionForBlob(blob)),
-    );
+    const plaintext = await openConnectionSecret(this.#crypto, connection, blob);
     const parsed = JSON.parse(plaintext) as Record<string, unknown>;
     if (isRecord(parsed.env)) {
       return {
@@ -1896,6 +2248,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     runCredentialSettings?: CapsuleProviderBindingMintEntry["runCredentialSettings"],
     issuanceAttemptRef?: `sha256:${string}`,
     minimumLifetimeSeconds = 1800,
+    prepared?: ObservedProviderSecretMaterial & { readonly connection: ProviderConnection },
   ): Promise<MintedProviderValues> {
     if (connectionIsExpired(connection, this.#now())) {
       await this.#markConnectionExpired(connection);
@@ -1904,7 +2257,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `connection ${connection.id} expired at ${connection.expiresAt}`,
       );
     }
-    const observed = await this.#renewProviderMaterial(connection, undefined, null, minimumLifetimeSeconds);
+    const observed = prepared ?? await this.#renewProviderMaterial(connection, undefined, null, minimumLifetimeSeconds);
     connection = observed.connection;
     const material = observed.material;
     const staticEvidence = () =>
@@ -3399,6 +3752,7 @@ function connectionManagementAdmissionError(error: unknown): unknown {
 interface SecretEnvelopeIdentity {
   readonly secretPartition: SecretPartition;
   readonly workspaceId?: string;
+  readonly ownerAccountId?: string;
   readonly connectionId: string;
   readonly provider: string;
 }
@@ -3411,8 +3765,19 @@ interface SecretEnvelopeIdentity {
  */
 function secretEnvelopeAad(
   identity: SecretEnvelopeIdentity,
-  version: 1 | 2 = 2,
+  version: 1 | 2 | 3 = 3,
 ): Uint8Array {
+  if (version === 3) {
+    if (!identity.ownerAccountId?.trim()) {
+      throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+    }
+    return new TextEncoder().encode(JSON.stringify({
+      v: 3,
+      ownerAccountId: identity.ownerAccountId,
+      connectionId: identity.connectionId,
+      provider: identity.provider,
+    }));
+  }
   const canonical = JSON.stringify({
     v: version,
     ...(version === 1
@@ -3431,7 +3796,7 @@ function secretEnvelopeAad(
  */
 function connectionEnvelopeAad(
   connection: ProviderConnection,
-  version: 1 | 2,
+  version: 1 | 2 | 3,
 ): Uint8Array {
   return secretEnvelopeAad(
     {
@@ -3439,6 +3804,7 @@ function connectionEnvelopeAad(
       ...(connection.workspaceId
         ? { workspaceId: connection.workspaceId }
         : {}),
+      ...(version === 3 ? { ownerAccountId: ownerAccountIdForConnection(connection) } : {}),
       connectionId: connection.id,
       provider: connection.provider,
     },
@@ -3446,15 +3812,44 @@ function connectionEnvelopeAad(
   );
 }
 
-function secretEnvelopeVersionForBlob(blob: StoredSecretBlob): 1 | 2 {
+function secretEnvelopeVersionForBlob(blob: StoredSecretBlob): 1 | 2 | 3 {
   try {
     const metadata = JSON.parse(blob.aad) as Record<string, unknown>;
+    if (metadata.v === 3) return 3;
     return Object.hasOwn(metadata, "secretPartition") ? 2 : 1;
   } catch {
     // Historical blobs used v1 before the generic secret-partition metadata
     // field existed. The parsed blob metadata never supplies a key or identity.
     return 1;
   }
+}
+
+function ownerAccountIdForConnection(connection: ProviderConnection): string {
+  if (connection.scope === "operator") return OPERATOR_OWNER_AAD;
+  if (typeof connection.ownerAccountId === "string" && connection.ownerAccountId.trim()) {
+    return connection.ownerAccountId;
+  }
+  throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+}
+
+async function openConnectionSecret(
+  crypto: SecretBoundaryCrypto,
+  connection: ProviderConnection,
+  blob: StoredSecretBlob,
+): Promise<string> {
+  const bytes = base64ToBytes(blob.ciphertext);
+  const partition = secretPartitionForConnection(connection);
+  const version = secretEnvelopeVersionForBlob(blob);
+  if (connection.scope === "operator" || connection.ownerAccountId) {
+    try {
+      return await crypto.open(bytes, partition, connectionEnvelopeAad(connection, 3));
+    } catch (error) {
+      if (version === 3) throw error;
+    }
+  } else if (version === 3) {
+    throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+  }
+  return await crypto.open(bytes, partition, connectionEnvelopeAad(connection, version));
 }
 
 function secretPartitionForConnection(
@@ -3504,17 +3899,24 @@ function isSecretPartitionToken(value: unknown): value is string {
 function makeStoredSecretBlob(input: {
   readonly connectionId: string;
   readonly workspaceId?: string;
+  readonly ownerAccountId?: string;
+  readonly envelopeVersion?: 1 | 2 | 3;
   readonly provider: string;
   readonly sealed: Uint8Array;
   readonly secretPartition: SecretPartition;
   readonly createdAt: string;
   readonly crypto: SecretBoundaryCrypto;
 }): StoredSecretBlob {
-  const aad = {
-    secretPartition: input.secretPartition,
-    workspaceId: input.workspaceId ?? OPERATOR_SCOPE_AAD,
-    provider: input.provider,
-  };
+  const version = input.envelopeVersion ?? 3;
+  if (version === 3 && !input.ownerAccountId) {
+    throw new ConnectionVaultError("failed_precondition", "Connection owner is unavailable for v3 secret material");
+  }
+  const aad = version === 3
+    ? { v: 3, secretPartition: input.secretPartition, ownerAccountId: input.ownerAccountId,
+      provider: input.provider }
+    : version === 2
+      ? { v: 2, secretPartition: input.secretPartition, provider: input.provider }
+      : { v: 1, provider: input.provider };
   return {
     id: `secret_${input.connectionId}`,
     connectionId: input.connectionId,

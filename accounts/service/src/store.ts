@@ -84,10 +84,34 @@ export interface PersonalAccessTokenRecord {
   name: string;
   scopes: readonly TakosumiAccountsPatScope[];
   workspaceId?: string;
+  /** Optional app fence; live AppAccess is still required for each operation. */
+  appIds?: readonly string[];
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;
   lastUsedAt?: number;
+}
+
+/** Empty appIds is a persisted deny-all snapshot, distinct from undefined. */
+export function personalAccessTokenStoredAppIdsAreWellFormed(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.length <= 10_000 &&
+    new Set(value).size === value.length &&
+    value.every((id) => typeof id === "string" && id.length > 0 &&
+      id.length <= 256 && id.trim() === id);
+}
+
+export interface PersonalAccessTokenAppAttenuation {
+  readonly subject: TakosumiSubject;
+  readonly tokenId: string;
+  readonly expectedWorkspaceId: string;
+  readonly appIds: readonly string[];
+}
+
+export function assertPersonalAccessTokenAppAttenuation(input: PersonalAccessTokenAppAttenuation): void {
+  if (!input.subject || !input.tokenId || !input.expectedWorkspaceId ||
+    !personalAccessTokenStoredAppIdsAreWellFormed(input.appIds)) {
+    throw new TypeError("PAT app attenuation input is invalid");
+  }
 }
 
 export const PERSONAL_ACCESS_TOKEN_INVENTORY_MAX_LIMIT = 100;
@@ -408,6 +432,10 @@ export interface AccountsStore extends HostedIdentityStore {
   ):
     | PersonalAccessTokenInventoryPage
     | Promise<PersonalAccessTokenInventoryPage>;
+  /** Single-row CAS: subject, token ID, Workspace, and absent appIds must all match. */
+  attenuatePersonalAccessTokenApps?(
+    input: PersonalAccessTokenAppAttenuation,
+  ): boolean | Promise<boolean>;
   revokePersonalAccessToken(input: {
     subject: TakosumiSubject;
     tokenId: string;
@@ -928,6 +956,15 @@ export class InMemoryAccountsStore implements AccountsStore {
       total: records.length,
       cursorValid,
     };
+  }
+
+  attenuatePersonalAccessTokenApps(input: PersonalAccessTokenAppAttenuation): boolean {
+    assertPersonalAccessTokenAppAttenuation(input);
+    const record = this.#personalAccessTokens.get(input.tokenId);
+    if (!record || record.subject !== input.subject ||
+      record.workspaceId !== input.expectedWorkspaceId || record.appIds !== undefined) return false;
+    this.#personalAccessTokens.set(input.tokenId, { ...record, appIds: [...input.appIds] });
+    return true;
   }
 
   revokePersonalAccessToken(input: {

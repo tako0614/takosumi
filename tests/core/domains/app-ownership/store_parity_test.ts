@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { ProviderConnection } from "takosumi-contract/connections";
 import type { UsageEvent } from "takosumi-contract/billing";
+import type { SourceSyncRun } from "takosumi-contract/sources";
 import type { Workspace } from "takosumi-contract/workspaces";
 import { InMemoryOpenTofuControlStore, type OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
@@ -101,18 +102,50 @@ test("concurrent transfers compare the old epoch and retain the losing recipient
   }
 });
 
-test("transferred ownership comes from the physical row when Capsule JSON retains its first owner", async () => {
+test("transferred ownership comes from the physical row while Capsule JSON stays ownerless", async () => {
   for (const { name, control, ownership } of await stores()) {
     await control.putWorkspace(workspace());
     await control.putCapsule({ ...capsule(), ownerAccountId: initial.ownerAccountId,
       ownershipEpoch: 0, managementState: "active", managementEpoch: 0, storageRoot: initial.storageRoot });
+    expect(await ownership.initializeOwnershipIfMissing(initial)).toBe(true);
     expect(await ownership.putOwnership({ ...initial, ownerAccountId: "new-owner", ownershipEpoch: 1 }, 0)).toBe(true);
+    await control.putCapsule({ ...capsule(), ownerAccountId: "intruder", ownershipEpoch: 99,
+      managementState: "frozen", managementEpoch: 99, storageRoot: "apps/intruder" });
     expect(await ownership.getOwnership(initial.capsuleId)).toMatchObject({ ownerAccountId: "new-owner", ownershipEpoch: 1 });
+    expect(await control.getCapsuleStorageRoot(initial.capsuleId)).toBe(initial.storageRoot);
     expect(await ownership.resolveAppAccess("new-owner", initial.capsuleId)).toMatchObject({ role: "owner" });
     expect(await ownership.resolveAppAccess(initial.ownerAccountId, initial.capsuleId)).toBeUndefined();
-    if (name !== "memory") {
-      expect((await control.getCapsule(initial.capsuleId))?.ownerAccountId).toBe(initial.ownerAccountId);
-    }
+    expect((await control.getCapsule(initial.capsuleId))?.ownerAccountId).toBeUndefined();
+    expect((await control.getCapsule(initial.capsuleId))?.storageRoot).toBeUndefined();
+    expect(name).toBeTruthy();
+  }
+});
+
+test("owned Source sync admission uses physical owner and active app members", async () => {
+  for (const { control, ownership } of await stores()) {
+    await control.putWorkspace(workspace());
+    await control.putCapsule(capsule());
+    await control.putSource({ id: capsule().sourceId, workspaceId: workspace().id,
+      ownerCapsuleId: capsule().id, name: "owned source",
+      url: "https://example.com/source.git", defaultRef: "main", defaultPath: ".",
+      status: "active", autoSync: false, hookSecretHash: "fixture-hash",
+      createdAt: NOW, updatedAt: NOW });
+    expect(await ownership.initializeOwnershipIfMissing(initial)).toBe(true);
+    const queued: SourceSyncRun = {
+      id: "sync_owned", kind: "source_sync", workspaceId: workspace().id,
+      sourceId: capsule().sourceId, url: "https://example.com/source.git", ref: "main",
+      path: ".", archiveRef: "archives/sync_owned", status: "queued",
+      createdAt: NOW, updatedAt: NOW,
+    };
+    const authority = { workspaceId: workspace().id, managementState: "active" as const, managementEpoch: 1 };
+    expect((await control.beginSourceSyncRun({ ...queued, actorAccountId: "stranger" }, authority)).status)
+      .toBe("conflict");
+    expect((await control.beginSourceSyncRun({ ...queued, actorAccountId: "legacy-owner" }, authority)).status)
+      .toBe("created");
+    expect(await ownership.putMember({ capsuleId: capsule().id, accountId: "member",
+      status: "active", createdAt: NOW, updatedAt: NOW })).toBe(true);
+    expect((await control.beginSourceSyncRun({ ...queued, id: "sync_member", actorAccountId: "member" }, authority)).status)
+      .toBe("created");
   }
 });
 
@@ -168,8 +201,12 @@ test("new Capsule and Connection writes assign owners while usage preserves the 
     const app = { ...capsule(), ownerAccountId: "app-owner", storageRoot: "apps/cap_app_owner",
       ownershipEpoch: 0, managementState: "active" as const, managementEpoch: 0 };
     await control.putCapsule(app);
+    expect(await ownership.initializeOwnershipIfMissing({ capsuleId: app.id, ownerAccountId: "app-owner",
+      ownershipEpoch: 0, managementState: "active", managementEpoch: 0,
+      storageRoot: "apps/cap_app_owner" })).toBe(true);
     expect(await ownership.getOwnership(app.id)).toMatchObject({ ownerAccountId: "app-owner", storageRoot: app.storageRoot });
-    expect(await control.getCapsule(app.id)).toMatchObject({ ownerAccountId: "app-owner", storageRoot: app.storageRoot });
+    expect((await control.getCapsule(app.id))?.ownerAccountId).toBeUndefined();
+    expect(await control.getCapsuleStorageRoot(app.id)).toBe(app.storageRoot);
     const connection = { id: "conn_new", workspaceId: workspace().id, scope: "workspace", provider: "example",
       providerSource: "example.com/example", status: "verified", materialization: "env", envNames: [],
       createdAt: NOW, updatedAt: NOW } as ProviderConnection;
@@ -212,12 +249,14 @@ test("initial Capsule creation copies only active Workspace owner and admin gran
     await control.putSource(source);
     const app = { ...capsule(), id: "cap_initial_owner", name: "initial-owner", slug: "initial-owner",
       sourceId: source.id, installConfigId: "cfg_initial_owner", status: "pending" as const,
-      ownerAccountId: ws.ownerUserId, ownershipEpoch: 0, managementState: "active" as const,
-      managementEpoch: 0, storageRoot: "apps/cap_initial_owner" };
+    };
     const input = {
       installConfig: { id: app.installConfigId, workspaceId: ws.id, name: "initial-owner",
         variableMapping: {}, outputAllowlist: {}, policy: {}, createdAt: NOW, updatedAt: NOW },
       capsule: app,
+      initialOwnership: { capsuleId: app.id, ownerAccountId: ws.ownerUserId,
+        ownershipEpoch: 0, managementState: "active" as const, managementEpoch: 0,
+        storageRoot: "apps/cap_initial_owner" },
       providerBindingSet: { id: "pbs_initial_owner", workspaceId: ws.id, capsuleId: app.id,
         environment: app.environment, bindings: [], createdAt: NOW, updatedAt: NOW },
     };
@@ -254,9 +293,11 @@ test("app inventory pages mixed physical and legacy access without Workspace fal
       ["f_invited", "other", 5],
     ] as const;
     for (const [id, ownerAccountId, ownershipEpoch] of rows) {
-      await control.putCapsule({ ...capsule(), id, name: id, slug: id, ...(ownerAccountId
-        ? { ownerAccountId, ownershipEpoch, managementState: "active" as const,
-          managementEpoch: 0, storageRoot: `apps/${id}` } : {}) });
+      await control.putCapsule({ ...capsule(), id, name: id, slug: id });
+      if (ownerAccountId) expect(await ownership.initializeOwnershipIfMissing({
+        capsuleId: id, ownerAccountId, ownershipEpoch, managementState: "active",
+        managementEpoch: 0, storageRoot: `apps/${id}`,
+      })).toBe(true);
     }
     expect(await ownership.putMember({ capsuleId: "c_member", accountId: "admin", status: "active",
       createdAt: NOW, updatedAt: NOW })).toBe(true);

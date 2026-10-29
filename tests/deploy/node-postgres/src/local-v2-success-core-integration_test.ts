@@ -54,6 +54,7 @@ const { sha256Digest } = await import("../../../../core/adapters/source/digest.t
 const { PartitionedSecretBoundaryCrypto } = await import("../../../../core/adapters/secret-store/memory.ts");
 const { ObjectKeyArtifactReferenceAllocator } = await import("../../../../core/adapters/storage/artifact-references.ts");
 const { SqlOpenTofuControlStore } = await import("../../../../core/domains/deploy-control/store_sql.ts");
+const { SqlAppOwnershipStore } = await import("../../../../core/domains/app-ownership/store.ts");
 const { applyExpectedGuardFromPlanRun } = await import("../../../../core/domains/deploy-control/mod.ts");
 const { createTakosumiService } = await import("../../../../core/bootstrap.ts");
 const { createFileOpenTofuStateArtifactStore, createHttpOpenTofuRunner, createLocalOpenTofuRunnerProfile } =
@@ -290,6 +291,7 @@ esac
       role: "takosumi-api",
       runtimeEnv: { TAKOSUMI_DEV_MODE: "1", TAKOSUMI_DEPLOY_CONTROL_TOKEN: `test-${id}` },
       opentofuControlStore: store,
+      appOwnershipStore: new SqlAppOwnershipStore(client, store),
       opentofuRunner: routedRunner,
       runnerProfiles: [profile],
       defaultRunnerProfileId: profile.id,

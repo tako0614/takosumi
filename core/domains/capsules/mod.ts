@@ -504,11 +504,6 @@ export class CapsulesService {
     }
     const capsule: Capsule = {
       id: request.capsuleId,
-      ownerAccountId: workspace.ownerUserId,
-      ownershipEpoch: 0,
-      managementState: "active",
-      managementEpoch: 0,
-      storageRoot: `apps/${request.capsuleId}`,
       workspaceId: request.workspaceId,
       projectId: project.id,
       name: request.name,
@@ -540,6 +535,14 @@ export class CapsulesService {
       result = await this.#store.createCapsuleInitialAuthority({
         installConfig: config,
         capsule,
+        initialOwnership: {
+          capsuleId: capsule.id,
+          ownerAccountId: workspace.ownerUserId,
+          ownershipEpoch: 0,
+          managementState: "active",
+          managementEpoch: 0,
+          storageRoot: `apps/${capsule.id}`,
+        },
         providerBindingSet,
         ...(expectedWorkspaceManagementAuthority
           ? { expectedWorkspaceManagementAuthority }

@@ -47,6 +47,7 @@ const TOKENS = [
       name: "B",
       scopes: ["read", "write"] as const,
       workspaceId: "ws_inventory",
+      appIds: ["cap_inventory"],
       createdAt: 1_000,
       revokedAt: 1_500,
     },
@@ -76,6 +77,35 @@ const TOKENS = [
     },
   },
 ] as const;
+
+test("Accounts PAT app_ids migration preserves legacy Workspace tokens", async () => {
+  const db = new PGlite();
+  await db.exec(`
+    create schema accounts_v1;
+    create table accounts_v1.personal_access_tokens (
+      token_id text primary key, workspace_id text
+    );
+    insert into accounts_v1.personal_access_tokens(token_id, workspace_id)
+      values ('pat_legacy_workspace', 'ws_legacy');
+  `);
+  const migration = await Bun.file(new URL(
+    "../../../../accounts/service/migrations/046_personal_access_tokens_app_ids.sql",
+    import.meta.url,
+  )).text();
+  await db.exec(migration);
+  const before = await db.query<{ workspace_id: string; app_ids: string[] | null }>(
+    "select workspace_id, app_ids from accounts_v1.personal_access_tokens where token_id = 'pat_legacy_workspace'",
+  );
+  expect(before.rows).toEqual([{ workspace_id: "ws_legacy", app_ids: null }]);
+  await db.query("update accounts_v1.personal_access_tokens set app_ids = $1 where token_id = $2", [
+    ["cap_legacy"], "pat_legacy_workspace",
+  ]);
+  const after = await db.query<{ workspace_id: string; app_ids: string[] | null }>(
+    "select workspace_id, app_ids from accounts_v1.personal_access_tokens where token_id = 'pat_legacy_workspace'",
+  );
+  expect(after.rows).toEqual([{ workspace_id: "ws_legacy", app_ids: ["cap_legacy"] }]);
+  await db.close();
+});
 
 test("in-memory PAT inventory binds total, keyset order, and stale cursor evidence", async () => {
   const store = new InMemoryAccountsStore();
@@ -115,6 +145,7 @@ test("Postgres PAT inventory has memory parity in one statement", async () => {
       name text not null,
       scopes text[] not null,
       workspace_id text,
+      app_ids text[],
       created_at timestamptz not null,
       expires_at timestamptz,
       revoked_at timestamptz,
@@ -150,6 +181,7 @@ test("Postgres serves canonical pages for reverse-lexical microsecond timestamps
       name text not null,
       scopes text[] not null,
       workspace_id text,
+      app_ids text[],
       created_at timestamptz not null,
       expires_at timestamptz,
       revoked_at timestamptz,
@@ -298,6 +330,7 @@ async function expectCanonicalInventoryPages(store: AccountsStore) {
     total: 3,
     cursorValid: true,
   });
+  expect(second.items[0]?.appIds).toEqual(["cap_inventory"]);
 
   const end = await store.listPersonalAccessTokenInventoryPage({
     subject: SUBJECT,

@@ -458,7 +458,7 @@ export async function handleRunGroups(
     }
     if (segments[2] === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await approveRunGroup(operations, runGroupId);
+      return await approveRunGroup(operations, runGroupId, ctx.session.subject);
     }
   }
   return undefined;
@@ -570,8 +570,9 @@ async function getRunGroup(
 async function approveRunGroup(
   operations: ControlPlaneOperations,
   runGroupId: string,
+  actorAccountId: string,
 ): Promise<Response> {
-  const result = await operations.runGroups.approveRunGroup(runGroupId);
+  const result = await operations.runGroups.approveRunGroup(runGroupId, actorAccountId);
   if (!result) return errorJson("not_found", "not found", 404);
   return json(result);
 }

@@ -20,6 +20,8 @@ removes the superseded v2 check in a separate short transaction. Migration
 `043` additively records the Capsule activation digest on dynamic OIDC grants,
 and migration `044` validates its nullable legacy-compatible shape check. A
 legacy null remains stored but is denied until an exact Apply refreshes it.
+Migration `046` adds nullable PAT `app_ids`. Existing Workspace-bound tokens
+keep their Workspace fence until a Control-owned snapshot conversion is applied.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

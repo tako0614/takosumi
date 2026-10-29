@@ -11,7 +11,7 @@ const at = "2026-10-01T00:00:00.000Z";
 function capsule(id: string, workspaceId: string, status = "active"): never {
   return {
     id, workspaceId, projectId: "prj_sweep", sourceId: "src_sweep",
-    name: id, slug: id, installConfigId: "cfg_sweep", environment: "production",
+    name: id, slug: id, installConfigId: "cfg_sweep", environment: "production", ownerAccountId: "usr_sweep",
     currentStateGeneration: 1, status, createdAt: at, updatedAt: at,
   } as never;
 }
@@ -32,7 +32,8 @@ test("auto-plan visits every Workspace beyond the fixed window despite permanent
     workspaces: new WorkspacesService({ store }),
     capsules: { listCapsules: (id: string) => store.listCapsules(id) },
     controller: { listRuns: () => Promise.resolve([]) },
-    createCapsulePlan: (id: string) => {
+    createCapsulePlan: (id: string, options: { actor: string }) => {
+      expect(options.actor).toBe("system:stale-auto-plan");
       visited.add(id);
       return Promise.reject(new Error("persistent failure"));
     },

@@ -19,6 +19,7 @@ import {
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { rewrapVaultSecrets } from "../../../../core/adapters/vault/rewrap.ts";
 
 const CLOUDFLARE_ACCOUNT_TEST_ID = "0123456789abcdef0123456789abcdef";
 const CLOUDFLARE_ACCOUNT_OAUTH_ID = "fedcba9876543210fedcba9876543210";
@@ -50,9 +51,10 @@ function makeVault(
   overrides: {
     fetch?: typeof fetch;
     allowedProviderConfigUrls?: readonly string[];
+    store?: InMemoryOpenTofuControlStore;
   } = {},
 ) {
-  const store = new InMemoryOpenTofuControlStore();
+  const store = overrides.store ?? new InMemoryOpenTofuControlStore();
   seedWorkspace(store, "space_1");
   let counter = 0;
   const subject = new StaticSecretConnectionVault({
@@ -762,8 +764,23 @@ test("opening a blob swapped onto a different connection id fails the aad bind",
   await expect(vault.test(victim.id, undefined, null)).rejects.toThrow();
 });
 
-test("opening a blob moved to a different Workspace fails the aad bind", async () => {
-  const { store, vault } = makeVault();
+test("opening a blob moved to a different account owner fails the v3 aad bind", async () => {
+  class CorruptedOwnerStore extends InMemoryOpenTofuControlStore {
+    corruptedOwner = false;
+    override async getConnection(id: string) {
+      const connection = await super.getConnection(id);
+      return connection && this.corruptedOwner
+        ? { ...connection, ownerAccountId: "different-owner" } : connection;
+    }
+    override async listConnections(workspaceId: string) {
+      const connections = await super.listConnections(workspaceId);
+      return this.corruptedOwner
+        ? connections.map((connection) => ({ ...connection, ownerAccountId: "different-owner" }))
+        : connections;
+    }
+  }
+  const corruptedStore = new CorruptedOwnerStore();
+  const { store, vault } = makeVault({ store: corruptedStore });
   const original = await markVerified(
     store,
     await vault.register({
@@ -776,14 +793,88 @@ test("opening a blob moved to a different Workspace fails the aad bind", async (
   const sealed = await store.getSecretBlob(original.id);
   expect(sealed).toBeDefined();
 
-  // Re-home the verified connection (and its blob) into a different Workspace. The
-  // blob's AAD is bound to the first Workspace, so the cross-Workspace row can no longer open it.
-  await store.putConnection({ ...original, workspaceId: "space_2" });
-  await store.putSecretBlob({ ...sealed!, workspaceId: "space_2" });
+  // Account ownership is the v3 AAD boundary. A swapped public row cannot
+  // decrypt the old owner's sealed material.
+  // Normal writes preserve the owner; simulate corruption at the storage read
+  // boundary to test the cryptographic owner binding independently.
+  corruptedStore.corruptedOwner = true;
 
   await expect(
-    vault.mint("space_2", ["registry.opentofu.org/cloudflare/cloudflare"]),
+    vault.mint("space_1", ["registry.opentofu.org/cloudflare/cloudflare"]),
   ).rejects.toThrow();
+});
+
+test("vault opens legacy v2 then dry-runs and CAS rewraps to v3 without changing material", async () => {
+  const { store, vault } = makeVault();
+  const connection = await markVerified(store, await vault.register({
+    workspaceId: "space_1",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    values: { CLOUDFLARE_API_TOKEN: "fixture-secret" },
+  }, undefined, null));
+  const old = (await store.getSecretBlob(connection.id))!;
+  const crypto = makeCrypto();
+  const legacyAad = new TextEncoder().encode(JSON.stringify({
+    v: 2,
+    secretPartition: connection.secretPartition,
+    workspaceId: "space_1",
+    connectionId: connection.id,
+    provider: connection.provider,
+  }));
+  const legacySealed = await crypto.seal(
+    JSON.stringify({ CLOUDFLARE_API_TOKEN: "fixture-secret" }),
+    connection.secretPartition!,
+    legacyAad,
+  );
+  let binary = "";
+  for (const byte of legacySealed) binary += String.fromCharCode(byte);
+  await store.putSecretBlob({
+    ...old,
+    ciphertext: btoa(binary),
+    aad: JSON.stringify({ secretPartition: connection.secretPartition, workspaceId: "space_1", provider: connection.provider }),
+  });
+  const legacy = (await store.getSecretBlob(connection.id))!;
+  await store.putSecretBlob({
+    ...legacy,
+    renewalLease: { owner: "fixture-renewal", expiresAt: "2026-06-04T01:00:00.000Z" },
+  });
+  expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("conflict");
+  await store.putSecretBlob({ ...legacy, renewalLease: {
+    owner: "expired-renewal", expiresAt: "2026-06-03T23:00:00.000Z" } });
+  expect((await vault.rewrapConnectionSecret(connection.id, { dryRun: true })).status).toBe("dry_run");
+  expect((await store.getSecretBlob(connection.id))!.aad).not.toContain('"v":3');
+  expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("rewrapped");
+  expect((await store.getSecretBlob(connection.id))!.aad).toContain('"v":3');
+  expect((await vault.mint("space_1", [connection.provider])).env.CLOUDFLARE_API_TOKEN).toBe("fixture-secret");
+  expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("already_v3");
+});
+
+test("legacy rewrap reports a missing row owner per item without selecting Workspace owner", async () => {
+  const { store, vault } = makeVault();
+  const connection = await markVerified(store, await vault.register({
+    workspaceId: "space_1", provider: "registry.opentofu.org/cloudflare/cloudflare",
+    values: { CLOUDFLARE_API_TOKEN: "fixture-secret" },
+  }, undefined, null));
+  const blob = (await store.getSecretBlob(connection.id))!;
+  await store.putSecretBlob({ ...blob, aad: JSON.stringify({ v: 2, secretPartition: connection.secretPartition }) });
+  await store.deleteConnection(connection.id);
+  await store.putWorkspace({ ...(await store.getWorkspace("space_1"))!, ownerUserId: undefined } as never);
+  await store.putConnection({ ...connection, ownerAccountId: undefined });
+  expect((await vault.rewrapConnectionSecret(connection.id)).status).toBe("missing_owner");
+});
+
+test("operator rewrap batch deduplicates IDs and returns value-free status", async () => {
+  const seen: string[] = [];
+  const results = await rewrapVaultSecrets({
+    rewrapConnectionSecret: async (connectionId, options) => {
+      seen.push(connectionId);
+      return { connectionId, status: options?.dryRun ? "dry_run" : "rewrapped", fromVersion: 2 };
+    },
+  }, ["conn_1", "conn_1", "conn_2"], { dryRun: true });
+  expect(seen).toEqual(["conn_1", "conn_2"]);
+  expect(results).toEqual([
+    { connectionId: "conn_1", status: "dry_run", fromVersion: 2 },
+    { connectionId: "conn_2", status: "dry_run", fromVersion: 2 },
+  ]);
 });
 
 test("mint refuses a pending connection before verification", async () => {

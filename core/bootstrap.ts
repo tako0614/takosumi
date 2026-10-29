@@ -1,5 +1,6 @@
 import type { Hono as HonoApp } from "hono";
 import { createApiApp } from "./api/mod.ts";
+import type { PublicSessionOpenApiEndpoint } from "./api/openapi.ts";
 import {
   PRIVATE_RUN_FILE_HTTP_PATH,
   type PrivateRunFileRouteDependencies,
@@ -76,6 +77,9 @@ import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
+import { sqlAccountResourceReader, type AccountResourceReader } from "./domains/account-resources/read.ts";
+import { SqlAppAuthorizationStore, type AppAuthorizationMutations } from "./domains/app-authorization/store.ts";
+import { SqlAppMintLeaseStore, type AppMintLeaseStore } from "./domains/app-authorization/mint-leases.ts";
 import {
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";
@@ -374,6 +378,13 @@ function assertDurableGitInstallPlanStoreOrWarn(input: {
 }
 
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
+  readonly publicSessionControlEndpoints?: readonly PublicSessionOpenApiEndpoint[];
+  /** Optional host override for the canonical ownership resolver during rollout. */
+  readonly appAccessResolver?: AppAccessResolver;
+  readonly appMintLeaseStore?: AppMintLeaseStore;
+  readonly accountResourceReader?: AccountResourceReader;
+  /** Host factory binds atomic app mutations to the same canonical resolver. */
+  readonly appAuthorizationFactory?: (access: AppAccessResolver) => AppAuthorizationMutations;
   /** Private Accounts proof/fence reader, selected only by owner composition. */
   readonly identityReconciliationAuthority?: ControlIdentityAuthorityReader;
   readonly validateUninstallRequester?: import("./domains/capsules/uninstall_authorization.ts").UninstallRequesterValidator;
@@ -654,6 +665,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
  */
 export interface TakosumiOperations {
   readonly appAccess: AppAccessResolver;
+  readonly accountResources?: AccountResourceReader;
+  readonly appAuthorization?: AppAuthorizationMutations;
   readonly appOwnership: AppOwnershipStore;
   readonly identityReconciliation?: ControlIdentityReconciliationPort;
   /** The wired OpenTofu deployment controller. */
@@ -812,7 +825,7 @@ export interface TakosumiOperations {
    * read-only plan that detects state drift. Never parks waiting_approval and can
    * never be applied; emits `capsule.drift_detected` on a non-empty summary.
    */
-  createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(capsuleId: string, options?: { readonly actor?: string }): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
@@ -840,6 +853,7 @@ export interface TakosumiOperations {
   /** Creates a rollback PLAN run from a StateVersion's Run provenance. */
   createStateVersionRollbackPlan(
     stateVersionId: string,
+    options?: { readonly actor?: string },
   ): Promise<PlanRunResponse>;
   /** Unified Run facade (§6.8): read / approve / cancel by run id. */
   getRun(id: string): Promise<Run>;
@@ -924,7 +938,9 @@ export interface TakosumiOperations {
         readonly browserBindingRequired?: boolean;
         start(input: {
           readonly subject: string;
-          readonly workspaceId: string;
+          readonly workspaceId?: string;
+          readonly scope?: "personal" | "workspace";
+          readonly ownerAccountId?: string;
           readonly displayName?: string;
           readonly successRedirectUri?: string;
           readonly scopeHints?: import("takosumi-contract/connections").ConnectionScopeHints;
@@ -980,6 +996,7 @@ export interface TakosumiOperations {
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse>;
   convergeOwnedSourceLane(sourceId: string): Promise<SourceResponse>;
   createSourceReconciliationSyncs(
@@ -1091,10 +1108,23 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
-  const appOwnershipStore = options.appOwnershipStore ??
-    (options.sqlClient
-      ? new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore)
-      : new InMemoryAppOwnershipStore(durableOpenTofuStore));
+  // Every app authority consumer shares this port, including OIDC and the
+  // scheduled finalizer. A missing port is not evidence of a legacy ownerless
+  // app: refuse a durable composition before any domain service can start.
+  let appOwnershipStore = options.appOwnershipStore;
+  if (!(durableOpenTofuStore instanceof InMemoryOpenTofuControlStore) &&
+      appOwnershipStore instanceof InMemoryAppOwnershipStore) {
+    throw new TypeError("durable control store requires a durable AppOwnershipStore");
+  }
+  if (!appOwnershipStore) {
+    if (options.sqlClient) {
+      appOwnershipStore = new SqlAppOwnershipStore(options.sqlClient, durableOpenTofuStore);
+    } else if (durableOpenTofuStore instanceof InMemoryOpenTofuControlStore) {
+      appOwnershipStore = new InMemoryAppOwnershipStore(durableOpenTofuStore);
+    } else {
+      throw new TypeError("durable control store requires an AppOwnershipStore");
+    }
+  }
   const operatorInstallConfigs = options.operatorInstallConfigs ?? [];
   const defaultInstallConfigOverrides = operatorInstallConfigs.filter(
     (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -1173,12 +1203,17 @@ export async function createTakosumiService(
   // resolution + credential mint). Without either, the controller fails closed on
   // every provider-using run (this is what the shipped worker was previously
   // missing — provider plan/apply + private-git source_sync had no vault to mint).
+  const appAccess = options.appAccessResolver ?? appOwnershipStore;
+  const appMintLeases = options.appMintLeaseStore ?? (options.sqlClient ? new SqlAppMintLeaseStore(options.sqlClient) : undefined);
   const opentofuConnectionVault =
     options.opentofuConnectionVault ??
     (options.secretCrypto
       ? new StaticSecretConnectionVault({
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
+          appAccessResolver: appAccess,
+          appOwnership: appOwnershipStore,
+          ...(appMintLeases ? { appMintLeases } : {}),
           operatorProviderConnections: operatorProviderConnectionProjection,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
           credentialDrivers: credentialRecipeDrivers,
@@ -1231,6 +1266,7 @@ export async function createTakosumiService(
   // compositions fall back to the controller's inline dispatcher once the
   // controller is constructed.
   const sourcesService = new SourcesService({
+    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     plans: gitInstallPlanStore,
     enqueueSourceSync,
@@ -1270,6 +1306,7 @@ export async function createTakosumiService(
   });
   const connectionsService = new ConnectionsService({
     store: sharedOpenTofuStore,
+    appOwnership: appOwnershipStore,
     operatorProviderConnections: operatorProviderConnectionProjection,
     allowOperatorScopedProviderConnections:
       options.allowOperatorScopedProviderConnections === true,
@@ -1341,6 +1378,7 @@ export async function createTakosumiService(
     retireOwnedSource: (sourceId, reason) => sourcesService.retireOwnedSource(sourceId, reason),
   });
   opentofuController = new OpenTofuController({
+    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     validateUninstallRequester: options.validateUninstallRequester,
     ...(options.privateRunFiles
@@ -1408,8 +1446,12 @@ export async function createTakosumiService(
   // Status is computed from member runs at read time. Constructed after the
   // controller it drives.
   const runGroupsService = new RunGroupsService({
+    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     controller: opentofuController,
+    actor: "system:run-group",
+    systemOwnedFlow: true,
+    appAccess,
     activity: activityService,
   });
   // A cancelled uninstall must not leave the finalizer's unapproved teardown
@@ -1748,6 +1790,7 @@ export async function createTakosumiService(
   const connectionOAuthHelpers = options.connectionOAuthHelpers;
   const app = await createApiApp({
     role,
+    publicSessionControlEndpoints: options.publicSessionControlEndpoints,
     ...(options.privateRunFiles
       ? { privateRunFileRoutes: options.privateRunFiles }
       : {}),
@@ -1859,7 +1902,15 @@ export async function createTakosumiService(
     },
   };
   const operations: TakosumiOperations = {
-    appAccess: appOwnershipStore,
+    appAccess,
+    ...(options.appAuthorizationFactory ? {
+      appAuthorization: options.appAuthorizationFactory(appAccess),
+    } : options.sqlClient ? {
+      appAuthorization: new SqlAppAuthorizationStore(options.sqlClient, appAccess),
+    } : {}),
+    ...(options.accountResourceReader || options.sqlClient ? {
+      accountResources: options.accountResourceReader ?? sqlAccountResourceReader(options.sqlClient!),
+    } : {}),
     appOwnership: appOwnershipStore,
     ...(identityReconciliation ? { identityReconciliation } : {}),
     controller: opentofuController,
@@ -1876,6 +1927,7 @@ export async function createTakosumiService(
     finalizeDueCapsuleUninstalls: (finalizeOptions) =>
       finalizeDueCapsuleUninstalls(
         {
+          appOwnership: appOwnershipStore,
           store: sharedOpenTofuStore,
           capsules: capsulesService,
           controller: opentofuController,
@@ -1977,8 +2029,8 @@ export async function createTakosumiService(
           ? { runnerProfileId: options.runnerProfileId }
           : {},
       ),
-    createCapsuleDriftCheck: (capsuleId) =>
-      opentofuController.createCapsuleDriftCheck(capsuleId),
+    createCapsuleDriftCheck: (capsuleId, options) =>
+      opentofuController.createCapsuleDriftCheck(capsuleId, { actor: options?.actor }),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
@@ -1995,8 +2047,8 @@ export async function createTakosumiService(
     getCurrentResourceInventory: (capsuleId) =>
       opentofuController.getCurrentResourceInventory(capsuleId),
     getOutput: (id) => opentofuController.getOutput(id),
-    createStateVersionRollbackPlan: (stateVersionId) =>
-      opentofuController.createStateVersionRollbackPlan(stateVersionId),
+    createStateVersionRollbackPlan: (stateVersionId, options) =>
+      opentofuController.createStateVersionRollbackPlan(stateVersionId, { actor: options?.actor }),
     getRun: (id) => opentofuController.getRun(id),
     listRuns: (workspaceId, options) =>
       opentofuController.listRuns(workspaceId, options),
@@ -2091,7 +2143,9 @@ export async function createTakosumiService(
                     ),
                     principal: { actor: "dashboard-session" },
                     body: {
-                      workspaceId: input.workspaceId,
+                      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+                      ...(input.scope ? { scope: input.scope } : {}),
+                      ...(input.ownerAccountId ? { ownerAccountId: input.ownerAccountId } : {}),
                       // Sign the authenticated subject INTO the OAuth state so the
                       // cross-site callback can authorize without a session cookie.
                       subject: input.subject,
@@ -2141,11 +2195,12 @@ export async function createTakosumiService(
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
     rotateSourceHookSecret: (id, actorId) => opentofuController.rotateSourceHookSecret(id, actorId),
     deleteSource: (id, actorId, authority) => opentofuController.deleteSource(id, actorId, authority),
-    createSourceSync: (sourceId, opts, expectedWorkspaceManagementAuthority) =>
+    createSourceSync: (sourceId, opts, expectedWorkspaceManagementAuthority, actorAccountId) =>
       opentofuController.createSourceSync(
         sourceId,
         opts ?? {},
         expectedWorkspaceManagementAuthority,
+        actorAccountId,
       ),
     convergeOwnedSourceLane: (sourceId) => opentofuController.convergeOwnedSourceLane(sourceId),
     createSourceReconciliationSyncs: (sourceId, options) =>

@@ -1,3 +1,5 @@
+import { InMemoryAppOwnershipStore, type AppOwnershipStore } from "../app-ownership/store.ts";
+import { InMemoryOpenTofuControlStore } from "../deploy-control/store.ts";
 import type { GitInstallPlanStore } from "../install-plans/store.ts";
 import { isInstallPlanSourceReservation } from "../install-plans/source-reservation.ts";
 import { sourceCreatorPlanAllowsRetirement, sourceCreatorPlanMatchesSource } from "./retirement_policy.ts";
@@ -155,6 +157,7 @@ export interface EnsureOwnedSourceRequest {
 }
 
 export interface SourcesServiceDependencies {
+  readonly appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly store: OpenTofuControlStore;
   readonly plans?: Pick<GitInstallPlanStore, "get">;
   /** Host authority for opaque durable source-archive references. */
@@ -175,6 +178,7 @@ export interface SourcesServiceDependencies {
 }
 
 export class SourcesService {
+  readonly #appOwnership?: Pick<AppOwnershipStore, "getOwnership">;
   readonly #store: OpenTofuControlStore;
   readonly #plans?: Pick<GitInstallPlanStore, "get">;
   readonly #artifactReferenceAllocator?: ArtifactReferenceAllocator;
@@ -192,6 +196,8 @@ export class SourcesService {
 
   constructor(deps: SourcesServiceDependencies) {
     this.#store = deps.store;
+    this.#appOwnership = deps.appOwnership ?? (deps.store instanceof InMemoryOpenTofuControlStore
+      ? new InMemoryAppOwnershipStore(deps.store) : undefined);
     this.#plans = deps.plans;
     this.#artifactReferenceAllocator = deps.artifactReferenceAllocator;
     this.#enqueue = deps.enqueueSourceSync ?? (() => Promise.resolve());
@@ -306,7 +312,7 @@ export class SourcesService {
       await this.#captureWorkspaceManagementAuthority(request.workspaceId);
     if (request.authConnectionId !== undefined) {
       requireNonEmptyString(request.authConnectionId, "authConnectionId");
-      await this.#requireConnectionInWorkspace(request.authConnectionId, request.workspaceId);
+      await this.#requireConnectionInWorkspace(request.authConnectionId, request.workspaceId, request.ownerCapsuleId);
     }
     const source: StoredSource = {
       id: request.id, workspaceId: request.workspaceId, name: request.name,
@@ -422,6 +428,7 @@ export class SourcesService {
       await this.#requireConnectionInWorkspace(
         patch.authConnectionId as string,
         stored.workspaceId,
+        stored.ownerCapsuleId,
       );
     }
     const persisted = await this.#writeSourceConfiguration({
@@ -808,12 +815,14 @@ export class SourcesService {
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     return await this.#createSync(
       sourceId,
       options,
       undefined,
       expectedWorkspaceManagementAuthority,
+      actorAccountId,
     );
   }
 
@@ -891,8 +900,11 @@ export class SourcesService {
     }
 
     const runs: CreateSourceSyncResponse[] = [];
+    const ownership = stored.ownerCapsuleId
+      ? await this.#appOwnership?.getOwnership(stored.ownerCapsuleId) : undefined;
+    const reconciliationActor = ownership?.ownerAccountId;
     for (const address of addresses.values()) {
-      runs.push(await this.#createSync(stored.id, { intent: "observe", dedupe: true }, address, authority));
+      runs.push(await this.#createSync(stored.id, { intent: "observe", dedupe: true }, address, authority, reconciliationActor));
     }
     return runs;
   }
@@ -902,6 +914,7 @@ export class SourcesService {
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean },
     trackedAddress?: { readonly ref: string; readonly path: string },
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
     if (stored.status !== "active" || stored.retiringAt) {
@@ -1070,6 +1083,20 @@ export class SourcesService {
     }
     const runId = coordinator?.runId ?? this.#newId("ssr");
     const snapshotId = coordinator?.snapshotId ?? this.#newId("snap");
+    const ownerCapsule = stored.ownerCapsuleId
+      ? await this.#store.getCapsule(stored.ownerCapsuleId)
+      : undefined;
+    const ownership = ownerCapsule ? await this.#appOwnership?.getOwnership(ownerCapsule.id) : undefined;
+    const appAuthorityRequired = ownership !== undefined;
+    // A Source is reserved before its initial Capsule exists. Legacy Capsules
+    // also retain their Workspace admission until the ownership expand lands.
+    if (appAuthorityRequired && (!actorAccountId?.trim() ||
+      !ownership.ownerAccountId || ownership.managementState !== "active" ||
+      !Number.isSafeInteger(ownership.ownershipEpoch) || ownership.ownershipEpoch < 0)) {
+      throw new OpenTofuControllerError("failed_precondition",
+        "App-owned Source sync requires a trusted current actor and ownership epoch.",
+        { reason: "app_access_denied" });
+    }
     if (!this.#artifactReferenceAllocator) {
       throw new OpenTofuControllerError(
         "not_implemented",
@@ -1089,6 +1116,7 @@ export class SourcesService {
       kind: "source_sync",
       workspaceId: stored.workspaceId,
       sourceId,
+      ...(ownership ? { actorAccountId, ownershipEpoch: ownership.ownershipEpoch } : {}),
       url: stored.url,
       ref: runRef,
       path: runPath,
@@ -1801,8 +1829,17 @@ export class SourcesService {
   async #requireConnectionInWorkspace(
     connectionId: string,
     workspaceId: string,
+    ownerCapsuleId?: string,
   ): Promise<void> {
     const connection = await this.#store.getConnection(connectionId);
+    const capsule = ownerCapsuleId ? await this.#store.getCapsule(ownerCapsuleId) : undefined;
+    const ownership = capsule ? await this.#appOwnership?.getOwnership(capsule.id) : undefined;
+    if (connection?.scope === "workspace" && connection.workspaceId === workspaceId && ownership === undefined) return;
+    if (connection && (connection.scope === "personal" || ownership !== undefined || (ownerCapsuleId && !capsule))) {
+      const ownerAccountId = ownership?.ownerAccountId ?? (await this.#store.getWorkspace(workspaceId))?.ownerUserId;
+      if (ownerAccountId && connection.ownerAccountId === ownerAccountId) return;
+      throw new OpenTofuControllerError("connection_not_owned_by_app_owner", "Source connection is not owned by the app owner");
+    }
     if (!connection || connection.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",

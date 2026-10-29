@@ -53,6 +53,7 @@ import {
   parseProviderBindings,
 } from "./parse.ts";
 import { resolveRepoOwnedInstallModulePath } from "./repo-owned-install-config.ts";
+import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
   capsuleInstallConfigReAdoptionAuthoritySnapshot,
   hasValidDerivedTargetSeal,
@@ -222,6 +223,7 @@ export async function handleCapsuleConfigurationPlans(
     ctx.operations,
     authority.capsule.workspaceId,
     request.providerBindings,
+    (await capsuleOwnerAuthority(ctx.operations, authority.capsule)).ownerAccountId,
   );
   if (!resolvedBindings.ok) {
     return errorJson(
@@ -504,9 +506,14 @@ async function finishConfigurationPlan(input: {
       evidence,
     });
     assertConfigurationCompatibilityPolicy(compatibility, input.target);
+    const ownership = await capsuleOwnerAuthority(input.ctx.operations, current);
     await assertConfigurationPlanRun({
       run: existingPlan,
       capsule: current,
+      planActor: !ownership.canonical
+        ? evidence.planCreatedBy
+        : input.receipt.actorSubject,
+      allowLegacySyntheticActor: ownership.canonical,
       source,
       sourceSnapshot,
       targetInstallConfig: input.target,
@@ -989,6 +996,13 @@ async function createFreshPlanRun(input: {
   readonly expectedBaseStateVersionId: string | undefined;
   readonly evidence: ConfigurationEvidenceIdentity;
 }): Promise<string> {
+  const ownership = await capsuleOwnerAuthority(
+    input.ctx.operations,
+    input.capsule,
+  );
+  const planActor = !ownership.canonical
+    ? input.evidence.planCreatedBy
+    : input.ctx.session.subject;
   // Run persistence happens before private-input sidecars, notification, and
   // enqueue. The exact identity is derived from the sealed successor/evidence,
   // so a lost acknowledgement reuses the same durable PlanRun row and never
@@ -1006,7 +1020,7 @@ async function createFreshPlanRun(input: {
         currentStateGeneration: input.expectedBaseStateGeneration,
         currentStateVersionId: input.expectedBaseStateVersionId,
       },
-      actor: input.evidence.planCreatedBy,
+      actor: planActor,
       origin: { kind: "configuration" },
     },
   );
@@ -1015,6 +1029,7 @@ async function createFreshPlanRun(input: {
   await assertConfigurationPlanRun({
     run,
     capsule: input.capsule,
+    planActor,
     source: input.source,
     sourceSnapshot: input.sourceSnapshot,
     targetInstallConfig: input.targetInstallConfig,
@@ -1025,6 +1040,20 @@ async function createFreshPlanRun(input: {
     evidence: input.evidence,
   });
   return run.id;
+}
+
+async function capsuleOwnerAuthority(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<{ readonly canonical: boolean; readonly ownerAccountId?: string }> {
+  const ownership = await operations.appOwnership?.getOwnership(capsule.id);
+  if (ownership) {
+    return { canonical: true, ownerAccountId: ownership.ownerAccountId };
+  }
+  const workspace = await operations.workspaces.getWorkspace(capsule.workspaceId);
+  return workspace.ownerUserId
+    ? { canonical: false, ownerAccountId: workspace.ownerUserId }
+    : { canonical: false };
 }
 
 async function planRunIfPresent(
@@ -1118,6 +1147,8 @@ function assertConfigurationCompatibilityPolicy(
 async function assertConfigurationPlanRun(input: {
   readonly run: PublicPlanRun;
   readonly capsule: Capsule;
+  readonly planActor: string;
+  readonly allowLegacySyntheticActor?: boolean;
   readonly source: Source;
   readonly sourceSnapshot: SourceSnapshot;
   readonly targetInstallConfig: InstallConfig;
@@ -1141,7 +1172,9 @@ async function assertConfigurationPlanRun(input: {
     capsuleContext.environment !== input.capsule.environment ||
     input.run.sourceSnapshotId !== input.sourceSnapshot.id ||
     input.run.compatibilityReportId !== input.compatibilityReportId ||
-    input.run.createdBy !== input.evidence.planCreatedBy ||
+    (input.run.createdBy !== input.planActor &&
+      !(input.allowLegacySyntheticActor &&
+        input.run.createdBy === input.evidence.planCreatedBy)) ||
     input.run.capsuleExecutionAuthorityEpoch !== input.executionAuthorityEpoch ||
     (input.run.capsuleCurrentStateVersionId ?? null) !==
       (input.expectedBaseStateVersionId ?? null) ||

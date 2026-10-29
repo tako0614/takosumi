@@ -48,12 +48,12 @@ for (const credential of ["oauth", "session", "pat"] as const) {
     const body = await response!.json();
     expect(JSON.stringify(body)).not.toContain(secret);
     if (credential === "oauth") {
-      expect(response!.status).toBe(409);
+      expect(response!.status).toBe(403);
       expect(body).toMatchObject({ error: {
-        code: "failed_precondition", details: { reason: "capsule_uninstall_oauth_unsupported" },
+        code: "forbidden",
       } });
       expect(body.error.message).toContain("session");
-      expect(body.error.message).toContain("PAT");
+      expect(body.error.message).toContain("personal access token");
       expect(await store.getCapsule(seeded.capsule.id)).toEqual(before);
       expect(await store.listActivityEvents(seeded.workspace.id, { limit: 100 })).toHaveLength(0);
     } else {

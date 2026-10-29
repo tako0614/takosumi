@@ -6,6 +6,7 @@ import { RunCredentialBroker } from "../../../../core/domains/deploy-control/run
 import { RunEnvResolver } from "../../../../core/domains/deploy-control/run_env_resolver.ts";
 import type { ResolvedCapsuleProviderBinding } from "../../../../core/domains/connections/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { InMemoryAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
 import {
   PhaseMintBundle,
   type CapsuleProviderBindingMintEntry,
@@ -129,6 +130,7 @@ function brokerFor(resolved: readonly ResolvedCapsuleProviderBinding[]): {
   const store = new InMemoryOpenTofuControlStore();
   const broker = new RunCredentialBroker({
     store,
+    appOwnership: new InMemoryAppOwnershipStore(store),
     newId: (prefix) => `${prefix}_${(counter += 1)}`,
     now: () => Date.parse(NOW),
     vault,
@@ -170,6 +172,64 @@ test("run credential mint is narrowed to the plan's declared providers", async (
       temporary: true,
       ttlEnforced: true,
     }],
+  }]);
+});
+
+test("owner-tagged mint audit records current plan actor, apply approver, connection owner and epoch", async () => {
+  const owned = {
+    ...CLOUDFLARE,
+    connection: { ...CLOUDFLARE.connection, ownerAccountId: "account_owner" },
+  };
+  const { broker, store } = brokerFor([owned]);
+  const { capsule } = await seedCapsuleModel(store, {
+    workspaceId: "workspace_1",
+    capsuleId: "cap_1",
+  });
+  expect(await new InMemoryAppOwnershipStore(store).initializeOwnershipIfMissing({
+    capsuleId: capsule.id, ownerAccountId: "account_owner", ownershipEpoch: 4,
+    managementState: "active", managementEpoch: 0, storageRoot: `apps/${capsule.id}`,
+  })).toBe(true);
+  const plan = {
+    ...planRun([owned.provider]),
+    createdBy: "account_creator",
+    ownershipEpoch: 4,
+  };
+  await broker.mintRunCredentials(plan, "plan", "plan_audit");
+  expect(await store.listCredentialMintEventsForRun("plan_audit")).toMatchObject([{
+    actorAccountId: "account_creator",
+    connectionOwnerAccountId: "account_owner",
+    ownershipEpoch: 4,
+  }]);
+  await store.putApplyRun({
+    id: "apply_audit",
+    planRunId: plan.id,
+    workspaceId: plan.workspaceId,
+    capsuleId: "cap_1",
+    operation: "update",
+    runnerProfileId: plan.runnerProfileId,
+    status: "running",
+    approval: { approvedBy: "account_approver", approvedAt: 1 },
+    expected: {
+      planRunId: plan.id,
+      capsuleId: "cap_1",
+      runnerProfileId: plan.runnerProfileId,
+      sourceDigest: plan.sourceDigest,
+      variablesDigest: plan.variablesDigest,
+      policyDecisionDigest: plan.policyDecisionDigest,
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:artifact",
+    },
+    stateBackend: { kind: "managed", ref: "state" },
+    stateLock: { status: "pending", backendRef: "state" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await broker.mintRunCredentials(plan, "apply", "apply_audit");
+  expect(await store.listCredentialMintEventsForRun("apply_audit")).toMatchObject([{
+    actorAccountId: "account_approver",
+    connectionOwnerAccountId: "account_owner",
+    ownershipEpoch: 4,
   }]);
 });
 

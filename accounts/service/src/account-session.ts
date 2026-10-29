@@ -3,6 +3,7 @@ import type {
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import type { CapsuleUninstallRequester } from "takosumi-contract/capsules";
+import { appActionAllowed, type AppAccess, type AppAccessResolver, type AppAction } from "../../../contract/app-access.ts";
 import type { AccountsStore, AccountSessionRecord } from "./store.ts";
 import { hostedIssuerSessionId, hostedOpaqueId, HOSTED_SESSION_IDLE_MS, HOSTED_SESSION_ABSOLUTE_MS } from "./hosted-oidc-profile.ts";
 import {
@@ -13,7 +14,7 @@ import {
 } from "./http-helpers.ts";
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
-import { personalAccessTokenIsActive } from "./pat-routes.ts";
+import { personalAccessTokenAppIdsAreWellFormed, personalAccessTokenIsActive } from "./pat-routes.ts";
 import { sha256Text } from "./encoding.ts";
 import {
   findActiveAccessToken,
@@ -38,6 +39,7 @@ export type AccountsBearerSubject = {
   readonly credential:
     "session" | "personal-access-token" | "oauth-access-token";
   readonly workspaceId?: string;
+  readonly appIds?: readonly string[];
 };
 
 export async function requireAccountSession(input: {
@@ -443,6 +445,7 @@ export async function requireAccountsBearer(input: {
   const activePersonalAccessTokenRecord =
     personalAccessTokenRecord &&
     personalAccessTokenIsActive(personalAccessTokenRecord, now)
+    && personalAccessTokenAppIdsAreWellFormed(personalAccessTokenRecord.appIds)
       ? personalAccessTokenRecord
       : undefined;
   const candidateCount =
@@ -499,6 +502,9 @@ export async function requireAccountsBearer(input: {
         },
         principalSubject: record.subject,
         credential: "oauth-access-token",
+        // A Capsule OIDC token is for that installed app, even when its user
+        // has no Workspace membership and the live grant omits workspaceId.
+        ...(record.capsuleId !== undefined ? { appIds: [record.capsuleId] } : {}),
         ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
       },
     };
@@ -549,6 +555,9 @@ export async function requireAccountsBearer(input: {
       ...(activePersonalAccessTokenRecord.workspaceId
         ? { workspaceId: activePersonalAccessTokenRecord.workspaceId }
         : {}),
+      ...(activePersonalAccessTokenRecord.appIds !== undefined
+        ? { appIds: activePersonalAccessTokenRecord.appIds }
+        : {}),
     },
   };
 }
@@ -596,6 +605,35 @@ export function bearerWorkspaceAllows(
   workspaceId: string,
 ): boolean {
   return !auth.workspaceId || auth.workspaceId === workspaceId;
+}
+
+/** PAT app fence only. Callers must also resolve live AppAccess and action role. */
+export function bearerAppAllows(
+  auth: Pick<AccountsBearerSubject, "appIds">,
+  capsuleId: string,
+): boolean {
+  return auth.appIds === undefined ||
+    (personalAccessTokenAppIdsAreWellFormed(auth.appIds) && auth.appIds.includes(capsuleId));
+}
+
+/** Re-evaluate every app request against the token fence and live role. */
+export async function resolveBearerAppAccess(input: {
+  auth: Pick<AccountsBearerSubject, "subject" | "workspaceId" | "appIds">;
+  capsuleId: string;
+  action: AppAction;
+  resolver: AppAccessResolver | undefined;
+  /** Required whenever a legacy Workspace-bound credential is presented. */
+  capsuleWorkspaceId?: string;
+}): Promise<AppAccess | undefined> {
+  if (!bearerAppAllows(input.auth, input.capsuleId) ||
+    (input.auth.workspaceId !== undefined &&
+      input.auth.workspaceId !== input.capsuleWorkspaceId)) return undefined;
+  const access = await input.resolver?.resolveAppAccess(input.auth.subject, input.capsuleId);
+  return access?.capsuleId === input.capsuleId &&
+    (access.role === "owner" || access.role === "member") &&
+    appActionAllowed(access.role, input.action)
+    ? access
+    : undefined;
 }
 
 export function personalAccessTokenHasScope(

@@ -21,6 +21,7 @@ import type {
   PersonalAccessTokenInventoryCursor,
   PersonalAccessTokenRecord,
 } from "./store.ts";
+import { personalAccessTokenStoredAppIdsAreWellFormed } from "./store.ts";
 import {
   base64UrlEncodeBytes,
   base64UrlEncodeJson,
@@ -404,6 +405,7 @@ function personalAccessTokenInventoryRecordIsWellFormed(
       (typeof record.workspaceId === "string" &&
         record.workspaceId.length > 0 &&
         record.workspaceId.length <= 256)) &&
+    personalAccessTokenAppIdsAreWellFormed(record.appIds) &&
     timestampIsValid(record.createdAt) &&
     optionalTimestampIsValid(record.expiresAt) &&
     optionalTimestampIsValid(record.revokedAt) &&
@@ -437,6 +439,8 @@ function personalAccessTokenInventoryMetadata(
     prefix: record.tokenPrefix,
     scopes: canonicalPersonalAccessTokenScopes(record.scopes),
     workspace_id: record.workspaceId ?? null,
+    ...(record.appIds !== undefined ? { app_ids: record.appIds } : {}),
+    ...(record.appIds !== undefined ? { appIds: record.appIds } : {}),
     created_at: new Date(record.createdAt).toISOString(),
     expires_at:
       record.expiresAt === undefined
@@ -562,7 +566,8 @@ function personalAccessTokenAuthorityRecordIsWellFormed(
     (record.workspaceId === undefined ||
       (typeof record.workspaceId === "string" &&
         record.workspaceId.length > 0 &&
-        record.workspaceId.length <= 256))
+        record.workspaceId.length <= 256)) &&
+    personalAccessTokenAppIdsAreWellFormed(record.appIds)
   );
 }
 
@@ -682,6 +687,8 @@ function currentPersonalAccessTokenAuthorityBody(
     subject: record.subject,
     scopes,
     workspace_id: record.workspaceId ?? null,
+    ...(record.appIds !== undefined ? { app_ids: record.appIds } : {}),
+    ...(record.appIds !== undefined ? { appIds: record.appIds } : {}),
     expires_at:
       record.expiresAt === undefined
         ? null
@@ -753,12 +760,16 @@ export async function handleCreatePersonalAccessToken(input: {
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
   const workspaceId = stringValue(body.workspace_id)?.trim();
+  const appIdsRaw = body.appIds === undefined ? body.app_ids : body.appIds;
+  const appIds = appIdsRaw === undefined ? undefined : personalAccessTokenAppIdsValue(appIdsRaw);
   const now = Date.now();
   const expiresAtResult = personalAccessTokenExpiresAtValue(
     body.expires_at,
     now,
   );
-  if (!name || name.length > 80 || !scopes || expiresAtResult === "invalid") {
+  if (!name || name.length > 80 || !scopes || expiresAtResult === "invalid" ||
+    (body.appIds !== undefined && body.app_ids !== undefined) ||
+    (appIdsRaw !== undefined && appIds === undefined)) {
     return errorJson(
       "invalid_request",
       "name, one or more scopes, and optional future expires_at are required",
@@ -818,6 +829,22 @@ export async function handleCreatePersonalAccessToken(input: {
     }
   }
 
+  if (appIds) {
+    let accessible = false;
+    try {
+      const operations = input.operations ?? await input.resolveOperations?.();
+      if (!operations?.appAccess) {
+        return errorJson("app_authority_unavailable", "App authority is temporarily unavailable.", 503, input.request);
+      }
+      const accesses = await Promise.all(appIds.map((id) => operations.appAccess!.resolveAppAccess(session.subject, id)));
+      accessible = accesses.every((access, index) => access?.capsuleId === appIds[index] &&
+        (access.role === "owner" || access.role === "member"));
+    } catch {
+      return errorJson("app_authority_unavailable", "App authority is temporarily unavailable.", 503, input.request);
+    }
+    if (!accessible) return errorJson("app_access_denied", "App access denied.", 403, input.request);
+  }
+
   const token = generatePersonalAccessToken();
   const record: PersonalAccessTokenRecord = {
     tokenId: `pat_${crypto.randomUUID().replaceAll("-", "")}`,
@@ -826,6 +853,7 @@ export async function handleCreatePersonalAccessToken(input: {
     name,
     scopes,
     ...(workspaceId ? { workspaceId } : {}),
+    ...(appIds ? { appIds } : {}),
     createdAt: now,
     expiresAt: expiresAtResult,
   };
@@ -944,6 +972,23 @@ function personalAccessTokenScopesValue(
   return output;
 }
 
+function personalAccessTokenAppIdsValue(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) return undefined;
+  const appIds: string[] = [];
+  const seen = new Set<string>();
+  for (const id of value) {
+    if (typeof id !== "string" || id.length === 0 || id.length > 256 ||
+      id.trim() !== id || seen.has(id)) return undefined;
+    seen.add(id);
+    appIds.push(id);
+  }
+  return appIds;
+}
+
+export function personalAccessTokenAppIdsAreWellFormed(value: unknown): boolean {
+  return value === undefined || personalAccessTokenStoredAppIdsAreWellFormed(value);
+}
+
 function personalAccessTokenExpiresAtValue(
   value: unknown,
   now: number,
@@ -970,6 +1015,7 @@ export function personalAccessTokenIsActive(
 ): boolean {
   return (
     record.revokedAt === undefined &&
+    personalAccessTokenAppIdsAreWellFormed(record.appIds) &&
     (record.expiresAt === undefined || record.expiresAt > now)
   );
 }
@@ -987,6 +1033,8 @@ export function personalAccessTokenIntrospectionBody(
     client_id: "takosumi-accounts-pat",
     token_type: "Bearer",
     scope: record.scopes.join(" "),
+    ...(record.appIds !== undefined ? { app_ids: record.appIds } : {}),
+    ...(record.appIds !== undefined ? { appIds: record.appIds } : {}),
     ...(record.workspaceId
       ? {
           takosumi: {
@@ -1011,6 +1059,8 @@ function personalAccessTokenMetadata(
     prefix: record.tokenPrefix,
     scopes: record.scopes,
     ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
+    ...(record.appIds !== undefined ? { app_ids: record.appIds } : {}),
+    ...(record.appIds !== undefined ? { appIds: record.appIds } : {}),
     created_at: new Date(record.createdAt).toISOString(),
     ...(record.expiresAt === undefined
       ? {}

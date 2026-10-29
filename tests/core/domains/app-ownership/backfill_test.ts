@@ -4,7 +4,7 @@ import type { ProviderConnection } from "../../../../contract/connections.ts";
 import type { UsageEvent } from "../../../../contract/billing.ts";
 import type { Workspace, WorkspaceMember } from "../../../../contract/workspaces.ts";
 import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
-import { D1AppOwnershipStore, InMemoryAppOwnershipStore, SqlAppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
+import { D1AppOwnershipStore, InMemoryAppOwnershipStore, SqlAppOwnershipStore, type CapsuleOwnership } from "../../../../core/domains/app-ownership/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
@@ -40,7 +40,16 @@ function fixture() {
   const events: (UsageEvent & { payerAccountId?: string })[] = [
     { id: "usage", workspaceId: "organization", kind: "runner_seconds", quantity: 1, usdMicros: 0, ratingStatus: "unrated", source: "runner", idempotencyKey: "usage", createdAt: now } as UsageEvent,
   ];
+  const physicalOwnership = new Map<string, CapsuleOwnership>();
   const control = {
+    getCapsuleOwnership: (id: string) => physicalOwnership.get(id),
+    setCapsuleOwnership: (record: CapsuleOwnership, onlyIfMissing = false, expectedEpoch?: number) => {
+      const current = physicalOwnership.get(record.capsuleId);
+      if (!capsules.some(row => row.id === record.capsuleId) || (onlyIfMissing && current) ||
+        (expectedEpoch !== undefined && (current?.ownershipEpoch ?? 0) !== expectedEpoch)) return false;
+      physicalOwnership.set(record.capsuleId, structuredClone(record));
+      return true;
+    },
     listWorkspaces: async () => workspaces,
     getWorkspace: async (id: string) => workspaces.find((row) => row.id === id),
     listWorkspaceMembers: async (id: string) => members.filter((row) => row.workspaceId === id),

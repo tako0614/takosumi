@@ -48,7 +48,7 @@ export interface GuidedConnectionInput {
   readonly provider?: string;
   readonly workspaceId?: string;
   readonly displayName?: string;
-  readonly scope?: "operator" | "workspace";
+  readonly scope?: "operator" | "workspace" | "personal";
   readonly scopeHints?: ConnectionScopeHints;
   readonly expiresAt?: string;
   readonly values: Readonly<Record<string, string>>;

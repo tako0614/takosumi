@@ -13,7 +13,7 @@ async function transferAppOwner(store: InMemoryOpenTofuControlStore, ownerAccoun
   expect(previous).toBeDefined();
   const ownershipEpoch = previous!.ownershipEpoch + 1;
   expect(await ownership.putOwnership({ ...previous!, ownerAccountId, ownershipEpoch }, previous!.ownershipEpoch)).toBe(true);
-  expect(await store.getCapsule("cap_required")).toMatchObject({ ownerAccountId, ownershipEpoch });
+  expect(await store.getAppBillingOwnership("cap_required")).toEqual({ ownerAccountId, ownershipEpoch });
 }
 
 function planRun(overrides: Partial<PlanRun> = {}): PlanRun {
@@ -57,6 +57,10 @@ async function fixture(required: boolean, settings?: BillingSettings) {
     managementState: "active", managementEpoch: 0, storageRoot: "apps/cap_required",
     createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
   });
+  expect(await new InMemoryAppOwnershipStore(store).initializeOwnershipIfMissing({
+    capsuleId: "cap_required", ownerAccountId: "canonical_owner", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: "apps/cap_required",
+  })).toBe(true);
   await store.putPlanRun(planRun());
   await store.putApplyRun(applyRun());
   const calls: Array<{ method: string; context: unknown }> = [];

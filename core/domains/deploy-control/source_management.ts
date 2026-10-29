@@ -94,11 +94,13 @@ export class SourceManagement {
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
     expectedWorkspaceManagementAuthority?: WorkspaceManagementAuthority,
+    actorAccountId?: string,
   ): Promise<CreateSourceSyncResponse> {
     return await this.#require().createSync(
       sourceId,
       options,
       expectedWorkspaceManagementAuthority,
+      actorAccountId,
     );
   }
 
