@@ -5,6 +5,7 @@ import {
   type AppOwnershipOperations,
 } from "../../../../accounts/service/src/control/app-ownership.ts";
 import type { ControlDispatchContext } from "../../../../accounts/service/src/control/shared.ts";
+import { parseAppOwnershipMutationsFrozen } from "../../../../accounts/service/src/app-ownership-mutations-freeze.ts";
 
 const accounts = {
   owner: { subject: "owner", displayName: "Owner", email: "owner@example.test", emailVerified: true },
@@ -357,5 +358,84 @@ describe("per-app ownership routes", () => {
     const response = await call(ctx, ["apps"]);
     expect(await response.json()).toEqual({ apps: [] });
     expect(batches).toEqual([["cap1", "cap2"]]);
+  });
+});
+
+describe("operator kill switch for app member and transfer writes", () => {
+  const writes = [
+    ["POST", "capsules/cap1/members", "owner", { email: "member@example.test", consent: "connections_and_code" }, ["capsules", "cap1", "members"]],
+    ["DELETE", "capsules/cap1/members/member", "owner", undefined, ["capsules", "cap1", "members", "member"]],
+    ["DELETE", "capsules/cap1/members/member", "member", undefined, ["capsules", "cap1", "members", "member"]],
+    ["POST", "capsules/cap1/ownership-transfers", "owner", { toAccountId: "member" }, ["capsules", "cap1", "ownership-transfers"]],
+    ["POST", "ownership-transfers/tx1/accept", "member", undefined, ["ownership-transfers", "tx1", "accept"]],
+    ["DELETE", "ownership-transfers/tx1", "owner", undefined, ["ownership-transfers", "tx1"]],
+  ] as const;
+
+  function counting() {
+    const counts = { reads: 0, mutations: 0 };
+    const base = port();
+    const ownership = port({
+      resolveAppAccess: async (accountId, capsuleId) => { counts.reads++; return await base.resolveAppAccess(accountId, capsuleId); },
+      getTransfer: async (transferId) => { counts.reads++; return await base.getTransfer(transferId); },
+      addMember: async (input) => { counts.mutations++; return await base.addMember(input); },
+      removeMember: async (input) => { counts.mutations++; await base.removeMember(input); },
+      createTransfer: async (input) => { counts.mutations++; return await base.createTransfer(input); },
+      acceptTransfer: async (input) => { counts.mutations++; return await base.acceptTransfer(input); },
+      cancelTransfer: async (input) => { counts.mutations++; await base.cancelTransfer(input); },
+    });
+    return { counts, ownership };
+  }
+
+  const frozen = (ctx: ControlDispatchContext): ControlDispatchContext => ({ ...ctx, appOwnershipMutationsFrozen: true });
+
+  test("frozen: member add/remove/leave and transfer create/accept/cancel return 409 before any app read", async () => {
+    const { counts, ownership } = counting();
+    for (const [method, path, subject, body, segments] of writes) {
+      const response = await call(frozen(context(method, path, subject, ownership, body)), [...segments]);
+      expect(response.status, `${method} ${path}`).toBe(409);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect((await response.json()).error).toMatchObject({
+        code: "failed_precondition",
+        details: { reason: "app_ownership_mutations_frozen" },
+      });
+    }
+    expect(counts).toEqual({ reads: 0, mutations: 0 });
+  });
+
+  test("frozen: member and transfer reads stay available", async () => {
+    const { counts, ownership } = counting();
+    for (const [path, segments] of [
+      ["capsules/cap1/members", ["capsules", "cap1", "members"]],
+      ["capsules/cap1/ownership-transfers", ["capsules", "cap1", "ownership-transfers"]],
+      ["ownership-transfers", ["ownership-transfers"]],
+    ] as const) {
+      expect((await call(frozen(context("GET", path, "owner", ownership)), [...segments])).status, path).toBe(200);
+    }
+    expect(counts.mutations).toBe(0);
+  });
+
+  test("frozen: credential restrictions still answer first", async () => {
+    const { counts, ownership } = counting();
+    const [method, path, subject, body, segments] = writes[0];
+    expect((await call(frozen(oauthContext(method, path, subject, ownership, body)), [...segments])).status).toBe(403);
+    expect(counts.mutations).toBe(0);
+  });
+
+  test("enabled (the default): the same writes reach the ownership port", async () => {
+    const { counts, ownership } = counting();
+    for (const [method, path, subject, body, segments] of writes) {
+      expect((await call(context(method, path, subject, ownership, body), [...segments])).status, `${method} ${path}`).toBeLessThan(300);
+    }
+    expect(counts.mutations).toBe(writes.length);
+  });
+});
+
+describe("TAKOSUMI_APP_OWNERSHIP_MUTATIONS parsing", () => {
+  test("unset, empty and enabled keep writes on; frozen stops them; anything else fails closed", () => {
+    for (const value of [undefined, "", "  ", "enabled", " Enabled "]) expect(parseAppOwnershipMutationsFrozen(value)).toBe(false);
+    for (const value of ["frozen", " FROZEN "]) expect(parseAppOwnershipMutationsFrozen(value)).toBe(true);
+    for (const value of ["true", "false", "1", "0", "on", "off", "freeze"]) {
+      expect(() => parseAppOwnershipMutationsFrozen(value), value).toThrow("TAKOSUMI_APP_OWNERSHIP_MUTATIONS must be one of: frozen, enabled");
+    }
   });
 });

@@ -177,6 +177,7 @@ export * from "./identity.ts";
 export * from "./mobile-oidc-client.ts";
 export * from "./shared-account-workspace.ts";
 export * from "./workspace-mutations-freeze.ts";
+export { APP_OWNERSHIP_MUTATIONS_ENV, parseAppOwnershipMutationsFrozen } from "./app-ownership-mutations-freeze.ts";
 export {
   INSTALLED_APP_DELEGATION_SOURCES_ENV,
   parseInstalledAppDelegationSources,
@@ -208,6 +209,12 @@ export interface AccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   /** Defaults to true: legacy Workspace creation/member mutations return 409. */
   workspaceMutationsFrozen?: boolean;
+  /**
+   * Defaults to false. True (`TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`): app
+   * member add/remove/leave and ownership-transfer create/accept/cancel
+   * return 409 while an ownership backfill runs.
+   */
+  appOwnershipMutationsFrozen?: boolean;
   /**
    * Operator-designated repositories whose installed app may use its own
    * OAuth token as a Workspace delegation. Empty: every installed-app token is
@@ -266,6 +273,7 @@ export interface AccountsHandlerOptions {
 export interface EphemeralAccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   workspaceMutationsFrozen?: boolean;
+  appOwnershipMutationsFrozen?: boolean;
   installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   identityMergeReconciler?: IdentityMergeReconciler;
@@ -407,6 +415,7 @@ export async function createEphemeralAccountsHandler(
     issuer,
     hostedSessionPolicy: options.hostedSessionPolicy,
     workspaceMutationsFrozen: options.workspaceMutationsFrozen,
+    ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
     ...(options.installedAppDelegationSources
       ? { installedAppDelegationSources: options.installedAppDelegationSources }
       : {}),
@@ -1005,6 +1014,7 @@ export function createAccountsHandler(
             ...(options.workspaceMutationsFrozen !== undefined
               ? { workspaceMutationsFrozen: options.workspaceMutationsFrozen }
               : {}),
+            ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
             ...(options.installedAppDelegationSources?.length
               ? { installedAppDelegationSources: options.installedAppDelegationSources }
               : {}),

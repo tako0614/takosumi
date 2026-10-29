@@ -117,6 +117,7 @@ export const capsuleOwnershipTransfers = sqliteTable(names.capsuleOwnershipTrans
   check("capsule_ownership_transfers_state_check", sql`${table.state} in ('pending','accepted','cancelled')`),
   uniqueIndex("capsule_ownership_transfers_one_pending").on(table.capsuleId).where(sql`${table.state} = 'pending'`),
   index("capsule_ownership_transfers_recipient").on(table.toAccountId, table.state),
+  index("capsule_ownership_transfers_capsule_state_epoch_idx").on(table.capsuleId, table.state, table.ownershipEpoch),
 ]);
 
 export const appCredentialMintLeases = sqliteTable(names.appCredentialMintLeases, {
@@ -260,6 +261,7 @@ export const connections = sqliteTable(
     index("connections_space_idx").on(table.workspaceId),
     index("connections_provider_idx").on(table.provider),
     index("connections_status_idx").on(table.status),
+    index("connections_owner_created_idx").on(table.ownerAccountId, table.createdAt, table.id),
   ],
 );
 
@@ -381,6 +383,7 @@ export const capsules = sqliteTable(
       table.workspaceId,
       table.id,
     ),
+    index("capsules_space_source_idx").on(table.workspaceId, table.sourceId),
   ],
 );
 
@@ -672,6 +675,7 @@ export const usageEvents = sqliteTable(
     index("usage_events_workspace_idx").on(table.workspaceId),
     index("usage_events_run_idx").on(table.runId),
     uniqueIndex("usage_events_idempotency_key_unique").on(table.idempotencyKey),
+    index("usage_events_workspace_created_idx").on(table.workspaceId, table.createdAt, table.id),
   ],
 );
 
@@ -782,6 +786,7 @@ export const backups = sqliteTable(
   (table) => [
     index("backups_space_idx").on(table.workspaceId),
     index("backups_installation_idx").on(table.capsuleId),
+    index("backups_space_created_idx").on(table.workspaceId, table.createdAt, table.id),
     index("backups_created_by_run_id_idx").on(table.createdByRunId),
     index("backups_legacy_created_by_run_text_idx").on(sql`cast((case when json_valid(${table.recordJson}) = 1 then json_extract(${table.recordJson}, '$.createdByRunId') else null end) as text)`),
   ],

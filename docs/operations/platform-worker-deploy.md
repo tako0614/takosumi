@@ -735,7 +735,10 @@ Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
 same exact source commit. Back up, apply, and read-only verify staging before
 production. A platform Worker deployment must not depend on its first request
-to create or repair the required schema. The temporary production owner surface
+to create or repair the required schema. The TASK-0118 v75 -> v79 transition is
+the one Worker-first exception: its release accepts heads 71 through 79 and
+serves on v75 before the schema changes
+([rollout order](app-ownership-backfill.md#rollout-order)). The temporary production owner surface
 `takosumi-control-d1-schema-production-v66-v69` is a fixed, target-v69,
 continuously-fenced direct cutover for the exact v66 ledger lineage; its local
 synthetic proof is not live or full-HTTP evidence. It does not change the

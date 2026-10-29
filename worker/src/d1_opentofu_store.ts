@@ -16899,6 +16899,23 @@ const D1_APP_AUTHORIZATION_STATEMENTS = [
     on app_credential_mint_leases (capsule_id, expires_at)`,
 ] as const;
 
+// TASK-0118 rollout (v79): nonunique indexes read by per-app Workspace list
+// visibility (#676), owner-scoped Connection lists and the transfer-ledger
+// payer walk. A separate migration because v76-v78 may already be applied on
+// a target; their checksums never change. No row rewrite or authority change.
+const D1_APP_LIST_VISIBILITY_INDEX_STATEMENTS = [
+  `create index if not exists usage_events_workspace_created_idx
+    on usage_events (workspace_id, created_at, id)`,
+  `create index if not exists backups_space_created_idx
+    on backups (space_id, created_at, id)`,
+  `create index if not exists capsules_space_source_idx
+    on capsules (space_id, source_id)`,
+  `create index if not exists connections_owner_created_idx
+    on connections (owner_account_id, created_at, id)`,
+  `create index if not exists capsule_ownership_transfers_capsule_state_epoch_idx
+    on capsule_ownership_transfers (capsule_id, state, ownership_epoch)`,
+] as const;
+
 const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [
   `create index if not exists interfaces_authorized_page_idx
     on interfaces (workspace_id, phase, created_at, id)`,
@@ -20343,6 +20360,16 @@ ${D1_INTERFACE_LINK_STATEMENTS.join("\n---\n")}`,
     async atomicStatements() { return D1_APP_AUTHORIZATION_STATEMENTS; },
     async apply(db) { await runD1AtomicSql(db, D1_APP_AUTHORIZATION_STATEMENTS); },
   },
+  {
+    version: 79,
+    name: "d1_app_list_visibility_indexes",
+    checksumSource: () => `expand: TASK-0118 rollout; nonunique indexes for per-app Workspace list visibility, owner Connection lists and transfer-ledger payer history.
+No data rewrite, unique constraint or authority change; v76-v78 checksums are unchanged.
+Forward repair retains the indexes; no production down migration.
+${D1_APP_LIST_VISIBILITY_INDEX_STATEMENTS.join("\n---\n")}`,
+    async atomicStatements() { return D1_APP_LIST_VISIBILITY_INDEX_STATEMENTS; },
+    async apply(db) { await runD1AtomicSql(db, D1_APP_LIST_VISIBILITY_INDEX_STATEMENTS); },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -21461,6 +21488,25 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
       }
     }
   }
+  if (head >= 79) {
+    // Older tables keep history-dependent physical column order, so qualify the
+    // key column names and the exact DDL rather than column ids.
+    for (const [position, tableName, name, columns] of [
+      [0, "usage_events", "usage_events_workspace_created_idx", ["workspace_id", "created_at", "id"]],
+      [1, "backups", "backups_space_created_idx", ["space_id", "created_at", "id"]],
+      [2, "capsules", "capsules_space_source_idx", ["space_id", "source_id"]],
+      [3, "connections", "connections_owner_created_idx", ["owner_account_id", "created_at", "id"]],
+      [4, "capsule_ownership_transfers", "capsule_ownership_transfers_capsule_state_epoch_idx", ["capsule_id", "state", "ownership_epoch"]],
+    ] as const) {
+      const found = tables.get(tableName)?.indexes.filter((index) => index.name === name) ?? [];
+      const index = found[0];
+      if (found.length !== 1 || !index || index.unique !== 0 || index.partial !== 0 ||
+        stableStringify(index.columns) !== stableStringify(columns) ||
+        normalizedD1IndexSql(index.sql) !== normalizedD1IndexSql(D1_APP_LIST_VISIBILITY_INDEX_STATEMENTS[position])) {
+        throw new Error("D1 OpenTofu predeployed schema verification failed");
+      }
+    }
+  }
   check("scheduled_sweep_cursors", [["lane", "text", 0, 1], ["generation", "integer", 1], ["cursor_created_at", "text", 0], ["cursor_id", "text", 0], ["upper_created_at", "text", 0], ["upper_id", "text", 0]]);
   if (head >= 72) {
     check("workspace_billing_intents", [["workspace_id", "text", 0, 1], ["intent_id", "text", 1], ["billing_authority", "text", 1], ["workspace_ref", "text", 1], ["record_json", "text", 1], ["created_at", "text", 1]],
@@ -21506,8 +21552,9 @@ function validateD1RuntimeStructures(value: unknown, head: number): void {
 /**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
- * executes DDL or data migration. During the additive link rollout it accepts
- * complete v75 or v76 catalogs with exact names/checksums and physical shape.
+ * executes DDL or data migration. During the additive TASK-0118 rollout it
+ * accepts complete v75 through v79 catalogs with exact names/checksums and
+ * physical shape.
  */
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
@@ -21517,7 +21564,7 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
 }
 
 /** Runtime floors never weaken complete catalog and physical qualification. */
-async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78): Promise<void> {
+async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78 | 79): Promise<void> {
   let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   let structures: string | null;
@@ -21547,11 +21594,11 @@ async function verifyD1PredeployedSchemaEvidence(db: D1Database, minimumVersion:
 async function validateD1OpenTofuLedgerSchemaPredeployed(
   columns: readonly D1TableInfoRow[],
   rows: readonly D1SchemaMigrationRow[],
-  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78 = 76,
+  minimumVersion: 71 | 72 | 73 | 74 | 75 | 76 | 77 | 78 | 79 = 76,
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
   const head = rows.at(-1)?.version;
-  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76 && head !== 77 && head !== 78) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
+  if ((head !== 71 && head !== 72 && head !== 73 && head !== 74 && head !== 75 && head !== 76 && head !== 77 && head !== 78 && head !== 79) || head < minimumVersion) throw new Error("D1 OpenTofu predeployed schema verification failed");
   const catalog = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.filter((migration) => migration.version <= head);
   if (rows.length !== catalog.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

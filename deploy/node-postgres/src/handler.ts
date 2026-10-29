@@ -13,6 +13,7 @@ import type {
 import { upstreamOAuthOptionsFromEnvironment } from "@takosjp/takosumi-accounts-service";
 import { resolveTakosumiMobileOidcClientId } from "@takosjp/takosumi-accounts-service";
 import {
+  parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
   type InstalledAppDelegationSource,
 } from "@takosjp/takosumi-accounts-service";
@@ -47,6 +48,8 @@ export interface NodeAccountsServerConfig {
   readonly subject: string | undefined;
   /** Repositories whose installed app may use its own token as a Workspace delegation. */
   readonly installedAppDelegationSources: readonly InstalledAppDelegationSource[];
+  /** `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`: app member/transfer writes return 409. */
+  readonly appOwnershipMutationsFrozen?: boolean;
 }
 
 export function parseEnv(
@@ -85,6 +88,9 @@ export function parseEnv(
     subject: optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT"),
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
+    ),
+    appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
+      env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
   };
 }

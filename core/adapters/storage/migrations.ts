@@ -5350,4 +5350,21 @@ create index if not exists takosumi_app_credential_mint_leases_capsule_expiry
   on takosumi_app_credential_mint_leases (capsule_id, expires_at);
 `,
     },
+    {
+      id: "deploy.app_list_visibility.indexes",
+      version: 125,
+      domain: "deploy",
+      description: "TASK-0118 rollout: nonunique indexes for per-app Workspace list visibility, owner Connection lists and transfer-ledger payer history. v123/v124 are unchanged.",
+      sql: `-- expand only: no row rewrite, unique constraint or authority change. Forward repair keeps these indexes.
+create index if not exists takosumi_usage_events_workspace_created_idx
+  on takosumi_usage_events (workspace_id, created_at, id);
+create index if not exists takosumi_backups_space_created_id_idx
+  on takosumi_backups (space_id, created_at, id);
+create index if not exists takosumi_capsules_space_source_idx
+  on takosumi_capsules (space_id, source_id);
+create index if not exists takosumi_connections_owner_created_idx
+  on takosumi_connections (owner_account_id, created_at, id);
+create index if not exists takosumi_capsule_ownership_transfers_capsule_state_epoch_idx
+  on takosumi_capsule_ownership_transfers (capsule_id, state, ownership_epoch);`,
+    },
   ]);

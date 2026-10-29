@@ -8,6 +8,8 @@ import {
   CONTROL_D1_PRODUCTION_V66_V69_TARGET,
   CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD,
   CONTROL_D1_PRODUCTION_V66_V75_TARGET,
+  CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD,
+  CONTROL_D1_PRODUCTION_V75_V79_TARGET,
   ControlD1SchemaError,
   fenceControlD1Schema,
   releaseControlD1Candidate,
@@ -100,7 +102,8 @@ interface CliDependencies {
   /** @internal fixed-transition selector, injected only by the owner surface. */
   readonly internalGuard?:
     typeof CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD |
-    typeof CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD;
+    typeof CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD |
+    typeof CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD;
   readonly buildSchemaPlan?: (options?: {
     readonly throughMigrationVersion?: number;
   }) => Promise<ControlD1SchemaPlan>;
@@ -121,6 +124,8 @@ export async function runControlD1SchemaCli(
     ? { target: CONTROL_D1_PRODUCTION_V66_V69_TARGET, failurePrefix: "production_v66_v69" }
     : dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD
     ? { target: CONTROL_D1_PRODUCTION_V66_V75_TARGET, failurePrefix: "production_v66_v75" }
+    : dependencies.internalGuard === CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD
+    ? { target: CONTROL_D1_PRODUCTION_V75_V79_TARGET, failurePrefix: "production_v75_v79" }
     : undefined;
   let args: ParsedArgs;
   try {
@@ -172,9 +177,10 @@ export async function runControlD1SchemaCli(
     );
     return 1;
   }
-  if (dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD &&
+  if (productionTransition &&
+    dependencies.internalGuard !== CONTROL_D1_PRODUCTION_V66_V69_INTERNAL_GUARD &&
     (args.confirmPredecessorSource || args.confirmPredecessorManifest)) {
-    write(failureTranscript("production_v66_v75_predecessor_forbidden", undefined, args));
+    write(failureTranscript(`${productionTransition.failurePrefix}_predecessor_forbidden`, undefined, args));
     return 1;
   }
 
@@ -232,8 +238,9 @@ export async function runControlD1SchemaCli(
   let plan: ControlD1SchemaPlan;
   try {
     plan = await (dependencies.buildSchemaPlan ?? buildControlD1SchemaPlan)(
-      dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD
-        ? { throughMigrationVersion: CONTROL_D1_PRODUCTION_V66_V75_TARGET }
+      dependencies.internalGuard === CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD ||
+        dependencies.internalGuard === CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD
+        ? { throughMigrationVersion: productionTransition!.target }
         : undefined,
     );
     if (
@@ -662,6 +669,22 @@ export async function runControlD1SchemaProductionV66V75Cli(
   return runControlD1SchemaCli(argv, env, write, {
     ...dependencies,
     internalGuard: CONTROL_D1_PRODUCTION_V66_V75_INTERNAL_GUARD,
+  });
+}
+
+/**
+ * Fixed owner-only production75->79 selector for the TASK-0118 rollout; the
+ * plan stays pinned to v79 when the catalog advances. No migration-head flag.
+ */
+export async function runControlD1SchemaProductionV75V79Cli(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  write: (value: string) => void = console.log,
+  dependencies: CliDependencies = {},
+): Promise<number> {
+  return runControlD1SchemaCli(argv, env, write, {
+    ...dependencies,
+    internalGuard: CONTROL_D1_PRODUCTION_V75_V79_INTERNAL_GUARD,
   });
 }
 

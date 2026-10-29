@@ -3,6 +3,11 @@
 この手順は operator 用であり、staging / production の実行や承認を意味しない。
 まず [Source maintenance](./source-maintenance.md) の flag で自動 retirement を停止し、
 Control DB と archive store の復元可能な backup、対象 release commit、schema version、operator を記録する。
+Control schema の maintenance fence は**解除した状態**で実行する。fence はすべての Control の書き込みを止め、
+group の commit も拒否されるため、fence 中の route は dry-run の読み取り・archive のコピー・commit の前に
+`503 control_schema_maintenance_active` を返す。この移行の安全性は全体の書き込み停止ではなく、
+group ごとの CAS（観測した行と件数を同じ D1 batch で再確認し、変化があれば `conflict`）、
+実行中の Run・lease による `blocked`、レビュー済み dry-run の digest の一致で守る。
 Source ごとに snapshot 行数、distinct archive 数、総 byte 数、live / destroyed アプリ数、
 foreign archive 参照数を計測し、dry-run の group と照合する。
 

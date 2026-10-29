@@ -3,6 +3,7 @@ import type { CapsuleAppState, CapsuleAppAction } from "takosumi-contract/capsul
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { AppAccess, AppAccessResolver } from "../../../../contract/app-access.ts";
 import { errorJson, json, methodNotAllowed, readJsonObject } from "../http-helpers.ts";
+import { appOwnershipMutationsFrozenResponse } from "../app-ownership-mutations-freeze.ts";
 import { bearerAppAllows } from "../account-session.ts";
 import type { ControlDispatchContext } from "./shared.ts";
 import { controlPlaneUnavailable } from "./shared.ts";
@@ -418,6 +419,20 @@ async function changeTransfer(ctx: ControlDispatchContext, transferId: string, a
   }
 }
 
+/**
+ * Member add/remove/leave and transfer create/accept/cancel: the writers the
+ * operator kill switch stops. Reads stay available.
+ */
+function isAppOwnershipMutation(segments: readonly string[], method: string): boolean {
+  const verb = method.toUpperCase();
+  if (segments[0] === "capsules" && segments[2] === "members") {
+    return (segments.length === 3 && verb === "POST") || (segments.length === 4 && verb === "DELETE");
+  }
+  if (segments[0] === "capsules" && segments[2] === "ownership-transfers") return segments.length === 3 && verb === "POST";
+  if (segments[0] !== "ownership-transfers") return false;
+  return (segments.length === 3 && segments[2] === "accept" && verb === "POST") || (segments.length === 2 && verb === "DELETE");
+}
+
 /** Called before the existing Workspace-gated capsules handler for these paths. */
 export async function handleAppOwnership(
   ctx: ControlDispatchContext,
@@ -436,6 +451,9 @@ export async function handleAppOwnership(
   if (isApps) return method === "GET" ? listApps(ctx) : methodNotAllowed("GET");
   const credential = accountManagementCredential(ctx);
   if (credential) return credential;
+  if (ctx.appOwnershipMutationsFrozen && isAppOwnershipMutation(segments, method)) {
+    return appOwnershipMutationsFrozenResponse(ctx.request);
+  }
   if (isMembers) {
     const capsuleId = accountId(segments[1]);
     if (!capsuleId) return errorJson("invalid_request", "Invalid capsule ID.", 400, ctx.request);

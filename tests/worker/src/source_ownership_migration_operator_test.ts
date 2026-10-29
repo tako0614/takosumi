@@ -3,11 +3,27 @@ import type { SourceOwnershipMigrationGroup, SourceOwnershipMigrationMutation,
   SourceOwnershipMigrationStore } from "../../../core/domains/sources/ownership-migration.ts";
 import { handleSourceOwnershipMigrationOperatorRequest, R2SourceOwnershipArchiveCopier,
   SOURCE_OWNERSHIP_MIGRATION_PATH } from "../../../worker/src/source_ownership_migration_operator.ts";
-import type { CloudflareWorkerEnv, R2Bucket } from "../../../worker/src/bindings.ts";
+import type { CloudflareWorkerEnv, D1Database, R2Bucket } from "../../../worker/src/bindings.ts";
+import { buildControlD1SchemaPlan, SqliteControlD1Database } from "../../../deploy/platform/control_d1_schema.ts";
+import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_store.ts";
+import { acquireControlD1MaintenanceFence, ControlD1MaintenanceError, releaseControlD1MaintenanceFence } from "../../../worker/src/d1_schema_maintenance.ts";
 
 const origin = `https://operator.test${SOURCE_OWNERSHIP_MIGRATION_PATH}`;
 const token = "test-operator-token";
-const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: token, TAKOSUMI_CONTROL_DB: {} } as CloudflareWorkerEnv;
+/** A Control binding with no maintenance table yet: the fence reads as absent. */
+const withoutMaintenanceTable = {
+  prepare(query: string) {
+    const statement = {
+      bind: () => statement,
+      first: async () => {
+        if (query.includes("sqlite_master")) return null;
+        throw new Error("no such table");
+      },
+    };
+    return statement;
+  },
+} as unknown as D1Database;
+const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: token, TAKOSUMI_CONTROL_DB: withoutMaintenanceTable } as CloudflareWorkerEnv;
 const group: SourceOwnershipMigrationGroup = {
   source: { id: "src_legacy", workspaceId: "ws_1", name: "legacy", url: "https://example.test/repo.git",
     defaultRef: "main", defaultPath: ".", status: "active", autoSync: true, hookSecretHash: "a".repeat(64),
@@ -340,4 +356,55 @@ test("retirement marking never reads or copies external archives and needs no R2
   expect(apply?.status).toBe(200);
   expect(store.commits).toBe(1);
   expect(store.current.source).toMatchObject({ status: "disabled", autoSync: false, retiringAt: dry.preparedAt });
+});
+
+test("an active schema maintenance fence refuses dry-run and apply before any store read, copy or commit", async () => {
+  const db = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
+    const plan = await buildControlD1SchemaPlan({ throughMigrationVersion: 75 });
+    const fence = await acquireControlD1MaintenanceFence(db, {
+      sourceCommit: "a".repeat(40), manifestDigest: plan.manifestDigest, environment: "staging",
+      databaseRole: "in_place", releasePolicy: "in_place", databaseId: "synthetic",
+    }, "2026-10-29T00:00:00.000Z");
+    const fencedEnv = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: token, TAKOSUMI_CONTROL_DB: db } as unknown as CloudflareWorkerEnv;
+    const store = new FixtureStore();
+    let reads = 0;
+    const spy: SourceOwnershipMigrationStore = {
+      listSourceIds: async () => { reads++; return store.listSourceIds(); },
+      readGroup: async (id) => { reads++; return store.readGroup(id); },
+      commitGroup: async (mutation) => store.commitGroup(mutation),
+    };
+    let copies = 0;
+    const copier = { copyVerified: async () => { copies++; } };
+    for (const request of [
+      new Request(origin, { headers: { authorization: `Bearer ${token}` } }),
+      new Request(`${origin}?sourceId=src_legacy`, { headers: { authorization: `Bearer ${token}` } }),
+      new Request(origin, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ sourceId: "src_legacy", preparedAt: "2026-10-29T00:00:00.000Z", reportDigest: `sha256:${"0".repeat(64)}` }) }),
+    ]) {
+      const response = await handleSourceOwnershipMigrationOperatorRequest(request, fencedEnv, { store: spy, copier });
+      expect(response?.status).toBe(503);
+      expect(response?.headers.get("cache-control")).toBe("no-store");
+      expect(await response!.json()).toEqual({ error: "control_schema_maintenance_active" });
+    }
+    expect({ reads, copies, commits: store.commits }).toEqual({ reads: 0, copies: 0, commits: 0 });
+    // Once the schema owner releases the fence the same route serves the dry-run.
+    await releaseControlD1MaintenanceFence(db, fence, "2026-10-29T00:01:00.000Z");
+    const released = await handleSourceOwnershipMigrationOperatorRequest(
+      new Request(`${origin}?sourceId=src_legacy`, { headers: { authorization: `Bearer ${token}` } }), fencedEnv, { store: spy, copier });
+    expect(released?.status).toBe(200);
+  } finally { db.close(); }
+});
+
+test("a fence raised after admission surfaces as the same refusal, not a 500", async () => {
+  const fenced: SourceOwnershipMigrationStore = {
+    listSourceIds: async () => { throw new ControlD1MaintenanceError("maintenance_fence_active"); },
+    readGroup: async () => { throw new ControlD1MaintenanceError("maintenance_fence_active"); },
+    commitGroup: async () => { throw new Error("must not commit"); },
+  };
+  const response = await handleSourceOwnershipMigrationOperatorRequest(
+    new Request(origin, { headers: { authorization: `Bearer ${token}` } }), env, { store: fenced });
+  expect(response?.status).toBe(503);
+  expect(await response!.json()).toEqual({ error: "control_schema_maintenance_active" });
 });

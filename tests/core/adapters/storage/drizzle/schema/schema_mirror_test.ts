@@ -696,6 +696,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
     61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78,
+    79,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -773,6 +774,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_interface_links",
     "d1_app_ownership",
     "d1_app_authorization",
+    "d1_app_list_visibility_indexes",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1862,7 +1864,7 @@ test("Postgres v112 adds nullable compatibility declarations without upgrading l
     expect(result.rows).toEqual([
       { root_module_variable_declarations_json: null },
     ]);
-    expect(postgresStorageMigrationStatements.slice(-5).map((entry) => entry.version)).toEqual([120, 121, 122, 123, 124]);
+    expect(postgresStorageMigrationStatements.slice(-5).map((entry) => entry.version)).toEqual([121, 122, 123, 124, 125]);
   } finally {
     await client.close();
   }
