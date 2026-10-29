@@ -52,7 +52,6 @@ import {
   deleteCapsule,
   extractRunId,
   getCapsule,
-  getAppMembers,
   getAppConnectionChoices,
   resetAppOwnershipCache,
   getCapsuleApp,
@@ -207,10 +206,7 @@ export default function AppManagePage(props: {
   const [sharingAvailable, setSharingAvailable] = createSignal(false);
   const [memberChoices, { refetch: refetchMemberChoices }] = createResource(
     () => appRole() === "member" ? capsuleId() : null,
-    async (id) => {
-      const group = await getAppMembers(id);
-      return group ? await getAppConnectionChoices(id, group.owner.accountId) : undefined;
-    },
+    (id) => getAppConnectionChoices(id),
   );
 
 

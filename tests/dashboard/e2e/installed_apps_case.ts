@@ -97,7 +97,7 @@ async function fixture(page: Page, apps: readonly InstalledAppSummary[], complet
       } } });
     });
   }
-  await page.route("**/api/v1/source-ref-resolutions/stable-semver", (route) => route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } }));
+  await page.route("**/api/v1/source-ref-resolutions?**", (route) => route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } }));
   await page.route("**/api/v1/workspaces/*/source-ref-resolutions/stable-semver", (route) => route.fulfill({ json: { tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT } }));
   return { mutations, reads, errors };
 }

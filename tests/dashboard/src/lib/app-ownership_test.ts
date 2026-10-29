@@ -8,6 +8,7 @@ import {
   listAppOwnershipTransfers, listIncomingOwnershipTransfers,
   type CapsuleAppView,
 } from "../../../../dashboard/src/lib/control-api.ts";
+import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { appPrimaryAllowed, resolveAppRole } from "../../../../dashboard/src/lib/app-access.ts";
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -61,23 +62,43 @@ test("sharing reads hide only on404 and sends explicit connection/code consent",
   stub(() => Response.json({ error: { code: "route_not_found" } }, { status: 404 })); expect(await getAppMembers("a")).toBeUndefined();
   stub(() => Response.json({}, { status: 403 })); await expect(getAppMembers("a")).rejects.toMatchObject({ status: 403 });
 });
-test("member choices accept only marked owner labels and explicitly bindable operator labels", async () => {
-  const rows = [
-    { id: "owner", displayName: "Owner cloud", providerSource: "p", scope: "personal", ownerAccountId: "owner", secretMetadata: "excluded" },
-    { id: "member", displayName: "Member cloud", providerSource: "p", scope: "personal", ownerAccountId: "member" },
-    { id: "unknown", displayName: "Unknown", providerSource: "p", scope: "personal" },
-    { id: "operator", displayName: "Provided", providerSource: "p", scope: "operator", operatorBindable: true },
-    { id: "unbound", displayName: "Unbound", providerSource: "p", scope: "operator" },
-  ];
-  stub(() => Response.json({ projection: "app-owner-connection-labels", ownerAccountId: "owner", connections: rows }));
-  expect(await getAppConnectionChoices("a", "owner")).toEqual([
-    { id: "owner", displayName: "Owner cloud", providerSource: "p", scope: "personal" },
-    { id: "operator", displayName: "Provided", providerSource: "p", scope: "operator" },
+test("member choices read B label-only pages and normalize generic provider addresses for selection", async () => {
+  stub((path) => Response.json(path.includes("cursor=") ? { connections: [{ id: "custom", provider: "registry.example.test/team/cloud" }] } : {
+    connections: [{ id: "owner", displayName: "Owner cloud", provider: "Namespace/Cloud" }], nextCursor: "next page",
+  }));
+  const choices = await getAppConnectionChoices("app /a");
+  expect(choices).toEqual([
+    { id: "owner", displayName: "Owner cloud", providerSource: "registry.opentofu.org/namespace/cloud" },
+    { id: "custom", providerSource: "registry.example.test/team/cloud" },
   ]);
-  for (const body of [{ connections: rows }, { projection: "app-owner-connection-labels", ownerAccountId: "other", connections: rows }]) {
-    stub(() => Response.json(body)); expect(await getAppConnectionChoices("a", "owner")).toBeUndefined();
+  expect(choices?.filter((row) => sameProviderSource("namespace/cloud", row.providerSource)).map((row) => row.id)).toEqual(["owner"]);
+  expect(choices?.filter((row) => sameProviderSource("registry.example.test/team/cloud", row.providerSource)).map((row) => row.id)).toEqual(["custom"]);
+  expect(calls.map((call) => call.path)).toEqual([
+    "/api/v1/connections?capsuleId=app+%2Fa&projection=labels",
+    "/api/v1/connections?capsuleId=app+%2Fa&projection=labels&cursor=next%20page",
+  ]);
+  expect(JSON.stringify(choices)).not.toMatch(/scope|ownerAccountId|credentialRecipe|envNames/u);
+});
+test("member label choices reject full connection metadata and old marker projections", async () => {
+  for (const extra of [
+    { scope: "personal" }, { ownerAccountId: "owner" }, { workspaceId: "old" },
+    { credentialRecipe: { id: "r", authMode: "key" } }, { envNames: ["TOKEN"] },
+    { scopeHints: { accountId: "private" } }, { values: { TOKEN: "secret" } }, { providerSource: "namespace/cloud" },
+  ]) {
+    stub(() => Response.json({ connections: [{ id: "owner", provider: "namespace/cloud", ...extra }] }));
+    await expect(getAppConnectionChoices("a")).rejects.toMatchObject({ code: "invalid_connection_labels_response" });
   }
-  stub(() => Response.json({ error: { code: "route_not_found" } }, { status: 404 })); expect(await getAppConnectionChoices("a", "owner")).toBeUndefined();
+  for (const body of [
+    { projection: "app-owner-connection-labels", ownerAccountId: "owner", connections: [] },
+    { connections: [{ id: "missing-provider" }] }, { connections: [{ id: "bad", provider: "p", displayName: 7 }] },
+  ]) {
+    stub(() => Response.json(body));
+    await expect(getAppConnectionChoices("a")).rejects.toMatchObject({ code: "invalid_connection_labels_response" });
+  }
+  stub(() => Response.json({ error: { code: "route_not_found" } }, { status: 404 }));
+  expect(await getAppConnectionChoices("a")).toBeUndefined();
+  stub(() => Response.json({ error: { code: "not_found", details: { reason: "capsule_not_found" } } }, { status: 404 }));
+  await expect(getAppConnectionChoices("a")).rejects.toMatchObject({ code: "not_found" });
 });
 test("personal connections omit legacy workspace scope;403 cannot select legacy connections", async () => {
   stub((path) => Response.json(path === "/api/v1/apps" ? { apps: [] } : { connections: [{ id: "personal" }] }));
@@ -105,10 +126,35 @@ test("install capability selects the personal or legacy path and preserves the r
   await createGitInstallAttempt("old", body, "key"); expect(calls.map((call) => [call.path, call.key, call.body])).toEqual([["/api/v1/apps", null, undefined], ["/api/v1/workspaces/old/install-plans", "key", body]]);
   stub(() => Response.json({}, { status: 403 })); await expect(createGitInstallAttempt("old", body, "key")).rejects.toMatchObject({ status: 403 }); expect(calls).toHaveLength(1);
 });
-test("stable ref resolver tries account route before404 legacy fallback", async () => {
-  stub((path) => path === "/api/v1/apps" ? Response.json({ apps: [] }) : path === "/api/v1/source-ref-resolutions/stable-semver" ? Response.json({ error: { code: "route_not_found" } }, { status: 404 }) : Response.json({ tag: "v1.0.0", commit: "a".repeat(40) }));
-  expect((await resolveStableSourceTag("old", "https://example.test/app.git")).tag).toBe("v1.0.0");
-  expect(calls.map((call) => call.path)).toEqual(["/api/v1/apps", "/api/v1/source-ref-resolutions/stable-semver", "/api/v1/workspaces/old/source-ref-resolutions/stable-semver"]);
+test("stable ref resolver uses B public GET and falls back only to the legacy POST route", async () => {
+  const url = "https://example.test/app.git";
+  const resolved = { tag: "v1.0.0", commit: "a".repeat(40) };
+  stub((path) => Response.json(path === "/api/v1/apps" ? { apps: [] } : resolved));
+  expect(await resolveStableSourceTag("old", url)).toEqual(resolved);
+  expect(calls.map(({ path, method, body }) => ({ path, method, body }))).toEqual([
+    { path: "/api/v1/apps", method: "GET", body: undefined },
+    { path: "/api/v1/source-ref-resolutions?url=https%3A%2F%2Fexample.test%2Fapp.git", method: "GET", body: undefined },
+  ]);
+  stub((path) => path === "/api/v1/apps" ? Response.json({ apps: [] }) : path.startsWith("/api/v1/source-ref-resolutions?") ?
+    Response.json({ error: { code: "route_not_found" } }, { status: 404 }) : Response.json(resolved));
+  expect(await resolveStableSourceTag("old", url)).toEqual(resolved);
+  expect(calls.at(-1)).toMatchObject({ path: "/api/v1/workspaces/old/source-ref-resolutions/stable-semver", method: "POST", body: { url } });
+  for (const [status, code] of [[404, "source_not_found"], [403, "app_access_denied"], [503, "unavailable"]] as const) {
+    stub((path) => path === "/api/v1/apps" ? Response.json({ apps: [] }) : Response.json({ error: { code } }, { status }));
+    await expect(resolveStableSourceTag("old", url)).rejects.toMatchObject({ status, code });
+    expect(calls).toHaveLength(2);
+  }
+});
+test("public source resolution refuses credential or private URL material before any request", async () => {
+  for (const url of [
+    "https://user:secret@example.test/app.git", "https://user@example.test/app.git", "https://example.test/app.git?token=secret",
+    "https://example.test/app.git?X-Amz-Signature=secret", "https://example.test/app.git?unknown=secret",
+    "https://example.test/app.git#secret", "ssh://git@example.test/app.git", "git@example.test:app.git", "http://example.test/app.git", "not a URL",
+  ]) {
+    stub(() => Response.json({ apps: [] }));
+    await expect(resolveStableSourceTag(undefined, url)).rejects.toMatchObject({ status: 400, code: "invalid_request", body: undefined });
+    expect(calls).toEqual([]);
+  }
 });
 test("members cannot open any uninstall action disguised as retry or review", () => {
   for (const app of [
@@ -279,12 +325,14 @@ test("personal OAuth starts without workspace and falls back only on an absent r
 
 test("ownership transfer lists are pending-only and keep app and incoming routes separate", async () => {
   const transfer = { transferId: "tr_1", capsuleId: "app /a", fromAccountId: "owner", toAccountId: "member", state: "pending" };
-  stub(() => Response.json({ transfers: [transfer] }));
+  stub(() => Response.json({ ownershipTransfers: [transfer] }));
   expect(await listAppOwnershipTransfers("app /a")).toEqual([transfer]);
   expect(await listIncomingOwnershipTransfers()).toEqual([transfer]);
   expect(calls.map((call) => call.path)).toEqual([
     "/api/v1/capsules/app%20%2Fa/ownership-transfers?state=pending", "/api/v1/ownership-transfers?state=pending",
   ]);
+  stub(() => Response.json({ transfers: [transfer] }));
+  await expect(listIncomingOwnershipTransfers()).rejects.toMatchObject({ code: "invalid_ownership_transfers_response" });
   stub(() => Response.json({ error: { code: "route_not_found" } }, { status: 404 }));
   expect(await listIncomingOwnershipTransfers()).toBeUndefined();
   stub(() => Response.json({ error: { code: "not_found", message: "App not found" } }, { status: 404 }));

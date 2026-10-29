@@ -57,7 +57,7 @@ async function accountAs(page: Page, role: "owner" | "member"): Promise<RequestR
   });
   await page.route((url) => url.pathname === "/api/v1/ownership-transfers" ||
     /^\/api\/v1\/capsules\/[^/]+\/ownership-transfers$/u.test(url.pathname), (route) =>
-    route.fulfill({ json: { transfers: [] } }));
+    route.fulfill({ json: { ownershipTransfers: [] } }));
   return requests;
 }
 
@@ -114,7 +114,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
       let pending = false;
       await page.route((url) => url.pathname === `/api/v1/capsules/${OWNER_APP}/ownership-transfers`, async (route) => {
-        if (route.request().method() === "GET") return route.fulfill({ json: { transfers: pending ? [{
+        if (route.request().method() === "GET") return route.fulfill({ json: { ownershipTransfers: pending ? [{
           transferId: TRANSFER_ID, capsuleId: OWNER_APP, fromAccountId: "sub_portable_e2e", toAccountId: "tsub_kenta0123456789", state: "pending",
         }] : [] } });
         pending = true;
@@ -262,7 +262,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
       });
       await memberRoutes(page, SHARED_APP, PORTABLE_SHARED_APP_MEMBERS);
       await page.route((url) => url.pathname === "/api/v1/ownership-transfers", (route) =>
-        route.fulfill({ json: { transfers: role === "member" ? [{ transferId: TRANSFER_ID, capsuleId: SHARED_APP,
+        route.fulfill({ json: { ownershipTransfers: role === "member" ? [{ transferId: TRANSFER_ID, capsuleId: SHARED_APP,
           fromAccountId: "tsub_hanako0123456789", toAccountId: "sub_portable_e2e", state: "pending" }] : [] } }));
       await page.route(`**/api/v1/ownership-transfers/${TRANSFER_ID}/accept`, async (route) => {
         role = "owner";
@@ -291,7 +291,7 @@ export function registerAppSharingCases(mode: DashboardE2EMode): void {
     test("Home discovers incoming transfers for a recipient who is not an app member", async ({ page }) => {
       const requests = await accountAs(page, "owner");
       let pending = true;
-      await page.route((url) => url.pathname === "/api/v1/ownership-transfers", (route) => route.fulfill({ json: { transfers: pending ? [{
+      await page.route((url) => url.pathname === "/api/v1/ownership-transfers", (route) => route.fulfill({ json: { ownershipTransfers: pending ? [{
         transferId: TRANSFER_ID, capsuleId: "cap_not_a_member", fromAccountId: "tsub_hanako0123456789", toAccountId: "sub_portable_e2e", state: "pending",
       }] : [] } }));
       await page.route(`**/api/v1/ownership-transfers/${TRANSFER_ID}/accept`, (route) => {

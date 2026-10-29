@@ -20,7 +20,9 @@ with its retained owned personal billing reference.
 
 Writer B owns the server contracts for pending outgoing/incoming transfers,
 label-only owner connection choices, personal OAuth start, and workspace-less
-source-ref resolution. Transfer reads use the public `transfers` envelope with
+`GET /api/v1/source-ref-resolutions?url=...` resolution. Connection labels expose
+only `id`, `provider`, and optional `displayName`; no scope, owner, status, or secret
+metadata is requested or used. Transfer reads use the public `ownershipTransfers` envelope with
 `transferId`, `capsuleId`, `fromAccountId`, `toAccountId`, and `state`; unavailable
 routes hide/disable the corresponding new operation. The UI discovers incoming
 transfers without requiring app membership or a manually supplied transfer ID.

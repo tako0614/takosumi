@@ -232,43 +232,23 @@ export const PORTABLE_SHARED_APP_MEMBERS = {
 } as const;
 
 export function portableAppConnectionLabels(capsuleId: string) {
-  const ownerAccountId = capsuleId === "cap_beta_office"
-    ? "tsub_hanako0123456789"
-    : "sub_portable_e2e";
-  return {
-    projection: "app-owner-connection-labels",
-    ownerAccountId,
-    connections: [
-      {
-        id: capsuleId === "cap_beta_office" ? "pc_hanako_cloudflare" : "pc_cloudflare_direct",
-        displayName: "Cloudflare account",
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        scope: "personal",
-        ownerAccountId,
-      },
-      ...(capsuleId === "cap_beta_office" ? [{
-        id: "pc_hanako_cloudflare_alt",
-        displayName: "Second Cloudflare account",
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        scope: "personal",
-        ownerAccountId,
-      }] : []),
-      ...(capsuleId === "cap_beta_office" ? [{
-        id: "pc_hanako_aws",
-        displayName: "AWS account",
-        providerSource: "registry.opentofu.org/hashicorp/aws",
-        scope: "personal",
-        ownerAccountId,
-      }] : []),
-      {
-        id: "pc_takosumi_cloud",
-        displayName: "Takosumi hosted service",
-        providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-        scope: "operator",
-        operatorBindable: true,
-      },
-    ],
-  };
+  return { connections: [
+    {
+      id: capsuleId === "cap_beta_office" ? "pc_hanako_cloudflare" : "pc_cloudflare_direct",
+      displayName: "Cloudflare account",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+    },
+    ...(capsuleId === "cap_beta_office" ? [{
+      id: "pc_hanako_cloudflare_alt",
+      displayName: "Second Cloudflare account",
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+    }, {
+      id: "pc_hanako_aws",
+      displayName: "AWS account",
+      provider: "registry.opentofu.org/hashicorp/aws",
+    }] : []),
+    { id: "pc_takosumi_cloud", displayName: "Takosumi hosted service", provider: "registry.opentofu.org/cloudflare/cloudflare" },
+  ] };
 }
 
 function launcherInterface(

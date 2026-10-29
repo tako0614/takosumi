@@ -122,7 +122,7 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
   }
   if (request.method === "GET" && (path === "/api/v1/ownership-transfers" ||
     /^\/api\/v1\/capsules\/[^/]+\/ownership-transfers$/u.test(path))) {
-    return json({ transfers: [] });
+    return json({ ownershipTransfers: [] });
   }
   if (path === "/api/v1/connections" && request.method === "GET") {
     if (url.searchParams.get("projection") === "labels") {
@@ -135,7 +135,7 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
   if (path === "/api/v1/usage" && request.method === "GET") {
     return json(portableUsageResponse());
   }
-  if (path === "/api/v1/source-ref-resolutions/stable-semver" && request.method === "POST") {
+  if (path === "/api/v1/source-ref-resolutions" && request.method === "GET") {
     return json({ tag: "v1.0.0", commit: PORTABLE_SOURCE_COMMIT });
   }
   const memberMatch = path.match(/^\/api\/v1\/capsules\/([^/]+)\/members$/u);
