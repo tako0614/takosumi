@@ -2652,7 +2652,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
   async #connectionSnapshotMatches(current: ProviderConnection | undefined, expected: ProviderConnection): Promise<boolean> {
     if (!current) return false;
-    if (JSON.stringify(current) === JSON.stringify(expected)) return true;
+    // D1 persists JSON, where an omitted field and an explicit undefined field
+    // have the same representation. Normalize before comparing key order.
+    const expectedJson = stableStringify(JSON.parse(JSON.stringify(expected)));
+    if (stableStringify(current) === expectedJson) return true;
     // A pre-v77 caller can still hold the just-registered JSON snapshot while
     // the physical owner column has already been initialized. Only the exact
     // immutable Workspace owner may account for that one additive difference.
@@ -2662,7 +2665,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (workspace?.ownerUserId !== current.ownerAccountId) return false;
     const { ownerAccountId: _owner, ...legacy } = current;
     void _owner;
-    return JSON.stringify(legacy) === JSON.stringify(expected);
+    return stableStringify(legacy) === expectedJson;
   }
 
   async #initializeConnectionPhysicalOwner(connection: ProviderConnection): Promise<void> {
