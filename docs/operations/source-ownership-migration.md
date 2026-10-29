@@ -25,7 +25,8 @@ FROM sources s ORDER BY snapshot_count DESC, s.id;
 ```
 
 重複 snapshot の byte 合計は object store の実測使用量とは区別する。
-PostgreSQL では対応する `takosumi_*` table と JSONB field を用いて同じ内訳を確認する。
+PostgreSQL では `takosumi_sources`、`takosumi_source_snapshots`、`takosumi_runs`
+と対応する JSONB field を用いて同じ内訳を確認する。
 
 D1 の既存 HTTP operator は `scripts/operator-source-ownership.ts`。全 group の dry-run は read-only で、
 1 group の準備エラーはその group の `blocked` 理由として返し、他 group の棚卸しを続ける。
