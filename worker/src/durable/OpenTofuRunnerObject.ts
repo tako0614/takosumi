@@ -7,6 +7,7 @@ import type {
 } from "../bindings.ts";
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
+import { storedCapsuleArtifactRoot } from "../stored-capsule-root.ts";
 import { storedServiceCompositionFromEnv, type StoredBucketRole } from "../stored-service-usage.ts";
 import { assertStoredReleaseRunLease, assertStoredRetiredSourceArchiveDeletions, assertStoredRunLease, assertStoredSourceArchiveCleanup, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER, type SourceArchiveCleanupAllocation, type StoredReleaseParent, type StoredRunLease } from "../stored-service-owner-context.ts";
 import {
@@ -2970,6 +2971,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (composition) return runnerStoredServiceBucket(bucket, composition, this.env.TAKOSUMI_CONTROL_DB, { bucketRole: "state", runId, scope, restoreStageRef, restoreCleanup, expectedLeaseToken });
     return artifactStorageUsageBucket(bucket, this.env.TAKOSUMI_ARTIFACT_STORAGE_USAGE, {
       maxCiphertextBytes: maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+      resolveAppWorkspace: async (capsuleId) => {
+        const database = this.env.TAKOSUMI_CONTROL_DB;
+        if (!database) return undefined;
+        try {
+          const row = await database.prepare("select space_id from capsules where id = ? limit 2")
+            .bind(capsuleId).first<{ space_id?: unknown }>();
+          if (typeof row?.space_id !== "string" || !row.space_id) return undefined;
+          const root = await storedCapsuleArtifactRoot(database, row.space_id, capsuleId);
+          return root === `apps/${capsuleId}` ? row.space_id : undefined;
+        } catch {
+          // A workspace-less app key has no owner identity in its path. If the
+          // persisted Capsule/root lookup is unavailable, do not meter it under
+          // caller-controlled object metadata.
+          return undefined;
+        }
+      },
     });
   }
 
@@ -6784,7 +6801,7 @@ function planArtifactKeyFromRef(ref: string, bucket: string): string {
   }
   const key = ref.slice(prefix.length);
   const canonical =
-    /^workspaces\/[^/]+\/(?:capsules|resources)\/[^/]+\/runs\/[^/]+\/plan\.bin$/.test(
+    /^(?:workspaces\/[^/]+\/(?:capsules|resources)\/[^/]+|apps\/[^/]+)\/runs\/[^/]+\/plan\.bin$/.test(
       key,
     );
   if (

@@ -316,11 +316,17 @@ test("directory rejects spoofed IDs, legacy/PAT/Interface credentials, revoked/f
   f.clients[0]!.enabled=false;expect((await f.request("",grant.access_token)).status).toBe(401);f.clients[0]!.enabled=true;expect((await f.request("",grant.access_token)).status).toBe(401);
 });
 
-test("ephemeral Accounts handler keeps shared Workspace bootstrap frozen by default",async()=>{
+test("ephemeral Accounts handler permits canonical personal bootstrap with default freeze",async()=>{
   const f=await directoryFixture();const grant=await f.grant();
   const response=await f.request("/bootstrap",grant.access_token,"POST",{});
-  expect(response.status).toBe(409);
-  expect(await response.json()).toMatchObject({error:{code:"workspace_frozen"}});
+  expect(response.status).toBe(200);
+  const {workspace}=await response.json() as {workspace:{id:string;ownerUserId:string;type:string}};
+  expect(workspace).toMatchObject({ownerUserId:subject,type:"personal"});
+  expect((await f.request("/bootstrap",grant.access_token,"POST",{})).status).toBe(200);
+  const blocked=await f.request("",grant.access_token,"POST",{handle:"blocked-org",displayName:"Blocked",type:"organization"});
+  expect(blocked.status).toBe(409);
+  expect(await blocked.json()).toMatchObject({error:{code:"workspace_frozen"}});
+  expect(await f.control.listWorkspaces()).toHaveLength(1);
 });
 
 test("directory revalidates grant after owner billing wait and genuine issuer session still needs exact Origin",async()=>{

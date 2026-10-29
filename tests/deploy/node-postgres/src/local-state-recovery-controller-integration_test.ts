@@ -139,6 +139,7 @@ test("committed local state recovery flows through Core destroy planning into th
     const recoveryArtifacts = new LocalOpenTofuStateRecoveryArtifactStore({
       store: stateArtifactStore,
       allocator: new ObjectKeyArtifactReferenceAllocator(),
+      capsules: store,
     });
     const plaintextSha256 = await sha256Digest(TEST_STATE) as `sha256:${string}`;
     const staged = await recoveryArtifacts.stage({

@@ -15,6 +15,8 @@ import type {
   R2Objects,
   R2PutOptions,
 } from "../../../../worker/src/bindings.ts";
+import type { Capsule } from "takosumi-contract/capsules";
+import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import {
   type ContainerRequestFetcher,
   localOpenTofuRunnerProxyUrl,
@@ -2831,6 +2833,7 @@ test("OpenTofu runner Durable Object restores a legacy missing-size reviewed Pla
 async function applyReviewedPlanWithSize(
   r2: FakeR2Bucket,
   sizeBytes: number | undefined,
+  ref = "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
 ): Promise<{ readonly response: Response; readonly calls: readonly string[] }> {
   const calls: string[] = [];
   const runner = runnerWithContainer(r2, {
@@ -2858,7 +2861,7 @@ async function applyReviewedPlanWithSize(
         request: {
           planArtifact: {
             kind: "object-storage",
-            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            ref,
             digest: PLAN_DIGEST,
             ...(sizeBytes === undefined ? {} : { sizeBytes }),
           },
@@ -2871,9 +2874,11 @@ async function applyReviewedPlanWithSize(
 
 test("OpenTofu runner Durable Object applies the exact planArtifact its own Plan persisted", async () => {
   const r2 = new FakeR2Bucket();
+  const planCalls: string[] = [];
   const planRunner = runnerWithContainer(r2, {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
+      planCalls.push(`${request.method} ${path}`);
       if (request.method === "POST" && path === "/runs/plan_1") {
         return Response.json({
           status: "succeeded",
@@ -2897,7 +2902,14 @@ test("OpenTofu runner Durable Object applies the exact planArtifact its own Plan
       }
       return Response.json({ error: "unexpected" }, { status: 500 });
     },
-  });
+  }, { stateBucket: new FakeR2Bucket() });
+  const stateScope = {
+    workspaceId: "space_1",
+    subject: { kind: "capsule", id: "inst_1" },
+    environment: "production",
+    generation: 0,
+    stateRef: "apps/inst_1/environments/production/state-versions/00000000.tfstate.enc",
+  };
   const planned = await planRunner.fetch(
     new Request("https://runner/runs/plan_1", {
       method: "POST",
@@ -2906,21 +2918,23 @@ test("OpenTofu runner Durable Object applies the exact planArtifact its own Plan
         kind: "takosumi.opentofu-run@v1",
         action: "plan",
         runId: "plan_1",
-        request: {},
+        request: { stateScope },
       }),
     }),
   );
-  assert.equal(planned.status, 200);
+  assert.equal(planned.status, 200, `${await planned.clone().text()} calls=${JSON.stringify(planCalls)}`);
   const artifact = ((await planned.json()) as Record<string, unknown>)
     .planArtifact as Record<string, unknown>;
   // The persisted size is the plaintext the digest names, not the sealed object.
   assert.equal(artifact.sizeBytes, PLAN_BYTES.byteLength);
-  const sealed = r2.body("opentofu-plan-runs/plan_1/tfplan.enc");
+  assert.equal(artifact.ref, "r2://takos-artifacts/apps/inst_1/runs/plan_1/plan.bin");
+  const sealed = r2.body("apps/inst_1/runs/plan_1/plan.bin.enc");
   assert.ok(sealed && sealed.byteLength > PLAN_BYTES.byteLength);
 
   const { response, calls } = await applyReviewedPlanWithSize(
     r2,
     artifact.sizeBytes as number,
+    artifact.ref as string,
   );
   assert.equal(response.status, 200);
   assert.deepEqual(calls, [
@@ -6758,6 +6772,14 @@ async function seedRecoveredRestoreSource(state: FakeR2Bucket, ledger: FakeResto
     bucket: state,
     crypto: restoreTestCrypto(),
     allocator: new ObjectKeyArtifactReferenceAllocator(),
+    capsules: {
+      async getCapsule(id) {
+        return { id, workspaceId: "space_1", environment: "production" } as Capsule;
+      },
+      async getCapsuleStorageRoot() {
+        return "workspaces/space_1/capsules/inst_1";
+      },
+    } as Pick<OpenTofuControlStore, "getCapsule" | "getCapsuleStorageRoot">,
   });
   const staged = await adapter.stage({
     workspaceId: "space_1", capsuleId: "inst_1", environment: "production",

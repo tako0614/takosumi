@@ -31,6 +31,8 @@ function fixture() {
   });
   const facade = {
     workspaces: {
+      ensurePersonalWorkspace: service.ensurePersonalWorkspace.bind(service),
+      ensurePersonalWorkspaceForSharedAccount: service.ensurePersonalWorkspaceForSharedAccount.bind(service),
       listWorkspaces: service.listWorkspaces.bind(service),
       listWorkspacesByOwner: service.listWorkspacesByOwner.bind(service),
       listWorkspacesForAccount: service.listWorkspacesForAccount.bind(service),
@@ -173,12 +175,12 @@ test("Workspace creation and membership writes return the standard 409 envelope 
   expect(await f.control.listWorkspaceMembers(workspace.id)).toEqual([owner]);
 });
 
-test("frozen Workspace inventory reads do not trigger implicit personal bootstrap", async () => {
+test("default-frozen Workspace inventory bootstraps only the owner's personal singleton", async () => {
   const f = fixture();
   let ensured = 0;
-  (f.operations.workspaces as ControlPlaneOperations["workspaces"]).ensurePersonalWorkspace = async () => {
+  (f.operations.workspaces as ControlPlaneOperations["workspaces"]).ensurePersonalWorkspace = async (owner, handle) => {
     ensured += 1;
-    throw new Error("frozen list must not bootstrap");
+    return await f.service.ensurePersonalWorkspace(owner, handle);
   };
   const url = new URL("https://accounts.example.test/api/v1/workspaces");
   const response = await handleAuthenticatedControlRoute({
@@ -189,8 +191,34 @@ test("frozen Workspace inventory reads do not trigger implicit personal bootstra
     subject,
   });
   expect(response?.status).toBe(200);
-  expect(ensured).toBe(0);
-  expect(await f.control.listWorkspaces()).toEqual([]);
+  expect(ensured).toBe(1);
+  expect((await f.control.listWorkspaces())).toMatchObject([{ type: "personal", ownerUserId: subject }]);
+});
+
+test("default-frozen personal POST uses strict owner-bound singleton and rejects owner hints", async () => {
+  const f = fixture();
+  const call = async (body: Record<string, unknown>) => {
+    const url = new URL("https://accounts.example.test/api/v1/workspaces");
+    return await handleAuthenticatedControlRoute({
+      request: new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      url, store: f.accounts, operations: f.operations, subject, requireCurrentMembership: true,
+    });
+  };
+  const first = await call({ handle: "first-personal", type: "personal" });
+  expect(first?.status).toBe(201);
+  const personal = (await first?.json()).workspace as Workspace;
+  expect(personal).toMatchObject({ ownerUserId: subject, type: "personal" });
+  expect((await call({ handle: "another-handle" }))?.status).toBe(201);
+  expect(await f.control.listWorkspaces()).toEqual([personal]);
+  expect(await f.control.getWorkspaceMember(personal.id, subject)).toMatchObject({ status: "active", roles: ["owner"] });
+  for (const key of ["ownerUserId", "accountId", "workspaceId", "requireCurrentMembership"]) {
+    const response = await call({ handle: "injected", type: "personal", [key]: target });
+    expect(response?.status).toBe(400);
+  }
+  const organization = await call({ handle: "blocked-team", type: "organization" });
+  expect(organization?.status).toBe(409);
+  expect(await organization?.json()).toMatchObject({ error: { code: "workspace_frozen" } });
+  expect(await f.control.listWorkspaces()).toEqual([personal]);
 });
 
 for (const [label, type] of [

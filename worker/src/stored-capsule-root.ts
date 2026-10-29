@@ -44,7 +44,8 @@ export async function storedCapsuleArtifactRoot(
   // On v75/v76 there is no physical root authority. Old code could already
   // serialize an apps root into JSON, so keep the exact legacy allocation.
   // A nullable v77 row also retains its legacy root until backfill assigns one.
-  if (typeof physical === "string" && capsule.storageRoot !== undefined && capsule.storageRoot !== physical) throw new StoredServiceUsageError();
+  // The physical column is the authority after expansion; legacy JSON may
+  // still contain a root written before the schema bridge was corrected.
   try {
     return capsuleArtifactRoot(workspaceId, capsuleId, physical ?? undefined);
   } catch {
