@@ -35,7 +35,7 @@ test("the owning Worker cadence finalizes one bounded slice of due uninstalls", 
     "schedulePlatformSideEffect(\n      runScheduledCapsuleUninstallFinalize(env)",
   );
   expect(scheduledHandler.indexOf("runScheduledCapsuleUninstallFinalize")).toBeLessThan(
-    scheduledHandler.indexOf("scheduledSourcePollEnabledForCron(cron)"),
+    scheduledHandler.indexOf("schedulePlatformSideEffect(runSourceMaintenanceSchedule({"),
   );
   expect(workerSource).toContain('event: "capsule_uninstall_finalize_failed"');
 });

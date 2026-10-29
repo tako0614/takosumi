@@ -1764,6 +1764,8 @@ describe("Capsule execution authority", () => {
         updatedAt: NOW,
         snapshotId: "workerd-freeze-source-snapshot",
       };
+      await store.putSource({ ...seeded.source, id: queuedSourceSync.sourceId,
+        ownerCapsuleId: undefined, url: queuedSourceSync.url });
       expect(await store.beginSourceSyncRun(queuedSourceSync, authority)).toEqual({
         status: "created",
         run: queuedSourceSync,

@@ -41,6 +41,17 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
 | `authConnectionId` | なし          | 非公開リポジトリを読むための Connection             |
 | `autoSync`         | `false`（インストール計画を確認できる段階で `true` にします） | operator の scheduler が Git ref を定期的に確認する |
 
+アプリ所有の `defaultRef` / `defaultPath` は、採用中の snapshot の lane を表します。
+Apply・Restore・state recovery の後、版の変更計画の作成時、自動同期の開始時に、
+所有アプリと state を確認する CAS で収束させます。公開 PATCH での変更は
+`source_lane_owned_by_app` で拒否します。アプリの版の変更を使ってください。
+同期はこの lane だけを観測し、更新判定も所有アプリだけを対象にします。backup も採用中の snapshot を使います。
+
+インストールの「やめる」、アンインストール、abandon は専用 Source を退役させます。
+同期と polling を停止し、進行中の同期が終わってから専用 archive を削除し、最後に
+snapshot 行・Source 行と `source.retired` Activity を同じ書き込みで確定します。
+途中失敗は毎日の回収ジョブで再開します。退役後も destroyed アプリは表示できます。
+
 Git URL、ref、source subtree が Source の取得座標です。専用の source catalog はありません。
 `defaultPath` は取得範囲を狭めますが、実行 module を選びません。Source sync は exact
 commit の source subtree 配下に
@@ -129,7 +140,7 @@ Workspace が active でない Source と、すでに観測済みの固定 commi
 Source は `error` となり、設定を修復して `active` に戻すまで自動同期の対象から外れます。
 アプリが所有する Source は、同じ Workspace の所有アプリに適用済み state がある間だけ
 自動同期の対象です。未適用、アンインストール済み、削除済みの所有アプリは対象外です。
-所有アプリが記録されていない既存 Source の扱いは維持します。
+所有者未設定の事前確認用 Source は、未完了のインストール計画が参照していなければ 24 時間後に回収します。
 
 dashboard はこの scan 結果を読み、利用者が実在する module を選びます。同じ path の
 `.well-known/takosumi.json` entry は input の表示 hint と generic Host API/service request
@@ -141,7 +152,7 @@ Capsule はデプロイされた 1 つのまとまりです。Source が「ど�
 「何が動いているか」です。
 
 新しいアプリはそれぞれ専用の Source を持ち、同じリポジトリから追加しても共有しません。
-既存の共有 Source は維持します。module は認証情報も環境の区別も持たないので、
+既存の共有 Source は operator の移行ツールで分割します。移行前の ownerless Source では、既存アプリの採用 lane の観測と `stale` / 自動更新を維持します。commit 固定の採用 lane は定期 polling の対象外です。module は認証情報も環境の区別も持たないので、
 開発用と本番用は「別の Capsule に別の Source と Connection を割り当てる」ことで表します
 ([認証情報](./credentials.md))。
 

@@ -143,11 +143,11 @@ export function attemptCreateRequest(
         ? { authConnectionId: candidate.authConnectionId }
         : {}),
     },
-    ...(name || candidate.environment !== undefined
+    ...(name || candidate.environment
       ? {
           capsule: {
             ...(name ? { name } : {}),
-            ...(candidate.environment !== undefined ? { environment: candidate.environment } : {}),
+            ...(candidate.environment ? { environment: candidate.environment } : {}),
           },
         }
       : {}),
