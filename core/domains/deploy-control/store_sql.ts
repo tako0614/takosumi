@@ -56,7 +56,7 @@ import {
 import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import { jsonb, pgTable, text, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
-import type { AppListViewer } from "../app-ownership/list-visibility.ts";
+import { APP_LIST_SCHEMA_ABSENT_TTL_MS, type AppListViewer } from "../app-ownership/list-visibility.ts";
 import { isMissingOwnershipSchemaError } from "../app-ownership/store.ts";
 
 
@@ -11856,20 +11856,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return parseRow(rows[0]) as T | undefined;
   }
 
+  /** List-read-only negative cache: skips the failing filtered read before v123. */
+  #appListSchemaAbsentUntil = 0;
+
   /**
    * Applies a Workspace list's viewer predicate. A target before v123 has no
-   * ownership schema: the list then keeps the Workspace decision unfiltered.
+   * ownership schema: the list then keeps the Workspace decision unfiltered,
+   * and later lists skip the filtered attempt for a short TTL.
    */
   async #withAppListViewer<T>(
     viewer: AppListViewer | undefined,
     read: (viewer: AppListViewer | undefined) => Promise<T>,
   ): Promise<T> {
-    if (!viewer) return await read(undefined);
+    if (!viewer || Date.now() < this.#appListSchemaAbsentUntil) return await read(undefined);
     try {
       return await read(viewer);
     } catch (error) {
       if (!isMissingOwnershipSchemaError(error) &&
         !isMissingOwnershipSchemaError((error as { readonly cause?: unknown } | undefined)?.cause)) throw error;
+      this.#appListSchemaAbsentUntil = Date.now() + APP_LIST_SCHEMA_ABSENT_TTL_MS;
       return await read(undefined);
     }
   }

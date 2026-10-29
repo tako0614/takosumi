@@ -46,7 +46,7 @@ import {
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { alias, integer, sqliteTable, text, type SQLiteColumn, type SQLiteTable } from "drizzle-orm/sqlite-core";
 import { D1_APP_CREDENTIAL_MINT_LEASE_SCHEMA, D1_APP_OWNERSHIP_TRANSFER_SCHEMA } from "../../core/domains/app-authorization/schema.ts";
-import type { AppListViewer } from "../../core/domains/app-ownership/list-visibility.ts";
+import { APP_LIST_SCHEMA_ABSENT_TTL_MS, type AppListViewer } from "../../core/domains/app-ownership/list-visibility.ts";
 import {
   APP_OWNERSHIP_HISTORY_MAX_TRANSFERS,
   appOwnershipHistoryFromRows,
@@ -2755,9 +2755,15 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return present;
   }
 
+  /** List-read-only negative cache for the v77 probe; writes keep the uncached probe. */
+  #appListSchemaAbsentUntil = 0;
+
   /** The viewer to filter a Workspace list by; none before v77 (Workspace decision only). */
   async #appListViewer(viewer: AppListViewer | undefined): Promise<AppListViewer | undefined> {
-    return viewer && await this.#v77Column("capsules", "owner_account_id") ? viewer : undefined;
+    if (!viewer || Date.now() < this.#appListSchemaAbsentUntil) return undefined;
+    if (await this.#v77Column("capsules", "owner_account_id")) return viewer;
+    this.#appListSchemaAbsentUntil = Date.now() + APP_LIST_SCHEMA_ABSENT_TTL_MS;
+    return undefined;
   }
 
   async #withConnectionOwners(rows: readonly ProviderConnection[]): Promise<readonly ProviderConnection[]> {

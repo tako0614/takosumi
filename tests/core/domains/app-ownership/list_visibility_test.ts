@@ -1,10 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setSystemTime, test } from "bun:test";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type { UsageEvent } from "takosumi-contract/billing";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { Run } from "takosumi-contract/runs";
-import type { AppListViewer } from "../../../../core/domains/app-ownership/list-visibility.ts";
-import { D1AppOwnershipStore, InMemoryAppOwnershipStore, SqlAppOwnershipStore, type AppOwnershipStore } from "../../../../core/domains/app-ownership/store.ts";
+import type { SqlClient, SqlParameters } from "../../../../core/adapters/storage/sql.ts";
+import { APP_LIST_SCHEMA_ABSENT_TTL_MS, type AppListViewer } from "../../../../core/domains/app-ownership/list-visibility.ts";
+import {
+  D1AppOwnershipStore, InMemoryAppOwnershipStore, SqlAppOwnershipStore, isMissingOwnershipSchemaError, type AppOwnershipStore,
+} from "../../../../core/domains/app-ownership/store.ts";
 import { InMemoryOpenTofuControlStore, type OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore, ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -224,7 +227,8 @@ test("a Workspace without ownership rows is unfiltered for every viewer", async 
   }
 }, 180_000);
 
-test("pre-ownership schemas (D1 v75, Postgres v122) list without the predicate", async () => {
+/** A predeployed D1 at v75 (before the v77 ownership columns). */
+async function v75D1(): Promise<SqliteFakeD1> {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 75 });
   const fence = await acquireControlD1MaintenanceFence(db, {
@@ -232,6 +236,22 @@ test("pre-ownership schemas (D1 v75, Postgres v122) list without the predicate",
     environment: "test", databaseRole: "in_place", releasePolicy: "in_place",
   }, NOW);
   await releaseControlD1MaintenanceFence(db, fence, "2026-10-29T00:00:01.000Z");
+  return db;
+}
+
+/** Counts `pragma table_info(capsules)` statements, the v77 probe. */
+function countCapsuleProbes(db: SqliteFakeD1): { readonly count: () => number } {
+  let probes = 0;
+  const prepare = db.prepare.bind(db);
+  db.prepare = (query: string) => {
+    if (/pragma table_info\(capsules\)/iu.test(query)) probes++;
+    return prepare(query);
+  };
+  return { count: () => probes };
+}
+
+test("pre-ownership schemas (D1 v75, Postgres v122) list without the predicate", async () => {
+  const db = await v75D1();
   const d1 = new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
   const viewer: AppListViewer = { accountId: "stranger", appIds: [] };
   await d1.putWorkspace({ id: WS, handle: "list", displayName: "List", type: "organization",
@@ -254,4 +274,81 @@ test("pre-ownership schemas (D1 v75, Postgres v122) list without the predicate",
   expect((await postgres.listBackupRecordsPage(WS, { limit: 10 }, viewer)).items.map((row) => row.id)).toEqual(["bk_a"]);
   expect((await postgres.listCapsulesPage(WS, { limit: 10 }, viewer)).items).toEqual([]);
   expect((await postgres.listRunsByWorkspacePage(WS, { limit: 10 }, viewer)).rows).toEqual([]);
+}, 180_000);
+
+test("D1 v75 list requests probe the ownership schema once per TTL; writes keep probing", async () => {
+  const db = await v75D1();
+  const probes = countCapsuleProbes(db);
+  const d1 = new CloudflareD1OpenTofuControlStore(db, { schemaMode: "predeployed" });
+  const viewer: AppListViewer = { accountId: "stranger" };
+  await d1.putWorkspace({ id: WS, handle: "list", displayName: "List", type: "organization",
+    ownerUserId: "ws_owner", createdAt: NOW, updatedAt: NOW });
+  await d1.putCapsule(capsule("cap_a", "src_a", "active", 0));
+  try {
+    const before = probes.count();
+    // Consecutive list requests (one store per isolate) share one probe.
+    expect((await d1.listCapsulesPage(WS, { limit: 10 }, viewer)).items.map((row) => row.id)).toEqual(["cap_a"]);
+    expect((await d1.listCapsulesPage(WS, { limit: 10 }, viewer)).items.map((row) => row.id)).toEqual(["cap_a"]);
+    await d1.listRunsByWorkspacePage(WS, { limit: 10 }, viewer);
+    await d1.listSourcesPage(WS, { limit: 10 }, viewer);
+    await d1.listBackupRecordsPage(WS, { limit: 10 }, viewer);
+    await d1.listUsageEventsPage(WS, { limit: 10 }, viewer);
+    expect(probes.count() - before).toBe(1);
+    // A write still probes: it must see the v77 columns as soon as they exist.
+    await d1.putCapsule(capsule("cap_b", "src_a", "active", 1));
+    expect(probes.count() - before).toBeGreaterThan(1);
+    // After the TTL a list request probes again (the additive migration is seen).
+    const afterWrite = probes.count();
+    setSystemTime(new Date(Date.now() + APP_LIST_SCHEMA_ABSENT_TTL_MS + 1));
+    await d1.listCapsulesPage(WS, { limit: 10 }, viewer);
+    await d1.listCapsulesPage(WS, { limit: 10 }, viewer);
+    expect(probes.count() - afterWrite).toBe(1);
+  } finally {
+    setSystemTime();
+  }
+
+  // A current schema caches the present column: no probe after the first.
+  const current = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(current);
+  const currentProbes = countCapsuleProbes(current);
+  const store = new CloudflareD1OpenTofuControlStore(current);
+  await store.listCapsulesPage(WS, { limit: 10 }, viewer);
+  await store.listCapsulesPage(WS, { limit: 10 }, viewer);
+  await store.listRunsByWorkspacePage(WS, { limit: 10 }, viewer);
+  expect(currentProbes.count()).toBe(1);
+}, 180_000);
+
+test("Postgres v122 list requests attempt the filtered read once per TTL", async () => {
+  const pg = await PGliteSqlClient.createThroughMigrationVersion(122);
+  clients.push(pg);
+  let missingSchemaReads = 0;
+  const counted: SqlClient = {
+    async query<Row extends Record<string, unknown>>(sql: string, parameters?: SqlParameters) {
+      try {
+        return await pg.query<Row>(sql, parameters);
+      } catch (error) {
+        if (isMissingOwnershipSchemaError(error)) missingSchemaReads++;
+        throw error;
+      }
+    },
+    transaction: (fn) => pg.transaction(fn),
+  };
+  await pg.query(`insert into takosumi_backups (id, space_id, installation_id, backup_json, created_at)
+    values ('bk_a', '${WS}', 'cap_a', $1::json, '${NOW}')`, [JSON.stringify(backupRecord("bk_a", 0, "cap_a"))]);
+  const postgres = new SqlOpenTofuControlStore({ client: counted });
+  const viewer: AppListViewer = { accountId: "stranger" };
+  try {
+    expect((await postgres.listBackupRecordsPage(WS, { limit: 10 }, viewer)).items.map((row) => row.id)).toEqual(["bk_a"]);
+    expect((await postgres.listBackupRecordsPage(WS, { limit: 10 }, viewer)).items.map((row) => row.id)).toEqual(["bk_a"]);
+    await postgres.listCapsulesPage(WS, { limit: 10 }, viewer);
+    await postgres.listRunsByWorkspacePage(WS, { limit: 10 }, viewer);
+    await postgres.listSourcesPage(WS, { limit: 10 }, viewer);
+    expect(missingSchemaReads).toBe(1);
+    setSystemTime(new Date(Date.now() + APP_LIST_SCHEMA_ABSENT_TTL_MS + 1));
+    expect((await postgres.listBackupRecordsPage(WS, { limit: 10 }, viewer)).items.map((row) => row.id)).toEqual(["bk_a"]);
+    await postgres.listCapsulesPage(WS, { limit: 10 }, viewer);
+    expect(missingSchemaReads).toBe(2);
+  } finally {
+    setSystemTime();
+  }
 }, 180_000);

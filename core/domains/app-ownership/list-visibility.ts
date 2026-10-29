@@ -37,6 +37,15 @@ export interface AppListViewer {
   readonly appIds?: readonly string[];
 }
 
+/**
+ * How long a SQL store trusts "no ownership schema" for these list reads, like
+ * the D1 authorization fence (`D1_OWNERSHIP_FENCE_ABSENT_TTL_MS`), so a
+ * pre-v77/pre-v123 target is not probed on every list request. The additive
+ * migration is seen within it; a present schema stays cached. Writes keep
+ * their uncached probe.
+ */
+export const APP_LIST_SCHEMA_ABSENT_TTL_MS = 60_000;
+
 /** The memory store's mirror of the SQL rule for one app. */
 export function appHiddenFromViewer(
   viewer: AppListViewer,
