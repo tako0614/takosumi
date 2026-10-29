@@ -242,3 +242,47 @@ test("installed-app OAuth bearer cannot use account resources or another app", a
   expect(victimReads).toBe(0);
   expect(accountReads).toBe(0);
 });
+
+test("app members page the owner's bindable connection labels through the D1 owner index", async () => {
+  const db = new SqliteFakeD1();
+  await db.exec("create table connections (id text primary key, owner_account_id text, connection_json text not null, created_at text not null)");
+  const rows = [
+    ["conn_1", "owner", "verified", "2026-01-01T00:00:00.000Z"],
+    ["conn_2", "owner", "pending", "2026-01-02T00:00:00.000Z"],
+    ["conn_3", "stranger", "verified", "2026-01-03T00:00:00.000Z"],
+    ["conn_4", "owner", "verified", "2026-01-04T00:00:00.000Z"],
+    ["conn_5", "owner", "revoked", "2026-01-05T00:00:00.000Z"],
+    ["conn_6", "owner", "verified", "2026-01-06T00:00:00.000Z"],
+  ] as const;
+  for (const [id, owner, status, when] of rows) {
+    await db.prepare("insert into connections(id,owner_account_id,connection_json,created_at) values(?1,?2,?3,?4)").bind(id, owner, JSON.stringify({
+      id, ownerAccountId: owner, scope: "personal", status, provider: "registry.example/cloud", displayName: `Cloud ${id}`,
+      envNames: ["TOKEN"], scopeHints: { accountId: "private" }, createdAt: when, updatedAt: when,
+    }), when).run();
+  }
+  const capsule = { id: "cap_shared", workspaceId: "ws_owner", environment: "production" };
+  const operations = {
+    appAccess: { resolveAppAccess: async (subject: string, capsuleId: string) =>
+      subject === "member" && capsuleId === capsule.id ? { capsuleId, role: "member", ownerAccountId: "owner", ownershipEpoch: 1 } : undefined },
+    capsules: { getCapsule: async () => capsule, getProviderBindingSetByCapsule: async () => undefined },
+    accountResources: d1AccountResourceReader(db),
+    connections: { listReleaseOwnedProviderConnections: async () => [] },
+  } as unknown as ControlPlaneOperations;
+  const read = async (subject: string, query: string) => {
+    const request = new Request(`https://app.example.test/api/v1/connections?capsuleId=cap_shared&projection=labels${query}`);
+    return await handleConnections({ request, url: new URL(request.url), operations, store: new InMemoryAccountsStore(), session: { subject } }, ["connections"], "GET");
+  };
+  const seen: unknown[] = [];
+  let cursor: string | undefined;
+  for (let pages = 0; pages < 10; pages++) {
+    const response = await read("member", `&limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as { connections: unknown[]; nextCursor?: string };
+    seen.push(...body.connections);
+    cursor = body.nextCursor;
+    if (!cursor) break;
+  }
+  expect(cursor).toBeUndefined();
+  expect(seen).toEqual(["conn_1", "conn_4", "conn_6"].map((id) => ({ id, provider: "registry.example/cloud", displayName: `Cloud ${id}` })));
+  expect((await read("stranger", ""))?.status).toBe(403);
+});
