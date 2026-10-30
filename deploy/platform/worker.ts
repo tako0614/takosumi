@@ -30,6 +30,7 @@ import {
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
+  trustedNativeClientsFromEnv,
   type ControlPlaneOperations,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
@@ -558,6 +559,9 @@ async function createPlatformOperatorControlMcpAuthority(
         ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
           ? { appOwnershipMutationsFrozen: true }
           : {}),
+        trustedNativeClients: trustedNativeClientsFromEnv(
+          env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
+        ),
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
@@ -1707,6 +1711,7 @@ export async function handlePlatformSharedAuthControlRequest(
       credential: "session",
       requireCurrentMembership: true,
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
+      trustedNativeClients: trustedNativeClientsFromEnv(env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
       ...(withinRunReadDeadline ? { withinRunReadDeadline } : {}),
