@@ -8,6 +8,17 @@ package for the v1 GA line.
 
 ## Unreleased
 
+- **Devices can register for the instance's own notifications:**
+  `GET/POST/DELETE /api/v1/account/notification-pushers` stores Takosumi Mobile
+  `webpush` pushers (MSC4174 field layout) in the Accounts store, one per
+  account, `app_id` and `pushkey`, at most 20 per account. Endpoints must be
+  https on port 443 on an allowed push relay origin (the official relay, plus
+  `TAKOSUMI_NOTIFICATION_PUSH_RELAY_ORIGINS`). `web_push_public_key` is a VAPID
+  key derived from the secret-store passphrase, so no new secret is needed;
+  without a passphrase it is `null` and registration answers 503. PostgreSQL
+  needs Accounts migration `047`; D1 needs no migration. The Web Push sender
+  (RFC 8291/8292) and its answer rules ship with it; what is notified follows
+  separately.
 - **Takosumi Mobile can sign in to any instance:** every instance now includes
   the built-in public OIDC client `takosumi-mobile` (redirect
   `takosumi://oauth/callback`, scopes `openid profile offline_access
