@@ -5730,13 +5730,14 @@ test("OpenTofu runner Restore accepts the exact ledger-bound Restore-origin Stat
   assert.equal(ledger.sourceQueryCount, 1);
 });
 
-// TASK-0118 P9.1-f: Restore follows the persisted root for an app's `apps/`
-// root and for a legacy root after its Workspace id moved. A source written
-// before 9.1-f is bound by its Workspace metadata; one written since, by its
-// storage root alone, whatever Workspace the dispatch names.
-for (const [name, root] of [
-  ["an app's apps root", "apps/inst_1"],
-  ["a legacy root after its Workspace moved", "workspaces/space_1/capsules/inst_1"],
+// TASK-0118 P9.1-f: Restore under an app's `apps/` root and under a legacy
+// root. A source written before 9.1-f is bound by its Workspace metadata; one
+// written since, by its storage root. An `apps/` root does not depend on the
+// dispatch's Workspace, so its second Restore names a moved one; a legacy root
+// must still be the one the dispatch's Workspace names.
+for (const [name, root, secondWorkspace] of [
+  ["an app's apps root", "apps/inst_1", "space_moved"],
+  ["a legacy root", "workspaces/space_1/capsules/inst_1", "space_1"],
 ] as const) {
   test(`OpenTofu runner Restore restores old and new objects under ${name}`, async () => {
     const state = new HookedR2Bucket();
@@ -5753,11 +5754,10 @@ for (const [name, root] of [
     assert.equal(stage?.customMetadata?.["takosumi-storage-root"], root);
     assert.equal(stage?.customMetadata?.["takosumi-capsule-id"], "inst_1");
 
-    // Restore again from that new object while the dispatch and its
-    // StateVersion name a moved Workspace: the root binds it.
+    // Restore again from that new object: its storage root binds it.
     const restoreOrigin: RestoreSourceDescriptor = {
       stateVersionId: `state_restore_root_${root.split("/")[0]}`,
-      workspaceId: "space_moved",
+      workspaceId: secondWorkspace,
       capsuleId: "inst_1",
       environment: "production",
       generation: 2,
@@ -5767,10 +5767,17 @@ for (const [name, root] of [
     };
     ledger.referenceExactStateVersion(restoreOrigin);
     const replayed = await runner.fetch(restoreRequest("restore_root_new_object", restoreOrigin, undefined, {
-      workspaceId: "space_moved", generation: 3, root,
+      workspaceId: secondWorkspace, generation: 3, root,
     }));
     assert.equal(replayed.status, 200);
     assert.equal(ledger.sourceQueryCount, 1);
+    if (root.startsWith("workspaces/")) {
+      // A dispatch naming another Workspace than the legacy root's is refused.
+      const moved = await runner.fetch(restoreRequest("restore_root_moved", source, undefined, {
+        workspaceId: "space_moved", generation: 4, root,
+      }));
+      assert.notEqual(moved.status, 200);
+    }
   });
 }
 

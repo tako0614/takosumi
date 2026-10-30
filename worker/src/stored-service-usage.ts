@@ -6,13 +6,20 @@ import type { R2Bucket, R2Object, R2ObjectBody, R2PutOptions } from "./bindings.
 export type StoredBucketRole = "state" | "artifacts" | "source" | "backups";
 /**
  * Who a stored object is attributed to (TASK-0118 P9.1-f). An object under a
- * legacy `workspaces/{ws}/…` key belongs to that Workspace, as it always has;
- * one under an app's `apps/{cap}/…` root belongs to that Capsule and never
- * falls back to a Workspace. Exactly one of the two is present.
+ * legacy `workspaces/{ws}/…` key belongs to that Workspace, as it always has.
+ * One under an app's `apps/{cap}/…` root belongs to that Capsule (`capsuleId`).
+ *
+ * Until stage 9B moves Hosted to Capsule attribution, `workspaceId` is always
+ * present so the existing host contract keeps working: for an `apps/` object
+ * it is the Capsule's frozen scopeRef (the Workspace id it was created under
+ * for every existing app, never the live Workspace id). A legacy object's
+ * context keeps exactly its previous shape, so pending operation digests do
+ * not move.
  */
-export type StoredObjectOwner =
-  | { readonly workspaceId: string; readonly capsuleId?: undefined }
-  | { readonly capsuleId: string; readonly workspaceId?: undefined };
+export type StoredObjectOwner = {
+  readonly workspaceId: string;
+  readonly capsuleId?: string;
+};
 export type StoredObjectContext = {
   readonly sourceRef: string;
   readonly bucketRole: StoredBucketRole;
@@ -28,11 +35,14 @@ export interface StoredObjectIntent {
   readonly state: "pending" | "confirmed" | "cancelled";
 }
 export type StoredObjectSnapshot = {
+  readonly workspaceId: string;
+  /** Echoed only by a host that records Capsule attribution. */
+  readonly capsuleId?: string;
   readonly revision: number;
   readonly bytes: string;
   readonly versionDigest: string | null;
   readonly pending?: StoredObjectIntent;
-} & StoredObjectOwner;
+};
 export interface StoredServiceUsagePort {
   readStoredSource(input: { readonly bucketRole: StoredBucketRole; readonly writerId: string }): Promise<{ readonly sourceRef: string; readonly epochRef: string; readonly qualificationDigest: string }>;
   readStoredObject(input: StoredObjectContext): Promise<StoredObjectSnapshot>;
@@ -97,20 +107,23 @@ export async function storedServiceCall<T>(call: () => Promise<T>): Promise<T> {
 function id(value: unknown): asserts value is string {
   if (typeof value !== "string" || !ID.test(value)) throw new StoredServiceUsageError();
 }
-/** Exactly one valid owner id; returns a fresh object in the canonical key order. */
+/** A valid owner as a fresh object in the canonical key order (workspaceId, then capsuleId). */
 export function storedObjectOwner(value: unknown): StoredObjectOwner {
   if (!value || typeof value !== "object") throw new StoredServiceUsageError();
   const owner = value as { readonly workspaceId?: unknown; readonly capsuleId?: unknown };
-  if ((owner.workspaceId === undefined) === (owner.capsuleId === undefined)) throw new StoredServiceUsageError();
-  if (owner.workspaceId !== undefined) {
-    id(owner.workspaceId);
-    return { workspaceId: owner.workspaceId };
-  }
+  id(owner.workspaceId);
+  if (owner.capsuleId === undefined) return { workspaceId: owner.workspaceId };
   id(owner.capsuleId);
-  return { capsuleId: owner.capsuleId };
+  return { workspaceId: owner.workspaceId, capsuleId: owner.capsuleId };
 }
-export function sameStoredObjectOwner(left: StoredObjectOwner, right: StoredObjectOwner): boolean {
-  return left.workspaceId === right.workspaceId && left.capsuleId === right.capsuleId;
+/**
+ * A host snapshot matches the owner by Workspace scope; a host that already
+ * records the Capsule must also name the same one. (Hosted before 9B echoes
+ * only `workspaceId`.)
+ */
+function snapshotOwnerMatches(snapshot: StoredObjectSnapshot, owner: StoredObjectOwner): boolean {
+  return snapshot.workspaceId === owner.workspaceId &&
+    (snapshot.capsuleId === undefined || snapshot.capsuleId === owner.capsuleId);
 }
 function digest(value: unknown): asserts value is string {
   if (typeof value !== "string" || !DIGEST.test(value)) throw new StoredServiceUsageError();
@@ -192,7 +205,7 @@ function validIntent(input: StoredObjectIntent): StoredObjectIntent {
   return input;
 }
 function validSnapshot(input: StoredObjectSnapshot, owner: StoredObjectOwner): StoredObjectSnapshot {
-  if (!input || !sameStoredObjectOwner(storedObjectOwner(input), owner)) throw new StoredServiceUsageError();
+  if (!input || !snapshotOwnerMatches(input, owner)) throw new StoredServiceUsageError();
   revision(input.revision); integer(input.bytes); version(input.versionDigest);
   if (input.versionDigest === null && input.bytes !== "0") throw new StoredServiceUsageError();
   if (input.pending) {
@@ -242,8 +255,8 @@ export function storedServiceUsageBucket(bucket: R2Bucket, composition: StoredSe
     const source = await storedServiceCall(() => composition.usage.readStoredSource({ bucketRole, writerId }));
     if (!source) throw new StoredServiceUsageError();
     id(source.sourceRef); id(source.epochRef); digest(source.qualificationDigest);
-    // Key order is part of every operation digest: a Workspace owner keeps the
-    // exact context shape it always had.
+    // Key order is part of every operation digest: a legacy owner keeps the
+    // exact context shape it always had; an `apps/` owner adds capsuleId.
     return { sourceRef: source.sourceRef, bucketRole, writerId, ...owner, objectRef: await storedObjectReference(bucketRole, key, source.sourceRef) };
   };
   const observe = async (key: string) => await storedServiceCall(() => bucket.head(key));

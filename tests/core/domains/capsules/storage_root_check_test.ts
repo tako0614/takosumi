@@ -119,6 +119,8 @@ test("every row resolves as the stores resolve it, destroyed rows included", asy
       byRoot: { apps: 1, legacy: 1, derived: 2 },
       derived: ["cap_destroyed", "cap_prescope"],
       unresolvable: [],
+      workspaceColumnMismatch: [],
+      orphanAppArchives: [],
       ok: true,
     });
   }
@@ -145,9 +147,45 @@ test("rows that resolve to no canonical root are reported, never repaired", asyn
   }
 }, 60_000);
 
+test("a record naming another Workspace than its column, and apps/ archives of a Capsule that never existed, are reported", async () => {
+  for (const fixture of await stores()) {
+    if (!fixture.target) continue;
+    await seed(fixture);
+    const sourceRecord = (await fixture.store.getSource("src_cap_apps"))!;
+    // An abandoned install reservation: an apps/ archive for a Capsule with no row.
+    await fixture.store.putSourceSnapshot({
+      id: "snap_abandoned", origin: "git", workspaceId: "ws_roots", sourceId: sourceRecord.id, url: sourceRecord.url,
+      ref: "main", path: ".", resolvedCommit: "a".repeat(40),
+      archiveRef: `apps/cap_never_created/sources/${sourceRecord.id}/snapshots/snap_abandoned/source.tar.zst`,
+      archiveDigest: `sha256:${"b".repeat(64)}`, archiveSizeBytes: 1, fetchedByRunId: "run_abandoned",
+      fetchedAt: "2026-10-30T00:00:00.000Z",
+    });
+    // And an archive of an existing app is not an orphan.
+    await fixture.store.putSourceSnapshot({
+      id: "snap_owned", origin: "git", workspaceId: "ws_roots", sourceId: sourceRecord.id, url: sourceRecord.url,
+      ref: "main", path: ".", resolvedCommit: "a".repeat(40),
+      archiveRef: `apps/cap_apps/sources/${sourceRecord.id}/snapshots/snap_owned/source.tar.zst`,
+      archiveDigest: `sha256:${"b".repeat(64)}`, archiveSizeBytes: 1, fetchedByRunId: "run_owned",
+      fetchedAt: "2026-10-30T00:00:00.000Z",
+    });
+    if (fixture.name === "d1") {
+      await (fixture.store as unknown as { db: SqliteFakeD1 }).db
+        .prepare("update capsules set space_id = ? where id = ?").bind("ws_moved", "cap_legacy").run();
+    } else {
+      await (clients.at(-1)!).query("update takosumi_capsules set space_id = $2 where id = $1", ["cap_legacy", "ws_moved"]);
+    }
+    const report = await checkCapsuleStorageRoots(fixture.target);
+    expect(report.workspaceColumnMismatch, fixture.name).toEqual(["cap_legacy"]);
+    expect(report.orphanAppArchives, fixture.name).toEqual([
+      { sourceId: sourceRecord.id, capsuleId: "cap_never_created", refs: 1 },
+    ]);
+    expect(report.ok, fixture.name).toBe(false);
+  }
+}, 60_000);
+
 test("resolution of individual rows", () => {
   const row = (extra: Partial<CapsuleStorageRootRow>): CapsuleStorageRootRow => ({
-    id: "cap_1", status: "active", storageRoot: null, recordValid: true, recordId: "cap_1",
+    id: "cap_1", status: "active", columnWorkspaceId: "ws_1", storageRoot: null, recordValid: true, recordId: "cap_1",
     recordWorkspaceId: "ws_1", recordScopeRef: undefined, ...extra,
   });
   expect(resolveCapsuleStorageRoot(row({ storageRoot: "apps/cap_1" }))).toEqual({ ok: true, root: "apps/cap_1", kind: "apps" });

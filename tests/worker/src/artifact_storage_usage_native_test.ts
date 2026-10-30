@@ -5,14 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Hosted-shaped custody (takosumi-hosted origin/main before 9B): it requires
+// a workspaceId on every call and keys its ledger by it.
 const HOST = `
   import { WorkerEntrypoint } from "cloudflare:workers";
   export class Custody extends WorkerEntrypoint {
     async readArtifactRetention(input) {
+      if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("storageToken: workspaceId required");
       const row = await this.env.DB.prepare("SELECT input, ack FROM observations WHERE artifact_ref = ?").bind(input.artifactRef).first();
       if (!row) return null;
       const original = JSON.parse(row.input);
-      if (original.workspaceId !== input.workspaceId || original.capsuleId !== input.capsuleId) throw new Error("foreign owner");
+      if (original.workspaceId !== input.workspaceId) throw new Error("foreign workspace");
       return { bytes: original.bytes, ...(row.ack ? { acknowledgementDigest: row.ack } : {}) };
     }
     async prepareArtifactRetention(input) {
@@ -23,6 +26,7 @@ const HOST = `
       return { operationRef: "retain:" + input.artifactRef.slice(7), state: original?.acknowledgementDigest ? "confirmed" : "pending" };
     }
     async confirmArtifactRetention(input) {
+      if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("storageToken: workspaceId required");
       await this.env.DB.prepare("INSERT INTO attempts(input) VALUES(?)").bind(JSON.stringify(input)).run();
       const fail = await this.env.DB.prepare("SELECT value FROM controls WHERE key='fail-confirm'").first();
       if (fail?.value === 'yes') {
@@ -38,6 +42,7 @@ const HOST = `
       return { operationRef: "release:" + input.artifactRef.slice(7) };
     }
     async confirmArtifactRelease(input) {
+      if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("storageToken: workspaceId required");
       await this.env.DB.prepare("UPDATE observations SET released=1 WHERE artifact_ref=?").bind(input.artifactRef).run();
     }
   }
@@ -77,7 +82,10 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
           async put(...args) { physicalPuts++; const result = await env.STATE.put(...args); if (route === "/lost-put" || route === "/lost-put-conditional") throw new Error("lost PUT ACK"); return result; },
           async delete(k) { physicalDeletes++; await env.STATE.delete(k); if (route === "/lost-delete") throw new Error("lost DELETE ACK"); },
         };
-        const bucket = artifactStorageUsageBucket(raw, env.CUSTODY);
+        // The Capsule's frozen scope, as the Runner reads it from the Capsule row.
+        const bucket = artifactStorageUsageBucket(raw, env.CUSTODY, {
+          resolveAppScope: async (capsuleId) => route === "/app-no-scope" || capsuleId !== "c_app" ? undefined : "ws_native",
+        });
         try {
           if (route === "/delete" || route === "/lost-delete" || route === "/malformed-delete") await bucket.delete(key);
           else if (route === "/read") return Response.json({ objects: (await bucket.list()).objects.length, physicalPuts,physicalDeletes });
@@ -151,6 +159,10 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
       expect(refused.status, route).toBe(503);
       expect(await refused.json(), route).toMatchObject({ error: "artifact storage acknowledgement is invalid", physicalPuts: beforeApps.physicalPuts });
     }
+    // Without a Capsule scope there is no custody to report to the host.
+    const noScope = await runtime.dispatchFetch("https://artifact.test/app-no-scope");
+    expect(noScope.status).toBe(503);
+    expect(await noScope.json()).toMatchObject({ error: "artifact storage custody is unavailable", physicalPuts: beforeApps.physicalPuts });
     const mutableApp = await runtime.dispatchFetch("https://artifact.test/app-mutable");
     expect(mutableApp.status).toBe(200);
     const mutableResult = await mutableApp.json() as { bytes: number[]; customMetadata: Record<string, string> };
@@ -164,8 +176,9 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
     const appReceipt = await db.prepare("SELECT input,ack FROM observations ORDER BY rowid DESC LIMIT 1")
       .first<{ input: string; ack: string }>();
     const appFact = JSON.parse(appReceipt!.input);
-    expect(appFact).toMatchObject({ capsuleId: "c_app", bytes: "4", replayOnly: false });
-    expect(appFact).not.toHaveProperty("workspaceId");
+    // Measured for the Capsule; the Hosted-shaped host still gets its frozen
+    // scope as workspaceId (not the "ws_unrelated" object metadata).
+    expect(appFact).toMatchObject({ workspaceId: "ws_native", capsuleId: "c_app", bytes: "4", replayOnly: false });
     expect(appReceipt!.ack).toBe(mutableResult.customMetadata["takosumi-storage-observation-digest"]);
     // An exact replay of the same apps/ object adopts the existing receipt.
     const replayedApp = await runtime.dispatchFetch("https://artifact.test/app-valid");

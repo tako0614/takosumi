@@ -9,16 +9,25 @@
  * legacy root from the Capsule's frozen `scopeRef` (else its Workspace id). The
  * stage 9.5 bridge removes that fallback, so this check reports those rows as
  * `derived`, and it reports any row that resolves to no canonical root at all
- * as `unresolvable`. It reads only; it never writes or runs DDL.
+ * as `unresolvable`. It also reports rows whose record names another
+ * Workspace than their `space_id` column, and `apps/` Source archives
+ * allocated for a Capsule that does not exist (an abandoned install
+ * reservation). It reads only; it never writes or runs DDL.
  */
 
 import type { SqlClient } from "../../adapters/storage/sql.ts";
 import { capsuleArtifactRoot } from "../../adapters/storage/artifact-references.ts";
+import {
+  D1_APP_SOURCE_ARCHIVE_OWNERS_QUERY,
+  POSTGRES_APP_SOURCE_ARCHIVE_OWNERS_QUERY,
+} from "../../adapters/storage/source-archive-reference-query.ts";
 
 /** One Capsule row as the check reads it. */
 export interface CapsuleStorageRootRow {
   readonly id: string;
   readonly status: string;
+  /** The physical Workspace column (`space_id`). */
+  readonly columnWorkspaceId: string | null;
   /**
    * The persisted `storage_root`: a string, `null` when the column is empty,
    * `undefined` when the schema has no such column yet (D1 before v77).
@@ -32,9 +41,18 @@ export interface CapsuleStorageRootRow {
   readonly recordScopeRef: unknown;
 }
 
+/** `apps/{cap}/sources/{src}/…` archive refs of one Source, grouped by the Capsule segment. */
+export interface AppSourceArchiveOwnerRow {
+  readonly sourceId: string;
+  readonly capsuleId: string;
+  readonly refs: number;
+}
+
 export interface CapsuleStorageRootCheckTarget {
   /** Every Capsule row, destroyed ones included. */
   listRows(): Promise<readonly CapsuleStorageRootRow[]>;
+  /** Every `apps/` Source archive ref in SourceSnapshots and SourceSyncRuns. */
+  listAppSourceArchiveOwners(): Promise<readonly AppSourceArchiveOwnerRow[]>;
 }
 
 export type CapsuleStorageRootResolution =
@@ -60,7 +78,15 @@ export interface CapsuleStorageRootReport {
     readonly status: string;
     readonly reason: CapsuleStorageRootUnresolvableReason;
   }[];
-  /** Every row resolves to a canonical root. */
+  /** Rows whose record `workspaceId` differs from their `space_id` column. */
+  readonly workspaceColumnMismatch: readonly string[];
+  /**
+   * `apps/` Source archives allocated for a Capsule with no row: an install
+   * reservation that was never created. Reported for the storage inventory;
+   * they do not fail the check.
+   */
+  readonly orphanAppArchives: readonly AppSourceArchiveOwnerRow[];
+  /** Every row resolves to a canonical root and agrees with its Workspace column. */
   readonly ok: boolean;
 }
 
@@ -99,8 +125,10 @@ export async function checkCapsuleStorageRoots(
   const byRoot = { apps: 0, legacy: 0, derived: 0 };
   const derived: string[] = [];
   const unresolvable: { capsuleId: string; status: string; reason: CapsuleStorageRootUnresolvableReason }[] = [];
+  const workspaceColumnMismatch: string[] = [];
   for (const row of rows) {
     byStatus[row.status] = (byStatus[row.status] ?? 0) + 1;
+    if (row.recordValid && row.recordWorkspaceId !== row.columnWorkspaceId) workspaceColumnMismatch.push(row.id);
     const resolved = resolveCapsuleStorageRoot(row);
     if (!resolved.ok) {
       unresolvable.push({ capsuleId: row.id, status: row.status, reason: resolved.reason });
@@ -109,7 +137,14 @@ export async function checkCapsuleStorageRoots(
     byRoot[resolved.kind] += 1;
     if (resolved.kind === "derived") derived.push(row.id);
   }
-  return { total: rows.length, byStatus, byRoot, derived, unresolvable, ok: unresolvable.length === 0 };
+  const capsuleIds = new Set(rows.map((row) => row.id));
+  const orphanAppArchives = [...await target.listAppSourceArchiveOwners()]
+    .filter((owner) => !capsuleIds.has(owner.capsuleId))
+    .sort((a, b) => a.capsuleId.localeCompare(b.capsuleId) || a.sourceId.localeCompare(b.sourceId));
+  return {
+    total: rows.length, byStatus, byRoot, derived, unresolvable, workspaceColumnMismatch, orphanAppArchives,
+    ok: unresolvable.length === 0 && workspaceColumnMismatch.length === 0,
+  };
 }
 
 /** Minimal read-only D1 surface (a Worker binding, the REST transport, or a SQLite copy). */
@@ -130,7 +165,7 @@ export function d1CapsuleStorageRootCheckTarget(db: CapsuleStorageRootD1): Capsu
       ).bind().all<{ name: string }>();
       const hasRoot = (column.results ?? []).length === 1;
       const result = await db.prepare(
-        `select id, status, ${hasRoot ? "storage_root" : "null as storage_root"},
+        `select id, status, space_id, ${hasRoot ? "storage_root" : "null as storage_root"},
                 case when json_valid(record_json) then json_type(record_json) = 'object' else 0 end as record_valid,
                 case when json_valid(record_json) then json_extract(record_json, '$.id') end as record_id,
                 case when json_valid(record_json) then json_extract(record_json, '$.workspaceId') end as record_workspace_id,
@@ -141,6 +176,7 @@ export function d1CapsuleStorageRootCheckTarget(db: CapsuleStorageRootD1): Capsu
       ).bind().all<{
         id: string;
         status: string;
+        space_id: string | null;
         storage_root: string | null;
         record_valid: number | null;
         record_id: unknown;
@@ -151,6 +187,7 @@ export function d1CapsuleStorageRootCheckTarget(db: CapsuleStorageRootD1): Capsu
       return (result.results ?? []).map((row) => ({
         id: row.id,
         status: row.status,
+        columnWorkspaceId: row.space_id,
         storageRoot: hasRoot ? row.storage_root : undefined,
         recordValid: row.record_valid === 1,
         recordId: row.record_id,
@@ -160,6 +197,14 @@ export function d1CapsuleStorageRootCheckTarget(db: CapsuleStorageRootD1): Capsu
           : row.scope_type === "text"
             ? row.record_scope_ref
             : { type: row.scope_type },
+      }));
+    },
+    async listAppSourceArchiveOwners() {
+      const result = await db.prepare(
+        D1_APP_SOURCE_ARCHIVE_OWNERS_QUERY,
+      ).bind().all<{ source_id: string; capsule_id: string; refs: number }>();
+      return (result.results ?? []).map((row) => ({
+        sourceId: row.source_id, capsuleId: row.capsule_id, refs: Number(row.refs),
       }));
     },
   };
@@ -172,6 +217,7 @@ export function sqlCapsuleStorageRootCheckTarget(client: SqlClient): CapsuleStor
       const result = await client.query<{
         id: string;
         status: string;
+        space_id: string | null;
         storage_root: string | null;
         record_type: string | null;
         record_id: string | null;
@@ -179,7 +225,7 @@ export function sqlCapsuleStorageRootCheckTarget(client: SqlClient): CapsuleStor
         scope_type: string | null;
         record_scope_ref: string | null;
       }>(
-        `select id, status, storage_root,
+        `select id, status, space_id, storage_root,
                 jsonb_typeof(installation_json) as record_type,
                 installation_json->>'id' as record_id,
                 installation_json->>'workspaceId' as record_workspace_id,
@@ -191,6 +237,7 @@ export function sqlCapsuleStorageRootCheckTarget(client: SqlClient): CapsuleStor
       return result.rows.map((row) => ({
         id: row.id,
         status: row.status,
+        columnWorkspaceId: row.space_id,
         storageRoot: row.storage_root,
         recordValid: row.record_type === "object",
         recordId: row.record_id,
@@ -200,6 +247,14 @@ export function sqlCapsuleStorageRootCheckTarget(client: SqlClient): CapsuleStor
           : row.scope_type === "string"
             ? row.record_scope_ref
             : { type: row.scope_type },
+      }));
+    },
+    async listAppSourceArchiveOwners() {
+      const result = await client.query<{ source_id: string; capsule_id: string; refs: string | number }>(
+        POSTGRES_APP_SOURCE_ARCHIVE_OWNERS_QUERY,
+      );
+      return result.rows.map((row) => ({
+        sourceId: row.source_id, capsuleId: row.capsule_id, refs: Number(row.refs),
       }));
     },
   };

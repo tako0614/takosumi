@@ -8,7 +8,7 @@ import { publicStoredRun, runManagementAuthority } from "../../core/domains/depl
 import { stableStringify } from "../../core/adapters/source/digest.ts";
 import { verifyD1BackupOwnerIndexesPredeployed } from "./d1_opentofu_store.ts";
 import type { D1Database, R2Bucket } from "./bindings.ts";
-import { storedOwnerDatabase, storedOwnerForKey, storedOwnerRecord, storedOwnerRows } from "./stored-object-owner-resolver.ts";
+import { sourceArchiveOwnerLedger, storedOwnerDatabase, storedOwnerForKey, storedOwnerRecord, storedOwnerRows } from "./stored-object-owner-resolver.ts";
 import { storedCapsuleArtifactRoot } from "./stored-capsule-root.ts";
 import { storedServiceUsageBucket, StoredServiceUsageError, type StoredBucketRole, type StoredObjectOwner, type StoredServiceComposition } from "./stored-service-usage.ts";
 
@@ -88,11 +88,18 @@ type BackupAllocation = Extract<ArtifactReferenceAllocation, { readonly backupId
 export function createBackupStoredOwnerContext(allocator: ArtifactReferenceAllocator, composition: StoredServiceComposition | undefined, bucket: R2Bucket | undefined, database?: D1Database): BackupStoredOwnerContext {
   if (!composition || !bucket) return { allocator, bucket };
   const pending = new Map<string, BackupAllocation>();
+  // The owner of each pending allocation, fixed when it was allocated.
+  const owners = new Map<string, StoredObjectOwner>();
+  const pendingOwner = (key: string): StoredObjectOwner => {
+    const owner = owners.get(key);
+    if (!owner) throw new StoredServiceUsageError();
+    return owner;
+  };
   const wrapped = storedServiceUsageBucket(bucket, {
     usage: composition.usage,
     owners: { async resolveStoredObjectOwner(input) {
       const allocation = pending.get(input.key);
-      return allocation === undefined ? await composition.owners.resolveStoredObjectOwner(input) : backupAllocationOwner(input.key, allocation);
+      return allocation === undefined ? await composition.owners.resolveStoredObjectOwner(input) : pendingOwner(input.key);
     } },
   }, {
     bucketRole: "backups", writerId: "control-backup",
@@ -112,7 +119,14 @@ export function createBackupStoredOwnerContext(allocator: ArtifactReferenceAlloc
           const existing = pending.get(ref);
           if ((existing !== undefined && stableStringify(existing) !== stableStringify(captured)) ||
             (existing === undefined && pending.size >= 128)) throw new StoredServiceUsageError();
+          // A backup under its Capsule's `apps/` root belongs to that Capsule
+          // (P9.1-f); the in-process allocation names it, and the Capsule row
+          // supplies the frozen scope the host contract still needs.
+          const owner = await storedOwnerForKey(database, ref, {
+            workspaceId: captured.workspaceId, capsuleId: captured.owner?.capsuleId,
+          });
           pending.set(ref, captured);
+          owners.set(ref, owner);
         }
         return ref;
       },
@@ -133,30 +147,31 @@ export function createBackupStoredOwnerContext(allocator: ArtifactReferenceAlloc
         await assertAcceptedBackupWrite(database, original);
       };
       const owned = storedServiceUsageBucket(bucket, composition, {
-        bucketRole: "backups", writerId: "control-backup", owner: backupAllocationOwner(ref, allocation),
+        bucketRole: "backups", writerId: "control-backup", owner: pendingOwner(ref),
         beforePrepare: assertMutation, beforeDispatch: assertMutation,
       });
       return {
         get: key => owned.get(key), head: key => owned.head(key), list: input => owned.list(input), delete: key => owned.delete(key),
         async put(key, bytes, options) {
           try { return await owned.put(key, bytes, options); }
-          finally { pending.delete(ref); }
+          finally { pending.delete(ref); owners.delete(ref); }
         },
       };
     },
   };
 }
 
-/** A backup under its Capsule's `apps/` root belongs to that Capsule (P9.1-f);
- * the in-process allocation that produced the key names it. */
-function backupAllocationOwner(key: string, allocation: BackupAllocation): StoredObjectOwner {
-  return storedOwnerForKey(key, { workspaceId: allocation.workspaceId, capsuleId: allocation.owner?.capsuleId });
-}
-
 /** The custody check that admitted this Source archive key proved an `apps/`
- * key lies under the persisted Source owner's prefix; that owner is its segment. */
-function validatedSourceArchiveOwner(key: string, workspaceId: string): StoredObjectOwner {
-  return storedOwnerForKey(key, { workspaceId, capsuleId: /^apps\/([^/]+)\//u.exec(key)?.[1] });
+ * key lies under the persisted Source owner's prefix; that owner is its
+ * segment. Its scope comes from the Capsule row, or from the Source when it is
+ * an install reservation whose Capsule does not exist yet. */
+async function validatedSourceArchiveOwner(database: D1Database, key: string, workspaceId: string, sourceId: string): Promise<StoredObjectOwner> {
+  if (!key.startsWith("apps/")) return await storedOwnerForKey(database, key, { workspaceId });
+  const sources = await storedOwnerRows(storedOwnerDatabase(database), "select id, record_json from sources where id = ? limit 2", [sourceId]);
+  if (sources.length !== 1) throw new StoredServiceUsageError();
+  const source = storedOwnerRecord(sources[0]!.record_json);
+  if (sources[0]!.id !== sourceId || source.id !== sourceId) throw new StoredServiceUsageError();
+  return await storedOwnerForKey(database, key, { workspaceId, ...sourceArchiveOwnerLedger(source) });
 }
 
 /** Exact already-accepted manual work, using the same original running-record
@@ -238,7 +253,7 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
         : await (batchPrepare ??= check());
       if (!validated) throw new StoredServiceUsageError();
       fences.set(key, JSON.stringify(batch));
-      return validatedSourceArchiveOwner(key, batch.workspaceId);
+      return await validatedSourceArchiveOwner(database, key, batch.workspaceId, batch.sourceId);
     }
     if (frozen.sourceRetirement) {
       if (frozen.bucketRole !== "source" || key !== frozen.sourceRetirement.archiveRef ||
@@ -246,7 +261,7 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
         throw new StoredServiceUsageError();
       }
       fences.set(key, JSON.stringify(frozen.sourceRetirement));
-      return validatedSourceArchiveOwner(key, frozen.sourceRetirement.workspaceId);
+      return await validatedSourceArchiveOwner(database, key, frozen.sourceRetirement.workspaceId, frozen.sourceRetirement.sourceId);
     }
     const runId = cleanup?.runId ?? frozen.sourceCleanup?.runId ?? frozen.runId;
     if (!runId || !SEGMENT.test(runId)) throw new StoredServiceUsageError();
@@ -254,12 +269,12 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
     if (rows.length !== 1) throw new StoredServiceUsageError();
     const row = rows[0]!, run = storedOwnerRecord(row.run_json);
     if (run.id !== runId || run.workspaceId !== row.space_id || run.status !== row.status || typeof run.workspaceId !== "string" || !SEGMENT.test(run.workspaceId) || run.type !== undefined && run.type !== row.type || run.kind !== undefined && run.kind !== row.type) throw new StoredServiceUsageError();
-    // The Capsule an `apps/` key belongs to, once its path below has proved it.
-    let ownerCapsuleId: unknown;
+    // The Capsule an `apps/` key belongs to, once its path below has proved it,
+    // and the scope of an install reservation whose Capsule does not exist yet.
+    let ownerLedger: { readonly capsuleId?: unknown; readonly reservationScope?: unknown } = {};
     if (frozen.sourceCleanup) {
       if (frozen.bucketRole !== "source" || key !== frozen.sourceCleanup.archiveRef) throw new StoredServiceUsageError();
       await assertStoredSourceArchiveCleanup(database, frozen.sourceCleanup);
-      ownerCapsuleId = /^apps\/([^/]+)\//u.exec(key)?.[1];
     } else if (cleanup) {
       // Accepted cleanup uses the original retained Run and durable stage, not
       // current human membership, Workspace existence or new admission.
@@ -268,7 +283,7 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
       if (row.type !== "restore" || !["failed", "cancelled", "expired"].includes(String(row.status)) || typeof capsule !== "string" || typeof environment !== "string" || row.installation_id !== capsule || row.environment !== environment) throw new StoredServiceUsageError();
       const root = await storedCapsuleArtifactRoot(db, run.workspaceId as string, capsule, environment);
       if (cleanup.scopeKey !== `${root}/environments/${environment}/state-versions` || key !== cleanup.stateRef || !key.startsWith(`${cleanup.scopeKey}/restore-operations/`) || !/\/restore-operations\/[0-9]{8,16}-[0-9a-f]{24}\.tfstate\.enc$/u.test(key)) throw new StoredServiceUsageError();
-      ownerCapsuleId = capsule;
+      ownerLedger = { capsuleId: capsule };
     } else {
       if (row.status !== "running" || typeof frozen.expectedLeaseToken !== "string" || !frozen.expectedLeaseToken || frozen.expectedLeaseToken.length > 1024 || row.lease_token !== frozen.expectedLeaseToken) throw new StoredServiceUsageError();
       if (frozen.bucketRole === "source") {
@@ -280,10 +295,10 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
         // An `apps/` archive must sit under this Source's own owner prefix.
         if (key.startsWith("apps/") && sourceArchiveSnapshotSegment(key, sourceCustodyPrefixes(
           { workspaceId: run.workspaceId, sourceId: run.sourceId }, source)) === undefined) throw new StoredServiceUsageError();
-        ownerCapsuleId = source.ownerCapsuleId;
+        ownerLedger = sourceArchiveOwnerLedger(source);
       } else {
         await assertRunnerAllocation(db, row, run, frozen, key, dispatch);
-        ownerCapsuleId = run.capsuleId;
+        ownerLedger = { capsuleId: run.capsuleId };
       }
     }
     // The lease is captured independently of the body and checked again after
@@ -293,7 +308,10 @@ export function runnerStoredServiceBucket(bucket: R2Bucket, composition: StoredS
     if (previous !== undefined && previous !== fence) throw new StoredServiceUsageError();
     if (fences.size >= 32 && previous === undefined) throw new StoredServiceUsageError();
     fences.set(key, fence);
-    return storedOwnerForKey(key, { workspaceId: run.workspaceId, capsuleId: ownerCapsuleId });
+    if (frozen.sourceCleanup) {
+      return await validatedSourceArchiveOwner(database, key, run.workspaceId as string, frozen.sourceCleanup.sourceId);
+    }
+    return await storedOwnerForKey(database, key, { workspaceId: run.workspaceId, ...ownerLedger });
   };
   return storedServiceUsageBucket(bucket, {
     usage: composition.usage,

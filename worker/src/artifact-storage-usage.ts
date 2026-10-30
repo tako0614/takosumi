@@ -5,12 +5,19 @@ import type { R2Bucket, R2ObjectBody } from "./bindings.ts";
 /**
  * Who retained bytes are measured for (TASK-0118 P9.1-f). A state object
  * under a legacy `workspaces/{ws}/…` key is measured for that Workspace, as
- * it always was; one under an app's `apps/{cap}` root for that Capsule. An
- * `apps/` object is never attributed back to a Workspace. Exactly one is set.
+ * it always was; one under an app's `apps/{cap}` root for that Capsule
+ * (`capsuleId`).
+ *
+ * Until stage 9B moves Hosted to Capsule attribution, `workspaceId` is always
+ * set so the existing host contract keeps working: for an `apps/` object it is
+ * the Capsule's frozen scopeRef (the Workspace id it was created under for
+ * every existing app), never a live Workspace id. A legacy object's facts keep
+ * exactly their previous shape.
  */
-export type ArtifactStorageOwner =
-  | { readonly workspaceId: string; readonly capsuleId?: undefined }
-  | { readonly capsuleId: string; readonly workspaceId?: undefined };
+export type ArtifactStorageOwner = {
+  readonly workspaceId: string;
+  readonly capsuleId?: string;
+};
 
 export interface ArtifactStorageUsagePort {
   readArtifactRetention(input: ArtifactStorageOwner & {
@@ -51,11 +58,13 @@ const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 export const ARTIFACT_STORAGE_USAGE_DEADLINE_MS = 15_000;
 
-/** Exactly one valid owner id, as a fresh object in the canonical key order. */
+/** A valid owner as a fresh object in the canonical key order (workspaceId, then capsuleId). */
 function validOwner(owner: ArtifactStorageOwner | undefined): ArtifactStorageOwner | undefined {
-  if (!owner || (owner.workspaceId === undefined) === (owner.capsuleId === undefined)) return undefined;
-  if (owner.workspaceId !== undefined) return TOKEN.test(owner.workspaceId) ? { workspaceId: owner.workspaceId } : undefined;
-  return TOKEN.test(owner.capsuleId!) ? { capsuleId: owner.capsuleId! } : undefined;
+  if (!owner || typeof owner.workspaceId !== "string" || !TOKEN.test(owner.workspaceId)) return undefined;
+  if (owner.capsuleId === undefined) return { workspaceId: owner.workspaceId };
+  return typeof owner.capsuleId === "string" && TOKEN.test(owner.capsuleId)
+    ? { workspaceId: owner.workspaceId, capsuleId: owner.capsuleId }
+    : undefined;
 }
 
 /**
@@ -68,7 +77,7 @@ function ownerMetadataMatches(
   metadata: Record<string, string> | undefined,
   owner: ArtifactStorageOwner,
 ): boolean {
-  if (owner.workspaceId !== undefined) return metadata?.["takosumi-workspace-id"] === owner.workspaceId;
+  if (owner.capsuleId === undefined) return metadata?.["takosumi-workspace-id"] === owner.workspaceId;
   const root = metadata?.["takosumi-storage-root"];
   return metadata?.["takosumi-capsule-id"] === owner.capsuleId &&
     (root === undefined || root === `apps/${owner.capsuleId}`);
@@ -189,19 +198,32 @@ async function custodyCall<T>(call: () => Promise<T>): Promise<T> {
 
 type ArtifactStorageUsageOptions = {
   readonly maxCiphertextBytes?: number;
+  /**
+   * Trusted lookup of a Capsule's frozen scopeRef, which the host contract
+   * still needs as `workspaceId` for an `apps/` key until 9B. Never the live
+   * Workspace id.
+   */
+  readonly resolveAppScope?: (capsuleId: string) => Promise<string | undefined>;
 };
 
 /**
  * Only explicitly declared immutable state-version objects enter this lane.
  * The owner is the key's own allocated root: the Workspace of a legacy key, or
  * the Capsule of an `apps/{cap}` key (Core allocated it from the persisted
- * `storage_root`). An `apps/` key is never looked up back to a Workspace.
+ * `storage_root`), with that Capsule's frozen scope for the host contract.
  */
-function stateArtifactOwner(key: string): ArtifactStorageOwner | undefined {
+async function stateArtifactOwner(
+  key: string,
+  options: ArtifactStorageUsageOptions,
+): Promise<ArtifactStorageOwner | undefined> {
   const legacy = /^workspaces\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/(?:capsules|resources)\/[A-Za-z0-9][A-Za-z0-9_.-]*\/environments\/[A-Za-z0-9][A-Za-z0-9_.-]*\/state-versions\/[0-9]{8,}\.tfstate\.enc$/u.exec(key);
   if (legacy) return { workspaceId: legacy[1]! };
   const app = /^apps\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/environments\/[A-Za-z0-9][A-Za-z0-9_.-]*\/state-versions\/[0-9]{8,}\.tfstate\.enc$/u.exec(key);
-  return app ? { capsuleId: app[1]! } : undefined;
+  if (!app) return undefined;
+  let scope: string | undefined;
+  try { scope = await options.resolveAppScope?.(app[1]!); } catch { scope = undefined; }
+  if (typeof scope !== "string" || !TOKEN.test(scope)) throw new Error("artifact storage custody is unavailable");
+  return { workspaceId: scope, capsuleId: app[1]! };
 }
 
 /**
@@ -244,7 +266,7 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
   };
   return {
     async get(key) {
-      const owner = stateArtifactOwner(key);
+      const owner = await stateArtifactOwner(key, usageOptions);
       const object = await bucket.get(key);
       if (!object || !owner) return object;
       // A completed-state adoption after a lost billing ACK must converge the
@@ -256,8 +278,9 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
     async put(key, value, options) {
       if (!(value instanceof ArrayBuffer) && !ArrayBuffer.isView(value))
         throw new Error("artifact storage source requires exact encrypted bytes");
-      // Snapshot mutable inputs before the first await, so the caller cannot
-      // change the bytes or metadata that the eventual receipt describes.
+      // Snapshot mutable inputs before the first await. The `apps/` scope lookup
+      // is asynchronous, so it must not open a window for the caller to change
+      // the bytes or metadata that the eventual receipt describes.
       const bytes = new Uint8Array(value instanceof ArrayBuffer
         ? new Uint8Array(value)
         : new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
@@ -266,7 +289,7 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
         ...options, httpMetadata: { ...options.httpMetadata },
         onlyIf: options.onlyIf === undefined ? undefined : { ...options.onlyIf },
       };
-      const owner = stateArtifactOwner(key);
+      const owner = await stateArtifactOwner(key, usageOptions);
       if (!owner) return await bucket.put(key, value, options);
       if (
         !ownerMetadataMatches(metadataInput, owner) ||
@@ -306,7 +329,7 @@ export function artifactStorageUsageBucket(bucket: R2Bucket, port: ArtifactStora
       return writeResult === null ? null : acknowledged;
     },
     async delete(key) {
-      const owner = stateArtifactOwner(key);
+      const owner = await stateArtifactOwner(key, usageOptions);
       if (!owner) return await bucket.delete(key);
       const prior = await bucket.head(key);
       const artifactRef = await artifactStorageReference(key);

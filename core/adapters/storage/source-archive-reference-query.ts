@@ -79,3 +79,31 @@ export const POSTGRES_SOURCE_RETIREMENT_ARCHIVE_REFS_PAGE_QUERY = `
   ) archive_refs where ref is not null and left(ref, length($4)) = $4
     and ($2::text is null or ref > $2)
   order by ref limit $3`;
+
+/**
+ * `apps/{cap}/…` Source archive refs in SourceSnapshots and SourceSyncRuns,
+ * counted per Source and Capsule segment (TASK-0118 P9.1-f storage-root
+ * check). Read-only.
+ */
+export const D1_APP_SOURCE_ARCHIVE_OWNERS_QUERY = `select source_id, substr(ref, 6, instr(substr(ref, 6), '/') - 1) as capsule_id, count(*) as refs
+           from (
+             select source_id, coalesce(json_extract(record_json, '$.archiveRef'), json_extract(record_json, '$.archiveObjectKey')) as ref
+               from source_snapshots where json_valid(record_json)
+             union all
+             select source_id, coalesce(json_extract(run_json, '$.archiveRef'), json_extract(run_json, '$.archiveObjectKey')) as ref
+               from runs where type = 'source_sync' and json_valid(run_json)
+           ) where ref like 'apps/%/%'
+          group by source_id, capsule_id
+          order by capsule_id, source_id`;
+
+/** Postgres twin of {@link D1_APP_SOURCE_ARCHIVE_OWNERS_QUERY}. */
+export const POSTGRES_APP_SOURCE_ARCHIVE_OWNERS_QUERY = `select source_id, split_part(ref, '/', 2) as capsule_id, count(*) as refs
+           from (
+             select source_id, coalesce(snapshot_json ->> 'archiveRef', snapshot_json ->> 'archiveObjectKey') as ref
+               from takosumi_source_snapshots
+             union all
+             select source_id, coalesce(run_json ->> 'archiveRef', run_json ->> 'archiveObjectKey') as ref
+               from takosumi_runs where kind = 'source_sync'
+           ) archive_refs where ref like 'apps/%/%'
+          group by source_id, split_part(ref, '/', 2)
+          order by capsule_id, source_id`;

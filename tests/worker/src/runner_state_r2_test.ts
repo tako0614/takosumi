@@ -1480,13 +1480,12 @@ test("new Capsule apply writes state and outputs under its apps root", async () 
   assert.ok(fixture.artifacts.body(fixture.rawOutputRef));
 });
 
-// TASK-0118 P9.1-f: the Durable Object reads a Capsule's root back from the
-// stateRef Core allocated from the persisted root, never rebuilding it from the
-// dispatch's Workspace id, and every new state object names that root.
+// TASK-0118 P9.1-f: an app's root is read back from the stateRef Core allocated
+// from the persisted root, a legacy root must still be the one the dispatch's
+// Workspace names, and every new state object names its root.
 for (const [name, storageRoot] of [
   ["an app", "apps/inst_1"],
-  // A legacy Capsule whose authority Workspace moved after its root was frozen.
-  ["a legacy Capsule after its Workspace moved", "workspaces/spc_frozen/capsules/inst_1"],
+  ["a legacy Capsule", "workspaces/spc_1/capsules/inst_1"],
 ] as const) {
   test(`${name} writes state, pointer and outputs under its persisted root and names it`, async () => {
     const fixture = await deadlineApplyFixture("apply_root", storageRoot);
@@ -1513,6 +1512,20 @@ for (const [name, storageRoot] of [
     assert.equal(metadata["takosumi-workspace-id"], "spc_1");
   });
 }
+
+test("a legacy stateRef that is not the root the dispatch's Workspace names is refused before any write", async () => {
+  // A legacy Capsule whose Workspace id moved after its root was frozen: the
+  // Runner keeps refusing it until stage 9.5 gives the dispatch the scope.
+  const fixture = await deadlineApplyFixture("apply_moved", "workspaces/spc_frozen/capsules/inst_1");
+  let dispatched = false;
+  const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+    async containerFetch() { dispatched = true; return Response.json({ error: "unexpected" }, { status: 500 }); },
+  });
+  const response = await runner.fetch(fixture.request());
+  assert.notEqual(response.status, 200);
+  assert.equal(fixture.state.body(fixture.stateScope.stateRef), undefined);
+  assert.equal(dispatched, false);
+});
 
 test("a budget-timed-out apply persists partial state and a completion receipt that a takeover adopts", async () => {
   const applyRunId = "apply_deadline_timeout";

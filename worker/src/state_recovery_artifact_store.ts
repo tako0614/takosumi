@@ -6,6 +6,7 @@
  */
 import type { ArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import { capsuleArtifactRoot } from "../../core/adapters/storage/artifact-references.ts";
+import { capsuleScopeRef } from "takosumi-contract/capsules";
 import {
   VERIFIED_RECOVERY_ARTIFACT_FORMAT,
   type RecoveryArtifactVerifier,
@@ -101,7 +102,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
     }
     const stateRef = await this.#allocate(scope);
     const handle = await handleFor(scope, stateRef);
-    const owner = recoveryStorageOwner(scope, stateRef);
+    const owner = await this.#owner(scope, stateRef);
     const bucket = this.#bucketFor(owner);
     // Reconcile an earlier committed stage before encrypting. An unknown PUT
     // acknowledgement therefore never causes a fresh ciphertext identity.
@@ -199,7 +200,7 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       custodyEvidenceDigest: handleParts.custodyEvidenceDigest,
     };
     const stateRef = await this.#allocate(provisionalScope);
-    const object = await this.#readback(stateRef, recoveryStorageOwner(provisionalScope, stateRef));
+    const object = await this.#readback(stateRef, await this.#owner(provisionalScope, stateRef));
     if (!object) throw recoveryArtifactError("staged recovery artifact is unavailable");
     const metadata = object.customMetadata;
     const scope: RecoveryStateArtifactScope = {
@@ -215,12 +216,32 @@ export class R2RecoveryStateArtifactStore implements RecoveryArtifactVerifier {
       throw recoveryArtifactError("staged recovery artifact scope is invalid");
     }
     const prepared = await prepareArtifactRetention(this.#storageUsage, {
-      owner: recoveryStorageOwner(scope, allocated),
+      owner: await this.#owner(scope, allocated),
       allocatedKey: allocated,
       ciphertextBytes: object.size,
       replayOnly: true,
     });
     return await this.#verifyAndConfirmStorage(object, scope, allocated, input.artifactHandle, prepared);
+  }
+
+  /**
+   * Who the staged bytes are measured for (TASK-0118 P9.1-f): the Capsule of
+   * an `apps/` root, with its frozen scopeRef as the Workspace scope the host
+   * contract still needs until 9B; the Workspace of a legacy root as before.
+   */
+  async #owner(
+    scope: Pick<RecoveryStateArtifactScope, "workspaceId" | "capsuleId" | "environment">,
+    stateRef: string,
+  ): Promise<StoredObjectOwner> {
+    if (!recoveryStateRoot(scope, stateRef).startsWith("apps/")) return { workspaceId: scope.workspaceId };
+    let capsule;
+    try {
+      capsule = await this.#capsules.getCapsule(scope.capsuleId);
+    } catch {
+      throw recoveryArtifactError("recovery state scope is not the persisted Capsule");
+    }
+    if (!capsule || capsule.id !== scope.capsuleId) throw recoveryArtifactError("recovery state scope is not the persisted Capsule");
+    return { workspaceId: capsuleScopeRef(capsule), capsuleId: scope.capsuleId };
   }
 
   #bucketFor(owner: StoredObjectOwner): R2Bucket {
@@ -397,19 +418,6 @@ function recoveryStateRoot(scope: Pick<RecoveryStateArtifactScope, "environment"
   const suffix = `/environments/${safeSegment(scope.environment)}/state-versions/00000001.tfstate.enc`;
   if (!stateRef.endsWith(suffix)) throw recoveryArtifactError("recovery state allocation is not canonical");
   return stateRef.slice(0, -suffix.length);
-}
-
-/**
- * Who the staged bytes are measured for (TASK-0118 P9.1-f): the Capsule of an
- * `apps/` root, never its Workspace; the Workspace of a legacy root as before.
- */
-function recoveryStorageOwner(
-  scope: Pick<RecoveryStateArtifactScope, "workspaceId" | "capsuleId" | "environment">,
-  stateRef: string,
-): StoredObjectOwner {
-  return recoveryStateRoot(scope, stateRef).startsWith("apps/")
-    ? { capsuleId: scope.capsuleId }
-    : { workspaceId: scope.workspaceId };
 }
 
 async function handleFor(scope: RecoveryStateArtifactScope, stateRef: string): Promise<string> {

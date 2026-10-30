@@ -8,6 +8,7 @@ import type {
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { artifactStorageUsageBucket } from "../artifact-storage-usage.ts";
 import { capsuleArtifactRoot } from "../../../core/adapters/storage/artifact-references.ts";
+import { storedCapsuleScope } from "../stored-object-owner-resolver.ts";
 import { storedServiceCompositionFromEnv, type StoredBucketRole } from "../stored-service-usage.ts";
 import { assertStoredReleaseRunLease, assertStoredRetiredSourceArchiveDeletions, assertStoredRunLease, assertStoredSourceArchiveCleanup, readStoredRunLeaseHeader, runnerStoredServiceBucket, STORED_RUN_LEASE_HEADER, type SourceArchiveCleanupAllocation, type StoredReleaseParent, type StoredRunLease } from "../stored-service-owner-context.ts";
 import {
@@ -2983,10 +2984,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const composition = storedServiceCompositionFromEnv(this.env);
     if (composition) return runnerStoredServiceBucket(bucket, composition, this.env.TAKOSUMI_CONTROL_DB, { bucketRole: "state", runId, scope, restoreStageRef, restoreCleanup, expectedLeaseToken });
     // An `apps/{cap}` state key is measured for its Capsule, read from the key
-    // Core allocated from the persisted root; never looked up back to the
-    // Capsule's Workspace (TASK-0118 P9.1-f).
+    // Core allocated from the persisted root (TASK-0118 P9.1-f). Until 9B the
+    // host contract also needs a Workspace scope: the Capsule's frozen
+    // scopeRef, never its live Workspace id.
     return artifactStorageUsageBucket(bucket, this.env.TAKOSUMI_ARTIFACT_STORAGE_USAGE, {
       maxCiphertextBytes: maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+      resolveAppScope: async (capsuleId) => {
+        const database = this.env.TAKOSUMI_CONTROL_DB;
+        if (!database) return undefined;
+        try {
+          return await storedCapsuleScope(database, capsuleId);
+        } catch {
+          // Unknown scope is unknown custody: never meter under caller metadata.
+          return undefined;
+        }
+      },
     });
   }
 
@@ -5639,24 +5651,20 @@ function stateScopePrefix(scope: StateScope): string {
 }
 
 /**
- * The state root of a scope. A Capsule's root is read back from the stateRef
- * Core allocated from its persisted `storage_root` (TASK-0118 P9.1-f): `apps/{cap}`
- * or a frozen legacy `workspaces/{ws}/capsules/{cap}`, checked to be this
- * Capsule's canonical root, never rebuilt from the dispatch's live Workspace
- * id. A stateRef of another shape keeps the historical Workspace layout, which
- * `assertStateRefForScope` then refuses unless it matches exactly.
+ * The state root of a scope. An app's `apps/{cap}` root is read back from the
+ * stateRef Core allocated from its persisted `storage_root`. A legacy root is
+ * still the one the dispatch's Workspace id names: the stateRef must match it
+ * exactly (`assertStateRefForScope`), which keeps the check that a legacy
+ * stateRef is the Capsule's persisted root. Until stage 9.5 gives the dispatch
+ * the frozen scope, a legacy Capsule whose Workspace id moved is refused here
+ * rather than written under a root no ledger value confirms.
  */
 function stateSubjectRoot(scope: StateScope): string {
   const legacy = `workspaces/${safeKeySegment(scope.workspaceId)}/${scope.subjectKind === "resource" ? "resources" : "capsules"}/${safeKeySegment(scope.subjectId)}`;
   if (scope.subjectKind !== "capsule") return legacy;
+  const app = `apps/${safeKeySegment(scope.subjectId)}`;
   const suffix = `/environments/${safeKeySegment(scope.environment)}/state-versions/${formatGeneration(scope.generation)}.tfstate.enc`;
-  if (scope.stateRef.endsWith(suffix)) {
-    try {
-      return capsuleArtifactRoot("", scope.subjectId, scope.stateRef.slice(0, -suffix.length));
-    } catch {
-      // Not this Capsule's canonical root.
-    }
-  }
+  if (scope.subjectId === safeKeySegment(scope.subjectId) && scope.stateRef === `${app}${suffix}`) return app;
   return legacy;
 }
 

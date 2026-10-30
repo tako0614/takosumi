@@ -37,7 +37,8 @@ The local resolver reads bounded exact StateVersion, artifact/Run,
 SourceSnapshot/SourceSyncRun, Backup and private-file receipt allocations. Raw
 keys stay in OSS. Key and metadata IDs can select a record but cannot establish
 its owner by themselves. An object under an app's `apps/{cap}` root belongs to
-that Capsule, which its ledger record must name; every other object belongs to
+that Capsule, which its ledger record must name, and until stage 9B carries
+the Capsule's frozen scopeRef as its Workspace; every other object belongs to
 its record's Workspace ([app storage roots](../operations/app-storage-roots.md)). Private-file receipt lookup verifies the exact
 original scope/blob identity and all four native metadata fields.
 

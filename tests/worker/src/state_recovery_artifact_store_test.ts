@@ -85,7 +85,9 @@ test("recovery stages and verifies under a trusted persisted apps root", async (
     failedApplyRunId: input.failedApplyRunId, recoveryRunId: input.recoveryRunId,
     artifactHandle: staged.handle,
   }), staged.artifact);
-  assert.equal(f.capsuleReads, 3);
+  // Each allocation reads the Capsule and its root; an `apps/` stage also
+  // reads the Capsule's frozen scopeRef for the host's Workspace scope (9B).
+  assert.equal(f.capsuleReads, 6);
   assert.equal(f.rootReads, 3);
 });
 
