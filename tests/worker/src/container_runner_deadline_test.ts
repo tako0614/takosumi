@@ -490,3 +490,27 @@ test("an Apply whose init the run deadline stopped keeps its pre-provider reason
     true,
   );
 });
+
+// TASK-0118 P9.1-f: the Worker asks the Runner whether its image accepts
+// `apps/` Source archive keys. A stuck container cold start must not hold up
+// the install or sync that asked.
+test("the Runner capability probe gives up after its bound and is asked again later", async () => {
+  let calls = 0;
+  let answer: "hang" | "accept" = "hang";
+  const env = { RUNNER: { idFromName: (name: string) => name, get: () => ({ fetch: async () => {
+    calls++;
+    if (answer === "hang") return await new Promise<Response>(() => {});
+    return Response.json({ capabilities: ["takosumi.app-source-archive-roots@v1"] });
+  } }) } } as unknown as CloudflareWorkerEnv;
+  const runner = new CloudflareContainerOpenTofuRunner(env, { capabilityProbeTimeoutMs: 20 });
+  const started = Date.now();
+  expect(await runner.acceptsAppSourceArchiveRoots()).toBe(false);
+  expect(Date.now() - started).toBeLessThan(2_000);
+  // The refusal is cached for a while; no second probe right away.
+  answer = "accept";
+  expect(await runner.acceptsAppSourceArchiveRoots()).toBe(false);
+  expect(calls).toBe(1);
+  // A Runner that answers confirms it.
+  const ready = new CloudflareContainerOpenTofuRunner(env, { capabilityProbeTimeoutMs: 1_000 });
+  expect(await ready.acceptsAppSourceArchiveRoots()).toBe(true);
+});

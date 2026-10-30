@@ -34,6 +34,12 @@ not authorize a staging or production operation.
   Workspace record are left out. Before this, the app routes sent no `scope`
   and exported the whole Workspace. A Workspace export labelled with a Capsule
   stays in the Workspace layout.
+- Not yet changed, for a future app-level restore: the restore path picks its
+  Capsule as `request.capsuleId ?? backup.capsuleId`
+  (`core/domains/deploy-control/run-engine/run_engine.ts`). An app-level
+  restore must instead be bound to the backup's own `capsuleId` and capsule
+  scope, and refuse a Workspace export or another app's backup, so one app's
+  restore can never apply another app's state.
 - An existing Capsule's app-scoped backup follows the Workspace segment of its
   frozen root, never the live Workspace id. For a Capsule whose Workspace id
   has not moved that is exactly origin/main's key; once the Workspace id moves
@@ -76,9 +82,10 @@ confirms it:
   allocates an `apps/` archive only after its configured Runner advertised
   `takosumi.app-source-archive-roots@v1` on `/healthz` (probed through the
   Runner Durable Object's owner-free `GET /runner-capabilities`, which
-  dispatches nothing). A confirmation is kept for the isolate; a refusal or an
-  unavailable probe keeps the Workspace layout and is asked again after 60
-  seconds. The Postgres reference server probes its Runner the same way. The
+  dispatches nothing). The probe is bounded at 5 seconds, so a stuck container
+  cold start never holds up the install or sync that asked. A confirmation is
+  kept for the isolate; a refusal, timeout or unavailable probe keeps the
+  Workspace layout and is asked again after 60 seconds. The Postgres reference server probes its Runner the same way. The
   generic `core/index.ts` entry has no Runner to ask and never moves archives.
 
 1. Release a Runner image that contains this change and configure it.
