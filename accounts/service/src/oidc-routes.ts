@@ -45,6 +45,10 @@ import type {
 import type { AppRole } from "../../../contract/app-access.ts";
 
 import { measureRequestPhaseOperation, type RequestPhaseObserver } from "./request-phase-diagnostics.ts";
+import {
+  reportLegacyWorkspaceClaim,
+  type LegacyWorkspaceClaimSurface,
+} from "./legacy-workspace-telemetry.ts";
 
 type ResolveControlPlaneOperations = () => Promise<
   ControlPlaneOperations | undefined
@@ -506,6 +510,12 @@ export async function handleAuthorize(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
+  /**
+   * Called once an authenticated request names `workspace_id` (TASK-0118
+   * Phase 9 telemetry). A sign-in redirect is not a use: the authorization
+   * request is repeated with a session after sign-in.
+   */
+  observeWorkspaceRequest?: () => void;
 }): Promise<Response> {
   const response = withOAuthNoStoreHeaders(
     await handleAuthorizeUncached(input),
@@ -530,6 +540,7 @@ async function handleAuthorizeUncached(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
+  observeWorkspaceRequest?: () => void;
 }): Promise<Response> {
   // OAuth authorization is a top-level navigation. A subresource request can
   // carry the account session cookie without any user interaction and follow
@@ -709,6 +720,7 @@ async function handleAuthorizeUncached(input: {
     }
   }
   const requestedWorkspaceValues = input.url.searchParams.getAll("workspace_id");
+  if (requestedWorkspaceValues.length > 0) input.observeWorkspaceRequest?.();
   const requestedWorkspaceId =
     requestedWorkspaceValues.length === 0
       ? undefined
@@ -1311,6 +1323,7 @@ async function issueTokenResponse(input: {
           ...(input.appRole ? { app_role: input.appRole } : {}),
         }
       : undefined;
+  observeLegacyWorkspaceClaims("id_token", input.clientId, takosumiClaims, false);
   // email_verified reflects the upstream identity provider's assertion,
   // carried onto the account record by `resolveUpstreamAccount`. When the
   // value is genuinely unknown (provider omitted it, or the store has not
@@ -1467,6 +1480,7 @@ async function handleUserInfoUncached(input: {
         interface_binding_id: record.interfaceBindingId,
         interface_resolved_revision: record.interfaceResolvedRevision,
       };
+      observeLegacyWorkspaceClaims("interface_oauth_userinfo", record.clientId, body.takosumi, false);
       return json(body, 200, {
         "cache-control": "no-store",
         pragma: "no-cache",
@@ -1517,6 +1531,12 @@ async function handleUserInfoUncached(input: {
       if (liveGrant.workspaceId) {
         body.workspace_memberships = [liveGrant.workspaceId];
       }
+      observeLegacyWorkspaceClaims(
+        "userinfo",
+        record.clientId,
+        body.takosumi,
+        body.workspace_memberships !== undefined,
+      );
     }
     const account = record.takosumiSubject
       ? await input.store.findAccount(record.takosumiSubject)
@@ -1723,7 +1743,7 @@ async function handleIntrospectUncached(input: {
       if (!liveGrant.ok) return json({ active: false });
       liveClaims = liveGrant;
     }
-    return json(introspectionBody(accessRecord, "oauth_access", liveClaims));
+    return json(observedIntrospectionBody(introspectionBody(accessRecord, "oauth_access", liveClaims)));
   }
   const refreshRecord = await input.store.findRefreshToken(token);
   if (refreshRecord) {
@@ -1749,7 +1769,7 @@ async function handleIntrospectUncached(input: {
     });
     if (!liveGrant.ok) return json({ active: false });
     return json(
-      introspectionBody(refreshRecord, "refresh_token", liveGrant),
+      observedIntrospectionBody(introspectionBody(refreshRecord, "refresh_token", liveGrant)),
     );
   }
   if (auth.client.profile === "shared-account") return json({active:false});
@@ -1776,7 +1796,10 @@ async function handleIntrospectUncached(input: {
       return json({ active: false });
     }
     return json(
-      personalAccessTokenIntrospectionBody(patRecord, input.issuer, liveRole),
+      observedIntrospectionBody(
+        personalAccessTokenIntrospectionBody(patRecord, input.issuer, liveRole),
+        authenticatedClientId,
+      ),
     );
   }
   return json({ active: false });
@@ -1804,6 +1827,59 @@ async function isPkceVerifierValid(
     base64UrlEncodeBytes(new Uint8Array(digest)),
     record.codeChallenge,
   );
+}
+
+/**
+ * Reports a compatibility Workspace claim the moment it is emitted (TASK-0118
+ * Phase 9). Only the surface, the registered client and which companion
+ * claims were present are reported; never a Workspace, subject or token. The
+ * client id identifies an app integration or installation (a Capsule public
+ * client is per installation), not a person.
+ */
+function observeLegacyWorkspaceClaims(
+  surface: LegacyWorkspaceClaimSurface,
+  clientId: string | undefined,
+  takosumi: unknown,
+  memberships: boolean,
+): void {
+  if (typeof takosumi !== "object" || takosumi === null) return;
+  const claims = takosumi as Record<string, unknown>;
+  if (typeof claims.workspace_id !== "string") return;
+  reportLegacyWorkspaceClaim({
+    surface,
+    ...(clientId !== undefined ? { clientId } : {}),
+    capsuleBound: typeof claims.capsule_id === "string",
+    appRole: typeof claims.app_role === "string",
+    memberships,
+  });
+}
+
+/**
+ * Reports the Workspace claim of an introspection response. An OAuth token
+ * names its own client; a personal access token names only the fixed
+ * `takosumi-accounts-pat`, so for it the client that receives the claim is the
+ * authenticated introspecting client (a resource server such as an installed
+ * app). Workspace-bound PATs may never expire, so introspection is where they
+ * keep reading the claim long after they were created.
+ */
+function observedIntrospectionBody(
+  body: Record<string, unknown>,
+  introspectingClientId?: string,
+): Record<string, unknown> {
+  const personalAccess = body.token_use === "personal_access";
+  observeLegacyWorkspaceClaims(
+    body.token_use === "interface_oauth"
+      ? "interface_oauth_introspection"
+      : personalAccess
+        ? "personal_access_introspection"
+        : "introspection",
+    personalAccess
+      ? introspectingClientId
+      : typeof body.client_id === "string" ? body.client_id : undefined,
+    body.takosumi,
+    false,
+  );
+  return body;
 }
 
 function introspectionBody(
@@ -1907,6 +1983,8 @@ export async function resolveSharedAccountGrantSession(input: {
   request: Request;
   store: AccountsStore;
   clients: ReadonlyMap<string, OidcClientRegistration>;
+  /** Receives the grant's registered OAuth client (telemetry only). */
+  observeClientId?: (clientId: string) => void;
 }): Promise<{ok:true;session:SharedHostedSessionContext}|{ok:false;response:Response}> {
   const token = bearerToken(input.request.headers.get("authorization"));
   if (!token) return {ok:false,response:bearerChallenge("invalid_token")};
@@ -1918,6 +1996,7 @@ export async function resolveSharedAccountGrantSession(input: {
   };
   const record = await load();
   if (!record?.takosumiSubject) return {ok:false,response:bearerChallenge("invalid_token")};
+  input.observeClientId?.(record.clientId);
   return {ok:true,session:{kind:"shared-hosted-session",canonicalAccountId:record.takosumiSubject,assertCurrentGrant:async()=>{
     const current = await load();
     return current?.subject === record.subject && current.sid === record.sid;
