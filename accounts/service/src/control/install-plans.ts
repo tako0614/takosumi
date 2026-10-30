@@ -419,14 +419,18 @@ export async function handleInstallPlans(
   // A delegate token continues only its own user's capsule-less attempt in
   // that user's own namespace (where POST /install-plans puts it), so the app
   // it becomes is that user's; it never reaches anyone else's attempt.
-  const auth = !plan.capsuleId && await delegateContinuesOwnAttempt(ctx, plan)
+  // A Capsule committed before the plan recorded it (a lost acknowledgement)
+  // is already the app: it decides, never the delegate path.
+  const capsuleId = plan.capsuleId ??
+    (await getCapsuleIfPresent(ctx.operations, deterministicInitialCapsuleId(plan.id)))?.id;
+  const auth = !capsuleId && await delegateContinuesOwnAttempt(ctx, plan)
     ? { ok: true as const }
     : await requireResourceAccess({
         operations: ctx.operations,
         store: ctx.store,
         session: ctx.session,
         workspaceId: plan.workspaceId,
-        capsuleId: plan.capsuleId,
+        capsuleId,
         action: method === "GET" || method === "HEAD" ? "view"
           : method === "DELETE" ? "uninstall"
           : segments[2] === "reconcile" ? "update"
