@@ -37,7 +37,9 @@ test("Interface link routes return data-free candidates, use generation CAS and 
   expect((await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0, expectedRequirementFingerprint: await stableJsonDigest({ permissions: ["other"], delivery: requirement.delivery }) })).status).toBe(409);
   const selected = await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0 });
   expect(selected.status).toBe(200);
-  expect((await selected.json()).link.state).toBe("active");
+  // This host decides no apps, so an account caller never approves for the
+  // provider: the link waits for it (TASK-0118 9.1).
+  expect((await selected.json()).link.state).toBe("pending_approval");
   expect((await f.request(f.path, "PUT", { interfaceId: f.provider.metadata.id, expectedGeneration: 0 })).status).toBe(409);
   expect((await f.request(f.path, "DELETE", { expectedGeneration: 0 })).status).toBe(409);
   const unlinked = await f.request(f.path, "DELETE", { expectedGeneration: 1 });
