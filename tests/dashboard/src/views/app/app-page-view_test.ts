@@ -293,7 +293,10 @@ describe("installed app page", () => {
 
   test("a stalled version change is continued through its own coordinator; updates wait while one is under way", () => {
     const continueRevision = page.slice(page.indexOf("const continueRevision = (revisionPlanId: string) =>"), page.indexOf("const [screenRetryBusy"));
-    expect(continueRevision).toContain("(await advanceGitRevisionPlan(revisionPlanId)).revisionPlan.planRunId");
+    // A continued revision that settles without a Plan (for example already
+    // current) reports its own diagnostic, not a generic "not started".
+    expect(continueRevision).toContain("requireReviewableRevisionPlan(await advanceGitRevisionPlan(revisionPlanId))");
+    expect(continueRevision).toContain(".revisionPlan.planRunId");
     expect(continueRevision).toContain('"update",');
     expect(attention).toContain("props.actions.continueRevision(revisionPlanId())");
     // Continuing a stopped one waits too while another change is under way
