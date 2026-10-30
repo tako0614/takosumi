@@ -418,9 +418,12 @@ only when the declared bundle id or package and the link templates match a nativ
 app the operator trusts (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`); `name` and
 `appStoreId` then come from that registration. `target` is where the links really
 go (`package`, `scheme`, `host`). Consumers never open an unverified app
-automatically: they show `target` and ask first, and `preferred: "native"` applies
-only to a verified app. Links are the templates with `{origin}` and `{url}`
-already filled in from that screen's URL, and `storeUrl` is used only when it is
+automatically: they show `target` and ask first, and label an unverified app
+without `name` neutrally (such as "Unverified app"), never with the screen's
+`title`. `preferred` is `"native"` only when at least one OS has a verified app
+and the declaration does not say `"web"`, and `"web"` otherwise; `"native"`
+applies only to a verified app. Links are the templates with `{origin}` and
+`{url}` already filled in from that screen's URL, and `storeUrl` is used only when it is
 tied to the declared id; otherwise it is built from `appStoreId` or `package`. How to declare them is
 in [Show your app on the home screen](../getting-started/home-launcher.md#declare-your-phone-app).
 `progress.revisionPreparing` is true only while an install or revision

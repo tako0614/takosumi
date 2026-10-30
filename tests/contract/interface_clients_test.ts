@@ -232,6 +232,8 @@ describe("unverified clients", () => {
       [{ package: "com.paypal.android.p2pmobile", appLink: "https://www.paypal.com/paypalme/attacker/5000" }, { package: "com.paypal.android.p2pmobile", host: "www.paypal.com" }],
     ] as const) {
       const clients = parseInterfaceClients({ preferred: "native", android }, OPTIONS);
+      // Without a verified client, a declared native default is not kept.
+      expect(clients?.preferred).toBe("web");
       expect(clients?.android?.verified).toBe(false);
       expect(clients?.android?.trustedClientId).toBeUndefined();
       expect(clients?.android?.target).toEqual(target);
@@ -272,13 +274,82 @@ describe("unverified clients", () => {
     ).toBeUndefined();
   });
 
+  test("an unverified link may not use a host below a trusted client's link host", () => {
+    for (const link of [
+      "https://evil.open.notes.example/connect#host_url={origin}",
+      "https://a.b.open.notes.example/x",
+      "https://OPEN.NOTES.EXAMPLE/x",
+    ]) {
+      expect(universalLink(link, WITH_NOTES), link).toBeUndefined();
+      expect(
+        parseInterfaceClients({ android: { package: "org.example.other", appLink: link } }, WITH_NOTES),
+        link,
+      ).toBeUndefined();
+    }
+    // Only whole labels count: a different host that merely ends the same way is not owned.
+    expect(universalLink("https://xopen.notes.example/x", WITH_NOTES)).toBe("https://xopen.notes.example/x");
+    expect(universalLink("https://notes.example/x", WITH_NOTES)).toBe("https://notes.example/x");
+  });
+
+  test("a scheme or host a trusted client owns on one platform is refused on the other too", () => {
+    const androidOnly = parseTrustedNativeClients([
+      { id: "chat-mobile", name: "Chat", android: {
+        package: "com.example.chat",
+        schemes: ["chat"],
+        appLinkHosts: ["open.chat.example"],
+        templates: ["chat://connect?server={origin}"],
+      } },
+    ]);
+    const options = { ...OPTIONS, trustedClients: androidOnly };
+    expect(parseInterfaceClients({ ios: { open: "chat://connect?server={origin}" } }, options)).toBeUndefined();
+    expect(parseInterfaceClients({ ios: { universalLink: "https://evil.open.chat.example/x" } }, options))
+      .toBeUndefined();
+  });
+
   test("an unverified name may not imitate Takosumi or a trusted client", () => {
     const named = (name: string) =>
       parseInterfaceClients({ ios: { name, open: "other://open" } }, WITH_NOTES)?.ios?.name;
-    for (const name of ["Takosumi", "Takosumi Pay", "T4kosumi", "Notes", "N0tes Pro", "Ｎｏｔｅｓ"]) {
+    for (const name of [
+      "Takosumi",
+      "Takosumi Pay",
+      "T4kosumi",
+      "Notes",
+      "N0tes Pro",
+      "Ｎｏｔｅｓ",
+      // Characters no lookalike table lists: other scripts, small capitals,
+      // emoji letters, and kana between Latin letters.
+      "TᎪkosumi",
+      "ᏁᎾᏆᎬᏚ",
+      "Nᴏtes",
+      "N🅾tes",
+      "Noテes",
+      "Тakosumi",
+      "Заметки",
+    ]) {
       expect(named(name), name).toBeUndefined();
     }
-    expect(named("Other app")).toBe("Other app");
+    for (const name of ["Other app", "Café", "メモ帳", "ノート (ベータ版)"]) {
+      expect(named(name), name).toBe(name);
+    }
+  });
+
+  test("an unverified client never takes the screen title as its name", () => {
+    // The screen title is not part of clients; without a checked name the
+    // consumer shows a neutral label with the target.
+    const clients = parseInterfaceClients(
+      { preferred: "native", android: { package: "com.evil.chat", open: "evilchat://open" } },
+      OPTIONS,
+    );
+    expect(clients).toEqual({
+      preferred: "web",
+      android: {
+        verified: false,
+        target: { package: "com.evil.chat", scheme: "evilchat" },
+        package: "com.evil.chat",
+        open: "evilchat://open",
+        storeUrl: "https://play.google.com/store/apps/details?id=com.evil.chat",
+      },
+    });
   });
 });
 
@@ -384,6 +455,14 @@ describe("custom schemes", () => {
       "prefs:root=General",
       "shortcuts://run-shortcut?name=x",
       "x-safari-https://evil.example/",
+      "googlechrome://evil.example/",
+      "googlechromes://evil.example/",
+      "firefox://open-url?url=https://evil.example/",
+      "focus://open-url?url=https://evil.example/",
+      "microsoft-edge-https://evil.example/",
+      "opera-https://evil.example/",
+      "brave://open-url?url=https%3A%2F%2Fevil.example%2F",
+      "duckduckgo://evil.example/",
       "http://notes.example.test/",
       "https://notes.example.test/",
     ]) {
@@ -570,9 +649,11 @@ describe("lengths, names and identifiers", () => {
       parseInterfaceClients({ ios: { name, open: "other://open" } }, OPTIONS)?.ios;
     const plain = { verified: false, target: { scheme: "other" }, open: "other://open" };
     expect(named("  Other  ")?.name).toBe("Other");
-    expect(named("📝".repeat(64))?.name).toBe("📝".repeat(64));
+    expect(named("メ".repeat(64))?.name).toBe("メ".repeat(64));
     for (const name of [
       "n".repeat(65),
+      "メ".repeat(65),
+      "📝",
       "   ",
       "Other\u202Eppa",
       "Other\u200Bapp",
@@ -627,6 +708,28 @@ describe("shape", () => {
     for (const preferred of ["in_app", "WEB", 1, null, true]) {
       expect(parseInterfaceClients({ ...declaration, preferred }, OPTIONS)?.preferred).toBe("native");
     }
+  });
+
+  test("preferred is native only when at least one platform is verified", () => {
+    const unverified = { android: { package: "org.example.other", open: "other://open" } };
+    for (const preferred of [undefined, "native", "web"]) {
+      expect(parseInterfaceClients({ ...unverified, preferred }, OPTIONS)?.preferred).toBe("web");
+    }
+    // One verified platform is enough; it still applies only on that platform.
+    const mixed = parseInterfaceClients(
+      {
+        preferred: "native",
+        ios: { bundleId: "com.yurucommu", open: "yurucommu://connect?host_url={origin}" },
+        android: { package: "org.example.other", open: "other://open" },
+      },
+      OPTIONS,
+    );
+    expect(mixed?.preferred).toBe("native");
+    expect(mixed?.ios?.verified).toBe(true);
+    expect(mixed?.android?.verified).toBe(false);
+    expect(
+      parseInterfaceClients(yurucommuDeclaration(), { ...OPTIONS, trustedClients: [] })?.preferred,
+    ).toBe("web");
   });
 
   test("unknown keys and platforms are ignored and never echoed", () => {
@@ -703,6 +806,7 @@ describe("parseTrustedNativeClients", () => {
       [entry({ id: "" })],
       [entry({ name: "Takosumi" })],
       [entry({ name: "Notes\u202E" })],
+      [entry({ name: "Заметки" })],
       [{ id: "x", name: "X" }],
       [ios({ bundleId: "com.takosumi" })],
       [android({ package: "com.takosumi.notes" })],

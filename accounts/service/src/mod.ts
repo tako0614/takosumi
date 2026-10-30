@@ -185,9 +185,13 @@ export {
   type InstalledAppDelegationSource,
 } from "./installed-app-delegation.ts";
 export {
+  createTrustedNativeClientsEnvReader,
   parseTrustedNativeClientsEnv,
   TRUSTED_NATIVE_CLIENTS_ENV,
   trustedNativeClientsFromEnv,
+  type TrustedNativeClientsEnvProblem,
+  type TrustedNativeClientsEnvReader,
+  type TrustedNativeClientsEnvResult,
 } from "./trusted-native-clients.ts";
 export * from "./workspace-billing-bootstrap.ts";
 export type { IdentityMergeReconciler } from "./identity-merge.ts";

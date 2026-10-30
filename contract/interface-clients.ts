@@ -18,14 +18,19 @@
  * entry's link templates; the name and App Store id then come from the entry.
  * A declaration that claims a trusted identity with any other link loses that
  * link. Every other declaration is returned with `verified: false` and its
- * real destination in `target`, and may not use a scheme or link host that a
- * trusted client owns.
+ * real destination in `target`, and may not use a scheme that a trusted client
+ * owns or a link host that a trusted client owns or one below it.
  *
  * Consumer contract (dashboard, Takosumi Mobile): only a verified platform may
  * open without asking, and only a verified platform honours
- * `preferred: "native"`. An unverified platform is never opened
+ * `preferred: "native"` (which the parser returns only when at least one
+ * platform is verified). An unverified platform is never opened
  * automatically; the consumer asks first and shows `target` (the Android
- * package, the custom scheme, the link host) next to the declared name.
+ * package, the custom scheme, the link host) next to the checked `name`, or
+ * next to a neutral label such as "Unverified app" when `name` is absent. An
+ * unverified platform is never labelled with the screen's title or any other
+ * screen metadata: the title is not checked against trusted names, so it could
+ * borrow one.
  *
  * Links. Templates may carry only `{origin}` (the screen URL's origin) and
  * `{url}` (the whole screen URL), at most four times in all. The parser fills
@@ -61,10 +66,12 @@ export type InterfaceClientPreference = "native" | "web";
 /**
  * Custom schemes an `open` template may not use. `http`/`https` links belong in
  * `universalLink` / `appLink`; the rest run script, read local data, start
- * system actions (calls, messages, settings, store installs, shortcuts), or
- * target Takosumi Mobile itself. `intent:` and `android-app:` are built by the
- * dashboard for Android, never declared. This list only removes the worst
- * schemes; trust comes from the trusted native clients, not from it.
+ * system actions (calls, messages, settings, store installs, shortcuts), open
+ * an arbitrary web page in a browser app (Chrome, Firefox, Edge, Opera, Brave,
+ * DuckDuckGo, Safari and the like), or target Takosumi Mobile itself.
+ * `intent:` and `android-app:` are built by the dashboard for Android, never
+ * declared. This list only removes the worst schemes; trust comes from the
+ * trusted native clients, not from it.
  */
 export const INTERFACE_CLIENT_BLOCKED_SCHEMES: ReadonlySet<string> = new Set([
   "http",
@@ -102,8 +109,29 @@ export const INTERFACE_CLIENT_BLOCKED_SCHEMES: ReadonlySet<string> = new Set([
   "app-prefs",
   "prefs",
   "shortcuts",
+  "x-web-search",
+  // Browser apps that open whatever web page the link names.
   "x-safari-http",
   "x-safari-https",
+  "googlechrome",
+  "googlechromes",
+  "googlechrome-x-callback",
+  "firefox",
+  "firefox-focus",
+  "focus",
+  "microsoft-edge",
+  "microsoft-edge-http",
+  "microsoft-edge-https",
+  "opera",
+  "opera-http",
+  "opera-https",
+  "touch-http",
+  "touch-https",
+  "brave",
+  "duckduckgo",
+  "ddgquicklink",
+  "samsunginternet",
+  "yandexbrowser-open-url",
   "ws",
   "wss",
   "ftp",
@@ -370,9 +398,12 @@ interface InterfaceClientBase {
   readonly trustedClientId?: string;
   readonly target: InterfaceClientTarget;
   /**
-   * Verified: the trusted client's name. Unverified: the declared name, which
-   * may not imitate Takosumi or a trusted client. Consumers fall back to the
-   * screen title.
+   * Verified: the trusted client's name, always present. Unverified: the
+   * declared name when it passes the checks (plain Latin or Japanese text that
+   * does not imitate Takosumi or a trusted client), else absent. Consumers
+   * never fall back to the screen title or other screen metadata for an
+   * unverified platform: without `name` they show a neutral label (such as
+   * "Unverified app") with `target`.
    */
   readonly name?: string;
   /** The custom-scheme link with `{origin}` / `{url}` filled in. */
@@ -410,9 +441,11 @@ export interface InterfaceAndroidClient extends InterfaceClientBase {
 /** The validated `document.clients` of one screen. */
 export interface InterfaceClients {
   /**
-   * The declared default, `"native"` unless it says `"web"`. It applies only
-   * on a platform whose client is verified; an unverified client is never a
-   * default and always asks first.
+   * The default on a phone. `"native"` only when the declaration does not say
+   * `"web"` and at least one platform's client is verified; otherwise `"web"`,
+   * so a declaration without a verified client never claims a native default.
+   * Even `"native"` applies only on a platform whose client is verified; an
+   * unverified client is never a default and always asks first.
    */
   readonly preferred: InterfaceClientPreference;
   readonly ios?: InterfaceIosClient;
@@ -446,9 +479,13 @@ interface TemplateCheck {
 
 interface ParseContext extends TemplateCheck {
   readonly trusted: readonly TrustedNativeClient[];
-  /** Schemes and hosts owned by trusted clients on this platform. */
+  /**
+   * Schemes and link hosts owned by trusted clients on either platform. An
+   * unverified link may not use an owned scheme, an owned host, or a host
+   * below one.
+   */
   readonly ownedSchemes: ReadonlySet<string>;
-  readonly ownedHosts: ReadonlySet<string>;
+  readonly ownedHosts: readonly string[];
   /** Names an unverified client may not imitate. */
   readonly trustedNames: readonly string[];
 }
@@ -470,25 +507,27 @@ export function parseInterfaceClients(
     ...(options.reservedHosts ?? []),
   ];
   const trusted = options.trustedClients ?? DEFAULT_TRUSTED_NATIVE_CLIENTS;
-  const base = {
+  const context: ParseContext = {
     values,
     reservedHosts,
     trusted,
     trustedNames: trusted.map((entry) => entry.name),
+    ownedSchemes: new Set(trusted.flatMap((entry) => [
+      ...(entry.ios?.schemes ?? []),
+      ...(entry.android?.schemes ?? []),
+    ])),
+    ownedHosts: [...new Set(trusted.flatMap((entry) => [
+      ...(entry.ios?.universalLinkHosts ?? []),
+      ...(entry.android?.appLinkHosts ?? []),
+    ]))],
   };
-  const ios = parseIosClient(value.ios, {
-    ...base,
-    ownedSchemes: new Set(trusted.flatMap((entry) => entry.ios?.schemes ?? [])),
-    ownedHosts: new Set(trusted.flatMap((entry) => entry.ios?.universalLinkHosts ?? [])),
-  });
-  const android = parseAndroidClient(value.android, {
-    ...base,
-    ownedSchemes: new Set(trusted.flatMap((entry) => entry.android?.schemes ?? [])),
-    ownedHosts: new Set(trusted.flatMap((entry) => entry.android?.appLinkHosts ?? [])),
-  });
+  const ios = parseIosClient(value.ios, context);
+  const android = parseAndroidClient(value.android, context);
   if (!ios && !android) return undefined;
+  // Without a verified client there is nothing to open by default.
+  const anyVerified = ios?.verified === true || android?.verified === true;
   return {
-    preferred: value.preferred === "web" ? "web" : "native",
+    preferred: anyVerified && value.preferred !== "web" ? "native" : "web",
     ...(ios ? { ios } : {}),
     ...(android ? { android } : {}),
   };
@@ -615,7 +654,11 @@ function trustedLink(
     : customSchemeLink(canonical, context);
 }
 
-/** A declared link of an unverified identity: never a trusted client's. */
+/**
+ * A declared link of an unverified identity: never a trusted client's scheme,
+ * nor a trusted client's link host or a host below it (`evil.open.example`
+ * under `open.example`), which a consumer could read as that client's.
+ */
 function untrustedLink(
   value: unknown,
   kind: "scheme" | "https",
@@ -627,7 +670,9 @@ function untrustedLink(
     : customSchemeLink(value, context);
   if (!link) return undefined;
   const owned = kind === "https"
-    ? context.ownedHosts.has(link.hostname)
+    ? context.ownedHosts.some((host) =>
+      link.hostname === host || link.hostname.endsWith(`.${host}`)
+    )
     : context.ownedSchemes.has(link.protocol.slice(0, -1));
   return owned ? undefined : link;
 }
@@ -945,7 +990,9 @@ const NAME_FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
 /**
  * A plain display name that does not imitate Takosumi or one of
- * `protectedNames` (the trusted clients' names).
+ * `protectedNames` (the trusted clients' names). Only Latin or Japanese text
+ * passes: other scripts, symbols and emoji, and Latin mixed with kana or
+ * kanji, are refused by `isTakosumiReservedClientName`.
  */
 function clientName(
   value: unknown,

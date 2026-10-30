@@ -56,12 +56,28 @@ test("reserved names are found through case, accents, width and lookalikes", () 
     "Тakosumi",
     "takoѕumi",
     "Open in Takosumi",
+    "𝐓𝐚𝐤𝐨𝐬𝐮𝐦𝐢",
   ]) {
     expect(identity.isTakosumiReservedClientName(name), name).toBe(true);
   }
-  for (const name of ["Takos", "Yurucommu", "Notes", "Tako", "Sumi"]) {
+  for (const name of ["Takos", "Yurucommu", "Notes", "Tako", "Sumi", "Café", "メモ帳", "たこ焼き 2", "ｶﾀｶﾅ"]) {
     expect(identity.isTakosumiReservedClientName(name), name).toBe(false);
   }
   expect(identity.isTakosumiReservedClientName("Yurucomrnu", ["Yurucommu"])).toBe(true);
   expect(identity.foldNativeClientName("Ｙｕｒｕ-commu!")).toBe("yurucommui");
+});
+
+test("names folding cannot compare are treated as reserved, without a lookalike table", () => {
+  for (const name of [
+    "TᎪkosumi", // Cherokee A
+    "ᎢᎪᏦᎣᏚᎷᎥ", // Cherokee only
+    "ᴛᴀᴋᴏsᴜᴍɪ", // Latin small capitals
+    "T🅰kosumi", // an emoji letter
+    "Takロsumi", // katakana between Latin letters
+    "Tαkosumi", // Greek alpha
+    "Заметки", // Cyrillic only
+    "📝",
+  ]) {
+    expect(identity.isTakosumiReservedClientName(name), name).toBe(true);
+  }
 });

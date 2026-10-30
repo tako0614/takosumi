@@ -128,14 +128,42 @@ export function foldNativeClientName(name: string): string {
   return folded.replace(/[^a-z]/gu, "").replaceAll("rn", "m");
 }
 
+/** ASCII letters, digits, spaces and ASCII punctuation. */
+const ASCII_NAME = /^[\x20-\x7e]*$/u;
 /**
- * True when `name` contains, after folding, a reserved Takosumi name or one
- * of `extraNames` (for example the names of trusted native clients).
+ * Kana, kanji and Japanese punctuation with ASCII digits, spaces and ASCII
+ * punctuation, but no ASCII letter.
+ */
+const JAPANESE_NAME =
+  /^[\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Han}\u3000-\u303f\x20-\x40\x5b-\x60\x7b-\x7e]*$/u;
+
+/**
+ * True when folding can compare every character of `name`: after removing
+ * accents and compatibility forms (full-width, ligatures, styled letters), it
+ * is ASCII text, or Japanese text without Latin letters. Other scripts
+ * (Cyrillic, Greek, Cherokee and so on), small capitals, symbols and emoji can
+ * imitate a Latin letter that no lookalike table lists, and kana or kanji
+ * between Latin letters can stand in for one (`Takロsumi`), so a name using
+ * them is never treated as safe.
+ */
+function isComparableClientName(name: string): boolean {
+  const base = name.normalize("NFKD").replace(/\p{M}/gu, "");
+  return ASCII_NAME.test(base) || JAPANESE_NAME.test(base);
+}
+
+/**
+ * True when `name` may imitate a reserved Takosumi name or one of
+ * `extraNames` (for example the names of trusted native clients): it
+ * contains one after folding, or it uses characters folding cannot compare
+ * (anything but ASCII text, or Japanese text without Latin letters, after
+ * removing accents and compatibility forms). Refusing every such name is
+ * simpler and more robust than listing every lookalike of every script.
  */
 export function isTakosumiReservedClientName(
   name: string,
   extraNames: readonly string[] = [],
 ): boolean {
+  if (!isComparableClientName(name)) return true;
   const folded = foldNativeClientName(name);
   if (!folded) return false;
   return [...TAKOSUMI_RESERVED_CLIENT_NAMES, ...extraNames].some((reserved) => {

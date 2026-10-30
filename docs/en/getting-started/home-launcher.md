@@ -142,12 +142,12 @@ from the dashboard and Takosumi Mobile comes later.
 
 | Field | What to write |
 | --- | --- |
-| `preferred` | The default on a phone: `"native"` (the native app) or `"web"`. Without it, `"native"`. It applies only on an OS with a verified native app (below) |
+| `preferred` | The default on a phone: `"native"` (the native app) or `"web"`. Without it, `"native"`. The API returns `"native"` only when at least one OS has a verified native app (below), and `"web"` otherwise. It applies only on an OS with a verified native app |
 | `ios.bundleId` | The bundle id, in reverse-DNS form such as `com.example.notes`. Required for verification |
 | `android.package` | Required. The applicationId, in reverse-DNS form. On Android the link goes only to the app with this package |
 | `open` | A template for the app's custom-scheme link |
 | `ios.universalLink`, `android.appLink` | Optional. A template for an https link on the publisher's domain (universal link, App Link) |
-| `ios.name`, `android.name` | Optional. The name shown for an unverified app where people choose how to open (up to 64 characters). A verified app uses the name the operator registered |
+| `ios.name`, `android.name` | Optional. The name shown for an unverified app where people choose how to open (up to 64 characters, Latin letters or Japanese). A verified app uses the name the operator registered |
 | `ios.appStoreId` | Optional. The App Store id (1 to 12 digits). A verified app uses the registered id |
 | `ios.storeUrl`, `android.storeUrl` | Optional. An install link; only one tied to the declared id is used (below) |
 
@@ -164,12 +164,17 @@ as trusted (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`, below).
   link loses that OS entirely.
 - **Unverified** (`verified: false`): every other declaration. It is returned with its real
   destination (the Android package, the custom scheme, the link host) in `target`. It cannot use
-  a scheme or host that a registered app owns, and a name that imitates Takosumi or a registered
-  app (including case, full-width forms and lookalikes such as `0` for `o`) is dropped.
+  a scheme or host that a registered app owns, or a host below one (such as
+  `evil.open.example.com`). A name that imitates Takosumi or a registered app (including case,
+  full-width forms and lookalikes such as `0` for `o`) is dropped, and so is a name that is not
+  written only in ASCII letters or only in Japanese without Latin letters (other scripts such as
+  Cyrillic, Greek or Cherokee, small capitals, symbols, emoji, or Latin mixed with kana or kanji).
 
 The dashboard and Takosumi Mobile open only a verified native app without asking, and honour
 `preferred: "native"` only for one. They never open an unverified native app automatically; they
-show `target` and ask first.
+show `target` and ask first. An unverified app without `name` is shown with a neutral label such
+as "Unverified app" and its `target`, never with the screen's `display.title`: the title is not
+checked against the registered names.
 
 Templates are compared literally, except that the case of the scheme and host and a default port
 (`:443`) are normalised. Every registered template contains `{origin}`.
@@ -215,20 +220,24 @@ no way to open the app is treated as absent too. Unknown fields and operating sy
 | Field | Refused |
 | --- | --- |
 | `open` | A scheme that is not 2 to 32 characters starting with a lowercase letter (lowercase letters, digits, `+`, `.`, `-`), a blocked scheme (below), a user name or password, a query parameter whose name looks like a credential (such as `token`), a `#` fragment (on Android, Takosumi builds an `intent:` link and appends to it) |
-| `universalLink`, `appLink` | Anything but `https://` (including `http://`), a user name or password, a port other than 443, an IP address or a host without a dot, a credential-like name in the query or after `#`, a Takosumi domain (`takosumi.com` and below, and this Takosumi's dashboard and issuer hosts) |
+| `universalLink`, `appLink` | Anything but `https://` (including `http://`), a user name or password, a port other than 443, an IP address or a host without a dot, a credential-like name in the query or after `#`, a Takosumi domain (`takosumi.com` and below, and this Takosumi's dashboard and issuer hosts), and for an unverified app a registered app's host or one below it |
 | Any template | A `{...}` other than `{origin}` and `{url}` (including `{ORIGIN}` and an unmatched `{`), five or more placeholders, `{origin}` or `{url}` in the host, spaces or characters not allowed in URLs, more than 2,048 characters before or after filling in |
 | `bundleId`, `android.package` | Not in reverse-DNS form (up to 155 characters), or Takosumi Mobile's own `com.takosumi` and anything below it (which drops the whole OS) |
 | `appStoreId` | Not 1 to 12 digits |
 | `storeUrl` | The page of another app than the declared id, or a host other than those above |
-| `name` | 65 characters or more, control or format characters (direction overrides, zero-width characters and so on), line or paragraph separators, or a name imitating Takosumi or a registered app |
+| `name` | 65 characters or more, control or format characters (direction overrides, zero-width characters and so on), line or paragraph separators, a name imitating Takosumi or a registered app, or a name not written only in ASCII letters or only in Japanese (above) |
 
 Schemes `open` cannot use: `http`, `https` (write those in `universalLink` or `appLink`),
 `javascript`, `vbscript`, `data`, `file`, `filesystem`, `blob`, `about`, `content`, `intent`,
 `android-app` (Takosumi builds Android links), `takosumi` (Takosumi Mobile itself), `tel`, `callto`,
 `sms`, `smsto`, `mms`, `mmsto`, `mailto`, `facetime`, `facetime-audio`, `facetime-prompt`,
 `facetime-audio-prompt`, `itms`, `itmss`, `itms-apps`, `itms-appss`, `itms-services`, `itms-beta`,
-`market`, `app-settings`, `app-prefs`, `prefs`, `shortcuts`, `x-safari-http`, `x-safari-https`, `ws`,
-`wss`, `ftp`. This list only removes the worst schemes; trust comes from the registration above.
+`market`, `app-settings`, `app-prefs`, `prefs`, `shortcuts`, `x-web-search`, `ws`, `wss`, `ftp`, and
+browser apps that open any web page (`x-safari-http`, `x-safari-https`, `googlechrome`,
+`googlechromes`, `googlechrome-x-callback`, `firefox`, `firefox-focus`, `focus`, `microsoft-edge`,
+`microsoft-edge-http`, `microsoft-edge-https`, `opera`, `opera-http`, `opera-https`, `touch-http`,
+`touch-https`, `brave`, `duckduckgo`, `ddgquicklink`, `samsunginternet`, `yandexbrowser-open-url`).
+This list only removes the worst schemes; trust comes from the registration above.
 
 Takosumi's own identities (Takosumi Mobile's bundle id, package and scheme, Takosumi's domains,
 reserved names) are in the public package `@takosjp/takosumi-contract/native-client-identity`,

@@ -584,7 +584,7 @@ test("a screen carries verified first-party clients and marks every other declar
       sortOrder: 2,
       url: "https://pay.example.test/",
       clients: {
-        preferred: "native",
+        preferred: "web",
         android: {
           verified: false,
           target: { package: "com.evil.pay", scheme: "upi" },
@@ -608,6 +608,47 @@ test("a screen carries verified first-party clients and marks every other declar
   expect(body).not.toContain("Free money");
   expect(body).not.toContain("evil.example");
   expect(body).not.toContain("javascript:");
+});
+
+test("an unverified client never borrows the screen title, even a trusted client's name", async () => {
+  const h = await fixture();
+  const [bare, named] = await createScreens(h, [
+    {
+      name: "bare",
+      url: "https://chat.example.test/",
+      document: {
+        display: { title: "Yurucommu", sortOrder: 1 },
+        clients: { preferred: "native", android: { package: "com.evil.chat", open: "evilchat://open?h={origin}" } },
+      },
+    },
+    {
+      name: "named",
+      url: "https://chat2.example.test/",
+      document: {
+        display: { title: "Yurucommu", sortOrder: 2 },
+        clients: { ios: { name: "Yurucommu", open: "evilchat://open" } },
+      },
+    },
+  ]);
+  const app = await h.app();
+  const screens = new Map(app.screens.map((screen) => [screen.interfaceId, screen]));
+  // The title stays the screen's own; the unverified client gets no name and no native default.
+  expect(screens.get(bare)?.title).toBe("Yurucommu");
+  expect(screens.get(bare)?.clients).toEqual({
+    preferred: "web",
+    android: {
+      verified: false,
+      target: { package: "com.evil.chat", scheme: "evilchat" },
+      package: "com.evil.chat",
+      open: "evilchat://open?h=https%3A%2F%2Fchat.example.test",
+      storeUrl: "https://play.google.com/store/apps/details?id=com.evil.chat",
+    },
+  });
+  expect(screens.get(named)?.clients?.ios).toEqual({
+    verified: false,
+    target: { scheme: "evilchat" },
+    open: "evilchat://open",
+  });
 });
 
 test("the operator's trusted native clients and issuer host decide verification", async () => {

@@ -498,4 +498,17 @@ test("trusted shared-auth cookies retain first-party authority for app members a
   }), frozen, dependencies);
   expect(paused?.status).toBe(409);
   expect((await paused?.json()).error).toMatchObject({ code: "failed_precondition", details: { reason: "app_ownership_mutations_frozen" } });
+
+  // A malformed trusted native client list trusts none but never fails Control requests.
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    for (const value of ["{\"private-marker\"", "[{\"id\":\"private-marker\"}]"]) {
+      const malformed = { ...env, TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS: value } as CloudflareWorkerEnv;
+      expect((await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/members"), malformed, dependencies))?.status).toBe(200);
+    }
+    expect(logged.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("private-marker");
+  } finally {
+    logged.mockRestore();
+  }
 });

@@ -18,15 +18,20 @@ package for the v1 GA line.
   filled in. A platform is `verified` only when its bundle id or package and
   every kept link template match an entry of
   `TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS` (default: the Yurucommu, Yurumeet
-  and Takos apps; malformed values fail startup); its name and App Store id
-  then come from that entry. Every other declaration is returned with
-  `verified: false` and its real destination in `target`, may not use a
-  trusted client's scheme or link host, and must never be opened without
-  asking. Templates carry only `{origin}` / `{url}` (at most four), dangerous
-  schemes, non-https links, Takosumi Mobile's own `com.takosumi`,
-  Takosumi-owned domains, lookalike names and store links of another app are
-  refused, and invalid fields degrade to absence. The field is optional, so
-  neither the Interface version nor any repository manifest version changes.
+  and Takos apps; a malformed value trusts none and is logged once per
+  isolate without its contents, and Accounts, OIDC and the control API keep
+  serving); its name and App Store id then come from that entry. Every other
+  declaration is returned with `verified: false` and its real destination in
+  `target`, may not use a trusted client's scheme, link host or a host below
+  it, is never labelled with the screen title, and must never be opened
+  without asking; `preferred` is `"native"` only when some platform is
+  verified. Templates carry only `{origin}` / `{url}` (at most four);
+  dangerous and browser-launching schemes, non-https links, Takosumi Mobile's
+  own `com.takosumi`, Takosumi-owned domains, lookalike names (including any
+  name that is not plain ASCII or plain Japanese text) and store links of
+  another app are refused, and invalid fields degrade to absence. The field is
+  optional, so neither the Interface version nor any repository manifest
+  version changes.
   `@takosjp/takosumi-contract` 2.2.0 (unpublished) adds the
   `native-client-identity` subpath with Takosumi's own refused identities for
   Takosumi Mobile. The dashboard and Takosumi Mobile do not act on `clients`

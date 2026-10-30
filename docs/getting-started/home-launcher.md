@@ -139,12 +139,12 @@ Worker やサーバーなど）のアドレスから作ります。既定値の�
 
 | 欄 | 書くもの |
 | --- | --- |
-| `preferred` | スマホで開くときの既定。`"native"`（専用アプリ）か `"web"`。省くと `"native"`。効くのは、検証済み（下）の専用アプリがある OS だけです |
+| `preferred` | スマホで開くときの既定。`"native"`（専用アプリ）か `"web"`。省くと `"native"`。ただし API が `"native"` を返すのは、どれかの OS の専用アプリが検証済み（下）のときだけで、それ以外は `"web"` を返します。効くのも、検証済みの専用アプリがある OS だけです |
 | `ios.bundleId` | bundle id（`com.example.notes` のような逆 DNS の形）。検証には必須 |
 | `android.package` | 必須。applicationId（逆 DNS の形）。Android ではこの package のアプリにだけ渡します |
 | `open` | 専用アプリの custom scheme の link の雛形 |
 | `ios.universalLink`・`android.appLink` | 任意。配布者のドメインに置いた https の link（universal link・App Links）の雛形 |
-| `ios.name`・`android.name` | 任意。未検証のときに選ぶ画面に出す名前（64 文字まで）。検証済みなら、運用している人が登録した名前を使います |
+| `ios.name`・`android.name` | 任意。未検証のときに選ぶ画面に出す名前（64 文字まで、英字か日本語）。検証済みなら、運用している人が登録した名前を使います |
 | `ios.appStoreId` | 任意。App Store の ID（1〜12 桁の数字）。検証済みなら、登録された ID を使います |
 | `ios.storeUrl`・`android.storeUrl` | 任意。入れる先の link。宣言した ID に結び付いたものだけ使えます（下） |
 
@@ -159,12 +159,16 @@ Worker やサーバーなど）のアドレスから作ります。既定値の�
   値は使いません。一致しない link は捨てます。登録された `bundleId`・`package` を名乗りながら、
   一致する link が一つも無い宣言は、その OS ごと捨てます。
 - **未検証**（`verified: false`）: それ以外の宣言。実際の行き先（Android の package、custom scheme、
-  link の host）を `target` に入れて返します。登録された専用アプリが持つ scheme と host は使えません。
-  名前は、Takosumi や登録された専用アプリに似せたもの（大文字小文字、全角、`0` と `o` のような
-  似た文字の違いを含む）を捨てます。
+  link の host）を `target` に入れて返します。登録された専用アプリが持つ scheme と host、その host の
+  下の host（`evil.open.example.com` など）は使えません。名前は、Takosumi や登録された専用アプリに
+  似せたもの（大文字小文字、全角、`0` と `o` のような似た文字の違いを含む）と、英字（ASCII）だけ、
+  または英字を含まない日本語だけで書かれていないもの（キリル文字・ギリシャ文字・チェロキー文字などの
+  ほかの文字、小さな大文字、記号、絵文字、英字とかな・漢字の混在）を捨てます。
 
 dashboard と Takosumi Mobile は、検証済みの専用アプリだけを尋ねずに開き、`preferred: "native"` も
 検証済みのときだけ効かせます。未検証の専用アプリは自動では開かず、開く前に `target` を見せて確かめます。
+未検証の専用アプリに `name` が無いときは「未確認のアプリ」のような中立の表示と `target` を出し、
+画面の `display.title` は使いません（title は登録された名前に似ていないかを確かめていないため）。
 
 雛形の比較では、scheme と host の大文字小文字と既定の port（`:443`）だけをそろえ、ほかは文字どおりに
 比べます。登録された雛形には、必ず `{origin}` が入っています。
@@ -209,20 +213,24 @@ dashboard と Takosumi Mobile は、検証済みの専用アプリだけを尋�
 | 欄 | 通らないもの |
 | --- | --- |
 | `open` | scheme が英小文字で始まる 2〜32 文字（英小文字・数字・`+`・`.`・`-`）でないもの、下の禁止の scheme、ユーザー名やパスワード、`token` のような認証情報らしい名前の query、`#` 以降（Android では Takosumi が `intent:` の link を組み立てて後ろに付けるため） |
-| `universalLink`・`appLink` | `https://` 以外（`http://` を含む）、ユーザー名やパスワード、443 以外の port、IP アドレスや `.` の無い host、認証情報らしい名前の query や `#` 以降の値、Takosumi のドメイン（`takosumi.com` とその下、その Takosumi の dashboard と issuer の host） |
+| `universalLink`・`appLink` | `https://` 以外（`http://` を含む）、ユーザー名やパスワード、443 以外の port、IP アドレスや `.` の無い host、認証情報らしい名前の query や `#` 以降の値、Takosumi のドメイン（`takosumi.com` とその下、その Takosumi の dashboard と issuer の host）、未検証のときは登録された専用アプリの host とその下 |
 | 雛形の全体 | `{origin}`・`{url}` 以外の `{...}`（`{ORIGIN}`、対になっていない `{` も）、5 個以上の placeholder、host の部分に置いた `{origin}`・`{url}`、空白や URL に使えない文字、値を入れる前か後で 2,048 文字を超えるもの |
 | `bundleId`・`android.package` | 逆 DNS の形でないもの（155 文字まで）、Takosumi Mobile 自身の `com.takosumi` とその下（この場合は OS ごと捨てます） |
 | `appStoreId` | 1〜12 桁の数字でないもの |
 | `storeUrl` | 宣言した ID と違うアプリのページ、上の決まったドメイン以外 |
-| `name` | 65 文字以上、制御文字・書式文字（文字の向きを変える文字、幅の無い文字など）・行や段落の区切り、Takosumi や登録された専用アプリに似せた名前 |
+| `name` | 65 文字以上、制御文字・書式文字（文字の向きを変える文字、幅の無い文字など）・行や段落の区切り、Takosumi や登録された専用アプリに似せた名前、英字だけか日本語だけで書かれていない名前（上） |
 
 `open` で使えない scheme: `http`、`https`（`universalLink`・`appLink` に書きます）、`javascript`、
 `vbscript`、`data`、`file`、`filesystem`、`blob`、`about`、`content`、`intent`、`android-app`
 （Android の link は Takosumi が組み立てます）、`takosumi`（Takosumi Mobile 自身）、`tel`、`callto`、
 `sms`、`smsto`、`mms`、`mmsto`、`mailto`、`facetime`、`facetime-audio`、`facetime-prompt`、
 `facetime-audio-prompt`、`itms`、`itmss`、`itms-apps`、`itms-appss`、`itms-services`、`itms-beta`、
-`market`、`app-settings`、`app-prefs`、`prefs`、`shortcuts`、`x-safari-http`、`x-safari-https`、`ws`、
-`wss`、`ftp`。この一覧は最悪の scheme を落とすだけで、信頼は上の登録で決まります。
+`market`、`app-settings`、`app-prefs`、`prefs`、`shortcuts`、`x-web-search`、`ws`、`wss`、`ftp`、
+任意の web ページを開くブラウザのアプリ（`x-safari-http`、`x-safari-https`、`googlechrome`、
+`googlechromes`、`googlechrome-x-callback`、`firefox`、`firefox-focus`、`focus`、`microsoft-edge`、
+`microsoft-edge-http`、`microsoft-edge-https`、`opera`、`opera-http`、`opera-https`、`touch-http`、
+`touch-https`、`brave`、`duckduckgo`、`ddgquicklink`、`samsunginternet`、`yandexbrowser-open-url`）。
+この一覧は最悪の scheme を落とすだけで、信頼は上の登録で決まります。
 
 Takosumi 自身の識別子（Takosumi Mobile の bundle id・package・scheme、Takosumi のドメイン、予約した名前）は、
 公開の package の `@takosjp/takosumi-contract/native-client-identity` にあり、Takosumi Mobile も同じ値を使います。
