@@ -150,8 +150,8 @@ export async function handleCapsuleInstallConfigReAdoption(
     capsuleId: capsule.id,
     ...request,
   });
-  const targetInstallConfigId = await targetId({
-    workspaceId: capsule.workspaceId,
+  const targetInstallConfigId = await reAdoptionTargetInstallConfigId({
+    scopeRef: capsuleScopeRef(capsule),
     capsuleId: capsule.id,
     actorSubject,
     idempotencyKeyHash,
@@ -811,15 +811,24 @@ export async function capsuleInstallConfigReAdoptionAuthoritySnapshot(
   };
 }
 
-async function targetId(input: {
-  readonly workspaceId: string;
+/**
+ * Deterministic id of the re-adoption successor for one idempotency key. The
+ * scope slot holds the Capsule's frozen `scopeRef` under the historical
+ * `workspaceId` key, so a retry finds the same successor after Workspace is
+ * removed.
+ */
+export async function reAdoptionTargetInstallConfigId(input: {
+  readonly scopeRef: string;
   readonly capsuleId: string;
   readonly actorSubject: string;
   readonly idempotencyKeyHash: string;
 }): Promise<string> {
   const digest = await stableJsonDigest({
     kind: "capsule_install_config_re_adoption_v1",
-    ...input,
+    workspaceId: input.scopeRef,
+    capsuleId: input.capsuleId,
+    actorSubject: input.actorSubject,
+    idempotencyKeyHash: input.idempotencyKeyHash,
   });
   return `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
 }

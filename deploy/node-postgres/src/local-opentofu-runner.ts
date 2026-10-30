@@ -3535,9 +3535,25 @@ async function assertLocalRecoveryStateArtifact(
     environment: artifact.environment,
     generation: 1,
   };
-  const legacyRef = allocator.allocate(allocation);
-  const appRoot = capsuleArtifactRoot(artifact.workspaceId, artifact.subject?.id ?? "", `apps/${artifact.subject?.id ?? ""}`);
-  const appRef = allocator.allocate({ ...allocation, storageRoot: appRoot });
+  // Core allocated the ref from the Capsule's persisted root: `apps/{cap}` or
+  // the legacy Workspace-prefixed root the ownership backfill froze. Accept
+  // exactly that root's canonical ref for this Capsule; never rebuild the
+  // legacy root from the artifact's (live) Workspace id.
+  const suffix = `/environments/${artifact.environment}/state-versions/00000001.tfstate.enc`;
+  let canonicalRef: string | undefined;
+  try {
+    const persistedRoot = typeof artifact.stateRef === "string" && artifact.stateRef.endsWith(suffix)
+      ? artifact.stateRef.slice(0, -suffix.length)
+      : undefined;
+    canonicalRef = persistedRoot === undefined
+      ? undefined
+      : allocator.allocate({
+        ...allocation,
+        storageRoot: capsuleArtifactRoot(artifact.workspaceId, artifact.subject?.id ?? "", persistedRoot),
+      });
+  } catch {
+    canonicalRef = undefined;
+  }
   if (artifact.action !== "state_recovery" || Object.hasOwn(artifact, "result") ||
     artifact.subject?.kind !== "capsule" || artifact.generation !== 1 ||
     !safeSegment(artifact.workspaceId) || !safeSegment(artifact.subject.id) ||
@@ -3551,7 +3567,7 @@ async function assertLocalRecoveryStateArtifact(
     artifact.stateBytes.byteLength === 0 ||
     artifact.stateBytes.byteLength > 16 * 1024 * 1024 ||
     !validLocalRecoveryStateBytes(artifact.stateBytes) ||
-    (artifact.stateRef !== legacyRef && artifact.stateRef !== appRef)) {
+    canonicalRef === undefined || artifact.stateRef !== canonicalRef) {
     throw new Error("local OpenTofu recovery artifact scope or custody is invalid");
   }
   await assertDigest(artifact.stateBytes, artifact.stateDigest,

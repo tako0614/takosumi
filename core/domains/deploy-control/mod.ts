@@ -698,6 +698,12 @@ export interface ReleaseCommandRunJob {
   /** Runner-only plaintext dispatch opened immediately before release. */
   readonly runtimeSecrets?: RunnerRuntimeSecretFilesDispatch;
   readonly applyRunId: string;
+  /**
+   * Exposed to release commands as `TAKOSUMI_WORKSPACE_ID` and
+   * `TAKOSUMI_RELEASE_CONTEXT_JSON.workspaceId`. Holds the Capsule's frozen
+   * `scopeRef` (`capsuleScopeRef`), never the live Workspace id: apps may key
+   * durable data on it.
+   */
   readonly workspaceId?: string;
   readonly capsuleId: string;
   readonly stateVersionId: string;
