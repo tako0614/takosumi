@@ -26,7 +26,7 @@ import type { Run } from "takosumi-contract/runs";
 /** Capsules reserved per tick. One page serves both steps. */
 export const CAPSULE_SWEEP_PAGE_LIMIT = 25;
 
-/** Newest plan Runs read per stale app to find an open update Plan. */
+/** Newest Runs read per app to find an open update Plan or drift check. */
 export const CAPSULE_SWEEP_PLAN_LOOKBACK = 100;
 
 /** Recorded actor for a legacy stale app without an owner row. */
@@ -53,21 +53,34 @@ export interface CapsuleSweepOperations {
   ): Promise<readonly CapsuleSweepCapsule[]>;
   /** Current app ownership; absent for a legacy Capsule without an owner row. */
   getOwnership?(capsuleId: string): Promise<
-    | { readonly ownerAccountId: string; readonly managementState: string }
+    | {
+        readonly ownerAccountId: string;
+        readonly ownershipEpoch: number;
+        readonly managementState: string;
+      }
     | undefined
   >;
-  /** One app's newest plan Runs (never a Workspace listing). */
-  listCapsulePlanRuns(
+  /** One app's newest Runs of the given types (never a Workspace listing). */
+  listCapsuleRuns(
     capsule: CapsuleSweepCapsule,
-    limit: number,
+    options: { readonly types: readonly ("plan" | "drift_check")[]; readonly limit: number },
   ): Promise<readonly Pick<Run, "type" | "status">[]>;
+  /**
+   * `actorOwnershipEpoch` accompanies an owner actor: creation is refused if
+   * the app changed owner since this sweep read it, so `createdBy` never
+   * names a previous owner. The next tick reads the new owner.
+   */
   createCapsulePlan(
     capsuleId: string,
-    options: { readonly actor: string; readonly origin: { readonly kind: "update" } },
+    options: {
+      readonly actor: string;
+      readonly actorOwnershipEpoch?: number;
+      readonly origin: { readonly kind: "update" };
+    },
   ): Promise<unknown>;
   createCapsuleDriftCheck(
     capsuleId: string,
-    options: { readonly actor: string },
+    options: { readonly actor: string; readonly actorOwnershipEpoch?: number },
   ): Promise<unknown>;
   /** Activity for a created stale auto-plan (best-effort). */
   recordStaleAutoPlan?(capsule: CapsuleSweepCapsule): Promise<void>;
@@ -80,7 +93,10 @@ export interface CapsuleSweepOptions {
   readonly driftCheck: boolean;
   /** Capsules reserved this tick (default {@link CAPSULE_SWEEP_PAGE_LIMIT}). */
   readonly limit?: number;
-  /** Plan Runs read per stale app (default {@link CAPSULE_SWEEP_PLAN_LOOKBACK}). */
+  /**
+   * Newest plan (stale app) or drift-check (active app) Runs read per app
+   * (default {@link CAPSULE_SWEEP_PLAN_LOOKBACK}).
+   */
   readonly planLookback?: number;
 }
 
@@ -133,12 +149,20 @@ export async function sweepCapsules(
       const ownership = await operations.getOwnership?.(capsule.id);
       // An app being transferred, drained or retired takes no system work.
       if (ownership && ownership.managementState !== "active") continue;
-      const owner = ownership?.ownerAccountId.trim() || undefined;
+      const owner = ownership && ownership.ownerAccountId.trim()
+        ? {
+            actor: ownership.ownerAccountId,
+            actorOwnershipEpoch: ownership.ownershipEpoch,
+          }
+        : undefined;
       if (step === "auto_plan") {
-        const runs = await operations.listCapsulePlanRuns(capsule, planLookback);
+        const runs = await operations.listCapsuleRuns(capsule, {
+          types: ["plan"],
+          limit: planLookback,
+        });
         if (runs.some(isPendingPlan)) continue;
         await operations.createCapsulePlan(capsule.id, {
-          actor: owner ?? STALE_AUTO_PLAN_SYSTEM_ACTOR,
+          ...(owner ?? { actor: STALE_AUTO_PLAN_SYSTEM_ACTOR }),
           origin: { kind: "update" },
         });
         plansCreated += 1;
@@ -148,9 +172,17 @@ export async function sweepCapsules(
           console.warn("scheduled.stale_auto_plan_activity_failed");
         }
       } else {
-        await operations.createCapsuleDriftCheck(capsule.id, {
-          actor: owner ?? DRIFT_CHECK_SYSTEM_ACTOR,
+        // One drift check at a time per app: a queued or running one already
+        // answers the question.
+        const runs = await operations.listCapsuleRuns(capsule, {
+          types: ["drift_check"],
+          limit: planLookback,
         });
+        if (runs.some(isPendingDriftCheck)) continue;
+        await operations.createCapsuleDriftCheck(
+          capsule.id,
+          owner ?? { actor: DRIFT_CHECK_SYSTEM_ACTOR },
+        );
         driftChecksCreated += 1;
       }
     } catch {
@@ -163,6 +195,11 @@ export async function sweepCapsules(
     }
   }
   return { scanned: capsules.length, plansCreated, driftChecksCreated };
+}
+
+function isPendingDriftCheck(run: Pick<Run, "type" | "status">): boolean {
+  return run.type === "drift_check" &&
+    (run.status === "queued" || run.status === "running");
 }
 
 function isPendingPlan(run: Pick<Run, "type" | "status">): boolean {

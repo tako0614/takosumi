@@ -2978,13 +2978,6 @@ export async function getRunGroup(id: string): Promise<RunGroupWithRuns> {
   );
 }
 
-export async function approveRunGroup(id: string): Promise<RunGroupWithRuns> {
-  return await controlFetch<RunGroupWithRuns>(
-    `${BASE}/run-groups/${encodeURIComponent(id)}/approve`,
-    { method: "POST" },
-  );
-}
-
 // --- Connections -----------------------------------------------------------
 
 function normalizedWorkspaceId(value: string): string {

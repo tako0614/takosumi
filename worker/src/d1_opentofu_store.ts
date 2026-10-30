@@ -2871,9 +2871,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   #requestMaintenanceScope?: D1RequestMaintenanceScope;
 
   /**
-   * `bootstrap` (the default) may run idempotent DDL on first use;
-   * `predeployed` never does. Operator tools that must not change the schema
-   * read this to refuse a bootstrap store.
+   * `bootstrap` creates and migrates the schema on first access;
+   * `predeployed` only verifies it. Operator tools that must stay read-only
+   * refuse a bootstrap store.
    */
   get schemaMode(): D1OpenTofuControlSchemaMode {
     return this.#schemaMode;

@@ -505,6 +505,7 @@ export async function handlePlatformOperatorControlMcpRequest(
       run: async () => undefined,
       installNamespaceId: async () => undefined,
       appPartitions: async () => new Map(),
+      recordedOwnership: async () => new Set(),
     });
   }
   const session = await (
@@ -2635,12 +2636,12 @@ const REQUIRED_DASHBOARD_METRICS = [
   "takosumi_api_request_duration_seconds_bucket",
   "takosumi_oidc_request_count",
 ] as const;
-// The app (`capsule_id`) is the tenant label; Workspace labels are retired
-// (TASK-0118 P9.1-g).
+// Only labels the protected scrape actually carries. Tenant labels are never
+// series labels: the exposition drops `capsule_id` (and any legacy
+// `workspace_id`) to keep cardinality bounded (TASK-0118 P9.1-g).
 const REQUIRED_DASHBOARD_LABELS = [
   "environment",
   "runner_profile_id",
-  "capsule_id",
   "operation_kind",
   "status",
 ] as const;
@@ -4583,8 +4584,19 @@ function platformExtensionPatAppIds(
   const raw = record.app_ids;
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw) || raw.length > 10_000) return null;
-  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionContextId(value) : undefined);
+  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionPatAppId(value) : undefined);
   return ids.every((id): id is string => id !== undefined) ? ids : null;
+}
+
+/**
+ * One PAT app id: the platform id characters, up to the stored PAT app id
+ * length (256), so a stored id longer than other context ids (128) never
+ * refuses its token. Stored ids are app ids checked at creation, which use
+ * only these characters.
+ */
+function safePlatformExtensionPatAppId(value: string): string | undefined {
+  const trimmed = value.trim();
+  return /^[A-Za-z0-9_.:-]{1,256}$/u.test(trimmed) ? trimmed : undefined;
 }
 
 /** The introspected OAuth client id, only in a bounded printable shape. */
@@ -5075,11 +5087,15 @@ export interface ScheduledCapsuleSweepOperations {
   ): Promise<{ readonly runs: readonly Run[] }>;
   createCapsulePlan(
     capsuleId: string,
-    options: { readonly actor: string; readonly origin: { readonly kind: "update" } },
+    options: {
+      readonly actor: string;
+      readonly actorOwnershipEpoch?: number;
+      readonly origin: { readonly kind: "update" };
+    },
   ): Promise<unknown>;
   createCapsuleDriftCheck(
     capsuleId: string,
-    options: { readonly actor: string },
+    options: { readonly actor: string; readonly actorOwnershipEpoch?: number },
   ): Promise<unknown>;
   readonly activity?: Pick<ActivityRecorder, "record">;
 }
@@ -5264,13 +5280,13 @@ export async function runCapsuleSweep(
     ...(appOwnership
       ? { getOwnership: (capsuleId: string) => appOwnership.getOwnership(capsuleId) }
       : {}),
-    listCapsulePlanRuns: async (capsule, limit) =>
+    listCapsuleRuns: async (capsule, { types, limit }) =>
       (await operations.listCapsuleRunsPage(capsule.id, {
         // The store matches the app's own Workspace column with its id; the
         // read never widens past this one app.
         workspaceId: capsule.workspaceId,
         limit,
-        types: ["plan"],
+        types,
       })).runs,
     createCapsulePlan: (capsuleId, planOptions) =>
       operations.createCapsulePlan(capsuleId, planOptions),

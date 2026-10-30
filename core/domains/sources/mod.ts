@@ -68,7 +68,7 @@ import {
   type CapsuleSourceFile,
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
-import { mergePolicyConfigs } from "../deploy-control/provider_policy.ts";
+import { effectiveProviderPolicy } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
 import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
@@ -1527,7 +1527,7 @@ export class SourcesService {
       this.#store.getInstallConfig(capsule.installConfigId),
     ]);
     return {
-      policy: mergePolicyConfigs(workspace?.policy, config?.policy),
+      policy: effectiveProviderPolicy(workspace?.policy, config?.policy),
       ...(config?.modulePath ? { modulePath: config.modulePath } : {}),
     };
   }
@@ -1582,7 +1582,7 @@ export class SourcesService {
     }
     const workspace = await this.#store.getWorkspace(workspaceId);
     return {
-      policy: mergePolicyConfigs(workspace?.policy, config.policy),
+      policy: effectiveProviderPolicy(workspace?.policy, config.policy),
       ...(config.modulePath ? { modulePath: config.modulePath } : {}),
     };
   }

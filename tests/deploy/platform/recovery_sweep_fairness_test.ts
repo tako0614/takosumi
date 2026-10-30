@@ -71,10 +71,16 @@ test("the per-app sweep visits every live app beyond the page despite permanent 
   }
   expect([...planned].sort()).toEqual(Array.from({ length: 7 }, (_, i) => `cap_stale_${i}`));
   expect([...checked].sort()).toEqual(Array.from({ length: 7 }, (_, i) => `cap_active_${i}`));
-  // Open plans are read per app, with only that app's own Workspace column.
+  // Open plans (stale) and drift checks (active) are read per app, with only
+  // that app's own Workspace column.
   for (const read of runReads) {
-    expect(read.types).toEqual(["plan"]);
-    expect(read.workspaceId).toBe(`ws_${Number(read.capsuleId.slice("cap_stale_".length)) % 3}`);
+    if (read.capsuleId.startsWith("cap_stale_")) {
+      expect(read.types).toEqual(["plan"]);
+      expect(read.workspaceId).toBe(`ws_${Number(read.capsuleId.slice("cap_stale_".length)) % 3}`);
+    } else {
+      expect(read.types).toEqual(["drift_check"]);
+      expect(read.workspaceId).toBe(`ws_${read.capsuleId.slice("cap_active_".length)}`);
+    }
   }
 });
 

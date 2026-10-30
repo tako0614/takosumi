@@ -927,7 +927,7 @@ management is temporary and stays retryable with
 | GET | `/api/v1/runs/{runId}/logs` | Read Run logs |
 | GET | `/api/v1/runs/{runId}/events` | Read Run events |
 | GET | `/api/v1/runs/{runId}/cost` | Read Run cost projection |
-| GET | `/api/v1/run-groups/{runGroupId}` | Read a RunGroup created before the retirement (only when every member app is viewable) |
+| GET | `/api/v1/run-groups/{runGroupId}` | Read a RunGroup created before the retirement, only when every member app is viewable through its own ownership row; otherwise `404`, the same as a missing group |
 | POST | `/api/v1/run-groups/{runGroupId}/approve` | Retired: answers `410` `run_group_retired` |
 | GET | `/api/v1/state-versions/{stateVersionId}` | Read a StateVersion projection |
 | POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | Create a StateVersion rollback plan |
