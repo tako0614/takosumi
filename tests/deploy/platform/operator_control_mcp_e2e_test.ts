@@ -27,6 +27,7 @@ import { InMemoryGitInstallPlanStore } from "../../../core/domains/install-plans
 import { createD1InterfaceStores } from "../../../core/domains/interfaces/d1_stores.ts";
 import { createSqlInterfaceStores } from "../../../core/domains/interfaces/sql_stores.ts";
 import { defaultProjectId } from "../../../core/domains/projects/mod.ts";
+import { deterministicInitialCapsuleId } from "../../../core/domains/install-plans/source-reservation.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   ensureD1OpenTofuLedgerSchema,
@@ -204,7 +205,7 @@ async function compose(backend: Backend) {
     const result = (await response.json()).result as any;
     return result.structuredContent as { status: number; body: any };
   }
-  return { backend, operations, ownerNamespace, ownerElsewhere, tool, dispatched };
+  return { backend, operations, deployStore, ownerNamespace, ownerElsewhere, tool, dispatched };
 }
 
 const INSTALL = (name: string) => ({
@@ -297,5 +298,31 @@ for (const backend of BACKENDS) {
       expect((await fixture.tool("takosumi_install_plan_create", INSTALL("after-transfer"), token)).status).toBe(403);
     }
     expect(fixture.dispatched).toEqual([]);
+  });
+
+  test(`[${backend}] an install whose app was committed before the plan recorded it is decided by that app`, async () => {
+    const fixture = await compose(backend);
+    const created = await fixture.tool("takosumi_install_plan_create", INSTALL("lost-ack"));
+    expect(created.status).toBe(201);
+    const planId = created.body.installPlan.id as string;
+    expect(created.body.installPlan.capsuleId).toBeUndefined();
+    // The plan's deterministic initial Capsule exists, but belongs to OTHER:
+    // the handler would treat it as the app, so the MCP fence must as well.
+    const capsuleId = deterministicInitialCapsuleId(planId);
+    const at = new Date().toISOString();
+    await fixture.deployStore.putCapsule({
+      id: capsuleId, workspaceId: fixture.ownerNamespace.id, projectId: defaultProjectId(fixture.ownerNamespace.id),
+      name: "lost-ack", slug: "lost-ack", environment: "production", sourceId: `src_${capsuleId}`,
+      installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID, installingPrincipalId: OTHER,
+      currentStateGeneration: 1, status: "active", createdAt: at, updatedAt: at,
+    });
+    expect(await fixture.operations.appOwnership!.initializeOwnershipIfMissing({
+      capsuleId, ownerAccountId: OTHER, ownershipEpoch: 0, managementState: "active",
+      managementEpoch: 0, storageRoot: `apps/${capsuleId}`,
+    })).toBe(true);
+    const before = fixture.dispatched.length;
+    expect((await fixture.tool("takosumi_install_plan_get", { installPlanId: planId })).status).toBe(403);
+    expect((await fixture.tool("takosumi_install_plan_reconcile", { installPlanId: planId })).status).toBe(403);
+    expect(fixture.dispatched).toHaveLength(before);
   });
 }

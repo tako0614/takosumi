@@ -504,6 +504,7 @@ export async function handlePlatformOperatorControlMcpRequest(
       installPlan: async () => undefined,
       run: async () => undefined,
       installNamespaceId: async () => undefined,
+      appPartitions: async () => new Map(),
     });
   }
   const session = await (

@@ -103,8 +103,11 @@ own namespace and are owned by the user. The adapter uses no Workspace route.
 
 While Interface tokens still carry a Workspace (until TASK-0118 Phase 9.4), that
 Workspace is a restriction applied first: the target app must also be in it,
-and a new install is refused when it would land outside it. It never grants
-anything.
+a new install is refused when it would land outside it, and an idempotent
+replay that returns an install from another of the user's namespaces is not
+returned. It never grants anything. An install plan whose app was committed
+before the plan recorded it is decided by that app, as the public handler
+decides it.
 
 Install-plan tools forward only the bounded public `/api/v1` request. They do
 not accept variable values, credentials, provider tokens, or an arbitrary

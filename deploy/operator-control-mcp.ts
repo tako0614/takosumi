@@ -164,6 +164,11 @@ export interface OperatorControlMcpAppFacts {
 }
 
 export interface OperatorControlMcpInstallPlanFacts {
+  /**
+   * The plan's app: the recorded Capsule, or the plan's deterministic initial
+   * Capsule when it was committed before the plan recorded it (a lost
+   * acknowledgement), exactly as the public handler resolves it.
+   */
   readonly capsuleId?: string;
   readonly workspaceId: string;
   readonly createdBy: string;
@@ -201,7 +206,17 @@ export interface OperatorControlMcpAuthority {
    * install inside its Workspace restriction.
    */
   readonly installNamespaceId: () => Promise<string | undefined>;
+  /**
+   * The retained internal partition of each listed app, in one batched read.
+   * Read only for a Workspace-bound token's listing restriction.
+   */
+  readonly appPartitions: (
+    capsuleIds: readonly string[],
+  ) => Promise<ReadonlyMap<string, string>>;
 }
+
+/** A narrowed response the MCP refuses to return (an access decision, not a failure). */
+class OperatorControlMcpRefusal extends Error {}
 
 type JsonRpcId = string | number | null;
 
@@ -554,8 +569,14 @@ async function callTool(
   if (call.narrow && response.ok) {
     try {
       body = await call.narrow(body);
-    } catch {
-      // Never return an unnarrowed listing.
+    } catch (error) {
+      if (error instanceof OperatorControlMcpRefusal) {
+        return toolResult(request.id, 403, {
+          error: "access_denied",
+          error_description: error.message,
+        });
+      }
+      // Never return an unnarrowed response.
       return toolResult(request.id, 503, {
         error: "control_unavailable",
         error_description: "Takosumi control operation failed",
@@ -612,6 +633,7 @@ function parsedToolCall(
         request: jsonRequest(`${origin}/api/v1/install-plans`, body, {
           "idempotency-key": idempotencyKey,
         }),
+        narrow: (response) => installPlanInsideRestriction(response, authority),
       };
     };
   }
@@ -913,26 +935,48 @@ async function requireInstallNamespace(
   }
 }
 
-/** Keeps only the apps the MCP's owner owns, inside the token's Workspace. */
+/**
+ * A replayed key returns the subject's plan from whichever of its own
+ * namespaces holds it, which may be outside a Workspace-bound token's
+ * restriction; the MCP does not return such a plan.
+ */
+async function installPlanInsideRestriction(
+  body: unknown,
+  authority: OperatorControlMcpAuthority,
+): Promise<unknown> {
+  if (authority.workspaceId === undefined) return body;
+  const plan = record(record(body).installPlan);
+  if (textValue(plan.workspaceId) !== authority.workspaceId) {
+    throw new OperatorControlMcpRefusal("the install is outside the MCP token's Workspace");
+  }
+  return body;
+}
+
+/**
+ * Keeps only the apps the MCP's owner owns, inside the token's Workspace. The
+ * listing comes from the in-process public handler, whose `role` is the
+ * subject's live per-app role; only a Workspace-bound token needs one batched
+ * partition read.
+ */
 async function ownAppsOnly(
   body: unknown,
   authority: OperatorControlMcpAuthority,
 ): Promise<unknown> {
   const page = record(body);
   if (!Array.isArray(page.apps)) throw new TypeError("unexpected app listing");
-  const kept = await Promise.all(page.apps.map(async (entry: unknown) => {
+  const owned = page.apps.filter((entry: unknown) => {
     const app = record(entry);
-    const capsuleId = textValue(app.capsuleId);
-    if (!capsuleId || app.role !== "owner") return undefined;
-    try {
-      await requireAppTarget(authority, capsuleId);
-      return entry;
-    } catch {
-      return undefined;
-    }
-  }));
+    return textValue(app.capsuleId) !== undefined && app.role === "owner";
+  });
+  const workspaceId = authority.workspaceId;
+  const partitions = workspaceId === undefined
+    ? undefined
+    : await authority.appPartitions(owned.map((entry: unknown) => textValue(record(entry).capsuleId)!));
   return {
-    apps: kept.filter((entry) => entry !== undefined),
+    apps: owned.filter((entry: unknown) =>
+      partitions === undefined ||
+      partitions.get(textValue(record(entry).capsuleId)!) === workspaceId
+    ),
     ...(typeof page.nextCursor === "string" ? { nextCursor: page.nextCursor } : {}),
   };
 }
