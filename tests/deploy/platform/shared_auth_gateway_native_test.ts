@@ -55,7 +55,7 @@ test("native service binding and DO transport preserves RP cookies and denies fo
     expect((await fetch("/api/v1/workspaces/ws_native", { headers: { cookie: "takosumi_session=sess_forged", "x-takosumi-platform-subject": "tsub_native" } })).status).toBe(401);
     const extension = await fetch("/extensions/native?workspaceId=ws_native", { headers: { cookie, "x-takosumi-platform-subject": "tsub_attacker", "x-takosumi-actor-context": "owner" } });
     expect(extension.status).toBe(200);
-    expect(await extension.json()).toEqual({ context: { authKind: "session", subject: "tsub_native", workspaceId: "ws_native", workspaceRole: "viewer" }, cookie: null, actor: null });
+    expect(await extension.json()).toEqual({ context: { authKind: "session", subject: "tsub_native", accountId: "tsub_native", workspaceId: "ws_native", workspaceRole: "viewer" }, cookie: null, actor: null });
     expect((await fetch("/extensions/native?workspaceId=ws_native", { method: "POST", headers: { cookie, origin: "https://evil.example.test" } })).status).toBe(403);
     expect((await fetch("/extensions/native?workspaceId=ws_native", { method: "POST", headers: { cookie, origin } })).status).toBe(403);
     const callback = await fetch("/auth/oidc/callback?code=server-bound&state=state");

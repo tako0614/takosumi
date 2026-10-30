@@ -144,6 +144,7 @@ import type {
   WorkspaceMember,
   WorkspaceRole,
 } from "takosumi-contract/workspaces";
+import type { AppRole } from "takosumi-contract/app-access";
 import {
   encodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
@@ -503,6 +504,7 @@ export async function handlePlatformOperatorControlMcpRequest(
       installPlan: async () => undefined,
       run: async () => undefined,
       installNamespaceId: async () => undefined,
+      appPartitions: async () => new Map(),
     });
   }
   const session = await (
@@ -788,6 +790,13 @@ const platformWorker = {
         session,
         context,
       );
+    const appAccess: PlatformExtensionAppAccess = (
+      request,
+      env,
+      capsuleId,
+      session,
+    ) =>
+      platformExtensionSessionAppRole(request, env, capsuleId, session, context);
     if (isPlatformExtensionCatalogPath(url.pathname)) {
       return await handlePlatformExtensionCatalogRequest(
         request,
@@ -829,6 +838,7 @@ const platformWorker = {
         platformExtensionRoute,
         sessionVerifier,
         workspaceAccess,
+        appAccess,
       );
     }
     // Generic Interface/InterfaceBinding APIs remain a normal session edge
@@ -2952,6 +2962,7 @@ export interface PlatformExtensionCatalogItem {
   readonly selfServicePatScopes?: readonly string[];
   readonly requestScopeRules?: PlatformExtensionRoute["requestScopeRules"];
   readonly workspaceContext?: "query-required" | "query-optional";
+  readonly appContext?: "query-required" | "query-optional";
   readonly contributions?: readonly PlatformExtensionContribution[];
 }
 
@@ -2990,6 +3001,7 @@ export function platformExtensionCatalog(
     ...(route.workspaceContext
       ? { workspaceContext: route.workspaceContext }
       : {}),
+    ...(route.appContext ? { appContext: route.appContext } : {}),
     ...(route.contributions ? { contributions: route.contributions } : {}),
   }));
   const configured = extensions.filter(
@@ -3117,6 +3129,7 @@ export async function handlePlatformExtensionRouteRequest(
   route: PlatformExtensionRoute,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
+  appAccess: PlatformExtensionAppAccess = platformExtensionSessionAppRole,
 ): Promise<Response> {
   const legacyWorkspace: PlatformLegacyWorkspaceObservation = {};
   const response = await handlePlatformExtensionRouteRequestObserved(
@@ -3125,6 +3138,7 @@ export async function handlePlatformExtensionRouteRequest(
     route,
     sessionVerifier,
     workspaceAccess,
+    appAccess,
     legacyWorkspace,
   );
   return observePlatformLegacyWorkspaceUse(
@@ -3141,6 +3155,7 @@ async function handlePlatformExtensionRouteRequestObserved(
   route: PlatformExtensionRoute,
   sessionVerifier: PlatformExtensionSessionVerifier,
   workspaceAccess: PlatformExtensionWorkspaceAccess,
+  appAccess: PlatformExtensionAppAccess,
   legacyWorkspace: PlatformLegacyWorkspaceObservation,
 ): Promise<Response> {
   const requestRoute = resolvePlatformExtensionRequestScopeRoute(request, route);
@@ -3186,11 +3201,14 @@ async function handlePlatformExtensionRouteRequestObserved(
       workspaceAccess,
       "context",
       legacyWorkspace,
+      appAccess,
     );
     if (!authContext.ok) return authContext.response;
     const authenticatedContext = platformExtensionAuthenticatedContext(
       authContext.session,
       authContext.workspaceRoleVerified,
+      authContext.appRoleVerified,
+      authContext.accountId,
     );
     if (!authenticatedContext) {
       return Response.json(
@@ -3213,6 +3231,7 @@ async function handlePlatformExtensionRouteRequestObserved(
     request.method === "OPTIONS" &&
     route.authMode !== "handler" &&
     route.workspaceContext === undefined &&
+    route.appContext === undefined &&
     route.requestScopeRules &&
     route.requiredScopes?.length === 0
   ) {
@@ -3234,6 +3253,7 @@ async function handlePlatformExtensionRouteRequestObserved(
     workspaceAccess,
     "headers",
     legacyWorkspace,
+    appAccess,
   );
   if (!authContext.ok) return authContext.response;
   return await handler.fetch(authContext.request);
@@ -3296,6 +3316,11 @@ const PLATFORM_EXTENSION_SUBJECT_HEADER = "x-takosumi-platform-subject";
 const PLATFORM_EXTENSION_AUTH_KIND_HEADER = "x-takosumi-platform-auth-kind";
 const PLATFORM_EXTENSION_SCOPES_HEADER = "x-takosumi-platform-scopes";
 const PLATFORM_EXTENSION_CAPSULE_ID_HEADER = "x-takosumi-platform-capsule-id";
+/** The Takosumi account that authenticated (session or PAT), TASK-0118 9.1-e. */
+const PLATFORM_EXTENSION_ACCOUNT_ID_HEADER = "x-takosumi-platform-account-id";
+/** The live role on the `capsuleId` app context, TASK-0118 9.1-e. */
+const PLATFORM_EXTENSION_APP_ROLE_HEADER = "x-takosumi-platform-app-role";
+/** Compatibility only until stage 9B (Hosted selects its billing tenant). */
 const PLATFORM_EXTENSION_WORKSPACE_ID_HEADER =
   "x-takosumi-platform-workspace-id";
 const PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER =
@@ -3324,6 +3349,8 @@ const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_EXTENSION_AUTH_KIND_HEADER,
   PLATFORM_EXTENSION_SCOPES_HEADER,
   PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
+  PLATFORM_EXTENSION_ACCOUNT_ID_HEADER,
+  PLATFORM_EXTENSION_APP_ROLE_HEADER,
   PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
   PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER,
   PLATFORM_EXTENSION_AUDIENCE_HEADER,
@@ -3358,7 +3385,11 @@ export interface PlatformExtensionSessionContext {
     | "run-credential";
   readonly subject?: string;
   readonly capsuleId?: string;
-  /** The apps a personal access token is limited to (introspected `app_ids`). */
+  /**
+   * The apps a personal access token is limited to (introspected `app_ids`).
+   * It travels to Core on the actor and narrows Workspace and app context on
+   * extension routes; it is never forwarded to an extension.
+   */
   readonly appIds?: readonly string[];
   /** Present only on a verified, short-lived Run credential. */
   readonly runId?: string;
@@ -3370,6 +3401,8 @@ export interface PlatformExtensionSessionContext {
   readonly workspaceId?: string;
   /** Live Workspace role carried by token introspection or membership lookup. */
   readonly workspaceRole?: WorkspaceRole;
+  /** Live role on `capsuleId`, set only by a verified `appContext`. */
+  readonly appRole?: AppRole;
   readonly audience?: string;
   readonly interfaceId?: string;
   readonly interfaceBindingId?: string;
@@ -3396,12 +3429,15 @@ async function platformExtensionAuthContext(
   workspaceAccess: PlatformExtensionWorkspaceAccess,
   delivery: "headers" | "context" = "headers",
   legacyWorkspace?: PlatformLegacyWorkspaceObservation,
+  appAccess: PlatformExtensionAppAccess = platformExtensionSessionAppRole,
 ): Promise<
   | {
       readonly ok: true;
       readonly request: Request;
       readonly session: PlatformExtensionSessionContext;
       readonly workspaceRoleVerified: boolean;
+      readonly appRoleVerified: boolean;
+      readonly accountId?: string;
     }
   | { readonly ok: false; readonly response: Response }
 > {
@@ -3419,6 +3455,9 @@ async function platformExtensionAuthContext(
   if (sessionRoleFailure) {
     return { ok: false, response: sessionRoleFailure };
   }
+  // From the credential itself, before a selected Workspace or app changes
+  // the session: a restricted token never carries its account.
+  const accountId = platformExtensionAccountId(session);
   let workspaceRoleVerified = false;
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
@@ -3529,6 +3568,56 @@ async function platformExtensionAuthContext(
       workspaceRoleVerified = true;
     }
   }
+  let appRoleVerified = false;
+  if (route?.appContext) {
+    const requestedValues = new URL(request.url).searchParams.getAll(
+      "capsuleId",
+    );
+    if (
+      requestedValues.length === 0 &&
+      route.appContext === "query-required"
+    ) {
+      return {
+        ok: false,
+        response: Response.json(
+          {
+            error: "invalid_request",
+            error_description: "capsuleId query is required",
+          },
+          { status: 400 },
+        ),
+      };
+    }
+    if (requestedValues.length > 0) {
+      const requestedCapsuleId =
+        requestedValues.length === 1
+          ? safePlatformExtensionContextId(requestedValues[0])
+          : undefined;
+      if (!requestedCapsuleId) {
+        return {
+          ok: false,
+          response: Response.json(
+            {
+              error: "invalid_request",
+              error_description:
+                "capsuleId query must contain one valid app id",
+            },
+            { status: 400 },
+          ),
+        };
+      }
+      const verified = await platformExtensionVerifiedAppSession(
+        request,
+        env,
+        session,
+        requestedCapsuleId,
+        appAccess,
+      );
+      if (!verified.ok) return verified;
+      session = verified.session;
+      appRoleVerified = verified.session.appRole !== undefined;
+    }
+  }
   const sessionContext = session;
   if (sessionContext.workspaceId && legacyWorkspace && route) {
     // The credential's own Workspace is forwarded to the extension (header or
@@ -3564,6 +3653,15 @@ async function platformExtensionAuthContext(
         PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
         safePlatformExtensionHeaderValue(sessionContext.capsuleId),
       );
+    }
+    if (accountId) {
+      headers.set(
+        PLATFORM_EXTENSION_ACCOUNT_ID_HEADER,
+        safePlatformExtensionHeaderValue(accountId),
+      );
+    }
+    if (appRoleVerified && sessionContext.appRole) {
+      headers.set(PLATFORM_EXTENSION_APP_ROLE_HEADER, sessionContext.appRole);
     }
     if (sessionContext.workspaceId) {
       headers.set(
@@ -3609,12 +3707,42 @@ async function platformExtensionAuthContext(
     request: clonePlatformExtensionRequest(request, headers),
     session: sessionContext,
     workspaceRoleVerified,
+    appRoleVerified,
+    ...(accountId ? { accountId } : {}),
   };
+}
+
+/**
+ * The Takosumi account behind an unrestricted human credential the platform
+ * verified itself: a browser session (Accounts or shared account) or a
+ * personal access token, whose subject is the account. A token limited to
+ * apps (`appIds`) or bound to a Workspace does not act for the whole account,
+ * so it carries none. OAuth subjects may be pairwise, and app, Interface, Run
+ * and operator credentials act for something else, so they carry none either.
+ * Call it on the session as the credential verified it, never after a
+ * Workspace context was added.
+ */
+function platformExtensionAccountId(
+  session: PlatformExtensionSessionContext,
+): string | undefined {
+  if (session.authKind === "session") {
+    return safePlatformExtensionContextId(session.subject);
+  }
+  if (
+    session.authKind === "personal-access-token" &&
+    session.appIds === undefined &&
+    session.workspaceId === undefined
+  ) {
+    return safePlatformExtensionContextId(session.subject);
+  }
+  return undefined;
 }
 
 function platformExtensionAuthenticatedContext(
   session: PlatformExtensionSessionContext,
   workspaceRoleVerified: boolean,
+  appRoleVerified = false,
+  accountId?: string,
 ): PlatformExtensionAuthenticatedContext | undefined {
   if (!session.authenticated) return undefined;
   const authKind = session.authKind;
@@ -3672,12 +3800,16 @@ function platformExtensionAuthenticatedContext(
       ? undefined
       : safePlatformWorkspaceRole(session.workspaceRole);
   if (session.workspaceRole !== undefined && !workspaceRole) return undefined;
+  const appRole = appRoleVerified ? safePlatformAppRole(session.appRole) : undefined;
+  if (appRoleVerified && !appRole) return undefined;
 
   return Object.freeze({
     authKind,
     subject,
+    ...(accountId ? { accountId } : {}),
     ...(workspaceId ? { workspaceId } : {}),
     ...(workspaceRoleVerified && workspaceRole ? { workspaceRole } : {}),
+    ...(appRole ? { appRole } : {}),
     ...(scopes ? { scopes } : {}),
     ...(capsuleId ? { capsuleId } : {}),
     ...(runId ? { runId } : {}),
@@ -3825,12 +3957,30 @@ function platformExtensionWorkspaceAccessFailure(): {
   };
 }
 
+/**
+ * May this session name `workspaceId` for a compatibility Workspace context
+ * (TASK-0118 P9.1-e)? This live check runs for browser sessions and personal
+ * access tokens without a Workspace binding. It is decided by the account,
+ * in-process, without the legacy `/api/v1/workspaces/:id` routes: only the
+ * Workspace's owner may name it, and the forwarded role is `owner`. For these
+ * credentials Workspace membership no longer grants this (there are no
+ * non-owner members in production, and member writes are frozen). A
+ * credential already bound to a Workspace (a Workspace-bound PAT or OAuth
+ * token) never reaches this check: it may name only its own Workspace, with
+ * the member role its introspection reports. A shared-account (Hosted)
+ * session keeps the shared RP's decision until stage 9B.
+ *
+ * The credential gates the Accounts route applied are kept: a personal access
+ * token restricted to apps never names a Workspace, and one without a core
+ * `read` (or `admin`) scope cannot select one. Any failure refuses.
+ */
 async function platformExtensionSessionCanAccessWorkspace(
   request: Request,
   env: CloudflareWorkerEnv,
   workspaceId: string,
   session?: PlatformExtensionSessionContext,
-  context?: PlatformExecutionContext,
+  _context?: PlatformExecutionContext,
+  operationsFor: (env: CloudflareWorkerEnv) => Promise<ControlPlaneOperations> = controlPlaneOperationsFor,
 ): Promise<boolean | WorkspaceRole | { readonly kind: "unavailable" }> {
   if (session?.sharedAccount) {
     const result = await resolveSharedAuthWorkspace(
@@ -3839,73 +3989,184 @@ async function platformExtensionSessionCanAccessWorkspace(
     return result.kind === "authorized" ? result.role :
       result.kind === "unavailable" ? { kind: "unavailable" } : false;
   }
-  const headers = sessionMirrorHeaders(request);
-  if (!headers) return false;
+  const subject = safePlatformExtensionSubject(session?.subject);
+  if (!session || !subject) return false;
+  if (session.authKind !== "session" && session.authKind !== "personal-access-token") {
+    return false;
+  }
+  if (session.authKind === "personal-access-token") {
+    const scopes = session.scopes ?? [];
+    if (session.appIds !== undefined ||
+      !(scopes.includes("read") || scopes.includes("admin"))) {
+      return false;
+    }
+  }
   try {
-    const response = await accountsWorker.fetch(
-      new Request(
-        new URL(
-          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`,
-          request.url,
-        ),
-        { method: "GET", headers },
-      ),
-      env,
-      context,
-    );
-    if (!response.ok) return false;
-    const workspaceEnvelope = objectRecord(
-      await response.json().catch(() => undefined),
-    );
-    const workspace = objectRecord(workspaceEnvelope.workspace);
-    const subject = safePlatformExtensionSubject(session?.subject);
-    if (!subject) return true;
-    if (valueString(workspace.ownerUserId) === subject) return "owner";
-
-    const membersResponse = await accountsWorker.fetch(
-      new Request(
-        new URL(
-          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/members`,
-          request.url,
-        ),
-        { method: "GET", headers },
-      ),
-      env,
-      context,
-    );
-    if (!membersResponse.ok) return false;
-    const membersEnvelope = objectRecord(
-      await membersResponse.json().catch(() => undefined),
-    );
-    const members = Array.isArray(membersEnvelope.members)
-      ? membersEnvelope.members
-      : [];
-    const member = members
-      .map(objectRecord)
-      .find(
-        (candidate) =>
-          valueString(candidate.accountId) === subject &&
-          valueString(candidate.status) === "active",
-      );
-    const roles = member && Array.isArray(member.roles) ? member.roles : [];
-    return preferredPlatformWorkspaceRole(roles);
+    const workspace = await (await operationsFor(env)).workspaces.getWorkspace(workspaceId);
+    return workspace.id === workspaceId && workspace.ownerUserId === subject
+      ? "owner"
+      : false;
   } catch {
     return false;
   }
 }
 
-function preferredPlatformWorkspaceRole(
-  roles: readonly unknown[],
-): WorkspaceRole | false {
-  for (const role of [
-    "owner",
-    "admin",
-    "member",
-    "viewer",
-  ] as const satisfies readonly WorkspaceRole[]) {
-    if (roles.includes(role)) return role;
+/** Test seam for the in-process Workspace decision (TASK-0118 P9.1-e). */
+export async function platformExtensionAccountWorkspaceRole(
+  workspaceId: string,
+  session: PlatformExtensionSessionContext,
+  operations: ControlPlaneOperations,
+): Promise<boolean | WorkspaceRole | { readonly kind: "unavailable" }> {
+  return await platformExtensionSessionCanAccessWorkspace(
+    new Request("https://takosumi.invalid/"),
+    {} as CloudflareWorkerEnv,
+    workspaceId,
+    session,
+    undefined,
+    async () => operations,
+  );
+}
+
+/** The caller's live role on one app, or a refusal. */
+export type PlatformExtensionAppAccess = (
+  request: Request,
+  env: CloudflareWorkerEnv,
+  capsuleId: string,
+  session: PlatformExtensionSessionContext,
+) => Promise<AppRole | false | { readonly kind: "unavailable" }>;
+
+/**
+ * Binds an `appContext` route's `capsuleId` to the session (TASK-0118 P9.1-e).
+ * A credential bound to one app (an installed app's OAuth token, an
+ * Interface OAuth token, a Run credential) may name only that app and gains
+ * no role. An account session or personal access token gets its live owner or
+ * member role on the app; a token needs the core scope Accounts requires for
+ * the method (`read` to read, `write` to change, or `admin`), and a token
+ * restricted to apps must list it. Operator service tokens and unbound OAuth
+ * tokens cannot name an app.
+ */
+export async function platformExtensionVerifiedAppSession(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformExtensionSessionContext,
+  requestedCapsuleId: string,
+  appAccess: PlatformExtensionAppAccess = platformExtensionSessionAppRole,
+): Promise<
+  | { readonly ok: true; readonly session: PlatformExtensionSessionContext }
+  | { readonly ok: false; readonly response: Response }
+> {
+  const boundCapsuleId = safePlatformExtensionContextId(session.capsuleId);
+  if (session.capsuleId !== undefined) {
+    if (boundCapsuleId !== requestedCapsuleId) return platformExtensionAppAccessFailure();
+    // A bound credential acts for its app, never with a person's role.
+    const { appRole: _appRole, ...withoutRole } = session;
+    return { ok: true, session: withoutRole };
   }
-  return false;
+  if (session.authKind !== "session" && session.authKind !== "personal-access-token") {
+    return platformExtensionAppAccessFailure();
+  }
+  if (session.authKind === "personal-access-token") {
+    // A token gets an app role only with the core scope Accounts' own per-app
+    // decision requires for this method: `read` to read, `write` to change
+    // (`admin` covers both). Extension-only scopes never confer one.
+    const scopes = session.scopes ?? [];
+    const required = request.method === "GET" || request.method === "HEAD" ||
+        request.method === "OPTIONS"
+      ? "read"
+      : "write";
+    if (!scopes.includes(required) && !scopes.includes("admin")) {
+      return platformExtensionAppAccessFailure();
+    }
+    if (session.appIds !== undefined && !session.appIds.includes(requestedCapsuleId)) {
+      return platformExtensionAppAccessFailure();
+    }
+  }
+  const live = await appAccess(request, env, requestedCapsuleId, session);
+  if (typeof live === "object") return { ok: false, response: sharedAuthUnavailableResponse() };
+  const appRole = safePlatformAppRole(live);
+  if (!appRole) return platformExtensionAppAccessFailure();
+  return { ok: true, session: { ...session, capsuleId: requestedCapsuleId, appRole } };
+}
+
+function platformExtensionAppAccessFailure(): {
+  readonly ok: false;
+  readonly response: Response;
+} {
+  return {
+    ok: false,
+    response: Response.json(
+      { error: "access_denied", error_description: "app context is not authorized" },
+      { status: 403 },
+    ),
+  };
+}
+
+function safePlatformAppRole(value: unknown): AppRole | undefined {
+  return value === "owner" || value === "member" ? value : undefined;
+}
+
+/**
+ * The live per-app role of an account session or personal access token, from
+ * the same resolver Accounts' per-app decision uses (an app still without an
+ * ownership row keeps that resolver's rollout fallback). A shared-account (Hosted) session
+ * must first pass the same shared-auth app view the dashboard uses, so its
+ * current-membership rule still applies. A credential still bound to a
+ * Workspace (a Workspace-bound PAT, or a Workspace this request already
+ * verified) reaches only apps in that Workspace: a restriction, never a grant.
+ */
+async function platformExtensionSessionAppRole(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  capsuleId: string,
+  session: PlatformExtensionSessionContext,
+  context?: PlatformExecutionContext,
+  operationsFor: (env: CloudflareWorkerEnv) => Promise<ControlPlaneOperations> = controlPlaneOperationsFor,
+  appPartition: PlatformInterfaceAppPartition = platformExtensionSessionAppPartition,
+): Promise<AppRole | false | { readonly kind: "unavailable" }> {
+  const subject = safePlatformExtensionSubject(session.subject);
+  if (!subject) return false;
+  if (session.sharedAccount) {
+    const partition = await appPartition(request, env, capsuleId, {
+      sharedAccount: true,
+      ...(context ? { context } : {}),
+    });
+    if (!partition) return false;
+  }
+  let operations: ControlPlaneOperations;
+  try {
+    operations = await operationsFor(env);
+  } catch {
+    return { kind: "unavailable" };
+  }
+  if (!operations.appAccess) return { kind: "unavailable" };
+  try {
+    if (session.workspaceId !== undefined) {
+      const capsule = await operations.capsules.getCapsule(capsuleId);
+      if (capsule.id !== capsuleId || capsule.workspaceId !== session.workspaceId) return false;
+    }
+    const access = await operations.appAccess.resolveAppAccess(subject, capsuleId);
+    return access?.capsuleId === capsuleId ? safePlatformAppRole(access.role) ?? false : false;
+  } catch {
+    return false;
+  }
+}
+
+/** Test seam for the in-process app decision (TASK-0118 P9.1-e). */
+export async function platformExtensionAccountAppRole(
+  capsuleId: string,
+  session: PlatformExtensionSessionContext,
+  operations: ControlPlaneOperations,
+  sharedAppView?: PlatformInterfaceAppPartition,
+): Promise<AppRole | false | { readonly kind: "unavailable" }> {
+  return await platformExtensionSessionAppRole(
+    new Request("https://takosumi.invalid/"),
+    {} as CloudflareWorkerEnv,
+    capsuleId,
+    session,
+    undefined,
+    async () => operations,
+    ...(sharedAppView ? [sharedAppView] : []),
+  );
 }
 
 type PlatformExtensionAccountsFetch = (
@@ -4287,6 +4548,8 @@ async function introspectPlatformExtensionToken(
         : interfaceSession;
     }
     const takosumi = platformExtensionTakosumiMetadata(record);
+    // A personal access token restricted to apps keeps that restriction on
+    // the platform seam; a malformed list refuses the token.
     const appIds = tokenUse === "personal_access" ? platformExtensionPatAppIds(record) : undefined;
     if (appIds === null) return { authenticated: false };
     return {
@@ -4311,14 +4574,15 @@ async function introspectPlatformExtensionToken(
 /**
  * The apps a personal access token is limited to (introspection `app_ids`):
  * `undefined` when unlimited, `null` (refuse the token) when malformed. An
- * empty list is a deny-all snapshot and stays empty.
+ * empty list is a deny-all snapshot and stays empty. The bound is the stored
+ * PAT limit (10,000), so no valid token is refused for its length.
  */
 function platformExtensionPatAppIds(
   record: Record<string, unknown>,
 ): readonly string[] | undefined | null {
   const raw = record.app_ids;
   if (raw === undefined) return undefined;
-  if (!Array.isArray(raw) || raw.length > 256) return null;
+  if (!Array.isArray(raw) || raw.length > 10_000) return null;
   const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionContextId(value) : undefined);
   return ids.every((id): id is string => id !== undefined) ? ids : null;
 }
