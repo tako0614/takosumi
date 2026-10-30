@@ -30,8 +30,7 @@ import {
   hasConfiguredOpenTofuRunner,
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
-import { appActionAllowed } from "takosumi-contract/app-access";
-import { isMissingOwnershipSchemaError } from "../../../core/domains/app-ownership/store.ts";
+import { decideInterfaceAppAccess } from "../../../core/domains/app-ownership/interface-app-decision.ts";
 import { validateUninstallRequester } from "@takosjp/takosumi-accounts-service";
 import {
   PartitionedSecretBoundaryCrypto,
@@ -439,24 +438,15 @@ export async function buildComposedApp(
     authorizeInterfaceApp: async ({ actor, capsuleId, access, request }) => {
       const operations = controlPlaneOperations;
       if (!operations) return false;
-      let owned: Awaited<ReturnType<typeof operations.appOwnership.getOwnership>>;
-      try {
-        owned = await operations.appOwnership.getOwnership(capsuleId);
-      } catch (error) {
-        return isMissingOwnershipSchemaError(error) ? undefined : false;
-      }
-      if (!owned) return undefined;
+      const decided = await decideInterfaceAppAccess(operations, {
+        accountId: actor.actorAccountId,
+        capsuleId,
+        access,
+      });
+      // A PAT limited to apps reaches only those apps.
       const appIds = interfaceBearers.get(request)?.appIds;
-      if (appIds !== undefined && !appIds.includes(capsuleId)) return false;
-      try {
-        const app = await operations.appAccess.resolveAppAccess(actor.actorAccountId, capsuleId);
-        return app !== undefined && app.capsuleId === capsuleId &&
-          app.ownerAccountId === owned.ownerAccountId &&
-          app.ownershipEpoch === owned.ownershipEpoch &&
-          appActionAllowed(app.role, access === "read" ? "view" : "change_settings");
-      } catch {
-        return false;
-      }
+      if (decided !== undefined && appIds !== undefined && !appIds.includes(capsuleId)) return false;
+      return decided;
     },
   });
   controlPlaneOperations = created.operations;

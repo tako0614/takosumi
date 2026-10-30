@@ -357,6 +357,7 @@ Interface API (`/api/v1/interfaces…`) もWorkspaceなしで使えます。
 - インストール済みアプリ自身のOAuthトークン (そのアプリに結び付いたもの。Workspaceの有無は問わない) は実行時のprincipalです。Workspaceが無い場合は、`workspaceId` を付けずに `GET /api/v1/interfaces` を呼びます (`permission` は必須。`capsuleId` で提供側の1アプリに絞れる。`workspaceId` を付けると `400`)。結果は、そのトークンにその権限の今有効なPrincipal BindingがあるInterfaceだけで、`limit` と `cursor` でページを分け、続きがあれば `nextCursor` を返します。そのBindingは、トークンのアプリ自身の根拠である場合だけ数えます。つまり、そのアプリの有効なInterface連携から作られたBindingか、そのアプリ自身が所有するInterfaceのBindingです (アプリのpairwise subjectは呼び出し先の提供者に見えます。また、ある区画にBindingを書ける人は、共有された旧来の区画のほかの利用者も含めて、そこで任意のsubjectにBindingを作れます。そのため、アプリが所有していないInterfaceの手作りのBindingは根拠になりません)。`GET /api/v1/interfaces/{id}`、その `bindings`、`POST /api/v1/interfaces/{id}/token` も同じ規則で、根拠の無いInterfaceは `404`、実行時のprincipalは変更できません。アプリに結び付いていない、Workspaceも無い実行時のprincipalは拒否します。こうして発行するトークンは、そのInterfaceの区画で発行します。Workspaceに結び付いた実行時のトークンは、従来どおりそのWorkspaceに限ります。
 - Workspaceの制限が無いアカウントのセッションやPATは、`GET /api/v1/interfaces?capsuleId=` で1アプリのInterfaceを一覧できます (そのアプリの `view`。そのアプリが所有するInterfaceだけ)。`workspaceId` と `capsuleId` は同時に指定できず、どちらも無いと `400` です。
 - 同梱のAccounts host (self-host) では、Workspaceの制限が無いアカウントの呼び出し元が、IDで指定したCapsule所有のInterfaceを扱うとき、アプリに所有記録があればアプリで判定します (読み取りは `view`、InterfaceとBindingの変更は `change_settings`)。所有記録の無いアプリと、Workspace所有のInterfaceは従来のWorkspace判定のままです。`appIds` 付きのPATはそのアプリのInterfaceだけに届き、ここでWorkspaceの権限を持つことはありません。
+- self-hostとplatform Workerのどちらでも、アカウントの呼び出し元によるCapsule所有のInterfaceの変更 (Capsuleの `ownerRef` を付けた `POST /api/v1/interfaces`、`PATCH`・`DELETE`、`/status`、Bindingの作成と取り消し) は、アプリに所有記録があればそのアプリの `change_settings` が要ります。Workspaceに束縛された資格情報でも同じです (その資格情報はInterfaceの区画を指している必要もあります)。Workspaceのメンバーであるだけでは他人のアプリを変えられないので、共有された旧来の区画のほかの利用者は、アプリのInterfaceを作る・向け先を変える・廃止する・Bindingを付けることができません。Workspaceに束縛された資格情報での読み取り、Workspace所有のInterface、所有記録の無いアプリ、service principalは従来のWorkspace判定のままです。
 - platform Workerでは、shared-account (Hosted) のセッションによる `capsuleId` の一覧も、dashboardと同じshared-authの制御経路で判定します。platform extensionの認可がアプリへ移るまで (Phase 9.1-e)、IDで指定するInterface routeにはアカウントの呼び出し元でもWorkspaceが要ります。
 
 `GET /api/v1/dashboard/bootstrap` は、`includeWorkspaces=true` を指定しない限りWorkspaceの一覧を含めません。`includeNotifications=true` の通知は、bootstrapの任意項目の期限の中で読んだ `GET /api/v1/activity` の最新ページ (最大60件) です。各項目は短くしたイベント、イベントがアプリを示すときの `capsuleId`、互換のための `workspaceHandle` (イベントの内部区画のID) を持ちます。アプリ所有の読み取りを持たないhostと、旧Workspace束縛の資格情報には、従来のWorkspaceからの通知を返します。
@@ -398,6 +399,11 @@ Workspace はアプリごとの所有に置き換わり、段階を分けて撤�
 | `workspaceId` で選ぶ `/api/v1/connections` | `workspaceId` を付けない `/api/v1/connections` (個人の接続) |
 
 ほかの route の後継は、置き換えの API ができたものから順に足します。
+
+移行の途中で変わる挙動:
+
+- Workspaceの無い、インストール済みアプリ自身のOAuthトークンが使えるのは、根拠のあるInterfaceだけです。根拠は、そのアプリの有効なInterface連携から作られたBindingか、そのアプリが所有するInterfaceのBindingです。Workspace所有のInterfaceや、ほかのアプリのInterfaceに誰かが手作業でアプリのsubjectを結んだものには届かなくなりました。それらはInterface連携でつないでください。探索で `workspaceId` を指定すると `400` です。
+- Capsule所有のInterfaceの変更 (作成・更新・廃止・status・Bindingの作成と取り消し) には、Workspaceに束縛された資格情報でも、そのアプリの所有者か、設定を変えられるメンバーである必要があります。アプリに入っていないWorkspaceのメンバーは、Workspaceの資格情報で読むことと、Workspace所有のInterfaceを従来どおり扱うことはできます。
 
 ### Workspace
 

@@ -13,6 +13,7 @@ import { isValidInterfacePermissionToken } from "takosumi-contract";
 import { TAKOSUMI_INTERNAL_ACTOR_HEADER } from "takosumi-contract/reference/compat";
 import { decodeActorContext } from "takosumi-contract/internal/rpc";
 import { constantTimeEqualsString } from "../shared/constant_time.ts";
+import { isRecord } from "../shared/guards.ts";
 import {
   InterfaceService,
   InterfaceServiceError,
@@ -42,10 +43,11 @@ export interface RegisterInterfaceRoutesOptions {
     readonly request: Request;
   }) => boolean | Promise<boolean>;
   /**
-   * Optional per-app decision (TASK-0118 9.1) for an account actor that is
-   * not bound to a Workspace, on a Capsule-owned Interface or a `capsuleId`
-   * listing. `true` / `false` decide; `undefined` means the app has no
-   * ownership row yet and the Workspace decision above applies.
+   * Optional per-app decision (TASK-0118 9.1) on a Capsule-owned Interface
+   * or a `capsuleId` listing: for every write by an account actor (a
+   * Workspace-bound one included), and for reads by an account actor not
+   * bound to a Workspace. `true` / `false` decide; `undefined` means the app
+   * has no ownership row yet and the Workspace decision above applies.
    */
   readonly authorizeInterfaceApp?: (input: {
     readonly actor: ActorContext;
@@ -203,12 +205,18 @@ export function registerInterfaceRoutes(
     if (controlDenied) return controlDenied;
     return respond(c, async () => {
       const body = await readJsonObject(c.req.raw, { maxBytes: 1_048_576 });
-      const scoped = await scopeInterfaceWorkspace(
-        c,
-        options,
-        auth.actor,
-        string(body.workspaceId),
-      );
+      const workspaceId = string(body.workspaceId);
+      const ownerRef = isRecord(body.ownerRef) ? body.ownerRef : undefined;
+      const capsuleOwnerId = ownerRef?.kind === "Capsule" ? string(ownerRef.id) : undefined;
+      // Creating a Capsule-owned Interface is a change to that app, decided
+      // per app like every other write to it; Workspace-owned Interfaces keep
+      // the Workspace decision.
+      const scoped = capsuleOwnerId
+        ? await scopeInterface(c, options, auth.actor, {
+            workspaceId: requireWorkspaceId(workspaceId),
+            ownerRef: { kind: "Capsule", id: capsuleOwnerId },
+          })
+        : await scopeInterfaceWorkspace(c, options, auth.actor, workspaceId);
       if (!scoped.ok) return scoped.response;
       const record = await options.service.create(
         body as unknown as CreateInterfaceRequest,
@@ -711,11 +719,16 @@ async function runtimeConsumer(
 }
 
 /**
- * Scope a request to one Interface's owner. An account actor without a
- * Workspace restriction is decided per app for a Capsule-owned Interface when
- * the host provides {@link RegisterInterfaceRoutesOptions.authorizeInterfaceApp};
- * otherwise (and for an app without an ownership row) the Workspace decision
- * applies unchanged.
+ * Scope a request to one Interface's owner. When the host provides
+ * {@link RegisterInterfaceRoutesOptions.authorizeInterfaceApp}, a
+ * Capsule-owned Interface is decided per app for an account actor: every
+ * write (create, update, retire, status, Binding create and revoke), and
+ * reads by an actor without a Workspace restriction. A Workspace-bound
+ * credential must still name the Interface's own partition, but Workspace
+ * membership alone no longer changes another person's app: in a shared
+ * legacy partition it would let a co-tenant repoint the app's Interface or
+ * bind the app's subject to one they made. Service principals, Workspace-owned
+ * Interfaces and apps without an ownership row keep the Workspace decision.
  */
 async function scopeInterface(
   c: Context,
@@ -723,25 +736,38 @@ async function scopeInterface(
   actor: ActorContext | undefined,
   owner: Pick<Interface["metadata"], "workspaceId" | "ownerRef">,
 ): Promise<InterfaceWorkspaceAuthResult> {
+  const access = interfaceAccess(c);
   if (
     actor &&
     !actor.roles.includes("runtime-principal") &&
-    !actor.workspaceId &&
+    actor.principalKind !== "service" &&
+    (!actor.workspaceId || access === "write") &&
     owner.ownerRef.kind === "Capsule" &&
     options.authorizeInterfaceApp
   ) {
+    if (actor.workspaceId && actor.workspaceId !== owner.workspaceId) {
+      return { ok: false, response: workspaceForbidden(c) };
+    }
     const decided = await options.authorizeInterfaceApp({
       actor,
       capsuleId: owner.ownerRef.id,
-      access: interfaceAccess(c),
+      access,
       request: c.req.raw,
     });
     if (decided === true) {
-      return { ok: true, actor: { ...actor, workspaceId: owner.workspaceId } };
+      return {
+        ok: true,
+        actor: actor.workspaceId === owner.workspaceId ? actor : { ...actor, workspaceId: owner.workspaceId },
+      };
     }
     if (decided === false) return { ok: false, response: appForbidden(c) };
   }
   return await scopeInterfaceWorkspace(c, options, actor, owner.workspaceId);
+}
+
+function requireWorkspaceId(workspaceId: string | undefined): string {
+  if (!workspaceId) throw invalid("workspaceId is required");
+  return workspaceId;
 }
 
 /** Reads and token issuance (an invocation of a Ready binding) are read access. */

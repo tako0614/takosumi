@@ -1789,6 +1789,12 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
       scopes: ["read", "write"], appIds: [...appIds], createdAt: now, expiresAt: now + 60_000,
     });
   }
+  // The Workspace owner's Workspace-bound PAT (no appIds): the legacy
+  // co-tenant credential of the shared partition.
+  store.savePersonalAccessToken("takpat_workspace_owner", {
+    tokenId: "pat_takpat_workspace_owner", tokenPrefix: "takpat_w", subject: workspaceOwner as `tsub_${string}`, name: "iface-ws",
+    scopes: ["read", "write"], workspaceId: seeded.workspace.id, createdAt: now, expiresAt: now + 60_000,
+  });
   // An installed app's own OAuth token bound to its app and no Workspace.
   store.saveAccessToken("takat_app_runtime", {
     clientId: "client_composed_iface", scope: "openid capsules:read",
@@ -1890,4 +1896,38 @@ test("composed Interface API decides Capsule-owned Interfaces per app and lets a
     body: JSON.stringify({ permission: "mcp.invoke" }),
   }));
   assert.equal(coTenantToken.status, 404);
+  // Writes to the app's Capsule-owned Interfaces are decided per app even
+  // with the co-tenant's Workspace-bound credential: no forged Interface for
+  // the app, no repointing, retiring or binding its Interface.
+  const send = async (method: string, path: string, token: string, body?: unknown, headers: Record<string, string> = {}) =>
+    await app.fetch(new Request(`http://localhost${path}`, {
+      method,
+      headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }));
+  const spec = { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" } };
+  const forged = await send("POST", "/api/v1/interfaces", "takpat_workspace_owner", {
+    workspaceId: seeded.workspace.id, name: "forged", ownerRef: { kind: "Capsule", id: "cap_composed_iface" }, spec,
+  });
+  assert.equal(forged.status, 403);
+  const mineEtag = (await get(`/api/v1/interfaces/${mine}`, `sess_${appOwner}`)).headers.get("etag") ?? "";
+  assert.equal((await send("PATCH", `/api/v1/interfaces/${mine}`, "takpat_workspace_owner", { spec }, { "if-match": mineEtag })).status, 403);
+  assert.equal((await send("DELETE", `/api/v1/interfaces/${mine}`, "takpat_workspace_owner", undefined, { "if-match": mineEtag })).status, 403);
+  assert.equal((await send("POST", `/api/v1/interfaces/${mine}/bindings`, "takpat_workspace_owner", {
+    subjectRef: { kind: "Principal", id: "pairwise_composed_runtime" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
+  })).status, 403);
+  // The same credential still manages its own app and the Workspace's own
+  // Interfaces; the app's owner creates the app's Interface without a Workspace.
+  assert.equal((await send("POST", "/api/v1/interfaces", "takpat_workspace_owner", {
+    workspaceId: seeded.workspace.id, name: "own-app", ownerRef: { kind: "Capsule", id: "cap_composed_other" }, spec,
+  })).status, 201);
+  assert.equal((await send("POST", "/api/v1/interfaces", "takpat_workspace_owner", {
+    workspaceId: seeded.workspace.id, name: "workspace-made", ownerRef: { kind: "Workspace", id: seeded.workspace.id }, spec,
+  })).status, 201);
+  assert.equal((await send("POST", "/api/v1/interfaces", `sess_${appOwner}`, {
+    workspaceId: seeded.workspace.id, name: "owner-made", ownerRef: { kind: "Capsule", id: "cap_composed_iface" }, spec,
+  })).status, 201);
+  // The app's runtime token still discovers only its own Interfaces.
+  const finalDiscovery = await get("/api/v1/interfaces?type=mcp.server&permission=mcp.invoke", "takat_app_runtime");
+  assert.deepEqual((await finalDiscovery.json()).interfaces.map((entry: { metadata: { id: string } }) => entry.metadata.id), [mine]);
 });

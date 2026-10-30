@@ -8,6 +8,7 @@ import { expect, test } from "bun:test";
 import { handlePlatformInterfaceApiRequest } from "../../../deploy/platform/worker.ts";
 import type { PlatformExtensionSessionContext } from "../../../deploy/platform/worker.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../worker/src/d1_opentofu_store.ts";
+import { D1AppOwnershipStore } from "../../../core/domains/app-ownership/store.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 import { seedCapsuleModel } from "../../helpers/deploy-control/model_fixture.ts";
 
@@ -145,4 +146,35 @@ test("a shared-account session's app decision goes through the shared-auth contr
   );
   expect(response.status).toBe(200);
   expect(seen).toEqual([true]);
+});
+
+test("a Workspace session's write to a Capsule-owned Interface needs the app's owner or member", async () => {
+  const env = await environment() as { TAKOSUMI_CONTROL_DB: SqliteFakeD1 };
+  const control = new CloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB);
+  const workspaceMember = async () => "owner" as const;
+  const create = (session: () => Promise<PlatformExtensionSessionContext>, name: string, ownerRef: { kind: string; id: string }) =>
+    handlePlatformInterfaceApiRequest(
+      request("/api/v1/interfaces", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://app.takosumi.com" },
+        body: JSON.stringify({
+          workspaceId: "ws_platform_iface", name, ownerRef,
+          spec: { type: "mcp.server", version: "2025-11-25", document: {}, access: { visibility: "private" } },
+        }),
+      }),
+      env as never, session, workspaceMember,
+    );
+  // Before the app has an ownership row, the Workspace decision applies.
+  expect((await create(accountSession, "before-backfill", { kind: "Capsule", id: "cap_platform_iface" })).status).toBe(201);
+  // Once another account owns the app, a Workspace member cannot create its
+  // Interfaces; the app's owner can, and Workspace-owned ones are unchanged.
+  expect(await new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB as never, control).initializeOwnershipIfMissing({
+    capsuleId: "cap_platform_iface", ownerAccountId: "tsub_app_owner", ownershipEpoch: 0,
+    managementState: "active", managementEpoch: 0, storageRoot: "apps/cap_platform_iface",
+  })).toBe(true);
+  const refused = await create(accountSession, "cotenant-made", { kind: "Capsule", id: "cap_platform_iface" });
+  expect(refused.status).toBe(403);
+  const appOwner = async (): Promise<PlatformExtensionSessionContext> => ({ ...(await accountSession()), subject: "tsub_app_owner" });
+  expect((await create(appOwner, "owner-made", { kind: "Capsule", id: "cap_platform_iface" })).status).toBe(201);
+  expect((await create(accountSession, "workspace-made", { kind: "Workspace", id: "ws_platform_iface" })).status).toBe(201);
 });
