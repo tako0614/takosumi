@@ -502,6 +502,12 @@ export async function handleAuthorize(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
+  /**
+   * Called once an authenticated request names `workspace_id` (TASK-0118
+   * Phase 9 telemetry). A sign-in redirect is not a use: the authorization
+   * request is repeated with a session after sign-in.
+   */
+  observeWorkspaceRequest?: () => void;
 }): Promise<Response> {
   const response = withOAuthNoStoreHeaders(
     await handleAuthorizeUncached(input),
@@ -526,6 +532,7 @@ async function handleAuthorizeUncached(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
+  observeWorkspaceRequest?: () => void;
 }): Promise<Response> {
   // OAuth authorization is a top-level navigation. A subresource request can
   // carry the account session cookie without any user interaction and follow
@@ -692,6 +699,7 @@ async function handleAuthorizeUncached(input: {
     }
   }
   const requestedWorkspaceValues = input.url.searchParams.getAll("workspace_id");
+  if (requestedWorkspaceValues.length > 0) input.observeWorkspaceRequest?.();
   const requestedWorkspaceId =
     requestedWorkspaceValues.length === 0
       ? undefined
@@ -1744,7 +1752,10 @@ async function handleIntrospectUncached(input: {
       return json({ active: false });
     }
     return json(
-      personalAccessTokenIntrospectionBody(patRecord, input.issuer, liveRole),
+      observedIntrospectionBody(
+        personalAccessTokenIntrospectionBody(patRecord, input.issuer, liveRole),
+        authenticatedClientId,
+      ),
     );
   }
   return json({ active: false });
@@ -1777,7 +1788,9 @@ async function isPkceVerifierValid(
 /**
  * Reports a compatibility Workspace claim the moment it is emitted (TASK-0118
  * Phase 9). Only the surface, the registered client and which companion
- * claims were present are reported; never a Workspace, Capsule or subject.
+ * claims were present are reported; never a Workspace, subject or token. The
+ * client id identifies an app integration or installation (a Capsule public
+ * client is per installation), not a person.
  */
 function observeLegacyWorkspaceClaims(
   surface: LegacyWorkspaceClaimSurface,
@@ -1797,14 +1810,28 @@ function observeLegacyWorkspaceClaims(
   });
 }
 
+/**
+ * Reports the Workspace claim of an introspection response. An OAuth token
+ * names its own client; a personal access token names only the fixed
+ * `takosumi-accounts-pat`, so for it the client that receives the claim is the
+ * authenticated introspecting client (a resource server such as an installed
+ * app). Workspace-bound PATs may never expire, so introspection is where they
+ * keep reading the claim long after they were created.
+ */
 function observedIntrospectionBody(
   body: Record<string, unknown>,
+  introspectingClientId?: string,
 ): Record<string, unknown> {
+  const personalAccess = body.token_use === "personal_access";
   observeLegacyWorkspaceClaims(
     body.token_use === "interface_oauth"
       ? "interface_oauth_introspection"
-      : "introspection",
-    typeof body.client_id === "string" ? body.client_id : undefined,
+      : personalAccess
+        ? "personal_access_introspection"
+        : "introspection",
+    personalAccess
+      ? introspectingClientId
+      : typeof body.client_id === "string" ? body.client_id : undefined,
     body.takosumi,
     false,
   );

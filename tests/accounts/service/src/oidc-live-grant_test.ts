@@ -650,6 +650,26 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     code_challenge_method: "S256",
   }).toString();
 
+  // TASK-0118 Phase 9: an anonymous request is sent to sign-in and repeated
+  // afterwards, so only the signed-in request counts as a Workspace use.
+  let workspaceRequests = 0;
+  const observeWorkspaceRequest = () => {
+    workspaceRequests += 1;
+  };
+  const anonymous = await handleAuthorize({
+    request: new Request(url),
+    url,
+    flow: claimFlow,
+    clients,
+    store,
+    operations,
+    observeWorkspaceRequest,
+  });
+  expect(anonymous.status).toBeGreaterThanOrEqual(300);
+  expect(anonymous.status).toBeLessThan(400);
+  expect(new URL(anonymous.headers.get("location")!, issuer).searchParams.get("code")).toBeNull();
+  expect(workspaceRequests).toBe(0);
+
   const authorization = await handleAuthorize({
     request: new Request(url, {
       headers: { "x-takosumi-account-session": "sess_live_grant" },
@@ -659,8 +679,10 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     clients,
     store,
     operations,
+    observeWorkspaceRequest,
   });
   expect(authorization.status).toBe(302);
+  expect(workspaceRequests).toBe(1);
   const code = new URL(authorization.headers.get("location")!).searchParams.get(
     "code",
   );

@@ -695,6 +695,9 @@ export function createAccountsHandler(
       if (!options.oidcFlow) return reservedOidcEndpoint();
       const limited = authorizeLimiter.consume(request);
       if (limited) return limited;
+      // Counted only once a signed-in request names a Workspace: an
+      // anonymous request is redirected to sign-in and repeated afterwards.
+      let authorizeNamedWorkspace = false;
       const authorizeResponse = await handleAuthorize({
         issuer,
         request,
@@ -706,12 +709,15 @@ export function createAccountsHandler(
         ...(resolveControlPlaneOperations
           ? { resolveOperations: resolveControlPlaneOperations }
           : {}),
+        observeWorkspaceRequest: () => {
+          authorizeNamedWorkspace = true;
+        },
       });
-      return url.searchParams.has("workspace_id")
+      return authorizeNamedWorkspace
         ? observeLegacyWorkspaceUse(request, authorizeResponse, {
           surface: "authorize_workspace",
           route: `${TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH}?workspace_id`,
-        }, extractAccountSessionId(request) ? "session" : "none")
+        }, "session")
         : authorizeResponse;
     }
 
@@ -810,18 +816,28 @@ export function createAccountsHandler(
     }
 
     if (options.hostedSessionPolicy && isSharedAccountWorkspaceRoute(url.pathname)) {
-      return observeLegacyWorkspaceUse(request, (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
+      // Counted only after a credential is accepted; a 401 depends on nothing.
+      let sharedWorkspaceCredential: LegacyWorkspaceCredential | undefined;
+      const sharedWorkspaceResponse = (await diagnostics.measure("shared_workspace_dispatch", () => handleSharedAccountWorkspaceRoute({request,url,store,diagnostics,directory:options.sharedAccountWorkspaceDirectory,workspaceMutationsFrozen: options.workspaceMutationsFrozen ?? true,authenticate: (directoryRequest) => diagnostics.measure("shared_workspace_auth", async () => {
         const token = directoryRequest.headers.get("authorization");
         if (token?.startsWith("Bearer ")) {
           const genuineSession = await store.findAccountSession(token.slice(7));
-          if (!genuineSession) return resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients});
+          if (!genuineSession) {
+            const grant = await resolveSharedAccountGrantSession({issuer,request:directoryRequest,store,clients});
+            if (grant.ok) sharedWorkspaceCredential = "oauth-access-token";
+            return grant;
+          }
         }
         const session = await requireAccountSession({request:directoryRequest,store});
+        if (session.ok) sharedWorkspaceCredential = "session";
         return session.ok ? {ok:true,session:{subject:session.subject,sessionId:session.sessionId}} : session;
-      })}))) ?? errorJson("not_found","not found",404,request), {
-        surface: "shared_workspace",
-        route: sharedAccountWorkspaceRouteTemplate(request.method, url.pathname),
-      }, "unknown");
+      })}))) ?? errorJson("not_found","not found",404,request);
+      return sharedWorkspaceCredential
+        ? observeLegacyWorkspaceUse(request, sharedWorkspaceResponse, {
+          surface: "shared_workspace",
+          route: sharedAccountWorkspaceRouteTemplate(request.method, url.pathname),
+        }, sharedWorkspaceCredential)
+        : sharedWorkspaceResponse;
     }
 
     if (url.pathname === "/api/v1/account/session/global-logout" && options.hostedSessionPolicy) {

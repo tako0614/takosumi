@@ -7,9 +7,12 @@ import {
 import {
   classifyLegacyWorkspaceControlRequest,
   interfaceApiRouteTemplate,
+  isConcreteSuccessorPath,
   LEGACY_WORKSPACE_DEPRECATION,
   legacyWorkspaceClientFamily,
   legacyWorkspaceMetricTags,
+  LegacyWorkspaceRouteCounter,
+  legacyWorkspaceUseMetricTags,
   parseLegacyWorkspaceSunset,
   reportLegacyWorkspaceClaim,
   reportLegacyWorkspaceRoute,
@@ -18,6 +21,9 @@ import {
 import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "../../../../accounts/service/src/control-route-inventory.ts";
 import { sharedAccountWorkspaceRouteTemplate } from "../../../../accounts/service/src/shared-account-workspace.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { handleIntrospect } from "../../../../accounts/service/src/oidc-routes.ts";
+import { handleCurrentPersonalAccessTokenAuthority } from "../../../../accounts/service/src/pat-routes.ts";
+import { createEphemeralAccountsHandler } from "../../../../accounts/service/src/mod.ts";
 
 const WORKSPACE_ID = "ws_telemetry_owner";
 const SUBJECT = "tsub_telemetry_owner";
@@ -461,9 +467,266 @@ test("platform-served templates and metric tags never carry ids", () => {
   });
   expect(tags("/api/v1/connections", "POST")?.route).toBe("body");
   expect(tags(`/api/v1/interfaces/iface_1?workspaceId=${WORKSPACE_ID}`)?.route).toBe(
-    "/api/v1/interfaces/{interfaceId}?workspaceId",
+    "/api/v1/interfaces/{interfaceId}",
   );
   expect(tags(`/oauth/authorize?workspace_id=${WORKSPACE_ID}`)?.route).toBe("/oauth/authorize?workspace_id");
-  expect(tags(`/extensions/hosted/things?workspaceId=${WORKSPACE_ID}`)?.route).toBe("platform-extension?workspaceId");
   expect(legacyWorkspaceMetricTags(new Request("https://app.example.test/api/v1/workspaces"), new Response(null))).toBeUndefined();
+  // Platform-served uses tag themselves, selector included.
+  expect(legacyWorkspaceUseMetricTags({
+    surface: "interface_workspace",
+    route: "/api/v1/interfaces/{interfaceId}/token",
+    selector: "session",
+  }, "post", 403)).toEqual({
+    route: "/api/v1/interfaces/{interfaceId}/token",
+    selector: "session",
+    method: "POST",
+    status: "403",
+  });
+});
+
+test("a Link successor is sent only when it is a concrete URI, never a template", () => {
+  const concrete = withLegacyWorkspaceDeprecation(new Response(null), {
+    surface: "workspace_route",
+    route: "/api/v1/workspaces",
+    successor: "/api/v1/apps",
+  });
+  expect(concrete.headers.get("Link")).toBe(
+    '<https://takosumi.com/docs/reference/api#legacy-workspace-routes>; rel="deprecation"; type="text/html", </api/v1/apps>; rel="successor-version"',
+  );
+  const templated = withLegacyWorkspaceDeprecation(new Response(null), {
+    surface: "workspace_route",
+    route: "/api/v1/workspaces/{workspaceId}/runs",
+    successor: "/api/v1/capsules/{capsuleId}/runs",
+  });
+  // Only the deprecation relation: a strict client may drop the whole header
+  // when one target is not a valid URI.
+  expect(templated.headers.get("Link")).toBe(
+    '<https://takosumi.com/docs/reference/api#legacy-workspace-routes>; rel="deprecation"; type="text/html"',
+  );
+  expect(isConcreteSuccessorPath("/api/v1/source-ref-resolutions")).toBe(true);
+  expect(isConcreteSuccessorPath("/api/v1/capsules/{capsuleId}/plan")).toBe(false);
+  expect(isConcreteSuccessorPath("api/v1/apps")).toBe(false);
+  expect(isConcreteSuccessorPath("/api/v1/apps space")).toBe(false);
+  expect(isConcreteSuccessorPath("/api/v1/apps%2")).toBe(false);
+});
+
+test("every Link sent for an inventory Workspace route is a valid URI reference", async () => {
+  const workspaceEndpoints = PUBLIC_SESSION_CONTROL_ENDPOINTS.filter((endpoint) =>
+    endpoint.path.startsWith("/api/v1/workspaces")
+  );
+  for (const endpoint of workspaceEndpoints) {
+    const concrete = endpoint.path
+      .replaceAll("{workspaceId}", WORKSPACE_ID)
+      .replace(/\{[A-Za-z]+\}/gu, "id_value_1");
+    const use = classify(endpoint.method, concrete)!;
+    const link = withLegacyWorkspaceDeprecation(new Response(null), use).headers.get("Link")!;
+    for (const target of link.matchAll(/<([^>]*)>/gu)) {
+      expect(target[1], `${endpoint.method} ${endpoint.path}`).not.toMatch(/[{}]/u);
+    }
+  }
+});
+
+test("the counter writes the first use of a tag set at once and carries the rest", () => {
+  const counter = new LegacyWorkspaceRouteCounter(60_000);
+  const runs = { route: "/api/v1/workspaces/{workspaceId}/runs", method: "GET", status: "200" };
+  const bootstrap = { route: "/api/v1/dashboard/bootstrap?includeWorkspaces", method: "GET", status: "200" };
+  // Leading edge: the first use is never held back, so the gate cannot read 0.
+  expect(counter.add(runs, 1_000)).toBe(1);
+  expect(counter.add(runs, 2_000)).toBeUndefined();
+  expect(counter.add(runs, 30_000)).toBeUndefined();
+  // Another tag set (or the same one in another order) is independent.
+  expect(counter.add(bootstrap, 30_000)).toBe(1);
+  expect(counter.add({ status: "200", method: "GET", route: runs.route }, 59_999)).toBeUndefined();
+  // After the interval the carried uses are written with the next one.
+  expect(counter.add(runs, 61_000)).toBe(4);
+  expect(counter.add(runs, 62_000)).toBeUndefined();
+  expect(counter.add({ ...runs, status: "403" }, 62_000)).toBe(1);
+});
+
+test("the counter never holds back a use once its tag sets are exhausted", () => {
+  const counter = new LegacyWorkspaceRouteCounter(60_000);
+  for (let index = 0; index < 512; index++) {
+    expect(counter.add({ route: `/r/${index}`, method: "GET", status: "200" }, 0)).toBe(1);
+  }
+  // A new tag set beyond the bound is written directly, every time.
+  expect(counter.add({ route: "/r/overflow", method: "GET", status: "200" }, 1)).toBe(1);
+  expect(counter.add({ route: "/r/overflow", method: "GET", status: "200" }, 2)).toBe(1);
+  expect(counter.add({ route: "/r/0", method: "GET", status: "200" }, 3)).toBeUndefined();
+});
+
+function claimEvents(lines: readonly string[]): Record<string, unknown>[] {
+  return lines
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((event) => event.event === "legacy_workspace_claim_emitted");
+}
+
+const RESOURCE_SERVER = "yurucommu-resource-server";
+const resourceServerClients = new Map([
+  [
+    RESOURCE_SERVER,
+    {
+      clientId: RESOURCE_SERVER,
+      redirectUris: ["https://resource.example.test/callback"],
+      clientSecret: "resource-secret",
+      tokenEndpointAuthMethod: "client_secret_post" as const,
+    },
+  ],
+]);
+
+function introspect(token: string): Request {
+  return new Request("https://accounts.example.test/oauth/introspect", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      token,
+      client_id: RESOURCE_SERVER,
+      client_secret: "resource-secret",
+    }),
+  });
+}
+
+test("introspecting a Workspace-bound PAT reports the claim to the introspecting client", async () => {
+  const store = new InMemoryAccountsStore();
+  const patToken = "takpat_workspace_bound_secret";
+  await store.savePersonalAccessToken(patToken, {
+    tokenId: "pat_workspace_bound",
+    tokenPrefix: "takpat_works",
+    subject: SUBJECT,
+    name: "never expires",
+    scopes: ["read"],
+    workspaceId: WORKSPACE_ID,
+    createdAt: Date.now(),
+  });
+  const { result: response, lines } = await captureInfo(() =>
+    handleIntrospect({
+      issuer: "https://accounts.example.test",
+      request: introspect(patToken),
+      store,
+      clients: resourceServerClients,
+      operations: operations(),
+    })
+  );
+  expect(await response.json()).toMatchObject({
+    active: true,
+    token_use: "personal_access",
+    takosumi: { workspace_id: WORKSPACE_ID },
+  });
+  expect(claimEvents(lines)).toEqual([{
+    event: "legacy_workspace_claim_emitted",
+    surface: "personal_access_introspection",
+    clientId: RESOURCE_SERVER,
+    capsuleBound: false,
+    appRole: false,
+    memberships: false,
+  }]);
+  const raw = lines.join("\n");
+  for (const value of [WORKSPACE_ID, SUBJECT, patToken, "pat_workspace_bound"]) {
+    expect(raw).not.toContain(value);
+  }
+});
+
+test("introspecting an account PAT without a Workspace reports nothing", async () => {
+  const store = new InMemoryAccountsStore();
+  await store.savePersonalAccessToken("takpat_account_only", {
+    tokenId: "pat_account_only",
+    tokenPrefix: "takpat_accou",
+    subject: SUBJECT,
+    name: "account",
+    scopes: ["read"],
+    createdAt: Date.now(),
+  });
+  const { result: response, lines } = await captureInfo(() =>
+    handleIntrospect({
+      issuer: "https://accounts.example.test",
+      request: introspect("takpat_account_only"),
+      store,
+      clients: resourceServerClients,
+      operations: operations(),
+    })
+  );
+  expect(await response.json()).toMatchObject({ active: true, token_use: "personal_access" });
+  expect(claimEvents(lines)).toEqual([]);
+});
+
+test("a Workspace-bound PAT reading its own authority is reported as a claim use", async () => {
+  const store = new InMemoryAccountsStore();
+  const patToken = "takpat_authority_secret";
+  await store.savePersonalAccessToken(patToken, {
+    tokenId: "pat_authority",
+    tokenPrefix: "takpat_autho",
+    subject: SUBJECT,
+    name: "automation",
+    scopes: ["read"],
+    workspaceId: WORKSPACE_ID,
+    createdAt: Date.now(),
+  });
+  const { result: response, lines } = await captureInfo(() =>
+    handleCurrentPersonalAccessTokenAuthority({
+      request: new Request("https://accounts.example.test/api/v1/account/tokens/current", {
+        headers: { authorization: `Bearer ${patToken}` },
+      }),
+      store,
+      membershipReader: {
+        getMember: async (workspaceId, subject) => ({
+          workspaceId,
+          accountId: subject,
+          roles: ["owner"],
+          status: "active",
+        }),
+      },
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ workspace_id: WORKSPACE_ID });
+  expect(claimEvents(lines)).toEqual([{
+    event: "legacy_workspace_claim_emitted",
+    surface: "personal_access_authority",
+    capsuleBound: false,
+    appRole: false,
+    memberships: false,
+  }]);
+  expect(lines.join("\n")).not.toContain(WORKSPACE_ID);
+});
+
+test("the shared Workspace directory is counted only after authentication", async () => {
+  const issuer = "https://accounts.example.test";
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  store.saveAccount({ subject: SUBJECT, createdAt: now, updatedAt: now });
+  store.saveAccountSession({
+    sessionId: "sess_shared_directory",
+    subject: SUBJECT,
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  const handler = await createEphemeralAccountsHandler({
+    issuer,
+    store,
+    hostedSessionPolicy: true,
+    allowEphemeralKeyOnHttpsIssuer: true,
+    sharedAccountWorkspaceDirectory: {
+      menu: async () => ({ workspaces: [], nextCursor: null }),
+    } as never,
+  });
+  const directory = (token: string) =>
+    handler(new Request(`${issuer}/api/v1/account/shared-workspaces`, {
+      headers: { authorization: `Bearer ${token}` },
+    }));
+
+  const anonymous = await captureInfo(() => directory("not-a-credential"));
+  expect(anonymous.result.status).toBe(401);
+  expect(anonymous.result.headers.get("Deprecation")).toBeNull();
+  expect(legacyEvents(anonymous.lines)).toEqual([]);
+
+  const signedIn = await captureInfo(() => directory("sess_shared_directory"));
+  expect(signedIn.result.status).toBe(200);
+  expect(signedIn.result.headers.get("Deprecation")).toBe(LEGACY_WORKSPACE_DEPRECATION);
+  expect(legacyEvents(signedIn.lines)).toEqual([expect.objectContaining({
+    surface: "shared_workspace",
+    route: "/api/v1/account/shared-workspaces",
+    status: 200,
+    credential: "session",
+  })]);
+  expect(signedIn.lines.join("\n")).not.toContain("sess_shared_directory");
 });

@@ -34,6 +34,7 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { reportLegacyWorkspaceClaim } from "./legacy-workspace-telemetry.ts";
 import {
   decodePageCursor,
   paginateById,
@@ -547,6 +548,14 @@ export async function handleCurrentPersonalAccessTokenAuthority(input: {
       input.request,
     );
   }
+  // TASK-0118 Phase 9: a Workspace-bound PAT reading its own Workspace is a
+  // claim use too, and such a PAT may never expire.
+  reportLegacyWorkspaceClaim({
+    surface: "personal_access_authority",
+    capsuleBound: false,
+    appRole: false,
+    memberships: false,
+  });
   return json(currentPersonalAccessTokenAuthorityBody(record, scopes, role));
 }
 

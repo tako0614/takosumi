@@ -8,18 +8,26 @@
  * dependency and reports it, so the gate can be read from Workers Logs (or any
  * log sink of a self-hosted deployment) without querying a database.
  *
- * Every report is value-free by construction: it carries a route TEMPLATE,
- * never a path; a credential KIND, never a token; a client FAMILY from a fixed
- * vocabulary, never a raw `User-Agent` or `Takosumi-Client` value; and booleans for "bound to a Workspace"
- * or "bound to apps". No account, subject, Workspace, Capsule, or request id is
- * ever written. The only identifier is the OAuth `clientId` of an OAuth
- * credential, which names a registered client (an app integration), not a
- * person; stage 9.4 needs it to find the client that still reads Workspace
- * claims.
+ * Every report is built from bounded values: a route TEMPLATE, never a path; a
+ * credential KIND, never a token; how the Workspace was SELECTED, never which
+ * one; a client FAMILY from a fixed vocabulary, never a raw `User-Agent` or
+ * `Takosumi-Client` value; and booleans for "bound to a Workspace" or "bound
+ * to apps". No account, subject, Workspace, request or token id is ever
+ * written. The one identifier is the registered OAuth `clientId` that sent the
+ * request or received the claim. It identifies an app integration or an
+ * installation, never a person or a token: a Capsule's public client (`tko_…`)
+ * is registered per installation, so its client id maps 1:1 to that installed
+ * Capsule. Stage 9.4 needs it to find the installation that still reads
+ * Workspace claims.
+ *
+ * Only authenticated requests are reported: a request refused before its
+ * credential was accepted (401, or 403 before authentication) depends on
+ * nothing and is not counted.
  *
  * Responses to a legacy route also carry RFC 9745 `Deprecation`, an optional
  * RFC 8594 `Sunset` (only when the operator has scheduled stage 9.3), and RFC
- * 8288 `Link` relations to the successor route and the deprecation notice.
+ * 8288 `Link` relations to the deprecation notice and, when it is a concrete
+ * URI, the successor route.
  */
 
 import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "./control-route-inventory.ts";
@@ -71,9 +79,10 @@ export const LEGACY_WORKSPACE_DEPRECATION_NOTICE =
  * - `shared_workspace`: the shared-account Workspace directory.
  * - `billing_workspace`: browser billing selected by Workspace (reserved;
  *   stage 9B counts it from invocation logs).
- * - `interface_workspace`: the Interface API selected by Workspace.
+ * - `interface_workspace`: the Interface API selected by Workspace (query,
+ *   header, body or the credential's own Workspace; see `selector`).
  * - `platform_extension_workspace`: a platform extension route given a
- *   Workspace context.
+ *   Workspace context (query, or the credential's own Workspace).
  * - `authorize_workspace`: an OIDC authorization request naming a Workspace.
  * - `pat_workspace`: a personal access token created for a Workspace.
  */
@@ -96,13 +105,29 @@ export type LegacyWorkspaceEntry =
   | "shared_auth"
   | "platform";
 
-/** Credential kind as resolved by the authenticated dispatcher. */
+/**
+ * Credential kind as resolved by the authenticating composition. The platform
+ * kinds (`service-token` … `deploy-control`) appear only on platform-served
+ * surfaces.
+ */
 export type LegacyWorkspaceCredential =
   | "session"
   | "personal-access-token"
   | "oauth-access-token"
-  | "none"
+  | "interface-oauth-token"
+  | "service-token"
+  | "run-credential"
+  | "protocol-credential"
+  | "deploy-control"
   | "unknown";
+
+/**
+ * How a platform-served request selected its Workspace:
+ * `?workspaceId=` (`query`), the `x-takosumi-platform-workspace-id` header
+ * (`header`), a `workspaceId` body field (`body`), or implicitly from the
+ * Workspace its credential is bound to (`session`).
+ */
+export type LegacyWorkspaceSelector = "query" | "header" | "body" | "session";
 
 export interface LegacyWorkspaceUse {
   readonly surface: LegacyWorkspaceSurface;
@@ -110,6 +135,8 @@ export interface LegacyWorkspaceUse {
   readonly route: string;
   /** Current replacement route, when one exists today. */
   readonly successor?: string;
+  /** How the Workspace was selected; set on platform-served surfaces. */
+  readonly selector?: LegacyWorkspaceSelector;
 }
 
 export interface LegacyWorkspaceRouteReport {
@@ -121,19 +148,35 @@ export interface LegacyWorkspaceRouteReport {
   readonly workspaceBound: boolean;
   readonly appBound: boolean;
   readonly clientFamily: string;
-  /** Registered OAuth client id; only for an OAuth access token. */
+  /**
+   * Registered OAuth client id; only for an OAuth access token. Identifies an
+   * app integration or installation, never a person or a token.
+   */
   readonly clientId?: string;
 }
 
+/**
+ * Where a compatibility Workspace claim was handed out.
+ * `personal_access_introspection` is a Workspace-bound personal access token
+ * introspected by a resource server; `personal_access_authority` is such a
+ * token reading its own authority (`/api/v1/account/tokens/current`).
+ */
 export type LegacyWorkspaceClaimSurface =
   | "id_token"
   | "userinfo"
   | "introspection"
   | "interface_oauth_userinfo"
-  | "interface_oauth_introspection";
+  | "interface_oauth_introspection"
+  | "personal_access_introspection"
+  | "personal_access_authority";
 
 export interface LegacyWorkspaceClaimReport {
   readonly surface: LegacyWorkspaceClaimSurface;
+  /**
+   * The registered OAuth client that received the claim (for
+   * `personal_access_introspection`, the introspecting client). Identifies an
+   * app integration or installation, never a person or a token.
+   */
   readonly clientId?: string;
   /** True when the same claim set also carried `capsule_id`. */
   readonly capsuleBound: boolean;
@@ -144,9 +187,10 @@ export interface LegacyWorkspaceClaimReport {
 }
 
 /**
- * The value an app-bound or Workspace-scoped request receives from a
- * successor route. Only routes with a current replacement are listed; the rest
- * get their replacement in stage 9.1.
+ * The current replacement of each legacy route. Only routes with a
+ * replacement today are listed; the rest get theirs in stage 9.1. A templated
+ * replacement (`{capsuleId}`) is documented in the API reference but never
+ * sent as a `Link` target: it is not a valid URI.
  */
 const WORKSPACE_ROUTE_SUCCESSORS: Readonly<Record<string, string>> = {
   "GET /api/v1/workspaces": "/api/v1/apps",
@@ -355,7 +399,9 @@ export function withLegacyWorkspaceDeprecation(
   if (options.sunset) headers.set("Sunset", options.sunset);
   const links = [
     `<${LEGACY_WORKSPACE_DEPRECATION_NOTICE}>; rel="deprecation"; type="text/html"`,
-    ...(use.successor ? [`<${use.successor}>; rel="successor-version"`] : []),
+    ...(use.successor && isConcreteSuccessorPath(use.successor)
+      ? [`<${use.successor}>; rel="successor-version"`]
+      : []),
   ];
   const existing = headers.get("Link");
   headers.set("Link", existing ? `${existing}, ${links.join(", ")}` : links.join(", "));
@@ -364,6 +410,16 @@ export function withLegacyWorkspaceDeprecation(
     statusText: response.statusText,
     headers,
   });
+}
+
+/**
+ * True for an absolute-path URI reference made only of RFC 3986 path
+ * characters. A route template (`{capsuleId}`) is not a URI, and a strict
+ * client may drop the whole `Link` header (the deprecation relation included)
+ * when one target is invalid, so templates are never linked.
+ */
+export function isConcreteSuccessorPath(value: string): boolean {
+  return /^\/(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$/u.test(value);
 }
 
 /** Writes one `legacy_workspace_route` event. Never throws. */
@@ -376,6 +432,7 @@ export function reportLegacyWorkspaceRoute(
       event: LEGACY_WORKSPACE_ROUTE_EVENT,
       surface: report.use.surface,
       route: report.use.route,
+      ...(report.use.selector ? { selector: report.use.selector } : {}),
       method: report.method.toUpperCase(),
       status: report.status,
       entry: report.entry,
@@ -430,10 +487,25 @@ export function interfaceApiRouteTemplate(pathname: string): string {
   return parts.join("/");
 }
 
+/** Metric tags of one reported use: route template, selector, method, status. */
+export function legacyWorkspaceUseMetricTags(
+  use: LegacyWorkspaceUse,
+  method: string,
+  status: number,
+): Record<string, string> {
+  return {
+    route: use.route,
+    ...(use.selector ? { selector: use.selector } : {}),
+    method: method.toUpperCase(),
+    status: String(status),
+  };
+}
+
 /**
- * Metric tags for a response this module marked as deprecated, or `undefined`
- * for any other response. The route is re-derived from the request URL; a use
- * only visible in a parsed body is tagged `body`.
+ * Metric tags for a response an Accounts handler marked as deprecated, or
+ * `undefined` for any other response. Platform-served uses supply their own
+ * tags (`legacyWorkspaceUseMetricTags`); here the route is re-derived from the
+ * request URL, and a use only visible in a parsed body is tagged `body`.
  */
 export function legacyWorkspaceMetricTags(
   request: Request,
@@ -450,17 +522,63 @@ export function legacyWorkspaceMetricTags(
     const use = classifyLegacyWorkspaceControlRequest(method, segments, url.searchParams);
     if (use) route = use.route;
     else if (segments[0] === "interfaces") {
-      route = `${interfaceApiRouteTemplate(url.pathname)}?workspaceId`;
+      route = interfaceApiRouteTemplate(url.pathname);
     } else if (segments[0] === "account" && segments[1] === "shared-workspaces") {
       route = "/api/v1/account/shared-workspaces/*";
     }
   } else if (url.pathname === "/oauth/authorize") {
     route = "/oauth/authorize?workspace_id";
   }
-  if (route === "body" && url.searchParams.has("workspaceId")) {
-    route = "platform-extension?workspaceId";
-  }
   return { route, method, status: String(response.status) };
+}
+
+/** How long one isolate coalesces the counter of one tag set. */
+export const LEGACY_WORKSPACE_METRIC_INTERVAL_MS = 60_000;
+
+/** Tag sets tracked per isolate; beyond it every use is written directly. */
+const LEGACY_WORKSPACE_METRIC_MAX_BUCKETS = 512;
+
+/**
+ * Per-isolate coalescing of `takosumi_legacy_workspace_route_count`, so a
+ * legacy use costs at most one Control D1 write per tag set (route, selector,
+ * method, status) per isolate per minute instead of one per request.
+ *
+ * It writes on the leading edge: the first use of a tag set in an isolate is
+ * written at once, and later uses inside the interval are carried into that
+ * tag set's next write. A tag set therefore can never read 0 while a use
+ * happened (the 0-versus-nonzero question the stage 9.3 gate asks); the only
+ * loss is the carried tail of an isolate that is evicted before its next
+ * write, which can make the total low but never zero. The per-use log line is
+ * not coalesced and remains the source for the gate.
+ */
+export class LegacyWorkspaceRouteCounter {
+  readonly #intervalMs: number;
+  readonly #buckets = new Map<string, { lastWriteAt: number; carried: number }>();
+
+  constructor(intervalMs: number = LEGACY_WORKSPACE_METRIC_INTERVAL_MS) {
+    this.#intervalMs = intervalMs;
+  }
+
+  /**
+   * Counts one use at `now`. Returns the value to write now (this use plus
+   * any carried uses), or `undefined` when the tag set was written within the
+   * interval and the use was carried.
+   */
+  add(tags: Readonly<Record<string, string>>, now: number): number | undefined {
+    const key = JSON.stringify(
+      Object.keys(tags).sort().map((name) => [name, tags[name]]),
+    );
+    const bucket = this.#buckets.get(key);
+    if (bucket && now - bucket.lastWriteAt < this.#intervalMs) {
+      bucket.carried += 1;
+      return undefined;
+    }
+    const value = (bucket?.carried ?? 0) + 1;
+    if (bucket || this.#buckets.size < LEGACY_WORKSPACE_METRIC_MAX_BUCKETS) {
+      this.#buckets.set(key, { lastWriteAt: now, carried: 0 });
+    }
+    return value;
+  }
 }
 
 /** A client id is reported only in a bounded, printable shape. */

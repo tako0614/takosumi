@@ -292,9 +292,9 @@ Workspace はアプリごとの所有に置き換わり、段階を分けて撤�
 - `/api/v1/workspaces/*`、`/api/v1/projects/*`、`/api/v1/views/workspaces.v1`
 - `?workspaceId=` で選ぶ connections・sources・capsule-configs・provider-connections・dashboard と、本文の `workspaceId` で選ぶ接続の作成・接続の OAuth 開始・Source の作成
 - `includeWorkspaces=false` を付けない `/api/v1/dashboard/bootstrap`
-- `/api/v1/account/shared-workspaces*`、`/api/v1/billing*` (応答の印は付けません)、`?workspaceId=` 付きの `/api/v1/interfaces*`、`/oauth/authorize` の `workspace_id`、`workspace_id` を付けた PAT の作成
+- `/api/v1/account/shared-workspaces*`、`/api/v1/billing*` (応答の印は付けません)、Workspace を選ぶ `/api/v1/interfaces*` (`?workspaceId=`、`x-takosumi-platform-workspace-id` header、本文の `workspaceId`、または Workspace に束縛された credential による暗黙の選択)、Workspace を受け取る platform extension の route、`/oauth/authorize` の `workspace_id`、`workspace_id` を付けた PAT の作成
 
-これらの応答には `Deprecation: @1793145600` (RFC 9745) と、この節を指す `Link: <…>; rel="deprecation"` が付きます。今使える後継の route があれば `rel="successor-version"` の `Link` も付きます。運用者が撤去日を決めると `Sunset` (RFC 8594) も付きます (`TAKOSUMI_LEGACY_WORKSPACE_SUNSET`)。応答の status と本文は変わりません。client は任意で `Takosumi-Client: <名前>/<版>` を送って名乗れます。サーバーは利用を、ID を含まない構造化ログ `legacy_workspace_route` に記録します。ID token・userinfo・introspection に互換の `takosumi.workspace_id` を入れたときは `legacy_workspace_claim_emitted` を記録します。
+これらの応答には `Deprecation: @1793145600` (RFC 9745) と、この節を指す `Link: <…>; rel="deprecation"` が付きます。今使える後継の route があり、それが具体的な URI のときは `rel="successor-version"` の `Link` も付きます (`/api/v1/capsules/{capsuleId}/runs` のような template の後継は下の表にだけ載せ、`Link` には入れません)。運用者が撤去日を決めると `Sunset` (RFC 8594) も付きます (`TAKOSUMI_LEGACY_WORKSPACE_SUNSET`)。応答の status と本文は変わりません。client は任意で `Takosumi-Client: <名前>/<版>` を送って名乗れます。サーバーは認証された利用を、構造化ログ `legacy_workspace_route` に記録します。ID token・userinfo・introspection に互換の `takosumi.workspace_id` を入れたとき (Workspace に束縛された PAT の introspection を含む) は `legacy_workspace_claim_emitted` を記録します。どちらにも account・Workspace・token の ID は入りません。入る識別子は登録済みの OAuth client id だけで、これはアプリの連携またはインストールを指し、人を指しません。
 
 | 廃止予定 | 後継 |
 | --- | --- |
