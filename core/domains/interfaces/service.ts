@@ -812,10 +812,13 @@ export class InterfaceService {
     if (current?.providerInterfaceId === iface.metadata.id && (current.state === "active" || current.state === "pending_approval") && linkMatchesRequirementExactly(current, input.requirement)) return current;
     const requestedBy = actor?.actorAccountId ?? "system";
     let approval = await this.#linkApprovalPolicy.evaluate({ consumerWorkspaceId: input.workspaceId, providerWorkspaceId: iface.metadata.workspaceId, requestedBy });
-    if (approval && suppliedFence?.mayApproveProvider &&
-      !(await suppliedFence.mayApproveProvider({ capsuleId: iface.metadata.ownerRef.id, workspaceId: iface.metadata.workspaceId }))) {
+    const providerApp = { capsuleId: iface.metadata.ownerRef.id, workspaceId: iface.metadata.workspaceId };
+    if (approval && suppliedFence?.mayApproveProvider && !(await suppliedFence.mayApproveProvider(providerApp))) {
       approval = undefined;
     }
+    // An approval that rests on the caller's provider authority is checked
+    // again inside the pre-write fence below.
+    const approvalRestsOnCaller = approval !== undefined && suppliedFence?.mayApproveProvider !== undefined;
     const now = this.#now();
     const liveCurrent = current && (current.state === "active" || current.state === "pending_approval");
     // A replacement revokes the current link. Without provider approval the
@@ -826,7 +829,7 @@ export class InterfaceService {
     if (liveCurrent && !approval) {
       throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept. Remove the current link and select the provider again to send an approval request to the provider app's owner and members");
     }
-    const next: InterfaceLink = {
+    let next: InterfaceLink = {
       id: `ifl_${crypto.randomUUID().replaceAll("-", "")}`,
       ...scope,
       interface: input.requirement.interface,
@@ -865,6 +868,17 @@ export class InterfaceService {
     let wrote: boolean;
     try {
       const authority = await writeFence.assertCurrent();
+      // Inside the fence: a caller who lost the provider app's authority
+      // since the check above no longer approves. A brand-new link then waits
+      // as pending_approval; a replacement (or one with prepared Bindings)
+      // keeps the current link, as without approval.
+      if (approvalRestsOnCaller && next.state === "active" && !(await suppliedFence!.mayApproveProvider!(providerApp))) {
+        if (liveCurrent || preparedSubjects.length > 0) {
+          throw new InterfaceServiceError("interface_link_approval_required", "The provider app must approve this Interface link; the current link is kept. Remove the current link and select the provider again to send an approval request to the provider app's owner and members");
+        }
+        const { approval: _withdrawn, ...unapproved } = next;
+        next = { ...unapproved, state: "pending_approval", approvedPermissions: [] };
+      }
       wrote = current
         ? await this.#stores.links.replace({ record: next, expected: current, ...(revoked ? { revoked } : {}) }, authority)
         : await this.#stores.links.create(next, authority);

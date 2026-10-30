@@ -163,7 +163,8 @@ test("Capsule-owned Interface writes need the app's owner or member, with parity
       // Service principals keep the Workspace decision.
       const probe = await h.call("service-ws", "POST", "/api/v1/interfaces", interfaceBody("probe", { kind: "Capsule", id: "cap_a" }));
       expect(probe.status, label).toBe(201);
-      expect((probe.body as { metadata: { createdUnder?: string } }).metadata.createdUnder, label).toBe("workspace");
+      // A host service token is the operator's authority.
+      expect((probe.body as { metadata: { createdUnder?: string } }).metadata.createdUnder, label).toBe("operator");
       // A PAT limited to apps reaches only those apps, and never the Workspace.
       expect((await h.call("owner-pat-b", "POST", "/api/v1/interfaces", interfaceBody("pat-b", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(403);
       expect((await h.call("owner-pat-a", "POST", "/api/v1/interfaces", interfaceBody("pat-a", { kind: "Capsule", id: "cap_a" }))).status, label).toBe(201);

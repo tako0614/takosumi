@@ -691,13 +691,20 @@ async function scopeInterfaceWorkspace(
   options: RegisterInterfaceRoutesOptions,
   actor: ActorContext | undefined,
   workspaceId: string | undefined,
+  /** The Capsule owning the Interface in question, when there is one. */
+  capsuleOwnerId?: string,
 ): Promise<InterfaceWorkspaceAuthResult> {
   if (!workspaceId) throw invalid("workspaceId is required");
   // No actor means the configured internal deploy-control bearer was used
   // without an actor header. That remains the explicit operator authority.
   if (!actor) return { ok: true, authority: "operator" };
-  // A credential limited to apps never holds Workspace authority.
-  if (!actor.roles.includes("runtime-principal") && actor.appIds !== undefined) {
+  // A credential limited to apps never holds Workspace authority. Issuing an
+  // Interface token (a PAT acting as a runtime principal) reaches only a
+  // Capsule-owned Interface of one of its apps.
+  if (
+    actor.appIds !== undefined &&
+    !(actor.roles.includes("runtime-principal") && capsuleOwnerId !== undefined && actor.appIds.includes(capsuleOwnerId))
+  ) {
     return { ok: false, response: workspaceForbidden(c) };
   }
   if (isRuntimePrincipal(actor) && !actor.workspaceId) {
@@ -734,7 +741,8 @@ async function scopeInterfaceWorkspace(
     ok: true,
     actor:
       actor.workspaceId === workspaceId ? actor : { ...actor, workspaceId },
-    authority: "workspace",
+    // A host service token is the operator's deploy-control authority.
+    authority: actor.principalKind === "service" ? "operator" : "workspace",
   };
 }
 
@@ -795,7 +803,13 @@ async function scopeInterface(
     }, access === "read" ? "view" : writeAction);
     if (decided) return decided;
   }
-  return await scopeInterfaceWorkspace(c, options, actor, owner.workspaceId);
+  return await scopeInterfaceWorkspace(
+    c,
+    options,
+    actor,
+    owner.workspaceId,
+    owner.ownerRef.kind === "Capsule" ? owner.ownerRef.id : undefined,
+  );
 }
 
 /**

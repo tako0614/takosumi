@@ -2301,8 +2301,9 @@ function platformInterfaceActorContext(
       ? { capsuleId: safePlatformExtensionContextId(session.capsuleId) }
       : {}),
     // A personal access token limited to apps: Core never gives it Workspace
-    // authority and decides only those apps.
-    ...(session.authKind === "personal-access-token" && session.appIds !== undefined && !runtimePrincipal
+    // authority and decides only those apps, also when it issues an
+    // Interface token (as a runtime principal).
+    ...(session.authKind === "personal-access-token" && session.appIds !== undefined
       ? { appIds: [...session.appIds] }
       : {}),
     ...(session.authKind === "service-token"
