@@ -203,6 +203,30 @@ for (const backend of BACKENDS) {
       .toBe(403);
   });
 
+  test(`[${backend}] nobody but its creator advances a pre-app install started on a shared Workspace route`, async () => {
+    const fixture = await compose(backend);
+    const created = await fixture.route(ADMIN, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("not-yours"), "not-yours");
+    expect(created.status).toBe(201);
+    const plan = (await created.json()).installPlan;
+    // The Workspace owner passes the Workspace decision: it may read the
+    // admin's capsule-less install, never answer or reconcile it.
+    expect((await fixture.route(WORKSPACE_OWNER, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(200);
+    expect((await fixture.route(WORKSPACE_OWNER, "POST", `/api/v1/install-plans/${plan.id}/reconcile`)).status).toBe(403);
+    expect((await fixture.route(WORKSPACE_OWNER, "PATCH", `/api/v1/install-plans/${plan.id}`, { expectedGeneration: plan.generation })).status)
+      .toBe(403);
+    // Also not after the admin left (the reviewed probe: the owner used to
+    // reconcile it into an app owned by the departed admin).
+    const member = await fixture.deployStore.getWorkspaceMember(fixture.workspaceId, ADMIN);
+    await fixture.deployStore.putWorkspaceMember({ ...member!, status: "suspended", updatedAt: new Date().toISOString() });
+    for (let step = 0; step < 4; step += 1) {
+      expect((await fixture.route(WORKSPACE_OWNER, "POST", `/api/v1/install-plans/${plan.id}/reconcile`)).status).toBe(403);
+    }
+    const stored = (await fixture.operations.gitInstallPlans.get(plan.id))!;
+    expect(stored.capsuleId).toBeUndefined();
+    expect(stored.generation).toBe(plan.generation);
+    expect(await fixture.operations.capsules.listCapsules(fixture.workspaceId)).toEqual([]);
+  });
+
   test(`[${backend}] an install in the creator's own namespace is continued by its creator`, async () => {
     const fixture = await compose(backend);
     const created = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", {

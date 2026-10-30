@@ -444,6 +444,20 @@ export async function handleInstallPlans(
         ...(ctx.diagnostics ? { diagnostics: ctx.diagnostics } : {}),
       });
   if (!auth.ok) return auth.response;
+  // Before its app exists only the person who started the install advances
+  // it (TASK-0118 P9.1-c): the app it commits is owned by that person and
+  // binds that person's connections, so a Workspace owner or another admin
+  // passing the Workspace decision may read it but never answer or
+  // reconcile it into someone else's app.
+  if (!capsuleId && (method === "PATCH" || segments[2] === "reconcile") &&
+    (plan.createdBy !== ctx.session.subject || plan.actorSubject !== ctx.session.subject)) {
+    return errorJson(
+      "forbidden",
+      "Only the person who started this install can advance it before its app exists.",
+      403,
+      ctx.request,
+    );
+  }
 
   if (segments.length === 2) {
     if (method === "GET") return await installPlanJson(ctx, plan);

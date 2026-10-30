@@ -627,7 +627,7 @@ Workspace-less route) is the creator's: the creator's account credential (not a
 PAT with `appIds` or an installed app's own token, and not a shared-account
 composition that requires current membership) reads and advances it without a
 Workspace decision. An install started through a shared Workspace's route keeps
-the Workspace decision, so someone who left that Workspace cannot finish it. If
+the Workspace decision, so someone who left that Workspace cannot finish it. Before the app exists only its creator answers (`PATCH`) or reconciles a plan; a Workspace owner or another admin may read it but never advance it. If
 the app was committed before the plan recorded it (a lost acknowledgement), the
 app decides. Workspace-less install idempotency is per account: a key also
 replays a plan the account created in another personal namespace it owns
