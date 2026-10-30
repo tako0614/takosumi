@@ -271,19 +271,20 @@ test("state-version rollback-plan route denies a principal with no allowed runne
   expect((await response.json()).error.message).toContain("runner profile");
 });
 
-test("workspace plan-update RunGroup requires the update operation", async () => {
-  const { app } = await scopedApp({
-    workspaceIds: [WORKSPACE_ID],
-    operations: ["create"],
-    runnerProfileIds: "*",
-  });
-
-  const response = await app.request(
-    `/internal/v1/workspaces/${WORKSPACE_ID}/plan-update`,
-    { method: "POST", headers: headers() },
-  );
-
-  expect(response.status).toEqual(403);
+test("retired Workspace plan-update answers 410 for any scoped principal and creates nothing", async () => {
+  for (const scope of [
+    { workspaceIds: [WORKSPACE_ID], operations: ["create"], runnerProfileIds: "*" },
+    { workspaceIds: ["ws_other424"], operations: "*", runnerProfileIds: "*" },
+  ] as const) {
+    const { app, store } = await scopedApp(scope as never);
+    const response = await app.request(
+      `/internal/v1/workspaces/${WORKSPACE_ID}/plan-update`,
+      { method: "POST", headers: headers() },
+    );
+    expect(response.status).toEqual(410);
+    expect((await response.json()).error.code).toBe("run_group_retired");
+    expect(await store.listRunsByWorkspace(WORKSPACE_ID)).toHaveLength(0);
+  }
 });
 
 test("internal DELETE outside the principal's Workspace scope cannot add Activity", async () => {

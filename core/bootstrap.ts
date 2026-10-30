@@ -731,8 +731,8 @@ export interface TakosumiOperations {
   };
   readonly connections: ConnectionsService;
   /**
-   * RunGroups domain service (Core Specification §19 / §24): workspace_update and
-   * workspace_drift_check RunGroups over the same shared ledger + controller.
+   * Read-only RunGroups (Core Specification §19 / §24). Creating and approving
+   * RunGroups is retired (TASK-0118 9.1); only historical rows are read.
    */
   readonly runGroups: RunGroupsService;
   /** Runtime declarations shared by Capsule and OpenTofu authoring flows. */
@@ -1471,18 +1471,12 @@ export async function createTakosumiService(
     observability: context.adapters.observability,
     metricTags,
   });
-  // RunGroups domain (Core Specification §19 / §24): workspace_update re-plans
-  // stale Capsules and workspace_drift_check groups read-only drift checks.
-  // Status is computed from member runs at read time. Constructed after the
-  // controller it drives.
+  // RunGroups (Core Specification §19 / §24) are retired (TASK-0118 9.1): no
+  // flow creates or approves one. The service only reads a row written before
+  // the retirement; status is computed from its member runs at read time.
   const runGroupsService = new RunGroupsService({
-    appOwnership: appOwnershipStore,
     store: sharedOpenTofuStore,
     controller: opentofuController,
-    actor: "system:run-group",
-    systemOwnedFlow: true,
-    appAccess,
-    activity: activityService,
   });
   // A cancelled uninstall must not leave the finalizer's unapproved teardown
   // Plan behind as an approvable destroy for the Capsule that was kept.

@@ -274,6 +274,7 @@ import type {
   RetireSourceResult,
 } from "../../core/domains/deploy-control/store.ts";
 import {
+  SCHEDULED_SWEEP_CAPSULE_STATUS_LIST,
   assertExactRunTransitionInput,
   assertDrainRunSettlementInput,
   assertSourceSyncSuccessCommit,
@@ -2882,7 +2883,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async #reserveScheduledSweepPage<T>(input: {
-    readonly lane: "workspaces" | "active_capsules" | "recoverable_runs";
+    // The `workspaces` lane row is no longer read (TASK-0118 9.1); stage 9.6
+    // deletes it.
+    readonly lane: "active_capsules" | "recoverable_runs";
     readonly limit: number;
     readonly buildAfter: (
       cursor?: { readonly createdAt: string; readonly id: string },
@@ -5865,56 +5868,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  async listWorkspacesForSweep(limit: number): Promise<readonly Workspace[]> {
-    const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
-    await this.#ensureSchema();
-    if (boundedLimit === 0) return [];
-    const baseWhere = sql`COALESCE(json_extract(${schema.workspaces.recordJson}, '$.archivedAt'), '') = ''`;
-    const buildQuery = (
-      cursor?: { readonly createdAt: string; readonly id: string },
-      upper?: { readonly createdAt: string; readonly id: string },
-      descending = false,
-    ) => this.#orm
-      .select({
-        json: sql`${schema.workspaces.recordJson}`.as("json"),
-        sweepCreatedAt: sql`${schema.workspaces.createdAt}`.as("sweep_created_at"),
-        sweepId: sql`${schema.workspaces.id}`.as("sweep_id"),
-      })
-      .from(schema.workspaces)
-      .where(
-        d1SweepKeysetWhere(
-          baseWhere,
-          schema.workspaces.createdAt,
-          schema.workspaces.id,
-          cursor,
-          upper,
-        ),
-      )
-      .orderBy(
-        descending ? desc(schema.workspaces.createdAt) : asc(schema.workspaces.createdAt),
-        descending ? desc(d1SweepIdOrder(schema.workspaces.id)) : asc(d1SweepIdOrder(schema.workspaces.id)),
-      )
-      .limit(descending ? 1 : boundedLimit)
-      .toSQL();
-    const emptyPage = this.#orm
-      .select({
-        json: sql`${schema.workspaces.recordJson}`.as("json"),
-        sweepCreatedAt: sql`${schema.workspaces.createdAt}`.as("sweep_created_at"),
-        sweepId: sql`${schema.workspaces.id}`.as("sweep_id"),
-      })
-      .from(schema.workspaces)
-      .where(sql`0 = 1`)
-      .toSQL();
-    return await this.#reserveScheduledSweepPage({
-      lane: "workspaces",
-      limit: boundedLimit,
-      buildAfter: (cursor, upper) => cursor && upper ? buildQuery(cursor, upper) : emptyPage,
-      start: buildQuery(),
-      upper: buildQuery(undefined, undefined, true),
-      mapRow: (row) => jsonRecordFromD1Value(row.json) as unknown as Workspace,
-    });
-  }
-
   async listWorkspacesPage(params: PageParams): Promise<Page<Workspace>> {
     const limit = clampPageLimit(params.limit);
     const cursor = decodeCursor(params.cursor);
@@ -8156,11 +8109,11 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     ).map(normalizeCapsuleRecord);
   }
 
-  async listActiveCapsulesForSweep(limit: number): Promise<readonly Capsule[]> {
+  async listCapsulesForScheduledSweep(limit: number): Promise<readonly Capsule[]> {
     const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
     await this.#ensureSchema();
     if (boundedLimit === 0) return [];
-    const baseWhere = eq(schema.capsules.status, "active");
+    const baseWhere = inArray(schema.capsules.status, [...SCHEDULED_SWEEP_CAPSULE_STATUS_LIST]);
     const buildQuery = (
       cursor?: { readonly createdAt: string; readonly id: string },
       upper?: { readonly createdAt: string; readonly id: string },

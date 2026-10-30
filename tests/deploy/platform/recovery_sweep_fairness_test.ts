@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
-import { planStaleCapsuleUpdates, repairStaleOpenTofuRuns } from "../../../deploy/platform/worker.ts";
+import { repairStaleOpenTofuRuns, runCapsuleSweep } from "../../../deploy/platform/worker.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
-import { WorkspacesService } from "../../../core/domains/workspaces/mod.ts";
 import { CapsuleQuery } from "../../../core/domains/deploy-control/capsule_query.ts";
-import { RunGroupsService } from "../../../core/domains/run-groups/mod.ts";
-import { driftSweep } from "../../../worker/src/scheduled/drift.ts";
 
 const at = "2026-10-01T00:00:00.000Z";
 
@@ -20,55 +17,113 @@ function workspace(id: string): never {
   return { id, handle: id, displayName: id, type: "personal", ownerUserId: "usr_sweep", createdAt: at, updatedAt: at } as never;
 }
 
-test("auto-plan visits every Workspace beyond the fixed window despite permanent prefix failures", async () => {
+/** The facade members the per-app sweep reads, backed by one in-memory store. */
+function sweepOperations(
+  store: InMemoryOpenTofuControlStore,
+  handlers: {
+    readonly plan?: (id: string, options: { readonly actor: string }) => Promise<unknown>;
+    readonly drift?: (id: string, options: { readonly actor: string }) => Promise<unknown>;
+    readonly runReads?: { capsuleId: string; workspaceId: string; types?: readonly string[] }[];
+  } = {},
+) {
+  const query = new CapsuleQuery(store, (value) => value);
+  return {
+    controller: {
+      listCapsulesForScheduledSweep: (limit: number) => query.listCapsulesForScheduledSweep(limit),
+    },
+    listCapsuleRunsPage: (capsuleId: string, options: { readonly workspaceId: string; readonly types?: readonly string[] }) => {
+      handlers.runReads?.push({ capsuleId, workspaceId: options.workspaceId, ...(options.types ? { types: options.types } : {}) });
+      return Promise.resolve({ runs: [] });
+    },
+    createCapsulePlan: (id: string, options: { readonly actor: string }) =>
+      handlers.plan ? handlers.plan(id, options) : Promise.resolve({}),
+    createCapsuleDriftCheck: (id: string, options: { readonly actor: string }) =>
+      handlers.drift ? handlers.drift(id, options) : Promise.resolve({}),
+  };
+}
+
+test("the per-app sweep visits every live app beyond the page despite permanent failures", async () => {
   const store = new InMemoryOpenTofuControlStore();
+  // Apps spread over shared and separate Workspaces; the sweep never reads one.
   for (let i = 0; i < 7; i++) {
-    const id = `ws_${i}`;
-    await store.putWorkspace(workspace(id));
-    await store.putCapsule(capsule(`cap_${i}`, id, "stale"));
+    await store.putCapsule(capsule(`cap_stale_${i}`, `ws_${i % 3}`, "stale"));
+    await store.putCapsule(capsule(`cap_active_${i}`, `ws_${i}`, "active"));
   }
-  const visited = new Set<string>();
-  const operations = {
-    workspaces: new WorkspacesService({ store }),
-    capsules: { listCapsules: (id: string) => store.listCapsules(id) },
-    controller: { listRuns: () => Promise.resolve([]) },
-    createCapsulePlan: (id: string, options: { actor: string }) => {
+  const planned = new Set<string>();
+  const checked = new Set<string>();
+  const runReads: { capsuleId: string; workspaceId: string; types?: readonly string[] }[] = [];
+  const operations = sweepOperations(store, {
+    runReads,
+    plan: (id, options) => {
       expect(options.actor).toBe("system:stale-auto-plan");
-      visited.add(id);
+      planned.add(id);
       return Promise.reject(new Error("persistent failure"));
     },
-  };
-  for (let tick = 0; tick < 4; tick++) {
-    const result = await planStaleCapsuleUpdates(operations, { workspaceLimit: 2 });
-    expect(result.workspacesScanned).toBeLessThanOrEqual(2);
+    drift: (id, options) => {
+      expect(options.actor).toBe("system:drift-check");
+      checked.add(id);
+      return Promise.reject(new Error("persistent failure"));
+    },
+  });
+  for (let tick = 0; tick < 7; tick++) {
+    const result = await runCapsuleSweep(operations, { autoPlanStale: true, driftCheck: true, limit: 2 });
+    expect(result.scanned).toBeLessThanOrEqual(2);
   }
-  expect([...visited].sort()).toEqual(Array.from({ length: 7 }, (_, i) => `cap_${i}`));
+  expect([...planned].sort()).toEqual(Array.from({ length: 7 }, (_, i) => `cap_stale_${i}`));
+  expect([...checked].sort()).toEqual(Array.from({ length: 7 }, (_, i) => `cap_active_${i}`));
+  // Open plans are read per app, with only that app's own Workspace column.
+  for (const read of runReads) {
+    expect(read.types).toEqual(["plan"]);
+    expect(read.workspaceId).toBe(`ws_${Number(read.capsuleId.slice("cap_stale_".length)) % 3}`);
+  }
 });
 
-test("drift checks the selected Capsules beyond the window within a single Workspace", async () => {
+test("the per-app sweep never hands a non-live app to a step", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  await store.putWorkspace(workspace("ws_drift"));
-  for (let i = 0; i < 7; i++) await store.putCapsule(capsule(`cap_${i}`, "ws_drift"));
-  const visited = new Set<string>();
-  let nextId = 0;
-  const controller = {
-    createCapsuleDriftCheck: (id: string) => {
-      visited.add(id);
-      return Promise.resolve({ planRun: { id: `plan_${nextId++}` } });
-    },
-    getRun: (id: string) => Promise.resolve({ id, type: "drift_check", status: "queued", createdAt: at }),
-  };
-  const groups = new RunGroupsService({ store, controller: controller as never });
-  const query = new CapsuleQuery(store, (value) => value);
-  const operations = {
-    listActiveCapsules: (limit: number) => query.listActiveCapsules(limit),
-    createWorkspaceDriftCheck: (id: string, options?: { readonly limit?: number; readonly capsuleIds?: readonly string[] }) => groups.createWorkspaceDriftCheck(id, options),
-  };
-  for (let tick = 0; tick < 4; tick++) {
-    const result = await driftSweep(operations, { limit: 2 });
-    expect(result.checked).toBeLessThanOrEqual(2);
+  for (const status of ["pending", "disabled", "error", "uninstalled", "destroyed"]) {
+    await store.putCapsule(capsule(`cap_${status}`, "ws_mixed", status));
   }
-  expect([...visited].sort()).toEqual(Array.from({ length: 7 }, (_, i) => `cap_${i}`));
+  await store.putCapsule(capsule("cap_live_stale", "ws_mixed", "stale"));
+  await store.putCapsule(capsule("cap_live_active", "ws_other", "active"));
+  const visited: string[] = [];
+  const operations = sweepOperations(store, {
+    plan: (id) => { visited.push(id); return Promise.resolve({}); },
+    drift: (id) => { visited.push(id); return Promise.resolve({}); },
+  });
+  const result = await runCapsuleSweep(operations, { autoPlanStale: true, driftCheck: true, limit: 10 });
+  expect(visited.sort()).toEqual(["cap_live_active", "cap_live_stale"]);
+  expect(result).toEqual({ scanned: 2, plansCreated: 1, driftChecksCreated: 1 });
+});
+
+test("the per-app sweep records the stale auto-plan on the app itself", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  await store.putCapsule(capsule("cap_owned", "ws_owner", "stale"));
+  const events: unknown[] = [];
+  const operations = {
+    ...sweepOperations(store),
+    appOwnership: {
+      getOwnership: (capsuleId: string) => Promise.resolve({
+        capsuleId, ownerAccountId: "acct_owner", ownershipEpoch: 1, managementState: "active",
+      } as never),
+    },
+    activity: { record: (event: unknown) => { events.push(event); return Promise.resolve(undefined); } },
+  };
+  const plans: { id: string; actor: string }[] = [];
+  operations.createCapsulePlan = (id, options) => {
+    plans.push({ id, actor: options.actor });
+    return Promise.resolve({});
+  };
+  const result = await runCapsuleSweep(operations, { autoPlanStale: true, driftCheck: false });
+  expect(plans).toEqual([{ id: "cap_owned", actor: "acct_owner" }]);
+  expect(events).toEqual([{
+    workspaceId: "ws_owner",
+    actorId: "system:stale-auto-plan",
+    action: "capsule.stale_auto_plan_created",
+    targetType: "capsule",
+    targetId: "cap_owned",
+    metadata: {},
+  }]);
+  expect(result.plansCreated).toBe(1);
 });
 
 test("repair visits all 5001 eligible Runs while the first 5000 remain permanently recoverable", async () => {
@@ -106,80 +161,31 @@ test("repair visits all 5001 eligible Runs while the first 5000 remain permanent
   expect(visited.size).toBe(5001);
 });
 
-test("drift page revalidation never widens to another Workspace, inactive or prefix Capsule", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  await store.putWorkspace(workspace("ws_selected"));
-  await store.putWorkspace(workspace("ws_other"));
-  await store.putCapsule(capsule("cap_prefix", "ws_selected"));
-  await store.putCapsule(capsule("cap_selected", "ws_selected"));
-  await store.putCapsule(capsule("cap_inactive", "ws_selected", "stale"));
-  await store.putCapsule(capsule("cap_cross_workspace", "ws_other"));
-  const visited: string[] = [];
-  const controller = {
-    createCapsuleDriftCheck: (id: string) => {
-      visited.push(id);
-      return Promise.resolve({ planRun: { id: `plan_${id}` } });
-    },
-    getRun: (id: string) => Promise.resolve({ id, type: "drift_check", status: "queued", createdAt: at }),
-  };
-  const groups = new RunGroupsService({ store, controller: controller as never });
-  await groups.createWorkspaceDriftCheck("ws_selected", {
-    limit: 4,
-    capsuleIds: ["cap_selected", "cap_selected", "cap_deleted", "cap_inactive", "cap_cross_workspace"],
-  });
-  expect(visited).toEqual(["cap_selected"]);
-  await expect(groups.createWorkspaceDriftCheck("ws_selected", {
-    limit: 2, capsuleIds: ["cap_deleted", "cap_inactive"],
-  })).rejects.toThrow("nothing_to_drift_check");
-  expect(visited).toEqual(["cap_selected"]);
-});
-
-test("drift counts only checks created after selected Capsule status revalidation", async () => {
-  const store = new InMemoryOpenTofuControlStore();
-  await store.putWorkspace(workspace("ws_race"));
-  await store.putCapsule(capsule("cap_live", "ws_race"));
-  await store.putCapsule(capsule("cap_changed", "ws_race", "stale"));
-  const groups = new RunGroupsService({
-    store,
-    controller: {
-      createCapsuleDriftCheck: (id: string) => Promise.resolve({ planRun: { id: `plan_${id}` } }),
-      getRun: (id: string) => Promise.resolve({ id, type: "drift_check", status: "queued", createdAt: at }),
-    } as never,
-  });
-  const result = await driftSweep({
-    listActiveCapsules: () => Promise.resolve([
-      { id: "cap_live", workspaceId: "ws_race" },
-      { id: "cap_changed", workspaceId: "ws_race" },
-    ]),
-    createWorkspaceDriftCheck: (id, options) => groups.createWorkspaceDriftCheck(id, options),
-  }, { limit: 2 });
-  expect(result).toEqual({ scanned: 2, checked: 1 });
-});
-
-test("auto-plan revisits a failed page while newer Workspaces arrive every tick", async () => {
+test("the per-app sweep revisits a failed page while newer apps arrive every tick", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const attempts = new Map<string, number>();
+  let clock = Date.parse(at);
   const add = async (index: number) => {
-    const id = `ws_append_${String(index).padStart(3, "0")}`;
-    await store.putWorkspace(workspace(id));
-    await store.putCapsule(capsule(`cap_${id}`, id, "stale"));
+    clock += 1000;
+    await store.putCapsule({
+      ...(capsule(`cap_append_${String(index).padStart(3, "0")}`, `ws_append_${index}`, "stale") as object),
+      createdAt: new Date(clock).toISOString(),
+    } as never);
   };
   for (let i = 0; i < 3; i++) await add(i);
-  const operations = {
-    workspaces: new WorkspacesService({ store }),
-    capsules: { listCapsules: (id: string) => store.listCapsules(id) },
-    controller: { listRuns: () => Promise.resolve([]) },
-    createCapsulePlan: (id: string) => {
+  const operations = sweepOperations(store, {
+    plan: (id) => {
       attempts.set(id, (attempts.get(id) ?? 0) + 1);
       return Promise.reject(new Error("crashed or failed page"));
     },
-  };
+  });
   for (let tick = 0; tick < 4; tick++) {
-    const result = await planStaleCapsuleUpdates(operations, { workspaceLimit: 1 });
-    expect(result.workspacesScanned).toBeLessThanOrEqual(1);
+    const result = await runCapsuleSweep(operations, { autoPlanStale: true, driftCheck: false, limit: 1 });
+    expect(result.scanned).toBeLessThanOrEqual(1);
     await add(tick + 3);
   }
-  expect(attempts.get("cap_ws_append_000")).toBe(2);
-  expect(attempts.get("cap_ws_append_001")).toBe(1);
-  expect(attempts.get("cap_ws_append_002")).toBe(1);
+  // The lap's upper key is fixed, so newer apps never postpone the oldest.
+  expect(attempts.get("cap_append_000")).toBe(2);
+  expect(attempts.get("cap_append_001")).toBe(1);
+  expect(attempts.get("cap_append_002")).toBe(1);
 });

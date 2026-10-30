@@ -396,7 +396,7 @@ Workspace単位のroute (一覧、Workspace設定、Workspace作成、所有者�
 
 cursorで続きを読む一覧 (`capsules`・`current-state-versions`・`runs`・`backups`・`usage`、`/dashboard/overview`、`/sources?workspaceId=`) は、表示できる行だけをstoreのquery (memory・Postgres・D1) で選びます。表示できない行がいくつ続いても、ページは表示できる行で埋まり、最後まで読み進められます。`nextCursor` はstoreが返す表示できる行のcursorで、表示できない行のIDや時刻は入りません。行の持ち主は次のとおりです。Runは自分のCapsule (Capsuleを持たない古いapply行はそのplanのCapsule)、無ければSourceのアプリです。Sourceは所有アプリ、所有アプリの無いSourceはそれを使う稼働中のアプリすべてです。backupは自分のCapsule、Capsuleを示さないbackupは稼働中の全アプリです。usageは自分のCapsule、無ければRunのアプリです。Runが残っていないusageは、所有記録のあるアプリがWorkspaceにある間は表示しません。行の持ち主のアプリが1つでも表示できなければ、その行は表示しません。所有記録のschemaが無いtarget (D1 v77・Postgres v123より前) では絞り込みません。所有ストアを持つhostがこの絞り込み付きの読み取りを提供しない場合、一覧は絞り込まずに返すのではなく `503` になります。
 
-Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCapsuleIds` は全員)、Interfaceの所有アプリ (`ownerId`)、bindingの対象Capsule (`subjectId`) と、binding・tokenのInterfaceの提供側アプリ、Source (それを使うアプリ、または所有アプリ)、それでもアプリが分からないときはRun (`runId`、Run対象、`metadata.runId`・`planRunId`・`applyRunId`) でアプリに結び付けます。アプリを示さないbackupはWorkspace全体のbackupで、稼働中の全アプリに属します。所有記録のあるアプリがWorkspaceにある間は、アプリを決められないイベント (Run・Interfaceが見つからない、このWorkspaceに無いCapsuleのIDを指す、読み取りの上限を超えた、手がかりが無い) を表示しません。ほかの手がかりでアプリが分かっても同じです。`workspace`・`connection` のイベントと、アプリに属さないと分かったイベント (どのアプリも使わないRun・Source、削除済みのSource) はWorkspace判定のまま表示します。`/dashboard/bootstrap?includeNotifications=true` の通知は、代わりに呼び出し元のアプリから作ります (次の節)。読み取りは、WorkspaceのCapsule一覧と所有記録の一括読み取りが先です。所有記録のあるアプリが無ければ (v75では全アプリ)、それ以上読みません。ある場合のRun・Source・Interfaceの読み取りは、重複を除いて並列に行い、1リクエスト50件までです。Workspace一括操作 (`plan-update`、`drift-check`、Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。
+Activityは、対象のCapsule、metadataのCapsule ID (run groupの `memberCapsuleIds` は全員)、Interfaceの所有アプリ (`ownerId`)、bindingの対象Capsule (`subjectId`) と、binding・tokenのInterfaceの提供側アプリ、Source (それを使うアプリ、または所有アプリ)、それでもアプリが分からないときはRun (`runId`、Run対象、`metadata.runId`・`planRunId`・`applyRunId`) でアプリに結び付けます。アプリを示さないbackupはWorkspace全体のbackupで、稼働中の全アプリに属します。所有記録のあるアプリがWorkspaceにある間は、アプリを決められないイベント (Run・Interfaceが見つからない、このWorkspaceに無いCapsuleのIDを指す、読み取りの上限を超えた、手がかりが無い) を表示しません。ほかの手がかりでアプリが分かっても同じです。`workspace`・`connection` のイベントと、アプリに属さないと分かったイベント (どのアプリも使わないRun・Source、削除済みのSource) はWorkspace判定のまま表示します。`/dashboard/bootstrap?includeNotifications=true` の通知は、代わりに呼び出し元のアプリから作ります (次の節)。読み取りは、WorkspaceのCapsule一覧と所有記録の一括読み取りが先です。所有記録のあるアプリが無ければ (v75では全アプリ)、それ以上読みません。ある場合のRun・Source・Interfaceの読み取りは、重複を除いて並列に行い、1リクエスト50件までです。Workspace一括操作 (Workspace backup、Interface materializationの再試行) は、Workspace判定に加えて、所有記録のある各アプリでその操作が許されることを要求します。一括の `plan-update`・`drift-check` は廃止済みで、Workspaceを読む前に `410` `run_group_retired` を返します。
 
 **移行中の扱い。** 所有記録がまだ使えないアプリは、そのリクエストに限り従来のWorkspace判定で決めます。対象は、所有ストアがない構成、D1 v77 / Postgres v123 より前のschema、backfillがまだ所有記録を書いていないアプリです。所有記録が書かれた時点から、そのアプリはアプリでの判定だけになります。従来判定を使ったことは、IDを含まない構造化ログ `app_authorization_workspace_fallback` (`reason` は `ownership_store_unavailable`・`ownership_schema_unavailable`・`capsule_not_backfilled`) に、isolateごとに5分に1回まとめて残します。判定ごとに所有記録を1回読み、所有記録があるときは役割の解決でもう一度読みます。所有ストアの既存のschema確認を使い、D1 v77より前では「schemaが無い」結果を60秒保持するので、判定ごとの確認queryは発生しません。
 
@@ -464,7 +464,8 @@ Workspace はアプリごとの所有に置き換わり、段階を分けて撤�
 | `GET /api/v1/workspaces/{workspaceId}/runs` | `GET /api/v1/capsules/{capsuleId}/runs` |
 | `GET /api/v1/workspaces/{workspaceId}/usage`、`GET /api/v1/workspaces/{workspaceId}/billing` | `GET /api/v1/usage` |
 | `POST /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | `GET /api/v1/source-ref-resolutions` |
-| `POST /api/v1/workspaces/{workspaceId}/plan-update`・`drift-check`・`backups` | `POST /api/v1/capsules/{capsuleId}/plan`・`drift-check`・`backups` |
+| `POST /api/v1/workspaces/{workspaceId}/backups` | `POST /api/v1/capsules/{capsuleId}/backups` |
+| `POST /api/v1/workspaces/{workspaceId}/plan-update`・`drift-check` (廃止済み、`410` `run_group_retired`) | `POST /api/v1/capsules/{capsuleId}/plan`・`drift-check` |
 | `workspaceId` で選ぶ `/api/v1/connections` | `workspaceId` を付けない `/api/v1/connections` (個人の接続) |
 
 ほかの route の後継は、置き換えの API ができたものから順に足します。
@@ -497,8 +498,8 @@ Workspace はアプリごとの所有に置き換わり、段階を分けて撤�
 | GET      | `/api/v1/workspaces/{workspaceId}/billing`           | 課金状態を読む                          |
 | GET      | `/api/v1/workspaces/{workspaceId}/backups`           | 制御情報の書き出しを一覧する            |
 | POST     | `/api/v1/workspaces/{workspaceId}/backups`           | 制御情報を書き出す                      |
-| POST     | `/api/v1/workspaces/{workspaceId}/plan-update`       | Workspace 全体の更新 Run を作る         |
-| POST     | `/api/v1/workspaces/{workspaceId}/drift-check`       | Workspace 全体の差分確認 Run を作る     |
+| POST     | `/api/v1/workspaces/{workspaceId}/plan-update`       | 廃止済み。`410` `run_group_retired` を返す |
+| POST     | `/api/v1/workspaces/{workspaceId}/drift-check`       | 廃止済み。`410` `run_group_retired` を返す |
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
@@ -1067,8 +1068,8 @@ Apply が新しい InstallConfig を認可することはありません。
 | GET      | `/api/v1/runs/{runId}/logs`                             | Run のログを読む                |
 | GET      | `/api/v1/runs/{runId}/events`                           | Run のイベントを読む            |
 | GET      | `/api/v1/runs/{runId}/cost`                             | Run の費用見込みを読む          |
-| GET      | `/api/v1/run-groups/{runGroupId}`                       | まとめて実行した Run を読む     |
-| POST     | `/api/v1/run-groups/{runGroupId}/approve`               | まとめて実行した Run を承認する |
+| GET      | `/api/v1/run-groups/{runGroupId}`                       | 廃止前に作られた RunGroup を読む (含まれる全 Run のアプリを見られる場合だけ) |
+| POST     | `/api/v1/run-groups/{runGroupId}/approve`               | 廃止済み。`410` `run_group_retired` を返す |
 | GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
 | POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |
 
@@ -1161,9 +1162,9 @@ Run には次を保存します。
 解決された commit は `SourceSnapshot` として保存されます。同じ ref/path lane を採用している
 active Capsule の現在 snapshot と新しい commit が異なると、Capsule は `stale` になります。
 別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。
-通常の update plan も採用済み lane の最新 snapshot を使います。そこからは既存の
-Workspace update / RunGroup が reviewable plan を作り、
-apply は通常の Run approval に従います。app artifact をどこから取るかは、あくまで
+通常の update plan も採用済み lane の最新 snapshot を使います。そこからはアプリごとの
+plan (`POST /api/v1/capsules/{capsuleId}/plan`、または opt-in の定期 stale auto-plan) が
+reviewable plan を作り、apply は通常の Run approval に従います。app artifact をどこから取るかは、あくまで
 OpenTofu module の中で決まります。
 
 明示的な更新確認では、先に Source を同期し、その要求が生成した変更不可の

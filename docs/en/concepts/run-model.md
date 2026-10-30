@@ -130,32 +130,31 @@ screen you pressed it on; the Run does not record `autoApplyRequested`.
 
 In short, **unless automatic updates are on, detection never starts an apply.**
 
-Checking for differences alone works per Capsule or across a whole Workspace.
+Checking for differences alone works per Capsule.
 
 ```bash
 curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/drift-check" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/drift-check" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-## Running several at once
+## Running per app
 
-Updating a whole Workspace produces several Runs collected into a RunGroup.
+Plans, drift checks, and approvals are made per app (Capsule). The Workspace-wide
+`POST /api/v1/workspaces/{workspaceId}/plan-update` and `drift-check` operations and the
+group approval `POST /api/v1/run-groups/{runGroupId}/approve` are retired and answer
+`410` with `run_group_retired`. A RunGroup created before the retirement is still readable
+through `GET /api/v1/run-groups/{runGroupId}`, only when the caller can view the app of
+every Run it names.
 
-```bash
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/plan-update" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-```
-
-Approval can be given for the group at once through
-`/api/v1/run-groups/{runGroupId}/approve`. The record of each individual Run is kept.
+When the operator sets `TAKOSUMI_AUTO_PLAN_STALE_CAPSULES=1` or
+`TAKOSUMI_DRIFT_CHECK_ENABLED=1`, the scheduled sweep walks live apps a page at a time and
+decides for each app on its own: a `stale` app (its Source moved) gets one update plan
+unless it already has an open one, and an `active` app gets a drift check. Neither lists
+Workspaces or creates a RunGroup.
 
 A Capsule that still has retired Dependency configuration is refused with
-`dependency_retired`. Workspace updates and drift checks record the failure in the
-RunGroup and continue with other Capsules; no Run is created for the refused Capsule.
-Ask a database operator to maintain the remaining configuration, then create a new plan.
+`dependency_retired`, and no Run is created for it. Ask a database operator to maintain
+the remaining configuration, then create a new plan.
 
 ## When a Run fails
 

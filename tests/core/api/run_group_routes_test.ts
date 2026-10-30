@@ -1,13 +1,14 @@
 /**
- * RunGroup HTTP route tests (Core Specification §19 / §24).
+ * RunGroup HTTP route tests (Core Specification §19 / §24; TASK-0118 9.1).
  *
- *   POST /internal/v1/workspaces/:workspaceId/plan-update -> create a workspace_update RunGroup
- *   GET  /internal/v1/run-groups/:runGroupId        -> read group + member Runs + status
- *   POST /internal/v1/run-groups/:runGroupId/approve -> approve waiting members
+ *   POST /internal/v1/workspaces/:workspaceId/plan-update -> 410 run_group_retired
+ *   POST /internal/v1/workspaces/:workspaceId/drift-check -> 410 run_group_retired
+ *   GET  /internal/v1/run-groups/:runGroupId        -> read a historical group + member Runs + status
+ *   POST /internal/v1/run-groups/:runGroupId/approve -> 410 run_group_retired
  *
- * Drives the full surface over the internal routes against an in-memory store
- * and a fake runner. Plan-update covers independent source-stale Capsules;
- * drift-check covers active Capsules.
+ * Drives the surface over the internal routes against an in-memory store and
+ * a fake runner. Each app is planned and drift-checked through its own
+ * Capsule route instead.
  */
 
 import { expect, test } from "bun:test";
@@ -234,7 +235,7 @@ async function applyCapsule(
   if (apply.status === "queued") await controller.runQueuedApply(apply.id);
 }
 
-test("plan-update groups independent source-stale Capsules; GET, approve, and drift-check remain", async () => {
+test("Workspace bulk operations and approval answer 410 run_group_retired; a historical group stays readable", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
@@ -264,123 +265,89 @@ test("plan-update groups independent source-stale Capsules; GET, approve, and dr
   expect(workspaceRes.status).toBe(201);
   const workspaceId = (await workspaceRes.json()).workspace.id as string;
 
-  const producer = await seedCapsule(
-    store,
-    operations,
-    app,
-    workspaceId,
-    "producer",
-  );
-  const consumer = await seedCapsule(
-    store,
-    operations,
-    app,
-    workspaceId,
-    "consumer",
-  );
-
-  // Bring both Capsules up independently.
+  const producer = await seedCapsule(store, operations, app, workspaceId, "producer");
+  const consumer = await seedCapsule(store, operations, app, workspaceId, "consumer");
   await applyCapsule(app, operations.controller, producer);
   await applyCapsule(app, operations.controller, consumer);
+  await store.patchCapsule(producer, { status: "stale", updatedAt: new Date(0).toISOString() });
+  const runsBefore = (await store.listRunsByWorkspace(workspaceId)).length;
 
-  // Before any stale: plan-update is failed_precondition nothing_to_update.
-  const emptyRes = await app.request(
+  // The retired operations refuse with the typed code whatever the Workspace
+  // holds (here: one stale and one active app) and create nothing.
+  for (const path of [
     `/internal/v1/workspaces/${workspaceId}/plan-update`,
-    {
-      method: "POST",
-      headers: headers(),
-    },
-  );
-  expect(emptyRes.status).toBe(409);
-  expect((await emptyRes.json()).error.code).toBe("failed_precondition");
-
-  // Workspace drift-check: active Capsules are grouped under one RunGroup and
-  // each member projects as read-only drift_check.
-  const driftGroupRes = await app.request(
     `/internal/v1/workspaces/${workspaceId}/drift-check`,
-    {
-      method: "POST",
-      headers: headers(),
-    },
-  );
-  expect(driftGroupRes.status).toBe(201);
-  const driftGroup = (await driftGroupRes.json()) as {
-    runGroup: { id: string; type: string };
-    runs: Run[];
-  };
-  expect(driftGroup.runGroup.type).toBe("workspace_drift_check");
-  expect(driftGroup.runs).toHaveLength(2);
-  expect(driftGroup.runs.every((run) => run.type === "drift_check")).toBe(true);
-  expect(
-    driftGroup.runs.every((run) => run.runGroupId === driftGroup.runGroup.id),
-  ).toBe(true);
-
-  // A source update marks each affected Capsule stale independently.
-  for (const capsuleId of [producer, consumer]) {
-    await store.patchCapsule(capsuleId, {
-      status: "stale",
-      updatedAt: new Date(0).toISOString(),
-    });
+    "/internal/v1/workspaces/ws_unknown00000001/plan-update",
+    "/internal/v1/run-groups/rg_missing00000001/approve",
+  ]) {
+    const response = await app.request(path, { method: "POST", headers: headers() });
+    expect(response.status, path).toBe(410);
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect(body.error.code, path).toBe("run_group_retired");
+    expect(body.error.message, path).toContain("/capsules/{capsuleId}/plan");
   }
+  expect((await store.listRunsByWorkspace(workspaceId)).length).toBe(runsBefore);
+  expect(await store.listRunGroups(workspaceId)).toEqual([]);
 
-  // plan-update: both independent stale Capsules become group members.
-  const updateRes = await app.request(
+  // The operator bearer is still required before the refusal.
+  const unauthenticated = await app.request(
     `/internal/v1/workspaces/${workspaceId}/plan-update`,
-    {
-      method: "POST",
-      headers: headers(),
-    },
+    { method: "POST" },
   );
-  expect(updateRes.status).toBe(201);
-  const group = (await updateRes.json()) as {
-    runGroup: { id: string; type: string; status: string; graphJson: string };
-    runs: Run[];
-  };
-  expect(group.runGroup.type).toBe("workspace_update");
-  expect(group.runs.map((run) => run.capsuleId).sort()).toEqual(
-    [producer, consumer].sort(),
-  );
-  expect(group.runs.every((run) => run.runGroupId === group.runGroup.id)).toBe(
-    true,
-  );
+  expect(unauthenticated.status).toBe(401);
 
-  // GET the group: same members, computed status. Preview members auto-succeed
-  // (no approval gate), so the group reads succeeded.
-  const getRes = await app.request(
-    `/internal/v1/run-groups/${group.runGroup.id}`,
-    {
-      headers: headers(),
-    },
-  );
+  // Each app is planned and drift-checked through its own route instead.
+  const planRes = await app.request(`/internal/v1/capsules/${producer}/plan`, {
+    method: "POST", headers: headers(),
+  });
+  expect(planRes.status).toBe(201);
+  const plan = (await planRes.json()).run as Run;
+  expect(plan.runGroupId).toBeUndefined();
+  const driftRes = await app.request(`/internal/v1/capsules/${consumer}/drift-check`, {
+    method: "POST", headers: headers(),
+  });
+  expect(driftRes.status).toBe(201);
+  const drift = (await driftRes.json()).run as Run;
+  expect(drift.type).toBe("drift_check");
+  expect(drift.runGroupId).toBeUndefined();
+
+  // A group written before the retirement keeps reading with computed status.
+  await store.putRunGroup({
+    id: "rg_history00000001",
+    workspaceId,
+    type: "workspace_update",
+    status: "running",
+    graphJson: JSON.stringify({
+      order: [[producer, consumer]],
+      runs: { [producer]: plan.id, [consumer]: drift.id },
+      failures: {},
+    }),
+    createdAt: new Date(0).toISOString(),
+  });
+  const getRes = await app.request("/internal/v1/run-groups/rg_history00000001", {
+    headers: headers(),
+  });
   expect(getRes.status).toBe(200);
-  const fetched = (await getRes.json()) as {
-    runGroup: { status: string };
-    runs: Run[];
-  };
-  expect(fetched.runs.map((run) => run.capsuleId).sort()).toEqual(
-    [producer, consumer].sort(),
-  );
-  expect(fetched.runGroup.status).toBe("succeeded");
+  const fetched = (await getRes.json()) as { runGroup: { id: string; status: string }; runs: Run[] };
+  expect(fetched.runGroup.id).toBe("rg_history00000001");
+  expect(fetched.runs.map((run) => run.id).sort()).toEqual([plan.id, drift.id].sort());
+  expect(typeof fetched.runGroup.status).toBe("string");
 
-  // Approve is a no-op here (no waiting members) but must still return the group.
-  const approveRes = await app.request(
-    `/internal/v1/run-groups/${group.runGroup.id}/approve`,
-    { method: "POST", headers: headers() },
-  );
-  expect(approveRes.status).toBe(200);
-  expect((await approveRes.json()).runGroup.id).toBe(group.runGroup.id);
+  // Approval stays retired for an existing group too.
+  const approveRes = await app.request("/internal/v1/run-groups/rg_history00000001/approve", {
+    method: "POST", headers: headers(),
+  });
+  expect(approveRes.status).toBe(410);
+  expect((await approveRes.json()).error.code).toBe("run_group_retired");
 
   // An unknown run group is 404.
-  const missingRes = await app.request(
-    "/internal/v1/run-groups/rg_missing00000001",
-    {
-      headers: headers(),
-    },
-  );
+  const missingRes = await app.request("/internal/v1/run-groups/rg_missing00000001", {
+    headers: headers(),
+  });
   expect(missingRes.status).toBe(404);
 });
 
-test("plan-update rejects a malformed workspaceId and run-group rejects a malformed id", async () => {
+test("retired routes still reject a malformed workspaceId and run-group rejects a malformed id", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const { app } = await createTakosumiService({
     role: "takosumi-api",
