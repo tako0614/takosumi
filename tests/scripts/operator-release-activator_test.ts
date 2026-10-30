@@ -177,6 +177,24 @@ test("operator release activator rejects non-operator commands", () => {
   );
 });
 
+test("operator release activator accepts both Source archive layouts and nothing else", () => {
+  const withArchive = (archiveRef: string) => ({
+    ...validPayload(),
+    sourceSnapshot: { ...(validPayload().sourceSnapshot as Record<string, unknown>), archiveRef },
+  });
+  // A Workspace Source, and an app-owned Source of a Capsule with an `apps/`
+  // root (TASK-0118 P9.1-f).
+  for (const archiveRef of [
+    "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+    "apps/inst_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+  ]) {
+    expect(parsePayload(withArchive(archiveRef)).sourceSnapshot.archiveRef).toBe(archiveRef);
+  }
+  for (const archiveRef of ["tenants/inst_1/source.tar.zst", "apps/../etc/passwd", "/apps/inst_1/source.tar.zst"]) {
+    expect(() => parsePayload(withArchive(archiveRef)), archiveRef).toThrow();
+  }
+});
+
 test("operator release activator accepts only the canonical v2 identity model", () => {
   expect(() =>
     parsePayload({

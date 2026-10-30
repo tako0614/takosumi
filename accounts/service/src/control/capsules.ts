@@ -411,10 +411,13 @@ export async function handleCapsules(
     if (leaf === "backups" && segments.length === 3) {
       if (method === "GET") return await handleCapsuleBackupList(ctx, capsule);
       if (method !== "POST") return methodNotAllowed("GET, POST");
+      // Scoped to this app: an unscoped export would carry every app of the
+      // Workspace, and anyone who can view this app can list its backups.
       const backup = await operations.backups.createBackup({
         workspaceId: capsule.workspaceId,
         capsuleId: capsule.id,
         environment: capsule.environment,
+        scope: "capsule",
         expectedWorkspaceManagementAuthority: requireCapturedManagement(),
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);

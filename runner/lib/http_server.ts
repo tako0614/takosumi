@@ -14,6 +14,7 @@ import {
   PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
   PRIVATE_RUN_FILE_REFRESH_SEQUENCE_HEADER,
 } from "../../core/shared/private_run_file_refresh.ts";
+import { APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY } from "../../core/shared/app_source_archive_roots.ts";
 import {
   redactionValuesFromRequest,
   sourceCredentialRedactionValuesFromRequest,
@@ -194,6 +195,7 @@ async function handleRunnerRequestBody(
         capabilities: [
           "takosumi.runner-credential-refresh@v1",
           PRIVATE_RUN_FILE_REFRESH_CAPABILITY,
+          APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY,
           ...(custodyMode === "local-http" && dependencies.localPreparationV2 === true
             ? ["takosumi.local-mutation-preparation@v2"] : []),
         ],

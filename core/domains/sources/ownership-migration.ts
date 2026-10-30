@@ -11,7 +11,11 @@ import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { Run } from "takosumi-contract/runs";
-import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
+import {
+  sourceArchiveCustodyPrefixes,
+  sourceArchiveSnapshotSegment,
+  type ArtifactReferenceAllocator,
+} from "../../adapters/storage/artifact-references.ts";
 import { classifyStoredCapsuleCompatibilityProviderColumn, type StoredInstallConfig, type StoredSource }
   from "../deploy-control/store.ts";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
@@ -409,7 +413,10 @@ export async function prepareSourceOwnershipMigration(
   for (const snapshot of group.snapshots) {
     const ref = await allocator.allocate({ kind: "source_archive", workspaceId: group.source.workspaceId,
       sourceId: group.source.id, snapshotId: snapshot.id });
-    const replacement = ref === snapshot.archiveRef ? snapshot : { ...snapshot, archiveRef: ref };
+    // An app-owned Source's own `apps/{owner}/…` archive of this snapshot is
+    // already canonical; never copy it back into the Workspace layout.
+    const replacement = ref === snapshot.archiveRef || ownAppArchive(snapshot.archiveRef, group.source, snapshot.id)
+      ? snapshot : { ...snapshot, archiveRef: ref };
     canonicalSnapshots.set(snapshot.id, replacement);
     if (replacement !== snapshot) {
       retainedSnapshots.push(replacement);
@@ -457,8 +464,14 @@ export async function prepareSourceOwnershipMigration(
     archiveCopies: [...retainedCopies, ...splits.flatMap((split) => split.archiveCopies)], activity };
 }
 
+function ownAppArchive(ref: string, source: StoredSource, snapshotId: string): boolean {
+  const prefixes = sourceArchiveCustodyPrefixes(source);
+  return prefixes.length === 2 && sourceArchiveSnapshotSegment(ref, [prefixes[0]!]) === snapshotId;
+}
+
 function archiveOwnedBySource(ref: string, source: StoredSource): boolean {
-  return ref.startsWith(`workspaces/${source.workspaceId}/sources/${source.id}/snapshots/`);
+  // The Workspace prefix, or `apps/{owner}/…` for an app-owned Source.
+  return sourceArchiveCustodyPrefixes(source).some((prefix) => ref.startsWith(prefix));
 }
 
 function installConfigSnapshotPins(config: StoredInstallConfig): readonly string[] {

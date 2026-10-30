@@ -46,7 +46,7 @@ import { PostgresPrivateRunFileRepository } from "../../../core/domains/private-
 import { createLocalPrivateRunFileBlobStore } from "./local-private-run-file-blob-store.ts";
 import { FileBackupArtifactStore } from "./file-backup-artifact-store.ts";
 import { StateArtifactCrypto } from "../../../worker/src/state_crypto.ts";
-import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import { appSourceArchiveRootsFromEnv, ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
@@ -284,7 +284,14 @@ export async function buildComposedApp(
       : {}),
     ...(privateRunFiles ? { privateRunFiles } : {}),
     mountInternalLedgerRoutes: true,
-    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator({
+      // Honored only once the configured Runner advertises that it accepts
+      // `apps/` archive keys; a Runner that cannot be asked keeps the
+      // Workspace layout.
+      appSourceArchiveRoots: appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS)
+        ? async () => await input.opentofuRunner?.acceptsAppSourceArchiveRoots?.() === true
+        : false,
+    }),
     // The Bun/Postgres reference server explicitly installs the reference
     // provider contribution. Core has no fallback catalog or driver registry.
     credentialRecipes:

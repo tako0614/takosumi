@@ -872,6 +872,12 @@ export interface OpenTofuRestoreResult {
 }
 
 export interface OpenTofuRunner {
+  /**
+   * Whether the configured Runner image advertises that it accepts Source
+   * archive keys under an app's `apps/` root (TASK-0118 P9.1-f). False when it
+   * does not or cannot be asked; never throws.
+   */
+  acceptsAppSourceArchiveRoots?(): Promise<boolean>;
   /** A slot-bearing Run must prove file-backed rotation before it is claimed. */
   assertPrivateRunFileRefreshCapability?(input: {
     readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };
@@ -944,6 +950,8 @@ export interface OpenTofuRunner {
     readonly runId: string;
     readonly workspaceId: string;
     readonly sourceId: string;
+    /** The persisted Source's owner Capsule; its `apps/` prefix is in custody too. */
+    readonly ownerCapsuleId?: string;
     readonly archiveRef: string;
     readonly canonicalSnapshotId: string;
   }): Promise<void>;
@@ -951,6 +959,8 @@ export interface OpenTofuRunner {
   deleteRetiredSourceArchives?(input: {
     readonly workspaceId: string;
     readonly sourceId: string;
+    /** The persisted Source's owner Capsule; its `apps/` prefix is in custody too. */
+    readonly ownerCapsuleId?: string;
     readonly archiveRefs: readonly string[];
   }): Promise<void>;
   /**

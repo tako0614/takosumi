@@ -13,6 +13,13 @@ export type ArtifactReferenceAllocation =
       readonly workspaceId: string;
       readonly sourceId: string;
       readonly snapshotId: string;
+      /**
+       * The Capsule that owns this Source and its trusted root. An `apps/`
+       * root places the archive under it; a legacy root, or no owner (a
+       * Workspace Source), keeps the Workspace layout. See
+       * {@link ArtifactOwnerRoot}.
+       */
+      readonly owner?: ArtifactOwnerRoot;
     }
   | {
       readonly kind: "state";
@@ -50,7 +57,21 @@ export type ArtifactReferenceAllocation =
         | "backup_service_data";
       readonly workspaceId: string;
       readonly backupId: string;
+      /** The Capsule this backup belongs to and its trusted root; see the Source archive. */
+      readonly owner?: ArtifactOwnerRoot;
     };
+
+/**
+ * A Capsule and its trusted artifact root: the persisted `storage_root` from
+ * `getCapsuleStorageRoot`, or `apps/{id}` for an install reservation whose
+ * Capsule is created later with exactly that root. Only an `apps/` root moves
+ * a Source archive or backup out of the Workspace layout; a legacy root keeps
+ * the key the Capsule has always used, byte for byte.
+ */
+export interface ArtifactOwnerRoot {
+  readonly capsuleId: string;
+  readonly storageRoot: string;
+}
 
 export interface ArtifactReferenceAllocator {
   allocate(input: ArtifactReferenceAllocation): string | Promise<string>;
@@ -62,17 +83,52 @@ export interface ArtifactReferenceAllocator {
  * These layouts are deliberately isolated in the storage adapter. The returned
  * values cross Core and runner contracts only as opaque `*Ref` strings. Capsule
  * allocations follow the persisted root ({@link capsuleArtifactRoot}), whether
- * it is an `apps/` root or a legacy Workspace-prefixed one; Resource
- * coordinates retain their Workspace prefix. Historical references already
+ * it is an `apps/` root or a legacy Workspace-prefixed one. A Source archive
+ * or backup of a Capsule with an `apps/` root goes under that root
+ * (`apps/{cap}/sources/…`, `apps/{cap}/backups/…`); one of a legacy Capsule,
+ * or with no Capsule, keeps its Workspace prefix. Resource coordinates retain
+ * their Workspace prefix (Core allocates none). Historical references already
  * stored in immutable migration data remain opaque inputs.
+ *
+ * Source archives move only with `appSourceArchiveRoots`: the Runner image
+ * validates the archive key it writes, and an image built before it accepted
+ * `apps/` refuses that key. Hosts pass a probe of the configured Runner
+ * (`TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS=enabled` plus the Runner's advertised
+ * capability), so an archive moves only once the image is confirmed to accept
+ * it; until then it keeps the Workspace layout. `true` (tests) skips the
+ * probe. Backups are written by the Worker itself and always follow the owner.
  */
 export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAllocator {
-  allocate(input: ArtifactReferenceAllocation): string {
+  readonly #appSourceArchiveRoots: boolean | (() => Promise<boolean>);
+
+  constructor(options: { readonly appSourceArchiveRoots?: boolean | (() => Promise<boolean>) } = {}) {
+    this.#appSourceArchiveRoots = options.appSourceArchiveRoots ?? false;
+  }
+
+  /** Only a Source archive may wait on the Runner probe; every other kind is synchronous. */
+  allocate(input: Exclude<ArtifactReferenceAllocation, { readonly kind: "source_archive" }>): string;
+  allocate(input: ArtifactReferenceAllocation): string | Promise<string>;
+  allocate(input: ArtifactReferenceAllocation): string | Promise<string> {
+    if (input.kind === "source_archive" && input.owner !== undefined &&
+      typeof this.#appSourceArchiveRoots === "function") {
+      const probe = this.#appSourceArchiveRoots;
+      return (async () => {
+        let accepted = false;
+        try { accepted = await probe() === true; } catch { accepted = false; }
+        return this.#allocate(input, accepted);
+      })();
+    }
+    return this.#allocate(input, this.#appSourceArchiveRoots === true);
+  }
+
+  #allocate(input: ArtifactReferenceAllocation, appSourceArchiveRoots: boolean): string {
     switch (input.kind) {
-      case "source_archive":
-        return `workspaces/${segment(input.workspaceId)}/sources/${segment(
-          input.sourceId,
-        )}/snapshots/${segment(input.snapshotId)}/source.tar.zst`;
+      case "source_archive": {
+        const owner = appSourceArchiveRoots ? input.owner : undefined;
+        return `${sourceArchiveRoot(input.workspaceId, input.sourceId, owner)}/snapshots/${segment(
+          input.snapshotId,
+        )}/source.tar.zst`;
+      }
       case "state": {
         const generation = String(input.generation).padStart(8, "0");
         const owner =
@@ -161,13 +217,97 @@ function keySegment(value: string): boolean {
   return value.length > 0 && !/^\.+$/u.test(value);
 }
 
+/**
+ * The owner's `apps/{cap}` root, or undefined when the owner keeps the
+ * Workspace layout (no owner, or a legacy root). A root that is not this
+ * Capsule's canonical root is refused, exactly as for state allocation.
+ */
+function ownerAppRoot(owner: ArtifactOwnerRoot | undefined): string | undefined {
+  if (owner === undefined) return undefined;
+  const root = capsuleArtifactRoot("", owner.capsuleId, owner.storageRoot);
+  return root.startsWith("apps/") ? root : undefined;
+}
+
+/**
+ * The prefix a backup goes under: the owner's `apps/` root; for a legacy
+ * owner the Workspace segment of its frozen root (the Workspace id it was
+ * written under, never the live one); else the allocation's Workspace.
+ */
+function backupScopeRoot(input: {
+  readonly workspaceId: string;
+  readonly owner?: ArtifactOwnerRoot;
+}): string {
+  if (input.owner === undefined) return `workspaces/${segment(input.workspaceId)}`;
+  const root = capsuleArtifactRoot("", input.owner.capsuleId, input.owner.storageRoot);
+  if (root.startsWith("apps/")) return root;
+  return `workspaces/${LEGACY_CAPSULE_ROOT.exec(root)![1]!}`;
+}
+
+function sourceArchiveRoot(
+  workspaceId: string,
+  sourceId: string,
+  owner: ArtifactOwnerRoot | undefined,
+): string {
+  const appRoot = ownerAppRoot(owner);
+  return `${appRoot ?? `workspaces/${segment(workspaceId)}`}/sources/${segment(sourceId)}`;
+}
+
+/**
+ * `TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS`: `enabled` allocates an app-owned
+ * Source's new archives under its Capsule's `apps/` root; absent or `disabled`
+ * keeps the Workspace layout. Any other value is refused at startup.
+ */
+export function appSourceArchiveRootsFromEnv(value: string | undefined): boolean {
+  if (value === undefined || value === "" || value === "disabled") return false;
+  if (value === "enabled") return true;
+  throw new Error("TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS must be enabled or disabled");
+}
+
+/**
+ * The prefixes under which a Source's archives can have been allocated, in
+ * ascending key order: `apps/{owner}/sources/{src}/snapshots/` for an
+ * app-owned Source, then the Workspace one every Source has had. A Source's
+ * deletion custody covers exactly these prefixes. Because `apps/` sorts before
+ * `workspaces/`, one ascending cursor walks both in turn.
+ */
+export function sourceArchiveCustodyPrefixes(source: {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly ownerCapsuleId?: string;
+}): readonly string[] {
+  const legacy = `workspaces/${segment(source.workspaceId)}/sources/${segment(source.id)}/snapshots/`;
+  const owner = source.ownerCapsuleId;
+  if (owner === undefined || segment(owner) !== owner || !keySegment(owner)) return [legacy];
+  return [`apps/${owner}/sources/${segment(source.id)}/snapshots/`, legacy];
+}
+
+/**
+ * The snapshot segment of `{prefix}{snapshot}/source.tar.zst` under one of a
+ * Source's custody prefixes, or undefined when the ref lies outside them.
+ */
+export function sourceArchiveSnapshotSegment(
+  ref: string,
+  prefixes: readonly string[],
+): string | undefined {
+  for (const prefix of prefixes) {
+    if (!ref.startsWith(prefix)) continue;
+    const suffix = ref.slice(prefix.length);
+    const snapshotId = suffix.split("/")[0]!;
+    if (/^[A-Za-z0-9._-]+$/u.test(snapshotId) && keySegment(snapshotId) &&
+      suffix === `${snapshotId}/source.tar.zst`) return snapshotId;
+  }
+  return undefined;
+}
+
 function backupRef(
-  input: { readonly workspaceId: string; readonly backupId: string },
+  input: {
+    readonly workspaceId: string;
+    readonly backupId: string;
+    readonly owner?: ArtifactOwnerRoot;
+  },
   name: string,
 ): string {
-  return `workspaces/${segment(input.workspaceId)}/backups/${segment(
-    input.backupId,
-  )}/${name}`;
+  return `${backupScopeRoot(input)}/backups/${segment(input.backupId)}/${name}`;
 }
 
 function segment(value: string): string {

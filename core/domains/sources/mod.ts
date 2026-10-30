@@ -28,6 +28,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
+  Capsule,
   CapsuleCompatibilityReport,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -69,7 +70,11 @@ import {
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
 import { effectiveProviderPolicy } from "../deploy-control/provider_policy.ts";
-import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
+import {
+  sourceArchiveCustodyPrefixes,
+  type ArtifactOwnerRoot,
+  type ArtifactReferenceAllocator,
+} from "../../adapters/storage/artifact-references.ts";
 import { stableStringify } from "../../adapters/source/digest.ts";
 import { CAPSULE_SOURCE_REVISION_LINEAGE_MISMATCH_REASON, getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 import { MAX_SOURCE_RECONCILIATION_CAPSULES } from "../deploy-control/source_sync_settlement.ts";
@@ -176,6 +181,8 @@ export interface SourcesServiceDependencies {
   readonly deleteRetiredSourceArchives?: (input: {
     readonly workspaceId: string;
     readonly sourceId: string;
+    /** The persisted Source's owner Capsule; its `apps/` prefix is in custody too. */
+    readonly ownerCapsuleId?: string;
     readonly archiveRefs: readonly string[];
   }) => Promise<void>;
   readonly newId?: (prefix: string) => string;
@@ -685,8 +692,13 @@ export class SourcesService {
       throw sourceConfigurationConflictError();
     }
     if (await this.#hasInFlightSourceRun(source)) return "deferred";
-    const scope = `workspaces/${source.workspaceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/sources/${sourceId.replace(/[^a-zA-Z0-9._-]+/gu, "_")}/snapshots/`;
-    const blocker = await this.#store.sourceRetirementArchiveBlocker(sourceId, scope);
+    // Its own prefixes: `apps/{owner}/…` for an app-owned Source, then the
+    // Workspace one (TASK-0118 P9.1-f).
+    const scopes = sourceArchiveCustodyPrefixes(source);
+    let blocker: "outside_scope" | "foreign_reference" | undefined;
+    for (const scope of scopes) {
+      blocker ??= await this.#store.sourceRetirementArchiveBlocker(sourceId, scope);
+    }
     if (blocker === "foreign_reference") {
       throw new OpenTofuControllerError("failed_precondition",
         `Source ${sourceId} shares an archive with another live Source`,
@@ -697,8 +709,8 @@ export class SourcesService {
     const startedAt = performance.now();
     let pages = 0;
     while (true) {
-      let page = await this.#store.listSourceRetirementArchiveRefsPage(
-        sourceId, source.retirementArchiveCursor, 32, scope,
+      let page = await this.#retirementArchiveRefsPage(
+        sourceId, source.retirementArchiveCursor, scopes,
       );
       if (source.retirementSnapshotCount === undefined ||
         source.retirementSourceSyncRunCount === undefined) {
@@ -708,8 +720,8 @@ export class SourcesService {
             updatedAt: this.#now().toISOString() },
           expectedSource: source, expectedWorkspaceManagementAuthority: authority,
         });
-        page = await this.#store.listSourceRetirementArchiveRefsPage(
-          sourceId, source.retirementArchiveCursor, 32, scope,
+        page = await this.#retirementArchiveRefsPage(
+          sourceId, source.retirementArchiveCursor, scopes,
         );
       }
       if (page.snapshotCount !== source.retirementSnapshotCount ||
@@ -723,11 +735,11 @@ export class SourcesService {
             updatedAt: this.#now().toISOString() },
           expectedSource: source, expectedWorkspaceManagementAuthority: authority,
         });
-        page = await this.#store.listSourceRetirementArchiveRefsPage(sourceId, undefined, 32, scope);
+        page = await this.#retirementArchiveRefsPage(sourceId, undefined, scopes);
       }
       const archiveRefs = page.archiveRefs;
       // Only this Source's own prefix is in its physical deletion custody.
-      if (archiveRefs.some((ref) => !ref.startsWith(scope))) {
+      if (archiveRefs.some((ref) => !scopes.some((scope) => ref.startsWith(scope)))) {
         throw new OpenTofuControllerError("failed_precondition",
           `Source ${sourceId} has an archive outside its custody scope`,
           { reason: "source_archive_outside_custody_scope" });
@@ -740,6 +752,7 @@ export class SourcesService {
         }
         await this.#deleteRetiredSourceArchives({
           workspaceId: source.workspaceId, sourceId, archiveRefs,
+          ...(source.ownerCapsuleId ? { ownerCapsuleId: source.ownerCapsuleId } : {}),
         });
       }
       if (page.hasMore) {
@@ -780,6 +793,61 @@ export class SourcesService {
    * Run for it, a Workspace Run carrying its id, or a Run bound to a Capsule
    * that tracks it (a destroyed Capsule's history alone does not block).
    */
+  /**
+   * The Capsule whose root a new archive of this Source goes under (TASK-0118
+   * P9.1-f). An app-owned Source follows its owner's persisted root: `apps/`
+   * for an app created after ownership expansion, the frozen legacy root for
+   * an existing Capsule (its archives keep the Workspace layout). An install
+   * reservation syncs before its Capsule exists; that Capsule is created with
+   * exactly `apps/{reserved id}`, so its first archive already goes there. A
+   * Workspace Source, or an owner that vanished outside a reservation, keeps
+   * the Workspace layout.
+   */
+  async #sourceArchiveOwner(
+    stored: StoredSource,
+    ownerCapsule: Capsule | undefined,
+  ): Promise<ArtifactOwnerRoot | undefined> {
+    const capsuleId = stored.ownerCapsuleId;
+    if (!capsuleId) return undefined;
+    if (ownerCapsule) {
+      if (ownerCapsule.id !== capsuleId) return undefined;
+      const storageRoot = await this.#store.getCapsuleStorageRoot(ownerCapsule.id);
+      return storageRoot === undefined ? undefined : { capsuleId, storageRoot };
+    }
+    return isInstallPlanSourceReservation(stored)
+      ? { capsuleId, storageRoot: `apps/${capsuleId}` }
+      : undefined;
+  }
+
+  /**
+   * One retirement page over every prefix in this Source's custody, in
+   * ascending key order. The cursor is the last ref returned; refs under a
+   * later prefix all sort after it, so a page can continue into the next
+   * prefix and never returns an empty page that claims more.
+   */
+  async #retirementArchiveRefsPage(
+    sourceId: string,
+    after: string | undefined,
+    scopes: readonly string[],
+  ): Promise<{
+    readonly archiveRefs: readonly string[]; readonly hasMore: boolean;
+    readonly snapshotCount: number; readonly sourceSyncRunCount: number;
+  }> {
+    const archiveRefs: string[] = [];
+    let hasMore = false;
+    let counts: { snapshotCount: number; sourceSyncRunCount: number } | undefined;
+    for (const [index, scope] of scopes.entries()) {
+      const page = await this.#store.listSourceRetirementArchiveRefsPage(
+        sourceId, after, 32 - archiveRefs.length, scope,
+      );
+      counts ??= { snapshotCount: page.snapshotCount, sourceSyncRunCount: page.sourceSyncRunCount };
+      archiveRefs.push(...page.archiveRefs);
+      if (page.hasMore) { hasMore = true; break; }
+      if (archiveRefs.length >= 32) { hasMore = index < scopes.length - 1; break; }
+    }
+    return { archiveRefs, hasMore, ...counts! };
+  }
+
   async #hasInFlightSourceRun(stored: StoredSource): Promise<boolean> {
     return (await this.#store.sourceLifecycleBlockers(stored.id, stored.workspaceId))
       .includes("source_has_in_flight_run");
@@ -1115,11 +1183,13 @@ export class SourcesService {
         "source sync requires an artifact-reference allocator",
       );
     }
+    const archiveOwner = await this.#sourceArchiveOwner(stored, ownerCapsule);
     const archiveRef = await this.#artifactReferenceAllocator.allocate({
       kind: "source_archive",
       workspaceId: stored.workspaceId,
       sourceId,
       snapshotId,
+      ...(archiveOwner ? { owner: archiveOwner } : {}),
     });
     requireNonEmptyString(archiveRef, "archiveRef");
     const nowIso = this.#now().toISOString();

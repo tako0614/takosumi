@@ -50,6 +50,10 @@ import {
 } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 import {
+  APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY,
+  cachedRunnerCapabilityProbe,
+} from "../../core/shared/app_source_archive_roots.ts";
+import {
   RUN_DEADLINE_AT_HEADER,
   RUN_DEADLINE_EXCEEDED_REASON,
   RUNNER_MUTATION_INDETERMINATE_CODE,
@@ -148,13 +152,53 @@ export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
 {
   readonly #activeRunsByAction = new Map<ContainerRunnerAction, number>();
+  readonly #appSourceArchiveRoots: () => Promise<boolean>;
 
   constructor(
     private readonly env: CloudflareWorkerEnv,
     private readonly options: {
       readonly observability?: WorkerMetricSink;
+      /** Bound on the capability probe (default 5 s); a timeout reads as "not accepted". */
+      readonly capabilityProbeTimeoutMs?: number;
     } = {},
-  ) {}
+  ) {
+    this.#appSourceArchiveRoots = cachedRunnerCapabilityProbe(() => this.#probeAppSourceArchiveRoots());
+  }
+
+  /** Whether the configured Runner image accepts `apps/` Source archive keys (TASK-0118 P9.1-f). */
+  acceptsAppSourceArchiveRoots(): Promise<boolean> {
+    return this.#appSourceArchiveRoots();
+  }
+
+  async #probeAppSourceArchiveRoots(): Promise<boolean> {
+    if (!this.env.RUNNER) return false;
+    // A stuck container cold start must not hold up the install or sync that
+    // asked: after the bound the archive keeps the Workspace layout, and the
+    // cached refusal is asked again later.
+    const timeoutMs = this.options.capabilityProbeTimeoutMs ?? 5_000;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<false>((resolve) => {
+      timer = setTimeout(() => { controller.abort(); resolve(false); }, timeoutMs);
+    });
+    const probe = (async () => {
+      try {
+        const response = await this.env.RUNNER!.get(this.env.RUNNER!.idFromName("runner-capability-probe")).fetch(
+          new Request("https://opentofu-runner.internal/runner-capabilities", { method: "GET", signal: controller.signal }),
+        );
+        const payload = response.ok ? await response.json().catch(() => undefined) as unknown : undefined;
+        return isRecordValue(payload) &&
+          stringArrayFromRecord(payload, "capabilities")?.includes(APP_SOURCE_ARCHIVE_ROOTS_CAPABILITY) === true;
+      } catch {
+        return false;
+      }
+    })();
+    try {
+      return await Promise.race([probe, expired]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
 
   async assertCredentialRefreshCapability(input: {
     readonly owner: { readonly kind: "plan" | "apply"; readonly id: string };

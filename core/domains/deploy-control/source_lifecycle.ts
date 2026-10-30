@@ -34,6 +34,10 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
+import {
+  sourceArchiveCustodyPrefixes,
+  sourceArchiveSnapshotSegment,
+} from "../../adapters/storage/artifact-references.ts";
 import type { SourcesService } from "../sources/mod.ts";
 import type {
   FreezeWorkspaceManagementExpectation,
@@ -567,10 +571,27 @@ export class SourceLifecycleService {
       if (await this.#store.hasForeignSourceArchiveReference(run.archiveRef, run.sourceId)) return;
       const cleanup = this.#runner?.cleanupUnusedSourceArchive;
       if (!cleanup) throw new Error("runner source archive cleanup capability is unavailable");
+      // An app-owned Source's archive may sit under its owner's `apps/` root;
+      // only the persisted Source can prove that owner.
+      const source = await this.#store.getSource(run.sourceId);
+      if (!source && sourceArchiveSnapshotSegment(run.archiveRef, sourceArchiveCustodyPrefixes({
+        id: run.sourceId, workspaceId: run.workspaceId,
+      })) === undefined) {
+        // Terminal: the Source is gone, so no custody check can ever admit an
+        // archive outside its Workspace prefix again. Redelivery would fail
+        // the same way forever; leave the object for the storage inventory.
+        console.warn("SourceSync unused archive cleanup skipped: its Source no longer exists to prove the archive owner", {
+          runId: run.id,
+          sourceId: run.sourceId,
+        });
+        return;
+      }
+      const ownerCapsuleId = source?.ownerCapsuleId;
       await cleanup.call(this.#runner, {
         runId: run.id,
         workspaceId: run.workspaceId,
         sourceId: run.sourceId,
+        ...(ownerCapsuleId ? { ownerCapsuleId } : {}),
         archiveRef: run.archiveRef,
         canonicalSnapshotId: canonical.id,
       });

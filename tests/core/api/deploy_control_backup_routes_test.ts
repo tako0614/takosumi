@@ -67,7 +67,7 @@ async function makeApp(options: {
     },
     requestCorrelation: false,
   });
-  return { app, store };
+  return { app, store, artifactStore };
 }
 
 const HEADERS = {
@@ -194,8 +194,13 @@ test("unauthorized backup caller keeps the auth error while Workspace management
   expect((await response.json()).error.code).toBe("unauthenticated");
 });
 
-test("POST /internal/v1/capsules/:capsuleId/backups creates a Workspace backup (201)", async () => {
-  const { app } = await makeApp();
+test("POST /internal/v1/capsules/:capsuleId/backups creates a backup scoped to that app (201)", async () => {
+  const { app, store, artifactStore } = await makeApp();
+  // Another app in the same Workspace must not reach this app's backup.
+  await seedCapsuleModel(store, {
+    workspaceId: "ws_aaaaaaaa", capsuleId: "cap_bbbbbbbb", sourceId: "src_bbbbbbbb",
+    name: "other", installConfigId: "cfg_bbbbbbbb", snapshotId: "snap_bbbbbbbb",
+  });
   const response = await app.request(
     "/internal/v1/capsules/cap_aaaaaaaa/backups",
     {
@@ -210,6 +215,12 @@ test("POST /internal/v1/capsules/:capsuleId/backups creates a Workspace backup (
     "workspaces/ws_aaaaaaaa/backups/bkp_0001/control.json.zst.enc",
   );
   expect(body.backup.createdByRunId).toBe("backup_0002");
+  // A legacy-root app keeps the Workspace layout of its frozen root above; the
+  // bundle is scoped to the app. The portable encoder stores raw zstd blocks,
+  // so the JSON bundle is legible.
+  const bundleText = new TextDecoder().decode(artifactStore!.get(body.backup.ref)!);
+  expect(bundleText).toContain('"scope":{"kind":"capsule","capsuleId":"cap_aaaaaaaa"}');
+  expect(bundleText).not.toContain("cap_bbbbbbbb");
 
   const runResponse = await app.request(
     `/internal/v1/runs/${body.backup.createdByRunId}`,

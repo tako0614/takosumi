@@ -51,7 +51,12 @@ import { workspaceSlugSuffix } from "../../../core/domains/capsules/repository_i
 import { reAdoptionTargetInstallConfigId } from "../../../accounts/service/src/control/install-config-re-adoptions.ts";
 import { configurationTargetInstallConfigId } from "../../../accounts/service/src/control/configuration-plans.ts";
 import { stableJsonDigest } from "../../../core/adapters/source/digest.ts";
-import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
+import {
+  ObjectKeyArtifactReferenceAllocator,
+  sourceArchiveCustodyPrefixes,
+} from "../../../core/adapters/storage/artifact-references.ts";
+import { SourcesService } from "../../../core/domains/sources/mod.ts";
+import { BackupsService, InMemoryBackupArtifactStore } from "../../../core/domains/backups/mod.ts";
 import type { ReleaseActivationInput } from "../../../core/domains/deploy-control/mod.ts";
 import {
   createCompositeReleaseActivator,
@@ -131,6 +136,32 @@ const GOLDEN_FOLLOW_UP = {
   stateRef: "workspaces/ws_golden_scope/capsules/cap_golden/environments/production/state-versions/00000007.tfstate.enc",
   rawOutputRef: "workspaces/ws_golden_scope/capsules/cap_golden/runs/apply_golden/outputs.raw.json.enc",
   releaseWorkspaceId: "ws_golden_scope",
+} as const;
+
+/**
+ * Storage keys of an existing (legacy-root) Capsule in Workspace
+ * `ws_golden_scope`, captured from the unmodified allocator on origin/main
+ * `e71daf8e6`, before stage 9.1-f let a Source archive or backup follow an
+ * `apps/` root. For a Capsule whose Workspace id has not moved they must not
+ * move.
+ *
+ * `backupMovedWorkspaceOnMain` is what that same allocator produced once the
+ * authority Workspace id moved (`ws_after_workspace_removal`): it keyed new
+ * backups by the live Workspace id. Stage 9.1-f deliberately changes that:
+ * a new backup of an existing Capsule follows the Workspace segment of the
+ * Capsule's frozen root instead, so it stays where the Capsule's other objects
+ * are. Only that moved-Workspace case differs from `e71daf8e6`.
+ */
+const GOLDEN_STORAGE = {
+  sourceArchiveRef: "workspaces/ws_golden_scope/sources/src_golden/snapshots/snap_golden/source.tar.zst",
+  sourceCustodyPrefix: "workspaces/ws_golden_scope/sources/src_golden/snapshots/",
+  backup: {
+    ref: "workspaces/ws_golden_scope/backups/bkp_golden/control.json.zst.enc",
+    stateArchive: "workspaces/ws_golden_scope/backups/bkp_golden/state.tar.zst.enc",
+    artifactsManifest: "workspaces/ws_golden_scope/backups/bkp_golden/artifacts.manifest.json",
+    serviceData: "workspaces/ws_golden_scope/backups/bkp_golden/service-data.tar.zst.enc",
+  },
+  backupMovedWorkspaceOnMain: "workspaces/ws_after_workspace_removal/backups/bkp_golden/control.json.zst.enc",
 } as const;
 
 interface Variant {
@@ -787,6 +818,81 @@ describe("callers keep the follow-up derived values byte-identical", () => {
         expect(call.context.workspaceId).toBe(variant.workspaceId);
       }
       expect(held?.releasedAt).toBeDefined();
+    });
+  }
+});
+
+/**
+ * Stage 9.1-f lets a new app's Source archives and backups follow its `apps/`
+ * root. An existing Capsule keeps its persisted legacy root: every key it
+ * allocates through the real callers stays byte-identical to origin/main for
+ * the legacy and backfilled spellings, with the new layout switched on. For a
+ * moved Workspace id, new backups intentionally follow the frozen root rather
+ * than the live Workspace id main used (see `GOLDEN_STORAGE`).
+ */
+describe("storage keys of an existing Capsule (9.1-f)", () => {
+  for (const variant of VARIANTS) {
+    const moved = variant.workspaceId !== SCOPE;
+    const title = moved
+      ? "an app-scoped backup follows the frozen root, not the moved Workspace id main used"
+      : "an app-scoped backup keeps origin/main's key byte for byte";
+    test(`${variant.name}: ${title}`, async () => {
+      const { store } = await seededStore(variant, undefined);
+      const artifactStore = new InMemoryBackupArtifactStore();
+      const backups = new BackupsService({
+        store,
+        artifactStore,
+        artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator({ appSourceArchiveRoots: true }),
+        stateObjectReader: { get: async () => undefined },
+        serviceDataRunner: {
+          run: async () => ({ status: "missing", reason: "fixture" }),
+        },
+        now: () => NOW,
+        newId: (prefix) => `${prefix}_golden`,
+      });
+      const backup = await backups.createBackup({
+        workspaceId: variant.workspaceId,
+        capsuleId: CAP,
+        environment: "production",
+        scope: "capsule",
+      });
+      // The backup follows the Capsule's frozen root, even when the
+      // allocation names the moved authority Workspace. For that moved case
+      // this is a deliberate change from origin/main, which keyed it by the
+      // live Workspace id.
+      expect(backup.ref).toBe(GOLDEN_STORAGE.backup.ref);
+      if (moved) expect(backup.ref).not.toBe(GOLDEN_STORAGE.backupMovedWorkspaceOnMain);
+      expect(backup.artifactsManifest?.ref).toBe(GOLDEN_STORAGE.backup.artifactsManifest);
+      expect(artifactStore.get(GOLDEN_STORAGE.backup.ref)).toBeDefined();
+      // The sidecars this fixture does not produce use the same owner root.
+      const owner = { capsuleId: CAP, storageRoot: (await store.getCapsuleStorageRoot(CAP))! };
+      const allocator = new ObjectKeyArtifactReferenceAllocator({ appSourceArchiveRoots: true });
+      expect(allocator.allocate({ kind: "backup_state", workspaceId: variant.workspaceId, backupId: "bkp_golden", owner }))
+        .toBe(GOLDEN_STORAGE.backup.stateArchive);
+      expect(allocator.allocate({ kind: "backup_service_data", workspaceId: variant.workspaceId, backupId: "bkp_golden", owner }))
+        .toBe(GOLDEN_STORAGE.backup.serviceData);
+    });
+  }
+
+  // A Source has no scopeRef: its Workspace layout reads the Source record's
+  // own Workspace id, which no stage before the schema contract moves.
+  for (const variant of VARIANTS.filter((entry) => entry.workspaceId === SCOPE)) {
+    test(`${variant.name}: archive of the Capsule's own Source and its custody prefix`, async () => {
+      const { store } = await seededStore(variant, undefined);
+      const capsuleRow = (await store.getCapsule(CAP))!;
+      const source = (await store.getSource(capsuleRow.sourceId))!;
+      await store.putSource({ ...source, id: "src_golden", ownerCapsuleId: CAP });
+      await store.putCapsule({ ...capsuleRow, sourceId: "src_golden" });
+      const sources = new SourcesService({
+        store,
+        artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator({ appSourceArchiveRoots: true }),
+        now: () => NOW,
+        newId: (prefix) => `${prefix}_golden`,
+      });
+      const { run } = await sources.createSync("src_golden");
+      expect(run.archiveRef).toBe(GOLDEN_STORAGE.sourceArchiveRef);
+      expect(sourceArchiveCustodyPrefixes((await store.getSource("src_golden"))!))
+        .toEqual([`apps/${CAP}/sources/src_golden/snapshots/`, GOLDEN_STORAGE.sourceCustodyPrefix]);
     });
   }
 });

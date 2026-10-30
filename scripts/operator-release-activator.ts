@@ -793,7 +793,9 @@ function parseOutput(raw: unknown): ReleaseActivationPayload["output"] {
 
 function assertSafeArchiveRef(ref: string): void {
   if (
-    !ref.startsWith("workspaces/") ||
+    // A Workspace Source's layout, or `apps/{cap}/…` for an app-owned Source
+    // of a Capsule with an `apps/` root (TASK-0118 P9.1-f).
+    !(ref.startsWith("workspaces/") || ref.startsWith("apps/")) ||
     ref.includes("..") ||
     ref.includes("\\")
   ) {

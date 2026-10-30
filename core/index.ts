@@ -14,7 +14,7 @@ import {
   type ServeHttpHandle,
 } from "./shared/runtime/index.ts";
 import { StorageMigrationRunner } from "./adapters/storage/migration-runner/mod.ts";
-import { ObjectKeyArtifactReferenceAllocator } from "./adapters/storage/artifact-references.ts";
+import { appSourceArchiveRootsFromEnv, ObjectKeyArtifactReferenceAllocator } from "./adapters/storage/artifact-references.ts";
 import {
   SecretEncryptionConfigurationError,
   selectSecretBoundaryCrypto,
@@ -95,6 +95,10 @@ export async function startTakosumiService(
     auditReplicationSink,
   );
   const sharedSqlClientHandle = await createSharedSqlClient(runtimeEnv);
+  // This entry has no Runner it could ask whether the image accepts `apps/`
+  // Source archive keys, so it never allocates them; the setting is still
+  // validated. The Worker and the Postgres reference server honor it.
+  appSourceArchiveRootsFromEnv(runtimeEnv.TAKOSUMI_APP_SOURCE_ARCHIVE_ROOTS);
   const created = await createTakosumiService({
     runtimeEnv,
     runtimeConfig,

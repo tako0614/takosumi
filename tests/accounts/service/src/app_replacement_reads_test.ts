@@ -189,6 +189,21 @@ describe("per-app replacement routes authorize by app role only", () => {
 });
 
 describe("per-app replacement route contents", () => {
+  test("an app's backup is requested scoped to that app (TASK-0118 P9.1-f)", async () => {
+    const h = await fixture();
+    const requests: unknown[] = [];
+    const backups = h.operations.backups as { createBackup: (input: unknown) => Promise<unknown> };
+    backups.createBackup = async (input) => {
+      requests.push(input);
+      return { id: "bkp_scoped", workspaceId: WORKSPACE, capsuleId: CAPSULE, environment: "production",
+        ref: "opaque", digest: `sha256:${"b".repeat(64)}`, sizeBytes: 1, createdByRunId: "backup_run", createdAt: NOW };
+    };
+    const outcome = await h.call("POST", `/capsules/${CAPSULE}/backups`, h.headers.session(OWNER));
+    expect(outcome.status).toBe(201);
+    // Without `scope` the domain would export every app of the Workspace.
+    expect(requests).toEqual([expect.objectContaining({ capsuleId: CAPSULE, scope: "capsule" })]);
+  });
+
   test("backups list only this app's backups, newest first with a cursor", async () => {
     const h = await fixture();
     for (const [index, capsuleId] of [CAPSULE, OTHER, CAPSULE, undefined, CAPSULE].entries()) {

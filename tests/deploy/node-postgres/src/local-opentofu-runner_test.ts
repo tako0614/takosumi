@@ -80,6 +80,40 @@ test("local Source retirement removes exact archives and resumes after deletion"
   }
 });
 
+test("local archive custody covers an app-owned Source's apps prefix only for its owner (TASK-0118 P9.1-f)", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "takosumi-source-apps-"));
+  try {
+    const archiveStore = createFileSourceArchiveStore(join(directory, "archives"));
+    const runner = createLocalOpenTofuRunner({ archiveStore,
+      stateStore: createFileOpenTofuStateArtifactStore(join(directory, "state"), TEST_STATE_CRYPTO) });
+    const owned = "apps/cap_1/sources/src_1/snapshots/snap_1/source.tar.zst";
+    const legacy = "workspaces/workspace_1/sources/src_1/snapshots/snap_2/source.tar.zst";
+    const otherApp = "apps/cap_2/sources/src_1/snapshots/snap_3/source.tar.zst";
+    for (const [ref, byte] of [[owned, 1], [legacy, 2], [otherApp, 3]] as const) {
+      await archiveStore.write(ref, new Uint8Array([byte]));
+    }
+    const input = { workspaceId: "workspace_1", sourceId: "src_1", ownerCapsuleId: "cap_1", archiveRefs: [owned, legacy] };
+    // Without the owner, or for another Capsule's prefix, the ref is outside custody.
+    await expect(runner.deleteRetiredSourceArchives!({ workspaceId: "workspace_1", sourceId: "src_1", archiveRefs: [owned] }))
+      .rejects.toThrow("outside the Source boundary");
+    await expect(runner.deleteRetiredSourceArchives!({ ...input, archiveRefs: [otherApp] })).rejects.toThrow();
+    await runner.deleteRetiredSourceArchives!(input);
+    await expect(archiveStore.read(owned)).rejects.toThrow();
+    await expect(archiveStore.read(legacy)).rejects.toThrow();
+    expect(Array.from(await archiveStore.read(otherApp))).toEqual([3]);
+
+    const unused = "apps/cap_1/sources/src_1/snapshots/snap_new/source.tar.zst";
+    await archiveStore.write(unused, new Uint8Array([4]));
+    const cleanup = { runId: "sync_1", workspaceId: "workspace_1", sourceId: "src_1",
+      archiveRef: unused, canonicalSnapshotId: "snap_old" };
+    await expect(runner.cleanupUnusedSourceArchive!(cleanup)).rejects.toThrow();
+    await runner.cleanupUnusedSourceArchive!({ ...cleanup, ownerCapsuleId: "cap_1" });
+    await expect(archiveStore.read(unused)).rejects.toThrow();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("local OpenTofu runner executes generic release commands in restored source", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-runner-"));
   try {
