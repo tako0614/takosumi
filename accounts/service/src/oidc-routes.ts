@@ -45,6 +45,10 @@ import type {
 import type { AppRole } from "../../../contract/app-access.ts";
 
 import { measureRequestPhaseOperation, type RequestPhaseObserver } from "./request-phase-diagnostics.ts";
+import {
+  reportLegacyWorkspaceClaim,
+  type LegacyWorkspaceClaimSurface,
+} from "./legacy-workspace-telemetry.ts";
 
 type ResolveControlPlaneOperations = () => Promise<
   ControlPlaneOperations | undefined
@@ -1267,6 +1271,7 @@ async function issueTokenResponse(input: {
           ...(input.appRole ? { app_role: input.appRole } : {}),
         }
       : undefined;
+  observeLegacyWorkspaceClaims("id_token", input.clientId, takosumiClaims, false);
   // email_verified reflects the upstream identity provider's assertion,
   // carried onto the account record by `resolveUpstreamAccount`. When the
   // value is genuinely unknown (provider omitted it, or the store has not
@@ -1423,6 +1428,7 @@ async function handleUserInfoUncached(input: {
         interface_binding_id: record.interfaceBindingId,
         interface_resolved_revision: record.interfaceResolvedRevision,
       };
+      observeLegacyWorkspaceClaims("interface_oauth_userinfo", record.clientId, body.takosumi, false);
       return json(body, 200, {
         "cache-control": "no-store",
         pragma: "no-cache",
@@ -1473,6 +1479,12 @@ async function handleUserInfoUncached(input: {
       if (liveGrant.workspaceId) {
         body.workspace_memberships = [liveGrant.workspaceId];
       }
+      observeLegacyWorkspaceClaims(
+        "userinfo",
+        record.clientId,
+        body.takosumi,
+        body.workspace_memberships !== undefined,
+      );
     }
     const account = record.takosumiSubject
       ? await input.store.findAccount(record.takosumiSubject)
@@ -1679,7 +1691,7 @@ async function handleIntrospectUncached(input: {
       if (!liveGrant.ok) return json({ active: false });
       liveClaims = liveGrant;
     }
-    return json(introspectionBody(accessRecord, "oauth_access", liveClaims));
+    return json(observedIntrospectionBody(introspectionBody(accessRecord, "oauth_access", liveClaims)));
   }
   const refreshRecord = await input.store.findRefreshToken(token);
   if (refreshRecord) {
@@ -1705,7 +1717,7 @@ async function handleIntrospectUncached(input: {
     });
     if (!liveGrant.ok) return json({ active: false });
     return json(
-      introspectionBody(refreshRecord, "refresh_token", liveGrant),
+      observedIntrospectionBody(introspectionBody(refreshRecord, "refresh_token", liveGrant)),
     );
   }
   if (auth.client.profile === "shared-account") return json({active:false});
@@ -1760,6 +1772,43 @@ async function isPkceVerifierValid(
     base64UrlEncodeBytes(new Uint8Array(digest)),
     record.codeChallenge,
   );
+}
+
+/**
+ * Reports a compatibility Workspace claim the moment it is emitted (TASK-0118
+ * Phase 9). Only the surface, the registered client and which companion
+ * claims were present are reported; never a Workspace, Capsule or subject.
+ */
+function observeLegacyWorkspaceClaims(
+  surface: LegacyWorkspaceClaimSurface,
+  clientId: string | undefined,
+  takosumi: unknown,
+  memberships: boolean,
+): void {
+  if (typeof takosumi !== "object" || takosumi === null) return;
+  const claims = takosumi as Record<string, unknown>;
+  if (typeof claims.workspace_id !== "string") return;
+  reportLegacyWorkspaceClaim({
+    surface,
+    ...(clientId !== undefined ? { clientId } : {}),
+    capsuleBound: typeof claims.capsule_id === "string",
+    appRole: typeof claims.app_role === "string",
+    memberships,
+  });
+}
+
+function observedIntrospectionBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  observeLegacyWorkspaceClaims(
+    body.token_use === "interface_oauth"
+      ? "interface_oauth_introspection"
+      : "introspection",
+    typeof body.client_id === "string" ? body.client_id : undefined,
+    body.takosumi,
+    false,
+  );
+  return body;
 }
 
 function introspectionBody(

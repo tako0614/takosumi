@@ -749,6 +749,8 @@ export async function handleCreatePersonalAccessToken(input: {
   extensionScopes?: readonly TakosumiAccountsPatScope[];
   /** Test-only override; production always uses the bounded default. */
   workspaceAuthorityTimeoutMs?: number;
+  /** Called when the body names a Workspace (TASK-0118 Phase 9 telemetry). */
+  observeWorkspaceBinding?: () => void;
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -760,6 +762,7 @@ export async function handleCreatePersonalAccessToken(input: {
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
   const workspaceId = stringValue(body.workspace_id)?.trim();
+  if (body.workspace_id !== undefined) input.observeWorkspaceBinding?.();
   const appIdsRaw = body.appIds === undefined ? body.app_ids : body.appIds;
   const appIds = appIdsRaw === undefined ? undefined : personalAccessTokenAppIdsValue(appIdsRaw);
   const now = Date.now();

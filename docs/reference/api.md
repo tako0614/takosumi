@@ -285,6 +285,30 @@ active membership を `created_asc` で返し、archived Workspace も含めま�
 `cursor` だけを受け付けます。レスポンスの `total` は cursor 適用前の全 active
 membership 行数です。Workspace-scoped credential では利用できません。
 
+### 廃止予定の Workspace route {#legacy-workspace-routes}
+
+Workspace はアプリごとの所有に置き換わり、段階を分けて撤去します (TASK-0118 Phase 9)。次の利用は廃止予定です。
+
+- `/api/v1/workspaces/*`、`/api/v1/projects/*`、`/api/v1/views/workspaces.v1`
+- `?workspaceId=` で選ぶ connections・sources・capsule-configs・provider-connections・dashboard と、本文の `workspaceId` で選ぶ接続の作成・接続の OAuth 開始・Source の作成
+- `includeWorkspaces=false` を付けない `/api/v1/dashboard/bootstrap`
+- `/api/v1/account/shared-workspaces*`、`/api/v1/billing*` (応答の印は付けません)、`?workspaceId=` 付きの `/api/v1/interfaces*`、`/oauth/authorize` の `workspace_id`、`workspace_id` を付けた PAT の作成
+
+これらの応答には `Deprecation: @1793145600` (RFC 9745) と、この節を指す `Link: <…>; rel="deprecation"` が付きます。今使える後継の route があれば `rel="successor-version"` の `Link` も付きます。運用者が撤去日を決めると `Sunset` (RFC 8594) も付きます (`TAKOSUMI_LEGACY_WORKSPACE_SUNSET`)。応答の status と本文は変わりません。client は任意で `Takosumi-Client: <名前>/<版>` を送って名乗れます。サーバーは利用を、ID を含まない構造化ログ `legacy_workspace_route` に記録します。ID token・userinfo・introspection に互換の `takosumi.workspace_id` を入れたときは `legacy_workspace_claim_emitted` を記録します。
+
+| 廃止予定 | 後継 |
+| --- | --- |
+| `GET /api/v1/workspaces`、`GET /api/v1/workspaces/{workspaceId}/capsules`、`GET /api/v1/workspaces/{workspaceId}/installed-apps`、`GET /api/v1/views/workspaces.v1` | `GET /api/v1/apps` |
+| `POST /api/v1/workspaces/{workspaceId}/install-plans` | `POST /api/v1/install-plans` |
+| `GET /api/v1/workspaces/{workspaceId}/members` | `GET /api/v1/capsules/{capsuleId}/members` |
+| `GET /api/v1/workspaces/{workspaceId}/runs` | `GET /api/v1/capsules/{capsuleId}/runs` |
+| `GET /api/v1/workspaces/{workspaceId}/usage`、`GET /api/v1/workspaces/{workspaceId}/billing` | `GET /api/v1/usage` |
+| `POST /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | `GET /api/v1/source-ref-resolutions` |
+| `POST /api/v1/workspaces/{workspaceId}/plan-update`・`drift-check`・`backups` | `POST /api/v1/capsules/{capsuleId}/plan`・`drift-check`・`backups` |
+| `workspaceId` で選ぶ `/api/v1/connections` | `workspaceId` を付けない `/api/v1/connections` (個人の接続) |
+
+ほかの route の後継は、置き換えの API ができたものから順に足します。
+
 ### Workspace
 
 | メソッド | パス                                                 | 説明                                    |

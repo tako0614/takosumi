@@ -666,6 +666,7 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
   );
   expect(code).toBeTruthy();
 
+  const claimLog = spyOn(console, "info").mockImplementation(() => {});
   const tokenResponse = await handleToken({
     issuer,
     request: new Request(`${issuer}/oauth/token`, {
@@ -706,6 +707,30 @@ test("Workspace-bound composition tokens project Workspace claims without a Caps
     clients,
     operations,
   });
+  const claimEvents = claimLog.mock.calls
+    .map(([line]) => String(line))
+    .filter((line) => line.includes("legacy_workspace_claim_emitted"));
+  claimLog.mockRestore();
+  // TASK-0118 Phase 9: each emitted Workspace claim is counted, value-free.
+  expect(claimEvents.map((line) => JSON.parse(line))).toEqual([
+    {
+      event: "legacy_workspace_claim_emitted",
+      surface: "id_token",
+      clientId: compositionClientId,
+      capsuleBound: false,
+      appRole: false,
+      memberships: false,
+    },
+    {
+      event: "legacy_workspace_claim_emitted",
+      surface: "userinfo",
+      clientId: compositionClientId,
+      capsuleBound: false,
+      appRole: false,
+      memberships: true,
+    },
+  ]);
+  expect(claimEvents.join("\n")).not.toContain(workspaceId);
   expect(userInfo.status).toBe(200);
   const userInfoBody = (await userInfo.json()) as Record<string, unknown>;
   expect(userInfoBody).toMatchObject({

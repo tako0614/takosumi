@@ -40,6 +40,8 @@ export type AccountsBearerSubject = {
     "session" | "personal-access-token" | "oauth-access-token";
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
+  /** Registered OAuth client of an OAuth access token; telemetry only. */
+  readonly oauthClientId?: string;
 };
 
 export async function requireAccountSession(input: {
@@ -502,6 +504,7 @@ export async function requireAccountsBearer(input: {
         },
         principalSubject: record.subject,
         credential: "oauth-access-token",
+        oauthClientId: record.clientId,
         // A Capsule OIDC token is for that installed app, even when its user
         // has no Workspace membership and the live grant omits workspaceId.
         ...(record.capsuleId !== undefined ? { appIds: [record.capsuleId] } : {}),

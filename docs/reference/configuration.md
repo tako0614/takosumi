@@ -70,6 +70,7 @@ Takosumi にサインインする製品の入口になります。
 | `TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN`                                                                 | 任意・**秘密**                             | なし                                                  | プライバシー要求の完了を記録する operator token                                                                                                                    |
 | `TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES` | 任意 | なし (どのアプリも代理不可) | インストールされたアプリ自身のOAuth tokenをWorkspaceの代理として使えるアプリの元リポジトリと許可するref。`[{"url":"https://…","path":".","refs":["refs/heads/main","refs/tags/v*"]}]` 形式のJSON配列で、`refs` は必須 (`refs/heads/…`・`refs/tags/…`、末尾 `*` で前方一致)。適用中のrevisionのsnapshotにrunnerが記録した完全なref名 (`resolvedRef`) で判定し、指定したref名 (`main`、`HEAD`) は使いません。`resolvedRef` の無いsnapshot、commit SHA、`refs/pull/*` は対象外。不正な値では起動しません。Takosのように利用者の代わりにアプリをインストールするアプリだけを指定します |
 | `TAKOSUMI_APP_OWNERSHIP_MUTATIONS` | 任意 | `enabled` | アプリのメンバーと所有権の譲渡の書き込みを止める operator 用のスイッチ。`frozen` にすると、メンバーの追加・削除・脱退と、譲渡の申し出・受諾・取消が HTTP 409 `failed_precondition` (`details.reason: "app_ownership_mutations_frozen"`) を返します。読み取りは使えます。それ以外の値では起動しません。所有の backfill の実行中だけ `frozen` にします (`docs/operations/app-ownership-backfill.md`) |
+| `TAKOSUMI_LEGACY_WORKSPACE_SUNSET` | 任意 | なし | 廃止予定の Workspace route の応答に付ける `Sunset` の日付 (ISO 8601 の日付・日時、または HTTP-date)。未設定なら `Sunset` を付けません (`Deprecation` は常に付きます)。日付として読めない値では起動しません。TASK-0118 Phase 9 の 410 化の日付が決まったら設定します (`docs/operations/legacy-workspace-telemetry.md`) |
 
 client の登録は次の形です。
 

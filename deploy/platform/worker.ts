@@ -47,6 +47,16 @@ import {
   measureRequestPhaseOperation,
 } from "../../accounts/service/src/request-phase-diagnostics.ts";
 import type { AccountsStore } from "../../accounts/service/src/store.ts";
+import {
+  interfaceApiRouteTemplate,
+  LEGACY_WORKSPACE_ROUTE_METRIC,
+  legacyWorkspaceClientFamily,
+  legacyWorkspaceMetricTags,
+  parseLegacyWorkspaceSunset,
+  reportLegacyWorkspaceRoute,
+  withLegacyWorkspaceDeprecation,
+  type LegacyWorkspaceUse,
+} from "../../accounts/service/src/legacy-workspace-telemetry.ts";
 import type { RunStreamTiming } from "../../accounts/service/src/control/shared.ts";
 import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
@@ -555,6 +565,8 @@ async function createPlatformOperatorControlMcpAuthority(
         operations,
         subject: session.subject,
         workspaceId: session.workspaceId,
+        entry: "operator_mcp",
+        ...platformLegacyWorkspaceSunsetOption(env),
         ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS)
           ? { appOwnershipMutationsFrozen: true }
           : {}),
@@ -671,7 +683,7 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
     platformExtensionSelfServicePatScopesForAccounts(env),
 });
 
-export default {
+const platformWorker = {
   async fetch(
     request: Request,
     env: CloudflareWorkerEnv,
@@ -815,22 +827,32 @@ export default {
       extensionRoutes,
     );
     const browserBillingResponse = await handlePlatformBrowserBillingRequest(request, env, platformExtensionRoute);
+    // Browser billing still selects a Workspace on every request. It is a
+    // stage 9B allow-listed surface with its own closed response and console
+    // contract, so it is counted from invocation logs, not marked here.
     if (browserBillingResponse) return browserBillingResponse;
     if (platformExtensionRoute) {
-      return await handlePlatformExtensionRouteRequest(
+      const extensionResponse = await handlePlatformExtensionRouteRequest(
         request,
         env,
         platformExtensionRoute,
         sessionVerifier,
         workspaceAccess,
       );
+      return platformExtensionRoute.workspaceContext &&
+          url.searchParams.has("workspaceId")
+        ? observePlatformLegacyWorkspaceUse(request, env, extensionResponse, {
+          surface: "platform_extension_workspace",
+          route: `${platformExtensionRoute.basePath}/*?workspaceId`,
+        })
+        : extensionResponse;
     }
     // Generic Interface/InterfaceBinding APIs remain a normal session edge
     // surface on the canonical `/api/v1` prefix.
     if (
       isPlatformInterfaceApiPath(url.pathname)
     ) {
-      return await (
+      const interfaceResponse = await (
         handlePlatformInterfaceApiRequest(
           request,
           env,
@@ -839,6 +861,12 @@ export default {
           context,
         )
       );
+      return url.searchParams.has("workspaceId")
+        ? observePlatformLegacyWorkspaceUse(request, env, interfaceResponse, {
+          surface: "interface_workspace",
+          route: `${interfaceApiRouteTemplate(url.pathname)}?workspaceId`,
+        })
+        : interfaceResponse;
     }
     if (url.pathname === OPERATOR_CONTROL_MCP_PATH) {
       return (
@@ -936,6 +964,30 @@ export default {
     if (driftCheckEnabled(env)) {
       await runScheduledDriftSweep(env);
     }
+  },
+};
+
+export default {
+  ...platformWorker,
+  /**
+   * Counts every response marked as a legacy Workspace use (TASK-0118 Phase 9)
+   * after it is produced, wherever in the composition it was produced. The
+   * metric is best-effort and never changes the response.
+   */
+  async fetch(
+    request: Request,
+    env: CloudflareWorkerEnv,
+    context?: PlatformExecutionContext,
+  ): Promise<Response> {
+    const response = await platformWorker.fetch(request, env, context);
+    const legacyTags = legacyWorkspaceMetricTags(request, response);
+    if (legacyTags) {
+      await schedulePlatformSideEffect(
+        recordPlatformLegacyWorkspaceMetric(env, legacyTags),
+        context,
+      );
+    }
+    return response;
   },
 };
 
@@ -1704,6 +1756,8 @@ export async function handlePlatformSharedAuthControlRequest(
       subject: identity.accountId,
       credential: "session",
       requireCurrentMembership: true,
+      entry: "shared_auth",
+      ...platformLegacyWorkspaceSunsetOption(env),
       ...(parseAppOwnershipMutationsFrozen(env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS) ? { appOwnershipMutationsFrozen: true } : {}),
       ...(diagnostics ? { diagnostics } : {}),
       ...(assertActive ? { assertActive } : {}),
@@ -2086,6 +2140,80 @@ export function withPlatformAssetCacheHeaders(
     statusText: response.statusText,
     headers,
   });
+}
+
+/**
+ * Reports a legacy Workspace use served by the platform composition itself and
+ * adds the deprecation headers. The credential is reported only by its shape:
+ * the platform has not resolved it at this point.
+ */
+function observePlatformLegacyWorkspaceUse(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  response: Response,
+  use: LegacyWorkspaceUse,
+): Response {
+  const authorization = request.headers.get("authorization");
+  const cookie = request.headers.get("cookie") ?? "";
+  reportLegacyWorkspaceRoute({
+    use,
+    method: request.method,
+    status: response.status,
+    entry: "platform",
+    credential: authorization !== null
+      ? "unknown"
+      : /(?:^|;\s*)takosumi_session=/u.test(cookie)
+        ? "session"
+        : "none",
+    workspaceBound: false,
+    appBound: false,
+    clientFamily: legacyWorkspaceClientFamily(request.headers),
+  });
+  const sunset = platformLegacyWorkspaceSunset(env);
+  return withLegacyWorkspaceDeprecation(response, use, sunset ? { sunset } : {});
+}
+
+/**
+ * The operator `Sunset` for legacy Workspace routes. A malformed value is
+ * ignored here (the Accounts composition refuses it at startup) so a request
+ * never fails because of telemetry configuration.
+ */
+function platformLegacyWorkspaceSunset(
+  env: CloudflareWorkerEnv,
+): string | undefined {
+  try {
+    return parseLegacyWorkspaceSunset(env.TAKOSUMI_LEGACY_WORKSPACE_SUNSET);
+  } catch {
+    return undefined;
+  }
+}
+
+function platformLegacyWorkspaceSunsetOption(
+  env: CloudflareWorkerEnv,
+): { readonly legacyWorkspaceSunset?: string } {
+  const sunset = platformLegacyWorkspaceSunset(env);
+  return sunset ? { legacyWorkspaceSunset: sunset } : {};
+}
+
+async function recordPlatformLegacyWorkspaceMetric(
+  env: CloudflareWorkerEnv,
+  tags: Record<string, string>,
+): Promise<void> {
+  // The metric sink lives in Control D1; a composition without it has no sink.
+  if (!env.TAKOSUMI_CONTROL_DB) return;
+  try {
+    const service = await cachedDeployControlService(env);
+    await recordWorkerMetric({
+      observability: service.context.adapters.observability,
+      env,
+      name: LEGACY_WORKSPACE_ROUTE_METRIC,
+      kind: "counter",
+      value: 1,
+      tags,
+    });
+  } catch {
+    // Metrics are best-effort and must never change a response.
+  }
 }
 
 async function recordPlatformOidcMetric(

@@ -81,6 +81,14 @@ import type {
   RequestDiagnosticPhase,
 } from "./request-phase-diagnostics.ts";
 import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
+import {
+  classifyLegacyWorkspaceControlRequest,
+  legacyWorkspaceClientFamily,
+  LegacyWorkspaceUseRecorder,
+  reportLegacyWorkspaceRoute,
+  withLegacyWorkspaceDeprecation,
+  type LegacyWorkspaceEntry,
+} from "./legacy-workspace-telemetry.ts";
 
 const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
 
@@ -213,6 +221,8 @@ interface ControlRouteContext {
   readonly appOwnershipMutationsFrozen?: boolean;
   /** Operator-designated repositories whose installed app may delegate. */
   readonly installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
+  /** RFC 8594 `Sunset` for legacy Workspace routes, once stage 9.3 is scheduled. */
+  readonly legacyWorkspaceSunset?: string;
 }
 
 type ControlOperationsResolution = ControlPlaneOperations | undefined;
@@ -449,6 +459,8 @@ export async function handleAuthenticatedControlRoute(
     readonly workspaceId?: string;
     readonly requireCurrentMembership?: true;
     readonly reauthorizeBearer?: () => Promise<boolean>;
+    /** Which composition entry authenticated the subject (telemetry only). */
+    readonly entry?: Exclude<LegacyWorkspaceEntry, "public">;
   },
 ): Promise<Response | undefined> {
   const { request, url } = context;
@@ -472,9 +484,59 @@ export async function handleAuthenticatedControlRoute(
   );
 }
 
+/**
+ * Observes legacy Workspace use around the authenticated dispatch. The
+ * classification reads only the method, path and query; handlers may add a
+ * body-selected use. Neither changes authorization, dispatch or the response
+ * status: a legacy response only gains deprecation headers and one value-free
+ * log line.
+ */
 async function dispatchAuthenticatedControlRoute(
+  context: ControlRouteContext & {
+    readonly session: ControlSession;
+    readonly entry?: LegacyWorkspaceEntry;
+  },
+  timings: ServerTimingBucket,
+): Promise<Response> {
+  const { request, url, session } = context;
+  const legacyWorkspace = new LegacyWorkspaceUseRecorder(
+    classifyLegacyWorkspaceControlRequest(
+      request.method,
+      normalizeControlRouteSegments(url.pathname.slice(API_V1_PREFIX.length)),
+      url.searchParams,
+    ),
+  );
+  const response = await dispatchAuthenticatedControlRouteForSession(
+    context,
+    timings,
+    legacyWorkspace,
+  );
+  const use = legacyWorkspace.use;
+  if (!use) return response;
+  reportLegacyWorkspaceRoute({
+    use,
+    method: request.method,
+    status: response.status,
+    entry: context.entry ?? "public",
+    credential: session.credential ?? "unknown",
+    workspaceBound: session.workspaceId !== undefined,
+    appBound: session.appIds !== undefined,
+    clientFamily: legacyWorkspaceClientFamily(request.headers),
+    ...(session.oauthClientId !== undefined
+      ? { clientId: session.oauthClientId }
+      : {}),
+  });
+  return withLegacyWorkspaceDeprecation(response, use, {
+    ...(context.legacyWorkspaceSunset
+      ? { sunset: context.legacyWorkspaceSunset }
+      : {}),
+  });
+}
+
+async function dispatchAuthenticatedControlRouteForSession(
   context: ControlRouteContext & { readonly session: ControlSession },
   timings: ServerTimingBucket,
+  legacyWorkspace: LegacyWorkspaceUseRecorder,
 ): Promise<Response> {
   const { request, url } = context;
   context.assertActive?.();
@@ -544,6 +606,7 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.workspaceMutationsFrozen !== undefined ? { workspaceMutationsFrozen: context.workspaceMutationsFrozen } : {}),
           ...(context.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
           session: context.session,
+          legacyWorkspace,
         }),
       ),
     );
@@ -651,6 +714,9 @@ export async function handleControlRoute(
         ...(bearer.auth.workspaceId
           ? { workspaceId: bearer.auth.workspaceId }
           : {}),
+        ...(bearer.auth.oauthClientId !== undefined
+          ? { oauthClientId: bearer.auth.oauthClientId }
+          : {}),
         // Operator configuration: only an installed app's own token can be a
         // delegate, and code changes of a designated app are owner-only.
         ...(context.installedAppDelegationSources?.length
@@ -721,6 +787,7 @@ interface DispatchInput {
   readonly withinRunReadDeadline?: RunReadWaiter;
   readonly workspaceMutationsFrozen?: boolean;
   readonly appOwnershipMutationsFrozen?: boolean;
+  readonly legacyWorkspace?: LegacyWorkspaceUseRecorder;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -749,6 +816,7 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       ...(input.withinRunReadDeadline ? { withinRunReadDeadline: input.withinRunReadDeadline } : {}),
       workspaceMutationsFrozen: input.workspaceMutationsFrozen !== false,
       ...(input.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+      ...(input.legacyWorkspace ? { legacyWorkspace: input.legacyWorkspace } : {}),
       session: input.session,
     };
     const response = await handler(ctx, segments, method);

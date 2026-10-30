@@ -293,6 +293,30 @@ Activity is attributed to apps by its Capsule target, Capsule ids in metadata (e
 | --- | --- | --- |
 | GET | `/api/v1/views/workspaces.v1` | Read the account Workspace inventory projection |
 
+### Legacy Workspace routes {#legacy-workspace-routes}
+
+Workspace is being replaced by per-app ownership and removed in stages (TASK-0118 Phase 9). These uses are deprecated:
+
+- `/api/v1/workspaces/*`, `/api/v1/projects/*`, `/api/v1/views/workspaces.v1`
+- connections, sources, capsule-configs, provider-connections and dashboard selected by `?workspaceId=`, and connection create, connection OAuth start and Source create selected by a `workspaceId` body field
+- `/api/v1/dashboard/bootstrap` without `includeWorkspaces=false`
+- `/api/v1/account/shared-workspaces*`, `/api/v1/billing*` (responses are not marked), `/api/v1/interfaces*` with `?workspaceId=`, `workspace_id` on `/oauth/authorize`, and personal access tokens created with `workspace_id`
+
+Their responses carry `Deprecation: @1793145600` (RFC 9745) and `Link: <…>; rel="deprecation"` pointing here, plus a `rel="successor-version"` link when a replacement route exists today, and `Sunset` (RFC 8594) once the operator schedules removal (`TAKOSUMI_LEGACY_WORKSPACE_SUNSET`). Status and body are unchanged. Clients may identify themselves with `Takosumi-Client: <name>/<version>`. The server records each use as the id-free structured log `legacy_workspace_route`, and each compatibility `takosumi.workspace_id` claim placed in an ID token, userinfo or introspection response as `legacy_workspace_claim_emitted`.
+
+| Deprecated | Replacement |
+| --- | --- |
+| `GET /api/v1/workspaces`, `GET /api/v1/workspaces/{workspaceId}/capsules`, `GET /api/v1/workspaces/{workspaceId}/installed-apps`, `GET /api/v1/views/workspaces.v1` | `GET /api/v1/apps` |
+| `POST /api/v1/workspaces/{workspaceId}/install-plans` | `POST /api/v1/install-plans` |
+| `GET /api/v1/workspaces/{workspaceId}/members` | `GET /api/v1/capsules/{capsuleId}/members` |
+| `GET /api/v1/workspaces/{workspaceId}/runs` | `GET /api/v1/capsules/{capsuleId}/runs` |
+| `GET /api/v1/workspaces/{workspaceId}/usage`, `GET /api/v1/workspaces/{workspaceId}/billing` | `GET /api/v1/usage` |
+| `POST /api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver` | `GET /api/v1/source-ref-resolutions` |
+| `POST /api/v1/workspaces/{workspaceId}/plan-update` / `drift-check` / `backups` | `POST /api/v1/capsules/{capsuleId}/plan` / `drift-check` / `backups` |
+| `/api/v1/connections` selected by `workspaceId` | `/api/v1/connections` without `workspaceId` (personal connections) |
+
+Replacements for the remaining routes are added as their APIs land.
+
 ### Workspaces
 
 | Method | Path | Description |
