@@ -125,8 +125,10 @@ function assertTakosumiMobileClientShape(
  *   is validated as a Takosumi Mobile client and used instead).
  * - `TAKOSUMI_MOBILE_OIDC_CLIENT_ID` still selects an operator-registered
  *   client; when set it is the advertised id.
- * - Every client that serves Takosumi Mobile (the advertised one and the
- *   built-in id) is marked to always show the consent screen.
+ * - Every client that serves Takosumi Mobile (the advertised one, the
+ *   built-in id, and any other client registered for the Takosumi Mobile
+ *   redirect) is marked to always show the consent screen, so none of them
+ *   issues a code silently.
  */
 export function composeTakosumiMobileOidcClients<
   T extends MobileOidcClientRegistration,
@@ -152,13 +154,21 @@ export function composeTakosumiMobileOidcClients<
     mobileClientIds.add(TAKOSUMI_MOBILE_BUILTIN_OIDC_CLIENT_ID);
   }
   const marked = (input.clients ?? []).map((client) => {
-    if (!mobileClientIds.has(client.clientId)) return client;
-    assertTakosumiMobileClientShape(client);
-    return {
-      ...client,
-      consent: "always" as const,
-      displayName: TAKOSUMI_MOBILE_OIDC_CLIENT_DISPLAY_NAME,
-    };
+    if (mobileClientIds.has(client.clientId)) {
+      assertTakosumiMobileClientShape(client);
+      return {
+        ...client,
+        consent: "always" as const,
+        displayName: TAKOSUMI_MOBILE_OIDC_CLIENT_DISPLAY_NAME,
+      };
+    }
+    // A leftover registration for the Takosumi Mobile redirect (for example
+    // one created from older docs and no longer selected) must not issue
+    // codes without consent: any app can claim the custom scheme.
+    if (client.redirectUris.includes(TAKOSUMI_MOBILE_OIDC_REDIRECT_URI)) {
+      return { ...client, consent: "always" as const };
+    }
+    return client;
   });
   const hasBuiltinId = marked.some(
     (client) => client.clientId === TAKOSUMI_MOBILE_BUILTIN_OIDC_CLIENT_ID,

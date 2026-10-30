@@ -83,3 +83,17 @@ test("the built-in switch accepts only true or false", () => {
   expect(parseTakosumiMobileBuiltinClientSetting("false", true)).toBe(false);
   expect(() => parseTakosumiMobileBuiltinClientSetting("0", true)).toThrow("must be true or false");
 });
+
+test("an unselected registration for the Takosumi Mobile redirect still requires consent", () => {
+  const leftover = {
+    clientId: "takosumi-mobile-operator-example",
+    redirectUris: ["takosumi://oauth/callback"],
+    tokenEndpointAuthMethod: "none",
+    allowedScopes: MOBILE_SCOPES,
+  };
+  const other = { clientId: "takos-mobile", redirectUris: ["takos://oauth/callback"], tokenEndpointAuthMethod: "none" };
+  const composed = composeTakosumiMobileOidcClients({ builtinClient: true, clients: [leftover, other] });
+  expect(composed.mobileOidcClientId).toBe("takosumi-mobile");
+  expect(composed.clients?.find((client) => client.clientId === leftover.clientId)).toMatchObject({ consent: "always" });
+  expect(composed.clients?.find((client) => client.clientId === "takos-mobile")).toEqual(other);
+});
