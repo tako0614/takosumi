@@ -1377,6 +1377,41 @@ test("local state store durably keeps recovered state resultless and adopts only
   }
 });
 
+test("local recovery custody follows the persisted root, not the live Workspace id", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-root-"));
+  try {
+    const stateBytes = new TextEncoder().encode('{"version":4,"terraform_version":"1.9.8","serial":1,"lineage":"b8d6c5f4-8f27-4d16-8b90-839c7f770002","outputs":{},"resources":[]}');
+    const stateDigest = `sha256:${createHash("sha256").update(stateBytes).digest("hex")}`;
+    const store = createFileOpenTofuStateArtifactStore(join(tempDir, "state"), TEST_STATE_CRYPTO);
+    const suffix = "environments/production/state-versions/00000001.tfstate.enc";
+    const input = {
+      // Frozen in storage_root under the Workspace the Capsule had then; its
+      // authority Workspace has moved to workspace_local since.
+      stateRef: `workspaces/workspace_before/capsules/inst_local/${suffix}`,
+      workspaceId: "workspace_local", subject: { kind: "capsule" as const, id: "inst_local" },
+      environment: "production", generation: 1 as const,
+      createdByRunId: "run_recovery_root", action: "state_recovery" as const,
+      failedApplyRunId: "apply_failed_root", custodyEvidenceDigest: `sha256:${"a".repeat(64)}`,
+      stateDigest, stateBytes,
+    };
+    expect((await store.commitRecovery(input)).stateRef).toBe(input.stateRef);
+    expect((await store.commitRecovery({ ...input, stateRef: `apps/inst_local/${suffix}` })).stateRef)
+      .toBe(`apps/inst_local/${suffix}`);
+    // Still exactly this Capsule's canonical generation-1 ref.
+    for (const stateRef of [
+      `workspaces/workspace_before/capsules/inst_other/${suffix}`,
+      `apps/inst_other/${suffix}`,
+      `workspaces/../capsules/inst_local/${suffix}`,
+      "workspaces/workspace_before/capsules/inst_local/environments/staging/state-versions/00000001.tfstate.enc",
+      "workspaces/workspace_before/capsules/inst_local/environments/production/state-versions/00000002.tfstate.enc",
+    ]) {
+      await expect(store.commitRecovery({ ...input, stateRef }), stateRef).rejects.toThrow("scope or custody is invalid");
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("local recovery readback rejects an oversized occupied v3 file before allocation", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-recovery-oversize-"));
   try {

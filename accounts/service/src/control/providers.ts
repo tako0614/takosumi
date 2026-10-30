@@ -129,6 +129,7 @@ import {
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { connectionOwnerFilter } from "./connection-owner.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 
@@ -193,11 +194,11 @@ async function listProviderConnections(
     session,
   });
   if (!auth.ok) return auth.response;
-  // A Workspace member may use an explicitly selected connection for app
-  // work, but the full inventory belongs to the Workspace owner.
-  const workspace = await operations.workspaces.getWorkspace(workspaceId);
-  if (session.appIds !== undefined || workspace.ownerUserId !== session.subject) {
-    return errorJson("app_owner_only", "Only the Workspace owner can list provider connections.", 403);
+  // A Workspace-scoped connection is its owner's (TASK-0118 P9.1-d): the
+  // caller lists the bindable operator connections and only the connections
+  // it owns that record this Workspace, never other people's.
+  if (session.appIds !== undefined) {
+    return errorJson("app_owner_only", "Only the connection owner can list provider connections.", 403);
   }
   const projection = url.searchParams.get("projection");
   if (projection !== null && projection !== "release-owned") {
@@ -207,15 +208,20 @@ async function listProviderConnections(
       400,
     );
   }
-  const providerConnections = (
+  const owned = connectionOwnerFilter(operations, session.subject);
+  const providerConnections: ProviderConnection[] = [];
+  for (const connection of (
     projection === "release-owned"
       ? await operations.connections.listReleaseOwnedProviderConnections(
           workspaceId,
         )
       : await operations.connections.listProviderConnections(workspaceId)
-  ).filter((connection) =>
-    providerConnectionVisibleToWorkspace(connection, workspaceId),
-  );
+  )) {
+    if (!providerConnectionVisibleToWorkspace(connection, workspaceId)) continue;
+    if (isWorkspaceBindableOperatorConnection(connection) || await owned(connection)) {
+      providerConnections.push(connection);
+    }
+  }
   return json({
     providerConnections: providerConnections.map(publicProviderConnection),
   });

@@ -34,6 +34,7 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { reportLegacyWorkspaceClaim } from "./legacy-workspace-telemetry.ts";
 import {
   decodePageCursor,
   paginateById,
@@ -552,6 +553,14 @@ export async function handleCurrentPersonalAccessTokenAuthority(input: {
       input.request,
     );
   }
+  // TASK-0118 Phase 9: a Workspace-bound PAT reading its own Workspace is a
+  // claim use too, and such a PAT may never expire.
+  reportLegacyWorkspaceClaim({
+    surface: "personal_access_authority",
+    capsuleBound: false,
+    appRole: false,
+    memberships: false,
+  });
   return json(currentPersonalAccessTokenAuthorityBody(record, scopes, role));
 }
 
@@ -754,6 +763,8 @@ export async function handleCreatePersonalAccessToken(input: {
   extensionScopes?: readonly TakosumiAccountsPatScope[];
   /** Test-only override; production always uses the bounded default. */
   workspaceAuthorityTimeoutMs?: number;
+  /** Called when the body names a Workspace (TASK-0118 Phase 9 telemetry). */
+  observeWorkspaceBinding?: () => void;
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -765,6 +776,7 @@ export async function handleCreatePersonalAccessToken(input: {
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
   const workspaceId = stringValue(body.workspace_id)?.trim();
+  if (body.workspace_id !== undefined) input.observeWorkspaceBinding?.();
   const appIdsRaw = body.appIds === undefined ? body.app_ids : body.appIds;
   const appIds = appIdsRaw === undefined ? undefined : personalAccessTokenAppIdsValue(appIdsRaw);
   const now = Date.now();

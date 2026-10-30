@@ -22,7 +22,14 @@ export type ArtifactReferenceAllocation =
         | { readonly kind: "resource"; readonly id: string };
       readonly environment: string;
       readonly generation: number;
-      /** Trusted persisted Capsule root; absent for pre-v77 Capsules. */
+      /**
+       * Trusted Capsule root from `getCapsuleStorageRoot`: the persisted
+       * `storage_root`, or for a row without one the legacy root derived from
+       * the Capsule's frozen `scopeRef`. Core always passes it for a Capsule,
+       * and Capsule allocations follow it. Only when it is omitted does the
+       * allocator build the legacy root from `workspaceId`, which is right
+       * only while that still equals the Capsule's scopeRef.
+       */
       readonly storageRoot?: string;
     }
   | {
@@ -32,7 +39,7 @@ export type ArtifactReferenceAllocation =
         | { readonly kind: "capsule"; readonly id: string }
         | { readonly kind: "resource"; readonly id: string };
       readonly runId: string;
-      /** Trusted persisted Capsule root; absent for pre-v77 Capsules. */
+      /** Trusted persisted Capsule root; see the `state` allocation. */
       readonly storageRoot?: string;
     }
   | {
@@ -53,8 +60,9 @@ export interface ArtifactReferenceAllocator {
  * Reference allocator for object-key-backed hosts.
  *
  * These layouts are deliberately isolated in the storage adapter. The returned
- * values cross Core and runner contracts only as opaque `*Ref` strings. Current
- * Capsule allocations follow the persisted root; legacy Capsule and Resource
+ * values cross Core and runner contracts only as opaque `*Ref` strings. Capsule
+ * allocations follow the persisted root ({@link capsuleArtifactRoot}), whether
+ * it is an `apps/` root or a legacy Workspace-prefixed one; Resource
  * coordinates retain their Workspace prefix. Historical references already
  * stored in immutable migration data remain opaque inputs.
  */
@@ -102,17 +110,55 @@ export class ObjectKeyArtifactReferenceAllocator implements ArtifactReferenceAll
   }
 }
 
-/** A persisted root is an exact Capsule identity, never a free-form R2 path. */
+/**
+ * A Capsule's artifact root.
+ *
+ * The persisted root (`capsules.storage_root`) is the authority: `apps/{cap}`
+ * for a Capsule created after ownership expansion, or the legacy
+ * `workspaces/{ws}/capsules/{cap}` root the ownership backfill froze. The
+ * legacy Workspace segment is history: it is returned as stored and never
+ * rebuilt from, or compared with, a live Workspace id, so moving or removing
+ * Workspace cannot move an artifact key. Only a row with no persisted root
+ * (before the v77 column existed) derives the legacy root, from the Capsule's
+ * frozen `scopeRef` (`capsuleScopeRef`), which is the Workspace id that root
+ * was written under.
+ *
+ * A persisted root is still an exact Capsule identity, never a free-form R2
+ * path: it must end in this Capsule's own segment, and no segment may be
+ * empty or dots only (`.`, `..`), which a filesystem-backed store would
+ * resolve as a path step.
+ */
 export function capsuleArtifactRoot(
-  workspaceId: string,
+  scopeRef: string,
   capsuleId: string,
   persistedRoot?: string,
 ): string {
-  const legacy = `workspaces/${segment(workspaceId)}/capsules/${segment(capsuleId)}`;
-  if (persistedRoot === undefined || persistedRoot === legacy) return legacy;
-  const app = `apps/${segment(capsuleId)}`;
-  if (persistedRoot === app && capsuleId === segment(capsuleId)) return app;
+  const capsuleSegment = segment(capsuleId);
+  if (persistedRoot === undefined) {
+    const scopeSegment = segment(scopeRef);
+    if (!keySegment(scopeSegment) || !keySegment(capsuleSegment)) {
+      throw new Error("Capsule artifact root is not canonical");
+    }
+    return `workspaces/${scopeSegment}/capsules/${capsuleSegment}`;
+  }
+  if (keySegment(capsuleSegment)) {
+    if (persistedRoot === `apps/${capsuleSegment}` && capsuleId === capsuleSegment) {
+      return persistedRoot;
+    }
+    const legacy = LEGACY_CAPSULE_ROOT.exec(persistedRoot);
+    if (legacy && legacy[2] === capsuleSegment && keySegment(legacy[1]!)) {
+      return persistedRoot;
+    }
+  }
   throw new Error("persisted Capsule storageRoot is not canonical");
+}
+
+const LEGACY_CAPSULE_ROOT =
+  /^workspaces\/([a-zA-Z0-9._-]+)\/capsules\/([a-zA-Z0-9._-]+)$/u;
+
+/** A non-empty object-key segment that is not a dot-only path step. */
+function keySegment(value: string): boolean {
+  return value.length > 0 && !/^\.+$/u.test(value);
 }
 
 function backupRef(

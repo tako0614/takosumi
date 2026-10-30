@@ -42,6 +42,10 @@ interface ReleaseActivationPayload {
   readonly kind: typeof RELEASE_ACTIVATION_KIND;
   readonly planRunId: string;
   readonly applyRunId: string;
+  /**
+   * The Capsule's frozen derivation scope (`scopeRef`), sent under the
+   * historical name. Release commands receive it as `TAKOSUMI_WORKSPACE_ID`.
+   */
   readonly workspaceId: string;
   readonly capsule: {
     readonly id: string;
