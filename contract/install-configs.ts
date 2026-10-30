@@ -833,6 +833,18 @@ export interface InstallConfig {
       readonly compatibilityReportId: string;
       readonly actorSubject: string;
     };
+    /**
+     * Value-free receipt of the operator Workspace-policy bake (TASK-0118
+     * P9.1-g): this row is the predecessor with its Workspace policy ceiling
+     * baked into `policy` by the strictest merge. Provenance only; it grants
+     * nothing and no runtime decision reads it.
+     */
+    readonly workspacePolicyBake?: {
+      readonly workspaceId: string;
+      readonly workspacePolicyDigest: string;
+      readonly previousInstallConfigId: string;
+      readonly previousInstallConfigDigest: string;
+    };
     /** Value-free authority/audit receipt for an explicit Capsule re-adoption. */
     readonly reAdoption?: {
       readonly capsuleId: string;
