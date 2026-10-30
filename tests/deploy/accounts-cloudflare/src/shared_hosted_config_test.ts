@@ -168,11 +168,11 @@ test("the built-in Takosumi Mobile client is on by default and off under the sha
   expect(hosted.mobileOidcClientId).toBeUndefined();
   expect(hosted.clients?.map((client) => client.clientId)).toEqual(["server-staging"]);
 
-  const hostedOptIn = configuredOidcClientsWithTakosumiMobile(environment({
+  // Not yet supported under the shared hosted profile: refused, not ignored.
+  expect(() => configuredOidcClientsWithTakosumiMobile(environment({
     TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY: "true",
     TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "true",
-  }));
-  expect(hostedOptIn.mobileOidcClientId).toBe("takosumi-mobile");
+  }))).toThrow("cannot be enabled under the shared hosted session policy");
 
   expect(() => configuredOidcClientsWithTakosumiMobile(environment({
     TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT: "yes",

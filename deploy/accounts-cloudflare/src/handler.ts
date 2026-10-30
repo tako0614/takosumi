@@ -1715,17 +1715,42 @@ export function configuredOidcClientsWithTakosumiMobile(
 } {
   return composeTakosumiMobileOidcClients({
     configuredClientId: optionalString(env.TAKOSUMI_MOBILE_OIDC_CLIENT_ID),
-    builtinClient: parseTakosumiMobileBuiltinClientSetting(
-      env.TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT,
-      !parseHostedSessionPolicy(env),
-    ),
+    builtinClient: takosumiMobileBuiltinClientEnabled(env),
     clients: parseConfiguredOidcClients(env),
   });
+}
+
+/**
+ * The built-in client is on by default. Under the shared hosted session policy
+ * it stays off and cannot be turned on yet: its tokens would be ordinary
+ * account-wide credentials outside that profile's identity-generation, fence
+ * and global-logout model (ADR 0025/0026 open question).
+ */
+function takosumiMobileBuiltinClientEnabled(env: CloudflareWorkerEnv): boolean {
+  const hosted = parseHostedSessionPolicy(env);
+  const enabled = parseTakosumiMobileBuiltinClientSetting(
+    env.TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT,
+    !hosted,
+  );
+  if (hosted && enabled) {
+    throw new TypeError(
+      "TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT cannot be enabled under the shared hosted session policy",
+    );
+  }
+  return enabled;
 }
 
 export function configuredTakosumiMobileOidcClientId(
   env: CloudflareWorkerEnv,
 ): string | undefined {
+  // Discovery reads the operator client list only when a Takosumi Mobile
+  // client can exist, as before the built-in client.
+  if (
+    !optionalString(env.TAKOSUMI_MOBILE_OIDC_CLIENT_ID) &&
+    !takosumiMobileBuiltinClientEnabled(env)
+  ) {
+    return undefined;
+  }
   return configuredOidcClientsWithTakosumiMobile(env).mobileOidcClientId;
 }
 

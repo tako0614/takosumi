@@ -18,7 +18,9 @@ package for the v1 GA line.
   screen naming the client, its scopes, and that it can approve and cancel
   Runs, because another app could claim the same custom scheme (RFC 8252
   §8.6). `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` turns the built-in client
-  off; under the shared hosted session policy it defaults to off.
+  off; under the shared hosted session policy it is off and cannot be enabled
+  yet. Consent clients refuse `prompt=login` and `max_age` (fresh
+  re-authentication is not implemented for them).
 - **Discovery reports the configured issuer:** `endpoints.oidc_issuer` in
   `/.well-known/takosumi` is now `TAKOSUMI_ACCOUNTS_ISSUER` instead of the
   request origin.

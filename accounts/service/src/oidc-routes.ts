@@ -1957,8 +1957,11 @@ function nativeConsentRequestProblem(
   if (requestedScope.length > 1024) return "scope is too long";
   // S256 of a 32-byte or longer verifier is always 43 base64url characters.
   if (!/^[A-Za-z0-9_-]{43}$/u.test(codeChallenge)) return "code_challenge must be an S256 challenge";
+  // Fresh re-authentication (prompt=login, max_age) is not implemented for
+  // these clients, so it is refused instead of being silently ignored.
+  if (parameters.has("max_age")) return "max_age is not supported for this client";
   const prompts = (parameters.get("prompt") ?? "").split(/\s+/u).filter(Boolean);
-  if (prompts.some((prompt) => !["none", "login", "consent"].includes(prompt)) || (prompts.includes("none") && prompts.length > 1)) {
+  if (prompts.some((prompt) => !["none", "consent"].includes(prompt)) || (prompts.includes("none") && prompts.length > 1)) {
     return "prompt is not supported";
   }
   return undefined;
@@ -2031,8 +2034,10 @@ async function handleNativeConsentStep(input: {
   }
   // Single use: a replayed or stale form never reaches code issuance.
   const record = await input.store.consumeAuthorizationCode(transaction);
-  // Re-read the session after the await so a sign-out or rotation during the
-  // consent cannot turn the retired cookie into a code.
+  // The transaction is bound to the session that rendered the page: a POST
+  // carrying another (or a rotated) session cookie is refused. This reads the
+  // request-scoped session, so it does not observe a sign-out that lands
+  // during this same request.
   const current = await requireAccountSession({ request: input.request, store: input.store });
   if (
     !record || record.expiresAt <= Date.now() ||
@@ -2079,9 +2084,9 @@ const NATIVE_CONSENT_COPY = {
       email: "メールアドレスを見る",
       offline_access: "サインインしたままにする（この端末で更新を続ける）",
       "capsules:read": "アプリ、Run、状態を見る",
-      "capsules:write": "アプリを変更し、Runを承認・取り消す",
+      "capsules:write": "このアカウントでTakosumiを操作する（アプリの変更、Runの承認・取り消し、接続・ソース・スペースの変更を含む）",
     } as Record<string, string>,
-    runs: "許可すると、このアプリからRunの承認と取り消しができます。",
+    runs: "許可すると、このアプリからRunの承認と取り消しを含め、ダッシュボードでできる操作のほとんどができます。",
     warning: (client: string) => `このページを ${client} から開いていない場合は、「許可しない」を選んでください。`,
     returnsTo: "戻り先",
     approve: "許可する",
@@ -2099,9 +2104,9 @@ const NATIVE_CONSENT_COPY = {
       email: "See your email address",
       offline_access: "Stay signed in on this device",
       "capsules:read": "See your apps, Runs and their state",
-      "capsules:write": "Change your apps and approve or cancel Runs",
+      "capsules:write": "Act on Takosumi as this account (change apps, approve or cancel Runs, and change connections, sources and workspaces)",
     } as Record<string, string>,
-    runs: "If you allow it, this app can approve and cancel Runs.",
+    runs: "If you allow it, this app can approve and cancel Runs and do most of what you can do in the dashboard.",
     warning: (client: string) => `If you did not open this page from ${client}, choose Don't allow.`,
     returnsTo: "Returns to",
     approve: "Allow",

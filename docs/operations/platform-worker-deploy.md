@@ -859,9 +859,11 @@ PKCE alone does not prove which app started the flow (RFC 8252 §8.6).
 
 - `TAKOSUMI_MOBILE_OIDC_BUILTIN_CLIENT=false` turns the built-in client off.
   It defaults to on, except under the shared hosted session policy
-  (`TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY=true`), where it defaults to off
-  until the native credential path for that profile is settled; set `true` to
-  opt in.
+  (`TAKOSUMI_ACCOUNTS_HOSTED_SESSION_POLICY=true`), where it is off and setting
+  `true` is a configuration error: its tokens would be ordinary account-wide
+  credentials outside that profile's identity-generation, fence and global
+  logout model, and the native credential path for that profile is not settled
+  yet.
 - `TAKOSUMI_MOBILE_OIDC_CLIENT_ID` selects a client you registered in
   `TAKOSUMI_ACCOUNTS_CLIENTS` instead, as in the example above. The selector is
   not a second client definition: it must name one entry in

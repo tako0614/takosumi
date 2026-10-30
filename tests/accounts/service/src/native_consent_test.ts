@@ -426,6 +426,8 @@ test("silent and widened native authorization requests are refused", async () =>
     { code_challenge: "short" },
     { request_uri: "https://attacker.example/request" },
     { response_mode: "fragment" },
+    { prompt: "login" },
+    { max_age: "0" },
   ]) {
     const response = await handler(
       new Request(authorizeUrl(challenge, overrides), {
@@ -508,4 +510,5 @@ test("English browsers get the English consent screen", async () => {
   const html = await response.text();
   expect(html).toContain("Allow Takosumi Mobile to access your account?");
   expect(html).toContain("approve and cancel Runs");
+  expect(html).toContain("change connections, sources and workspaces");
 });
