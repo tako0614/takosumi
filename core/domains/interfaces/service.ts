@@ -16,6 +16,7 @@ import type {
   InterfaceProjectionSink,
   InterfacePhase,
   InterfaceSpec,
+  InterfaceWriteAuthority,
   IssueInterfaceTokenRequest,
   IssueInterfaceTokenResponse,
   JsonObject,
@@ -42,7 +43,7 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
-import { bindingServesRuntimeConsumer } from "./stores.ts";
+import { bindingServesRuntimeConsumer, isAppOwnRecord } from "./stores.ts";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   canonicalInterfaceOAuth2ResourceUri,
@@ -369,6 +370,8 @@ export class InterfaceService {
     actor?: ActorContext,
     materialization?: InterfaceServiceMaterialization,
     authorityFence?: InterfaceAuthorityWriteFence,
+    /** Recorded on a Capsule-owned Interface (TASK-0118 9.1). */
+    createdUnder?: InterfaceWriteAuthority,
   ): Promise<Interface> {
     validateCreate(request);
     const workspaceId = requireText(request.workspaceId, "workspaceId");
@@ -397,6 +400,7 @@ export class InterfaceService {
         ...(materialization
           ? { materializedFrom: interfaceMaterialization(materialization) }
           : {}),
+        ...(createdUnder && ownerRef.kind === "Capsule" ? { createdUnder } : {}),
         createdAt: now,
         updatedAt: now,
       },
@@ -1434,6 +1438,38 @@ export class InterfaceService {
   }
 
   /**
+   * The app's Capsule-owned Interfaces that wait for its owner's review
+   * (TASK-0118 9.1): the Interface, or one of its current Bindings, is not
+   * the app's own record — written only under Workspace authority (for an app
+   * that had no ownership record then) or written manually before writes
+   * were recorded. They are never the app's evidence; the owner deletes them
+   * or recreates them as the app. Read-only.
+   */
+  async listInterfacesNeedingReview(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<readonly Interface[]> {
+    const interfaces = await this.list({
+      workspaceId: requireText(workspaceId, "workspaceId"),
+      ownerKind: "Capsule",
+      ownerId: requireText(capsuleId, "capsuleId"),
+      includeRetired: false,
+    });
+    const needingReview: Interface[] = [];
+    for (const iface of interfaces) {
+      if (!isAppOwnRecord(iface.metadata)) {
+        needingReview.push(iface);
+        continue;
+      }
+      const bindings = await this.#stores.bindings.listByInterface(iface.metadata.id);
+      if (bindings.some((binding) => binding.status.phase !== "Revoked" && !isAppOwnRecord(binding.metadata))) {
+        needingReview.push(iface);
+      }
+    }
+    return needingReview;
+  }
+
+  /**
    * The internal partition one app records its Interfaces into. It is never
    * authority; callers decide the app first.
    */
@@ -2421,6 +2457,8 @@ export class InterfaceService {
     actor?: ActorContext,
     materialization?: InterfaceBindingServiceMaterialization,
     authorityFence?: InterfaceAuthorityWriteFence,
+    /** Recorded on a Binding of a Capsule-owned Interface (TASK-0118 9.1). */
+    createdUnder?: InterfaceWriteAuthority,
   ): Promise<InterfaceBinding> {
     validateBindingRequest(request);
     // Binding issuance is a runtime authority boundary too. Reconcile against
@@ -2462,6 +2500,7 @@ export class InterfaceService {
                 interfaceBindingMaterialization(materialization),
             }
           : {}),
+        ...(createdUnder && iface.metadata.ownerRef.kind === "Capsule" ? { createdUnder } : {}),
         createdAt: now,
         updatedAt: now,
       },

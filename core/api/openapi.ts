@@ -981,6 +981,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
         ownerRef: ref("InterfaceOwnerRef"),
         generation: { type: "integer", minimum: 1 },
         labels,
+        createdUnder: { enum: ["app", "workspace", "operator"] },
         materializedFrom: {
           oneOf: [
             {
@@ -1159,6 +1160,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
             id: { type: "string" },
             workspaceId: { type: "string" },
             generation: { type: "integer", minimum: 1 },
+            createdUnder: { enum: ["app", "workspace", "operator"] },
             materializedFrom: {
               oneOf: [
                 {

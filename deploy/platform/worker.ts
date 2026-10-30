@@ -2300,6 +2300,11 @@ function platformInterfaceActorContext(
     safePlatformExtensionContextId(session.capsuleId)
       ? { capsuleId: safePlatformExtensionContextId(session.capsuleId) }
       : {}),
+    // A personal access token limited to apps: Core never gives it Workspace
+    // authority and decides only those apps.
+    ...(session.authKind === "personal-access-token" && session.appIds !== undefined && !runtimePrincipal
+      ? { appIds: [...session.appIds] }
+      : {}),
     ...(session.authKind === "service-token"
       ? { principalKind: "service", serviceId: session.subject }
       : { principalKind: "account" }),
@@ -3385,6 +3390,8 @@ export interface PlatformExtensionSessionContext {
     | "run-credential";
   readonly subject?: string;
   readonly capsuleId?: string;
+  /** The apps a personal access token is limited to (introspected `app_ids`). */
+  readonly appIds?: readonly string[];
   /** Present only on a verified, short-lived Run credential. */
   readonly runId?: string;
   /** Installer provenance re-read from the canonical Capsule ledger. */
@@ -4312,6 +4319,8 @@ async function introspectPlatformExtensionToken(
         : interfaceSession;
     }
     const takosumi = platformExtensionTakosumiMetadata(record);
+    const appIds = tokenUse === "personal_access" ? platformExtensionPatAppIds(record) : undefined;
+    if (appIds === null) return { authenticated: false };
     return {
       authenticated: true,
       authKind:
@@ -4320,6 +4329,7 @@ async function introspectPlatformExtensionToken(
           : "personal-access-token",
       subject,
       ...takosumi,
+      ...(appIds !== undefined ? { appIds } : {}),
       scopes,
       ...(tokenUse === "oauth_access"
         ? platformExtensionOAuthClientId(record)
@@ -4328,6 +4338,21 @@ async function introspectPlatformExtensionToken(
   } catch {
     return { authenticated: false };
   }
+}
+
+/**
+ * The apps a personal access token is limited to (introspection `app_ids`):
+ * `undefined` when unlimited, `null` (refuse the token) when malformed. An
+ * empty list is a deny-all snapshot and stays empty.
+ */
+function platformExtensionPatAppIds(
+  record: Record<string, unknown>,
+): readonly string[] | undefined | null {
+  const raw = record.app_ids;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > 256) return null;
+  const ids = raw.map((value) => typeof value === "string" ? safePlatformExtensionContextId(value) : undefined);
+  return ids.every((id): id is string => id !== undefined) ? ids : null;
 }
 
 /** The introspected OAuth client id, only in a bounded printable shape. */

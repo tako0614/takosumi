@@ -94,6 +94,7 @@ import {
 } from "../../deploy/platform/platform_extension_provider_credentials.ts";
 import { applyCredentialRequiredProviderSources } from "../../deploy/platform/host_install_config_composition.ts";
 import { createTakosumiAccountsOidcModuleVariableMaterializer } from "../../deploy/platform/accounts_oidc_module_variable_materializer.ts";
+import { decideInterfaceAppAccess } from "../../core/domains/app-ownership/interface-app-decision.ts";
 import {
   createTakosumiRuntimeInputOidcClientSource,
   type RuntimeInputCapsulePublicOrigin,
@@ -380,6 +381,7 @@ export async function createWorkerServiceApp(
             : {}),
         })
       : undefined;
+  const appOwnershipStore = new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB, opentofuControlStore);
   // Late-bound: the observer runs only after the service below exists.
   let ownNotificationOperations: Awaited<ReturnType<typeof createTakosumiService>>["operations"] | undefined;
   const service = await createTakosumiService({
@@ -439,7 +441,19 @@ export async function createWorkerServiceApp(
     ),
     artifactReferenceAllocator: backupStorage.allocator,
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
-    appOwnershipStore: new D1AppOwnershipStore(env.TAKOSUMI_CONTROL_DB, opentofuControlStore),
+    appOwnershipStore,
+    // Capsule-owned Interfaces are decided per app (TASK-0118 9.1): every
+    // write by an account actor, Workspace-bound or not, needs the app's
+    // owner or member; an app without an ownership row keeps the Workspace
+    // decision.
+    // A personal access token limited to apps (`app_ids`) reaches only those.
+    authorizeInterfaceApp: ({ actor, capsuleId, action }) =>
+      actor.appIds !== undefined && !actor.appIds.includes(capsuleId)
+        ? false
+        : decideInterfaceAppAccess(
+          { appOwnership: appOwnershipStore, appAccess: appOwnershipStore },
+          { accountId: actor.actorAccountId, capsuleId, action },
+        ),
     workspaceMutationsFrozen: parseWorkspaceMutationsFrozen(
       env.TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN,
     ),

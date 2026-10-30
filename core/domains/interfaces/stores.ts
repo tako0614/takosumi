@@ -256,10 +256,26 @@ export type InterfaceAuthorizationFilter =
  * may write Bindings in some partition (including another tenant of a shared
  * legacy partition) can bind that subject, so a Binding counts as its
  * evidence only when it was materialized from an active Interface link of
- * this app, or sits on an Interface this app itself owns.
+ * this app, or sits on an Interface this app itself owns — and then only when
+ * both the Interface and the Binding are the app's own records (materialized,
+ * or written under the app's or the operator's authority). A record written
+ * only under Workspace authority, for an app that had no ownership record
+ * yet, or an unrecorded manual one, waits for the app's owner to review it.
  */
 export interface InterfaceRuntimeConsumer {
   readonly capsuleId: string;
+}
+
+/** Write authorities whose Capsule-owned records count as the app's own. */
+export const APP_OWN_WRITE_AUTHORITIES = ["app", "operator"] as const;
+
+/** Materialized, or written under the app's or the operator's authority. */
+export function isAppOwnRecord(metadata: {
+  readonly materializedFrom?: unknown;
+  readonly createdUnder?: string;
+}): boolean {
+  return metadata.materializedFrom !== undefined ||
+    (APP_OWN_WRITE_AUTHORITIES as readonly string[]).includes(metadata.createdUnder ?? "");
 }
 
 export function bindingServesRuntimeConsumer(
@@ -268,7 +284,8 @@ export function bindingServesRuntimeConsumer(
   consumer: InterfaceRuntimeConsumer,
 ): boolean {
   if (iface.metadata.ownerRef.kind === "Capsule" &&
-    iface.metadata.ownerRef.id === consumer.capsuleId) return true;
+    iface.metadata.ownerRef.id === consumer.capsuleId &&
+    isAppOwnRecord(iface.metadata) && isAppOwnRecord(binding.metadata)) return true;
   const source = binding.metadata.materializedFrom;
   return source?.source === "capsule_required_interface" &&
     source.capsuleId === consumer.capsuleId;
