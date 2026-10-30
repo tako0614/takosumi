@@ -322,6 +322,16 @@ export function isSharedAccountWorkspaceRoute(pathname: string): boolean {
   return pathname === SHARED_ACCOUNT_WORKSPACES_PATH || pathname.startsWith(`${SHARED_ACCOUNT_WORKSPACES_PATH}/`);
 }
 
+/** Id-free route template of a shared-account Workspace directory request. */
+export function sharedAccountWorkspaceRouteTemplate(_method: string, pathname: string): string {
+  const tail = pathname.slice(SHARED_ACCOUNT_WORKSPACES_PATH.length);
+  if (tail === "" || tail === "/bootstrap") return pathname;
+  const match = /^\/[^/]+\/(select|billing-organization)$/u.exec(tail);
+  return match
+    ? `${SHARED_ACCOUNT_WORKSPACES_PATH}/{workspaceId}/${match[1]}`
+    : `${SHARED_ACCOUNT_WORKSPACES_PATH}/*`;
+}
+
 export async function handleSharedAccountWorkspaceRoute(input: {
   readonly request: Request;
   readonly url: URL;

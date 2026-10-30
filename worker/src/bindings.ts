@@ -27,6 +27,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   /** Explicit rollback switch for the Phase 3 legacy Workspace mutation freeze. */
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
+  /** ISO date or HTTP-date announced as `Sunset` on legacy Workspace routes. */
+  readonly TAKOSUMI_LEGACY_WORKSPACE_SUNSET?: string;
   /**
    * Host key for the private runtime-binding derivation. When a composition
    * materializes a Capsule's `runtimeBindingMaterialization` profile through

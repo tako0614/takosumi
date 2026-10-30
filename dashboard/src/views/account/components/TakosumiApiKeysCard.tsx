@@ -45,6 +45,10 @@ import {
 } from "../lib/tokens.ts";
 
 const EXPIRATION_DAYS = [30, 90, 365] as const;
+const CORE_ACCOUNT_KEY_SCOPES: ReadonlySet<TakosumiAccountsPatScope> = new Set([
+  "read",
+  "write",
+]);
 
 export default function TakosumiApiKeysCard() {
   const [keys, { refetch }] = createResource(listTakosumiApiKeys);
@@ -66,9 +70,15 @@ export default function TakosumiApiKeysCard() {
     (): readonly TakosumiAccountsPatScopeCatalogEntry[] =>
       scopeCatalog.error ? [] : (scopeCatalog.latest?.scopes ?? []),
   );
+  // Only the core account scopes are offered here. Hosted-resource and AI
+  // keys stay out of this card until their host routes accept app- or
+  // account-scoped keys without a Workspace (TASK-0118 9B).
   const selfServiceScopes = createMemo(() =>
     scopeCatalogEntries().filter(
-      (scope) => scope.selfService && scope.workspaceBinding === "optional",
+      (scope) =>
+        scope.selfService &&
+        scope.workspaceBinding === "optional" &&
+        CORE_ACCOUNT_KEY_SCOPES.has(scope.scope),
     ),
   );
 

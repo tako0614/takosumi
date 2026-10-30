@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dir, "../..");
 const CONTRACT = join(ROOT, "contract");
 const TSC = join(ROOT, "node_modules/.bin/tsc");
-const TARBALL_NAME = "takosjp-takosumi-contract-2.1.0.tgz";
+const TARBALL_NAME = "takosjp-takosumi-contract-2.2.0.tgz";
 
 /**
  * Derived, not listed. `files` is itself derived from `exports` by
@@ -116,7 +116,7 @@ test(
           /(?:^|\/)(?:accounts|core|deploy|lib|providers|reference)(?:\/|$)/u,
         );
         expect(path).not.toMatch(
-          /(?:index|interface-display|internal-[^/]+)\.ts$/u,
+          /(?:index|interface-display|interface-clients|internal-[^/]+)\.ts$/u,
         );
       }
 
@@ -323,6 +323,8 @@ import type { CreateInterfaceRequest } from "@takosjp/takosumi-contract/runtime-
 import type { InterfaceInputProvenance } from "@takosjp/takosumi-contract/runtime-interfaces";
 // @ts-expect-error interface display policy remains application-owned
 import * as InterfaceDisplay from "@takosjp/takosumi-contract/interface-display";
+// @ts-expect-error interface client policy remains application-owned
+import * as InterfaceClients from "@takosjp/takosumi-contract/interface-clients";
 // @ts-expect-error internal crypto is not a package export
 import * as InternalCrypto from "@takosjp/takosumi-contract/internal-crypto";
 // @ts-expect-error IP classification is not a package export

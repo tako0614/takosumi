@@ -88,6 +88,45 @@ export class CapsuleInterfaceMaterializationFailureService {
     return await Promise.all(intents.map(projectFailure));
   }
 
+  /** One app's dead-lettered materializations, newest first. */
+  async listForCapsule(
+    capsuleId: string,
+    options: { readonly limit?: number } = {},
+  ): Promise<readonly CapsuleInterfaceMaterializationFailure[]> {
+    requiredText(capsuleId, "capsuleId");
+    const intents =
+      await this.#store.listDeadLetteredCapsuleInterfaceMaterializationIntentsForCapsule(
+        capsuleId,
+        options.limit,
+      );
+    return await Promise.all(
+      intents.filter((intent) => intent.capsuleId === capsuleId).map(projectFailure),
+    );
+  }
+
+  /**
+   * Retries one exact failure addressed through its app. The failure must
+   * belong to `capsuleId`; otherwise it does not exist for this caller. The
+   * intent's own recorded partition fences the reopening CAS.
+   */
+  async retryForCapsule(
+    capsuleId: string,
+    id: string,
+    input: RetryCapsuleInterfaceMaterializationFailureInput,
+  ): Promise<CapsuleInterfaceMaterializationRetryReceipt> {
+    requiredText(capsuleId, "capsuleId");
+    requiredText(id, "id");
+    const current =
+      await this.#store.getCapsuleInterfaceMaterializationIntent(id);
+    if (!current || current.capsuleId !== capsuleId) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        "Interface materialization failure not found",
+      );
+    }
+    return await this.retry(current.workspaceId, id, input);
+  }
+
   async retry(
     workspaceId: string,
     id: string,

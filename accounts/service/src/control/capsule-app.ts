@@ -42,8 +42,10 @@ import {
 import {
   hasCredentialQueryParams,
   isValidInterfaceName,
+  parseInterfaceClients,
   parseInterfaceDisplay,
   TAKOSUMI_API_VERSION,
+  type TrustedNativeClient,
   UI_SURFACE_INTERFACE_TYPE,
   UI_SURFACE_INTERFACE_VERSION,
   UI_SURFACE_OPEN_PERMISSION,
@@ -359,7 +361,7 @@ async function readAppLinks(
   const providerInterfaces = new Map<string, Promise<Interface | undefined>>();
   // Membership alone must not advertise writes to a read-only delegated grant.
   const writeBearer = ctx.session.uninstallRequester?.grant
-    ? await requireAccountsBearer({ request: ctx.request, store: ctx.store, scope: "write" })
+    ? await requireAccountsBearer({ request: ctx.request, store: ctx.store, scope: "write", recheck: true })
     : undefined;
   const mayWrite = writeBearer === undefined ||
     (writeBearer.ok && writeBearer.auth.subject === ctx.session.subject &&
@@ -693,6 +695,10 @@ async function readScreens(
   const interfaces = ctx.operations.interfaces;
   if (!interfaces) return [];
   const viewerOrigin = ctx.url.origin;
+  const clientPolicy: AppScreenClientPolicy = {
+    ...(ctx.trustedNativeClients ? { trustedClients: ctx.trustedNativeClients } : {}),
+    reservedHosts: issuerHosts(ctx.issuer),
+  };
   const screens: CapsuleAppScreen[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < APP_SCREEN_PAGE_LIMIT; page += 1) {
@@ -704,7 +710,7 @@ async function readScreens(
       capsule.id,
     );
     for (const item of result.items) {
-      const screen = projectAppScreen(item, capsule, viewerOrigin);
+      const screen = projectAppScreen(item, capsule, viewerOrigin, clientPolicy);
       if (screen) screens.push(screen);
     }
     if (!result.nextCursor) break;
@@ -713,14 +719,34 @@ async function readScreens(
   return screens.sort(compareScreens);
 }
 
+/** How a screen's declared native clients are checked. */
+export interface AppScreenClientPolicy {
+  /** The operator's trusted native clients; the built-in list when absent. */
+  readonly trustedClients?: readonly TrustedNativeClient[];
+  /** Takosumi-owned hosts no client link may use (the issuer's). */
+  readonly reservedHosts?: readonly string[];
+}
+
+function issuerHosts(issuer: string | undefined): readonly string[] {
+  if (!issuer) return [];
+  try {
+    return [new URL(issuer).hostname];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Projects one authorized launcher Interface the way the Dashboard's strict
- * consumer does, keeping only display metadata and the checked launch URL.
+ * consumer does, keeping only display metadata, the checked launch URL and the
+ * validated native clients (whose links carry nothing but that URL; only
+ * operator-trusted clients are `verified`).
  */
 export function projectAppScreen(
   value: unknown,
   capsule: Pick<Capsule, "id" | "workspaceId">,
   viewerOrigin?: string,
+  clientPolicy: AppScreenClientPolicy = {},
 ): CapsuleAppScreen | undefined {
   const record = asRecord(value);
   const metadata = asRecord(record?.metadata);
@@ -773,6 +799,12 @@ export function projectAppScreen(
     surfaceUrl: url,
     ...(viewerOrigin ? { viewerOrigin } : {}),
   });
+  const clients = parseInterfaceClients(document.clients, {
+    surfaceUrl: url,
+    ...(viewerOrigin ? { viewerOrigin } : {}),
+    ...(clientPolicy.reservedHosts ? { reservedHosts: clientPolicy.reservedHosts } : {}),
+    ...(clientPolicy.trustedClients ? { trustedClients: clientPolicy.trustedClients } : {}),
+  });
   return {
     interfaceId,
     name,
@@ -784,6 +816,7 @@ export function projectAppScreen(
     ...(display.category !== undefined ? { category: display.category } : {}),
     ...(display.sortOrder !== undefined ? { sortOrder: display.sortOrder } : {}),
     url,
+    ...(clients ? { clients } : {}),
   };
 }
 

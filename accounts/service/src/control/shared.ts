@@ -5,6 +5,7 @@
  * (P3 god-file split) so per-resource `control/<resource>.ts` modules import
  * cross-cutting helpers from one place.
  */
+import type { LegacyWorkspaceUseRecorder } from "../legacy-workspace-telemetry.ts";
 import type {
   ApplyExpectedGuard,
   ApplyRunResponse,
@@ -51,6 +52,7 @@ import {
   type AccountsBearerRequiredScope,
 } from "../account-session.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
+import type { TrustedNativeClient } from "takosumi-contract";
 import type {
   InstallConfig,
   Capsule,
@@ -140,6 +142,8 @@ export interface ControlSession {
   readonly uninstallRequester?: CapsuleUninstallRequester;
   readonly workspaceId?: string;
   readonly appIds?: readonly string[];
+  /** Registered OAuth client of an OAuth access token; telemetry only. */
+  readonly oauthClientId?: string;
   /**
    * Operator-designated repositories (with allowed refs) whose installed app
    * may use its own OAuth token as a Workspace delegation. Operator
@@ -176,11 +180,18 @@ export interface ControlDispatchContext {
   readonly workspaceMutationsFrozen?: boolean;
   /** Operator kill switch: app member and ownership-transfer writes return 409. */
   readonly appOwnershipMutationsFrozen?: boolean;
+  /**
+   * Operator-trusted native phone apps (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`);
+   * the built-in first-party list when absent.
+   */
+  readonly trustedNativeClients?: readonly TrustedNativeClient[];
   /** Injectable request-local clock for deterministic stream tests. */
   readonly runStreamTiming?: RunStreamTiming;
   /** Stops new work after the enclosing ordinary Run GET read budget expires. */
   readonly assertActive?: () => void;
   readonly withinRunReadDeadline?: RunReadWaiter;
+  /** Records a Workspace named in a parsed body (TASK-0118 Phase 9 telemetry). */
+  readonly legacyWorkspace?: LegacyWorkspaceUseRecorder;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

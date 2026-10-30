@@ -11057,6 +11057,38 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return intents;
   }
 
+  async listDeadLetteredCapsuleInterfaceMaterializationIntentsForCapsule(
+    capsuleId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]> {
+    if (typeof capsuleId !== "string" || capsuleId.trim() === "") {
+      throw new TypeError("capsuleId is required");
+    }
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.capsuleInterfaceMaterializationIntents)
+      .where(
+        and(
+          eq(
+            pgSchema.capsuleInterfaceMaterializationIntents.capsuleId,
+            capsuleId,
+          ),
+          eq(
+            pgSchema.capsuleInterfaceMaterializationIntents.status,
+            "dead_letter",
+          ),
+        ),
+      )
+      .orderBy(
+        desc(pgSchema.capsuleInterfaceMaterializationIntents.deadLetteredAt),
+        desc(pgSchema.capsuleInterfaceMaterializationIntents.id),
+      )
+      .limit(capsuleInterfaceMaterializationFailureListLimit(limit));
+    const intents = rows.map(capsuleInterfaceMaterializationIntentFromPgRow);
+    await Promise.all(intents.map(validateCapsuleInterfaceMaterializationIntent));
+    return intents;
+  }
+
   async claimCapsuleInterfaceMaterializationIntent(
     input: ClaimCapsuleInterfaceMaterializationIntentInput,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
@@ -11470,6 +11502,33 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
     return pageFromProbe(rows, limit);
   }
 
+  async listActivityEventsForWorkspacesPage(
+    workspaceIds: readonly string[],
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<ActivityEvent>(
+      pgSchema.auditEvents,
+      pgSchema.auditEvents.eventJson,
+      {
+        where: pgKeysetWhereDesc(
+          inArray(pgSchema.auditEvents.workspaceId, ids),
+          pgSchema.auditEvents.createdAt,
+          pgSchema.auditEvents.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          desc(pgSchema.auditEvents.createdAt),
+          desc(pgSchema.auditEvents.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   // --- credential_mint_events (spec invariant 17) ---------------------------
   //
   // Non-secret mint audit rows. The JSON payload carries metadata only:
@@ -11828,6 +11887,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore, SourceOwne
         limit: limit + 1,
       },
     ));
+    return pageFromProbe(rows, limit);
+  }
+
+  async listBackupRecordsPageForCapsule(
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<BackupRecord>(
+      pgSchema.backups,
+      pgSchema.backups.backupJson,
+      {
+        where: pgKeysetWhereDesc(
+          eq(pgSchema.backups.capsuleId, capsuleId),
+          pgSchema.backups.createdAt,
+          pgSchema.backups.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [desc(pgSchema.backups.createdAt), desc(pgSchema.backups.id)],
+        limit: limit + 1,
+      },
+    );
     return pageFromProbe(rows, limit);
   }
 

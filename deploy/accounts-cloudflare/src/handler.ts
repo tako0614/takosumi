@@ -36,8 +36,10 @@ import {
   composeTakosumiMobileOidcClients,
   parseTakosumiMobileBuiltinClientSetting,
   parseInstalledAppDelegationSources,
+  trustedNativeClientsFromEnv,
   parseWorkspaceMutationsFrozen,
   parseAppOwnershipMutationsFrozen,
+  parseLegacyWorkspaceSunset,
 } from "@takosjp/takosumi-accounts-service";
 import {
   isAccountsApiPath,
@@ -95,8 +97,12 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_WORKSPACE_MUTATIONS_FROZEN?: string;
   /** JSON array of `{ url, path }` repositories whose installed app may delegate. */
   readonly TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES?: string;
+  /** JSON array of trusted native phone apps; malformed trusts none (logged once). */
+  readonly TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS?: string;
   /** `frozen` | `enabled` (default): app member and ownership-transfer writes. */
   readonly TAKOSUMI_APP_OWNERSHIP_MUTATIONS?: string;
+  /** ISO date or HTTP-date announced as `Sunset` on legacy Workspace routes. */
+  readonly TAKOSUMI_LEGACY_WORKSPACE_SUNSET?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_REDIRECT_URIS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
@@ -1303,8 +1309,12 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,
     ),
+    ...legacyWorkspaceSunsetOption(env.TAKOSUMI_LEGACY_WORKSPACE_SUNSET),
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
+    ),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
     ...(hostedSessionPolicy && options.identityMergeReconciler
       ? { identityMergeReconciler: options.identityMergeReconciler(env) }
@@ -2011,4 +2021,11 @@ function splitList(value: unknown): readonly string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function legacyWorkspaceSunsetOption(
+  value: string | undefined,
+): { readonly legacyWorkspaceSunset?: string } {
+  const sunset = parseLegacyWorkspaceSunset(value);
+  return sunset ? { legacyWorkspaceSunset: sunset } : {};
 }

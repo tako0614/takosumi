@@ -19,6 +19,7 @@
 import type { PublicRun, Run, RunStatus, RunType } from "./runs.ts";
 import type { InstallConfigStoreText } from "./install-configs.ts";
 import type { InterfaceDisplayIcon } from "./interface-display.ts";
+import type { InterfaceClients } from "./interface-clients.ts";
 import type {
   ProviderRequirement,
   ProviderResolution,
@@ -789,8 +790,9 @@ export interface CapsuleInterfaceLinkRequest {
 
 /**
  * One launchable, authorized screen (a Resolved `ui-surface` Interface the
- * caller may open). Only display metadata and the checked launch URL are
- * projected; no other Interface input or Output value is.
+ * caller may open). Only display metadata, the checked launch URL and the
+ * screen's validated native clients are projected; no other Interface input
+ * or Output value is.
  */
 export interface CapsuleAppScreen {
   readonly interfaceId: string;
@@ -801,6 +803,12 @@ export interface CapsuleAppScreen {
   readonly category?: string;
   readonly sortOrder?: number;
   readonly url: string;
+  /**
+   * The native phone apps the screen declares (`document.clients`), parsed by
+   * `parseInterfaceClients` against `url`: links are filled in with this
+   * screen's origin or URL and nothing else. Absent when none is usable.
+   */
+  readonly clients?: InterfaceClients;
 }
 
 export interface CapsuleAppRunSummary {

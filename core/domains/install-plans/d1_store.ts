@@ -2,6 +2,7 @@ import {
   assertCompletionGeneration,
   assertGitInstallPlanDrainFailureInput,
   assertImmutableScope,
+  assertListOpenGitInstallAttemptsScope,
   assertTransitionGitInstallPlanInput,
   gitInstallPlanForDrainFailure,
   gitInstallPlanManagementAuthority,
@@ -536,12 +537,16 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
   async listOpenAttempts(
     input: ListOpenGitInstallAttemptsInput,
   ): Promise<readonly StoredGitInstallPlan[]> {
+    assertListOpenGitInstallAttemptsScope(input);
     const limit = Math.max(1, Math.min(200, Math.trunc(input.limit)));
+    const scope = [
+      ...(input.workspaceId === undefined ? [] : ["workspace_id = ?"]),
+      ...(input.actorSubject === undefined ? [] : ["actor_subject = ?"]),
+    ];
     const result = await this.#db
       .prepare(
         `select * from git_install_plans
-          where workspace_id = ?
-            ${input.actorSubject === undefined ? "" : "and actor_subject = ?"}
+          where ${scope.join(" and ")}
             and phase not in ('failed', 'discarded')
             and json_valid(record_json) = 1
             and coalesce(json_extract(record_json, '$.operation'), 'install') = 'install'
@@ -570,7 +575,7 @@ export class D1GitInstallPlanStore implements GitInstallPlanStore {
           limit ?`,
       )
       .bind(
-        input.workspaceId,
+        ...(input.workspaceId === undefined ? [] : [input.workspaceId]),
         ...(input.actorSubject === undefined ? [] : [input.actorSubject]),
         limit,
       )

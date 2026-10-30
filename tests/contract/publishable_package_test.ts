@@ -133,7 +133,7 @@ const packedArchiveFiles = new Set(await packedFiles());
 test("the OSS contract directory is an explicit public package", () => {
   expect(packageJson).toMatchObject({
     name: "@takosjp/takosumi-contract",
-    version: "2.1.0",
+    version: "2.2.0",
     license: "MIT",
     publishConfig: { access: "public" },
   });
@@ -158,7 +158,7 @@ test("every export subpath resolves to a module the package actually ships", asy
   }
 });
 
-test("the public export map remains the nine curated runtime entrypoints", () => {
+test("the public export map remains the ten curated runtime entrypoints", () => {
   // Assert identities independently of the manifest-derived closure. Checking
   // only that every declared export packs would accept an accidental SDK.
   expect(packageJson.exports).toEqual({
@@ -171,6 +171,7 @@ test("the public export map remains the nine curated runtime entrypoints", () =>
     "./runtime-interfaces": "./runtime-interfaces.ts",
     "./notification-pushers": "./notification-pushers.ts",
     "./identity-oidc": "./identity-oidc.ts",
+    "./native-client-identity": "./native-client-identity.ts",
   });
 });
 
@@ -192,7 +193,7 @@ test("root and explicit runtime subpaths expose one contract identity", () => {
   );
 });
 
-test("the 2.1 root keeps the exact 2.0 runtime value exports", () => {
+test("the 2.2 root keeps the exact 2.0 runtime value exports", () => {
   expect(Object.keys(rootRuntime).sort()).toEqual([
     "MANAGED_RELATIONAL_LIMITS",
     "ManagedRelationalRuntimeContractError",
