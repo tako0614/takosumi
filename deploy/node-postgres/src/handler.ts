@@ -18,8 +18,10 @@ import {
 import {
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
+  trustedNativeClientsFromEnv,
   type InstalledAppDelegationSource,
 } from "@takosjp/takosumi-accounts-service";
+import type { TrustedNativeClient } from "takosumi-contract";
 
 export interface NodeAccountsStableOidcConfig {
   readonly privateJwkJson: string;
@@ -51,6 +53,11 @@ export interface NodeAccountsServerConfig {
   readonly subject: string | undefined;
   /** Repositories whose installed app may use its own token as a Workspace delegation. */
   readonly installedAppDelegationSources: readonly InstalledAppDelegationSource[];
+  /**
+   * `TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`: native phone apps whose screen
+   * declarations are verified. A malformed value trusts none (logged once).
+   */
+  readonly trustedNativeClients: readonly TrustedNativeClient[];
   /** `TAKOSUMI_APP_OWNERSHIP_MUTATIONS=frozen`: app member/transfer writes return 409. */
   readonly appOwnershipMutationsFrozen?: boolean;
 }
@@ -98,6 +105,9 @@ export function parseEnv(
     subject: optional(env, "TAKOSUMI_ACCOUNTS_SUBJECT"),
     installedAppDelegationSources: parseInstalledAppDelegationSources(
       env.TAKOSUMI_ACCOUNTS_DELEGATED_APP_SOURCES,
+    ),
+    trustedNativeClients: trustedNativeClientsFromEnv(
+      env.TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS,
     ),
     appOwnershipMutationsFrozen: parseAppOwnershipMutationsFrozen(
       env.TAKOSUMI_APP_OWNERSHIP_MUTATIONS,

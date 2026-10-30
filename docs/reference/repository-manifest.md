@@ -301,6 +301,19 @@ Workspace 全体や運用者の権限を与えるものではありません。�
 Binding を実際に用意するのは Takosumi 側の通常の処理で、リポジトリが利用許可（grant）を作ることは
 できません。
 
+`document` は公開する JSON で、manifest の版はその中身を決めません。`interface.ui.surface` の
+`document` で Takosumi が読む欄は、次の三つです。どれも任意で、足しても Interface の版（`"1"`）と
+manifest の版は変わりません。値が正しくなければ、その欄が無かったことになります。
+
+| 欄 | 内容 |
+| --- | --- |
+| `launcher` | `true` のとき、画面をホームのタイルとアプリのページに出す |
+| `display` | タイルの名前、アイコン、並び順など |
+| `clients` | スマホの専用アプリ（iOS・Android）。bundle id・package、ストアの ID、custom scheme の link、配布者のドメインの universal link・App Links、スマホでの既定（`preferred`）。雛形には `{origin}` と `{url}` だけを入れられる。運用者が信頼する専用アプリと一致したものだけが検証済みになる |
+
+書き方と検査の規則は[ホームにアプリを出す](../getting-started/home-launcher.md)にあります。
+どの欄の名前と値も、下の「Authority と secret の境界」の検査を受けます。
+
 ## Authority と secret の境界
 
 manifest に書けるのは、公開してよい提案だけです。次のものは書けません。

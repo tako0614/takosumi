@@ -494,6 +494,17 @@ export interface ControlPlaneOperations {
     intentId: string,
     input: RetryCapsuleInterfaceMaterializationFailureInput,
   ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
+  /** One app's dead-lettered Interface materializations; absent on older hosts. */
+  listCapsuleInterfaceMaterializationFailures?(
+    capsuleId: string,
+    options?: { readonly limit?: number },
+  ): Promise<readonly CapsuleInterfaceMaterializationFailure[]>;
+  /** Retries one failure of `capsuleId`; absent on older hosts. */
+  retryCapsuleInterfaceMaterializationFailure?(
+    capsuleId: string,
+    intentId: string,
+    input: RetryCapsuleInterfaceMaterializationFailureInput,
+  ): Promise<CapsuleInterfaceMaterializationRetryReceipt>;
   // --- Activity (§27 / §34) ---
   readonly activity: {
     record?(
@@ -507,6 +518,11 @@ export interface ControlPlaneOperations {
       workspaceIds: readonly string[],
       limit?: number,
     ): Promise<readonly ActivityEvent[]>;
+    /** Keyset page across internal partitions; absent on older hosts. */
+    listAcrossWorkspacesPage?(
+      workspaceIds: readonly string[],
+      params: PageParams,
+    ): Promise<Page<ActivityEvent>>;
   };
   // --- Backups (§29) ---
   readonly backups: {
@@ -519,6 +535,11 @@ export interface ControlPlaneOperations {
     }): Promise<BackupRecord>;
     listBackups(
       workspaceId: string,
+      params?: PageParams,
+    ): Promise<ListBackupsResponse>;
+    /** Backups taken of one app; absent on older hosts. */
+    listCapsuleBackups?(
+      capsuleId: string,
       params?: PageParams,
     ): Promise<ListBackupsResponse>;
   };
@@ -558,6 +579,8 @@ export interface ControlPlaneOperations {
     listReleaseOwnedProviderConnections(
       workspaceId?: string,
     ): Promise<readonly ProviderConnection[]>;
+    /** Release-owned bindable connections without a Workspace; absent on older hosts. */
+    listReleaseOwnedBindableProviderConnections?(): Promise<readonly ProviderConnection[]>;
     getProviderConnection?(id: string): Promise<ProviderConnection>;
     /** The account's own non-operator Connections, where the store lists by owner. */
     listOwnedConnections?(ownerAccountId: string): Promise<readonly ProviderConnection[] | undefined>;

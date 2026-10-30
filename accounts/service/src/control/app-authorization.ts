@@ -601,6 +601,32 @@ export async function visibleActivityEvents<T extends ActivityEvent>(input: {
     .filter((capsule) => capsule.workspaceId === input.workspaceId);
   const known = new Set(capsules.map((capsule) => capsule.id));
   if (!(await ownedCapsuleIds(operations, [...known])).size) return input.events;
+  const attributed = await attributeActivityEvents({ operations, capsules, events: input.events });
+  const visibility = await workspaceAppVisibility({
+    operations, session: input.session, capsuleIds: attributed.flatMap((ids) => ids ?? []),
+  });
+  return input.events.filter((_, index) => {
+    const ids = attributed[index];
+    return ids !== undefined && visibility.allows(ids);
+  });
+}
+
+/**
+ * The apps each Activity event of one internal partition belongs to, by the
+ * rule documented on {@link visibleActivityEvents}: `undefined` when the app
+ * cannot be determined (fail closed), `[]` for an event that belongs to no
+ * app, otherwise the Capsule ids. `capsules` are every Capsule recorded in
+ * the events' partition (destroyed ones included). Attribution grants
+ * nothing: callers still filter by what the caller may view.
+ */
+export async function attributeActivityEvents<T extends ActivityEvent>(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly capsules: readonly Capsule[];
+  readonly events: readonly T[];
+}): Promise<readonly (readonly string[] | undefined)[]> {
+  const { operations, capsules } = input;
+  if (!input.events.length) return [];
+  const known = new Set(capsules.map((capsule) => capsule.id));
   const live = capsules.filter((capsule) => capsule.status !== "destroyed");
   const sourceApps = sourceAppsOf(live);
   let budget = ACTIVITY_LOOKUP_LIMIT;
@@ -704,14 +730,7 @@ export async function visibleActivityEvents<T extends ActivityEvent>(input: {
     if (ids.size) return [...ids];
     return WORKSPACE_ACTIVITY_TARGETS.has(event.targetType) || resolvedNoApp ? [] : undefined;
   };
-  const attributed = await Promise.all(input.events.map(attribute));
-  const visibility = await workspaceAppVisibility({
-    operations, session: input.session, capsuleIds: attributed.flatMap((ids) => ids ?? []),
-  });
-  return input.events.filter((_, index) => {
-    const ids = attributed[index];
-    return ids !== undefined && visibility.allows(ids);
-  });
+  return await Promise.all(input.events.map(attribute));
 }
 
 function sourceOwner(source: { readonly ownerCapsuleId?: string }): string | undefined {

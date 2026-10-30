@@ -6,6 +6,7 @@ import type {
   Capsule,
   CapsulePublicOriginReservation,
 } from "../../contract/capsules.ts";
+import { capsuleScopeRef } from "../../contract/capsules.ts";
 import type { InstallConfig } from "../../contract/install-configs.ts";
 import { installExperienceServiceNameVariable } from "../../contract/install-experience.ts";
 import {
@@ -574,6 +575,8 @@ export interface PlatformExtensionCapsulePublicOriginPort {
    */
   release(input: {
     readonly workspaceId: string;
+    /** The Capsule's frozen derivation scope; keys the reservation. */
+    readonly scopeRef: string;
     readonly capsuleId: string;
   }): Promise<void>;
 }
@@ -726,9 +729,10 @@ export function capsulePublicOriginFromPlatformExtensions(
 
   const port: PlatformExtensionCapsulePublicOriginPort = {
     async resolve({ capsule, installConfig }) {
-      const clientIdempotencyKey = await capsulePublicOriginIdempotencyKey(
-        capsule,
-      );
+      const clientIdempotencyKey = await capsulePublicOriginIdempotencyKey({
+        id: capsule.id,
+        scopeRef: capsuleScopeRef(capsule),
+      });
       const held = heldReservation(await ledger.read(capsule.id));
       const requestedLabel = held
         ? held.requestedLabel
@@ -769,7 +773,7 @@ export function capsulePublicOriginFromPlatformExtensions(
       return reserved.origin;
     },
 
-    async release({ workspaceId, capsuleId }) {
+    async release({ workspaceId, scopeRef, capsuleId }) {
       try {
         const held = heldReservation(await ledger.read(capsuleId));
         if (!held) return;
@@ -779,7 +783,7 @@ export function capsulePublicOriginFromPlatformExtensions(
             workspaceId,
             clientIdempotencyKey: await capsulePublicOriginIdempotencyKey({
               id: capsuleId,
-              workspaceId,
+              scopeRef,
             }),
             requestedLabel: held.requestedLabel,
             reservationRef: held.reservationRef,
@@ -822,7 +826,7 @@ function brokerAnswersPublicOrigin(
  * an unscoped label would make the second installer collide with the first.
  */
 export function capsulePublicOriginRequestedLabel(input: {
-  readonly capsule: Pick<Capsule, "name" | "slug" | "workspaceId">;
+  readonly capsule: Pick<Capsule, "name" | "slug" | "workspaceId" | "scopeRef">;
   readonly installConfig: Pick<
     InstallConfig,
     "installExperience" | "variableMapping"
@@ -839,7 +843,9 @@ export function capsulePublicOriginRequestedLabel(input: {
       ? reviewed
       : input.capsule.slug || input.capsule.name,
   );
-  const suffix = workspaceSlugSuffix(input.capsule.workspaceId);
+  // The scope suffix reads the frozen derivation scope, so a label is the same
+  // string before and after Workspace removal.
+  const suffix = workspaceSlugSuffix(capsuleScopeRef(input.capsule));
   const label =
     !suffix || base === suffix || base.endsWith(`-${suffix}`)
       ? base
@@ -857,14 +863,16 @@ export function capsulePublicOriginRequestedLabel(input: {
  * immutable InstallConfig must not move the Capsule's origin, exactly as the
  * v2 OIDC client derivation is Capsule-stable
  * ({@link ./runtime_binding_materializer.ts}). Moving it would rotate the key,
- * orphan the reservation, and drift the registered redirect URI.
+ * orphan the reservation, and drift the registered redirect URI. The scope
+ * slot holds the Capsule's frozen `scopeRef` (its Workspace id for every
+ * Capsule created before stage 9.0).
  */
-async function capsulePublicOriginIdempotencyKey(
-  capsule: Pick<Capsule, "id" | "workspaceId">,
+export async function capsulePublicOriginIdempotencyKey(
+  capsule: { readonly id: string; readonly scopeRef: string },
 ): Promise<string> {
   const preimage = [
     PUBLIC_INPUT_IDEMPOTENCY_DOMAIN,
-    capsule.workspaceId,
+    capsule.scopeRef,
     capsule.id,
   ].join("\u0000");
   const digest = new Uint8Array(

@@ -153,6 +153,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
+import { capsuleWithScopeRef } from "takosumi-contract/capsules";
 import type {
   AccountWorkspaceListParams,
   AccountWorkspacePage,
@@ -7125,7 +7126,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const [expectedConfig, expectedCapsule, expectedBinding] =
       await Promise.all([
         stableJsonDigest(initialInstallConfig),
-        stableJsonDigest(storedCapsule),
+        stableJsonDigest(capsuleWithScopeRef(storedCapsule)),
         stableJsonDigest(binding),
       ]);
     const classifyExisting = async (): Promise<
@@ -7189,7 +7190,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
       const [configDigest, capsuleDigest, bindingDigest] = await Promise.all([
         stableJsonDigest(existingConfig),
-        stableJsonDigest(capsuleWithoutPhysicalOwnership(existingCapsule)),
+        stableJsonDigest(
+          capsuleWithScopeRef(capsuleWithoutPhysicalOwnership(existingCapsule)),
+        ),
         stableJsonDigest(existingBinding),
       ]);
       return existingCapsuleRow.epoch === 1 &&
@@ -10973,6 +10976,39 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return intents;
   }
 
+  async listDeadLetteredCapsuleInterfaceMaterializationIntentsForCapsule(
+    capsuleId: string,
+    limit?: number,
+  ): Promise<readonly CapsuleInterfaceMaterializationIntent[]> {
+    if (typeof capsuleId !== "string" || capsuleId.trim() === "") {
+      throw new TypeError("capsuleId is required");
+    }
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select()
+      .from(schema.capsuleInterfaceMaterializationIntents)
+      .where(
+        and(
+          eq(
+            schema.capsuleInterfaceMaterializationIntents.capsuleId,
+            capsuleId,
+          ),
+          eq(
+            schema.capsuleInterfaceMaterializationIntents.status,
+            "dead_letter",
+          ),
+        ),
+      )
+      .orderBy(
+        desc(schema.capsuleInterfaceMaterializationIntents.deadLetteredAt),
+        desc(schema.capsuleInterfaceMaterializationIntents.id),
+      )
+      .limit(capsuleInterfaceMaterializationFailureListLimit(limit));
+    const intents = rows.map(capsuleInterfaceMaterializationIntentFromD1Row);
+    await Promise.all(intents.map(validateCapsuleInterfaceMaterializationIntent));
+    return intents;
+  }
+
   async claimCapsuleInterfaceMaterializationIntent(
     input: ClaimCapsuleInterfaceMaterializationIntentInput,
   ): Promise<CapsuleInterfaceMaterializationIntent | undefined> {
@@ -11390,6 +11426,33 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows, limit);
   }
 
+  async listActivityEventsForWorkspacesPage(
+    workspaceIds: readonly string[],
+    params: PageParams,
+  ): Promise<Page<ActivityEvent>> {
+    const ids = boundedActivityWorkspaceIds(workspaceIds);
+    if (ids.length === 0) return { items: [] };
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<ActivityEvent>(
+      schema.auditEvents,
+      schema.auditEvents.recordJson,
+      {
+        where: d1KeysetWhereDesc(
+          inArray(schema.auditEvents.workspaceId, ids),
+          schema.auditEvents.createdAt,
+          schema.auditEvents.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [
+          desc(schema.auditEvents.createdAt),
+          desc(schema.auditEvents.id),
+        ],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   // -- credential_mint_events (spec invariant 17) -----------------------------
 
   async putCredentialMintEvent(
@@ -11732,6 +11795,28 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             eq(schema.backups.workspaceId, workspaceId),
             visibleTo ? sql`not ${d1BackupHidden(visibleTo)}` : undefined,
           ),
+          schema.backups.createdAt,
+          schema.backups.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [desc(schema.backups.createdAt), desc(schema.backups.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
+  async listBackupRecordsPageForCapsule(
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<BackupRecord>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<BackupRecord>(
+      schema.backups,
+      schema.backups.recordJson,
+      {
+        where: d1KeysetWhereDesc(
+          eq(schema.backups.capsuleId, capsuleId),
           schema.backups.createdAt,
           schema.backups.id,
           decodeCursor(params.cursor),

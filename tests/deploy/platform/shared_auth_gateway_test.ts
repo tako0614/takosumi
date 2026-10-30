@@ -417,9 +417,13 @@ test("shared Workspace menu never pins or repairs a suspended recorded owner", a
   const list = await handlePlatformSharedAuthControlRequest(request("/api/v1/workspaces?selectedWorkspaceId=ws_live"), env, deps);
   expect(list?.status).toBe(200);
   expect(await list?.json()).toMatchObject({ workspaces: [] });
-  const bootstrap = await handlePlatformSharedAuthControlRequest(request("/api/v1/dashboard/bootstrap?workspaceId=ws_live"), env, deps);
+  // The Workspace inventory is opt-in on the bootstrap (TASK-0118 9.1).
+  const bootstrap = await handlePlatformSharedAuthControlRequest(request("/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceId=ws_live"), env, deps);
   expect(bootstrap?.status).toBe(200);
   expect(await bootstrap?.json()).toMatchObject({ session: { subject: "tsub_canonical" }, workspaces: [] });
+  const defaultBootstrap = await handlePlatformSharedAuthControlRequest(request("/api/v1/dashboard/bootstrap?workspaceId=ws_live"), env, deps);
+  expect(defaultBootstrap?.status).toBe(200);
+  expect(await defaultBootstrap?.json()).not.toHaveProperty("workspaces");
   expect(repairs).toBe(0);
 });
 
@@ -498,4 +502,18 @@ test("trusted shared-auth cookies retain first-party authority for app members a
   }), frozen, dependencies);
   expect(paused?.status).toBe(409);
   expect((await paused?.json()).error).toMatchObject({ code: "failed_precondition", details: { reason: "app_ownership_mutations_frozen" } });
+
+  // A malformed trusted native client list trusts none but never fails Control requests.
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const malformed = { ...env, TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS: "[{\"id\":\"platform-gateway-marker\"}]" } as CloudflareWorkerEnv;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      expect((await handlePlatformSharedAuthControlRequest(request("/api/v1/capsules/cap_shared/members"), malformed, dependencies))?.status).toBe(200);
+    }
+    const lines = logged.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes("trusted_native_clients_config_invalid"))).toHaveLength(1);
+    expect(lines.join("\n")).not.toContain("platform-gateway-marker");
+  } finally {
+    logged.mockRestore();
+  }
 });

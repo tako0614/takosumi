@@ -27,6 +27,7 @@ import {
   type RequestPhaseDiagnosticsConfiguration,
 } from "./request-phase-diagnostics.ts";
 import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
+import type { TrustedNativeClient } from "takosumi-contract";
 
 export type {
   AccountsJsonWebKey,
@@ -183,6 +184,15 @@ export {
   parseInstalledAppDelegationSources,
   type InstalledAppDelegationSource,
 } from "./installed-app-delegation.ts";
+export {
+  createTrustedNativeClientsEnvReader,
+  parseTrustedNativeClientsEnv,
+  TRUSTED_NATIVE_CLIENTS_ENV,
+  trustedNativeClientsFromEnv,
+  type TrustedNativeClientsEnvProblem,
+  type TrustedNativeClientsEnvReader,
+  type TrustedNativeClientsEnvResult,
+} from "./trusted-native-clients.ts";
 export * from "./workspace-billing-bootstrap.ts";
 export type { IdentityMergeReconciler } from "./identity-merge.ts";
 export type { CredentialUnlinkReconciler } from "./identity-unlink-state.ts";
@@ -215,6 +225,13 @@ export interface AccountsHandlerOptions {
    * return 409 while an ownership backfill runs.
    */
   appOwnershipMutationsFrozen?: boolean;
+  /**
+   * Operator-trusted native phone apps
+   * (`TAKOSUMI_ACCOUNTS_TRUSTED_NATIVE_CLIENTS`). Absent: the built-in
+   * first-party list. A screen's declared client is `verified` only when it
+   * matches an entry.
+   */
+  trustedNativeClients?: readonly TrustedNativeClient[];
   /**
    * Operator-designated repositories whose installed app may use its own
    * OAuth token as a Workspace delegation. Empty: every installed-app token is
@@ -274,6 +291,7 @@ export interface EphemeralAccountsHandlerOptions {
   hostedSessionPolicy?: boolean;
   workspaceMutationsFrozen?: boolean;
   appOwnershipMutationsFrozen?: boolean;
+  trustedNativeClients?: readonly TrustedNativeClient[];
   installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   identityMergeReconciler?: IdentityMergeReconciler;
@@ -424,6 +442,7 @@ export async function createEphemeralAccountsHandler(
     hostedSessionPolicy: options.hostedSessionPolicy,
     workspaceMutationsFrozen: options.workspaceMutationsFrozen,
     ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+    ...(options.trustedNativeClients ? { trustedNativeClients: options.trustedNativeClients } : {}),
     ...(options.installedAppDelegationSources
       ? { installedAppDelegationSources: options.installedAppDelegationSources }
       : {}),
@@ -1032,6 +1051,9 @@ export function createAccountsHandler(
               ? { workspaceMutationsFrozen: options.workspaceMutationsFrozen }
               : {}),
             ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
+            ...(options.trustedNativeClients
+              ? { trustedNativeClients: options.trustedNativeClients }
+              : {}),
             ...(options.installedAppDelegationSources?.length
               ? { installedAppDelegationSources: options.installedAppDelegationSources }
               : {}),
