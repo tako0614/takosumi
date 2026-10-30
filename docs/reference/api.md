@@ -627,10 +627,16 @@ value-free の `source.retired` を Activity に 1 件記録します。失敗�
 
 新しいアプリの最初の所有者は、インストールを始めた本人です (TASK-0118 P9.1-c)。Workspace の所有者ではない
 管理者が Workspace の route でインストールしても、所有者はその管理者で、connection の binding とSourceの
-`authConnectionId` も本人の接続だけを受け付けます (作成時に Workspace の他の所有者・管理者がアプリのメンバーに
-加わる動作は変わりません)。アプリができる前のインストール計画は作った本人のもので、本人のアカウント資格情報
-(PATの `appIds` やインストール済みアプリ自身のtokenではないもの。現在のmembershipを要求する共有アカウント構成は除く) なら Workspace の判定なしに読み・進められます。アプリが記録前に作られていた場合 (応答の喪失) はアプリの判定になります。アプリができる前のSourceの `authConnectionId` も、インストールした本人の接続だけを受け付けます。
-Workspaceを指定しないインストールの idempotency は、本人の個人の場所で数えるため本人ごとです。
+`authConnectionId` も本人の接続だけを受け付けます。インストール候補に出る接続も、所有者として本人が記録された
+ものだけです。Workspace の他の所有者・管理者がアプリのメンバーに加わるのは、アプリの所有者が Workspace の所有者の
+ときだけで、管理者がインストールしたアプリはその管理者だけのものです。所有者のいないSource (確認済みの preflight の
+Source や以前の coordinator が記録したSource) を取り込むときも、Git接続はインストールした本人のものに限ります。
+本人の個人の場所 (Workspaceを指定しないインストール) にある、アプリができる前のインストール計画は作った本人のもので、
+本人のアカウント資格情報 (PATの `appIds` やインストール済みアプリ自身のtokenではないもの。現在のmembershipを要求する
+共有アカウント構成は除く) なら Workspace の判定なしに読み・進められます。共有 Workspace の route で始めたものは従来どおり
+Workspace の判定で、Workspace を離れた人は続けられません。アプリが記録前に作られていた場合 (応答の喪失) はアプリの判定に
+なります。Workspaceを指定しないインストールの idempotency は本人ごとで、本人が持つ他の個人の場所 (アーカイブ済みを
+含む) で同じ key を使った計画もそのまま返します。
 
 作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
 は同じ record を返し、内容が異なれば 409 になります。request digest は variable の名前だけを

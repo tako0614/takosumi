@@ -135,6 +135,14 @@ export async function handleWorkspaceInstallPlans(
   ctx: ControlDispatchContext,
   workspaceId: string,
   method: string,
+  options: {
+    /**
+     * Further Workspaces whose plans share this request's idempotency scope.
+     * The Workspace-less route passes every personal namespace the actor owns,
+     * so a key replays per account even if the namespace changed.
+     */
+    readonly idempotencyWorkspaceIds?: readonly string[];
+  } = {},
 ): Promise<Response> {
   if (method === "GET") return await listOpenInstallAttempts(ctx, workspaceId);
   if (method !== "POST") return methodNotAllowed("GET, POST");
@@ -176,11 +184,16 @@ export async function handleWorkspaceInstallPlans(
     variables ? stableJsonDigest(parsed) : Promise.resolve(undefined),
     stableJsonDigest(key),
   ]);
-  const existing = await ctx.operations.gitInstallPlans.getByScope({
-    workspaceId,
-    actorSubject: ctx.session.subject,
-    idempotencyKeyHash,
-  });
+  let existing: StoredGitInstallPlan | undefined;
+  for (const scopeWorkspaceId of [workspaceId, ...(options.idempotencyWorkspaceIds ?? [])
+    .filter((id) => id !== workspaceId)]) {
+    existing = await ctx.operations.gitInstallPlans.getByScope({
+      workspaceId: scopeWorkspaceId,
+      actorSubject: ctx.session.subject,
+      idempotencyKeyHash,
+    });
+    if (existing) break;
+  }
   if (existing) {
     if (
       existing.requestDigest === requestDigest ||
@@ -389,7 +402,13 @@ export async function handleInstallPlans(
     // Never use the general Workspace creation or membership mutation ports.
     const namespace = await personalResourceNamespace(ctx.operations, ctx.store, ctx.session);
     if (!namespace) return errorJson("feature_unavailable", "App installation is temporarily unavailable.", 503, ctx.request);
-    return await handleWorkspaceInstallPlans(ctx, namespace.id, method);
+    // Idempotency is per account (TASK-0118 P9.1-c): a key also replays a plan
+    // the actor created in any other personal namespace it owns (for example
+    // one archived since), never one in somebody else's Workspace.
+    const ownNamespaces = (await ctx.operations.workspaces.listWorkspacesByOwner(ctx.session.subject))
+      .filter((workspace) => workspace.type === "personal" && workspace.ownerUserId === ctx.session.subject)
+      .map((workspace) => workspace.id);
+    return await handleWorkspaceInstallPlans(ctx, namespace.id, method, { idempotencyWorkspaceIds: ownNamespaces });
   }
   if (segments[0] !== "install-plans" || segments.length < 2) {
     return undefined;
@@ -409,7 +428,7 @@ export async function handleInstallPlans(
   // is already the app: it decides, never the creator path.
   const capsuleId = plan.capsuleId ??
     (await getCapsuleIfPresent(ctx.operations, deterministicInitialCapsuleId(plan.id)))?.id;
-  const auth = !capsuleId && installAttemptCreatorContinues(ctx, plan)
+  const auth = !capsuleId && await installAttemptCreatorContinues(ctx, plan)
     ? { ok: true as const }
     : await requireResourceAccess({
         operations: ctx.operations,
@@ -440,21 +459,32 @@ export async function handleInstallPlans(
 }
 
 /**
- * The creator of a capsule-less install plan, with an account credential that
- * is not restricted to apps (no PAT `appIds`, no installed app's own token)
- * and, when bound to a Workspace, bound to the plan's. Never a Workspace
- * membership or ownership read. Compositions that require current Workspace
- * membership (shared accounts) and callers without an Accounts credential
- * kind (operator compositions) keep the Workspace decision.
+ * The creator of a capsule-less install plan in that creator's own namespace
+ * (the Workspace the Workspace-less install fills, owned by the creator), with
+ * an account credential that is not restricted to apps (no PAT `appIds`, no
+ * installed app's own token) and, when bound to a Workspace, bound to the
+ * plan's. An install started through a shared Workspace's route keeps the
+ * Workspace decision, so someone who has left that Workspace cannot finish
+ * it. Compositions that require current Workspace membership (shared
+ * accounts) and callers without an Accounts credential kind (operator
+ * compositions) also keep the Workspace decision.
  */
-function installAttemptCreatorContinues(
+async function installAttemptCreatorContinues(
   ctx: ControlDispatchContext,
   plan: StoredGitInstallPlan,
-): boolean {
+): Promise<boolean> {
   const session = ctx.session;
-  return plan.createdBy === session.subject && plan.actorSubject === session.subject &&
-    session.credential !== undefined && !session.requireCurrentMembership &&
-    session.appIds === undefined && bearerWorkspaceAllows(session, plan.workspaceId);
+  if (plan.createdBy !== session.subject || plan.actorSubject !== session.subject ||
+    session.credential === undefined || session.requireCurrentMembership ||
+    session.appIds !== undefined || !bearerWorkspaceAllows(session, plan.workspaceId)) return false;
+  try {
+    const workspace = await ctx.operations.workspaces.getWorkspace(plan.workspaceId);
+    return workspace.id === plan.workspaceId && workspace.ownerUserId === session.subject &&
+      workspace.type === "personal" && !workspace.archivedAt;
+  } catch (error) {
+    if (controllerErrorCode(error) === "not_found") return false;
+    throw error;
+  }
 }
 
 /**
@@ -2271,6 +2301,9 @@ async function createCapsule(
       "The canonical Source no longer matches this immutable install plan.",
     );
   }
+  // Claiming an ownerless Source for the new app must not adopt someone
+  // else's credential: its connection must be the installer's own.
+  await assertClaimableSourceConnection(source, plan, operations);
   const snapshot = await sourceSnapshotById(
     operations,
     source.id,
@@ -3835,6 +3868,42 @@ async function assertLegacyPreflightSourceOwnership(
     throw permanent(
       "source_owned_by_another_app",
       "The reviewed preflight Source already belongs to another app.",
+    );
+  }
+  await assertClaimableSourceConnection(source, plan, operations);
+}
+
+/**
+ * The new app is owned by the person who started the install (TASK-0118
+ * P9.1-c). A Source it claims (a reviewed preflight Source or a recorded
+ * legacy Source, both ownerless until the app exists) may carry a Git
+ * connection only when that connection is the installer's own; a legacy row
+ * without a recorded owner counts as its Workspace owner's.
+ */
+async function assertClaimableSourceConnection(
+  source: Source,
+  plan: StoredGitInstallPlan,
+  operations: ControlPlaneOperations,
+): Promise<void> {
+  const connectionId = source.authConnectionId;
+  // Only an ownerless Source is claimed; the app's own Source was checked by
+  // the Source service when it was written.
+  if (!connectionId || source.ownerCapsuleId !== undefined) return;
+  let owner: string | undefined;
+  try {
+    const connection = await operations.getConnection(connectionId);
+    owner = connection.id !== connectionId || connection.scope === "operator" ? undefined
+      : connection.ownerAccountId ??
+        (connection.scope === "workspace" && connection.workspaceId === plan.workspaceId
+          ? (await operations.workspaces.getWorkspace(plan.workspaceId)).ownerUserId
+          : undefined);
+  } catch (error) {
+    if (controllerErrorCode(error) !== "not_found") throw error;
+  }
+  if (owner !== plan.createdBy) {
+    throw permanent(
+      "source_connection_not_installer_owned",
+      "The Source's Git connection is not the installer's own connection.",
     );
   }
 }

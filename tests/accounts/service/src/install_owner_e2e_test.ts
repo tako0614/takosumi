@@ -169,15 +169,12 @@ for (const backend of BACKENDS) {
     const capsule = await fixture.operations.capsules.getCapsule(plan.capsuleId);
     expect(capsule).toMatchObject({ workspaceId: fixture.workspaceId, installingPrincipalId: ADMIN });
     expect((await fixture.operations.appOwnership!.getOwnership(capsule.id))?.ownerAccountId).toBe(ADMIN);
-    // Creation still seeds the Workspace's other owner/admin people as app
-    // members (unchanged store behaviour, kept for shared Workspaces until
-    // TASK-0118 9B): the Workspace owner is a member of the admin's app, not
-    // its owner, so owner-only actions are refused.
-    expect((await fixture.operations.appAccess!.resolveAppAccess(WORKSPACE_OWNER, capsule.id))?.role).toBe("member");
-    expect((await fixture.route(WORKSPACE_OWNER, "GET", `/api/v1/capsules/${capsule.id}`)).status).toBe(200);
-    const uninstall = await fixture.route(WORKSPACE_OWNER, "POST", `/api/v1/capsules/${capsule.id}/uninstall`, {});
-    expect(uninstall.status).toBe(403);
-    expect((await uninstall.json()).error.code).toBe("app_owner_only");
+    // The admin's app is the admin's alone: the Workspace's owner is not
+    // added as a member and gets no access.
+    expect(await fixture.operations.appOwnership!.listMembers(capsule.id)).toEqual([]);
+    expect(await fixture.operations.appAccess!.resolveAppAccess(WORKSPACE_OWNER, capsule.id)).toBeUndefined();
+    expect((await fixture.route(WORKSPACE_OWNER, "GET", `/api/v1/capsules/${capsule.id}`)).status).toBe(403);
+    expect((await fixture.route(WORKSPACE_OWNER, "POST", `/api/v1/capsules/${capsule.id}/uninstall`, {})).status).toBe(403);
     expect((await fixture.operations.appAccess!.resolveAppAccess(ADMIN, capsule.id))?.role).toBe("owner");
     // Someone with no Workspace role gets nothing.
     expect((await fixture.route(NEWCOMER, "GET", `/api/v1/capsules/${capsule.id}`)).status).toBe(403);
@@ -189,22 +186,33 @@ for (const backend of BACKENDS) {
     expect(created.status).toBe(201);
     const plan = await fixture.reconcileUntil(WORKSPACE_OWNER, (await created.json()).installPlan.id, "planning");
     expect((await fixture.operations.appOwnership!.getOwnership(plan.capsuleId))?.ownerAccountId).toBe(WORKSPACE_OWNER);
+    // The Workspace owner's app still takes its admins as members, as before.
+    expect((await fixture.operations.appAccess!.resolveAppAccess(ADMIN, plan.capsuleId))?.role).toBe("member");
   });
 
-  test(`[${backend}] before its app exists an install is its creator's, without a Workspace decision`, async () => {
+  test(`[${backend}] an admin who leaves the Workspace cannot finish an install started through its route`, async () => {
     const fixture = await compose(backend);
-    const created = await fixture.route(ADMIN, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("creators-app"), "creator-install");
+    const created = await fixture.route(ADMIN, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("left-behind"), "left-behind");
     expect(created.status).toBe(201);
     const planId = (await created.json()).installPlan.id as string;
-    // The admin leaves the Workspace: their own capsule-less install continues.
     const member = await fixture.deployStore.getWorkspaceMember(fixture.workspaceId, ADMIN);
     await fixture.deployStore.putWorkspaceMember({ ...member!, status: "suspended", updatedAt: new Date().toISOString() });
-    expect((await fixture.route(ADMIN, "GET", `/api/v1/install-plans/${planId}`)).status).toBe(200);
-    const plan = await fixture.reconcileUntil(ADMIN, planId, "planning");
-    expect((await fixture.operations.appOwnership!.getOwnership(plan.capsuleId))?.ownerAccountId).toBe(ADMIN);
-    // Someone who neither created it nor holds a Workspace role is refused.
-    const other = await fixture.route(NEWCOMER, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("x"), "x");
-    expect(other.status).toBe(403);
+    expect((await fixture.route(ADMIN, "GET", `/api/v1/install-plans/${planId}`)).status).toBe(403);
+    expect((await fixture.route(ADMIN, "POST", `/api/v1/install-plans/${planId}/reconcile`)).status).toBe(403);
+    expect((await fixture.route(NEWCOMER, "POST", `/api/v1/workspaces/${fixture.workspaceId}/install-plans`, NORMAL_INSTALL("x"), "x")).status)
+      .toBe(403);
+  });
+
+  test(`[${backend}] an install in the creator's own namespace is continued by its creator`, async () => {
+    const fixture = await compose(backend);
+    const created = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", {
+      mode: "attempt", source: { url: "https://github.com/takos/example.git", ref: "main" },
+    }, "own-namespace");
+    expect(created.status).toBe(201);
+    const plan = (await created.json()).installPlan;
+    expect((await fixture.route(NEWCOMER, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(200);
+    // Nobody else reaches it, a Workspace admin of another Workspace included.
+    expect((await fixture.route(ADMIN, "GET", `/api/v1/install-plans/${plan.id}`)).status).toBe(403);
   });
 
   test(`[${backend}] a Workspace admin cannot lend the Workspace owner's Git credential to an install before its app exists`, async () => {
@@ -261,6 +269,22 @@ for (const backend of BACKENDS) {
     expect((await replay.json()).installPlan.id).toBe(firstPlan.id);
     expect((await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", { ...body, capsule: { name: "other" } }, "same-key")).status)
       .toBe(409);
+    // The key stays the account's even when its namespace changes (here the
+    // first namespace is archived and a newer personal Workspace takes over).
+    const [firstNamespace] = await fixture.operations.workspaces.listWorkspacesByOwner(NEWCOMER);
+    expect(firstNamespace!.id).toBe(firstPlan.workspaceId);
+    const later = new Date(Date.now() + 1000).toISOString();
+    await fixture.deployStore.putWorkspace({
+      id: `ws_newer_${firstPlan.workspaceId}`, handle: `newer-${Date.now()}`, displayName: "Newer", type: "personal",
+      ownerUserId: NEWCOMER, createdAt: later, updatedAt: later,
+    });
+    await fixture.deployStore.putWorkspace({ ...firstNamespace!, archivedAt: later, updatedAt: later });
+    const afterMove = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", body, "same-key");
+    expect(afterMove.status).toBe(200);
+    expect((await afterMove.json()).installPlan.id).toBe(firstPlan.id);
+    const fresh = await fixture.route(NEWCOMER, "POST", "/api/v1/install-plans", body, "fresh-key");
+    expect(fresh.status).toBe(201);
+    expect((await fresh.json()).installPlan.workspaceId).toBe(`ws_newer_${firstPlan.workspaceId}`);
     // Another account's identical key is its own install.
     const another = await fixture.route(ADMIN, "POST", "/api/v1/install-plans", body, "same-key");
     expect(another.status).toBe(201);

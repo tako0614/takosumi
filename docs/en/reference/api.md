@@ -614,14 +614,21 @@ Only the member who started the attempt may `PATCH` or `DELETE` it. The new
 app's first owner is the person who started the install (TASK-0118 P9.1-c), also
 when a Workspace admin who is not the Workspace's owner uses a Workspace route;
 provider bindings and the Source `authConnectionId` accept only that person's
-connections (creation still adds the Workspace's other owner/admin people as app
-members). Before its app exists, the install is its creator's: the creator's
-account credential (not a PAT with `appIds` or an installed app's own token, and not
-a shared-account composition that requires current membership) reads and advances
-it without a Workspace decision; if its app was committed before the plan recorded
-it (a lost acknowledgement), the app decides. Before the app exists, its Source's
-`authConnectionId` also accepts only the installer's connection. Workspace-less install idempotency
-is per account, because it is counted in that account's own namespace. `PATCH`
+connections, and install candidates list only rows that record that person as
+owner. The Workspace's other owner/admin people join the new app as members only
+when its owner is the Workspace's owner; an admin's install is the admin's alone.
+Claiming an ownerless Source (a reviewed preflight Source or one a prior
+coordinator recorded) also requires its Git connection to be the installer's.
+Before its app exists, an install in the creator's own namespace (the
+Workspace-less route) is the creator's: the creator's account credential (not a
+PAT with `appIds` or an installed app's own token, and not a shared-account
+composition that requires current membership) reads and advances it without a
+Workspace decision. An install started through a shared Workspace's route keeps
+the Workspace decision, so someone who left that Workspace cannot finish it. If
+the app was committed before the plan recorded it (a lost acknowledgement), the
+app decides. Workspace-less install idempotency is per account: a key also
+replays a plan the account created in another personal namespace it owns
+(archived ones included). `PATCH`
 uses `expectedGeneration` as a CAS fence, and only the confirming
 `continue: true` request carries variable values, which go straight into the
 atomic initial creation and are never stored. Once a confirming request has

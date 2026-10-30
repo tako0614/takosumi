@@ -348,9 +348,9 @@ function connectionAllowed(
 
 /**
  * A Workspace-scoped connection is offered only to the person who will own
- * the app: its installer (TASK-0118 P9.1-c). Binding accepts only the app
- * owner's connections, so anything else would be a dead end. A legacy row
- * without an owner belongs to the owner of the Workspace it records.
+ * the app: its installer (TASK-0118 P9.1-c). Binding accepts only rows that
+ * record the app owner as their owner, so anything else (another person's
+ * row, or a legacy row without a recorded owner) would be a dead end.
  */
 function isOfferableConnection(
   connection: ProviderConnection,
@@ -361,7 +361,7 @@ function isOfferableConnection(
     (connection.scope === "workspace" &&
       connection.status === "verified" &&
       connection.workspaceId === workspace.id &&
-      (connection.ownerAccountId ?? workspace.ownerUserId) === appOwnerAccountId);
+      connection.ownerAccountId === appOwnerAccountId);
 }
 
 function sameRequirement(
