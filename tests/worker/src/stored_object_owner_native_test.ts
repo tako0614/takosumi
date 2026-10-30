@@ -20,16 +20,23 @@ import { R2PrivateRunFileBlobStore } from ${JSON.stringify(join(ROOT, "worker/sr
 import { D1PrivateRunFileRepository } from ${JSON.stringify(join(ROOT, "worker/src/d1_private_run_file_repository.ts"))};
 import { PartitionedSecretBoundaryCrypto } from ${JSON.stringify(join(ROOT, "core/adapters/secret-store/memory.ts"))};
 const digest = "sha256:" + "a".repeat(64);
+// Hosted-shaped (origin/main before 9B): it requires and catalogs by
+// workspaceId and echoes only that. An apps/{cap} object also carries
+// capsuleId, with the Capsule's frozen scope as workspaceId (TASK-0118 P9.1-f).
+const ownerOf = (input) => {
+  if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("hosted requires workspaceId");
+  return {workspaceId:input.workspaceId};
+};
 function composition(env, owners) {
   const usage = {
     async readStoredSource(input) { return {sourceRef:"source_"+input.bucketRole,epochRef:"epoch_one",qualificationDigest:digest}; },
     async readStoredObject(input) {
       let row = await env.DB.prepare("select snapshot from fixture_usage where object_ref=?").bind(input.objectRef).first();
-      return row ? JSON.parse(row.snapshot) : {workspaceId:input.workspaceId,revision:0,bytes:"0",versionDigest:null};
+      return row ? JSON.parse(row.snapshot) : {...ownerOf(input),revision:0,bytes:"0",versionDigest:null};
     },
     async prepareStoredObject(input) {
       const intent = {operationRef:input.operationRef,expectedRevision:input.expectedRevision,kind:input.desired===null?"delete":"put",bytes:input.desired?.bytes??"0",contentDigest:input.desired?.contentDigest??null,state:"pending"};
-      const snapshot = {workspaceId:input.workspaceId,revision:0,bytes:"0",versionDigest:null,pending:intent};
+      const snapshot = {...ownerOf(input),revision:0,bytes:"0",versionDigest:null,pending:intent};
       await env.DB.prepare("insert into fixture_usage(object_ref,owner,snapshot,request) values(?,?,?,?)").bind(input.objectRef,input.workspaceId,JSON.stringify(snapshot),JSON.stringify(input)).run();
       const control = await env.DB.prepare("select value from fixture_control where name='swap_lease'").first();
       if(control?.value) await env.DB.prepare("update runs set lease_token='lease_taken_over' where id=?").bind(control.value).run();
@@ -43,7 +50,7 @@ function composition(env, owners) {
       if(fail?.value === 'yes') throw new Error('synthetic committed R2 effect without catalogue ACK');
       const row = await env.DB.prepare("select request from fixture_usage where object_ref=?").bind(input.objectRef).first();
       const request = JSON.parse(row.request);
-      const snapshot = {workspaceId:input.workspaceId,revision:1,bytes:request.desired?.bytes??"0",versionDigest:input.newVersionDigest};
+      const snapshot = {...ownerOf(input),revision:1,bytes:request.desired?.bytes??"0",versionDigest:input.newVersionDigest};
       await env.DB.prepare("update fixture_usage set snapshot=? where object_ref=?").bind(JSON.stringify(snapshot),input.objectRef).run();
     },
     async cancelStoredObject() { throw new Error("unexpected fixture cancellation"); }
@@ -61,7 +68,7 @@ export default {
       if(!row) return null;
       const request = JSON.parse(row.request);
       if(request.bucketRole !== input.bucketRole || request.sourceRef !== 'source_'+input.bucketRole) throw new Error('foreign source');
-      return {workspaceId:row.owner,sourceRef:request.sourceRef,epochRef:'epoch_one',qualificationDigest:digest};
+      return {...ownerOf(request),sourceRef:request.sourceRef,epochRef:'epoch_one',qualificationDigest:digest};
     }};
     const owners = createStoredObjectOwnerResolver({database:env.DB,buckets,privateRunFilePrefix:"private",sources:sourceReader,originalOwners});
     try {
@@ -377,17 +384,25 @@ test("v77 persisted apps root controls Runner writes and retained pointer reads"
     const scope = { workspaceId, subjectKind: "capsule", subjectId: capsuleId, environment: "live", generation: 1, stateRef: key };
     expect((await call({ operation: "runner", bucketRole: "state", runId: apply.id, expectedLeaseToken: "lease_one", key: `workspaces/${workspaceId}/capsules/${capsuleId}/environments/live/state-versions/00000001.tfstate.enc`, scope })).status).toBe(503);
     expect((await call({ operation: "runner", bucketRole: "state", runId: apply.id, expectedLeaseToken: "lease_one", key, scope })).status).toBe(200);
+    // The apps/ write is measured for its Capsule (P9.1-f); the Hosted-shaped
+    // host still receives the Capsule's frozen scope as workspaceId.
+    expect(await db.prepare("select owner from fixture_usage").first("owner")).toBe(workspaceId);
+    expect(JSON.parse(await db.prepare("select request from fixture_usage").first("request") as string))
+      .toMatchObject({ workspaceId, capsuleId });
     await db.prepare("insert into state_versions values('state_app',?,?, 'live',1,?)").bind(workspaceId, capsuleId, key).run();
+    expect((await call({ operation: "resolve", bucketRole: "state", key })).body.result).toEqual({ workspaceId, capsuleId });
     const pointer = `${storageRoot}/environments/live/state-versions/current.json`;
     await (await runtime.getR2Bucket("STATE")).put(pointer, "pointer");
-    expect((await call({ operation: "resolve", bucketRole: "state", key: pointer })).body.result).toEqual({ workspaceId });
+    expect((await call({ operation: "resolve", bucketRole: "state", key: pointer })).body.result).toEqual({ workspaceId, capsuleId });
     const sidecar = `${storageRoot}/runs/${plan.id}/plan.json.zst.enc`;
     await (await runtime.getR2Bucket("ARTIFACTS")).put(sidecar, "sidecar", { customMetadata: { "takosumi-plan-run-id": plan.id } });
-    expect((await call({ operation: "resolve", bucketRole: "artifacts", key: sidecar })).body.result).toEqual({ workspaceId });
+    expect((await call({ operation: "resolve", bucketRole: "artifacts", key: sidecar })).body.result).toEqual({ workspaceId, capsuleId });
     await db.prepare("update capsules set storage_root='apps/forged'").run();
     expect((await call({ operation: "runner", bucketRole: "artifacts", runId: apply.id, expectedLeaseToken: "lease_one", key: `${storageRoot}/runs/${apply.id}/outputs.raw.json.enc`, scope })).status).toBe(503);
     await db.prepare("delete from capsules where id=?").bind(capsuleId).run();
-    expect((await call({ operation: "resolve", bucketRole: "state", key: pointer })).body.result).toEqual({ workspaceId });
+    // Without its Capsule row an apps/ object has no frozen scope to report:
+    // unknown ownership blocks instead of falling back to the Workspace column.
+    expect((await call({ operation: "resolve", bucketRole: "state", key: pointer })).status).toBe(503);
   } finally { await fixture.close(); }
 }, 30_000);
 

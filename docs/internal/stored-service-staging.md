@@ -36,7 +36,10 @@ intent, declare absence or advance coverage.
 The local resolver reads bounded exact StateVersion, artifact/Run,
 SourceSnapshot/SourceSyncRun, Backup and private-file receipt allocations. Raw
 keys stay in OSS. Key and metadata IDs can select a record but cannot establish
-its Workspace by themselves. Private-file receipt lookup verifies the exact
+its owner by themselves. An object under an app's `apps/{cap}` root belongs to
+that Capsule, which its ledger record must name, and until stage 9B carries
+the Capsule's frozen scopeRef as its Workspace; every other object belongs to
+its record's Workspace ([app storage roots](../operations/app-storage-roots.md)). Private-file receipt lookup verifies the exact
 original scope/blob identity and all four native metadata fields.
 
 New writes can precede final StateVersion, Backup or private-file pointer
@@ -91,7 +94,7 @@ This is a forward hash lookup of an existing allocation; it never reverses a
 hash or assigns ownership from a key prefix. The pending intent remains
 pending. An owner response grants no version, quantity or coverage fact.
 
-Retained allocations preserve their original Workspace after current Workspace
+Retained allocations preserve their original owner after current Workspace
 or membership deletion. Historical reads and already-accepted Restore cleanup
 do not require new Workspace admission. Unknown pre-profile objects, missing
 allocation evidence, conflicting owners and resolver capacity exhaustion block

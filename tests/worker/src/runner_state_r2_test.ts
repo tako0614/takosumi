@@ -1480,6 +1480,53 @@ test("new Capsule apply writes state and outputs under its apps root", async () 
   assert.ok(fixture.artifacts.body(fixture.rawOutputRef));
 });
 
+// TASK-0118 P9.1-f: an app's root is read back from the stateRef Core allocated
+// from the persisted root, a legacy root must still be the one the dispatch's
+// Workspace names, and every new state object names its root.
+for (const [name, storageRoot] of [
+  ["an app", "apps/inst_1"],
+  ["a legacy Capsule", "workspaces/spc_1/capsules/inst_1"],
+] as const) {
+  test(`${name} writes state, pointer and outputs under its persisted root and names it`, async () => {
+    const fixture = await deadlineApplyFixture("apply_root", storageRoot);
+    const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT") return Response.json({ ok: true });
+        if (request.method === "POST" && path === "/runs/plan_1") return Response.json({ status: "succeeded", exitCode: 0 });
+        if (request.method === "GET" && path === "/runs/plan_1/artifacts/tfstate") {
+          return new Response(NEW_STATE_BYTES, { headers: { "content-type": "application/json" } });
+        }
+        if (request.method === "GET" && path === "/runs/plan_1/artifacts/outputs") return Response.json({});
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    });
+    const response = await runner.fetch(fixture.request());
+    assert.equal(response.status, 200);
+    assert.ok(fixture.state.body(`${storageRoot}/environments/production/state-versions/current.json`));
+    assert.ok(fixture.artifacts.body(fixture.rawOutputRef));
+    const metadata = fixture.state.metadata(fixture.stateScope.stateRef)!;
+    assert.equal(metadata["takosumi-capsule-id"], "inst_1");
+    assert.equal(metadata["takosumi-storage-root"], storageRoot);
+    // Still filled for an older Worker's Restore; no longer an owner proof.
+    assert.equal(metadata["takosumi-workspace-id"], "spc_1");
+  });
+}
+
+test("a legacy stateRef that is not the root the dispatch's Workspace names is refused before any write", async () => {
+  // A legacy Capsule whose Workspace id moved after its root was frozen: the
+  // Runner keeps refusing it until stage 9.5 gives the dispatch the scope.
+  const fixture = await deadlineApplyFixture("apply_moved", "workspaces/spc_frozen/capsules/inst_1");
+  let dispatched = false;
+  const runner = runnerWithContainer(fixture.artifacts, fixture.state, {
+    async containerFetch() { dispatched = true; return Response.json({ error: "unexpected" }, { status: 500 }); },
+  });
+  const response = await runner.fetch(fixture.request());
+  assert.notEqual(response.status, 200);
+  assert.equal(fixture.state.body(fixture.stateScope.stateRef), undefined);
+  assert.equal(dispatched, false);
+});
+
 test("a budget-timed-out apply persists partial state and a completion receipt that a takeover adopts", async () => {
   const applyRunId = "apply_deadline_timeout";
   const fixture = await deadlineApplyFixture(applyRunId);

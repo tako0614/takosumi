@@ -5,10 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Hosted-shaped custody (takosumi-hosted origin/main before 9B): it requires
+// a workspaceId on every call and keys its ledger by it.
 const HOST = `
   import { WorkerEntrypoint } from "cloudflare:workers";
   export class Custody extends WorkerEntrypoint {
     async readArtifactRetention(input) {
+      if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("storageToken: workspaceId required");
       const row = await this.env.DB.prepare("SELECT input, ack FROM observations WHERE artifact_ref = ?").bind(input.artifactRef).first();
       if (!row) return null;
       const original = JSON.parse(row.input);
@@ -23,6 +26,7 @@ const HOST = `
       return { operationRef: "retain:" + input.artifactRef.slice(7), state: original?.acknowledgementDigest ? "confirmed" : "pending" };
     }
     async confirmArtifactRetention(input) {
+      if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("storageToken: workspaceId required");
       await this.env.DB.prepare("INSERT INTO attempts(input) VALUES(?)").bind(JSON.stringify(input)).run();
       const fail = await this.env.DB.prepare("SELECT value FROM controls WHERE key='fail-confirm'").first();
       if (fail?.value === 'yes') {
@@ -38,6 +42,7 @@ const HOST = `
       return { operationRef: "release:" + input.artifactRef.slice(7) };
     }
     async confirmArtifactRelease(input) {
+      if (typeof input.workspaceId !== "string" || !input.workspaceId) throw new Error("storageToken: workspaceId required");
       await this.env.DB.prepare("UPDATE observations SET released=1 WHERE artifact_ref=?").bind(input.artifactRef).run();
     }
   }
@@ -61,7 +66,14 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
           ? "apps/c_app/environments/stage/state-versions/00000001.tfstate.enc"
           : "workspaces/ws_native/capsules/" + (route.includes("conditional") ? "c_conditional" : "c_native") + "/environments/stage/state-versions/00000001.tfstate.enc";
         const bytes = new Uint8Array(mutableAppInput ? [1,2,3,4] : route === "/changed" ? [1,2,3,5] : [1,2,3,4]);
-        const customMetadata = {
+        // An apps/ object names its Capsule and root; any Workspace metadata on
+        // it is not an owner (TASK-0118 P9.1-f).
+        const customMetadata = appKey ? {
+          "takosumi-workspace-id": "ws_unrelated",
+          "takosumi-capsule-id": route === "/app-mismatch" ? "c_other" : "c_app",
+          "takosumi-storage-root": route === "/app-wrong-root" ? "apps/c_other" : "apps/c_app",
+          "takosumi-logical-target-state-ref":key, "takosumi-ciphertext-length":"4",
+        } : {
           "takosumi-workspace-id":"ws_native", "takosumi-logical-target-state-ref":key,
           "takosumi-ciphertext-length":"4",
         };
@@ -70,18 +82,10 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
           async put(...args) { physicalPuts++; const result = await env.STATE.put(...args); if (route === "/lost-put" || route === "/lost-put-conditional") throw new Error("lost PUT ACK"); return result; },
           async delete(k) { physicalDeletes++; await env.STATE.delete(k); if (route === "/lost-delete") throw new Error("lost DELETE ACK"); },
         };
-        const bucket = artifactStorageUsageBucket(raw, env.CUSTODY, route === "/app-missing"
-          ? {}
-          : { resolveAppWorkspace: async capsuleId => {
-            if (capsuleId !== "c_app") return undefined;
-            if (route === "/app-mutable") return await new Promise(resolve => setTimeout(() => {
-              bytes.fill(9);
-              customMetadata["takosumi-workspace-id"] = "ws_other";
-              customMetadata["takosumi-ciphertext-length"] = "999";
-              resolve("ws_native");
-            }, 0));
-            return route === "/app-mismatch" ? "ws_other" : "ws_native";
-          } });
+        // The Capsule's frozen scope, as the Runner reads it from the Capsule row.
+        const bucket = artifactStorageUsageBucket(raw, env.CUSTODY, {
+          resolveAppScope: async (capsuleId) => route === "/app-no-scope" || capsuleId !== "c_app" ? undefined : "ws_native",
+        });
         try {
           if (route === "/delete" || route === "/lost-delete" || route === "/malformed-delete") await bucket.delete(key);
           else if (route === "/read") return Response.json({ objects: (await bucket.list()).objects.length, physicalPuts,physicalDeletes });
@@ -90,7 +94,14 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
             if (!object || (new Uint8Array(await object.arrayBuffer())).join(",") !== "1,2,3,4") throw new Error("adoption byte mismatch");
           }
           else {
-            await bucket.put(key, bytes, {...(route.includes("conditional") ? {onlyIf:{etagDoesNotMatch:"*"}} : {}),customMetadata});
+            const pending = bucket.put(key, bytes, {...(route.includes("conditional") ? {onlyIf:{etagDoesNotMatch:"*"}} : {}),customMetadata});
+            if (route === "/app-mutable") {
+              // The caller changes its inputs while the write is still awaiting.
+              bytes.fill(9);
+              customMetadata["takosumi-capsule-id"] = "c_other";
+              customMetadata["takosumi-ciphertext-length"] = "999";
+            }
+            await pending;
             if (route === "/app-mutable") {
               const object = await raw.get(key);
               return Response.json({bytes:[...new Uint8Array(await object.arrayBuffer())],customMetadata:object.customMetadata});
@@ -141,28 +152,38 @@ test("workerd R2 writer records exact encrypted bytes and preserves unknown ACK 
     expect((await db.prepare("SELECT count(*) AS n FROM observations WHERE ack IS NULL").first<{ n: number }>())?.n).toBe(0);
     expect(await (await runtime.dispatchFetch("https://artifact.test/read")).json()).toEqual({ objects: 1, physicalPuts: 2, physicalDeletes: 1 });
     const beforeApps = await (await runtime.dispatchFetch("https://artifact.test/read")).json() as { physicalPuts: number };
-    const missingResolver = await runtime.dispatchFetch("https://artifact.test/app-missing");
-    expect(missingResolver.status).toBe(503);
-    expect(await missingResolver.json()).toMatchObject({ error: "artifact storage custody is unavailable", physicalPuts: beforeApps.physicalPuts });
-    const mismatchedResolver = await runtime.dispatchFetch("https://artifact.test/app-mismatch");
-    expect(mismatchedResolver.status).toBe(503);
-    expect(await mismatchedResolver.json()).toMatchObject({ error: "artifact storage acknowledgement is invalid", physicalPuts: beforeApps.physicalPuts });
-    const resolvedApp = await runtime.dispatchFetch("https://artifact.test/app-valid");
-    expect(resolvedApp.status).toBe(200);
-    expect(await resolvedApp.json()).toMatchObject({ physicalPuts: beforeApps.physicalPuts + 1 });
+    // An apps/ key is measured for the Capsule its own root names; the object
+    // must name that Capsule and root, and nothing is looked up to a Workspace.
+    for (const route of ["/app-mismatch", "/app-wrong-root"]) {
+      const refused = await runtime.dispatchFetch(`https://artifact.test${route}`);
+      expect(refused.status, route).toBe(503);
+      expect(await refused.json(), route).toMatchObject({ error: "artifact storage acknowledgement is invalid", physicalPuts: beforeApps.physicalPuts });
+    }
+    // Without a Capsule scope there is no custody to report to the host.
+    const noScope = await runtime.dispatchFetch("https://artifact.test/app-no-scope");
+    expect(noScope.status).toBe(503);
+    expect(await noScope.json()).toMatchObject({ error: "artifact storage custody is unavailable", physicalPuts: beforeApps.physicalPuts });
     const mutableApp = await runtime.dispatchFetch("https://artifact.test/app-mutable");
     expect(mutableApp.status).toBe(200);
     const mutableResult = await mutableApp.json() as { bytes: number[]; customMetadata: Record<string, string> };
     expect(mutableResult.bytes).toEqual([1, 2, 3, 4]);
     expect(mutableResult.customMetadata).toMatchObject({
-      "takosumi-workspace-id": "ws_native",
+      "takosumi-capsule-id": "c_app",
+      "takosumi-storage-root": "apps/c_app",
       "takosumi-logical-target-state-ref": "apps/c_app/environments/stage/state-versions/00000001.tfstate.enc",
       "takosumi-ciphertext-length": "4",
     });
     const appReceipt = await db.prepare("SELECT input,ack FROM observations ORDER BY rowid DESC LIMIT 1")
       .first<{ input: string; ack: string }>();
-    expect(JSON.parse(appReceipt!.input)).toMatchObject({ workspaceId: "ws_native", bytes: "4", replayOnly: false });
+    const appFact = JSON.parse(appReceipt!.input);
+    // Measured for the Capsule; the Hosted-shaped host still gets its frozen
+    // scope as workspaceId (not the "ws_unrelated" object metadata).
+    expect(appFact).toMatchObject({ workspaceId: "ws_native", capsuleId: "c_app", bytes: "4", replayOnly: false });
     expect(appReceipt!.ack).toBe(mutableResult.customMetadata["takosumi-storage-observation-digest"]);
+    // An exact replay of the same apps/ object adopts the existing receipt.
+    const replayedApp = await runtime.dispatchFetch("https://artifact.test/app-valid");
+    expect(replayedApp.status).toBe(200);
+    expect(await replayedApp.json()).toMatchObject({ physicalPuts: beforeApps.physicalPuts + 1 });
   } finally {
     await runtime?.dispose();
     await rm(dir, { recursive: true, force: true });

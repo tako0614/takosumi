@@ -57,7 +57,10 @@ billing aliases are not part of the current contract.
 ## Optional retained-artifact facts
 
 `TAKOSUMI_ARTIFACT_STORAGE_USAGE` is an operator-selected private direct RPC
-port for exact retained-artifact facts. It carries Workspace scope, an opaque
+port for exact retained-artifact facts. It carries the owner scope: the
+Workspace of a legacy `workspaces/…` key, or for an app's `apps/{cap}` root the
+Capsule (`capsuleId`) plus, until stage 9B, that Capsule's frozen scopeRef as
+`workspaceId` (see [app storage roots](./app-storage-roots.md)). It also carries an opaque
 artifact digest, exact encrypted byte count and an authenticated acknowledgement;
 it carries no price, wallet, Organization, account or session. A missing port
 preserves self-host behavior. Configuring this source requires its approved
@@ -104,8 +107,9 @@ runtime constructor. No new purge, TTL or state authority is introduced.
 These hooks do not establish complete coverage by themselves. The owning host
 must qualify every physical writer, external S3 principal, lifecycle rule and
 shared bucket; register a fixed physical source namespace; and resolve every
-existing object to its original canonical Workspace through trusted allocation
-or ledger evidence. A sanitized key, legacy backend hash or private-file digest
+existing object to its original canonical owner through trusted allocation
+or ledger evidence: its Workspace, or the Capsule of an object under an app's
+`apps/{cap}` root (with the Capsule's frozen scope as its Workspace until 9B). A sanitized key, legacy backend hash or private-file digest
 alone is not that evidence. Historical `spaces/*` source archives and orphaned
 private blobs require explicit adoption evidence. Unknown ownership blocks the
 inventory rather than becoming zero. Retained current pointers, old immutable
@@ -114,7 +118,7 @@ versions and unreferenced physical objects remain in the measured inventory.
 The named `PrivateStoredInventoryWorker` scans native R2 in bounded pages while
 the owner catalog holds the source-wide write fence. It checks the same fence
 before and after each page, uses `truncated/cursor` for EOF, and emits only opaque
-object identities, original Workspace ownership, native upload-version digests
+object identities, original Workspace or Capsule ownership, native upload-version digests
 and exact byte sizes. Raw keys and metadata remain with the OSS storage owner.
 The host's catalog verifies the cursor and digest chain before sealing a nonzero
 per-object baseline. A missing writer or partial page never proves completeness.

@@ -70,6 +70,137 @@ Source's own `apps/` archive canonical, and by the operator release activator.
 The custody prefixes and validators accept `apps/` whether or not the flag is
 on, so turning it off again never strands an archive.
 
+## Owner attribution and usage
+
+An object under an app's `apps/{cap}` root is attributed to that Capsule;
+every other object keeps the Workspace it has always been attributed to.
+
+- **Host contract until 9B.** Both usage ports keep `workspaceId` on every
+  call so Hosted (`takosumi-hosted` `src/artifact-storage-custody.ts` and
+  `src/stored-service-custody.ts`, which key their ledgers by it) keeps
+  working. An `apps/` object adds `capsuleId`, and its `workspaceId` is the
+  Capsule's frozen scopeRef (its stored scopeRef, else the Workspace id its
+  record was written under). For every existing app that is the Workspace id
+  it was created under. It is never the live Workspace column, and it does not
+  move. An install reservation's Capsule does not exist yet; its scope is the
+  Source's Workspace id, which that Capsule is created with. A legacy object's
+  context keeps exactly the shape and key order it had (`workspaceId` only),
+  so operation digests of intents already pending are unchanged. A host
+  snapshot is matched by `workspaceId`, and by `capsuleId` only when the host
+  echoes one.
+- Retained-artifact facts (`TAKOSUMI_ARTIFACT_STORAGE_USAGE`,
+  `worker/src/artifact-storage-usage.ts`) take the Capsule of an `apps/` state
+  key from the key Core allocated from the persisted root, and its scope from
+  the Capsule row. Without a scope, custody is unavailable and nothing is
+  written. The Runner no longer reads `capsules.space_id` for it.
+- The complete stored-service profile (`StoredObjectOwner` in
+  `worker/src/stored-service-usage.ts`) has the same shape. The owner resolver
+  (`worker/src/stored-object-owner-resolver.ts`) takes an `apps/` object's
+  Capsule from its ledger record: the StateVersion's Capsule, the Run's
+  Capsule, the persisted Source's owner (for a Source archive), or the
+  backup's Capsule. The key alone is never proof. An `apps/` object whose
+  Capsule row or Source row is gone is unresolvable; it is not attributed to a
+  Workspace column. Every write path
+  (`worker/src/stored-service-owner-context.ts`) pins the same owner, and a
+  Source sync may write an `apps/` archive only under its own Source's owner
+  prefix.
+- Private Run files stay Workspace-scoped until stage 9.5/9.6.
+- A current pointer is matched against the root of the latest retained
+  StateVersion's own key, not a root rebuilt from its Workspace column.
+- **9B migration for Hosted.** Hosted moves its retained-artifact and
+  stored-service ledgers from `workspaceId` to `capsuleId` for objects that
+  carry one, keeping the existing `workspaceId`-keyed rows for legacy
+  objects. Only after that can a later stage drop `workspaceId` from
+  `apps/` facts. Changing the Workspace scope of an existing object before
+  then would split its custody across two ledger rows. A Capsule whose
+  scopeRef is its own id (if a later stage creates such Capsules) would
+  appear to Hosted as its own tenant until then.
+
+There is no production binding for either profile.
+
+**Before deploying this to an environment with a stored-service profile
+bound** (`TAKOSUMI_STORED_SERVICE_USAGE`), drain the pending intents of
+`apps/` objects: their custody context gains `capsuleId`, so an operation digest
+prepared by the previous Worker no longer matches and its intent would stay
+pending. Legacy objects' contexts are unchanged.
+
+## Object metadata and Restore
+
+- The Runner Durable Object reads an app's `apps/{cap}` root back from the
+  stateRef Core allocated from the persisted root. A legacy root must still be
+  the one the dispatch's Workspace id names, exactly as before, which keeps the
+  check that a legacy stateRef is the Capsule's persisted root. Until stage 9.5
+  gives the dispatch the frozen scope, a legacy Capsule whose Workspace id
+  moved is refused before any write.
+- Every new Capsule state object, Restore stage and staged recovery artifact
+  carries `takosumi-capsule-id` and `takosumi-storage-root`. It still carries
+  `takosumi-workspace-id`, so a rolled-back Worker can restore it, but that is
+  no longer an owner proof.
+- Restore, its acknowledgement, the Restore-origin source check and the
+  Restore stage collector check an object that names its root against that
+  root only. An object written before stage 9.1-f has no root and is bound by
+  its `takosumi-workspace-id` as before: the key's Workspace segment or the
+  source StateVersion's Workspace. An old `apps/` object has no Workspace in
+  its key, so its Capsule id binds it. The Restore acknowledgement no longer
+  reads the Run's Workspace for it, except to fill the stored-service runner
+  scope.
+
+## Storage-root check
+
+`scripts/check-capsule-storage-roots.ts` is read-only. It lists every Capsule
+row, destroyed ones included, and resolves its root exactly as the stores do:
+
+- `apps` / `legacy`: a persisted canonical root;
+- `derived`: no persisted root, resolved from the frozen scopeRef (else the
+  Workspace id) by the fallback stage 9.5 removes. These rows must be 0 before
+  the 9.5 bridge (backfill them with the ownership backfill);
+- `unresolvable`: an invalid record, a root that is not the Capsule's own, or no
+  usable scope;
+- `workspaceColumnMismatch`: rows whose record `workspaceId` differs from
+  their `space_id` column (the scope fallback and older code would disagree);
+- `orphanAppArchives`: `apps/` Source archives allocated for a Capsule that
+  has no row (an abandoned install reservation), by Source and Capsule, for
+  the storage inventory. They do not fail the check.
+
+The tool exits 1 when any row is unresolvable or mismatched.
+
+```ts
+// /absolute/operator/storage-root-check.ts
+import { CloudflareD1RestTransport } from "<repo>/deploy/cloudflare/d1-rest-transport.ts";
+import { d1CapsuleStorageRootCheckTarget } from "<repo>/core/domains/capsules/storage_root_check.ts";
+
+export async function openCapsuleStorageRootCheck() {
+  const db = new CloudflareD1RestTransport({ accountId, databaseId, apiToken });
+  return { target: d1CapsuleStorageRootCheckTarget(db) };
+}
+```
+
+```bash
+bun --no-env-file scripts/check-capsule-storage-roots.ts --adapter="$ADAPTER"
+# review: total, byStatus, byRoot, derived, unresolvable,
+#         workspaceColumnMismatch, orphanAppArchives, ok
+```
+
+Postgres uses `sqlCapsuleStorageRootCheckTarget(client)`. For a rehearsal,
+point the D1 target at a local SQLite copy of an export. The test
+`tests/core/domains/capsules/storage_root_check_test.ts` checks it against the
+memory, Postgres and D1 stores' own `getCapsuleStorageRoot`. Running it
+against staging or production reads that database and still needs the user's
+prior approval. At planning time (2026-10-30) production had 58 Capsule rows
+and staging 103, none with a null `storage_root`.
+
+## What still reads the Workspace id
+
+| Value | Owner stage |
+| --- | --- |
+| An existing Capsule's Source archive layout (the Source record's own Workspace id) | 9.5/9.6 |
+| Stored-service profile only: the Restore acknowledgement of an `apps/` root reads the Run's Workspace to fill the runner scope, which `assertRunnerAllocation` compares with the Run; and the Capsule-row consistency checks in `storedCapsuleArtifactRoot` | 9.5 |
+| Restore fence Durable Object name (`restoreRunnerObjectName`) | 9.1-f/9.5 (the serialized restore job carries no scope yet) |
+| Staged state-recovery handle and custody digest | 9.5 |
+| Private Run file scope, keys and AAD | 9.5/9.6 |
+| The Runner's legacy-root check compares the stateRef with the root the dispatch's Workspace id names | 9.5 (dispatch carries the frozen scope) |
+| The usage ports' `workspaceId` (the Capsule's frozen scopeRef for an `apps/` object) | 9B (Hosted keys `apps/` facts by `capsuleId`) |
+
 ## Rollout
 
 The Runner image validates the archive key it writes (`runner/lib/policy.ts`),

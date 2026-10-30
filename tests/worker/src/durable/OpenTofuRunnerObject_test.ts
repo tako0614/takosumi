@@ -5730,12 +5730,69 @@ test("OpenTofu runner Restore accepts the exact ledger-bound Restore-origin Stat
   assert.equal(ledger.sourceQueryCount, 1);
 });
 
+// TASK-0118 P9.1-f: Restore under an app's `apps/` root and under a legacy
+// root. A source written before 9.1-f is bound by its Workspace metadata; one
+// written since, by its storage root. An `apps/` root does not depend on the
+// dispatch's Workspace, so its second Restore names a moved one; a legacy root
+// must still be the one the dispatch's Workspace names.
+for (const [name, root, secondWorkspace] of [
+  ["an app's apps root", "apps/inst_1", "space_moved"],
+  ["a legacy root", "workspaces/space_1/capsules/inst_1", "space_1"],
+] as const) {
+  test(`OpenTofu runner Restore restores old and new objects under ${name}`, async () => {
+    const state = new HookedR2Bucket();
+    const storage = new FakeDoStorage();
+    const ledger = new FakeRestoreLedgerDatabase();
+    const source = await seedRestoreSource(state, 1, STATE_BYTES, root);
+    const runner = restoreRunner(state, storage, ledger);
+    // The pre-9.1-f source names Workspace space_1, as its StateVersion does.
+    const restored = await runner.fetch(restoreRequest("restore_root_old_object", source, undefined, { root }));
+    assert.equal(restored.status, 200);
+    const payload = (await restored.json()) as { state: { stateRef: string; digest: string; runId: string } };
+    assert.ok(payload.state.stateRef.startsWith(`${root}/environments/production/state-versions/`));
+    const stage = await state.head(payload.state.stateRef);
+    assert.equal(stage?.customMetadata?.["takosumi-storage-root"], root);
+    assert.equal(stage?.customMetadata?.["takosumi-capsule-id"], "inst_1");
+
+    // Restore again from that new object: its storage root binds it.
+    const restoreOrigin: RestoreSourceDescriptor = {
+      stateVersionId: `state_restore_root_${root.split("/")[0]}`,
+      workspaceId: secondWorkspace,
+      capsuleId: "inst_1",
+      environment: "production",
+      generation: 2,
+      stateRef: payload.state.stateRef,
+      digest: payload.state.digest,
+      createdByRunId: payload.state.runId,
+    };
+    ledger.referenceExactStateVersion(restoreOrigin);
+    const replayed = await runner.fetch(restoreRequest("restore_root_new_object", restoreOrigin, undefined, {
+      workspaceId: secondWorkspace, generation: 3, root,
+    }));
+    assert.equal(replayed.status, 200);
+    assert.equal(ledger.sourceQueryCount, 1);
+    if (root.startsWith("workspaces/")) {
+      // A dispatch naming another Workspace than the legacy root's is refused.
+      const moved = await runner.fetch(restoreRequest("restore_root_moved", source, undefined, {
+        workspaceId: "space_moved", generation: 4, root,
+      }));
+      assert.notEqual(moved.status, 200);
+    }
+  });
+}
+
 test("OpenTofu runner Restore rejects mismatched Restore-origin object authority proof", async () => {
+  // `takosumi-workspace-id` binds only an object written before TASK-0118
+  // P9.1-f; the "legacy:" scenarios drop `takosumi-storage-root` to model one.
+  // A current object is bound by its storage root instead.
   const scenarios = [
     ["takosumi-run-id", "restore_different_creator"],
     ["takosumi-generation", "1"],
-    ["takosumi-workspace-id", "space_2"],
+    ["legacy:takosumi-workspace-id", "space_2"],
+    ["takosumi-storage-root", "workspaces/space_2/capsules/inst_1"],
+    ["takosumi-storage-root", "apps/inst_1"],
     ["takosumi-capsule-id", "inst_2"],
+    ["legacy:takosumi-capsule-id", "inst_2"],
     ["takosumi-environment", "staging"],
     [
       "takosumi-logical-target-state-ref",
@@ -5748,7 +5805,9 @@ test("OpenTofu runner Restore rejects mismatched Restore-origin object authority
     ],
   ] as const;
 
-  for (const [index, [metadataName, invalidValue]] of scenarios.entries()) {
+  for (const [index, [scenarioName, invalidValue]] of scenarios.entries()) {
+    const legacy = scenarioName.startsWith("legacy:");
+    const metadataName = legacy ? scenarioName.slice("legacy:".length) : scenarioName;
     const state = new HookedR2Bucket();
     const storage = new FakeDoStorage();
     const ledger = new FakeRestoreLedgerDatabase();
@@ -5763,10 +5822,13 @@ test("OpenTofu runner Restore rejects mismatched Restore-origin object authority
     };
     const object = await state.get(payload.state.stateRef);
     assert.ok(object);
+    // The stage names its persisted root (TASK-0118 P9.1-f).
+    assert.equal(object.customMetadata?.["takosumi-storage-root"], "workspaces/space_1/capsules/inst_1");
+    const { "takosumi-storage-root": storageRoot, ...withoutRoot } = object.customMetadata ?? {};
     await state.put(payload.state.stateRef, await object.arrayBuffer(), {
       httpMetadata: object.httpMetadata,
       customMetadata: {
-        ...object.customMetadata,
+        ...(legacy ? withoutRoot : { ...withoutRoot, "takosumi-storage-root": storageRoot! }),
         "takosumi-workspace-id": "space_1",
         "takosumi-capsule-id": "inst_1",
         "takosumi-environment": "production",
@@ -5794,8 +5856,8 @@ test("OpenTofu runner Restore rejects mismatched Restore-origin object authority
       ),
     );
 
-    assert.notEqual(response.status, 200, metadataName);
-    assert.equal(ledger.sourceQueryCount, 1, metadataName);
+    assert.notEqual(response.status, 200, scenarioName);
+    assert.equal(ledger.sourceQueryCount, 1, scenarioName);
   }
 });
 
@@ -6718,8 +6780,10 @@ async function seedRestoreSource(
   state: FakeR2Bucket,
   generation: number,
   plaintext: Uint8Array,
+  /** Capsule root; the seeded object predates `takosumi-storage-root`. */
+  root = "workspaces/space_1/capsules/inst_1",
 ): Promise<RestoreSourceDescriptor> {
-  const stateRef = `${RESTORE_STATE_PREFIX}/${String(generation).padStart(
+  const stateRef = `${root}/environments/production/state-versions/${String(generation).padStart(
     8,
     "0",
   )}.tfstate.enc`;
@@ -6842,13 +6906,16 @@ function restoreRequest(
     readonly capsuleId?: string;
     readonly environment?: string;
     readonly generation?: number;
+    /** Persisted Capsule root Core allocated the target from. */
+    readonly root?: string;
   } = {},
 ): Request {
   const workspaceId = target.workspaceId ?? "space_1";
   const capsuleId = target.capsuleId ?? "inst_1";
   const environment = target.environment ?? "production";
   const generation = target.generation ?? 2;
-  const targetStateRef = `workspaces/${workspaceId}/capsules/${capsuleId}/environments/${environment}/state-versions/${String(
+  const root = target.root ?? `workspaces/${workspaceId}/capsules/${capsuleId}`;
+  const targetStateRef = `${root}/environments/${environment}/state-versions/${String(
     generation,
   ).padStart(8, "0")}.tfstate.enc`;
   return new Request(`https://runner/runs/${encodeURIComponent(runId)}`, {
