@@ -30,8 +30,11 @@ import {
 import type { ActivityRecorder } from "../../core/domains/activity/mod.ts";
 import {
   activityCursorSealerFromEnv,
+  createNotificationPusherRateLimiter,
   D1AccountsStore,
   handleAuthenticatedControlRoute,
+  handleNotificationPusherRequest,
+  notificationPusherRouteOptionsFromEnv,
   parseAppOwnershipMutationsFrozen,
   resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
@@ -71,6 +74,7 @@ import {
 import type { RunStreamTiming } from "../../accounts/service/src/control/shared.ts";
 import {
   TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
+  TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH,
   type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
 import {
@@ -702,6 +706,8 @@ const platformWorker = {
     if (sharedAccountBoundaryResponse) return sharedAccountBoundaryResponse;
     const sharedSessionResponse = await handlePlatformSharedAuthSessionRequest(request, env);
     if (sharedSessionResponse) return sharedSessionResponse;
+    const sharedPushersResponse = await handlePlatformSharedAuthNotificationPushersRequest(request, env);
+    if (sharedPushersResponse) return sharedPushersResponse;
     const url = new URL(request.url);
     const destroyRecoveryResponse =
       await handlePlatformDestroyRecoveryRequest(request, url, env);
@@ -1908,6 +1914,84 @@ export async function handlePlatformSharedAuthSessionRequest(
   return Response.json(identity?.kind === "authenticated"
     ? { subject: identity.accountId, primaryAccountId: identity.accountId, expiresAt: 0 }
     : { session: null }, { headers: { "cache-control": "no-store" } });
+}
+
+const sharedAccountNotificationPusherLimiter = createNotificationPusherRateLimiter();
+
+/**
+ * The account's Takosumi Mobile pushers on the product host of the
+ * shared-account profile, where the issuer's other account routes are not
+ * mounted. The same Accounts routes and rules apply; only authentication
+ * differs. As on every other shared-account control route, humans arrive
+ * only through the private RP session (the account itself, never fenced to
+ * apps or a Workspace); an explicit bearer or issuer-session header is
+ * refused. Pushers live in this Worker's Accounts store, which the
+ * notification dispatcher (scheduled and immediate) reads.
+ */
+export async function handlePlatformSharedAuthNotificationPushersRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  dependencies: { readonly store?: AccountsStore } = {},
+): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (!sharedAuthConfigured(env) || !isNotificationPushersPath(url.pathname)) return undefined;
+  const ingressFailure = sharedAuthRequestFailure(request, env);
+  if (ingressFailure) return ingressFailure;
+  if (url.origin !== env.TAKOSUMI_SHARED_AUTH_ORIGIN) {
+    return Response.json({ error: "not found" }, {
+      status: 404, headers: { "cache-control": "no-store" },
+    });
+  }
+  let options;
+  try {
+    options = notificationPusherRouteOptionsFromEnv(
+      env as unknown as Readonly<Record<string, unknown>>,
+      env.TAKOSUMI_ACCOUNTS_ISSUER,
+    );
+  } catch {
+    // A malformed relay allowlist; the Accounts handler fails closed the same way.
+    return Response.json({ error: "notification_pushers_unavailable" }, {
+      status: 503, headers: { "cache-control": "no-store" },
+    });
+  }
+  return await handleNotificationPusherRequest({
+    request,
+    url,
+    store: dependencies.store ?? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+      schemaMode: resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE),
+    }),
+    options,
+    limiter: sharedAccountNotificationPusherLimiter,
+    authenticate: async (authenticating) => {
+      const refused = (status: number, error: string) => ({
+        ok: false as const,
+        response: Response.json({ error }, {
+          status, headers: { "cache-control": "no-store" },
+        }),
+      });
+      if (authenticating.headers.has("authorization") ||
+        authenticating.headers.has("x-takosumi-account-session")) {
+        return refused(401, "unauthenticated");
+      }
+      const identity = await authenticateSharedAuthRequest(authenticating, env);
+      if (identity?.kind === "unavailable") {
+        return { ok: false, response: sharedAuthUnavailableResponse() };
+      }
+      if (identity?.kind !== "authenticated" || !/^tsub_[A-Za-z0-9_-]+$/u.test(identity.accountId)) {
+        return refused(401, "unauthenticated");
+      }
+      const csrfFailure = platformExtensionSessionCsrfFailure(authenticating, env, {
+        authenticated: true, authKind: "session", sharedAccount: true,
+      });
+      if (csrfFailure) return { ok: false, response: csrfFailure };
+      return { ok: true, subject: identity.accountId as `tsub_${string}` };
+    },
+  });
+}
+
+function isNotificationPushersPath(pathname: string): boolean {
+  return pathname === TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH ||
+    pathname.startsWith(`${TAKOSUMI_ACCOUNTS_NOTIFICATION_PUSHERS_PATH}/`);
 }
 
 /**

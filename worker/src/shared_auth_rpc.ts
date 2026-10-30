@@ -207,6 +207,10 @@ export async function handleSharedAuthAccountBoundaryRequest(
       } });
     }
     if (url.pathname === "/api/v1/account/session/me") return undefined;
+    // The account's Takosumi Mobile pushers are served on the product host
+    // with RP authentication (the platform's own handler).
+    if (url.pathname === "/api/v1/account/notification-pushers" ||
+      url.pathname.startsWith("/api/v1/account/notification-pushers/")) return undefined;
     return Response.json({ error: "not found" }, {
       status: 404, headers: { "cache-control": "no-store" },
     });
