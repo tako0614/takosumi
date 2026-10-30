@@ -16,11 +16,13 @@ import {
   parseTakosumiMobileBuiltinClientSetting,
 } from "@takosjp/takosumi-accounts-service";
 import {
+  activityCursorSealerFromEnv,
   notificationPusherRouteOptionsFromEnv,
   parseAppOwnershipMutationsFrozen,
   parseInstalledAppDelegationSources,
   parseLegacyWorkspaceSunset,
   trustedNativeClientsFromEnv,
+  type ActivityCursorSealer,
   type InstalledAppDelegationSource,
   type NotificationPusherRouteOptions,
 } from "@takosjp/takosumi-accounts-service";
@@ -67,6 +69,8 @@ export interface NodeAccountsServerConfig {
   readonly notificationPushers?: NotificationPusherRouteOptions;
   /** `TAKOSUMI_LEGACY_WORKSPACE_SUNSET`: `Sunset` announced on legacy Workspace routes. */
   readonly legacyWorkspaceSunset?: string;
+  /** Activity cursor sealer keyed from the secret-store passphrase, when configured. */
+  readonly activityCursorSealer?: ActivityCursorSealer;
 }
 
 export function parseEnv(
@@ -123,7 +127,15 @@ export function parseEnv(
     legacyWorkspaceSunset: parseLegacyWorkspaceSunset(
       env.TAKOSUMI_LEGACY_WORKSPACE_SUNSET,
     ),
+    ...activityCursorSealerOption(env),
   };
+}
+
+function activityCursorSealerOption(
+  env: Record<string, string | undefined>,
+): { readonly activityCursorSealer?: ActivityCursorSealer } {
+  const sealer = activityCursorSealerFromEnv(env);
+  return sealer ? { activityCursorSealer: sealer } : {};
 }
 
 function parseClients(

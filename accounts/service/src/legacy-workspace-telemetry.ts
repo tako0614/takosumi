@@ -272,9 +272,11 @@ export function classifyLegacyWorkspaceControlRequest(
     // Source creation still requires `workspaceId` in its body.
     return legacyWorkspaceBodyUse(upper, segments);
   }
+  // The bootstrap's Workspace inventory is opt-in since TASK-0118 9.1-a, so
+  // only an explicit `includeWorkspaces=true` is a Workspace use.
   if (head === "dashboard" && segments[1] === "bootstrap" &&
     segments.length === 2 && upper === "GET" &&
-    searchParams.get("includeWorkspaces") !== "false") {
+    searchParams.get("includeWorkspaces") === "true") {
     return {
       surface: "workspace_projection",
       route: "/api/v1/dashboard/bootstrap?includeWorkspaces",

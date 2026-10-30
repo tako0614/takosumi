@@ -28,6 +28,7 @@ import {
 } from "./request-phase-diagnostics.ts";
 import type { InstalledAppDelegationSource } from "./installed-app-delegation.ts";
 import type { TrustedNativeClient } from "takosumi-contract";
+import type { ActivityCursorSealer } from "./control/activity-cursor.ts";
 
 export type {
   AccountsJsonWebKey,
@@ -166,6 +167,12 @@ export type {
 } from "./control-routes.ts";
 export { handleAuthenticatedControlRoute } from "./control-routes.ts";
 export {
+  ACTIVITY_CURSOR_LABEL,
+  activityCursorSealerFromEnv,
+  createActivityCursorSealer,
+  type ActivityCursorSealer,
+} from "./control/activity-cursor.ts";
+export {
   rejectDisallowedPresentedSession,
   type LoginEmailAllowlist,
 } from "./login-email-allowlist.ts";
@@ -257,6 +264,12 @@ export interface AccountsHandlerOptions {
    */
   trustedNativeClients?: readonly TrustedNativeClient[];
   /**
+   * Seals the Workspace-free Activity cursors (`activityCursorSealerFromEnv`
+   * over the secret-store passphrase). Absent: Activity paging returns 503
+   * instead of issuing a cursor.
+   */
+  activityCursorSealer?: ActivityCursorSealer;
+  /**
    * Operator-designated repositories whose installed app may use its own
    * OAuth token as a Workspace delegation. Empty: every installed-app token is
    * confined to its own app.
@@ -321,6 +334,7 @@ export interface EphemeralAccountsHandlerOptions {
   workspaceMutationsFrozen?: boolean;
   appOwnershipMutationsFrozen?: boolean;
   trustedNativeClients?: readonly TrustedNativeClient[];
+  activityCursorSealer?: ActivityCursorSealer;
   installedAppDelegationSources?: readonly InstalledAppDelegationSource[];
   sharedAccountWorkspaceDirectory?: SharedAccountWorkspaceDirectory;
   identityMergeReconciler?: IdentityMergeReconciler;
@@ -473,6 +487,7 @@ export async function createEphemeralAccountsHandler(
     workspaceMutationsFrozen: options.workspaceMutationsFrozen,
     ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
     ...(options.trustedNativeClients ? { trustedNativeClients: options.trustedNativeClients } : {}),
+    ...(options.activityCursorSealer ? { activityCursorSealer: options.activityCursorSealer } : {}),
     ...(options.installedAppDelegationSources
       ? { installedAppDelegationSources: options.installedAppDelegationSources }
       : {}),
@@ -1163,6 +1178,9 @@ export function createAccountsHandler(
             ...(options.appOwnershipMutationsFrozen ? { appOwnershipMutationsFrozen: true } : {}),
             ...(options.trustedNativeClients
               ? { trustedNativeClients: options.trustedNativeClients }
+              : {}),
+            ...(options.activityCursorSealer
+              ? { activityCursorSealer: options.activityCursorSealer }
               : {}),
             ...(options.installedAppDelegationSources?.length
               ? { installedAppDelegationSources: options.installedAppDelegationSources }

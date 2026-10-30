@@ -334,6 +334,9 @@ async function buildAccountsHandler(
     ...(config.trustedNativeClients
       ? { trustedNativeClients: config.trustedNativeClients }
       : {}),
+    ...(config.activityCursorSealer
+      ? { activityCursorSealer: config.activityCursorSealer }
+      : {}),
     ...(config.privacyOperationsToken
       ? { privacyOperationsToken: config.privacyOperationsToken }
       : {}),
