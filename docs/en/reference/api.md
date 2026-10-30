@@ -239,17 +239,21 @@ pushers) that products use for their native apps.
     shared-account control route. That is the account itself, never fenced to
     apps or a Workspace.
   - A request carrying `Authorization` (PAT, OAuth) or
-    `x-takosumi-account-session` gets 401; in this profile humans arrive only
-    through the RP.
+    `x-takosumi-account-session` gets 401
+    (`{"error":{"code":"unauthenticated",...}}`); in this profile humans arrive
+    only through the RP.
   - Writes must come from the product origin; otherwise they get 403
     `csrf_failed`.
   - Pushers live in that Worker's Accounts store, which the notification
     dispatcher (cron and immediate path) reads.
-  - Alternate URLs (workers.dev, previews) answer 404.
-  - How Takosumi Mobile obtains a credential (bearer) for the management API in
-    this profile is still undecided (takos-control
-    `docs/platform/takosumi-app-clients.md`, open points). Until then,
-    registration from a device does not pass on this host either.
+  - Alternate URLs (workers.dev, previews) answer 404, and so does any path
+    below the prefix other than the collection and one item (a trailing `/`,
+    more segments). Issuer credentials are never evaluated for them.
+  - **Takosumi Mobile cannot register on this host yet.** It always sends
+    `Authorization` and therefore gets 401. How a device obtains a credential
+    for the management API in this profile is undecided (takos-control
+    `docs/platform/takosumi-app-clients.md`, open points). Only the host's
+    dashboard (the RP session) can use these routes today.
 - POST body: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`.
   `pushkey` is an uncompressed P-256 point on the curve and `auth` is 16 bytes,
   both unpadded base64url. Unknown fields are 400. A new pusher answers 201, an

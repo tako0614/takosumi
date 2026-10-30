@@ -1438,6 +1438,14 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_TRACKED_CLIENTS = 4096;
 
 /**
+ * The per-source limiter on notification-pusher writes (30 per minute), for
+ * the Accounts handler and any host that mounts the same routes.
+ */
+export function createNotificationPusherRateLimiter(): NotificationPusherRateLimiter {
+  return createInMemoryRateLimiter(30);
+}
+
+/**
  * Create a simple in-isolate per-IP sliding-window rate limiter.
  *
  * Budget enforcement is best-effort: state lives only in the current
@@ -1450,14 +1458,6 @@ const RATE_LIMIT_MAX_TRACKED_CLIENTS = 4096;
  *
  * @param maxPerMinute Maximum requests per client IP in any 60 s window.
  */
-/**
- * The per-source limiter on notification-pusher writes (30 per minute), for
- * the Accounts handler and any host that mounts the same routes.
- */
-export function createNotificationPusherRateLimiter(): NotificationPusherRateLimiter {
-  return createInMemoryRateLimiter(30);
-}
-
 function createInMemoryRateLimiter(maxPerMinute: number): InMemoryRateLimiter {
   const windows = new Map<string, number[]>();
   return {

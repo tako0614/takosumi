@@ -217,15 +217,17 @@ push の endpoint、`data.auth` は購読の `auth` です。product が native 
   ほかの account API はこの host には出ません。
   - 認証は、ほかの共有アカウントの control API と同じく、private RP の session（cookie）だけです。
     アカウントそのものの資格なので、アプリや Workspace に限られることはありません。
-  - `Authorization`（PAT・OAuth）や `x-takosumi-account-session` を付けた要求は 401 です。
-    この構成では、人は RP からしか入れません。
+  - `Authorization`（PAT・OAuth）や `x-takosumi-account-session` を付けた要求は 401
+    （`{"error":{"code":"unauthenticated",...}}`）です。この構成では、人は RP からしか入れません。
   - 書き込みは product の origin からだけで、違えば 403 `csrf_failed` です。
   - pusher はこの Worker の Accounts の store に置きます。通知の送信（cron とすぐ送る経路）も
     同じ store を読みます。
-  - 別の URL（workers.dev や preview）では 404 です。
-  - Takosumi Mobile がこの構成で管理の API を呼ぶ資格（bearer）は、まだ決まっていません
-    （takos-control `docs/platform/takosumi-app-clients.md` の「未決の点」）。それまでは、端末からの
-    登録はこの host でも通りません。
+  - 別の URL（workers.dev や preview）では 404 です。この path の下の、一覧と一件以外の path
+    （末尾の `/` や 2 段以上）も 404 で、issuer の資格を評価することはありません。
+  - **この host では、まだ Takosumi Mobile から登録できません。** Takosumi Mobile は必ず
+    `Authorization` を付けるので 401 になります。この構成で端末が管理の API を呼ぶ資格は未決です
+    （takos-control `docs/platform/takosumi-app-clients.md` の「未決の点」）。今使えるのは、
+    この host の dashboard（RP の session）だけです。
 - POST の本文: `{"kind":"webpush","app_id":"com.takosumi","pushkey":"<p256dh>","data":{"url":"<endpoint>","auth":"<auth>"},"device_display_name":"Pixel 9","lang":"ja-JP"}`。
   `pushkey` は曲線上の P-256 非圧縮点、`auth` は 16 byte（どちらも padding 無しの base64url）。
   知らない欄は 400。新規は 201、同じ pusher の更新は 200 です。

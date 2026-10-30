@@ -41,6 +41,7 @@ const SHARED_AUTH_PATHS = new Set([
   "/auth/oidc/session",
 ]);
 const SHARED_AUTH_ABSENCE_HEADER = "x-takosumi-shared-auth-absent";
+const NOTIFICATION_PUSHER_ROUTE = /^\/api\/v1\/account\/notification-pushers(?:\/[^/]+)?$/u;
 const BILLING_TRACE_HEADER = "x-takosumi-internal-billing-trace";
 const BILLING_TRACE = /^brpc_[0-9a-f]{32}$/u;
 
@@ -207,10 +208,10 @@ export async function handleSharedAuthAccountBoundaryRequest(
       } });
     }
     if (url.pathname === "/api/v1/account/session/me") return undefined;
-    // The account's Takosumi Mobile pushers are served on the product host
-    // with RP authentication (the platform's own handler).
-    if (url.pathname === "/api/v1/account/notification-pushers" ||
-      url.pathname.startsWith("/api/v1/account/notification-pushers/")) return undefined;
+    // The account's notification pushers are served on the product host with
+    // RP authentication (the platform's own handler): exactly the collection
+    // and one item. Anything else under the prefix stays 404 here.
+    if (NOTIFICATION_PUSHER_ROUTE.test(url.pathname)) return undefined;
     return Response.json({ error: "not found" }, {
       status: 404, headers: { "cache-control": "no-store" },
     });

@@ -19,16 +19,18 @@ package for the v1 GA line.
   use the app's own routes (`capsuleId`) instead. Workspace-bound PATs and
   OAuth tokens and shared-account (Hosted) sessions keep their previous
   decision.
-- **Notification pushers on the shared-account product host:** with the
-  shared-account profile (Hosted), the product host now serves
-  `/api/v1/account/notification-pushers` instead of answering 404. The routes
-  and rules are those of the Accounts handler. Authentication is the private
-  RP session only, like the other shared-account control routes: a bearer or
-  issuer-session header gets 401, and a cross-origin write gets 403. Pushers
-  are stored in the platform Worker's Accounts store, which the notification
-  dispatcher reads. The device list in the dashboard therefore works on that
-  host. Takosumi Mobile still needs a credential for this profile, which is
-  undecided.
+- **The dashboard's device list works on the shared-account product host:**
+  with the shared-account profile (Hosted), the product host now serves
+  `/api/v1/account/notification-pushers` (the collection and one item)
+  instead of answering 404. The routes and rules are those of the Accounts
+  handler. Authentication is the private RP session only, like the other
+  shared-account control routes. A bearer or issuer-session header gets 401,
+  a write without the product Origin gets 403, and any other path under the
+  prefix gets 404.
+  Pushers are stored in the platform Worker's Accounts store, which the
+  notification dispatcher reads. Takosumi Mobile cannot register there yet:
+  it always sends `Authorization`, so it gets 401 until a mobile credential
+  for this profile is decided.
 - **Devices can register for the instance's own notifications:**
   `GET/POST/DELETE /api/v1/account/notification-pushers` stores Takosumi Mobile
   `webpush` pushers (MSC4174 field layout) in the Accounts store, one per
