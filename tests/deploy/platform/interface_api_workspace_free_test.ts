@@ -209,3 +209,49 @@ test("an app-scoped personal access token reaches only its apps and holds no Wor
   expect((await made.json()).metadata.createdUnder).toBe("app");
   expect((await create(pat(["cap_platform_iface"]), "workspace-scope", { kind: "Workspace", id: "ws_platform_iface" })).status).toBe(403);
 });
+
+test("an app-scoped personal access token issuing an Interface token keeps its app limit", async () => {
+  const env = await environment() as { TAKOSUMI_CONTROL_DB: SqliteFakeD1 };
+  // The app is live, so its Interface resolves.
+  const control = new CloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB);
+  const capsule = (await control.getCapsule("cap_platform_iface"))!;
+  await control.putCapsule({ ...capsule, status: "active", currentStateGeneration: 1 });
+  const workspaceMember = async () => "owner" as const;
+  const call = (session: () => Promise<PlatformExtensionSessionContext>, path: string, body: unknown) =>
+    handlePlatformInterfaceApiRequest(
+      request(path, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://app.takosumi.com" },
+        body: JSON.stringify(body),
+      }),
+      env as never, session, workspaceMember,
+    );
+  const spec = {
+    type: "mcp.server", version: "2025-11-25", document: {},
+    inputs: { endpoint: { source: "literal", value: "https://pat-issued.example.test/mcp" } },
+    access: { visibility: "private" },
+  };
+  // Before the app has an ownership record, a Workspace session writes one
+  // Capsule-owned and one Workspace-owned Interface, both bound to the PAT's subject.
+  const ids: Record<string, string> = {};
+  for (const [name, ownerRef] of [["app-owned", { kind: "Capsule", id: "cap_platform_iface" }], ["workspace-owned", { kind: "Workspace", id: "ws_platform_iface" }]] as const) {
+    const created = await call(accountSession, "/api/v1/interfaces", { workspaceId: "ws_platform_iface", name, ownerRef, spec });
+    expect(created.status).toBe(201);
+    ids[name] = (await created.json()).metadata.id;
+    const bound = await call(accountSession, `/api/v1/interfaces/${ids[name]}/bindings?workspaceId=ws_platform_iface`, {
+      subjectRef: { kind: "Principal", id: "tsub_pat_user" }, permissions: ["mcp.invoke"], delivery: { type: "none" },
+    });
+    expect(bound.status).toBe(201);
+  }
+  const pat = (appIds: readonly string[]) => async (): Promise<PlatformExtensionSessionContext> => ({
+    authenticated: true, authKind: "personal-access-token", subject: "tsub_pat_user", scopes: ["read", "write"], appIds,
+  });
+  const issue = (session: () => Promise<PlatformExtensionSessionContext>, interfaceId: string) =>
+    call(session, `/api/v1/interfaces/${interfaceId}/token?workspaceId=ws_platform_iface`, { permission: "mcp.invoke" });
+  // Limited to another app, it issues nothing; it never reaches a
+  // Workspace-owned Interface either.
+  expect((await issue(pat(["cap_somewhere_else"]), ids["app-owned"]!)).status).toBe(403);
+  expect((await issue(pat(["cap_platform_iface"]), ids["workspace-owned"]!)).status).toBe(403);
+  // Its own app's Interface is not refused by the app limit.
+  expect((await issue(pat(["cap_platform_iface"]), ids["app-owned"]!)).status).not.toBe(403);
+});
