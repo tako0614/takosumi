@@ -257,6 +257,24 @@ test("the backfill refuses a row whose column and record disagree", async () => 
   expect(await target.freeze("cap_skewed", WS)).toBe(false);
 });
 
+// TASK-0118 P9.1-b: the delegate app that installed a Capsule is stored once,
+// privately, in every store, and takes part in the initial-authority replay.
+test("the installing delegate round-trips and decides initial-authority replays in every store", async () => {
+  for (const { name, control } of await stores()) {
+    await seedSource(control);
+    const app = { ...capsule("cap_delegated", { scopeRef: WS, delegateCapsuleId: "cap_takos" }), status: "pending" as const };
+    expect((await control.createCapsuleInitialAuthority(initialAuthority(app))).status, name).toBe("created");
+    expect((await control.getCapsule("cap_delegated"))?.delegateCapsuleId, name).toBe("cap_takos");
+    expect((await control.createCapsuleInitialAuthority(initialAuthority(app))).status, name).toBe("replayed");
+    // Another delegate, or none, is a different initial authority.
+    expect((await control.createCapsuleInitialAuthority(initialAuthority({ ...app, delegateCapsuleId: "cap_other_takos" }))).status, name)
+      .toBe("conflict");
+    const { delegateCapsuleId: _unused, ...withoutDelegate } = app;
+    expect((await control.createCapsuleInitialAuthority(initialAuthority(withoutDelegate))).status, name).toBe("conflict");
+    expect((await control.getCapsule("cap_delegated"))?.delegateCapsuleId, name).toBe("cap_takos");
+  }
+});
+
 test("a row without a persisted root reads its legacy root from scopeRef in every store", async () => {
   for (const { name, control } of await stores()) {
     await seedSource(control);

@@ -323,6 +323,7 @@ export type { RestoreRunLifecycleEvent } from "./run-engine/run_engine.ts";
 export function publicCapsule(capsule: Capsule): PublicCapsule {
   const {
     scopeRef: _scopeRef,
+    delegateCapsuleId: _delegateCapsuleId,
     ownerAccountId: _ownerAccountId,
     ownershipEpoch: _ownershipEpoch,
     managementState: _managementState,
